@@ -2,7 +2,7 @@
 //!
 //! Ported from `mise-tasks/semver.sh` under CLOUD-1059, which is the rule
 //! working on its author: repairing that gate meant editing it, an edit is
-//! `V-SHELL-RULE-EDITED`, and that verdict declares no override route. So the
+//! `shell edit refused`, and that verdict declares no override route. So the
 //! maintenance was completed by migrating it, which is the campaign's whole
 //! claim.
 //!

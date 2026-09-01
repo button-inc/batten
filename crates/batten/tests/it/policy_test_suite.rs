@@ -124,7 +124,7 @@ rules contains "no-force-push"
 
 violation contains {
 	"rule": "no-force-push",
-	"verdict": "V-FORCE-PUSH-AT-TRUNK",
+	"verdict": "trunk push forced",
 } if {
 	words := split(input.call.command, " ")
 	"--force" in words
@@ -159,7 +159,7 @@ rules contains "no-force-push"
 
 violation contains {
 	"rule": "no-force-push",
-	"verdict": "V-FORCE-PUSH-AT-TRUNK",
+	"verdict": "trunk push forced",
 } if {
 	contains(input.call.command, "--force")
 }
@@ -501,7 +501,7 @@ rules contains "no-force-push"
 
 violation contains {
 	"rule": "no-force-push",
-	"verdict": "V-FORCE-PUSH-AT-TRUNK",
+	"verdict": "trunk push forced",
 } if {
 	some path, _ in input.tree.documents
 	endswith(path, ".forbidden")

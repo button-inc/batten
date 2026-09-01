@@ -104,7 +104,7 @@ runs_a_task(segment) if {
 
 violation contains {
 	"rule": "task-substitution",
-	"verdict": "V-TASK-SUBSTITUTION",
+	"verdict": "task run loose",
 	"subjects": [{"artifact": task}],
 } if {
 	some task in substituted
@@ -131,7 +131,7 @@ lint := {"lint": ["cargo", "clippy", "--all-targets"]}
 
 test_a_bare_tool_call_is_refused if {
 	some v in violation with input as call("cargo clippy", lint)
-	v.verdict == "V-TASK-SUBSTITUTION"
+	v.verdict == "task run loose"
 }
 
 # THE REFUSAL CARRIES THE TASK NAME, which is the whole of its value (CLOUD-437).
@@ -172,7 +172,7 @@ compound(command, first, second, tasks) := {
 # two strings.
 test_a_tool_call_in_a_later_segment_is_refused if {
 	some v in violation with input as compound("cd /tmp && cargo clippy", "cd /tmp", "cargo clippy", lint)
-	v.verdict == "V-TASK-SUBSTITUTION"
+	v.verdict == "task run loose"
 }
 
 # THE CASE THAT DISCRIMINATES THE RELATION, and the defect that produced

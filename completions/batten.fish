@@ -1508,7 +1508,7 @@ complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_s
 complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -f -a "spend" -d 'Spend an issued admission against the situation it was issued for'
 complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -l rule -d 'The rule whose refusal is being overridden' -r
-complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -l verdict -d 'The verdict token that refusal carries, e.g. V-PROSE-ONLY-DIFF' -r
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -l verdict -d 'The verdict token that refusal carries, e.g. diff ship early' -r
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -l subject -d 'The gate\'s canonical subject, exactly as its refusal names it' -r
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
@@ -1533,7 +1533,7 @@ complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l admission -d 'The admission address to spend' -r
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l rule -d 'The rule whose refusal is being overridden' -r
-complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l verdict -d 'The verdict token that refusal carries, e.g. V-PROSE-ONLY-DIFF' -r
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l verdict -d 'The verdict token that refusal carries, e.g. diff ship early' -r
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l subject -d 'The gate\'s canonical subject, exactly as its refusal names it' -r
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'

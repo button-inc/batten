@@ -3422,7 +3422,7 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bash: <issue> <why>` in the new program and own the increase; which of the two is the whole question"
 
-# CLOUD-1137. THE ROW ABOVE GLOBS ONE DIRECTORY, and `V-SHELL-RULE-ADDED`
+# CLOUD-1137. THE ROW ABOVE GLOBS ONE DIRECTORY, and `shell add refused`
 # (CLOUD-1059) covers `mise-tasks/**` and `tests/**/*.bats`. Those globs were the
 # whole enforced perimeter against new bash, and two surfaces sit outside it: a
 # `run = '''…'''` body in `mise.toml` is bash, and `.claude/hooks/session-start.sh`
@@ -3433,7 +3433,7 @@ no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bas
 # NOT the laundering path, which was already closed: `policy/shell-retirement.rego`
 # requires a deletion's ledger arm to name a policy surface AND a compiled-binary
 # test, and an inline body is neither, so retiring a described task by inlining it
-# already raises `V-SUCCESSOR-NO-SURFACE`. What these rows add is the case with no
+# already raises `shell port missing`. What these rows add is the case with no
 # sensor at all — shell authored straight into `mise.toml` or `.claude/**`, which
 # was never counted as bash in the first place.
 #
@@ -4154,7 +4154,7 @@ severity = "deny"
 # not name — a false refusal, in the direction that blocks correct work.
 #
 # THE OVERRIDE IS DECLARED ON THE CLASS, not here. `[[verdict]]`'s
-# `V-PROSE-ONLY-DIFF` carries an `override` route with its precondition, which is
+# `diff ship early` carries an `override` route with its precondition, which is
 # what `batten override request` generates its questions from (CLOUD-1051). No
 # `bypass_env`: the whole point of that row is that the bare variable stops
 # working.
@@ -4181,7 +4181,7 @@ severity = "deny"
 # NO `line_sources`: this row reads no file's contents. Its whole subject is the
 # recorder's record and the delta the engine already resolved.
 #
-# THE OVERRIDE IS DECLARED ON THE CLASS. `V-FILED-OVER-OWN-DIFF` carries an
+# THE OVERRIDE IS DECLARED ON THE CLASS. `issue file same` carries an
 # `override` route with its precondition, which is what `batten override request`
 # generates its questions from. No `bypass_env`, and specifically not
 # `BATTEN_FILED_HERE_OVERLAP`: the point of the admission mechanism is that the
@@ -5965,175 +5965,748 @@ expires = "2027-02-28"
 # mechanism behind CLOUD-1053: the hot path prints token, gloss and pointer, and
 # a gloss nobody bounded is how the paragraph comes back.
 
+# ---------------------------------------------------------------------------
+# THE VERDICT VOCABULARY (CLOUD-1284).
+#
+# A class name is exactly three space-separated words, `<subject> <action>
+# <condition>`, each drawn from the list for its position. `verdict::validate`
+# holds every class and every route to it, so the naming convention is a gate
+# rather than a habit -- which it had never been.
+#
+# WHY THREE WORDS RATHER THAN `V-SCREAMING-KEBAB`. Measured with `tiktoken`
+# `o200k_base` over all 130 classes: the old spelling cost 9.9 tokens on
+# average, lowercase kebab 5.2, and a curated three-word name 3.0. At ~300
+# refusals in a long session that is ~2,000 tokens an agent paid for a naming
+# convention. Uppercase runs and hyphen-joined compounds are close to the worst
+# case for a BPE vocabulary trained on running text.
+#
+# THE CURATION IS THE POINT, not the word count. `task spelling weakened` is 3
+# tokens; `shell edit unretired` is 5, because `unretired` is three merges on
+# its own. `mise run test:verdict-vocabulary` is the gate on that, and it is
+# what makes this list a measurement rather than an intention.
+#
+# THE GLOSS IS WHY A NAME NEEDS NO LOOKUP. Every word is defined once, here, and
+# reused across every name that spends it -- so a new class costs no new prose,
+# where a free-text name bought a fresh essay to explain itself. Position
+# carries the rest: slot 2 is always what happened.
+#
+# ARITY IS FIXED AT THREE AND MUST NOT BE RELAXED. It is what lets a rendered
+# refusal be read as `<class> <pointer...>` with nothing separating them. A
+# maximum instead of an exact count puts a delimiter back and dissolves the
+# grammar into the free text it replaced.
+[vocabulary]
+tokenizer = "o200k_base"
+tokenizer_source = "https://github.com/openai/tiktoken"
+tokenizer_retrieved = "2026-09-01"
+
+# --- subject ---
+[[vocabulary.subject]]
+word = "adapter"
+gloss = "a declared adapter row"
+
+[[vocabulary.subject]]
+word = "bats"
+gloss = "the bats suite runner"
+
+[[vocabulary.subject]]
+word = "bound"
+gloss = "a declared upper or lower bound"
+
+[[vocabulary.subject]]
+word = "branch"
+gloss = "a git branch"
+
+[[vocabulary.subject]]
+word = "call"
+gloss = "one mediated tool call"
+
+[[vocabulary.subject]]
+word = "cargo"
+gloss = "the Rust build tool"
+
+[[vocabulary.subject]]
+word = "check"
+gloss = "one named CI check, or a `batten check` run"
+
+[[vocabulary.subject]]
+word = "claim"
+gloss = "a pull-time claim on a tracker row"
+
+[[vocabulary.subject]]
+word = "commit"
+gloss = "one git commit"
+
+[[vocabulary.subject]]
+word = "config"
+gloss = "the committed policy authority"
+
+[[vocabulary.subject]]
+word = "connector"
+gloss = "an MCP connector"
+
+[[vocabulary.subject]]
+word = "default"
+gloss = "a value taken when nothing is declared"
+
+[[vocabulary.subject]]
+word = "diff"
+gloss = "the change under review"
+
+[[vocabulary.subject]]
+word = "drift"
+gloss = "a tracked surface moving under a session"
+
+[[vocabulary.subject]]
+word = "event"
+gloss = "a harness or forge event"
+
+[[vocabulary.subject]]
+word = "forge"
+gloss = "the code host"
+
+[[vocabulary.subject]]
+word = "gate"
+gloss = "a runnable check with an exit code"
+
+[[vocabulary.subject]]
+word = "grant"
+gloss = "handed over"
+
+[[vocabulary.subject]]
+word = "hook"
+gloss = "a mediated-call registration"
+
+[[vocabulary.subject]]
+word = "input"
+gloss = "the document a predicate reads"
+
+[[vocabulary.subject]]
+word = "issue"
+gloss = "a tracker row"
+
+[[vocabulary.subject]]
+word = "job"
+gloss = "one CI job"
+
+[[vocabulary.subject]]
+word = "lane"
+gloss = "a privileged execution lane"
+
+[[vocabulary.subject]]
+word = "layer"
+gloss = "a module layering position"
+
+[[vocabulary.subject]]
+word = "lease"
+gloss = "the landing lease"
+
+[[vocabulary.subject]]
+word = "lock"
+gloss = "a lockfile"
+
+[[vocabulary.subject]]
+word = "manifest"
+gloss = "a package manifest"
+
+[[vocabulary.subject]]
+word = "memory"
+gloss = "an agent memory document"
+
+[[vocabulary.subject]]
+word = "module"
+gloss = "a policy module"
+
+[[vocabulary.subject]]
+word = "patch"
+gloss = "a change identified by its content"
+
+[[vocabulary.subject]]
+word = "path"
+gloss = "a filesystem path"
+
+[[vocabulary.subject]]
+word = "pin"
+gloss = "fixed at a version"
+
+[[vocabulary.subject]]
+word = "program"
+gloss = "an executable"
+
+[[vocabulary.subject]]
+word = "prose"
+gloss = "authored text"
+
+[[vocabulary.subject]]
+word = "release"
+gloss = "a cut release"
+
+[[vocabulary.subject]]
+word = "remedy"
+gloss = "what a refusal tells the reader to do"
+
+[[vocabulary.subject]]
+word = "review"
+gloss = "a code review"
+
+[[vocabulary.subject]]
+word = "route"
+gloss = "one way out of a refusal"
+
+[[vocabulary.subject]]
+word = "rule"
+gloss = "a declared rule row"
+
+[[vocabulary.subject]]
+word = "shell"
+gloss = "an authored shell program"
+
+[[vocabulary.subject]]
+word = "sleep"
+gloss = "a delay"
+
+[[vocabulary.subject]]
+word = "source"
+gloss = "a file a predicate parses"
+
+[[vocabulary.subject]]
+word = "spawn"
+gloss = "a child process"
+
+[[vocabulary.subject]]
+word = "step"
+gloss = "one step of a gate"
+
+[[vocabulary.subject]]
+word = "suite"
+gloss = "a test suite"
+
+[[vocabulary.subject]]
+word = "symbol"
+gloss = "a resolved source symbol"
+
+[[vocabulary.subject]]
+word = "tag"
+gloss = "a release tag"
+
+[[vocabulary.subject]]
+word = "task"
+gloss = "a task-runner task"
+
+[[vocabulary.subject]]
+word = "test"
+gloss = "one test case or target"
+
+[[vocabulary.subject]]
+word = "tier"
+gloss = "a declared severity or profile tier"
+
+[[vocabulary.subject]]
+word = "timer"
+gloss = "a wall-clock wait"
+
+[[vocabulary.subject]]
+word = "tool"
+gloss = "a third-party validator"
+
+[[vocabulary.subject]]
+word = "turn"
+gloss = "one agent turn"
+
+[[vocabulary.subject]]
+word = "version"
+gloss = "a declared version"
+
+[[vocabulary.subject]]
+word = "workflow"
+gloss = "a CI workflow"
+
+[[vocabulary.subject]]
+word = "workspace"
+gloss = "the cargo workspace"
+
+# --- action ---
+[[vocabulary.action]]
+word = "add"
+gloss = "was added"
+
+[[vocabulary.action]]
+word = "admit"
+gloss = "let through under a declaration"
+
+[[vocabulary.action]]
+word = "answer"
+gloss = "gave a reply"
+
+[[vocabulary.action]]
+word = "ask"
+gloss = "put the question"
+
+[[vocabulary.action]]
+word = "bind"
+gloss = "attached one thing to another"
+
+[[vocabulary.action]]
+word = "carry"
+gloss = "holds as a field or value"
+
+[[vocabulary.action]]
+word = "check"
+gloss = "one named CI check, or a `batten check` run"
+
+[[vocabulary.action]]
+word = "count"
+gloss = "tallied"
+
+[[vocabulary.action]]
+word = "cover"
+gloss = "reaches every member"
+
+[[vocabulary.action]]
+word = "declare"
+gloss = "stated in config"
+
+[[vocabulary.action]]
+word = "deny"
+gloss = "refused"
+
+[[vocabulary.action]]
+word = "edit"
+gloss = "was changed in place"
+
+[[vocabulary.action]]
+word = "file"
+gloss = "opened a tracker row"
+
+[[vocabulary.action]]
+word = "grade"
+gloss = "assigned a verdict"
+
+[[vocabulary.action]]
+word = "grant"
+gloss = "handed over"
+
+[[vocabulary.action]]
+word = "guard"
+gloss = "stands in front of"
+
+[[vocabulary.action]]
+word = "judge"
+gloss = "rendered a verdict"
+
+[[vocabulary.action]]
+word = "key"
+gloss = "is keyed by"
+
+[[vocabulary.action]]
+word = "list"
+gloss = "enumerates"
+
+[[vocabulary.action]]
+word = "measure"
+gloss = "took a reading"
+
+[[vocabulary.action]]
+word = "mint"
+gloss = "created a record"
+
+[[vocabulary.action]]
+word = "name"
+gloss = "refers to by name"
+
+[[vocabulary.action]]
+word = "open"
+gloss = "started"
+
+[[vocabulary.action]]
+word = "own"
+gloss = "is the authority for"
+
+[[vocabulary.action]]
+word = "parse"
+gloss = "read as structure"
+
+[[vocabulary.action]]
+word = "pin"
+gloss = "fixed at a version"
+
+[[vocabulary.action]]
+word = "place"
+gloss = "assigned a position"
+
+[[vocabulary.action]]
+word = "point"
+gloss = "refers onward"
+
+[[vocabulary.action]]
+word = "port"
+gloss = "moved to a successor surface"
+
+[[vocabulary.action]]
+word = "reach"
+gloss = "can get to"
+
+[[vocabulary.action]]
+word = "read"
+gloss = "was read"
+
+[[vocabulary.action]]
+word = "report"
+gloss = "stated a finding"
+
+[[vocabulary.action]]
+word = "require"
+gloss = "demands"
+
+[[vocabulary.action]]
+word = "resolve"
+gloss = "looked up"
+
+[[vocabulary.action]]
+word = "retire"
+gloss = "removed with a successor"
+
+[[vocabulary.action]]
+word = "run"
+gloss = "was executed"
+
+[[vocabulary.action]]
+word = "select"
+gloss = "chose a subset"
+
+[[vocabulary.action]]
+word = "ship"
+gloss = "released"
+
+[[vocabulary.action]]
+word = "skip"
+gloss = "was passed over"
+
+[[vocabulary.action]]
+word = "spelling"
+gloss = "how it is written"
+
+[[vocabulary.action]]
+word = "state"
+gloss = "says in prose"
+
+[[vocabulary.action]]
+word = "table"
+gloss = "the declared table"
+
+[[vocabulary.action]]
+word = "watch"
+gloss = "subscribed to"
+
+[[vocabulary.action]]
+word = "wire"
+gloss = "registered"
+
+[[vocabulary.action]]
+word = "write"
+gloss = "wrote"
+
+# --- condition ---
+[[vocabulary.condition]]
+word = "absent"
+gloss = "nothing is there to look at"
+
+[[vocabulary.condition]]
+word = "ahead"
+gloss = "further along than its counterpart"
+
+[[vocabulary.condition]]
+word = "blocked"
+gloss = "cannot proceed"
+
+[[vocabulary.condition]]
+word = "broken"
+gloss = "will not parse"
+
+[[vocabulary.condition]]
+word = "dead"
+gloss = "reachable by nothing"
+
+[[vocabulary.condition]]
+word = "dirty"
+gloss = "reported findings"
+
+[[vocabulary.condition]]
+word = "dropped"
+gloss = "silently lost"
+
+[[vocabulary.condition]]
+word = "duplicate"
+gloss = "a second one exists"
+
+[[vocabulary.condition]]
+word = "early"
+gloss = "happened before its precondition"
+
+[[vocabulary.condition]]
+word = "empty"
+gloss = "declared and holding nothing"
+
+[[vocabulary.condition]]
+word = "first"
+gloss = "the first route to consider"
+
+[[vocabulary.condition]]
+word = "held"
+gloss = "still outstanding"
+
+[[vocabulary.condition]]
+word = "last"
+gloss = "the route of last resort"
+
+[[vocabulary.condition]]
+word = "late"
+gloss = "happened after it was useful"
+
+[[vocabulary.condition]]
+word = "loose"
+gloss = "wider than it should be"
+
+[[vocabulary.condition]]
+word = "missing"
+gloss = "expected and not found"
+
+[[vocabulary.condition]]
+word = "never"
+gloss = "does not happen at all"
+
+[[vocabulary.condition]]
+word = "other"
+gloss = "disagrees with its counterpart"
+
+[[vocabulary.condition]]
+word = "partial"
+gloss = "some fields and not others"
+
+[[vocabulary.condition]]
+word = "red"
+gloss = "failed"
+
+[[vocabulary.condition]]
+word = "refused"
+gloss = "the gate says no"
+
+[[vocabulary.condition]]
+word = "same"
+gloss = "identical where it should differ"
+
+[[vocabulary.condition]]
+word = "stale"
+gloss = "answers for a state that has moved"
+
+[[vocabulary.condition]]
+word = "twice"
+gloss = "happens more than once"
+
+[[vocabulary.condition]]
+word = "unclear"
+gloss = "cannot be decided from what is stated"
+
+[[vocabulary.condition]]
+word = "undefined"
+gloss = "named and never defined"
+
+[[vocabulary.condition]]
+word = "unknown"
+gloss = "not in any declared set"
+
+[[vocabulary.condition]]
+word = "unnamed"
+gloss = "carries no name"
+
+[[vocabulary.condition]]
+word = "unread"
+gloss = "could not be read"
+
+[[vocabulary.condition]]
+word = "unsafe"
+gloss = "fails open where it must fail closed"
+
+[[vocabulary.condition]]
+word = "unseen"
+gloss = "nothing looks at it"
+
+[[vocabulary.condition]]
+word = "unused"
+gloss = "declared and spent nowhere"
+
+[[vocabulary.condition]]
+word = "wrong"
+gloss = "does not match the declared shape"
+
 [[verdict]]
-id = "V-FORGE-VERDICT-NOT-GREEN"
+id = "forge check red"
 gloss = "the forge judged this commit and its fan-in check did not pass"
 class = """
 `final` is the fan-in every required job feeds, and CLOUD-900 records what naming the leaves instead buys: every failure becomes manufacturable by omitting a job. A recorded verdict that is anything but `success` on that check means the forge looked and refused. This is the DECISION half only — the polling stays outside the engine per CLOUD-1177 — so the remedy is to fix what CI refused and let the producer record the next verdict, never to re-read this one.
 """
 
 [[verdict.route]]
-id = "R-READ-THE-CI-CONTRACT"
+id = "rule read first"
 kind = "document"
 target = ".claude/rules/toolchain.md"
 
 [[verdict.route]]
-id = "R-LAND-DRIVES-THE-LOOP"
+id = "task run first"
 kind = "command"
 target = "mise run land"
 
 [[verdict]]
-id = "V-DENIALS-OUTLIVE-THE-TURN"
+id = "turn deny held"
 gloss = "this session recorded refusals and the turn is ending again anyway"
 class = """
 The session's own record counts hook runs that denied, and the agent is stopping a second time with that count still standing. A first stop after refusals is work concluding; a repeat one is a finding produced and then left behind, which is the question `finding-sink-check` reads a transcript to answer. The count is derived from a hook run's exit code rather than from any prose, and no span of session text reaches this decision. A session with no transcript is never this class -- that is could-not-look, and reading it as clean is the false green CLOUD-990 measured.
 """
 
 [[verdict.route]]
-id = "R-RESOLVE-THE-REFUSAL"
+id = "module read first"
 kind = "document"
 target = "policy/denials-outlive-the-turn.rego"
 
 [[verdict]]
-id = "V-TASK-SUBSTITUTION"
+id = "task run loose"
 gloss = "this call is a weaker spelling of a task the project already defines"
 class = """
 The project defines a task whose own argv leads with the same program, so this call runs the tool directly and skips whatever the task adds -- strictness flags, a pinned toolchain, a paired step. The refusal names the task because that name IS the remedy: run it instead. A task with no single-command body is never matched, so this cannot refuse a call by naming a command the task does not actually run.
 """
 
 [[verdict.route]]
-id = "R-RUN-THE-TASK-INSTEAD"
+id = "module read first"
 kind = "document"
 target = "policy/task-substitution.rego"
 
 [[verdict]]
-id = "V-MEMORY-ROOT-MISSING"
+id = "memory resolve missing"
 gloss = "the memory graph has no root, so it is findable only by listing the directory"
 class = """
 The reference model makes `mem:core` the discovery entry point, and a graph whose root is absent can be reached only by someone who already knows to list the directory. Judged only where memories exist at all: a repository carrying none is not a repository with a broken graph, and refusing there would make this rule unshippable over an ordinary tree.
 """
 
 [[verdict.route]]
-id = "R-READ-THE-MEMORY-ROOT"
+id = "prose read first"
 kind = "document"
 target = "AGENTS.md"
 
 [[verdict]]
-id = "V-MEMORY-NAME-SHADOWED"
+id = "memory name duplicate"
 gloss = "a memory name strips to another name, so it cannot be addressed as written"
 class = """
 The tooling silently strips one trailing `.md`, so `foo.md.md` lists as `foo.md` and no reference can ever name the file by its own filename. The two spellings then compete for one address. Rename the file so its name survives the strip.
 """
 
 [[verdict.route]]
-id = "R-RENAME-THE-MEMORY"
+id = "task run first"
 kind = "command"
 target = "mise run memories-check"
 
 [[verdict]]
-id = "V-MEMORY-NAME-UNREFERENCABLE"
+id = "memory name unseen"
 gloss = "a memory name carries a character no reference can spell"
 class = """
 The reference matcher stops at the first character outside its charset, so a memory whose name carries one cannot be referenced at all -- it is in the graph and no edge can reach it. The charset is the `memory-name` registry row, which is the same grammar `mem-reference` reads, so the two cannot drift.
 """
 
 [[verdict.route]]
-id = "R-RENAME-THE-MEMORY-TO-THE-CHARSET"
+id = "module read first"
 kind = "document"
 target = "policy/memories.rego"
 
 [[verdict]]
-id = "V-MEM-REF-STALE"
+id = "memory point stale"
 gloss = "a `mem:` reference names a memory this tree does not carry"
 class = """
 A dangling edge. The reference tooling's own integrity check is advisory by construction and its rename command is the only thing that keeps referrers in sync, so a `git mv` or any direct write orphans every reference silently -- which is what this exists to make loud. Pointer-only: the referrer's `path:line`, never the surrounding prose.
 """
 
 [[verdict.route]]
-id = "R-RENAME-THROUGH-THE-TOOLING"
+id = "prose read first"
 kind = "document"
 target = "AGENTS.md"
 
 [[verdict]]
-id = "V-MEMORY-SOURCE-UNREAD"
+id = "memory read unread"
 gloss = "a declared referrer could not be read, so its edges were never judged"
 class = """
 Could-not-look, and never a file with no stale references. A module iterating only the lines it received reports green over a file it never opened; this names the file instead. Distinct from a clean pass by construction, which is the whole point of the `missing` channel.
 """
 
 [[verdict.route]]
-id = "R-READ-THE-DECLARED-SOURCE"
+id = "module read first"
 kind = "document"
 target = "policy/memories.rego"
 
 [[verdict]]
-id = "V-CLAIM-BEFORE-CODE"
+id = "claim mint absent"
 gloss = "a declared row was captured and carries no project"
 class = """
 The capture store answered for this row's declared key and the payload carries no project, so the row is unfiled and no board state can be read about it. Asked rather than a status because the store has no clock: it keeps every read and answers from the first in digest order, so a predicate over a mutable field would report a state that has since moved. Absence is not this class -- a key nothing captured leaves the id out of the map entirely, which is could-not-look and never a verdict.
 """
 
 [[verdict.route]]
-id = "R-CLAIM-IT-BY-HAND"
+id = "task run first"
 kind = "command"
 target = "mise run claim-check"
 
 [[verdict]]
-id = "V-PROFILED-STEP-NOT-IN-CHECK"
+id = "step declare missing"
 gloss = "a step declaring the slow profile is not selected by the `check` hook"
 class = "The false green the two-tier split can produce, and the asymmetric half: the pre-commit path still skips the step, so nothing looks wrong, while `mise run ci`, `verify` and CI have all silently stopped running it. The other direction — the tier stops being skipped at pre-commit — is loud and self-correcting, which is why this is the one with a gate."
 
 [[verdict.route]]
-id = "R-RESTORE-THE-PROFILED-STEP"
+id = "gate read first"
 kind = "document"
 target = "hk.pkl"
 
 [[verdict]]
-id = "V-SLOW-TIER-EMPTY"
+id = "tier list empty"
 gloss = "something planned this tree and no step declares the slow profile"
 class = "The tier has evaporated: every step would run at pre-commit, and every per-step assertion about the tier would pass over an empty set. Distinct from no record at all, which is could-not-look and refuses nothing."
 
 [[verdict.route]]
-id = "R-RESTORE-THE-SLOW-TIER"
+id = "gate read first"
 kind = "document"
 target = "hk.pkl"
 
 [[verdict]]
-id = "V-HOOK-MISSING-PROFILE-FLAG"
+id = "hook declare missing"
 gloss = "the git hook runs hk without `--profile '!slow'`, so every commit pays the slow tier"
 class = "The economy half rather than the coverage half: the tier is still correct and CI is unaffected. Read from non-comment lines that actually run the hook, because the flag's own explanatory comment kept this green once when the flag had been deleted from the command."
 
 [[verdict.route]]
-id = "R-RESTORE-THE-PROFILE-FLAG"
+id = "source read first"
 kind = "document"
 target = ".claude/hooks/git-hook.sh"
 
 [[verdict]]
-id = "V-VALIDATOR-VERDICT-UNCLEAN"
+id = "tool judge dirty"
 gloss = "a third-party validator judged this file and reported something"
 class = """
 The record exists under this row's exact key -- the declared tool, the version it was pinned at, and the digest of the bytes it read -- so a validator ran over THIS revision and did not report clean. Absence is not this class: a record under any other key is not found at all, which is what keeps a stale verdict from reading as a fresh one. The remedy is to fix what the validator named and let the producer record the next verdict, never to re-read this one.
 """
 
 [[verdict.route]]
-id = "R-VALIDATOR-DECIDES-ITS-OWN-FINDINGS"
+id = "module read first"
 kind = "document"
 target = "policy/validator-verdict-clean.rego"
 
 [[verdict]]
-id = "V-RELEASE-TAG-SHAPE"
+id = "tag mint wrong"
 gloss = "a release tag does not carry the shape this repository's release tooling mints"
 class = """
 `release-plz` mints `v<major>.<minor>.<patch>` and every downstream reading — what has shipped, what is due, what a range since the last release contains — orders and compares on that shape. A tag that does not carry it is either a hand cut nobody will find again or a prerelease the ordering will misplace. Retag it in the shape the tooling mints, or move it out of the `v*` namespace so it is not read as a release.
 """
 
 [[verdict.route]]
-id = "R-RETAG-IN-SHAPE"
+id = "rule read first"
 kind = "document"
 target = ".claude/rules/commits.md"
 
 [[verdict.route]]
-id = "R-READ-THE-RELEASE-CONFIG"
+id = "source read first"
 kind = "document"
 target = "release-plz.toml"
 
@@ -6253,53 +6826,53 @@ A platform entry with a checksum and no url is the partial shape a regenerate-an
 """
 
 [[verdict.route]]
-id = "R-REGENERATE-THE-LOCK"
+id = "task run first"
 kind = "command"
 target = "mise run lock-complete"
 
 [[verdict.route]]
-id = "R-READ-THE-LOCK-RULE"
+id = "rule read first"
 kind = "document"
 target = ".claude/rules/toolchain.md"
 
 [[verdict]]
-id = "V-WEAKENS-DECLARES-NOTHING"
+id = "commit declare empty"
 gloss = "a `Weakens:` trailer names no key, so it declares nothing while reading as a declaration"
 class = """
 `config-lint` compares the weakenings an author DECLARED in a `Weakens:` trailer against the ones `trust::weakenings` DETECTED. A trailer with nothing after the colon satisfies every "did the author declare something" reading and matches no detected weakening, so it buys the appearance of disclosure without the content. Name the key the change weakens, or drop the trailer — an absent declaration is honest where an empty one is not.
 """
 
 [[verdict.route]]
-id = "R-NAME-THE-WEAKENED-KEY"
+id = "config read first"
 kind = "document"
 target = "batten.toml"
 
 [[verdict.route]]
-id = "R-READ-THE-COMMIT-RULE"
+id = "rule read first"
 kind = "document"
 target = ".claude/rules/commits.md"
 
 [[verdict]]
-id = "V-HARNESS-WIRING-SECOND-DECIDER"
+id = "hook wire duplicate"
 gloss = "a PreToolUse registration outside this repository does not reach the mediator"
 class = """
 `PreToolUse` is ONE entry — the engine — and CLOUD-312 measured the alternative: six task-runner launches per Bash call, 1.247s serial to do milliseconds of policy, ~93% of it startup. A second decider registered beside the mediator re-introduces that cost and, worse, splits the verdict across two authorities that can disagree about one call. The wiring this judges is the launcher's own merged settings, which live outside this repository — CLOUD-1167's fact is what makes the question expressible at all, and the row that declares the file is the whole bound on what the module may read.
 """
 
 [[verdict.route]]
-id = "R-REGISTER-ONLY-THE-MEDIATOR"
+id = "prose read first"
 kind = "document"
 target = "AGENTS.md"
 
 [[verdict.route]]
-id = "R-READ-THE-WIRING-RULE"
+id = "rule read first"
 kind = "document"
 target = ".claude/rules/toolchain.md"
 
 # --- closing the raw path (CLOUD-1260) ---------------------------------------
 
 [[verdict]]
-id = "V-RAW-CONNECTOR-GRANTED"
+id = "connector grant loose"
 gloss = "a reduced tool is also granted raw, so the reduction decides nothing"
 class = """
 Dispatch and reduction save nothing while a cheaper-looking route to the full \
@@ -6313,14 +6886,14 @@ prose with no gate, and the measurement is what falsified it.
 """
 
 [[verdict.route]]
-id = "R-DROP-THE-RAW-GRANT"
+id = "task run first"
 kind = "command"
 target = "remove the raw connector entry from `permissions.allow` in .claude/settings.json and reach the row through `batten mcp call`"
 
 # --- the committed half of the same grant (CLOUD-1247) -----------------------
 
 [[verdict]]
-id = "V-HARNESS-GRANT-ABSENT"
+id = "grant declare absent"
 gloss = "the committed settings no longer grant this repository's own binary"
 class = """
 `permissions.allow` is not the layer that decides. Claude Code's auto-mode \
@@ -6334,12 +6907,12 @@ session, in the repository whose own product this is. The grant that works is an
 """
 
 [[verdict.route]]
-id = "R-RESTORE-THE-GRANT"
+id = "task run first"
 kind = "command"
 target = "add an `autoMode.allow` entry naming `batten` to .claude/settings.json"
 
 [[verdict]]
-id = "V-HARNESS-GRANT-DEFAULTS-DROPPED"
+id = "default carry dropped"
 gloss = "the grant is there and the built-in classifier rules were discarded with it"
 class = """
 `$defaults` inherits the built-in classifier rules at its position in the list. \
@@ -6351,12 +6924,12 @@ rather than a second reason folded into the first.
 """
 
 [[verdict.route]]
-id = "R-RESTORE-THE-DEFAULTS"
+id = "task run first"
 kind = "command"
 target = "restore the `$defaults` sentinel to .claude/settings.json's autoMode.allow"
 
 [[verdict]]
-id = "V-SHELL-RULE-ADDED"
+id = "shell add refused"
 gloss = "an authored shell rule or bats suite was added, moving CLOUD-843's corpus the wrong way"
 class = """
 CLOUD-843's campaign is retiring 144 shell programs and 161 bats suites onto the \
@@ -6368,12 +6941,12 @@ row that it stays bash.
 """
 
 [[verdict.route]]
-id = "R-WRITE-A-POLICY-MODULE"
+id = "rule read first"
 kind = "document"
 target = ".claude/rules/policy-modules.md"
 
 [[verdict.route]]
-id = "R-DECLARE-IT-STAYS-BASH"
+id = "config read first"
 kind = "document"
 target = "batten.toml"
 
@@ -6398,7 +6971,7 @@ target = "batten.toml"
 # is legitimate and blocking "done" punishes correct behaviour — and the demotion
 # is what makes that structural instead of careful.
 [[verdict]]
-id = "V-HEDGED-FLAG-FRAMING"
+id = "prose report duplicate"
 gloss = "a finding was written as editorial rather than to a durable home"
 class = """
 Chat stores nothing, so a finding flagged in passing has no reader after the \
@@ -6409,17 +6982,17 @@ precision, which is why this rule leads the end-of-turn set.
 """
 
 [[verdict.route]]
-id = "R-FILE-THE-FINDING"
+id = "issue file first"
 kind = "issue"
 target = "put it in the row that already owns it, or file one"
 
 [[verdict.route]]
-id = "R-DROP-THE-HEDGE"
+id = "task run first"
 kind = "command"
 target = "say it plainly, or say nothing"
 
 [[verdict]]
-id = "V-PROSE-ONLY-DIFF"
+id = "diff ship early"
 gloss = "every changed line is a comment and no test moved, so a CI matrix would confirm nothing"
 class = """
 A full required matrix costs real minutes against a trunk landing every few \
@@ -6431,17 +7004,17 @@ the next one these files carry.
 """
 
 [[verdict.route]]
-id = "R-BATCH-IT"
+id = "task run first"
 kind = "command"
 target = "let the next change to these files carry the prose"
 
 [[verdict.route]]
-id = "R-OVERRIDE-PROSE-ONLY"
+id = "path admit first"
 kind = "override"
 precondition = "the prose IS the deliverable and cannot wait for the next change to these files"
 
 [[verdict]]
-id = "V-TEST-TARGET-ADDED"
+id = "test add refused"
 gloss = "a new top-level crates/batten/tests/*.rs mints a second cargo test target"
 class = """
 Cargo autodiscovers one test target per top-level `crates/batten/tests/*.rs`, and \
@@ -6453,12 +7026,12 @@ mints no target, which is where a retirement's tier belongs.
 """
 
 [[verdict.route]]
-id = "R-ADD-IT-TO-THE-GROUP"
+id = "patch run first"
 kind = "command"
 target = "git mv the file under crates/batten/tests/it/ and declare it in that group's main.rs"
 
 [[verdict]]
-id = "V-FILED-UNREFINED"
+id = "issue file unclear"
 gloss = "a row this branch created was never groomed to Ready, so filing cost nothing"
 class = """
 Filing is the third sink and the most expensive one on purpose: a new row costs \
@@ -6470,22 +7043,22 @@ carried.
 """
 
 [[verdict.route]]
-id = "R-FIX-IT-HERE"
+id = "task run first"
 kind = "command"
 target = "close the row you filed and fix it in this diff"
 
 [[verdict.route]]
-id = "R-COMMENT-ON-THE-OWNER"
+id = "issue file first"
 kind = "issue"
 target = "put it in the row that already owns it — comments are recorded and never gated"
 
 [[verdict.route]]
-id = "R-GROOM-TO-READY"
+id = "task run other"
 kind = "command"
 target = "mise run ready-lint"
 
 [[verdict]]
-id = "V-FILED-OVER-OWN-DIFF"
+id = "issue file same"
 gloss = "a row this branch filed names code this branch has open"
 class = """
 The punt CLOUD-514 is about. A defect you found in your own diff is a defect you \
@@ -6500,27 +7073,27 @@ names none of the diff.
 """
 
 [[verdict.route]]
-id = "R-FIX-IT-HERE"
+id = "task run first"
 kind = "command"
 target = "close the row you filed and fix it in this diff"
 
 [[verdict.route]]
-id = "R-CLOSE-IT-IN-THE-BODY"
+id = "task run other"
 kind = "command"
 target = "name it in closing form in the PR body, so the merge lands it"
 
 [[verdict.route]]
-id = "R-FILE-IT-AFTER-LANDING"
+id = "task run last"
 kind = "command"
 target = "file it from a clean tree, when it is no longer your diff"
 
 [[verdict.route]]
-id = "R-OVERRIDE-FILED-HERE"
+id = "path admit first"
 kind = "override"
 precondition = "the row DOCUMENTS the change being landed, so naming its files is the point rather than a deferral"
 
 [[verdict]]
-id = "V-SHELL-RULE-EDITED"
+id = "shell edit refused"
 gloss = "an authored shell rule or bats suite was edited in place rather than migrated"
 class = """
 The load-bearing arm. A migration replaces a shell gate; it does not maintain \
@@ -6532,28 +7105,28 @@ the successor on a `// carried:`, `// subsumed:` or `// changed:` row.
 """
 
 [[verdict.route]]
-id = "R-PORT-AND-RETIRE"
+id = "rule read first"
 kind = "document"
 target = ".claude/rules/policy-modules.md"
 
 # --- the same rule, said before the work instead of after it (CLOUD-1131) -----
 
 [[verdict]]
-id = "V-SHELL-EDIT-BEFORE-RETIREMENT"
+id = "shell edit early"
 gloss = "a write targets a path the retirement gate governs, said at the edit rather than at verify"
 class = """
-The same doctrine as `V-SHELL-RULE-EDITED` and none of its force: this class refuses nothing and moves no exit code. It exists because ORDER changes the conclusion a reader draws. `shell-retirement` is tree-scoped, so its refusal first arrives at `mise run verify` with the edit already finished, and the cheapest reading of a finished edit plus a gate saying no is "the gate is wrong" rather than "this should have been a retirement" — measured twice in one planning session. Arriving at the write costs nothing and removes that reading. The set is deliberately WIDER than the edit-time one, because the mediated surface cannot read a file to check for a shebang: it names a path the tree gate may yet allow, which is the sanctioned direction for advice and would not be for a refusal.
+The same doctrine as `shell edit refused` and none of its force: this class refuses nothing and moves no exit code. It exists because ORDER changes the conclusion a reader draws. `shell-retirement` is tree-scoped, so its refusal first arrives at `mise run verify` with the edit already finished, and the cheapest reading of a finished edit plus a gate saying no is "the gate is wrong" rather than "this should have been a retirement" — measured twice in one planning session. Arriving at the write costs nothing and removes that reading. The set is deliberately WIDER than the edit-time one, because the mediated surface cannot read a file to check for a shebang: it names a path the tree gate may yet allow, which is the sanctioned direction for advice and would not be for a refusal.
 """
 
 [[verdict.route]]
-id = "R-PORT-AND-RETIRE"
+id = "rule read first"
 kind = "document"
 target = ".claude/rules/toolchain.md"
 
 # --- the pole of the gate (CLOUD-386) ----------------------------------------
 
 [[verdict]]
-id = "V-HK-SKIP-UNCOVERED"
+id = "gate skip unseen"
 gloss = "a CI job carves a gate step out and no job runs it"
 class = """
 A workflow job may hand hk a step to skip, so the gate can be split across \
@@ -6566,12 +7139,12 @@ does not know what a caller passes. This class covers the second direction.
 """
 
 [[verdict.route]]
-id = "R-RUN-THE-CARVED-OUT-STEP"
+id = "workflow read first"
 kind = "document"
 target = ".github/workflows/ci.yml"
 
 [[verdict]]
-id = "V-CI-WORKFLOW-UNREAD"
+id = "workflow read unread"
 gloss = "the workflow this rule judges would not parse, so nothing was decided"
 class = """
 A declared source that will not parse is not an absent one. Absent means the \
@@ -6582,12 +7155,12 @@ set being left empty.
 """
 
 [[verdict.route]]
-id = "R-REPAIR-THE-WORKFLOW-DOCUMENT"
+id = "workflow read first"
 kind = "document"
 target = ".github/workflows/ci.yml"
 
 [[verdict]]
-id = "V-LEASE-PRECONDITION-ABSENT"
+id = "lease guard absent"
 gloss = "a job can start spending before the landing lease authorises its branch"
 class = """
 The lease serialises landing, but enforcing it only inside the lander means \
@@ -6601,12 +7174,12 @@ cannot start ahead of the cancellation.
 """
 
 [[verdict.route]]
-id = "R-ASK-THE-LEASE-FIRST"
+id = "workflow read first"
 kind = "document"
 target = ".github/workflows"
 
 [[verdict]]
-id = "V-LEASE-PRECONDITION-FATAL"
+id = "lease guard unsafe"
 gloss = "a precondition body that will not parse reds the first step of every job"
 class = """
 The presence clause matches the step's NAME, so a copy that reds its own job \
@@ -6621,12 +7194,12 @@ suffix.
 """
 
 [[verdict.route]]
-id = "R-TOLERATE-THE-PRECONDITION"
+id = "workflow read first"
 kind = "document"
 target = ".github/workflows"
 
 [[verdict]]
-id = "V-CHECK-STATUS-REROLLED"
+id = "check grade twice"
 gloss = "a workflow reads check status and decides green with its own copy of the predicate"
 class = """
 The green predicate has one home, and every hand-rolled copy of it so far has \
@@ -6638,12 +7211,12 @@ it cannot avoid.
 """
 
 [[verdict.route]]
-id = "R-DECIDE-THROUGH-THE-ONE-PREDICATE"
+id = "task run first"
 kind = "command"
 target = "mise run checks-green"
 
 [[verdict]]
-id = "V-BOT-PREFIX-UNWATCHED"
+id = "branch watch missing"
 gloss = "a bot lands on a branch prefix no workflow watches at its trigger"
 class = """
 Nothing runs on a bot's behalf unless a workflow is watching its heads. Handing \
@@ -6656,12 +7229,12 @@ is already too late. A lane whose config is absent is not asked for a watcher.
 """
 
 [[verdict.route]]
-id = "R-POINT-A-LANDER-AT-THE-PREFIX"
+id = "workflow read first"
 kind = "document"
 target = ".github/workflows"
 
 [[verdict]]
-id = "V-CI-TASK-NOT-IN-VERIFY"
+id = "task run missing"
 gloss = "CI runs a task `verify` does not, so CI is where that failure is discovered"
 class = """
 The workflow contract promises that CI runs the same tasks an author runs \
@@ -6674,12 +7247,12 @@ are absent.
 """
 
 [[verdict.route]]
-id = "R-RUN-IT-IN-VERIFY"
+id = "task run first"
 kind = "command"
 target = "mise run verify"
 
 [[verdict]]
-id = "V-REQUIRED-CHECK-NAMES-NO-JOB"
+id = "check name unknown"
 gloss = "the required roster names a check no job creates, so a wait never terminates"
 class = """
 `ci-wait` and `land` decide whether a commit got an answer over the required \
@@ -6690,12 +7263,12 @@ hand-maintained list is only safe with a sensor on it.
 """
 
 [[verdict.route]]
-id = "R-RECONCILE-THE-ROSTER"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "V-JOB-NOT-IN-REQUIRED-ROSTER"
+id = "job list missing"
 gloss = "a pull-request job is silently unrequired, so green can be reported without it"
 class = """
 The other direction, and the one with no symptom: a job added and not listed is \
@@ -6706,12 +7279,12 @@ it breaks.
 """
 
 [[verdict.route]]
-id = "R-ADD-THE-JOB-TO-THE-ROSTER"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "V-RELEASE-PR-NOT-DRAFT"
+id = "release open early"
 gloss = "the release pull request opens ready, so every refresh of it buys a matrix"
 class = """
 release-plz rewrites its branch on every push to the trunk. A non-draft pull \
@@ -6723,12 +7296,12 @@ zero; the flag is the mechanism rather than a preference.
 """
 
 [[verdict.route]]
-id = "R-OPEN-THE-RELEASE-PR-AS-A-DRAFT"
+id = "source read first"
 kind = "document"
 target = "release-plz.toml"
 
 [[verdict]]
-id = "V-DEPENDABOT-RETURNED"
+id = "config carry duplicate"
 gloss = "a retired second bot is back on ecosystems the first already owns"
 class = """
 This property INVERTED rather than being deleted: for the length of the \
@@ -6740,12 +7313,12 @@ surviving one already serves — with nothing else in the tree going red about i
 """
 
 [[verdict.route]]
-id = "R-MOVE-IT-TO-THE-ONE-BOT"
+id = "config read first"
 kind = "document"
 target = "renovate.json5"
 
 [[verdict]]
-id = "V-RENOVATE-BOUND-MISSING"
+id = "bound declare missing"
 gloss = "a key that decides what the bot lane spends or covers is absent or set to its own negation"
 class = """
 Five keys decide what the lane costs and what it reaches: whether its heads open \
@@ -6757,12 +7330,12 @@ the bound and its own negation differ by a single character.
 """
 
 [[verdict.route]]
-id = "R-RESTORE-THE-BOUND"
+id = "config read first"
 kind = "document"
 target = "renovate.json5"
 
 [[verdict]]
-id = "V-RENOVATE-COMMIT-TYPE-UNSCOPED"
+id = "commit name unnamed"
 gloss = "the commit type is written where a preset silently outranks it"
 class = """
 Every commit here lands by fast-forward through commit-lint, so a bot subject \
@@ -6776,12 +7349,12 @@ cannot detect from the file.
 """
 
 [[verdict.route]]
-id = "R-SCOPE-THE-COMMIT-TYPE"
+id = "config read first"
 kind = "document"
 target = "renovate.json5"
 
 [[verdict]]
-id = "V-ECOSYSTEM-UNSERVED"
+id = "manifest cover missing"
 gloss = "an ecosystem this repository maintains has nothing proposing updates for it"
 class = """
 An ecosystem nobody updates goes stale with nothing red anywhere. That is \
@@ -6792,12 +7365,12 @@ this repository actually maintains rather than everything that exists.
 """
 
 [[verdict.route]]
-id = "R-ENABLE-THE-MANAGER"
+id = "config read first"
 kind = "document"
 target = "renovate.json5"
 
 [[verdict]]
-id = "V-FANIN-NOT-REQUIRED"
+id = "job require missing"
 gloss = "the fan-in the abandon spares is not one the landing path waits for"
 class = """
 A red required check cancels the runs still spending on that commit, and that \
@@ -6808,12 +7381,12 @@ nothing that matters while the real one is cancelled.
 """
 
 [[verdict.route]]
-id = "R-REQUIRE-THE-FANIN"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "V-FANIN-WORKFLOW-DECLARES-NO-JOB"
+id = "workflow declare empty"
 gloss = "the file named as the fan-in's home does not carry it"
 class = """
 The abandon compares the declared workflow against each run's path, so a fan-in \
@@ -6824,12 +7397,12 @@ once, with nothing red.
 """
 
 [[verdict.route]]
-id = "R-NAME-THE-FANINS-HOME"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "V-ABANDON-RESTATES-THE-FANIN"
+id = "job declare duplicate"
 gloss = "the abandon decides which run to spare from a literal rather than the declaration"
 class = """
 A literal path in the task is a second authority for one fact, and the copy that \
@@ -6839,12 +7412,12 @@ would not.
 """
 
 [[verdict.route]]
-id = "R-READ-THE-DECLARATION"
+id = "task read first"
 kind = "document"
 target = "mise-tasks/abandon-matrix.sh"
 
 [[verdict]]
-id = "V-ABANDON-NEVER-CALLED"
+id = "job reach dead"
 gloss = "the abandon is wired, safe, and invoked by nothing"
 class = """
 The anti-vacuity term. Every other assertion about the fan-in is about making \
@@ -6854,12 +7427,12 @@ fan-in is declared, and the matrix still bills out in full after the first red.
 """
 
 [[verdict.route]]
-id = "R-CALL-THE-ABANDON"
+id = "task read first"
 kind = "document"
 target = "mise-tasks/land.sh"
 
 [[verdict]]
-id = "V-FOREIGN-CARGO-SPELLING-DRIFT"
+id = "cargo spelling other"
 gloss = "a foreign runner's cargo invocation is not the one `test:cargo` declares"
 class = """
 `ci-task-parity` exempts a foreign runner, and correctly — there is no local \
@@ -6872,12 +7445,12 @@ exemption is per JOB rather than per property.
 """
 
 [[verdict.route]]
-id = "R-RESPELL-THE-FOREIGN-INVOCATION"
+id = "workflow read first"
 kind = "document"
 target = ".github/workflows/rust.yml"
 
 [[verdict]]
-id = "V-FOREIGN-CARGO-ABSENT"
+id = "cargo reach absent"
 gloss = "no foreign-runner cargo invocation remains for the spelling rule to judge"
 class = """
 The anti-vacuity term. Every other clause of this rule judges a foreign leg, and \
@@ -6889,12 +7462,12 @@ ceasing to test.
 """
 
 [[verdict.route]]
-id = "R-RESTORE-THE-FOREIGN-LEG"
+id = "workflow read first"
 kind = "document"
 target = ".github/workflows/rust.yml"
 
 [[verdict]]
-id = "V-TASK-CARGO-UNREADABLE"
+id = "task read unread"
 gloss = "`test:cargo` yields no cargo invocation, so the comparison has no right-hand side"
 class = """
 Could-not-look, refused rather than reported clean, because a gate that found \
@@ -6905,12 +7478,12 @@ grows one, this arm is how that is discovered.
 """
 
 [[verdict.route]]
-id = "R-DECLARE-THE-CARGO-INVOCATION"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "V-BATS-NOT-PARALLEL"
+id = "suite run late"
 gloss = "the shell suite's invocation lost the parallelism it was measured with"
 class = """
 A speed-up is the one kind of fix that rots silently: nothing fails when \
@@ -6923,12 +7496,12 @@ spellings that cap the count below the machine.
 """
 
 [[verdict.route]]
-id = "R-RESTORE-THE-MEASURED-INVOCATION"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "V-BATS-RUN-UNCOUNTED"
+id = "suite count missing"
 gloss = "the run cannot say how many cases it executed, so a narrower run reads as a pass"
 class = """
 A suite that got faster by running fewer tests is the failure every change to \
@@ -6942,12 +7515,12 @@ with it.
 """
 
 [[verdict.route]]
-id = "R-COUNT-WHAT-RAN"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "V-BATS-COST-UNMEASURED"
+id = "suite measure missing"
 gloss = "nothing measures what the pole cost, or says which machine the measurement came from"
 class = """
 The pole of the gate is 85.9% of the job that is the CI critical path, and its \
@@ -6962,12 +7535,12 @@ never the duration, which is a property of the machine and is reported.
 """
 
 [[verdict.route]]
-id = "R-REMEASURE-THE-POLE"
+id = "rule read first"
 kind = "document"
 target = ".claude/rules/toolchain.md"
 
 [[verdict]]
-id = "V-SUITE-SUBJECT-IMMORTAL"
+id = "suite retire never"
 gloss = "a bats suite declares a subject no shell retirement can delete, and no exemption declares why"
 class = """
 `SubjectFacts::died` is `all`, so a suite is deletable only once EVERY declared \
@@ -6980,14 +7553,14 @@ written down.
 
 # The exemption is a DECLARATION, not a waiver, which is why the route names the
 # table rather than a bypass. Re-subjecting the suite is the other answer and is
-# refused by `V-SHELL-RULE-EDITED` with no override, so it is not offered here.
+# refused by `shell edit refused` with no override, so it is not offered here.
 [[verdict.route]]
-id = "R-DECLARE-THE-IMMORTAL-SUBJECT"
+id = "module read first"
 kind = "document"
 target = "policy/suite-subject-retirable.rego"
 
 [[verdict]]
-id = "V-SUITE-SUBJECT-UNDECLARED"
+id = "suite declare missing"
 gloss = "a bats suite declares no `# subject:` at all, so nothing can decide whether it is retirable"
 class = """
 The anti-vacuity half of the class above. Every other arm quantifies over a \
@@ -6998,12 +7571,12 @@ decide over.
 """
 
 [[verdict.route]]
-id = "R-DECLARE-THE-SUITE-SUBJECT"
+id = "rule read first"
 kind = "document"
 target = ".claude/rules/toolchain.md"
 
 [[verdict]]
-id = "V-SUITE-EXEMPTION-STALE"
+id = "suite admit stale"
 gloss = "an exemption names a suite that is gone, or one whose subjects are now all retirable"
 class = """
 The table held in the direction that keeps it honest. An exemption nothing needs \
@@ -7014,12 +7587,12 @@ nothing.
 """
 
 [[verdict.route]]
-id = "R-DROP-THE-SPENT-EXEMPTION"
+id = "module read first"
 kind = "document"
 target = "policy/suite-subject-retirable.rego"
 
 [[verdict]]
-id = "V-SUITE-SOURCE-UNREAD"
+id = "suite parse unread"
 gloss = "a declared suite could not be read, so nothing about its subject was judged"
 class = """
 Could-not-look, and it must not be spelled like either answer. A suite ABSENT \
@@ -7031,12 +7604,12 @@ produces over a file it never opened.
 """
 
 [[verdict.route]]
-id = "R-MAKE-THE-SUITE-READABLE"
+id = "task run first"
 kind = "command"
 target = "mise run lint:shell"
 
 [[verdict]]
-id = "V-BATS-SOURCE-UNREAD"
+id = "bats parse unread"
 gloss = "a declared source for the invocation could not be read, so nothing about it was judged"
 class = """
 Could-not-look, and it must not be spelled like either answer. An ABSENT manifest \
@@ -7050,14 +7623,14 @@ clean is the vacuous pass this engine exists to keep inexpressible.
 # file answers — never "add the task", since an ABSENT manifest is not this
 # refusal at all.
 [[verdict.route]]
-id = "R-MAKE-THE-SOURCE-READABLE"
+id = "task run first"
 kind = "command"
 target = "mise run lint:toml"
 
 # --- the formatters-only subset (CLOUD-681) ----------------------------------
 
 [[verdict]]
-id = "V-FMT-DESCRIBED-AS-THE-GATE"
+id = "task state wrong"
 gloss = "the prose describing `fmt` no longer says it is the formatters-only subset"
 class = """
 The other direction, and the one the issue's own §2 names as the inverse \
@@ -7068,12 +7641,12 @@ is the whole defect, and it does not matter which of them is the one that lied.
 """
 
 [[verdict.route]]
-id = "R-CORRECT-THE-DESCRIPTION"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "V-FIXER-TASK-UNROUTED"
+id = "task select missing"
 gloss = "a `fmt:*` task exists that no hk step routes, so `mise run fmt` cannot reach it"
 class = """
 The silent half, and the second defect this row was written on. `deno-fmt` \
@@ -7087,12 +7660,12 @@ of a linter is what puts it in scope.
 """
 
 [[verdict.route]]
-id = "R-ROUTE-THE-FIXER"
+id = "gate read first"
 kind = "document"
 target = "hk.pkl"
 
 [[verdict]]
-id = "V-HK-SOURCE-UNREAD"
+id = "gate parse unread"
 gloss = "a declared source for the hook selection could not be read, so nothing about it was judged"
 class = """
 Could-not-look, and it must not be spelled like either answer. An ABSENT config \
@@ -7103,12 +7676,12 @@ vacuous pass this engine exists to keep inexpressible.
 """
 
 [[verdict.route]]
-id = "R-MAKE-THE-HOOK-CONFIG-READABLE"
+id = "task run first"
 kind = "command"
 target = "mise run pkl-check hk.pkl"
 
 [[verdict]]
-id = "V-RETIREMENT-UNMAPPED"
+id = "shell retire missing"
 gloss = "a governed file was deleted and the retirement ledger records no successor for it"
 class = """
 CLOUD-908's defect at file granularity: the deletion is admitted and the logic \
@@ -7118,12 +7691,12 @@ under the `declared_in` glob the `[rule.conserves]` column already declares.
 """
 
 [[verdict.route]]
-id = "R-ADD-A-LEDGER-ARM"
+id = "config read first"
 kind = "document"
 target = "batten.toml"
 
 [[verdict]]
-id = "V-RETIREMENT-AMBIGUOUS"
+id = "shell retire unclear"
 gloss = "a deleted file carries more than one retirement arm, so it records no answer at all"
 class = """
 `carried`, `subsumed` and `changed` are three different claims about where the \
@@ -7133,12 +7706,12 @@ that is.
 """
 
 [[verdict.route]]
-id = "R-KEEP-THE-TRUE-ARM"
+id = "config read first"
 kind = "document"
 target = "batten.toml"
 
 [[verdict]]
-id = "V-SUCCESSOR-NO-SURFACE"
+id = "shell port missing"
 gloss = "a retirement arm names no policy surface, only a test"
 class = """
 A mapping that names only a test records where the assertions went and not where \
@@ -7151,12 +7724,12 @@ home and engine source is mechanism only.
 """
 
 [[verdict.route]]
-id = "R-NAME-THE-SURFACE"
+id = "rule read first"
 kind = "document"
 target = ".claude/rules/policy-modules.md"
 
 [[verdict]]
-id = "V-SUCCESSOR-NO-TEST"
+id = "test port missing"
 gloss = "a retirement arm names no compiled-binary test, so nothing proves the port works"
 class = """
 A module's own `test_` rules are the load-time tier and they fabricate their own \
@@ -7167,12 +7740,12 @@ successor must be a `crates/batten/tests/*.rs` case.
 """
 
 [[verdict.route]]
-id = "R-ADD-A-BINARY-TEST"
+id = "rule read first"
 kind = "document"
 target = ".claude/rules/policy-modules.md"
 
 [[verdict]]
-id = "V-SUCCESSOR-KIND-UNDECLARED"
+id = "shell port unnamed"
 gloss = "a retirement arm names engine source without saying whether that is a new verb or mechanism"
 class = """
 `crates/batten/src/*.rs` is two different dispositions wearing one spelling: a \
@@ -7186,12 +7759,12 @@ makes that case visible instead of automatic.
 """
 
 [[verdict.route]]
-id = "R-DECLARE-THE-SUCCESSOR-KIND"
+id = "rule read first"
 kind = "document"
 target = ".claude/rules/toolchain.md"
 
 [[verdict]]
-id = "V-WITHDRAWAL-SUBJECT-ALIVE"
+id = "shell retire never"
 gloss = "a `withdrawn` retirement arm was spent over a subject the tree still carries"
 class = """
 The condition that keeps the fourth arm narrower than a `[[waiver]]` over the \
@@ -7203,7 +7776,7 @@ Either delete the declared subject in this same change, or name a successor on a
 """
 
 [[verdict.route]]
-id = "R-RETIRE-THE-SUBJECT-TOO"
+id = "config read first"
 kind = "document"
 target = "batten.toml"
 
@@ -7214,7 +7787,7 @@ target = "batten.toml"
 # decide — a subject that travels on the row — and `retirement_blockers` is the
 # half that reads the declared `# subject:` header out of the base text.
 [[verdict]]
-id = "V-RETIREMENT-SUBJECT-ALIVE"
+id = "program retire never"
 gloss = "a retirement arm names a governed path this change does not retire"
 class = """
 A retirement conserves coverage only where the thing under test goes with the \
@@ -7226,7 +7799,7 @@ this file's subject.
 """
 
 [[verdict.route]]
-id = "R-RETIRE-THE-NAMED-SUBJECT"
+id = "config read first"
 kind = "document"
 target = "batten.toml"
 
@@ -7286,7 +7859,7 @@ kind = "document"
 target = "batten.toml"
 
 [[verdict]]
-id = "V-WITHDRAWAL-UNEXPLAINED"
+id = "shell retire empty"
 gloss = "a `withdrawn` retirement arm names neither a successor nor a reason"
 class = """
 The fourth arm names no successor by design, so the reason is the only thing a \
@@ -7296,12 +7869,12 @@ path.
 """
 
 [[verdict.route]]
-id = "R-EXPLAIN-THE-WITHDRAWAL"
+id = "config read first"
 kind = "document"
 target = "batten.toml"
 
 [[verdict]]
-id = "V-ANCESTRY-DECIDES-MERGEDNESS"
+id = "patch judge wrong"
 gloss = "a reachability answer decides merged-ness, which a rebased landing is invisible to"
 class = """
 Merged-ness is decided by patch identity, never by reachability (CLOUD-36). This \
@@ -7311,12 +7884,12 @@ no longer exists. The failure is silent and in the permissive direction.
 """
 
 [[verdict.route]]
-id = "R-ASK-PATCH-IDENTITY"
+id = "patch run first"
 kind = "command"
 target = "git cherry"
 
 [[verdict]]
-id = "V-COMMIT-WITHOUT-A-MESSAGE-SOURCE"
+id = "commit write missing"
 gloss = "a `git commit` names no message source, so git opens $EDITOR and blocks there"
 class = """
 No `-m`, `-F`, `-C`, `--no-edit`, `--fixup` or `--squash`. Git opens $EDITOR and \
@@ -7326,7 +7899,7 @@ four minutes (CLOUD-488). Write the message to a file and use \
 """
 
 [[verdict.route]]
-id = "R-COMMIT-FROM-A-FILE"
+id = "patch run first"
 kind = "command"
 target = "git commit -F <path>"
 
@@ -7337,7 +7910,7 @@ target = "git commit -F <path>"
 # an author who reads "name a message source" while looking at their own `-F -`
 # concludes the gate is wrong.
 [[verdict]]
-id = "V-COMMIT-STDIN-UNBOUND"
+id = "commit bind missing"
 gloss = "a `git commit -F -` has nothing redirected into the element it is written in, so it reads /dev/null"
 class = """
 The heredoc binds to the element that WRITES it. `git commit -F - && mise run \
@@ -7351,14 +7924,14 @@ and killing it took `kill -9` on the process group. A heredoc, `< msg.txt` or \
 """
 
 [[verdict.route]]
-id = "R-COMMIT-FROM-A-FILE-THAT-CANNOT-REBIND"
+id = "patch run first"
 kind = "command"
 target = "git commit -F <path>"
 
 # CLOUD-613, CLOUD-482. The waste here is the SESSION rather than a verdict or a
 # gate, which is why it is a class of its own rather than a row on either above.
 [[verdict]]
-id = "V-FOREGROUND-SLEEP"
+id = "sleep run blocked"
 gloss = "a foreground `sleep` spends the session's own turn waiting, and the call is killed at ~2 minutes"
 class = """
 A wait longer than about two minutes does not run slowly, it FAILS — measured at \
@@ -7371,20 +7944,20 @@ when the condition holds — that is a background wait and is allowed.
 """
 
 [[verdict.route]]
-id = "R-WAIT-ON-THE-CONDITION"
+id = "task run first"
 kind = "command"
 target = "until <test>; do sleep 1; done"
 
 [[verdict.route]]
-id = "R-ASK-WHAT-IS-RUNNING"
+id = "task run other"
 kind = "command"
 target = "mise run alive"
 
-# CLOUD-821. NOT a narrower `V-FOREGROUND-SLEEP`: backgrounding is the remedy for
+# CLOUD-821. NOT a narrower `sleep run blocked`: backgrounding is the remedy for
 # that one and the subject of this one, so an author reading the wrong class here
 # would be told to do the thing they already did.
 [[verdict]]
-id = "V-BACKGROUND-TIMER"
+id = "timer run refused"
 gloss = "a backgrounded `sleep` with no loop around it is a timer, not a wait"
 class = """
 It exits when the clock says so, never when the thing being waited for happens, \
@@ -7398,17 +7971,17 @@ is allowed.
 """
 
 [[verdict.route]]
-id = "R-WAIT-ON-THE-CONDITION-NOT-THE-CLOCK"
+id = "task run first"
 kind = "command"
 target = "until <test>; do sleep 1; done"
 
 [[verdict.route]]
-id = "R-ASK-WHAT-IS-RUNNING-ONCE"
+id = "task run other"
 kind = "command"
 target = "mise run alive"
 
 [[verdict]]
-id = "V-WORKFLOW-UNPARSED"
+id = "workflow parse broken"
 gloss = "a workflow could not be parsed, so its lanes were never judged"
 class = """
 Could-not-look, and deliberately not spelled the same way as a workflow whose \
@@ -7417,12 +7990,12 @@ about itself, and reporting silence there is CLOUD-251's vacuous pass.
 """
 
 [[verdict.route]]
-id = "R-FIX-THE-WORKFLOW-SYNTAX"
+id = "task run first"
 kind = "command"
 target = "mise run lint:deno"
 
 [[verdict]]
-id = "V-PRIVILEGED-LANE-UNTESTED-ORIGIN"
+id = "lane guard missing"
 gloss = "a job an outside author can reach holds contents:write and tests no head origin"
 class = """
 The privileged-lane shape: a trigger an outside author can fire, a token that can \
@@ -7432,12 +8005,12 @@ permission.
 """
 
 [[verdict.route]]
-id = "R-TEST-THE-HEAD-ORIGIN"
+id = "workflow read first"
 kind = "document"
 target = ".github/workflows"
 
 [[verdict]]
-id = "V-MCP-PIN-DISAGREES"
+id = "pin declare other"
 gloss = "a tool version .mcp.json names is not the version mise.toml pins"
 class = """
 The second place a pin is written cannot drift from the first. `mise exec` treats \
@@ -7448,12 +8021,12 @@ starts fine, which is what makes it a gate rather than a runtime error.
 """
 
 [[verdict.route]]
-id = "R-REPEAT-THE-AUTHORITATIVE-PIN"
+id = "config read first"
 kind = "document"
 target = ".mcp.json"
 
 [[verdict]]
-id = "V-MCP-PIN-UNDECLARED"
+id = "pin declare missing"
 gloss = "a tool .mcp.json launches has no plain-string pin in mise.toml at all"
 class = """
 A reference with no authority behind it is not a pin, it is a second opinion. \
@@ -7465,12 +8038,12 @@ wearing a translation's clothes.
 """
 
 [[verdict.route]]
-id = "R-PIN-THE-TOOL"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "V-MCP-EXEC-UNSCOPED"
+id = "call run loose"
 gloss = "a `mise exec` launch names no tool before `--`, so it provisions the whole toolchain"
 class = """
 The regression CLOUD-316 is actually about, and the reason the pin exists at all. \
@@ -7483,12 +8056,12 @@ not silently exempt.
 """
 
 [[verdict.route]]
-id = "R-SCOPE-THE-EXEC"
+id = "config read first"
 kind = "document"
 target = ".mcp.json"
 
 [[verdict]]
-id = "V-PIN-AUTHORITY-UNREADABLE"
+id = "pin read unread"
 gloss = "mise.toml could not be read, so no pin reference could be compared against it"
 class = """
 Could-not-look, kept loud. `mise.toml` carries the pins, so a tree that could not \
@@ -7499,12 +8072,12 @@ is not-applicable rather than could-not-look.
 """
 
 [[verdict.route]]
-id = "R-RESTORE-THE-AUTHORITY"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "V-TASK-UNDEFINED"
+id = "task name undefined"
 gloss = "a command row names a task this tree does not define"
 class = """
 `mise run <task>` resolves from the working directory, and the runner is on PATH, \
@@ -7516,17 +8089,17 @@ nothing.
 """
 
 [[verdict.route]]
-id = "R-DEFINE-THE-TASK"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict.route]]
-id = "R-NAME-A-PROGRAM-ON-PATH"
+id = "config read first"
 kind = "document"
 target = "batten.toml"
 
 [[verdict]]
-id = "V-AUTHORITY-UNPARSED"
+id = "config parse broken"
 gloss = "the committed authority could not be parsed, so none of its rows could be judged"
 class = """
 `batten.toml` carries the rows, so a tree that could not read it cannot have its \
@@ -7536,12 +8109,12 @@ same output.
 """
 
 [[verdict.route]]
-id = "R-LINT-THE-AUTHORITY"
+id = "task run first"
 kind = "command"
 target = "mise run config-lint"
 
 [[verdict]]
-id = "V-LAYERING-EDGE-FORBIDDEN"
+id = "layer reach refused"
 gloss = "a module reaches one the layer table places below it"
 class = """
 A layering this tree documents and, before this rule, nothing enforced. The edge \
@@ -7550,12 +8123,12 @@ through a re-export counts exactly as a direct one does.
 """
 
 [[verdict.route]]
-id = "R-MOVE-THE-DEPENDENCY"
+id = "prose read first"
 kind = "document"
 target = ".serena/memories/core.md"
 
 [[verdict]]
-id = "V-LAYER-UNPLACED"
+id = "module place missing"
 gloss = "a module is judged by the layering rule and absent from its table"
 class = """
 An unplaced module is not a module with no constraints — it is a module whose \
@@ -7564,12 +8137,12 @@ narrow the row's selector so it is honestly out of scope.
 """
 
 [[verdict.route]]
-id = "R-PLACE-THE-MODULE"
+id = "config read first"
 kind = "document"
 target = "batten.toml"
 
 [[verdict]]
-id = "V-LAYER-TABLE-DECIDES-NOTHING"
+id = "layer table dead"
 gloss = "the layer table forbids no edge, so the rule is on and decides nothing"
 class = """
 A gate that cannot refuse is off, and one that is off while reading as configured \
@@ -7578,12 +8151,12 @@ edges, or remove the row.
 """
 
 [[verdict.route]]
-id = "R-DECLARE-THE-EDGES"
+id = "config read first"
 kind = "document"
 target = "batten.toml"
 
 [[verdict]]
-id = "V-REMEDY-DROPPED-BY-THE-FILTER"
+id = "remedy select dropped"
 gloss = "a stderr line inside a `>&2` block carries no `::error::` prefix, so readers drop it"
 class = """
 `land` and every reader following this tree's filter convention drop an \
@@ -7593,12 +8166,12 @@ route. Prefix it, as `board-payloads` does for every line of its own recipe bloc
 """
 
 [[verdict.route]]
-id = "R-PREFIX-THE-LINE"
+id = "task read first"
 kind = "document"
 target = "mise-tasks/board-payloads.sh"
 
 [[verdict]]
-id = "V-REMEDY-HAS-TWO-AUTHORS"
+id = "remedy own duplicate"
 gloss = "a task body names a bypass it does not read, so it is a second author of another gate's remedy"
 class = """
 A second authority drifts. Measured: a caller's copy dropped one route entirely \
@@ -7609,12 +8182,12 @@ because it carries none.
 """
 
 [[verdict.route]]
-id = "R-POINT-AT-THE-GATE"
+id = "task read first"
 kind = "document"
 target = "mise-tasks/linear-check.sh"
 
 [[verdict]]
-id = "V-WORKSPACE-DEP-ORPHANED"
+id = "workspace declare unused"
 gloss = "a `[workspace.dependencies]` entry no member references resolves to nothing"
 class = """
 Every graph-reading gate is then green about a dependency that is not in the \
@@ -7624,12 +8197,12 @@ licence or SBOM check walks does not contain it. Reference it with \
 """
 
 [[verdict.route]]
-id = "R-REFERENCE-OR-DELETE"
+id = "manifest read first"
 kind = "document"
 target = "Cargo.toml"
 
 [[verdict]]
-id = "V-MANIFEST-UNPARSED"
+id = "manifest parse broken"
 gloss = "a manifest could not be parsed, so its references were never counted"
 class = """
 An orphan cannot be ruled out over a file nobody read. Could-not-look, reported \
@@ -7637,12 +8210,12 @@ rather than collapsed into the clean answer.
 """
 
 [[verdict.route]]
-id = "R-LINT-THE-MANIFEST"
+id = "task run first"
 kind = "command"
 target = "mise run lint:toml"
 
 [[verdict]]
-id = "V-WORKSPACE-TABLE-ABSENT"
+id = "workspace table absent"
 gloss = "no `[workspace.dependencies]` table reached the judged set, so the rule decided nothing"
 class = """
 The vacuity arm. A rule whose input never arrived has not established that there \
@@ -7651,12 +8224,12 @@ selector so it selects the manifest, or remove the row.
 """
 
 [[verdict.route]]
-id = "R-SELECT-THE-MANIFEST"
+id = "config read first"
 kind = "document"
 target = "batten.toml"
 
 [[verdict]]
-id = "V-COMPLIANCE-SOURCE-UNPARSED"
+id = "source parse broken"
 gloss = "a compliance source could not be parsed, so the checker was never judged against the evaluator"
 class = """
 The pinned type checker and the shipped evaluator have to agree about which OPA \
@@ -7665,12 +8238,12 @@ did not parse contributes neither, which is could-not-look rather than agreement
 """
 
 [[verdict.route]]
-id = "R-LINT-THE-SOURCE"
+id = "task run first"
 kind = "command"
 target = "mise run lint:toml"
 
 [[verdict]]
-id = "V-CHECKER-AHEAD-OF-EVALUATOR"
+id = "version pin ahead"
 gloss = "the pinned checker implements a newer OPA level than the shipped evaluator records"
 class = """
 A rule type checked by one and evaluated by the other is a false green: the \
@@ -7680,12 +8253,12 @@ recorded level up once upstream declares it.
 """
 
 [[verdict.route]]
-id = "R-ALIGN-THE-PIN"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "V-COMPLIANCE-CLAIM-STALE"
+id = "claim state stale"
 gloss = "the recorded compliance level was read against a different evaluator version than the one pinned"
 class = """
 The pin then tracks a claim nobody has checked. Re-read upstream's declared level \
@@ -7694,12 +8267,12 @@ the record a measurement rather than a memory.
 """
 
 [[verdict.route]]
-id = "R-REREAD-AND-MOVE-BOTH"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "V-COMPLIANCE-DECLARATION-ABSENT"
+id = "claim declare absent"
 gloss = "a declaration this comparison needs is absent, so there is nothing to hold the pin to"
 class = """
 One class rather than four, distinguished by the subject naming which declaration \
@@ -7710,12 +8283,12 @@ tokens for one thing to learn.
 """
 
 [[verdict.route]]
-id = "R-DECLARE-IT"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "V-VERSION-UNREADABLE"
+id = "version read unread"
 gloss = "a declared version is not MAJOR.MINOR, so no comparison it feeds can be trusted"
 class = """
 The comparison is numeric, so an unparseable version silently orders wrong rather \
@@ -7723,12 +8296,12 @@ than failing. Reported at the declaration, because that is where the fix goes.
 """
 
 [[verdict.route]]
-id = "R-WRITE-A-MAJOR-MINOR"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "V-ROUTE-TASK-UNDEFINED"
+id = "route name undefined"
 gloss = "a route offers a task this tree does not define"
 class = """
 The worst moment for a task to be missing. A reader has just been refused, has \
@@ -7738,7 +8311,7 @@ program on PATH, which this rule deliberately leaves alone.
 """
 
 [[verdict.route]]
-id = "R-DEFINE-THE-ROUTED-TASK"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
@@ -7750,10 +8323,10 @@ target = "mise.toml"
 # thread, or no review from anyone but the author", which was true of the `--jq`
 # projection that folded both into one count. The row is tool-sourced now and
 # counts one collection plus a page guard, so the second condition is
-# `V-REVIEW-ABSENT`'s below. Leaving it named here would send a reader looking for
+# `review read absent`'s below. Leaving it named here would send a reader looking for
 # threads on a head whose only problem is that nobody looked.
 [[verdict]]
-id = "V-REVIEW-UNANSWERED"
+id = "review answer missing"
 gloss = "readying would buy a CI matrix on a head carrying unresolved review threads"
 class = """
 Readying is the event that starts CI, and nothing in `land`'s pre-ready sequence \
@@ -7768,12 +8341,12 @@ thing that can name them.
 """
 
 [[verdict.route]]
-id = "R-ANSWER-THE-THREADS"
+id = "task run first"
 kind = "command"
 target = "resolve each thread, then read them again with pull_request_read and retry"
 
 [[verdict.route]]
-id = "R-FORCE-A-REVIEW"
+id = "task run other"
 kind = "command"
 target = "@coderabbitai full review"
 
@@ -7783,7 +8356,7 @@ target = "@coderabbitai full review"
 # count being non-zero and this refuses on zero — and because the remedies do not
 # overlap: there is nothing to answer on a head nobody has looked at.
 [[verdict]]
-id = "V-REVIEW-ABSENT"
+id = "review read absent"
 gloss = "readying would buy a CI matrix on a head nobody has reviewed"
 class = """
 The read found no review at all, which the thread count cannot say: a head with \
@@ -7796,12 +8369,12 @@ express (CLOUD-859 owns that half).
 """
 
 [[verdict.route]]
-id = "R-FORCE-A-FIRST-REVIEW"
+id = "task run first"
 kind = "command"
 target = "@coderabbitai full review"
 
 [[verdict.route]]
-id = "R-READ-THE-REVIEWS"
+id = "task run other"
 kind = "command"
 target = "pull_request_read, method get_reviews, then retry"
 
@@ -7809,7 +8382,7 @@ target = "pull_request_read, method get_reviews, then retry"
 # one, because a reader meeting an unplaced spawn and a reader meeting an absent
 # census have nothing to learn from each other.
 [[verdict]]
-id = "V-SPAWN-UNPLACED"
+id = "spawn place missing"
 gloss = "a module the adapter table does not place resolves the spawn type"
 class = """
 The adapter table says which modules own a delegated tool. A spawn outside them \
@@ -7820,17 +8393,17 @@ rather than by spelling: a byte scan would report `surface.rs`, which imports \
 """
 
 [[verdict.route]]
-id = "R-ROUTE-THROUGH-EXEC"
+id = "source read first"
 kind = "document"
 target = "crates/batten/src/exec.rs"
 
 [[verdict.route]]
-id = "R-PLACE-THE-ADAPTER"
+id = "module read first"
 kind = "document"
 target = "policy/spawn-adapters.rego"
 
 [[verdict]]
-id = "V-SYMBOL-CENSUS-ABSENT"
+id = "symbol count absent"
 gloss = "the symbol census is absent, so no spawn was placed or refused"
 class = """
 Could-not-look is not clean (CLOUD-251). `input.tree.symbols` is `null` both when \
@@ -7840,12 +8413,12 @@ this gate exists against.
 """
 
 [[verdict.route]]
-id = "R-DECLARE-THE-SYMBOL-FACT"
+id = "config read first"
 kind = "document"
 target = "batten.toml"
 
 [[verdict]]
-id = "V-ADAPTER-TABLE-EMPTY"
+id = "adapter table empty"
 gloss = "the adapter table places no module, so this rule decides nothing"
 class = """
 The vacuity guard. A table placing nothing cannot refuse anything, and a gate \
@@ -7853,7 +8426,7 @@ that cannot refuse is off rather than passing.
 """
 
 [[verdict.route]]
-id = "R-PLACE-AT-LEAST-ONE-ADAPTER"
+id = "module read first"
 kind = "document"
 target = "policy/spawn-adapters.rego"
 
@@ -7998,7 +8571,7 @@ id = "fixed-rule-ref"
 regex = '`data\.batten\.[a-z_]+`'
 
 [[pattern]]
-id = "policy-rule-const"
+id = "module read first"
 regex = '^const [A-Z_]+_RULE: &str = "[a-z_]+";'
 
 # CLOUD-1150 §2. The unit word is load-bearing: a rules file writes plenty of
@@ -8039,50 +8612,50 @@ id = "plain-dotted-version"
 regex = '^[0-9]+(\.[0-9]+)*$'
 
 [[verdict]]
-id = "V-RESTATED-DEFAULT-DRIFTS"
+id = "default state other"
 gloss = "a rules file restates an env default the mechanism does not have"
 class = """
 A stale parenthetical in a rules file is not a typo: these files are read by an agent that then acts without re-deriving, so it is a false premise delivered with the authority of the rule. The mechanism's own `${VAR:-N}` is the authority. Correct the prose, or drop the value and let the reader read it there — dropping it is always allowed, because this class never demands that a value be restated.
 """
 
 [[verdict.route]]
-id = "R-CORRECT-THE-RESTATED-DEFAULT"
+id = "rule read first"
 kind = "document"
 target = ".claude/rules/toolchain.md"
 
 [[verdict]]
-id = "V-NAMED-EVENT-UNWIRED"
+id = "event wire missing"
 gloss = "a sentence says a task runs on a hook event nothing wires it to"
 class = """
 Scoped to a sentence carrying "runs on", so prose stays free to record an accepted gap beside the wiring it qualifies. What cannot stand is the assertion that a task RUNS on an event `.claude/settings.json` does not wire. Either wire it, or say it is absent.
 """
 
 [[verdict.route]]
-id = "R-WIRE-OR-UNSAY-THE-EVENT"
+id = "config read first"
 kind = "document"
 target = ".claude/settings.json"
 
 [[verdict]]
-id = "V-NAMED-INPUT-KEY-UNEMITTABLE"
+id = "input key dead"
 gloss = "a rules file names a policy input key the generated schema does not carry"
 class = """
 CLOUD-845's defect in prose. A module copying the key reads an undefined path, Rego reads undefined as does not hold, and the deny set is empty — a dead gate and a clean tree are byte-identical. The generated schemas are the authority; correct the key or drop it.
 """
 
 [[verdict.route]]
-id = "R-CORRECT-THE-INPUT-KEY"
+id = "config read first"
 kind = "document"
 target = "schema/policy-input.schema.json"
 
 [[verdict]]
-id = "V-NAMED-FIXED-RULE-UNQUERIED"
+id = "rule ask missing"
 gloss = "a rules file names a fixed rule the evaluator does not query"
 class = """
 The three rule names are the query root, so a module publishing the named spelling contributes nothing to the deny set and fails nothing. `crates/batten/src/policy.rs`'s constants are the authority. Correct the name, or subscript it if the pattern table was meant.
 """
 
 [[verdict.route]]
-id = "R-CORRECT-THE-FIXED-RULE-NAME"
+id = "source read first"
 kind = "document"
 target = "crates/batten/src/policy.rs"
 
@@ -8118,6 +8691,6 @@ The could-not-look arm, and it is conditioned on there being a claim to judge ra
 """
 
 [[verdict.route]]
-id = "R-RESTORE-THE-DRIFT-AUTHORITY"
+id = "task run first"
 kind = "command"
 target = "mise run rules-drift"

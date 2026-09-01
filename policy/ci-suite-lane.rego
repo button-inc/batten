@@ -111,7 +111,7 @@ runs_task(name) if {
 
 violation contains {
 	"rule": "ci-suite-lane",
-	"verdict": "V-HK-SKIP-UNCOVERED",
+	"verdict": "gate skip unseen",
 	"subjects": [{"path": workflow_path}, {"artifact": name}],
 } if {
 	governed
@@ -127,7 +127,7 @@ violation contains {
 # green over a file it never read.
 violation contains {
 	"rule": "ci-suite-lane",
-	"verdict": "V-CI-WORKFLOW-UNREAD",
+	"verdict": "workflow read unread",
 	"subjects": [{"path": path}],
 } if {
 	some path in input.tree.missing
@@ -164,7 +164,7 @@ test_a_skipped_step_no_job_runs_is_refused if {
 	found := violation with input as sound_input({"ci": paired_jobs.ci})
 	count(found) == 1
 	some finding in found
-	finding.verdict == "V-HK-SKIP-UNCOVERED"
+	finding.verdict == "gate skip unseen"
 	some subject in finding.subjects
 	subject.artifact == "test:bats"
 }
@@ -193,7 +193,7 @@ test_a_job_level_carve_out_is_read_too if {
 	found := violation with input as sound_input(jobs)
 	count(found) == 1
 	some finding in found
-	finding.verdict == "V-HK-SKIP-UNCOVERED"
+	finding.verdict == "gate skip unseen"
 }
 
 # ANTI-VACUITY'S OTHER HALF: a workflow that carves nothing out has nothing to
@@ -217,5 +217,5 @@ test_an_unreadable_workflow_is_loud if {
 	}}
 	count(found) == 1
 	some finding in found
-	finding.verdict == "V-CI-WORKFLOW-UNREAD"
+	finding.verdict == "workflow read unread"
 }

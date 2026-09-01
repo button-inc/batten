@@ -48,7 +48,7 @@ rules contains "denials-outlive-the-turn"
 # exists to catch — a finding produced and then left behind.
 violation contains {
 	"rule": "denials-outlive-the-turn",
-	"verdict": "V-DENIALS-OUTLIVE-THE-TURN",
+	"verdict": "turn deny held",
 	"subjects": [{"count": input.facts.extracted.denials}],
 } if {
 	# GUARDED, and the guard is the whole could-not-look arm: `null` is the
@@ -73,7 +73,7 @@ stopped(extracted, repeat) := {
 
 test_a_repeat_stop_with_refusals_is_refused if {
 	some v in violation with input as stopped({"denials": 2}, true)
-	v.verdict == "V-DENIALS-OUTLIVE-THE-TURN"
+	v.verdict == "turn deny held"
 }
 
 # A FIRST stop is work concluding, not a finding left behind.
@@ -113,7 +113,7 @@ test_a_compound_command_reaches_the_same_verdict if {
 		"call": {"command": "cd /tmp && mise run land", "stop-repeat": true},
 		"facts": {"extracted": {"denials": 2}},
 	}
-	v.verdict == "V-DENIALS-OUTLIVE-THE-TURN"
+	v.verdict == "turn deny held"
 }
 
 #MUTANT-SUITE crates/batten/tests/it/extracted_facts.rs

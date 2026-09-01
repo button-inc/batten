@@ -100,7 +100,7 @@ touches_a_test if {
 # rewrite that ships with its own test.
 violation contains {
 	"rule": "prose-only",
-	"verdict": "V-PROSE-ONLY-DIFF",
+	"verdict": "diff ship early",
 	"subjects": [{"count": count(changed)}],
 } if {
 	count(changed) > 0
@@ -120,7 +120,7 @@ test_a_comment_only_branch_with_no_test_change_is_refused if {
 		"deleted": [],
 		"code-changed": [],
 	})
-	v.verdict == "V-PROSE-ONLY-DIFF"
+	v.verdict == "diff ship early"
 }
 
 # THE CONJUNCT THAT MAKES DOC WORK POSSIBLE. Same diff plus a test, and the gate
@@ -173,7 +173,7 @@ test_deleting_a_pure_prose_file_is_prose_only if {
 		"deleted": ["NOTES.md"],
 		"code-changed": [],
 	})
-	v.verdict == "V-PROSE-ONLY-DIFF"
+	v.verdict == "diff ship early"
 }
 
 # COULD-NOT-LOOK SAYS NOTHING. An unresolvable base is `null`, and reading it as

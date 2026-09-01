@@ -788,7 +788,7 @@ fn check_bump(
     //
     // **The consumer is not touched, and that is the point rather than a
     // shortcut.** `graph-check.sh` keys its exemption on the literal `none`; it
-    // is a governed shell rule that cannot retire, so `V-SHELL-RULE-EDITED`
+    // is a governed shell rule that cannot retire, so `shell edit refused`
     // refuses any edit to it with one route and no override. Changing which rows
     // the producer spends that token on fixes the contradiction with the consumer
     // byte-unchanged — which also makes its unedited suite the evidence that the
@@ -960,7 +960,7 @@ fn check_claims(
 /// The question is not dropped, it is somewhere better: `batten.toml`'s
 /// `command-task-defined` row already decides whether a named task exists, over
 /// the consumer's own declaration of where tasks live, and raises
-/// `V-TASK-UNDEFINED` with `R-DEFINE-THE-TASK`. Re-deriving it here would be a
+/// `task name undefined` with `task read first`. Re-deriving it here would be a
 /// second authority over one fact with only the newer one deciding — CLOUD-351's
 /// class — on top of the rule 1 violation.
 ///

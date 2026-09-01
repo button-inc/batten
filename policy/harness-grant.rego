@@ -71,7 +71,7 @@ keeps_the_defaults if {
 # actually decides.
 violation contains {
 	"rule": "harness-grant",
-	"verdict": "V-HARNESS-GRANT-ABSENT",
+	"verdict": "grant declare absent",
 	"subjects": [{"path": ".claude/settings.json"}],
 } if {
 	grants
@@ -81,7 +81,7 @@ violation contains {
 # The grant is present and every built-in safety rule was discarded with it.
 violation contains {
 	"rule": "harness-grant",
-	"verdict": "V-HARNESS-GRANT-DEFAULTS-DROPPED",
+	"verdict": "default carry dropped",
 	"subjects": [{"path": ".claude/settings.json"}],
 } if {
 	grants
@@ -105,7 +105,7 @@ test_the_landed_shape_is_clean if {
 
 test_a_dropped_grant_is_refused if {
 	some v in violation with input as settings(["$defaults"])
-	v.verdict == "V-HARNESS-GRANT-ABSENT"
+	v.verdict == "grant declare absent"
 }
 
 # The anti-vacuity mirror. Without it the clean case above is satisfied by a
@@ -113,7 +113,7 @@ test_a_dropped_grant_is_refused if {
 # as coverage having never been walked.
 test_a_dropped_sentinel_is_refused if {
 	some v in violation with input as settings(["Allow every `batten` subcommand."])
-	v.verdict == "V-HARNESS-GRANT-DEFAULTS-DROPPED"
+	v.verdict == "default carry dropped"
 }
 
 test_both_missing_raises_both if {

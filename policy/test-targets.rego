@@ -36,7 +36,7 @@
 #MUTANT depth-may-invert|s@count(segments) == 4@count(segments) == 5@|a module inside the group is not a target, and a new top-level file is
 #MUTANT extension-may-widen|s@endswith(path, ".rs")@true@|a fixture file under tests/ is not a target
 #
-#MUTANT-EXEMPT CLOUD-1210|no `tests/test-targets.bats` exists and none may: `.claude/rules/toolchain.md`'s two-shapes rule and `V-SHELL-RULE-ADDED` refuse adding an authored bats suite, and `mutant` resolves a gate's suite as `tests/$gate.bats`, so there is no named case a mutation could turn red. The second tier is `crates/batten/tests/it/test_targets.rs`, which drives the compiled engine over a real fixture repository with a real base ref — and is what caught the inverted depth test the first `#MUTANT` row above records
+#MUTANT-EXEMPT CLOUD-1210|no `tests/test-targets.bats` exists and none may: `.claude/rules/toolchain.md`'s two-shapes rule and `shell add refused` refuse adding an authored bats suite, and `mutant` resolves a gate's suite as `tests/$gate.bats`, so there is no named case a mutation could turn red. The second tier is `crates/batten/tests/it/test_targets.rs`, which drives the compiled engine over a real fixture repository with a real base ref — and is what caught the inverted depth test the first `#MUTANT` row above records
 package batten
 
 import rego.v1
@@ -77,7 +77,7 @@ added_target contains path if {
 
 violation contains {
 	"rule": "test-target-added",
-	"verdict": "V-TEST-TARGET-ADDED",
+	"verdict": "test add refused",
 	"subjects": [{"path": path}],
 } if {
 	some path in added_target

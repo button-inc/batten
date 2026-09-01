@@ -18,7 +18,7 @@ rules contains "no-force-push"
 
 violation contains {
 	"rule": "no-force-push",
-	"verdict": "V-FORCE-PUSH-AT-TRUNK",
+	"verdict": "trunk push forced",
 } if {
 	# PER SEGMENT, NOT PER LINE (CLOUD-857). This read
 	# `split(input.call.command, " ")` and anchored `words[0] == "git"` over the

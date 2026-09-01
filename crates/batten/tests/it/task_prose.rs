@@ -93,7 +93,7 @@ fn the_rules_file_names_the_command_fmt_runs() {
 /// the regression unguarded in both directions; asserting the opposite keeps one
 /// case on the sentence and moves which way it points. What now stops the
 /// regression on the CONFIG side — where it actually lives — is
-/// `hk-fix-selection`, whose `V-FMT-DESCRIBED-AS-THE-GATE` reads this same clause
+/// `hk-fix-selection`, whose `task state wrong` reads this same clause
 /// and `fix-selection-complete`, which holds hk's own selection to the gate's
 /// fixer-bearing steps in both directions. Prose alone was never the mechanism;
 /// it is the half a reader sees.

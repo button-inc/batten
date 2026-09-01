@@ -197,7 +197,7 @@ fn the_same_program_through_the_pin_is_not_reported() {
     provided(&repo, &["bats"]);
     let said = advice(&repo, "mise exec -- bats tests/land.bats");
     assert!(
-        !said.contains("V-PIN-BYPASSED"),
+        !said.contains("pin reach loose"),
         "the mediated form is the sanctioned one: {said}"
     );
 }
@@ -210,7 +210,7 @@ fn a_program_the_pin_does_not_provide_is_not_reported() {
     provided(&repo, &["bats"]);
     let said = advice(&repo, "ls -la tests");
     assert!(
-        !said.contains("V-PIN-BYPASSED"),
+        !said.contains("pin reach loose"),
         "an unpinned program is a genuine one-off: {said}"
     );
 }
@@ -226,7 +226,7 @@ fn a_checkout_with_no_record_reports_nothing() {
         "./tests/bats/bin/bats --filter 'a case' tests/land.bats",
     );
     assert!(
-        !said.contains("V-PIN-BYPASSED"),
+        !said.contains("pin reach loose"),
         "a project whose pin could not be read is not one to refuse: {said}"
     );
 }

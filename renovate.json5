@@ -326,7 +326,7 @@
       //
       // THIS IS NOT THE FIX AND MUST NOT BE MISTAKEN FOR ONE. Renaming the seam
       // means editing the task AND its suite, both frozen by
-      // `V-SHELL-RULE-EDITED` whose sole route is `R-PORT-AND-RETIRE`. CLOUD-1262
+      // `shell edit refused` whose sole route is `rule read first`. CLOUD-1262
       // tracks that retirement. This row buys quiet, not currency: the tool whose
       // whole job is dependency currency stays three majors stale until the port
       // lands, and leaving this row here while forgetting CLOUD-1262 is exactly

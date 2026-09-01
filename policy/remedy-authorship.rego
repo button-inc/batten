@@ -94,7 +94,7 @@ rules contains "remedy-has-one-author"
 
 violation contains {
 	"rule": "remedy-reaches-the-reader",
-	"verdict": "V-REMEDY-DROPPED-BY-THE-FILTER",
+	"verdict": "remedy select dropped",
 	"subjects": [{"path": path, "line": i + 1}],
 } if {
 	some path, block in stderr_block
@@ -191,7 +191,7 @@ emits_a_literal(line) if {
 
 violation contains {
 	"rule": "remedy-has-one-author",
-	"verdict": "V-REMEDY-HAS-TWO-AUTHORS",
+	"verdict": "remedy own duplicate",
 	"subjects": [{"artifact": name}, {"artifact": var}],
 } if {
 	some name, body in task_bodies

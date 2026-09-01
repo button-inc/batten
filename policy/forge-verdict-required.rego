@@ -71,7 +71,7 @@ passed(checks) if {
 
 violation contains {
 	"rule": "forge-verdict-required",
-	"verdict": "V-FORGE-VERDICT-NOT-GREEN",
+	"verdict": "forge check red",
 	"subjects": [{"count": count(refused)}],
 } if {
 	count(refused) > 0
@@ -93,14 +93,14 @@ test_a_green_record_is_clean if {
 
 test_a_failed_record_is_refused if {
 	some v in violation with input as recorded({"final": "failure"})
-	v.verdict == "V-FORGE-VERDICT-NOT-GREEN"
+	v.verdict == "forge check red"
 }
 
 # A judged commit whose fan-in never reported is not green, and reading it as
 # green is exactly the false pass CLOUD-900 records.
 test_a_record_missing_the_fan_in_is_refused if {
 	some v in violation with input as recorded({"lint": "success"})
-	v.verdict == "V-FORGE-VERDICT-NOT-GREEN"
+	v.verdict == "forge check red"
 }
 
 # NOTHING HAS JUDGED THIS COMMIT is not a verdict. The sha is absent from the

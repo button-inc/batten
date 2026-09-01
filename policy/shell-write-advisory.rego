@@ -120,7 +120,7 @@ is_bats(path) if {
 # disposition the tree gate admits.
 violation contains {
 	"rule": "shell-write-at-the-edit",
-	"verdict": "V-SHELL-EDIT-BEFORE-RETIREMENT",
+	"verdict": "shell edit early",
 	"subjects": [{"path": path}],
 } if {
 	input.call.operation == "write"
@@ -142,7 +142,7 @@ test_a_write_to_an_authored_shell_gate_is_flagged if {
 		"operation": "write",
 		"writes": "mise-tasks/ready-lint.sh",
 	}}
-	v.verdict == "V-SHELL-EDIT-BEFORE-RETIREMENT"
+	v.verdict == "shell edit early"
 }
 
 test_a_write_to_a_bats_suite_is_flagged if {
@@ -150,7 +150,7 @@ test_a_write_to_a_bats_suite_is_flagged if {
 		"operation": "write",
 		"writes": "tests/land.bats",
 	}}
-	v.verdict == "V-SHELL-EDIT-BEFORE-RETIREMENT"
+	v.verdict == "shell edit early"
 }
 
 # The wider set the bound above names, asserted so the over-approximation is a
@@ -160,7 +160,7 @@ test_a_nested_mise_tasks_path_is_flagged_though_the_edit_gate_would_not if {
 		"operation": "write",
 		"writes": "mise-tasks/lib/helper",
 	}}
-	v.verdict == "V-SHELL-EDIT-BEFORE-RETIREMENT"
+	v.verdict == "shell edit early"
 }
 
 test_an_ungoverned_write_is_silent if {

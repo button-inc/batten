@@ -92,7 +92,7 @@ rules contains "review-absent"
 #MUTANT ready-unread|s@^\treadying$@\tfalse@|the_measured_shape_a_head_carrying_unresolved_threads_is_refused_naming_the_count
 violation contains {
 	"rule": "review-unanswered",
-	"verdict": "V-REVIEW-UNANSWERED",
+	"verdict": "review answer missing",
 	"subjects": [{"count": record.rows}],
 } if {
 	readying
@@ -111,7 +111,7 @@ violation contains {
 # empty subject list reads as a refusal nobody could locate.
 violation contains {
 	"rule": "review-absent",
-	"verdict": "V-REVIEW-ABSENT",
+	"verdict": "review read absent",
 	"subjects": [{"count": record.rows}],
 } if {
 	readying

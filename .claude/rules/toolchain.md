@@ -51,7 +51,7 @@ So a change touching one has exactly two shapes:
    `conserves` arm per deleted path, and drop the gate from `$MUTANT_GATES`.
 2. **Leave the file alone.**
 
-`V-SHELL-RULE-EDITED` declares one route, `R-PORT-AND-RETIRE`, with no override
+`shell edit refused` declares one route, `rule read first`, with no override
 and no `bypass_env`. That is not an oversight to be worked around; it is the
 whole design.
 
@@ -116,7 +116,7 @@ on the arm, beside the successor it qualifies:
 ```
 
 A `policy/*.rego` or preset successor needs no field — its path already decides
-it — and `V-SUCCESSOR-KIND-UNDECLARED` refuses only the engine-source arm that
+it — and `shell port unnamed` refuses only the engine-source arm that
 omits one. **It does not refuse a verb**, and that is the point rather than a
 softening: a gate needing stdin, spawning with its own arguments, or performing a
 write cannot be a tree-scoped module, so the choice has to stay available and
@@ -459,7 +459,7 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   **Both environment variables are gone rather than ported** (CLOUD-1051):
   `BATTEN_FILED_HERE_BYPASS` and `BATTEN_FILED_HERE_OVERLAP` were knowable
   strings anyone could spend without articulating anything, and the override is
-  `V-FILED-OVER-OWN-DIFF`'s declared route with its precondition, issued and
+  `issue file same`'s declared route with its precondition, issued and
   spent through `batten override request`/`spend`. `land` still calls
   `mise run filed-here-check` by name — an inline `batten check` on that row now
   — so that call site is byte-identical and `land.sh` never

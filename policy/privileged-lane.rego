@@ -69,7 +69,7 @@ rules contains "privileged-lane-tests-origin"
 # indistinguishable from a real one.
 violation contains {
 	"rule": "privileged-lane-tests-origin",
-	"verdict": "V-WORKFLOW-UNPARSED",
+	"verdict": "workflow parse broken",
 	"subjects": [{"path": path}],
 } if {
 	some path in input.tree.missing
@@ -79,7 +79,7 @@ violation contains {
 # The finding itself: a subject job that never mentions the head's origin.
 violation contains {
 	"rule": "privileged-lane-tests-origin",
-	"verdict": "V-PRIVILEGED-LANE-UNTESTED-ORIGIN",
+	"verdict": "lane guard missing",
 	"subjects": [{"path": path}, {"artifact": job}],
 } if {
 	some path, doc in input.tree.documents

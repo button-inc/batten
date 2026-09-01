@@ -906,7 +906,7 @@ fn summarise(
 // whose whole subject is what an EXTERNAL process costs, so the spawns are the
 // thing rather than an implementation of it. That table places `perf` and is a
 // protected path; a sibling module would be an unplaced spawning module and
-// `V-SPAWN-UNPLACED` would refuse it. Sharing the module is also what stops a
+// `spawn place missing` would refuse it. Sharing the module is also what stops a
 // second percentile convention, a second record shape and a second hyperfine
 // invocation from existing — `perf-compare`'s reading is a contract, and two
 // spellings of it can disagree.

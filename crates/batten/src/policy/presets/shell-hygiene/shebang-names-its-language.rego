@@ -47,7 +47,7 @@ names_shell(path) if endswith(path, ".bash")
 
 violation contains {
 	"rule": "shebang-names-its-language",
-	"verdict": "V-SHEBANG-UNNAMED-LANGUAGE",
+	"verdict": "program name unnamed",
 	"subjects": [{"path": path}],
 } if {
 	some path, _ in input.tree.lines

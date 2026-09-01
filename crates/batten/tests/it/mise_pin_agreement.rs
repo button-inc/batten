@@ -83,50 +83,50 @@ severity = "deny"
 reason = "mise.toml owns the pin and .mcp.json's copy is a reference to it."
 
 [[verdict]]
-id = "V-MCP-PIN-DISAGREES"
+id = "pin declare other"
 gloss = "a tool version .mcp.json names is not the version mise.toml pins"
 class = """
 The second place a pin is written cannot drift from the first.
 """
 
 [[verdict.route]]
-id = "R-REPEAT-THE-AUTHORITATIVE-PIN"
+id = "config read first"
 kind = "document"
 target = ".mcp.json"
 
 [[verdict]]
-id = "V-MCP-PIN-UNDECLARED"
+id = "pin declare missing"
 gloss = "a tool .mcp.json launches has no plain-string pin in mise.toml at all"
 class = """
 A reference with no authority behind it is not a pin.
 """
 
 [[verdict.route]]
-id = "R-PIN-THE-TOOL"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "V-MCP-EXEC-UNSCOPED"
+id = "call run loose"
 gloss = "a `mise exec` launch names no tool before `--`"
 class = """
 A bare exec provisions the whole toolchain and dies with any one of it.
 """
 
 [[verdict.route]]
-id = "R-SCOPE-THE-EXEC"
+id = "config read first"
 kind = "document"
 target = ".mcp.json"
 
 [[verdict]]
-id = "V-PIN-AUTHORITY-UNREADABLE"
+id = "pin read unread"
 gloss = "mise.toml could not be read, so no pin reference could be compared"
 class = """
 Could-not-look, kept loud.
 """
 
 [[verdict.route]]
-id = "R-RESTORE-THE-AUTHORITY"
+id = "task read first"
 kind = "document"
 target = "mise.toml"
 "#;
@@ -399,12 +399,12 @@ fn a_table_valued_pin_reads_as_undeclared() {
 // different things, so a `2=2` pair in the replay row would assert the migration
 // preserved the very contract it exists to fix, and it would pass.
 //
-// The successor is the module's `V-PIN-AUTHORITY-UNREADABLE` clause, which is
+// The successor is the module's `pin read unread` clause, which is
 // written and correct and which the engine cannot currently reach: measured
 // above, `input.tree.missing` is empty for an absent declared path. So this case
 // diverges twice over — once by contract, once because the channel is unfilled —
 // and both reasons are on the row.
-// changed: "a missing mise.toml cannot be compared against — exit 2" crates/batten/tests/it/mise_pin_agreement.rs the shell's exit 2 is could-not-look and the engine's 2 is the policy verdict (house-style §7), so the code cannot be carried through an identity; and the successor clause `V-PIN-AUTHORITY-UNREADABLE` is unreachable today because `input.tree.missing` is never populated for an absent declared path — measured here, recorded on CLOUD-1049, which owns restoring the case
+// changed: "a missing mise.toml cannot be compared against — exit 2" crates/batten/tests/it/mise_pin_agreement.rs the shell's exit 2 is could-not-look and the engine's 2 is the policy verdict (house-style §7), so the code cannot be carried through an identity; and the successor clause `pin read unread` is unreachable today because `input.tree.missing` is never populated for an absent declared path — measured here, recorded on CLOUD-1049, which owns restoring the case
 //
 // THE SAME CHANNEL, THE OTHER INPUT. An unparseable `.mcp.json` is today
 // indistinguishable from an absent one and is silent, where the bash exited 2.

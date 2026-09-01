@@ -9,16 +9,14 @@
 //! the commit, and the table is a fixed committed artifact, so its token counts
 //! are a property of the commit rather than of the world.
 
-/// The measured dictionary: every word the three-word grammar may draw on.
+/// Every word `batten.toml`'s `[vocabulary]` declares, held to one token each.
 ///
-/// **This is half of CLOUD-1284 and says so.** The row's other five arms decide
-/// arity, membership, uniqueness, orphans and glosses over a `[vocabulary]`
-/// table in `batten.toml`, and that table is not declared yet — the conversion
-/// is all-or-nothing (`policy::check_registry_is_exhausted` refuses a
-/// declared-but-unraised token and `check_verdicts_are_declared` refuses a
-/// raised-but-undeclared one, so a half-renamed registry does not load). What
-/// lands here first is the measurement those arms depend on, because the
-/// vocabulary cannot be curated without it.
+/// **Why a mirrored list rather than a read of the table.** The other five arms
+/// are load-time and read the config; this one cannot be, because the tokenizer
+/// is a dev-dependency the binary does not link. A test that parsed the config
+/// would still be measuring the same bytes, so the list is duplicated and
+/// `a_declared_word_is_missing_from_this_list` holds the two in agreement — the
+/// duplication is visible and gated rather than implicit and drifting.
 ///
 /// Sifted from 250 candidates: **237 are one token, 13 are not**, and the 13 are
 /// a class rather than a scatter — `unparsed`, `unwired`, `untested`, `ungated`,
@@ -27,9 +25,6 @@
 /// `unnamed`, `unused`, `unmet` and `unseen` survive at 1. That is the issue's
 /// own worked example (`shell edit unretired` is 5 tokens, not 3) reproduced as
 /// a gate rather than an anecdote.
-///
-/// When the table lands this list is replaced by a read of the declared words,
-/// and the assertion is unchanged.
 const CANDIDATES: &[&str] = &[
     "absent",
     "adapter",
@@ -44,8 +39,6 @@ const CANDIDATES: &[&str] = &[
     "bound",
     "branch",
     "broken",
-    "build",
-    "cache",
     "call",
     "cargo",
     "carry",
@@ -59,7 +52,6 @@ const CANDIDATES: &[&str] = &[
     "dead",
     "declare",
     "default",
-    "denied",
     "deny",
     "diff",
     "dirty",
@@ -71,23 +63,21 @@ const CANDIDATES: &[&str] = &[
     "empty",
     "event",
     "file",
-    "finish",
-    "forced",
+    "first",
     "forge",
     "gate",
     "grade",
     "grant",
     "guard",
-    "handler",
     "held",
     "hook",
     "input",
-    "install",
     "issue",
     "job",
     "judge",
     "key",
     "lane",
+    "last",
     "late",
     "layer",
     "lease",
@@ -97,7 +87,6 @@ const CANDIDATES: &[&str] = &[
     "manifest",
     "measure",
     "memory",
-    "merge",
     "mint",
     "missing",
     "module",
@@ -116,14 +105,12 @@ const CANDIDATES: &[&str] = &[
     "port",
     "program",
     "prose",
-    "push",
     "reach",
     "read",
     "red",
     "refused",
     "release",
     "remedy",
-    "render",
     "report",
     "require",
     "resolve",
@@ -133,7 +120,6 @@ const CANDIDATES: &[&str] = &[
     "rule",
     "run",
     "same",
-    "scanner",
     "select",
     "shell",
     "ship",
@@ -143,7 +129,6 @@ const CANDIDATES: &[&str] = &[
     "spawn",
     "spelling",
     "stale",
-    "start",
     "state",
     "step",
     "suite",
@@ -155,13 +140,11 @@ const CANDIDATES: &[&str] = &[
     "tier",
     "timer",
     "tool",
-    "trunk",
     "turn",
     "twice",
     "unclear",
     "undefined",
     "unknown",
-    "unmet",
     "unnamed",
     "unread",
     "unsafe",
@@ -206,5 +189,50 @@ fn every_candidate_word_is_one_token_under_the_declared_pin() {
         multi.len(),
         CANDIDATES.len(),
         multi
+    );
+}
+
+/// The list above and the committed table are the same set, in both directions.
+///
+/// Without this the measurement is over a list nobody declares: a word added to
+/// `[vocabulary]` and not here would be unmeasured, and a word here and not in
+/// the table would be measured and unused. Both directions are asserted because
+/// only one of them is the obvious one.
+#[test]
+fn the_measured_list_and_the_declared_table_are_the_same_set() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let text =
+        std::fs::read_to_string(root.join("batten.toml")).expect("the authority is readable");
+    let config: toml::Value = toml::from_str(&text).expect("the authority parses");
+    let vocabulary = config
+        .get("vocabulary")
+        .expect("the authority declares a vocabulary");
+
+    let mut declared: Vec<String> = Vec::new();
+    for slot in ["subject", "action", "condition"] {
+        let rows = vocabulary
+            .get(slot)
+            .and_then(toml::Value::as_array)
+            .unwrap_or_else(|| panic!("`[[vocabulary.{slot}]]` is declared"));
+        for row in rows {
+            let word = row
+                .get("word")
+                .and_then(toml::Value::as_str)
+                .expect("every vocabulary row carries a word");
+            declared.push(word.to_owned());
+        }
+    }
+    declared.sort();
+    declared.dedup();
+
+    let measured: std::collections::BTreeSet<&str> = CANDIDATES.iter().copied().collect();
+    let declared_set: std::collections::BTreeSet<&str> =
+        declared.iter().map(String::as_str).collect();
+
+    let unmeasured: Vec<&&str> = declared_set.difference(&measured).collect();
+    let undeclared: Vec<&&str> = measured.difference(&declared_set).collect();
+    assert!(
+        unmeasured.is_empty() && undeclared.is_empty(),
+        "declared-but-unmeasured: {unmeasured:?}; measured-but-undeclared: {undeclared:?}"
     );
 }

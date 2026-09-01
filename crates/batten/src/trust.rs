@@ -685,6 +685,16 @@ pub enum WeakeningKind {
     /// to make; that a class went from having no hatch to having one is a
     /// predicate.
     VerdictOverrideAdded,
+    /// A declared `[vocabulary]` is gone, so the naming grammar stopped applying.
+    ///
+    /// The grammar is opt-in (`verdict::validate`'s own note says why: a consumer
+    /// with no lists cannot satisfy membership). That makes DELETING the table a
+    /// weakening in the one direction that matters — arms 1, 2 and 5 stop
+    /// deciding anything, and every name becomes free text again, silently and
+    /// with the config still loading clean. Shrinking the lists is NOT reported:
+    /// a word a name still spends fails the load on its own, so the dangerous
+    /// case is the whole table going away rather than part of it.
+    VocabularyAbandoned,
     /// A `[[marker]]` row is gone, so its suppressions stop being counted.
     MarkerRemoved,
     /// An `[[exec_pattern]]` row is gone, so a lying exit `0` carrying it stops
@@ -843,6 +853,7 @@ impl WeakeningKind {
             WeakeningKind::VerbRemoved => "verb-removed",
             WeakeningKind::PatternRemoved => "pattern-removed",
             WeakeningKind::VerdictOverrideAdded => "verdict-override-added",
+            WeakeningKind::VocabularyAbandoned => "vocabulary-abandoned",
             WeakeningKind::FactCommandChanged => "fact-command-changed",
             WeakeningKind::FactReturnsLoosened => "fact-returns-loosened",
             WeakeningKind::FactCountingChanged => "fact-counting-changed",
@@ -980,6 +991,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "verdicts",
         coverage: Coverage::Compared(&[WeakeningKind::VerdictOverrideAdded]),
+    },
+    FieldCoverage {
+        field: "vocabulary",
+        coverage: Coverage::Compared(&[WeakeningKind::VocabularyAbandoned]),
     },
     FieldCoverage {
         field: "facts",
@@ -1619,6 +1634,17 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
             &render(verdict_override_entries(base)),
             &render(verdict_override_entries(working)),
         ));
+    }
+
+    // The naming grammar (CLOUD-1284). Declared-then-absent only, per
+    // `VocabularyAbandoned`.
+    if !base.vocabulary.is_empty() && working.vocabulary.is_empty() {
+        found.push(Weakening {
+            kind: WeakeningKind::VocabularyAbandoned,
+            key: "vocabulary".to_owned(),
+            base: "declared".to_owned(),
+            working: "absent".to_owned(),
+        });
     }
 
     // The agent-sourced facts (CLOUD-776). Removal is reported and is a

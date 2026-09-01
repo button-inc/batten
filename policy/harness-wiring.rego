@@ -63,7 +63,7 @@ registrations contains command if {
 # rather than the spelling of the one that is there.
 violation contains {
 	"rule": "harness-wiring",
-	"verdict": "V-HARNESS-WIRING-SECOND-DECIDER",
+	"verdict": "hook wire duplicate",
 	"subjects": [{"count": count(strays)}],
 } if {
 	count(strays) > 0
@@ -95,7 +95,7 @@ test_a_second_decider_is_refused if {
 		"batten hook --harness claude-code",
 		"mise run some-other-guard",
 	})
-	v.verdict == "V-HARNESS-WIRING-SECOND-DECIDER"
+	v.verdict == "hook wire duplicate"
 }
 
 test_a_pinned_wrapper_around_the_mediator_is_not_a_second_decider if {

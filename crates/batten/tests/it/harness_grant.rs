@@ -62,22 +62,22 @@ module = "harness-grant.rego"
 severity = "deny"
 
 [[verdict]]
-id = "V-HARNESS-GRANT-ABSENT"
+id = "grant declare absent"
 gloss = "the committed settings no longer grant this repository's own binary"
 class = "A fixture copy of the shipped class; the registry's own row is in batten.toml."
 
 [[verdict.route]]
-id = "R-RESTORE-THE-GRANT"
+id = "task run first"
 kind = "document"
 target = "harness-grant.rego"
 
 [[verdict]]
-id = "V-HARNESS-GRANT-DEFAULTS-DROPPED"
+id = "default carry dropped"
 gloss = "the grant is there and the built-in classifier rules were discarded with it"
 class = "A fixture copy of the shipped class; the registry's own row is in batten.toml."
 
 [[verdict.route]]
-id = "R-RESTORE-THE-DEFAULTS"
+id = "task run first"
 kind = "document"
 target = "harness-grant.rego"
 "#;

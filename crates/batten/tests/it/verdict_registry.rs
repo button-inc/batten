@@ -202,7 +202,8 @@ fn a_tombstoned_token_that_is_still_raised_is_refused() {
 fn a_tombstone_resolves_through_its_chain() {
     let mut table = common::verdicts(&["V-OLD", "V-NEW"]);
     table[0].successor = Some("V-NEW".to_owned());
-    verdict::validate(&table).expect("a terminating chain is well formed");
+    verdict::validate(&table, &batten::verdict::Vocabulary::default())
+        .expect("a terminating chain is well formed");
     let (resolved, retired) = verdict::resolve(&table, "V-OLD").expect("the token resolves");
     assert_eq!(resolved.id, "V-NEW");
     assert!(retired);
@@ -223,7 +224,8 @@ fn a_tombstone_resolves_through_its_chain() {
 fn a_row_naming_only_a_withdrawal_loads_and_reports_retired() {
     let mut table = common::verdicts(&["V-GONE"]);
     table[0].withdrawn = Some("the thing it refused is no longer refused by anything".to_owned());
-    verdict::validate(&table).expect("a withdrawal is a well-formed retirement");
+    verdict::validate(&table, &batten::verdict::Vocabulary::default())
+        .expect("a withdrawal is a well-formed retirement");
     assert!(
         table[0].retired(),
         "a withdrawn class is as retired as a replaced one"
@@ -257,7 +259,8 @@ fn an_empty_withdrawal_reason_is_refused() {
     for blank in ["", "   ", "\n"] {
         let mut table = common::verdicts(&["V-GONE"]);
         table[0].withdrawn = Some(blank.to_owned());
-        let err = verdict::validate(&table).expect_err("an empty withdrawal explains nothing");
+        let err = verdict::validate(&table, &batten::verdict::Vocabulary::default())
+            .expect_err("an empty withdrawal explains nothing");
         let text = format!("{err}");
         assert!(text.contains("V-GONE"), "the refusal names the id: {text}");
         assert!(
@@ -274,7 +277,8 @@ fn a_row_naming_both_arms_is_refused() {
     let mut table = common::verdicts(&["V-OLD", "V-NEW"]);
     table[0].successor = Some("V-NEW".to_owned());
     table[0].withdrawn = Some("and also nobody refuses it".to_owned());
-    let err = verdict::validate(&table).expect_err("a row cannot be both replaced and withdrawn");
+    let err = verdict::validate(&table, &batten::verdict::Vocabulary::default())
+        .expect_err("a row cannot be both replaced and withdrawn");
     let text = format!("{err}");
     assert!(text.contains("V-OLD"), "the refusal names the id: {text}");
     assert!(text.contains("successor"), "{text}");
@@ -287,13 +291,15 @@ fn a_row_naming_both_arms_is_refused() {
 fn the_withdrawal_arm_weakens_neither_successor_refusal() {
     let mut dangling = common::verdicts(&["V-OLD"]);
     dangling[0].successor = Some("V-NEVER-DECLARED".to_owned());
-    let err = verdict::validate(&dangling).expect_err("a successor nothing declares is refused");
+    let err = verdict::validate(&dangling, &batten::verdict::Vocabulary::default())
+        .expect_err("a successor nothing declares is refused");
     assert!(format!("{err}").contains("V-NEVER-DECLARED"));
 
     let mut cycle = common::verdicts(&["V-A", "V-B"]);
     cycle[0].successor = Some("V-B".to_owned());
     cycle[1].successor = Some("V-A".to_owned());
-    let err = verdict::validate(&cycle).expect_err("a chain that cycles terminates nowhere");
+    let err = verdict::validate(&cycle, &batten::verdict::Vocabulary::default())
+        .expect_err("a chain that cycles terminates nowhere");
     assert!(format!("{err}").contains("cycles"));
 }
 
@@ -304,7 +310,7 @@ fn the_withdrawal_arm_weakens_neither_successor_refusal() {
 fn a_withdrawal_is_not_read_as_a_successor() {
     let mut table = common::verdicts(&["V-GONE"]);
     table[0].withdrawn = Some("V-SOMETHING-THAT-IS-NOT-A-TOKEN".to_owned());
-    verdict::validate(&table)
+    verdict::validate(&table, &batten::verdict::Vocabulary::default())
         .expect("a withdrawal reason is prose, never a token the registry must declare");
 }
 
@@ -317,10 +323,10 @@ fn a_withdrawal_is_not_read_as_a_successor() {
 #[test]
 fn a_consumer_row_colliding_with_a_vendored_class_is_refused() {
     let mut table = declared();
-    table.extend(common::verdicts(&["V-EMPTY-COMMIT"]));
+    table.extend(common::verdicts(&["commit ship empty"]));
     let err = load("collision", CONFORMING, &table)
         .expect_err("a class with two definitions is refused rather than resolved");
-    assert!(format!("{err}").contains("V-EMPTY-COMMIT"));
+    assert!(format!("{err}").contains("commit ship empty"));
 }
 
 /// **A preset loads against a registry the consumer never wrote.** Holding it to
@@ -356,7 +362,7 @@ fn a_vendored_preset_loads_with_no_consumer_rows_at_all() {
         panic!("the preset answered could-not-look");
     };
     assert_eq!(denials.len(), 1);
-    assert_eq!(denials[0].verdict, "V-EMPTY-COMMIT");
+    assert_eq!(denials[0].verdict, "commit ship empty");
 }
 
 // ---------------------------------------------------------------------------

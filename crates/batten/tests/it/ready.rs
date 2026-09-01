@@ -43,7 +43,7 @@
 //! rediscovered: `mise-tasks/graph-check.sh` resolves this gate BY PATH and
 //! branches on its exit codes, and both lines have to move for the program to
 //! die — the path because there is no path any more, the codes because a
-//! violation is `2` here where it was `1` there. `V-SHELL-RULE-EDITED` admits an
+//! violation is `2` here where it was `1` there. `shell edit refused` admits an
 //! edit to a caller only where every added line is a truncation of a removed one
 //! or an exact path substitution at a declared successor (both arms are in
 //! `policy/shell-retirement.rego`), and a shell sibling repointed at a compiled

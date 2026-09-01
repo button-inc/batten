@@ -80,7 +80,7 @@ refused contains id if {
 
 violation contains {
 	"rule": "claim-before-code",
-	"verdict": "V-CLAIM-BEFORE-CODE",
+	"verdict": "claim mint absent",
 	"subjects": [{"count": count(refused)}],
 } if {
 	count(refused) > 0
@@ -104,7 +104,7 @@ test_a_filed_row_is_clean if {
 
 test_an_unfiled_row_is_refused if {
 	some v in violation with input as reduced(false)
-	v.verdict == "V-CLAIM-BEFORE-CODE"
+	v.verdict == "claim mint absent"
 }
 
 # NOTHING WAS CAPTURED about this key is not a verdict. The id is absent from the

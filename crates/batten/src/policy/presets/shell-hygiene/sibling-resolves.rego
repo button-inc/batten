@@ -140,7 +140,7 @@ violation contains {
 	# because that is where the fix goes; the path it computed comes second
 	# because that is what the reader has to reconcile. Reversing them would send
 	# a reader to a file that does not exist.
-	"verdict": "V-SIBLING-UNRESOLVED",
+	"verdict": "program resolve missing",
 	"subjects": [{"path": path}, {"path": resolved}],
 } if {
 	some path, _ in input.tree.lines

@@ -99,7 +99,7 @@ findings(verdict) := {key |
 
 violation contains {
 	"rule": "validator-verdict-clean",
-	"verdict": "V-VALIDATOR-VERDICT-UNCLEAN",
+	"verdict": "tool judge dirty",
 	"subjects": [{"count": count(refused)}],
 } if {
 	count(refused) > 0
@@ -123,14 +123,14 @@ test_a_clean_record_is_clean if {
 
 test_a_record_carrying_a_finding_is_refused if {
 	some v in violation with input as recorded({"status": "clean", "unresolved-key": "hk.pkl:12"})
-	v.verdict == "V-VALIDATOR-VERDICT-UNCLEAN"
+	v.verdict == "tool judge dirty"
 }
 
 # A validator that reported an error and listed nothing is still an error, and
 # reading it as clean is the false pass this family exists to close.
 test_a_non_clean_status_alone_is_refused if {
 	some v in violation with input as recorded({"status": "error"})
-	v.verdict == "V-VALIDATOR-VERDICT-UNCLEAN"
+	v.verdict == "tool judge dirty"
 }
 
 # NOTHING HAS VALIDATED THESE BYTES is not a verdict. The id is absent from the

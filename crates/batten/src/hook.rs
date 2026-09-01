@@ -1315,7 +1315,7 @@ impl Harness {
                 // discriminating pair over one command, one word of this list
                 // apart: `jq --version` (which trips `pinned-toolchain-preset`,
                 // a live `severity = "warn"` mediated row) delivered
-                // `PreToolUse:Bash hook additional context: … V-PIN-BYPASSED …`
+                // `PreToolUse:Bash hook additional context: … pin reach loose …`
                 // to the agent with the entry present, and delivered nothing with
                 // it absent. The call was ALLOWED both times and the exit code
                 // never moved, which is the half that matters: the host carries a
@@ -2083,7 +2083,7 @@ impl Envelope {
     /// and a glob anchored at `.serena/memories/` does not match a string that
     /// begins with a filesystem root. Measured over the shipped binary against
     /// this repository's own committed config: the relative spelling was refused
-    /// with `V-PROTECTED-MUTATION`, the absolute one was **allowed**, and a live
+    /// with `path write refused`, the absolute one was **allowed**, and a live
     /// agent `Write` to a protected path created the file. `memory-guard` retired
     /// into that gate (CLOUD-442), so the write shapes it denied were ungated on
     /// the host that sends absolute paths.
@@ -2718,11 +2718,11 @@ fn cursor_specialized_input(value: &Value) -> Value {
 ///
 /// # It does not suppress the protected-path gate
 ///
-/// One class is outside this hatch's reach: `V-PROTECTED-MUTATION` is adjudicated
+/// One class is outside this hatch's reach: `path write refused` is adjudicated
 /// even when this is set, because it declares an override route and the boundary
 /// honours a spent admission for it. A refusal whose only way through is a string
 /// somebody knows is a password rather than a gate, and this repository already
-/// retired that shape once — `V-FILED-OVER-OWN-DIFF`'s two variables were deleted
+/// retired that shape once — `issue file same`'s two variables were deleted
 /// rather than kept beside the admission mechanism, on the stated ground that *the
 /// point of the admission mechanism is that the bare variable stops working*.
 ///
@@ -3719,12 +3719,12 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
     // THE HATCH NO LONGER ANSWERS FOR THE PROTECTED-PATH GATE, and that is the
     // whole of what `BATTEN_HOOK_BYPASS` stops being able to do.
     //
-    // It was the only way through a `V-PROTECTED-MUTATION` refusal, which made
+    // It was the only way through a `path write refused` refusal, which made
     // that refusal a password: a knowable string the guarded party can set, so it
     // recorded nothing and stopped nobody. §8's property — "an agent's context can
     // never influence the rules it is judged by" — was already false, because the
     // agent could set the variable. This repository ruled on exactly that shape
-    // for `V-FILED-OVER-OWN-DIFF`: *the point of the admission mechanism is that
+    // for `issue file same`: *the point of the admission mechanism is that
     // the bare variable stops working*. The class declares an override route now
     // (`R-ARTICULATE-THE-WRITE`) and the boundary honours a spent admission
     // (`admit_mediated`), so there is a way through that leaves a record — which
@@ -3952,7 +3952,7 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
 /// stopped being single.
 /// # A class the hatch cannot open must not advertise it
 ///
-/// `V-PROTECTED-MUTATION` is adjudicated under the hatch, so printing "Bypass
+/// `path write refused` is adjudicated under the hatch, so printing "Bypass
 /// with `BATTEN_HOOK_BYPASS`=1" on its refusal would name a remedy that does
 /// nothing — the defect class `crate::verdict`'s own header exists to kill ("a
 /// refusal could name no remedy, name a task that does not exist"), reintroduced
@@ -10559,7 +10559,7 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
         // THE SHARED PROJECTION IS NOW TWO CLAUSES, NOT THREE, and that is a real
         // split rather than a weakened assertion. This used to require the hatch
         // sentence on every deny, which was right while the hatch reached every
-        // row. `V-PROTECTED-MUTATION` is adjudicated under the hatch now, so
+        // row. `path write refused` is adjudicated under the hatch now, so
         // printing it there would name a remedy that does nothing — the defect
         // `crate::verdict`'s header exists to kill. What every deny still owes is
         // a `Refused by` clause and a `Fix:` clause.
@@ -10615,7 +10615,7 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
         // A native refusal now names a declared class, and `verdict::validate`
         // refuses a class with no route and refuses one whose only route is an
         // override. So the third tier is no longer a generic apology: it is
-        // `V-PROTECTED-MUTATION`'s own `R-RESTORE-IT`. The tiering is unchanged and
+        // `path write refused`'s own `patch run first`. The tiering is unchanged and
         // is asserted by its siblings — a consumer's `[[redirect]]` still wins, and
         // a verb's own `redirect` still wins over the class — this is only the
         // floor, and the floor got a verb.
@@ -10628,12 +10628,12 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
         );
         assert_eq!(
             refusal.verdict(),
-            Some("V-PROTECTED-MUTATION"),
+            Some("path write refused"),
             "and the refusal says which class it belongs to"
         );
         let reason = denial_text(decision);
         assert!(
-            reason.contains("V-PROTECTED-MUTATION ("),
+            reason.contains("path write refused ("),
             "the hot path leads with the token and its gloss: {reason}"
         );
         assert!(
@@ -11862,7 +11862,7 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
     /// this is its regression guard. Measured 2026-08-29 as a discriminating pair
     /// over one command, one word of `delivered_on` apart: `jq --version` — which
     /// trips the live `severity = "warn"` `pinned-toolchain-preset` row —
-    /// delivered `PreToolUse:Bash hook additional context: … V-PIN-BYPASSED …`
+    /// delivered `PreToolUse:Bash hook additional context: … pin reach loose …`
     /// with the entry present and nothing with it absent, and was ALLOWED both
     /// times.
     ///

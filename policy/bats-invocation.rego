@@ -15,9 +15,9 @@
 # stops being watched, and a reader who sees one finding should not have to guess
 # which:
 #
-#   V-BATS-NOT-PARALLEL     the run is serial, or is about to be
-#   V-BATS-RUN-UNCOUNTED    the run proves less than it appears to
-#   V-BATS-COST-UNMEASURED  nothing compares what the run cost against a record
+#   suite run late     the run is serial, or is about to be
+#   suite count missing    the run proves less than it appears to
+#   suite measure missing  nothing compares what the run cost against a record
 #
 # The third is CLOUD-386's third measurement (2026-08-28) and is the new half:
 # `test:bats` was 1435.7s at 2 workers on CI against a 1249.1s recorded serial
@@ -136,7 +136,7 @@ cost_markers := {
 
 violation contains {
 	"rule": "bats-invocation",
-	"verdict": "V-BATS-NOT-PARALLEL",
+	"verdict": "suite run late",
 	"subjects": [{"path": "mise.toml"}, {"artifact": marker}],
 } if {
 	governed
@@ -146,7 +146,7 @@ violation contains {
 
 violation contains {
 	"rule": "bats-invocation",
-	"verdict": "V-BATS-NOT-PARALLEL",
+	"verdict": "suite run late",
 	"subjects": [{"path": "mise.toml"}, {"artifact": spelling}],
 } if {
 	governed
@@ -167,7 +167,7 @@ nproc_mentions := [line |
 
 violation contains {
 	"rule": "bats-invocation",
-	"verdict": "V-BATS-NOT-PARALLEL",
+	"verdict": "suite run late",
 	"subjects": [{"path": "mise.toml"}, {"count": count(nproc_mentions)}],
 } if {
 	governed
@@ -179,7 +179,7 @@ violation contains {
 # pinned nowhere here.
 violation contains {
 	"rule": "bats-invocation",
-	"verdict": "V-BATS-NOT-PARALLEL",
+	"verdict": "suite run late",
 	"subjects": [{"path": "mise.toml"}, {"artifact": "aqua:shenwei356/rush"}],
 } if {
 	governed
@@ -213,7 +213,7 @@ ci_install_args := [args |
 
 violation contains {
 	"rule": "bats-invocation",
-	"verdict": "V-BATS-NOT-PARALLEL",
+	"verdict": "suite run late",
 	"subjects": [
 		{"path": ".github/workflows/ci.yml"},
 		{"artifact": "aqua:shenwei356/rush"},
@@ -230,7 +230,7 @@ violation contains {
 
 violation contains {
 	"rule": "bats-invocation",
-	"verdict": "V-BATS-RUN-UNCOUNTED",
+	"verdict": "suite count missing",
 	"subjects": [{"path": "mise.toml"}, {"artifact": marker}],
 } if {
 	governed
@@ -240,7 +240,7 @@ violation contains {
 
 violation contains {
 	"rule": "bats-invocation",
-	"verdict": "V-BATS-RUN-UNCOUNTED",
+	"verdict": "suite count missing",
 	"subjects": [{"path": "mise.toml"}, {"artifact": spelling}],
 } if {
 	governed
@@ -252,7 +252,7 @@ violation contains {
 
 violation contains {
 	"rule": "bats-invocation",
-	"verdict": "V-BATS-COST-UNMEASURED",
+	"verdict": "suite measure missing",
 	"subjects": [{"path": "mise.toml"}, {"artifact": marker}],
 } if {
 	governed
@@ -280,7 +280,7 @@ measured_date(line) := date if {
 
 violation contains {
 	"rule": "bats-invocation",
-	"verdict": "V-BATS-COST-UNMEASURED",
+	"verdict": "suite measure missing",
 	"subjects": [
 		{"path": "mise.toml"},
 		{"artifact": "# sweep: measured=<YYYY-MM-DD> cores=<n>"},
@@ -303,7 +303,7 @@ violation contains {
 # number nobody measured.
 violation contains {
 	"rule": "bats-invocation",
-	"verdict": "V-BATS-COST-UNMEASURED",
+	"verdict": "suite measure missing",
 	"subjects": [{"path": ".github/workflows/ci.yml", "line": index + 1}],
 } if {
 	governed
@@ -322,7 +322,7 @@ violation contains {
 # failure yet, so this clause is right and the channel is not yet filled.)
 violation contains {
 	"rule": "bats-invocation",
-	"verdict": "V-BATS-SOURCE-UNREAD",
+	"verdict": "bats parse unread",
 	"subjects": [{"path": path}],
 } if {
 	some path in input.tree.missing
@@ -387,37 +387,37 @@ test_a_dropped_jobs_flag_is_refused if {
 	found := violation with input as sound_input(replace(sound_body, `--jobs "$workers"`, ""))
 	count(found) > 0
 	some finding in found
-	finding.verdict == "V-BATS-NOT-PARALLEL"
+	finding.verdict == "suite run late"
 }
 
 test_a_count_of_one_is_refused_even_though_bats_refuses_it_too if {
 	found := violation with input as sound_input(concat("", [sound_body, " --jobs 1"]))
 	some finding in found
-	finding.verdict == "V-BATS-NOT-PARALLEL"
+	finding.verdict == "suite run late"
 }
 
 test_a_count_capped_below_the_machine_is_refused if {
 	found := violation with input as sound_input(concat("", [sound_body, " workers=$(($(nproc) / 2))"]))
 	some finding in found
-	finding.verdict == "V-BATS-NOT-PARALLEL"
+	finding.verdict == "suite run late"
 }
 
 test_a_run_that_counts_nothing_is_refused if {
 	found := violation with input as sound_input(replace(sound_body, `[ "$ran" != "$expected" ]`, ""))
 	some finding in found
-	finding.verdict == "V-BATS-RUN-UNCOUNTED"
+	finding.verdict == "suite count missing"
 }
 
 test_a_discarded_report_is_refused if {
 	found := violation with input as sound_input(concat("", [sound_body, " report=$(mktemp -d)"]))
 	some finding in found
-	finding.verdict == "V-BATS-RUN-UNCOUNTED"
+	finding.verdict == "suite count missing"
 }
 
 test_a_run_that_measures_no_cost_is_refused if {
 	found := violation with input as sound_input(replace(sound_body, `[ "$elapsed" -ge "$recorded" ]`, ""))
 	some finding in found
-	finding.verdict == "V-BATS-COST-UNMEASURED"
+	finding.verdict == "suite measure missing"
 }
 
 # THE PREDICATE THAT PRODUCED THIS ROW: a sweep table that does not say what
@@ -432,7 +432,7 @@ test_a_sweep_without_its_hardware_is_refused if {
 		"missing": [],
 	}}
 	some finding in found
-	finding.verdict == "V-BATS-COST-UNMEASURED"
+	finding.verdict == "suite measure missing"
 }
 
 # AND A BUDGET OLDER THAN THE SWEEP: the pole moved and the workflow that runs it
@@ -450,7 +450,7 @@ test_a_budget_older_than_the_sweep_is_refused if {
 		"missing": [],
 	}}
 	some finding in found
-	finding.verdict == "V-BATS-COST-UNMEASURED"
+	finding.verdict == "suite measure missing"
 }
 
 # A GRANDFATHERED ROW IS NOT STALE, it is undeclared, and it is CLOUD-352's.
@@ -490,5 +490,5 @@ test_an_unreadable_manifest_is_loud if {
 	}}
 	count(found) == 1
 	some finding in found
-	finding.verdict == "V-BATS-SOURCE-UNREAD"
+	finding.verdict == "bats parse unread"
 }

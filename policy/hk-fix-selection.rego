@@ -20,8 +20,8 @@
 # the prose stop agreeing, and a reader who sees one finding should not have to
 # guess which side moved:
 #
-#   V-FMT-DESCRIBED-AS-THE-GATE the prose stopped saying formatters-only
-#   V-FIXER-TASK-UNROUTED       a fixer task exists that `mise run fmt` cannot reach
+#   task state wrong the prose stopped saying formatters-only
+#   task select missing       a fixer task exists that `mise run fmt` cannot reach
 #
 # The second is the half that would otherwise be invisible, and it is the second
 # defect this row was written on. `deno-fmt`'s step carried a `check` and no
@@ -98,7 +98,7 @@ fmt_description := input.tree.documents["mise.toml"].tasks.fmt.description
 
 violation contains {
 	"rule": "hk-fix-selection",
-	"verdict": "V-FMT-DESCRIBED-AS-THE-GATE",
+	"verdict": "task state wrong",
 	"subjects": [{"path": "mise.toml"}, {"artifact": "Run every fixer over the tree"}],
 } if {
 	governed
@@ -108,7 +108,7 @@ violation contains {
 
 violation contains {
 	"rule": "hk-fix-selection",
-	"verdict": "V-FMT-DESCRIBED-AS-THE-GATE",
+	"verdict": "task state wrong",
 	"subjects": [
 		{"path": ".claude/rules/toolchain.md"},
 		{"artifact": "`fmt` remains the formatters-only subset"},
@@ -139,7 +139,7 @@ fixer_tasks := {name |
 
 violation contains {
 	"rule": "hk-fix-selection",
-	"verdict": "V-FIXER-TASK-UNROUTED",
+	"verdict": "task select missing",
 	"subjects": [{"path": "hk.pkl"}, {"artifact": task}],
 } if {
 	governed
@@ -156,7 +156,7 @@ violation contains {
 # yet, so this clause is right and the channel is not yet filled.)
 violation contains {
 	"rule": "hk-fix-selection",
-	"verdict": "V-HK-SOURCE-UNREAD",
+	"verdict": "gate parse unread",
 	"subjects": [{"path": path}],
 } if {
 	some path in input.tree.missing
@@ -218,7 +218,7 @@ test_a_task_description_that_names_the_gate_is_refused if {
 		"missing": [],
 	}}
 	some finding in found
-	finding.verdict == "V-FMT-DESCRIBED-AS-THE-GATE"
+	finding.verdict == "task state wrong"
 }
 
 test_a_rules_file_that_dropped_the_clause_is_refused if {
@@ -232,7 +232,7 @@ test_a_rules_file_that_dropped_the_clause_is_refused if {
 		"missing": [],
 	}}
 	some finding in found
-	finding.verdict == "V-FMT-DESCRIBED-AS-THE-GATE"
+	finding.verdict == "task state wrong"
 }
 
 # THE SECOND DEFECT THIS ROW WAS WRITTEN ON, in the shape it actually had: a
@@ -245,7 +245,7 @@ test_a_fixer_task_no_step_routes_is_refused if {
 	]
 	found := violation with input as sound_input(unrouted)
 	some finding in found
-	finding.verdict == "V-FIXER-TASK-UNROUTED"
+	finding.verdict == "task select missing"
 	some subject in finding.subjects
 	subject.artifact == "fmt:deno"
 }
@@ -270,5 +270,5 @@ test_an_unreadable_config_is_loud if {
 	}}
 	count(found) == 1
 	some finding in found
-	finding.verdict == "V-HK-SOURCE-UNREAD"
+	finding.verdict == "gate parse unread"
 }

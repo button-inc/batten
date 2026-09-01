@@ -16,8 +16,8 @@
 //!
 //! Non-negotiable rule 2: a rule without a runnable gate is half a change. The
 //! clause arrived by copy-forward and nothing saw it, which is precisely how it
-//! would arrive again — and this file is where `V-SHELL-RULE-ADDED`'s remedy
-//! `R-WRITE-A-POLICY-MODULE` sends authors, with CLOUD-843's wave 1 copying its
+//! would arrive again — and this file is where `shell add refused`'s remedy
+//! `rule read first` sends authors, with CLOUD-843's wave 1 copying its
 //! template ~80 times. A wrong sentence there is ~80 authors pushed toward
 //! hand-rolled string work that the `[[pattern]]` registry exists to make
 //! unwritable.

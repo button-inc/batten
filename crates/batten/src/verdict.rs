@@ -50,16 +50,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
 
-/// The prefix every verdict token carries.
-///
-/// A token has to be recognisable **as a token** in a line of output that also
-/// carries a rule id and a path, and a fixed prefix is what makes that free
-/// rather than a convention a reader has to know. `R-` is its sibling for
-/// routes.
-pub const VERDICT_PREFIX: &str = "V-";
-
-/// The prefix every route id carries. See [`VERDICT_PREFIX`].
-pub const ROUTE_PREFIX: &str = "R-";
+// THE `V-` AND `R-` PREFIXES ARE GONE (CLOUD-1284).
+//
+// They existed to make a token recognisable AS a token in a line that also
+// carries a rule id and a path, and a fixed prefix bought that without a
+// convention a reader had to know. The three-word grammar buys the same thing
+// and more cheaply: fixed arity is what separates the name from the pointers,
+// so the prefix was paying tokens for a job the arity now does for free.
+//
+// Measured over all 130 classes with `tiktoken` `o200k_base`, and the prefix is
+// most of the bill rather than a rounding error: `V-SCREAMING-KEBAB` costs 9.9
+// tokens on average against a curated three-word name's 3.0, and the drop from
+// `V-` plus the uppercase run alone is 9.9 -> 5.2. At ~300 refusals a session
+// that is ~2,000 tokens the agent used to pay for a sigil.
 
 /// The longest a gloss may be.
 ///
@@ -108,9 +111,9 @@ impl RouteKind {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Route {
-    /// The id a rendered refusal names, e.g. `R-DEFINE-THE-TASK`.
+    /// The id a rendered refusal names, e.g. `task read first`.
     ///
-    /// Stable and referenceable: an agent told `R-DEFINE-THE-TASK` twice has
+    /// Stable and referenceable: an agent told `task read first` twice has
     /// been told the same thing twice, which a paraphrase cannot establish.
     pub id: String,
     /// Which kind of way out this is.
@@ -124,11 +127,103 @@ pub struct Route {
     pub precondition: Option<String>,
 }
 
+/// One declared vocabulary word: the spelling, and what it means in a name.
+///
+/// The gloss is what makes dropping the per-class essay from the hot path safe
+/// rather than merely cheap (CLOUD-1284). A class used to buy a new essay to
+/// explain its own free-text name; a word buys one gloss that every name using
+/// it reuses, so the *marginal* class costs no new prose at all.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VocabularyWord {
+    /// The spelling, as it appears in a name. One token under the declared pin.
+    pub word: String,
+    /// What this word contributes to a name that uses it.
+    pub gloss: String,
+}
+
+/// The three positional lists a name is drawn from, and the pin they were
+/// measured under (CLOUD-1284).
+///
+/// # Why the middle list is `action` and not `verb`
+///
+/// The grammar is `<subject> <action> <condition>` and the issue writes the
+/// middle slot as "verb". The config key cannot be `verb`: `[[verb]]` is already
+/// this config's table of mutating **shell** verbs, and two unrelated tables one
+/// letter apart is the drift a reader pays for every time. The prose keeps the
+/// grammatical word; the key states which table it belongs to.
+///
+/// # Why the pin is data and not a constant
+///
+/// The token counts are model-specific, and `bench/tokens/method.toml` already
+/// sets this repository's discipline for a constant a published figure depends
+/// on: state it with its source and the date it was read, so a reader checks the
+/// arithmetic against the primary rather than trusting a program. The *ratio*
+/// argument survives a different tokenizer — common English words are
+/// single-merge in every modern BPE vocabulary — but the exact integer does not,
+/// so the integer's provenance travels with it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Vocabulary {
+    /// The encoding every word's token count was measured under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokenizer: Option<String>,
+    /// Where that encoding is published.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokenizer_source: Option<String>,
+    /// When it was read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokenizer_retrieved: Option<String>,
+    /// Slot 1: what the finding is about.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subject: Vec<VocabularyWord>,
+    /// Slot 2: what was done, or what relation is being judged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub action: Vec<VocabularyWord>,
+    /// Slot 3: the state that makes it a refusal.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub condition: Vec<VocabularyWord>,
+}
+
+impl Vocabulary {
+    /// The list for one slot, by position.
+    fn slot(&self, position: usize) -> &[VocabularyWord] {
+        match position {
+            0 => &self.subject,
+            1 => &self.action,
+            _ => &self.condition,
+        }
+    }
+
+    /// Whether this vocabulary declares anything at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.subject.is_empty() && self.action.is_empty() && self.condition.is_empty()
+    }
+
+    /// Every declared word, with the slot it was declared in.
+    fn words(&self) -> impl Iterator<Item = (usize, &VocabularyWord)> {
+        (0..SLOTS).flat_map(move |slot| self.slot(slot).iter().map(move |word| (slot, word)))
+    }
+}
+
+/// The name of each slot, for a refusal that has to say which one failed.
+const SLOT_NAMES: [&str; SLOTS] = ["subject", "action", "condition"];
+
+/// Fixed arity, and it is load-bearing rather than stylistic (CLOUD-1284).
+///
+/// **Exactly three, never `<= N`.** Fixed arity is what lets `<class> <pointer…>`
+/// parse on one line with no delimiter between the class and the first pointer:
+/// a reader — human or machine — takes three words and everything after them is
+/// pointers. Relax it and the line needs a separator, which is the free-text
+/// namespace this grammar replaced, wearing a delimiter.
+const SLOTS: usize = 3;
+
 /// One declared refusal class.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DeclaredVerdict {
-    /// The token, e.g. `V-TASK-UNDEFINED`.
+    /// The token, e.g. `task name undefined`.
     pub id: String,
     /// One line, the hot path's whole payload.
     pub gloss: String,
@@ -285,7 +380,7 @@ pub fn render_subjects(subjects: &[Subject]) -> String {
 /// (CLOUD-1053).
 ///
 /// ```text
-/// V-TASK-UNDEFINED (a command row names a task this tree does not define) batten.toml:1604
+/// task name undefined (a command row names a task this tree does not define) batten.toml:1604
 /// ```
 ///
 /// **The subject stays inline** rather than being dereferenced through
@@ -371,29 +466,167 @@ pub fn first_command_route<'a>(registry: &'a [DeclaredVerdict], token: &str) -> 
 /// A [`UsageError`] (exit `1`) naming the offending token. The declaration is
 /// the config author's own text — the class `config show` exists to echo — so
 /// naming it is inside rule 4.
-pub fn validate(verdicts: &[DeclaredVerdict]) -> anyhow::Result<()> {
+pub fn validate(verdicts: &[DeclaredVerdict], vocabulary: &Vocabulary) -> anyhow::Result<()> {
+    validate_vocabulary(vocabulary)?;
+    // THE GRAMMAR IS OPT-IN, AND THAT IS THE SAME EXEMPTION `[[pattern]]` MAKES.
+    //
+    // A consumer who declares no `[vocabulary]` has no lists for a name to be
+    // drawn from, so holding their classes to membership would refuse every
+    // config that has not adopted the grammar — the wrongly-refusing gate
+    // AGENTS.md calls a defect, with no fix available short of authoring 130
+    // words. `crate::pattern`'s preset exemption is the landed precedent for
+    // exactly this shape: a demand a consumer cannot satisfy is unsatisfiable
+    // rather than strict.
+    //
+    // Declaring the table is what opts in, and it is all-or-nothing from there:
+    // every class and every route is held, and arm 5 refuses a word nothing
+    // spends. So the exemption cannot be spent as a partial adoption, which is
+    // the direction that would let it rot.
+    let grammar = if vocabulary.is_empty() {
+        None
+    } else {
+        Some(vocabulary)
+    };
     let mut seen: BTreeSet<&str> = BTreeSet::new();
+    // Arm 5's evidence, gathered while walking rather than by a second pass: a
+    // word is used if some class or route name spends it in its own slot.
+    let mut used: BTreeSet<(usize, &str)> = BTreeSet::new();
     for verdict in verdicts {
-        validate_one(verdict)?;
+        validate_one(verdict, grammar, &mut used)?;
+        // ARM 3, uniqueness of the TRIPLE — and it is the duplicate-id refusal
+        // unchanged, because under this grammar the id IS the triple. There is no
+        // second uniqueness question to ask.
         if !seen.insert(verdict.id.as_str()) {
             return Err(UsageError::raise(format!(
-                "verdict `{}` is declared twice; one class, one token — \
+                "verdict `{}` is declared twice; one class, one name — \
                  `batten policy explain {}` cannot resolve to two definitions",
                 verdict.id, verdict.id
             )));
         }
     }
+    if grammar.is_some() {
+        validate_no_orphan_words(vocabulary, &used)?;
+    }
     validate_chains(verdicts, &seen)
 }
 
-/// The per-entry half of [`validate`].
-fn validate_one(verdict: &DeclaredVerdict) -> anyhow::Result<()> {
-    let id = verdict.id.as_str();
-    if !id.starts_with(VERDICT_PREFIX) || id.len() <= VERDICT_PREFIX.len() {
+/// ARM 6, and the shape arms over the vocabulary table itself.
+///
+/// Separate from [`validate_one`] because these decide the DICTIONARY, not a
+/// name that spends it — the same division [`crate::pattern::validate`] draws
+/// between a pattern registry and the rows that cite it.
+fn validate_vocabulary(vocabulary: &Vocabulary) -> anyhow::Result<()> {
+    let mut seen: BTreeSet<(usize, &str)> = BTreeSet::new();
+    for (slot, entry) in vocabulary.words() {
+        let word = entry.word.as_str();
+        let name = SLOT_NAMES[slot];
+        if word.is_empty() || word.split_whitespace().count() != 1 {
+            return Err(UsageError::raise(format!(
+                "vocabulary `{name}`: `{word}` is not a single word — a slot holds one \
+                 word, and a spelling carrying a space would make a three-word name \
+                 parse as four"
+            )));
+        }
+        if word.chars().any(|c| !c.is_ascii_lowercase()) {
+            return Err(UsageError::raise(format!(
+                "vocabulary `{name}`: `{word}` is not lowercase ASCII — the measured cost \
+                 of this grammar is a property of the spelling, and an uppercase run is \
+                 the worst case for a BPE vocabulary trained on running text"
+            )));
+        }
+        // ARM 6. A word with no gloss is the free-text namespace back again: the
+        // dictionary is what lets a reader take `task spelling weakened` with no
+        // lookup, and a word that explains nothing explains nothing three hundred
+        // times over.
+        if entry.gloss.trim().is_empty() {
+            return Err(UsageError::raise(format!(
+                "vocabulary `{name}`: `{word}` carries no gloss — the dictionary is what \
+                 replaced the per-class essay, so a word that means nothing declared makes \
+                 every name spending it unreadable"
+            )));
+        }
+        if !seen.insert((slot, word)) {
+            return Err(UsageError::raise(format!(
+                "vocabulary `{name}`: `{word}` is declared twice; one word, one meaning"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// ARM 5: a word no name spends fails the load.
+///
+/// The mirror of the landed rule that a `[[verdict]]` row nothing raises fails
+/// the load, one level down. Dead vocabulary reads as available headroom while
+/// nothing has ever walked it, which is the same defect as a class no gate
+/// reaches — and the headroom argument for three 64-word lists only holds if the
+/// lists are honest about what is in them.
+fn validate_no_orphan_words(
+    vocabulary: &Vocabulary,
+    used: &BTreeSet<(usize, &str)>,
+) -> anyhow::Result<()> {
+    for (slot, entry) in vocabulary.words() {
+        if !used.contains(&(slot, entry.word.as_str())) {
+            return Err(UsageError::raise(format!(
+                "vocabulary `{}`: `{}` is declared and no class or route name spends it — \
+                 a word nothing uses is dead vocabulary, which reads as headroom while \
+                 nothing has walked it",
+                SLOT_NAMES[slot], entry.word
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// ARMS 1 and 2 over one name: exact arity, then membership per position.
+///
+/// `kind` names what is being judged (`verdict` or a verdict's `route`) so the
+/// refusal points at the right table.
+fn check_name<'a>(
+    kind: &str,
+    name: &'a str,
+    vocabulary: &Vocabulary,
+    used: &mut BTreeSet<(usize, &'a str)>,
+) -> anyhow::Result<()> {
+    let words: Vec<&str> = name.split(' ').collect();
+    // ARM 1.
+    if words.len() != SLOTS {
         return Err(UsageError::raise(format!(
-            "verdict `{id}`: a token is `{VERDICT_PREFIX}` followed by a name — \
-             the prefix is what makes it readable as a token beside a rule id and a path"
+            "{kind} `{name}` is {} words — a name is exactly {SLOTS}, \
+             `<subject> <action> <condition>`. The arity is fixed rather than a maximum \
+             because it is what lets a rendered line be read as a name followed by \
+             pointers with nothing separating them",
+            words.len()
         )));
+    }
+    // ARM 2.
+    for (slot, word) in words.iter().enumerate() {
+        let declared = vocabulary
+            .slot(slot)
+            .iter()
+            .any(|entry| entry.word == *word);
+        if !declared {
+            return Err(UsageError::raise(format!(
+                "{kind} `{name}`: `{word}` is not in the declared `{}` list — \
+                 a name is drawn from the vocabulary, which is what makes position \
+                 carry meaning and a new name cost no new prose",
+                SLOT_NAMES[slot]
+            )));
+        }
+        used.insert((slot, word));
+    }
+    Ok(())
+}
+
+/// The per-entry half of [`validate`].
+fn validate_one<'a>(
+    verdict: &'a DeclaredVerdict,
+    grammar: Option<&Vocabulary>,
+    used: &mut BTreeSet<(usize, &'a str)>,
+) -> anyhow::Result<()> {
+    let id = verdict.id.as_str();
+    if let Some(vocabulary) = grammar {
+        check_name("verdict", id, vocabulary, used)?;
     }
     if verdict.gloss.trim().is_empty() {
         return Err(UsageError::raise(format!(
@@ -457,7 +690,7 @@ fn validate_one(verdict: &DeclaredVerdict) -> anyhow::Result<()> {
     }
     let mut route_ids: BTreeSet<&str> = BTreeSet::new();
     for route in &verdict.routes {
-        validate_route(id, route)?;
+        validate_route(id, route, grammar, used)?;
         if !route_ids.insert(route.id.as_str()) {
             return Err(UsageError::raise(format!(
                 "verdict `{id}` declares the route `{}` twice; a route id is what a \
@@ -470,12 +703,15 @@ fn validate_one(verdict: &DeclaredVerdict) -> anyhow::Result<()> {
 }
 
 /// The per-route half of [`validate_one`].
-fn validate_route(verdict: &str, route: &Route) -> anyhow::Result<()> {
+fn validate_route<'a>(
+    verdict: &str,
+    route: &'a Route,
+    grammar: Option<&Vocabulary>,
+    used: &mut BTreeSet<(usize, &'a str)>,
+) -> anyhow::Result<()> {
     let id = route.id.as_str();
-    if !id.starts_with(ROUTE_PREFIX) || id.len() <= ROUTE_PREFIX.len() {
-        return Err(UsageError::raise(format!(
-            "verdict `{verdict}`: route `{id}` is not `{ROUTE_PREFIX}`-prefixed"
-        )));
+    if let Some(vocabulary) = grammar {
+        check_name(&format!("verdict `{verdict}`: route"), id, vocabulary, used)?;
     }
     match route.kind {
         RouteKind::Override => {
@@ -662,13 +898,13 @@ impl Native {
     #[must_use]
     pub fn id(self) -> &'static str {
         match self {
-            Native::ProtectedMutation => "V-PROTECTED-MUTATION",
-            Native::InitWouldOverwrite => "V-AUTHORITY-EXISTS",
-            Native::HandlerDenied => "V-HANDLER-DENIED",
-            Native::ScannerUnpinned => "V-SCANNER-UNPINNED",
-            Native::ScannerUnprovisioned => "V-SCANNER-UNPROVISIONED",
-            Native::SpawningRuleOnReadVerb => "V-SPAWN-ON-READ-VERB",
-            Native::StopConditionUnmet => "V-STOP-CONDITION-UNMET",
+            Native::ProtectedMutation => "path write refused",
+            Native::InitWouldOverwrite => "config write refused",
+            Native::HandlerDenied => "handler answer denied",
+            Native::ScannerUnpinned => "scanner pin missing",
+            Native::ScannerUnprovisioned => "scanner install missing",
+            Native::SpawningRuleOnReadVerb => "spawn run refused",
+            Native::StopConditionUnmet => "turn finish unmet",
         }
     }
 }
@@ -759,7 +995,7 @@ const fn admit(id: &'static str, precondition: &'static str) -> VendoredRoute {
 const VENDORED: &[VendoredVerdict] = &[
     // ── native ──────────────────────────────────────────────────────────────
     VendoredVerdict {
-        id: "V-PROTECTED-MUTATION",
+        id: "path write refused",
         gloss: "a mutating verb was aimed at a path the config protects",
         class: "The path is in the `protected` set, so a write to it is refused before it \
 happens rather than reported after. The set is the consumer's own declaration; what is \
@@ -767,14 +1003,14 @@ protected is a question about their repository, and the engine only enforces it.
 narrower remedy may be declared per path class through `[[redirect]]`, which is what the \
 refusal names when one exists.",
         routes: &[
-            read("R-USE-THE-OWNING-SURFACE", "batten.toml"),
-            run("R-RESTORE-IT", "git restore"),
+            read("config read first", "batten.toml"),
+            run("patch run first", "git restore"),
             // THE CLASS COULD NOT BE OVERRIDDEN, AND THAT LEFT ONLY THE PASSWORD.
             //
             // The two routes above are real and are the right first answers, but
             // neither reaches a path whose owning surface IS the protected file —
             // registering a rule, adding a redirect, retiring a gate onto a config
-            // row. For that class of change `R-USE-THE-OWNING-SURFACE` names the
+            // row. For that class of change `config read first` names the
             // file being refused, so the remedy is the thing denied.
             //
             // With no override route, `admission::questions_for` returns `None` and
@@ -782,7 +1018,7 @@ refusal names when one exists.",
             // it cannot be overridden". The only remaining exit was
             // `BATTEN_HOOK_BYPASS` — a knowable string the guarded party can set,
             // which records nothing and stops nobody. This repository already ruled
-            // on that shape for `V-FILED-OVER-OWN-DIFF`: *the point of the admission
+            // on that shape for `issue file same`: *the point of the admission
             // mechanism is that the bare variable stops working*.
             //
             // The precondition is what the asker must be ABLE TO STATE, never a
@@ -798,86 +1034,86 @@ in the diff it lands in",
         ],
     },
     VendoredVerdict {
-        id: "V-AUTHORITY-EXISTS",
+        id: "config write refused",
         gloss: "`init` will not overwrite the committed authority",
         class: "House style §8 gives a repository ONE committed authority, and `init` \
 writes it. Overwriting an existing one would replace a reviewed policy with a default \
 set, silently, in a verb whose whole purpose is that there was nothing there before. \
 Edit the file that exists, or move it aside deliberately.",
-        routes: &[read("R-EDIT-THE-AUTHORITY", "batten.toml")],
+        routes: &[read("config read first", "batten.toml")],
     },
     VendoredVerdict {
-        id: "V-HANDLER-DENIED",
+        id: "handler answer denied",
         gloss: "a configured hook handler denied the call",
         class: "The refusal is the handler's, not the engine's: a `[hook.handler]` row \
 names a program, the program answered deny, and this carries that answer through. The \
 handler's own reason is free text the consumer configured, so no remedy is invented here \
 — the handler is where a remedy would have to be declared.",
-        routes: &[read("R-READ-THE-HANDLER-ROW", "batten.toml")],
+        routes: &[read("config read first", "batten.toml")],
     },
     VendoredVerdict {
-        id: "V-SCANNER-UNPINNED",
+        id: "scanner pin missing",
         gloss: "a `secrets` rule needs its scanner pinned and none is declared",
         class: "A `secrets` rule delegates to an external scanner, and which scanner \
 decides what the rule means. An unpinned one would resolve to whatever is ambient, so a \
 green run would say nothing about the tree — the same defect a bare `cargo` has against \
 a pinned toolchain. Declare the scanner as a `[[provision]]` entry.",
         routes: &[
-            run("R-PROVISION-THE-SCANNER", "batten provision"),
-            read("R-DECLARE-THE-ENTRY", "batten.toml"),
+            run("check run first", "batten provision"),
+            read("config read first", "batten.toml"),
         ],
     },
     VendoredVerdict {
-        id: "V-SCANNER-UNPROVISIONED",
+        id: "scanner install missing",
         gloss: "the pinned scanner is not in the provision cache, so nothing was scanned",
         class: "The scanner is declared and absent. This is could-not-look rather than a \
 clean tree, and it is reported as a refusal precisely so the two are not spelled the \
 same way: a secrets rule that scanned no file and reported nothing is the vacuous pass \
 this engine argues against everywhere.",
-        routes: &[run("R-PROVISION-THE-SCANNER", "batten provision")],
+        routes: &[run("check run first", "batten provision")],
     },
     VendoredVerdict {
-        id: "V-SPAWN-ON-READ-VERB",
+        id: "spawn run refused",
         gloss: "this rule kind runs a configured command, which a read-effect verb will not do",
         class: "The effect model (house style §5) puts every verb in one class and holds \
 it there. A rule kind that spawns is `Effect`, and `check` is `Read`, so reaching one \
 through the other would make the read-only allowlist a claim nobody could rely on. The \
 rule is not wrong; the verb is.",
-        routes: &[run("R-USE-THE-SPAWNING-VERB", "batten enforce")],
+        routes: &[run("check run first", "batten enforce")],
     },
     VendoredVerdict {
-        id: "V-STOP-CONDITION-UNMET",
+        id: "turn finish unmet",
         gloss: "the end-of-turn facts do not permit stopping",
         class: "A stop is a completion signal, and this engine's whole subject is keeping \
 that signal aligned with landed-and-verified work. The facts the turn ended on say it is \
 not, and the refusal names which. Each has its own route; the shared one is to finish \
 the thing rather than to re-declare that it is finished.",
         routes: &[
-            run("R-LAND-IT", "mise run land"),
-            read("R-READ-THE-FACTS", "batten.toml"),
+            run("task run first", "mise run land"),
+            read("config read first", "batten.toml"),
         ],
     },
     // ── vendored presets ────────────────────────────────────────────────────
     VendoredVerdict {
-        id: "V-EMPTY-COMMIT",
+        id: "commit ship empty",
         gloss: "an empty commit records that somebody wanted a new SHA",
         class: "A commit records a change. The reachable use of an empty one is kicking a \
 pipeline, which spends a run to re-ask a question the previous run already answered and \
 leaves a commit in the history no reader can act on. If the goal is a fresh run, re-run \
 the pipeline.",
-        routes: &[run("R-RERUN-THE-PIPELINE", "re-run the pipeline")],
+        routes: &[run("task run first", "re-run the pipeline")],
     },
     VendoredVerdict {
-        id: "V-FORCE-PUSH-AT-TRUNK",
+        id: "trunk push forced",
         gloss: "a force push rewrites a shared branch under whoever already fetched it",
         class: "Rewriting a published branch invalidates every checkout of it that \
 already exists, and the holder finds out by having their next pull fail in a way that \
 looks like their own mistake. `--force-with-lease` refuses when the remote moved, which \
 is the same operation with the one check that makes it safe.",
-        routes: &[run("R-LEASE-THE-FORCE", "git push --force-with-lease")],
+        routes: &[run("patch run first", "git push --force-with-lease")],
     },
     VendoredVerdict {
-        id: "V-PIN-BYPASSED",
+        id: "pin reach loose",
         gloss: "a program the project's pin provides was reached around the pin",
         class: "The pinned toolchain is what makes one machine's run mean anything about \
 another's, and it supplies an ENVIRONMENT as well as a binary. A program reached around \
@@ -887,52 +1123,52 @@ like a wrong invocation. Measured on one consumer: sixty runs of a test suite di
 unset variable instead of on the assertion, and the report that followed was published \
 as three claims about the tree, all false.",
         routes: &[run(
-            "R-REACH-IT-THROUGH-THE-PIN",
+            "task run first",
             "run the declared task, or invoke the program through the pin",
         )],
     },
     VendoredVerdict {
-        id: "V-SHEBANG-UNNAMED-LANGUAGE",
+        id: "program name unnamed",
         gloss: "the file runs a shell and its name does not say so",
         class: "Every instrument that selects by extension — a formatter, a linter, a \
 CI path filter — covers this file silently and exits 0. A green run over it therefore \
 means nothing was looked at rather than nothing was found, which is worse than a red \
 one. Name the language in the filename, or declare the file's coverage another way.",
-        routes: &[run("R-NAME-THE-LANGUAGE", "git mv")],
+        routes: &[run("patch run first", "git mv")],
     },
     VendoredVerdict {
-        id: "V-SIBLING-UNRESOLVED",
+        id: "program resolve missing",
         gloss: "a run-time sibling path is computed and the tree carries no such file",
         class: "The shape resolves a path beside the running program and then guards it \
 with a test that exits 0, so the reference does not fail — it goes silent, and the \
 behaviour it was reaching for simply never happens. A path that must exist should be \
 asserted rather than tested.",
-        routes: &[read("R-ADD-THE-SIBLING", "the computed path")],
+        routes: &[read("source read first", "the computed path")],
     },
     VendoredVerdict {
-        id: "V-JOB-RUNS-ON-DRAFT",
+        id: "job run early",
         gloss: "a job spends a runner on a pull request still being verified locally",
         class: "A draft says the author is still verifying locally, and it is also the lever a \
 red run pulls: a lander that re-drafts stops further spend while the failure is diagnosed. A \
 single job missing the guard defeats both, and the run it buys is one nobody reads. Measured on \
 one repository: a workflow triggered by any pull request touching a workflow file spent a runner \
 on every push to a draft for its whole life, and re-drafting did not close the tap.",
-        routes: &[read("R-GATE-THE-JOB-ON-DRAFT", "the job's condition")],
+        routes: &[read("source read first", "the job's condition")],
     },
     VendoredVerdict {
-        id: "V-PR-WORKFLOW-NOT-SUPERSEDED",
+        id: "workflow run twice",
         gloss: "a pull-request workflow pays out a run its own next push made obsolete",
         class: "A landing lap rebases and pushes. Without `cancel-in-progress` the superseded \
 commit's run is billed in full for a verdict nobody will read, and a lander loses the ability to \
 cancel a doomed run by simply pushing the next one. Declaring the group is not enough — the \
 value is what does the work, and it is a boolean rather than the string `true`.",
         routes: &[read(
-            "R-SUPERSEDE-THE-RUN",
+            "source read first",
             "the workflow's concurrency block",
         )],
     },
     VendoredVerdict {
-        id: "V-WORKFLOW-NO-CONCURRENCY",
+        id: "workflow declare missing",
         gloss: "a workflow can have two runs racing at all",
         class: "Superseding is the pull-request half of this and is not the whole of it: a \
 comment- or schedule-triggered workflow never reaches that guard, so the property that matters \
@@ -940,10 +1176,10 @@ off the landing path — that a workflow cannot race itself — reaches none of 
 concurrent comment invocations ran N concurrent attempts to advance a trunk branch, at 245 \
 refusals against 6 merges in half an hour. A scheduled workflow must NOT cancel its own previous \
 tick, so declaring a group is all this asks.",
-        routes: &[read("R-DECLARE-A-CONCURRENCY-GROUP", "the workflow")],
+        routes: &[read("source read first", "the workflow")],
     },
     VendoredVerdict {
-        id: "V-READY-FOR-REVIEW-UNSUBSCRIBED",
+        id: "review watch missing",
         gloss: "a draft-gated workflow can never be superseded once it skips",
         class: "Omitting `types:` defaults to `[opened, synchronize, reopened]`. Where the jobs \
 are draft-gated, a pull request created as a draft mints a skipped run on `opened`, and with no \
@@ -951,79 +1187,79 @@ are draft-gated, a pull request created as a draft mints a skipped run on `opene
 read a skip as an answer and polls forever. Measured as a deadlock across two pull requests at \
 once, both fully green but for one such name.",
         routes: &[read(
-            "R-SUBSCRIBE-TO-READY-FOR-REVIEW",
+            "source read first",
             "the pull_request trigger's types",
         )],
     },
     VendoredVerdict {
-        id: "V-WORKFLOW-RUN-UNSCOPED",
+        id: "workflow run loose",
         gloss: "a branch scope written where filtering is already too late",
         class: "A job condition is evaluated AFTER the run exists, so a branch scope expressed \
 only there creates a run and then skips it. Measured on one lane: 1131 inserted-and-skipped runs \
 in 25 hours — no runner minutes, which is why it survived, but 46% of every run in the \
 repository, enough that paginating the run list stops being stable. The filter belongs on the \
 trigger, where it is free.",
-        routes: &[read("R-FILTER-AT-THE-TRIGGER", "the workflow_run trigger")],
+        routes: &[read("source read first", "the workflow_run trigger")],
     },
     VendoredVerdict {
-        id: "V-COMMENT-TRIGGER-UNANCHORED",
+        id: "event bind loose",
         gloss: "a comment predicate fires from anywhere in a body anyone can write",
         class: "An unanchored substring test fires from mid-sentence, from inside backticks, from \
 a quoted block. That makes the repository's own writing ABOUT a trigger an invocation of it, and \
 every artifact that has to name the token in order to be about it a live round. The class is the \
 unanchored read of a body anyone can write, not the one token read that way.",
-        routes: &[read("R-ANCHOR-THE-PREDICATE", "the job condition")],
+        routes: &[read("source read first", "the job condition")],
     },
     VendoredVerdict {
-        id: "V-COMMENT-MERGE-IGNORES-DRAFT",
+        id: "merge run early",
         gloss: "a comment-triggered merge delegates the draft question to the ruleset",
         class: "A draft head grades no checks where every pull-request workflow is draft-gated, \
 and a branch ruleset admits that empty set as satisfying required-checks-green. So a merge path \
 that never reads the draft state has no draft check at all, and can advance the trunk to a commit \
 CI never ran on. Deciding not to ask is not the same as asking.",
-        routes: &[read("R-READ-THE-DRAFT-STATE", "the merge job")],
+        routes: &[read("source read first", "the merge job")],
     },
     VendoredVerdict {
-        id: "V-TRIGGER-REACHES-NO-JOB",
+        id: "event reach dead",
         gloss: "a declared trigger starts a run in which every job skips",
         class: "The trigger exists and does nothing: the run list shows a run, and only the job's \
 conclusion says it did not happen. Measured on one lane where a manual trigger was added so it \
 could be exercised without waiting on a late cron, and every job's condition still admitted only \
 the two original events. Judged only where a condition MENTIONS the event name at all, since a \
 workflow that does not discriminate by event answers for every trigger it declares.",
-        routes: &[read("R-ADMIT-THE-TRIGGER", "the job conditions")],
+        routes: &[read("source read first", "the job conditions")],
     },
     VendoredVerdict {
-        id: "V-CRON-COLLISION",
+        id: "job start same",
         gloss: "two scheduled workflows contend for the same runners at the same minute",
         class: "Every scheduled workflow's header tends to claim a staggered slot and nothing \
 checks it, so two pairs drifted onto the same minute and the second pair landed after the first \
 was found. Compared as LITERAL expressions rather than firing times: an every-30-minutes \
 schedule genuinely overlaps every hourly slot, and flagging that would make the class fire \
 forever on a workflow doing nothing wrong.",
-        routes: &[read("R-STAGGER-THE-SCHEDULE", "the schedule trigger")],
+        routes: &[read("source read first", "the schedule trigger")],
     },
     VendoredVerdict {
-        id: "V-FANIN-NEEDS-UNASSERTED",
+        id: "job require unseen",
         gloss: "a fan-in enumerates its own dependencies and has gone stale",
         class: "Branch protection points at one aggregating job so that adding a leg never needs \
 a ruleset change — which only holds if that job's assertion follows its dependency list by \
 itself. Measured: a fan-in enumerated three of its four dependencies, so a red fourth left green \
 the one check the host requires. A set-wide predicate cannot go stale, because it names nothing.",
-        routes: &[read("R-ASSERT-OVER-THE-WHOLE-SET", "the fan-in job")],
+        routes: &[read("source read first", "the fan-in job")],
     },
     VendoredVerdict {
-        id: "V-WARM-COMPILE-UNGUARDED",
+        id: "cache build loose",
         gloss: "a cache-warming build recompiles and writes nothing on every run",
         class: "A build that compiles to fill a cache and runs nothing judges nothing, which is \
 why it is exempt from parity rules — and that exemption is what makes it easy to leave running \
 for nothing. Measured: two cache entries carrying the same key across five merges, each cycle \
 compiling for ~145s and saving nothing, because the restore skips saving when the key already \
 exists. One condition reading the restore's hit flag is the whole fix.",
-        routes: &[read("R-GUARD-ON-THE-CACHE-HIT", "the compile step")],
+        routes: &[read("source read first", "the compile step")],
     },
     VendoredVerdict {
-        id: "V-WARM-GUARD-NAMES-MISSING-ID",
+        id: "cache name unknown",
         gloss: "the cache guard names a step that does not exist, so it admits every run",
         class: "The other direction of the same defect, and it has the same symptom with no \
 signal. If the action stops emitting the hit flag the expression is empty, the guard holds, and \
@@ -1031,10 +1267,10 @@ the compile runs — wasteful, but visible in the bill. If the step id is droppe
 the guard keeps naming it, the expression is ALSO empty and the build silently reverts to \
 compiling every time. So the class names both halves: the guard must be present, and the step it \
 reads must exist.",
-        routes: &[read("R-DECLARE-THE-STEP-ID", "the restore step")],
+        routes: &[read("source read first", "the restore step")],
     },
     VendoredVerdict {
-        id: "V-INTERPOLATION-SWALLOWED",
+        id: "input render dropped",
         gloss: "an unquoted comment truncates a value before it ever reaches the forge",
         class: "YAML opens a comment at an unquoted space-hash, so a value carrying an \
 interpolation after one parses to the bare text before it and the rest is discarded. Measured: \
@@ -1042,10 +1278,10 @@ one workflow carried exactly that for a day and 30 consecutive runs reported a t
 workflow name, so a caller keying on the interpolated value could never match. Linters pass over \
 the line because a comment is legal YAML, and review reads it as the thing it was meant to be. \
 Read pre-parse, because the parse is what destroys the evidence. Quoting the value is the fix.",
-        routes: &[read("R-QUOTE-THE-VALUE", "the truncated line")],
+        routes: &[read("source read first", "the truncated line")],
     },
     VendoredVerdict {
-        id: "V-GRADED-HEAD-REGRADED",
+        id: "head grade twice",
         gloss: "the forge already judged this commit and a second run would re-ask it",
         class: "A commit that has not changed cannot get a different verdict, so a second \
 run over it buys an answer that is already recorded and spends the metered tier to do it. \
@@ -1053,10 +1289,7 @@ Measured on one consumer's landing bot over a half hour: 400 runs, 248 executed,
 merges. Read the recorded verdict rather than asking for it again; if the intent was to \
 judge different work, the commit is what has to change.",
         routes: &[
-            read(
-                "R-READ-THE-RECORDED-VERDICT",
-                "the forge record for this commit",
-            ),
+            read("source read first", "the forge record for this commit"),
             // THE PRECONDITION IS THE WHOLE OF THIS ROUTE. A re-grade is
             // legitimate when the recorded verdict is about the RUNNER rather
             // than about the commit — a lost agent, an evicted node, an
@@ -1064,7 +1297,7 @@ judge different work, the commit is what has to change.",
             // nobody asked. It is not legitimate because the answer was
             // unwelcome, which is the case this condition exists to exclude.
             admit(
-                "R-OVERRIDE-THE-REGRADE",
+                "path admit first",
                 "the recorded verdict is about a runner fault rather than about this commit",
             ),
         ],
@@ -1180,36 +1413,125 @@ mod tests {
 
     #[test]
     fn a_conforming_entry_validates() {
-        validate(&[entry("V-ONE")]).expect("a conforming registry loads");
+        validate(&[entry("V-ONE")], &Vocabulary::default()).expect("a conforming registry loads");
+    }
+
+    /// A three-slot fixture vocabulary, enough to spell `task read first`.
+    fn vocab() -> Vocabulary {
+        let word = |w: &str| VocabularyWord {
+            word: w.to_owned(),
+            gloss: "a word".to_owned(),
+        };
+        Vocabulary {
+            tokenizer: Some("o200k_base".to_owned()),
+            tokenizer_source: None,
+            tokenizer_retrieved: None,
+            subject: vec![word("task"), word("shell")],
+            action: vec![word("read"), word("edit")],
+            condition: vec![word("first"), word("refused")],
+        }
+    }
+
+    /// A class named in the grammar, with every word spent so arm 5 is quiet.
+    fn named(id: &str) -> DeclaredVerdict {
+        let mut e = entry(id);
+        e.routes[0].id = "shell edit refused".to_owned();
+        e
     }
 
     #[test]
-    fn a_token_without_the_prefix_is_refused() {
-        let mut bad = entry("V-ONE");
-        bad.id = "TASK-UNDEFINED".to_owned();
-        assert!(validate(&[bad]).is_err());
+    fn the_declared_registry_passes_its_own_grammar() {
+        // ANTI-VACUITY, and it is the load-bearing case (CLOUD-418): an arm that
+        // refused everything would satisfy every negative case below and get
+        // switched off the first time somebody ran it.
+        validate(&[named("task read first")], &vocab()).expect("a conforming registry loads");
+    }
+
+    #[test]
+    fn a_four_word_class_is_refused() {
+        // ARM 1. Fixed arity, not a maximum — this is the constraint an
+        // implementer will want to relax, and relaxing it is what puts a
+        // delimiter back between the name and the pointers.
+        assert!(validate(&[named("task read first refused")], &vocab()).is_err());
+        assert!(validate(&[named("task read")], &vocab()).is_err());
+    }
+
+    #[test]
+    fn a_word_outside_the_declared_list_is_refused() {
+        // ARM 2, and in the right SLOT: `edit` is declared, as an action, so a
+        // class spelling it in slot 1 must still be refused. A membership check
+        // that ignored position would pass this and the grammar would mean
+        // nothing.
+        assert!(validate(&[named("cargo read first")], &vocab()).is_err());
+        assert!(validate(&[named("edit read first")], &vocab()).is_err());
+    }
+
+    #[test]
+    fn a_duplicate_triple_is_refused() {
+        // ARM 3. Under this grammar the id IS the triple, so the duplicate-id
+        // refusal is the uniqueness-of-the-triple refusal; there is no second
+        // question to ask.
+        assert!(
+            validate(
+                &[named("task read first"), named("task read first")],
+                &vocab()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_word_no_name_spends_is_refused() {
+        // ARM 5. The mirror of the landed rule that a `[[verdict]]` row nothing
+        // raises fails the load: dead vocabulary reads as headroom while nothing
+        // has walked it.
+        let mut wider = vocab();
+        wider.condition.push(VocabularyWord {
+            word: "stale".to_owned(),
+            gloss: "answers for a state that has moved".to_owned(),
+        });
+        assert!(validate(&[named("task read first")], &wider).is_err());
+    }
+
+    #[test]
+    fn a_word_with_no_gloss_is_refused() {
+        // ARM 6. A word that explains nothing explains nothing in every name
+        // that spends it, which is the free-text namespace back again.
+        let mut blank = vocab();
+        blank.subject[0].gloss = "  ".to_owned();
+        assert!(validate(&[named("task read first")], &blank).is_err());
+    }
+
+    #[test]
+    fn a_registry_declaring_no_vocabulary_is_not_held_to_the_grammar() {
+        // The opt-in exemption, and the direction that keeps it honest: a
+        // consumer with no lists cannot satisfy membership, so refusing them
+        // would be a demand with no fix available. `[[pattern]]`'s preset
+        // exemption is the landed precedent.
+        validate(&[entry("V-LEGACY-NAME")], &Vocabulary::default())
+            .expect("a consumer that has not adopted the grammar still loads");
     }
 
     #[test]
     fn a_duplicate_token_is_refused() {
-        assert!(validate(&[entry("V-ONE"), entry("V-ONE")]).is_err());
+        assert!(validate(&[entry("V-ONE"), entry("V-ONE")], &Vocabulary::default()).is_err());
     }
 
     #[test]
     fn a_paragraph_gloss_is_refused() {
         let mut bad = entry("V-ONE");
         bad.gloss = "x".repeat(GLOSS_MAX + 1);
-        assert!(validate(&[bad]).is_err());
+        assert!(validate(&[bad], &Vocabulary::default()).is_err());
         let mut wrapped = entry("V-ONE");
         wrapped.gloss = "one\ntwo".to_owned();
-        assert!(validate(&[wrapped]).is_err());
+        assert!(validate(&[wrapped], &Vocabulary::default()).is_err());
     }
 
     #[test]
     fn a_verdict_with_no_route_is_refused() {
         let mut bad = entry("V-ONE");
         bad.routes.clear();
-        assert!(validate(&[bad]).is_err());
+        assert!(validate(&[bad], &Vocabulary::default()).is_err());
     }
 
     #[test]
@@ -1221,7 +1543,7 @@ mod tests {
             target: String::new(),
             precondition: Some("you can state why".to_owned()),
         }];
-        assert!(validate(&[bad]).is_err());
+        assert!(validate(&[bad], &Vocabulary::default()).is_err());
     }
 
     #[test]
@@ -1233,21 +1555,21 @@ mod tests {
             target: String::new(),
             precondition: None,
         });
-        assert!(validate(&[bad]).is_err());
+        assert!(validate(&[bad], &Vocabulary::default()).is_err());
     }
 
     #[test]
     fn a_command_route_carrying_a_precondition_is_refused() {
         let mut bad = entry("V-ONE");
         bad.routes[0].precondition = Some("something".to_owned());
-        assert!(validate(&[bad]).is_err());
+        assert!(validate(&[bad], &Vocabulary::default()).is_err());
     }
 
     #[test]
     fn a_successor_naming_nothing_is_refused() {
         let mut bad = entry("V-OLD");
         bad.successor = Some("V-GONE".to_owned());
-        assert!(validate(&[bad]).is_err());
+        assert!(validate(&[bad], &Vocabulary::default()).is_err());
     }
 
     #[test]
@@ -1256,7 +1578,7 @@ mod tests {
         first.successor = Some("V-B".to_owned());
         let mut second = entry("V-B");
         second.successor = Some("V-A".to_owned());
-        assert!(validate(&[first, second]).is_err());
+        assert!(validate(&[first, second], &Vocabulary::default()).is_err());
     }
 
     #[test]
@@ -1265,7 +1587,7 @@ mod tests {
         old.successor = Some("V-NEW".to_owned());
         let new = entry("V-NEW");
         let table = vec![old, new];
-        validate(&table).expect("a terminating chain loads");
+        validate(&table, &Vocabulary::default()).expect("a terminating chain loads");
         let (resolved, retired) = resolve(&table, "V-OLD").expect("the token resolves");
         assert_eq!(resolved.id, "V-NEW");
         assert!(retired, "the token the reader asked for was retired");
@@ -1312,9 +1634,15 @@ mod tests {
                 | Native::SpawningRuleOnReadVerb
                 | Native::StopConditionUnmet => native.id(),
             };
-            assert!(
-                named.starts_with(VERDICT_PREFIX),
-                "{named} is not a verdict token"
+            // The prefix is gone (CLOUD-1284), so what makes this a token is the
+            // ARITY: exactly three words. Asserting that here rather than a
+            // prefix keeps the native half held to the same shape the consumer
+            // half is validated against, which is the property the prefix used
+            // to stand in for.
+            assert_eq!(
+                named.split(' ').count(),
+                SLOTS,
+                "{named} is not a three-word verdict name"
             );
         }
         assert_eq!(
@@ -1332,7 +1660,8 @@ mod tests {
     #[test]
     fn the_vendored_table_validates() {
         let table = vendored();
-        validate(&table).expect("the table this binary ships is well formed");
+        validate(&table, &Vocabulary::default())
+            .expect("the table this binary ships is well formed");
         for native in Native::ALL {
             assert!(
                 table.iter().any(|entry| entry.id == native.id()),

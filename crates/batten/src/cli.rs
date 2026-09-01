@@ -636,7 +636,7 @@ pub enum PolicyCommand {
     /// middle re-numbers every later discriminant and `semver` reads that as
     /// `enum_no_repr_variant_discriminant_changed`.
     Explain {
-        /// The token to resolve, e.g. `V-TASK-UNDEFINED`.
+        /// The token to resolve, e.g. `task name undefined`.
         token: String,
         /// Emit the class as byte-stable JSON instead of pointer lines.
         json: bool,

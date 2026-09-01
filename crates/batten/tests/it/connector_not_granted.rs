@@ -60,12 +60,12 @@ module = "connector-not-granted.rego"
 severity = "deny"
 
 [[verdict]]
-id = "V-RAW-CONNECTOR-GRANTED"
+id = "connector grant loose"
 gloss = "a reduced tool is also granted raw, so the reduction decides nothing"
 class = "A fixture copy of the shipped class; the registry's own row is in batten.toml."
 
 [[verdict.route]]
-id = "R-DROP-THE-RAW-GRANT"
+id = "task run first"
 kind = "document"
 target = "connector-not-granted.rego"
 "#;

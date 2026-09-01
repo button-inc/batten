@@ -60,7 +60,7 @@ violation contains {
 	"rule": "ancestry-decides-nothing",
 	# The site first, then the token that gave it away: the fix is at the line,
 	# and the token is what a reader searches for once there.
-	"verdict": "V-ANCESTRY-DECIDES-MERGEDNESS",
+	"verdict": "patch judge wrong",
 	"subjects": [{"path": path, "line": site.line}, {"artifact": token}],
 } if {
 	some path, sites in input.tree.invocations

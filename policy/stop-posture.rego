@@ -115,7 +115,7 @@ hits := count(regex.find_n(data.batten.patterns["hedged-flag-framing"], scrubbed
 # mirror, and a mirror is cleared by restating it, which is the double-write.
 violation contains {
 	"rule": "stop-posture",
-	"verdict": "V-HEDGED-FLAG-FRAMING",
+	"verdict": "prose report duplicate",
 	"subjects": [{"count": hits}],
 } if {
 	hits > 0
@@ -128,21 +128,21 @@ ending(text) := {"call": {"final-message": text}}
 
 test_a_hedged_flag_is_named if {
 	some v in violation with input as ending("One thing I would flag is the exit code.")
-	v.verdict == "V-HEDGED-FLAG-FRAMING"
+	v.verdict == "prose report duplicate"
 }
 
 test_the_witnessed_miss_fires if {
 	# `worth naming` — the sentence that reached chat and nothing else, and became
 	# CLOUD-380 only because a human asked.
 	some v in violation with input as ending("One open thread worth naming: the census never interrogated host settings.")
-	v.verdict == "V-HEDGED-FLAG-FRAMING"
+	v.verdict == "prose report duplicate"
 }
 
 test_both_openers_share_one_verb_set if {
 	# CLOUD-387's asymmetry: `mentioning` was a flagging verb under one opener and
 	# unknown under the other, so the pair is asserted rather than one of them.
 	some v in violation with input as ending("It bears mentioning that this is worth mentioning.")
-	v.verdict == "V-HEDGED-FLAG-FRAMING"
+	v.verdict == "prose report duplicate"
 }
 
 # THE SCRUB, and each case is a span the shell's first version leaked through.

@@ -347,14 +347,14 @@ fn string(text: &str) -> String {
 /// in front of every reviewer and review bot per-commit. A pull request body is
 /// worse on all three of the counts that matter here: it is mutable after the
 /// fact, it is one blob for N commits so the per-write binding is lost, and
-/// writing it is `land.sh`'s job — authored shell frozen by `V-SHELL-RULE-EDITED`.
+/// writing it is `land.sh`'s job — authored shell frozen by `shell edit refused`.
 ///
 /// # The block, and why it is verifiable with the store deleted
 ///
 /// ```text
 /// Admits: <address>
 /// Admits-rule: protected-mutation
-/// Admits-verdict: V-PROTECTED-MUTATION
+/// Admits-verdict: path write refused
 /// Admits-subject: .claude/rules/toolchain.md
 /// Admits-head: <sha>
 /// Admits-epoch: <generation>
@@ -803,7 +803,7 @@ pub fn chain_head(repo_root: &Path, rule: &str, subject: &str) -> Result<Option<
 /// only by the two `override` verbs, so a record could be minted, bound and
 /// consumed while the gate that refused went on refusing. Measured — a `spent`
 /// record whose rule, class, subject and HEAD all equalled the refusal's, and
-/// four routes on `V-FILED-OVER-OWN-DIFF` of which none was reachable. A remedy
+/// four routes on `issue file same` of which none was reachable. A remedy
 /// nothing consults is the defect CLOUD-1050 made unspellable one level up.
 ///
 /// # Why the store is scanned rather than the address computed
@@ -977,7 +977,7 @@ mod tests {
     fn binding() -> Binding {
         Binding {
             rule: "prose-only".to_owned(),
-            verdict: "V-PROSE-ONLY-DIFF".to_owned(),
+            verdict: "diff ship early".to_owned(),
             subject: "a.rs,b.rs".to_owned(),
             head: "0123456789abcdef".to_owned(),
             epoch: "epoch-1".to_owned(),

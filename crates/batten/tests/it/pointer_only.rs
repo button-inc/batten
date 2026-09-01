@@ -844,7 +844,7 @@ const CENSUS: &[Verb] = &[
     // 4 is about. The token asked for is a literal the caller typed.
     Verb {
         path: "policy explain",
-        args: &["V-PROTECTED-MUTATION"],
+        args: &["path write refused"],
         stdin: Stdin::Nothing,
         disposition: Disposition::Echoes(
             "the answer IS a `[[verdict]]` row — its gloss, its class definition and its \
@@ -873,7 +873,7 @@ const CENSUS: &[Verb] = &[
             "--rule",
             "prose-only",
             "--verdict",
-            "V-PROTECTED-MUTATION",
+            "path write refused",
             "--subject",
             "a.rs",
         ],
@@ -895,7 +895,7 @@ const CENSUS: &[Verb] = &[
             "--rule",
             "prose-only",
             "--verdict",
-            "V-PROTECTED-MUTATION",
+            "path write refused",
             "--subject",
             "a.rs",
         ],

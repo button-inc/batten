@@ -121,7 +121,7 @@ fn the_hatch_is_load_bearing() {
         //
         // This case used to observe the hatch through a protected-path refusal,
         // which was the obvious choice while the hatch reached every row. It no
-        // longer reaches `V-PROTECTED-MUTATION`: that class declares an override
+        // longer reaches `path write refused`: that class declares an override
         // route and the boundary honours a spent admission for it, so the variable
         // stopped being its way out. Observing the hatch through the one gate it
         // deliberately cannot open would assert the opposite of the contract.

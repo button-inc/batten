@@ -152,7 +152,7 @@ ci_task_used contains [path, task] if {
 
 violation contains {
 	"rule": "ci-task-parity",
-	"verdict": "V-CI-TASK-NOT-IN-VERIFY",
+	"verdict": "task run missing",
 	"subjects": [{"path": path}, {"artifact": task}],
 } if {
 	governed
@@ -184,7 +184,7 @@ roster_name_has_a_job(name) if name in job_display_names
 
 violation contains {
 	"rule": "required-roster-matches-jobs",
-	"verdict": "V-REQUIRED-CHECK-NAMES-NO-JOB",
+	"verdict": "check name unknown",
 	"subjects": [{"path": "mise.toml"}, {"artifact": name}],
 } if {
 	governed
@@ -194,7 +194,7 @@ violation contains {
 
 violation contains {
 	"rule": "required-roster-matches-jobs",
-	"verdict": "V-JOB-NOT-IN-REQUIRED-ROSTER",
+	"verdict": "job list missing",
 	"subjects": [{"path": "mise.toml"}, {"artifact": name}],
 } if {
 	governed
@@ -214,7 +214,7 @@ release_config := input.tree.documents["release-plz.toml"]
 
 violation contains {
 	"rule": "release-pr-opens-as-a-draft",
-	"verdict": "V-RELEASE-PR-NOT-DRAFT",
+	"verdict": "release open early",
 	"subjects": [{"path": "release-plz.toml"}],
 } if {
 	governed
@@ -236,7 +236,7 @@ dependabot_absent if not ".github/dependabot.yml" in input.tree.tracked
 
 violation contains {
 	"rule": "one-bot-serves-every-ecosystem",
-	"verdict": "V-DEPENDABOT-RETURNED",
+	"verdict": "config carry duplicate",
 	"subjects": [{"path": ".github/dependabot.yml"}],
 } if {
 	governed
@@ -260,7 +260,7 @@ renovate_key_ok("vulnerabilityAlerts") if is_object(renovate.vulnerabilityAlerts
 
 violation contains {
 	"rule": "one-bot-serves-every-ecosystem",
-	"verdict": "V-RENOVATE-BOUND-MISSING",
+	"verdict": "bound declare missing",
 	"subjects": [{"path": "renovate.json5"}, {"artifact": key}],
 } if {
 	governed
@@ -284,7 +284,7 @@ commit_type_is_scoped if {
 
 violation contains {
 	"rule": "one-bot-serves-every-ecosystem",
-	"verdict": "V-RENOVATE-COMMIT-TYPE-UNSCOPED",
+	"verdict": "commit name unnamed",
 	"subjects": [{"path": "renovate.json5"}],
 } if {
 	governed
@@ -301,7 +301,7 @@ maintained_ecosystems := ["cargo", "github-actions", "mise"]
 
 violation contains {
 	"rule": "one-bot-serves-every-ecosystem",
-	"verdict": "V-ECOSYSTEM-UNSERVED",
+	"verdict": "manifest cover missing",
 	"subjects": [{"path": "renovate.json5"}, {"artifact": eco}],
 } if {
 	governed
@@ -328,7 +328,7 @@ fanin_workflow := manifest.env.CI_FANIN_WORKFLOW
 
 violation contains {
 	"rule": "fan-in-is-wired",
-	"verdict": "V-FANIN-NOT-REQUIRED",
+	"verdict": "job require missing",
 	"subjects": [{"path": "mise.toml"}, {"artifact": fanin_check}],
 } if {
 	governed
@@ -337,7 +337,7 @@ violation contains {
 
 violation contains {
 	"rule": "fan-in-is-wired",
-	"verdict": "V-FANIN-WORKFLOW-DECLARES-NO-JOB",
+	"verdict": "workflow declare empty",
 	"subjects": [{"path": fanin_workflow}, {"artifact": fanin_check}],
 } if {
 	governed
@@ -360,7 +360,7 @@ abandon_reads_declaration if {
 
 violation contains {
 	"rule": "fan-in-is-wired",
-	"verdict": "V-ABANDON-RESTATES-THE-FANIN",
+	"verdict": "job declare duplicate",
 	"subjects": [{"path": "mise-tasks/abandon-matrix.sh"}],
 } if {
 	governed
@@ -378,7 +378,7 @@ lander_calls_abandon if {
 
 violation contains {
 	"rule": "fan-in-is-wired",
-	"verdict": "V-ABANDON-NEVER-CALLED",
+	"verdict": "job reach dead",
 	"subjects": [{"path": "mise-tasks/land.sh"}],
 } if {
 	governed
@@ -409,7 +409,7 @@ starts_with_the_lease(path, name) if {
 
 violation contains {
 	"rule": "lease-authorises-before-spending",
-	"verdict": "V-LEASE-PRECONDITION-ABSENT",
+	"verdict": "lease guard absent",
 	"subjects": [{"path": path}, {"artifact": name}],
 } if {
 	governed
@@ -443,7 +443,7 @@ lease_tolerant(path) := count([line |
 
 violation contains {
 	"rule": "lease-authorises-before-spending",
-	"verdict": "V-LEASE-PRECONDITION-FATAL",
+	"verdict": "lease guard unsafe",
 	"subjects": [{"path": path}],
 } if {
 	governed
@@ -475,7 +475,7 @@ decides_through_checks_green(path) if {
 
 violation contains {
 	"rule": "check-status-decided-in-one-place",
-	"verdict": "V-CHECK-STATUS-REROLLED",
+	"verdict": "check grade twice",
 	"subjects": [{"path": path}],
 } if {
 	governed
@@ -518,7 +518,7 @@ watched(prefix) if {
 
 violation contains {
 	"rule": "every-bot-branch-has-a-watcher",
-	"verdict": "V-BOT-PREFIX-UNWATCHED",
+	"verdict": "branch watch missing",
 	"subjects": [{"path": config}, {"artifact": bot_prefix(config)}],
 } if {
 	governed
@@ -535,7 +535,7 @@ violation contains {
 # green over a file it never read.
 violation contains {
 	"rule": "ci-task-parity",
-	"verdict": "V-CI-WORKFLOW-UNREAD",
+	"verdict": "workflow read unread",
 	"subjects": [{"path": path}],
 } if {
 	some path in input.tree.missing
@@ -604,7 +604,7 @@ foreign_cargo contains [path, number, cmd] if {
 
 violation contains {
 	"rule": "foreign-cargo-is-the-declared-spelling",
-	"verdict": "V-FOREIGN-CARGO-SPELLING-DRIFT",
+	"verdict": "cargo spelling other",
 	"subjects": [{"path": path, "line": number}, {"artifact": cmd}],
 } if {
 	governed
@@ -620,7 +620,7 @@ violation contains {
 # that carries a copy of this config and none of its subjects.
 violation contains {
 	"rule": "foreign-cargo-is-the-declared-spelling",
-	"verdict": "V-FOREIGN-CARGO-ABSENT",
+	"verdict": "cargo reach absent",
 	"subjects": [{"count": 0}],
 } if {
 	governed
@@ -631,7 +631,7 @@ violation contains {
 
 violation contains {
 	"rule": "foreign-cargo-is-the-declared-spelling",
-	"verdict": "V-TASK-CARGO-UNREADABLE",
+	"verdict": "task read unread",
 	"subjects": [{"artifact": "test:cargo"}],
 } if {
 	governed
@@ -724,7 +724,7 @@ test_a_foreign_leg_running_a_different_cargo_is_refused if {
 	drifted := object.union(sound_input.tree.lines, {".github/workflows/rust.yml": ["      - run: mise exec -- cargo nextest run --workspace --all-features"]})
 	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": drifted})}
 	some f in found
-	f.verdict == "V-FOREIGN-CARGO-SPELLING-DRIFT"
+	f.verdict == "cargo spelling other"
 }
 
 # THE ANTI-VACUITY TERM. Every clause above judges a foreign leg; none of them
@@ -737,7 +737,7 @@ test_a_tree_with_no_foreign_cargo_leg_is_refused if {
 	blank := object.union(object.remove(sound_input.tree, ["lines"]), {"lines": {}})
 	found := violation with input as {"tree": blank}
 	some f in found
-	f.verdict == "V-FOREIGN-CARGO-ABSENT"
+	f.verdict == "cargo reach absent"
 }
 
 # A `--no-run` build compiles and executes nothing, so it covers nothing and
@@ -748,7 +748,7 @@ test_a_no_run_build_is_exempt_and_does_not_satisfy_the_term if {
 	only_no_run := object.union(sound_input.tree.lines, {".github/workflows/rust.yml": ["      - run: mise exec -- cargo nextest run --no-run --workspace"]})
 	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": only_no_run})}
 	some f in found
-	f.verdict == "V-FOREIGN-CARGO-ABSENT"
+	f.verdict == "cargo reach absent"
 }
 
 # A manifest whose `test:cargo` carries no readable cargo line is could-not-look,
@@ -757,7 +757,7 @@ test_a_task_yielding_no_cargo_line_is_refused if {
 	blind := object.union(sound_manifest.tasks, {"test:cargo": {"run": "./mise-tasks/step-receipt.sh check test:cargo"}})
 	found := violation with input as swap("mise.toml", object.union(sound_manifest, {"tasks": blind}))
 	some f in found
-	f.verdict == "V-TASK-CARGO-UNREADABLE"
+	f.verdict == "task read unread"
 }
 
 test_a_sound_tree_is_clean if {
@@ -771,7 +771,7 @@ test_a_ci_task_verify_does_not_run_is_refused if {
 	}
 	found := violation with input as swap(".github/workflows/ci.yml", wf)
 	some f in found
-	f.verdict == "V-CI-TASK-NOT-IN-VERIFY"
+	f.verdict == "task run missing"
 	some s in f.subjects
 	s.artifact == "smoke"
 }
@@ -786,7 +786,7 @@ test_a_windows_job_may_run_a_task_verify_does_not if {
 	}
 	found := violation with input as swap(".github/workflows/ci.yml", wf)
 	every f in found {
-		f.verdict != "V-CI-TASK-NOT-IN-VERIFY"
+		f.verdict != "task run missing"
 	}
 }
 
@@ -800,7 +800,7 @@ test_an_unclassified_runner_is_still_judged if {
 	}
 	found := violation with input as swap(".github/workflows/ci.yml", wf)
 	some f in found
-	f.verdict == "V-CI-TASK-NOT-IN-VERIFY"
+	f.verdict == "task run missing"
 }
 
 # A TASK NAMED OUTSIDE A `run:` SCALAR IS NOT SPEND, which is the reading the
@@ -825,7 +825,7 @@ test_a_task_named_outside_a_run_step_is_not_read_as_spend if {
 	}
 	found := violation with input as swap(".github/workflows/ci.yml", wf)
 	every f in found {
-		f.verdict != "V-CI-TASK-NOT-IN-VERIFY"
+		f.verdict != "task run missing"
 	}
 }
 
@@ -833,7 +833,7 @@ test_a_job_missing_from_the_roster_is_refused if {
 	wf := object.union(sound_workflow, {"jobs": {"extra": {"name": "extra", "runs-on": "ubuntu-latest", "steps": [{"run": "mise run lint"}]}}})
 	found := violation with input as swap(".github/workflows/ci.yml", wf)
 	some f in found
-	f.verdict == "V-JOB-NOT-IN-REQUIRED-ROSTER"
+	f.verdict == "job list missing"
 	some s in f.subjects
 	s.artifact == "extra"
 }
@@ -842,7 +842,7 @@ test_a_roster_name_matching_no_job_is_refused if {
 	m := object.union(sound_manifest, {"env": object.union(sound_manifest.env, {"CI_REQUIRED_CHECKS": "ci,final,ghost"})})
 	found := violation with input as swap("mise.toml", m)
 	some f in found
-	f.verdict == "V-REQUIRED-CHECK-NAMES-NO-JOB"
+	f.verdict == "check name unknown"
 	some s in f.subjects
 	s.artifact == "ghost"
 }
@@ -853,28 +853,28 @@ test_a_matrix_leg_matches_on_its_base_name if {
 	m := object.union(sound_manifest, {"env": object.union(sound_manifest.env, {"CI_REQUIRED_CHECKS": "ci (ubuntu-latest),final"})})
 	found := violation with input as swap("mise.toml", m)
 	every f in found {
-		f.verdict != "V-REQUIRED-CHECK-NAMES-NO-JOB"
+		f.verdict != "check name unknown"
 	}
 }
 
 test_a_release_config_that_does_not_open_a_draft_is_refused if {
 	found := violation with input as swap("release-plz.toml", {"pr": {"pr_draft": false}})
 	some f in found
-	f.verdict == "V-RELEASE-PR-NOT-DRAFT"
+	f.verdict == "release open early"
 }
 
 test_a_returned_dependabot_config_is_refused if {
 	tree := object.union(sound_input.tree, {"tracked": ["mise.toml", ".github/dependabot.yml"]})
 	found := violation with input as {"tree": tree}
 	some f in found
-	f.verdict == "V-DEPENDABOT-RETURNED"
+	f.verdict == "config carry duplicate"
 }
 
 test_each_renovate_bound_missing_is_refused if {
 	some key in ["draftPR", "rebaseWhen", "prConcurrentLimit", "minimumReleaseAge", "vulnerabilityAlerts"]
 	found := violation with input as swap("renovate.json5", object.remove(sound_renovate, [key]))
 	some f in found
-	f.verdict == "V-RENOVATE-BOUND-MISSING"
+	f.verdict == "bound declare missing"
 	some s in f.subjects
 	s.artifact == key
 }
@@ -885,27 +885,27 @@ test_each_renovate_bound_missing_is_refused if {
 test_reverting_rebase_when_to_never_is_refused if {
 	found := violation with input as swap("renovate.json5", object.union(sound_renovate, {"rebaseWhen": "never"}))
 	some f in found
-	f.verdict == "V-RENOVATE-BOUND-MISSING"
+	f.verdict == "bound declare missing"
 }
 
 # ZERO IS UNLIMITED, so the bound and its own negation differ by one character.
 test_a_zero_concurrent_limit_is_not_a_bound if {
 	found := violation with input as swap("renovate.json5", object.union(sound_renovate, {"prConcurrentLimit": 0}))
 	some f in found
-	f.verdict == "V-RENOVATE-BOUND-MISSING"
+	f.verdict == "bound declare missing"
 }
 
 test_a_top_level_commit_type_does_not_satisfy_the_scoped_one if {
 	stripped := object.remove(sound_renovate, ["packageRules"])
 	found := violation with input as swap("renovate.json5", object.union(stripped, {"semanticCommitType": "ci"}))
 	some f in found
-	f.verdict == "V-RENOVATE-COMMIT-TYPE-UNSCOPED"
+	f.verdict == "commit name unnamed"
 }
 
 test_an_unserved_ecosystem_is_refused_and_named if {
 	found := violation with input as swap("renovate.json5", object.union(sound_renovate, {"enabledManagers": ["cargo", "github-actions"]}))
 	some f in found
-	f.verdict == "V-ECOSYSTEM-UNSERVED"
+	f.verdict == "manifest cover missing"
 	some s in f.subjects
 	s.artifact == "mise"
 }
@@ -914,21 +914,21 @@ test_a_fanin_outside_the_roster_is_refused if {
 	m := object.union(sound_manifest, {"env": object.union(sound_manifest.env, {"CI_FANIN_CHECK": "nowhere"})})
 	found := violation with input as swap("mise.toml", m)
 	some f in found
-	f.verdict == "V-FANIN-NOT-REQUIRED"
+	f.verdict == "job require missing"
 }
 
 test_a_fanin_workflow_declaring_no_such_job_is_refused if {
 	m := object.union(sound_manifest, {"env": object.union(sound_manifest.env, {"CI_FANIN_WORKFLOW": ".github/workflows/other.yml"})})
 	found := violation with input as swap("mise.toml", m)
 	some f in found
-	f.verdict == "V-FANIN-WORKFLOW-DECLARES-NO-JOB"
+	f.verdict == "workflow declare empty"
 }
 
 test_an_abandon_that_restates_the_path_is_refused if {
 	lines := object.union(sound_input.tree.lines, {"mise-tasks/abandon-matrix.sh": ["run=.github/workflows/ci.yml"]})
 	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
 	some f in found
-	f.verdict == "V-ABANDON-RESTATES-THE-FANIN"
+	f.verdict == "job declare duplicate"
 }
 
 # THE ANTI-VACUITY TERM. Every other fan-in clause makes the abandon SAFE; none
@@ -937,7 +937,7 @@ test_a_lander_that_never_abandons_is_refused if {
 	lines := object.union(sound_input.tree.lines, {"mise-tasks/land.sh": ["mise run ci-wait"]})
 	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
 	some f in found
-	f.verdict == "V-ABANDON-NEVER-CALLED"
+	f.verdict == "job reach dead"
 }
 
 test_a_job_that_starts_without_asking_the_lease_is_refused if {
@@ -948,7 +948,7 @@ test_a_job_that_starts_without_asking_the_lease_is_refused if {
 	}}})
 	found := violation with input as swap(".github/workflows/ci.yml", wf)
 	some f in found
-	f.verdict == "V-LEASE-PRECONDITION-ABSENT"
+	f.verdict == "lease guard absent"
 	some sub in f.subjects
 	sub.artifact == "ci"
 }
@@ -963,7 +963,7 @@ test_a_lease_step_that_is_not_first_is_refused if {
 	}}})
 	found := violation with input as swap(".github/workflows/ci.yml", wf)
 	some f in found
-	f.verdict == "V-LEASE-PRECONDITION-ABSENT"
+	f.verdict == "lease guard absent"
 }
 
 # A FAN-IN IS EXEMPT, and for a reason rather than by name: it cannot start
@@ -972,7 +972,7 @@ test_a_lease_step_that_is_not_first_is_refused if {
 test_a_job_that_waits_on_another_is_not_asked_for_the_lease if {
 	found := violation with input as sound_input
 	every f in found {
-		f.verdict != "V-LEASE-PRECONDITION-ABSENT"
+		f.verdict != "lease guard absent"
 	}
 }
 
@@ -982,21 +982,21 @@ test_a_precondition_invoked_without_the_tolerant_suffix_is_refused if {
 	lines := object.union(sound_input.tree.lines, {".github/workflows/ci.yml": ["        bash -c \"$body\""]})
 	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
 	some f in found
-	f.verdict == "V-LEASE-PRECONDITION-FATAL"
+	f.verdict == "lease guard unsafe"
 }
 
 test_a_workflow_reading_check_runs_without_the_one_predicate_is_refused if {
 	wf := object.union(sound_lander, {"jobs": {"land": {"steps": [{"run": "gh api /check-runs | jq ."}]}}})
 	found := violation with input as swap(".github/workflows/land.yml", wf)
 	some f in found
-	f.verdict == "V-CHECK-STATUS-REROLLED"
+	f.verdict == "check grade twice"
 }
 
 test_a_workflow_deciding_through_the_one_predicate_passes if {
 	wf := object.union(sound_lander, {"jobs": {"land": {"steps": [{"run": "gh api /check-runs && mise run checks-green"}]}}})
 	found := violation with input as swap(".github/workflows/land.yml", wf)
 	every f in found {
-		f.verdict != "V-CHECK-STATUS-REROLLED"
+		f.verdict != "check grade twice"
 	}
 }
 
@@ -1004,7 +1004,7 @@ test_a_workflow_deciding_through_the_one_predicate_passes if {
 test_a_workflow_that_reads_no_check_status_is_not_asked if {
 	found := violation with input as sound_input
 	every f in found {
-		f.verdict != "V-CHECK-STATUS-REROLLED"
+		f.verdict != "check grade twice"
 	}
 }
 
@@ -1012,7 +1012,7 @@ test_a_bot_prefix_with_no_watcher_is_refused if {
 	wf := object.union(sound_lander, {"on": {"workflow_run": {"branches": ["release-plz-**"]}}})
 	found := violation with input as swap(".github/workflows/land.yml", wf)
 	some f in found
-	f.verdict == "V-BOT-PREFIX-UNWATCHED"
+	f.verdict == "branch watch missing"
 	some sub in f.subjects
 	sub.artifact == "renovate/"
 }
@@ -1025,7 +1025,7 @@ test_an_overridden_prefix_is_read_from_its_own_config if {
 	})
 	found := violation with input as {"tree": object.union(sound_input.tree, {"documents": docs})}
 	every f in found {
-		f.verdict != "V-BOT-PREFIX-UNWATCHED"
+		f.verdict != "branch watch missing"
 	}
 }
 
@@ -1044,7 +1044,7 @@ test_a_lane_with_no_config_is_not_asked_for_a_watcher if {
 	tree := object.union(object.remove(sound_input.tree, ["documents"]), {"documents": docs})
 	found := violation with input as {"tree": tree}
 	every f in found {
-		f.verdict != "V-BOT-PREFIX-UNWATCHED"
+		f.verdict != "branch watch missing"
 	}
 }
 
@@ -1063,5 +1063,5 @@ test_an_unreadable_workflow_is_loud if {
 		"missing": [".github/workflows/ci.yml"],
 	}}
 	some f in found
-	f.verdict == "V-CI-WORKFLOW-UNREAD"
+	f.verdict == "workflow read unread"
 }

@@ -20,7 +20,7 @@
 //!
 //! **WHY IT IS NOT IN THAT BATS SUITE**, which is where it belongs on subject. The
 //! `shell-retirement` row (`severity = "deny"`) refuses an EDITED `tests/**/*.bats`
-//! as `V-SHELL-RULE-EDITED` and an ADDED one as `V-SHELL-RULE-ADDED`, and the one
+//! as `shell edit refused` and an ADDED one as `shell add refused`, and the one
 //! admitted edit is a line whose removal names a path the same change deletes. So
 //! the bats corpus is closed to an addition like this one. That is CLOUD-1088 —
 //! *"the campaign's own door-tier suites have no landable spelling"* — and this file

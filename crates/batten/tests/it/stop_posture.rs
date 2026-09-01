@@ -142,7 +142,7 @@ id = "hedged-flag-framing"
 regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’]?d) (flag|note)|I['’]?d (flag|note) (that|one)|I would (flag|note) that|I should (note|flag)|(it|that)['’]?s worth (noting|flagging|mentioning|naming)|bears (noting|flagging|mentioning|naming)"
 
 [[verdict]]
-id = "V-HEDGED-FLAG-FRAMING"
+id = "prose report duplicate"
 gloss = "a finding was written as editorial instead of durably"
 class = """
 Chat stores nothing, so a finding's home is an issue or a memory. A sentence \
@@ -358,7 +358,7 @@ fn the_hot_path_drops_the_modules_own_cases_and_policy_test_keeps_them() {
         &stop_payload("one thing I'd flag is the ordering", false),
     );
     assert!(
-        stdout_of(&out).contains("V-HEDGED-FLAG-FRAMING"),
+        stdout_of(&out).contains("prose report duplicate"),
         "the stripped module still refuses: {}",
         stdout_of(&out)
     );

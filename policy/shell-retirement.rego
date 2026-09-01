@@ -183,7 +183,7 @@ governed_when_deleted(path) if is_bats(path)
 
 violation contains {
 	"rule": "shell-rule-retired",
-	"verdict": "V-SHELL-RULE-ADDED",
+	"verdict": "shell add refused",
 	"subjects": [{"path": path}],
 } if {
 	some path in delta.added
@@ -196,7 +196,7 @@ violation contains {
 
 violation contains {
 	"rule": "shell-rule-retired",
-	"verdict": "V-SHELL-RULE-EDITED",
+	"verdict": "shell edit refused",
 	"subjects": [{"path": path}],
 } if {
 	some path in delta.edited
@@ -211,7 +211,7 @@ violation contains {
 # instance: `hooks-wiring-check.sh` carries a `DECLARED` table naming every
 # by-path hook registration, and its own `wiring-declaration-stale` refuses a row
 # whose subject no longer exists — so retiring `stop-guard.sh` forces a one-line
-# deletion in a governed file, which this arm then refused. `V-SHELL-RULE-EDITED`
+# deletion in a governed file, which this arm then refused. `shell edit refused`
 # declares no override route and no `bypass_env`, so the campaign was structurally
 # unable to complete a retirement it had itself mandated.
 #
@@ -640,7 +640,7 @@ mentions_retired(_, line, gone) if {
 # case further on. Retiring a program requires editing the siblings that CALL it,
 # and a caller does not merely drop a line: it names the successor instead. The
 # truncation clause admits only shortening, so every such retirement was refused
-# with no landable spelling — `V-SHELL-RULE-EDITED` declares no override route and
+# with no landable spelling — `shell edit refused` declares no override route and
 # no `bypass_env`.
 #
 # THIS CLAUSE ALONE DOES NOT REACH `mise-tasks/graph-check.sh`, AND SAYING IT DID
@@ -741,7 +741,7 @@ truncates_a_retired_reference(line, removed) if {
 
 violation contains {
 	"rule": "shell-rule-retired",
-	"verdict": "V-RETIREMENT-UNMAPPED",
+	"verdict": "shell retire missing",
 	"subjects": [{"path": path}],
 } if {
 	some path in delta.deleted
@@ -751,7 +751,7 @@ violation contains {
 
 violation contains {
 	"rule": "shell-rule-retired",
-	"verdict": "V-RETIREMENT-AMBIGUOUS",
+	"verdict": "shell retire unclear",
 	"subjects": [{"path": path}],
 } if {
 	some path in delta.deleted
@@ -775,7 +775,7 @@ violation contains {
 # be waived is, and the arm that carries the coverage is not.
 violation contains {
 	"rule": "shell-rule-retired",
-	"verdict": "V-SUCCESSOR-NO-SURFACE",
+	"verdict": "shell port missing",
 	"subjects": [{"path": path}],
 } if {
 	some path in delta.deleted
@@ -788,7 +788,7 @@ violation contains {
 
 violation contains {
 	"rule": "shell-rule-retired",
-	"verdict": "V-SUCCESSOR-NO-TEST",
+	"verdict": "test port missing",
 	"subjects": [{"path": path}],
 } if {
 	some path in delta.deleted
@@ -814,7 +814,7 @@ violation contains {
 # would be a refusal that teaches nothing.
 violation contains {
 	"rule": "shell-rule-retired",
-	"verdict": "V-SUCCESSOR-KIND-UNDECLARED",
+	"verdict": "shell port unnamed",
 	"subjects": [{"path": path}],
 } if {
 	some path in delta.deleted
@@ -835,7 +835,7 @@ violation contains {
 # to refuse.
 violation contains {
 	"rule": "shell-rule-retired",
-	"verdict": "V-WITHDRAWAL-SUBJECT-ALIVE",
+	"verdict": "shell retire never",
 	"subjects": [{"path": path}],
 } if {
 	some path in delta.deleted
@@ -866,7 +866,7 @@ violation contains {
 # suite that this delta does not retire always does.
 violation contains {
 	"rule": "shell-rule-retired",
-	"verdict": "V-RETIREMENT-SUBJECT-ALIVE",
+	"verdict": "program retire never",
 	"subjects": [{"path": path}, {"path": subject}],
 } if {
 	some path in delta.deleted
@@ -893,7 +893,7 @@ violation contains {
 #     not as a subject — and reading it as one refuses a conforming retirement.
 #     Nothing positional separates the two, because the subject field is optional.
 #   * `// withdrawn:` is subjects-and-reason with no successors at all, and
-#     `V-WITHDRAWAL-SUBJECT-ALIVE` above already decides subject survival for it
+#     `shell retire never` above already decides subject survival for it
 #     through `withdrawn_subjects`. Reading it here too would be a second
 #     authority over one question, answering from a weaker reading.
 #
@@ -994,7 +994,7 @@ violation contains {
 # claim against. An arm with neither is a file deleted with a marker on it.
 violation contains {
 	"rule": "shell-rule-retired",
-	"verdict": "V-WITHDRAWAL-UNEXPLAINED",
+	"verdict": "shell retire empty",
 	"subjects": [{"path": path}],
 } if {
 	some path in delta.deleted
@@ -1330,7 +1330,7 @@ test_dropping_a_line_naming_a_live_path_is_still_refused if {
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
 		},
 	}}
-	v.verdict == "V-SHELL-RULE-EDITED"
+	v.verdict == "shell edit refused"
 }
 
 # AND AN ADDED LINE IS NOT CLEANUP. Without this conjunct a change could delete a
@@ -1349,7 +1349,7 @@ test_an_edit_that_also_adds_a_line_is_refused if {
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
 		},
 	}}
-	v.verdict == "V-SHELL-RULE-EDITED"
+	v.verdict == "shell edit refused"
 }
 
 # THE MEASURED SHAPE the truncation clause exists for. `hooks-wiring-check.sh`
@@ -1388,7 +1388,7 @@ test_a_truncation_dropping_a_live_reference_is_refused if {
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
 		},
 	}}
-	v.verdict == "V-SHELL-RULE-EDITED"
+	v.verdict == "shell edit refused"
 }
 
 # THE REPOINTING, and the three cases that keep it from becoming a licence
@@ -1424,7 +1424,7 @@ test_a_repointing_that_also_changes_the_line_is_refused if {
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
 		},
 	}}
-	v.verdict == "V-SHELL-RULE-EDITED"
+	v.verdict == "shell edit refused"
 }
 
 # ANTI-VACUITY (b): the target must be a successor the LEDGER declares, never one
@@ -1443,7 +1443,7 @@ test_a_repointing_at_an_undeclared_target_is_refused if {
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
 		},
 	}}
-	v.verdict == "V-SHELL-RULE-EDITED"
+	v.verdict == "shell edit refused"
 }
 
 # ANTI-VACUITY (c): the retired path must be one THIS delta deleted, so a
@@ -1461,7 +1461,7 @@ test_a_repointing_away_from_a_live_path_is_refused if {
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
 		},
 	}}
-	v.verdict == "V-SHELL-RULE-EDITED"
+	v.verdict == "shell edit refused"
 }
 
 # COULD NOT LOOK REFUSES. A base side this could not read leaves the removed set
@@ -1479,7 +1479,7 @@ test_an_edit_with_no_readable_base_side_is_refused if {
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
 		},
 	}}
-	v.verdict == "V-SHELL-RULE-EDITED"
+	v.verdict == "shell edit refused"
 }
 
 test_deleted_and_fully_mapped_passes if {
@@ -1580,7 +1580,7 @@ test_a_kind_field_is_not_a_policy_surface if {
 #
 # The positive case: the subject dies in the same delta, the row carries a reason,
 # and NO successor is named. Under the three-arm module this exact input raised
-# both `V-SUCCESSOR-NO-SURFACE` and `V-SUCCESSOR-NO-TEST`, which is the refusal the
+# both `shell port missing` and `test port missing`, which is the refusal the
 # arm exists to remove.
 test_a_withdrawal_whose_subject_died_is_admitted if {
 	count(violation) == 0 with input as {"tree": {
@@ -1684,7 +1684,7 @@ test_a_carried_row_naming_a_live_subject_is_refused if {
 		},
 		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: tests/old-gate.bats mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"]},
 	}}
-	v.verdict == "V-RETIREMENT-SUBJECT-ALIVE"
+	v.verdict == "program retire never"
 }
 
 # THE OTHER DIRECTION, and without it the arm above would be a ban on naming a
@@ -1708,7 +1708,7 @@ test_a_row_whose_named_subject_died_is_admitted if {
 # after its two successors, so a sentence mentioning the governed program this
 # migration deliberately left standing must not read as a claim about it. Without
 # the marker bound in `named_and_alive` this input raises
-# `V-RETIREMENT-SUBJECT-ALIVE` over a word in an explanation — a false refusal in
+# `program retire never` over a word in an explanation — a false refusal in
 # the gate every retirement in CLOUD-843's campaign has to pass.
 test_a_changed_reason_naming_a_governed_path_is_not_a_subject if {
 	count(violation) == 0 with input as {"tree": {
@@ -1722,7 +1722,7 @@ test_a_changed_reason_naming_a_governed_path_is_not_a_subject if {
 }
 
 # AND THE WITHDRAWAL KEEPS ITS OWN ARM rather than gaining a second reading. Its
-# reason is prose on the same footing, and `V-WITHDRAWAL-SUBJECT-ALIVE` already
+# reason is prose on the same footing, and `shell retire never` already
 # decides whether its subject survived — from `withdrawn_subjects`, which requires
 # a named path to be in THIS delta's deleted set.
 test_a_withdrawal_reason_naming_a_governed_path_is_not_a_subject if {
@@ -1912,7 +1912,7 @@ test_a_repointing_at_an_undeclared_invocation_is_refused if {
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:mise+run+old-gate"],
 		},
 	}}
-	v.verdict == "V-SHELL-RULE-EDITED"
+	v.verdict == "shell edit refused"
 }
 
 # THE LOAD-BEARING NEGATIVE. Without the "span is a reference to a deleted path"
@@ -1932,7 +1932,7 @@ test_replacing_a_span_that_is_not_a_retired_reference_is_refused if {
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:mise+run+old-gate"],
 		},
 	}}
-	v.verdict == "V-SHELL-RULE-EDITED"
+	v.verdict == "shell edit refused"
 }
 
 # THE FIELD IS ADDITIVE: it satisfies neither successor obligation, so it cannot
@@ -1944,9 +1944,9 @@ test_an_invocation_field_is_not_a_successor if {
 		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh runs:mise+run+old-gate"]},
 	}}
 
-	# `V-SUCCESSOR-NO-SURFACE`, never `V-RETIREMENT-UNMAPPED`: the arm EXISTS and
+	# `shell port missing`, never `shell retire missing`: the arm EXISTS and
 	# is mapped, so what it fails is the successor obligation rather than the
 	# mapping one. Naming the wrong verdict here was this case's own first defect,
 	# and it would have passed over a module refusing for a different reason.
-	v.verdict == "V-SUCCESSOR-NO-SURFACE"
+	v.verdict == "shell port missing"
 }

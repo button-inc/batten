@@ -49,7 +49,7 @@ use batten::admission::{self, Binding, Record, Refused, Situation, State};
 const AUTHORITY: &str = r#"version = 1
 
 [[verdict]]
-id = "V-PROSE-ONLY-DIFF"
+id = "diff ship early"
 gloss = "a branch whose whole diff is comment lines buys a CI matrix that confirms nothing"
 class = """
 Every changed line is a comment and no test moved, so a full required matrix
@@ -57,12 +57,12 @@ would confirm nothing that could differ. Ride the next change these files carry.
 """
 
 [[verdict.route]]
-id = "R-BATCH-IT"
+id = "task run first"
 kind = "command"
 target = "let the next change to these files carry it"
 
 [[verdict.route]]
-id = "R-OVERRIDE-PROSE-ONLY"
+id = "path admit first"
 kind = "override"
 precondition = "the prose IS the deliverable and cannot wait for the next change"
 "#;
@@ -101,7 +101,7 @@ fn answers(reason: &str) -> BTreeMap<String, String> {
         ("lost".to_owned(), reason.to_owned()),
         (
             "rejected-route".to_owned(),
-            "R-BATCH-IT: no next change is coming".to_owned(),
+            "task run first: no next change is coming".to_owned(),
         ),
     ])
 }
@@ -117,7 +117,7 @@ fn answers(reason: &str) -> BTreeMap<String, String> {
 fn binding(subject: &str, head: &str, epoch: &str, reason: &str) -> Binding {
     Binding {
         rule: "prose-only".to_owned(),
-        verdict: "V-PROSE-ONLY-DIFF".to_owned(),
+        verdict: "diff ship early".to_owned(),
         subject: subject.to_owned(),
         head: head.to_owned(),
         epoch: epoch.to_owned(),
@@ -131,7 +131,7 @@ fn binding(subject: &str, head: &str, epoch: &str, reason: &str) -> Binding {
 fn situation<'a>(subject: &'a str, head: &'a str, epoch: &'a str) -> Situation<'a> {
     Situation {
         rule: "prose-only",
-        verdict: "V-PROSE-ONLY-DIFF",
+        verdict: "diff ship early",
         subject,
         head,
         epoch,
@@ -328,7 +328,7 @@ fn a_cycle_cannot_be_constructed_without_breaking_an_address() {
 
     let situation = Situation {
         rule: "prose-only",
-        verdict: "V-PROSE-ONLY-DIFF",
+        verdict: "diff ship early",
         subject: "a.rs",
         head: "head1",
         epoch: "epoch1",
@@ -395,7 +395,7 @@ fn two_concurrent_consumes_resolve_to_exactly_one_winner() {
                         &issued,
                         &Situation {
                             rule: "prose-only",
-                            verdict: "V-PROSE-ONLY-DIFF",
+                            verdict: "diff ship early",
                             subject: "a.rs",
                             head: "head1",
                             epoch: "epoch1",
@@ -462,7 +462,7 @@ fn an_unanswered_question_yields_no_admission_and_prints_what_to_answer() {
             "--rule",
             "prose-only",
             "--verdict",
-            "V-PROSE-ONLY-DIFF",
+            "diff ship early",
             "--subject",
             "a.rs",
         ],
@@ -489,7 +489,7 @@ fn a_class_declaring_no_override_route_cannot_be_overridden() {
     // The right default, and it composes with `verdict::validate`'s refusal of a
     // class whose ONLY route is an override: a class either offers a real way out
     // and may additionally be overridden, or it offers a real way out and may
-    // not. `V-SPAWN-ON-READ-VERB` is the second kind.
+    // not. `spawn run refused` is the second kind.
     let root = fixture("no-override-route");
     let output = common::run_with_stdin(
         &root,
@@ -499,7 +499,7 @@ fn a_class_declaring_no_override_route_cannot_be_overridden() {
             "--rule",
             "check",
             "--verdict",
-            "V-SPAWN-ON-READ-VERB",
+            "spawn run refused",
             "--subject",
             "a.rs",
         ],
@@ -562,13 +562,13 @@ fn a_correctly_answered_override_completes_end_to_end() {
             "--rule",
             "prose-only",
             "--verdict",
-            "V-PROSE-ONLY-DIFF",
+            "diff ship early",
             "--subject",
             "a.rs,b.rs",
         ],
         "precondition=the prose IS the deliverable — this branch is the release notes\n\
          lost=the notes miss the release window and ship describing the previous version\n\
-         rejected-route=R-BATCH-IT assumes a next change to these files, and there is none queued\n",
+         rejected-route=task run first assumes a next change to these files, and there is none queued\n",
     );
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert_eq!(
@@ -587,7 +587,7 @@ fn a_correctly_answered_override_completes_end_to_end() {
     assert_eq!(record.state, State::Issued);
     assert!(record.recomputes(), "and it verifies against its own key");
     assert_eq!(record.binding.subject, "a.rs,b.rs");
-    assert_eq!(record.binding.verdict, "V-PROSE-ONLY-DIFF");
+    assert_eq!(record.binding.verdict, "diff ship early");
     assert_eq!(
         record.binding.answers.len(),
         3,
@@ -609,7 +609,7 @@ fn an_admission_for_one_class_is_not_presentable_against_another() {
         .expect("the admission issues");
 
     let elsewhere = Situation {
-        verdict: "V-SHELL-RULE-EDITED",
+        verdict: "shell edit refused",
         ..situation("a.rs", "HEAD1", "E1")
     };
     assert_eq!(
@@ -635,7 +635,7 @@ fn issued_through_the_verb(root: &Path, subject: &str) -> String {
             "--rule",
             "prose-only",
             "--verdict",
-            "V-PROSE-ONLY-DIFF",
+            "diff ship early",
             "--subject",
             subject,
         ],
@@ -646,7 +646,7 @@ fn issued_through_the_verb(root: &Path, subject: &str) -> String {
         // about the SPEND rather than about the request.
         "precondition=the prose IS the deliverable — this branch is the release notes\n\
          lost=the notes miss the release window and ship describing the previous version\n\
-         rejected-route=R-BATCH-IT assumes a next change to these files, and there is none queued\n",
+         rejected-route=task run first assumes a next change to these files, and there is none queued\n",
     );
     assert_eq!(output.status.code(), Some(0), "the request succeeds");
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
@@ -670,7 +670,7 @@ fn the_verb_spends_a_legitimate_admission_and_reports_it() {
             "--rule",
             "prose-only",
             "--verdict",
-            "V-PROSE-ONLY-DIFF",
+            "diff ship early",
             "--subject",
             "a.rs",
         ],
@@ -681,7 +681,7 @@ fn the_verb_spends_a_legitimate_admission_and_reports_it() {
     // parses one line working across this change.
     let first = stdout.lines().next().unwrap_or_default();
     assert!(
-        first.contains("V-PROSE-ONLY-DIFF") && first.contains("spent"),
+        first.contains("diff ship early") && first.contains("spent"),
         "the class and the outcome, on line one: {stdout:?}"
     );
     // THIS ASSERTION IS INVERTED, AND IT IS THE CHANGE RATHER THAN COLLATERAL
@@ -734,7 +734,7 @@ fn the_verb_refuses_a_replay_with_the_policy_code() {
         "--rule",
         "prose-only",
         "--verdict",
-        "V-PROSE-ONLY-DIFF",
+        "diff ship early",
         "--subject",
         "a.rs",
     ];
@@ -775,7 +775,7 @@ fn the_verb_refuses_an_admission_presented_for_another_subject() {
             "--rule",
             "prose-only",
             "--verdict",
-            "V-PROSE-ONLY-DIFF",
+            "diff ship early",
             "--subject",
             "b.rs",
         ],

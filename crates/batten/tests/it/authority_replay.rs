@@ -380,7 +380,7 @@ fn the_compiled_authority_answers_exactly_what_the_program_answered() {
 /// — a `chore(lint)` row refused for landing the commit it exists to land.
 ///
 /// It is not repaired here because `mise-tasks/ready-lint.sh` is a governed shell
-/// rule: `V-SHELL-RULE-EDITED` declares one route, `R-PORT-AND-RETIRE`, with no
+/// rule: `shell edit refused` declares one route, `rule read first`, with no
 /// override and no `bypass_env`. Retiring it reaches `graph-check.sh`, and through
 /// it `released.sh` and `board-sweep.sh` — four programs and 214 `@test` cases,
 /// which is CLOUD-1194's campaign rather than a line in this file. CLOUD-1221

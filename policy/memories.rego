@@ -37,7 +37,7 @@
 # `path:line` — never the reference's surrounding prose, and never a line of a
 # memory. The predecessor emitted the same shape for the same reason.
 #
-#MUTANT-EXEMPT CLOUD-1267|no `tests/memories.bats` exists and none may be added: `mutant` resolves a gate's suite as `tests/$gate.bats`, and `V-SHELL-RULE-ADDED` refuses adding one, so there is no named case a mutation could turn red. The load-time tier is this file's own `test_` rules and the engine tier is `crates/batten/tests/memories.rs`, neither of which is what the mutation runner drives
+#MUTANT-EXEMPT CLOUD-1267|no `tests/memories.bats` exists and none may be added: `mutant` resolves a gate's suite as `tests/$gate.bats`, and `shell add refused` refuses adding one, so there is no named case a mutation could turn red. The load-time tier is this file's own `test_` rules and the engine tier is `crates/batten/tests/memories.rs`, neither of which is what the mutation runner drives
 
 # METADATA
 # description: |
@@ -92,7 +92,7 @@ name_of(path) := trim_suffix(trim_prefix(path, memories_dir), ".md")
 # a repository with a broken memory graph.
 violation contains {
 	"rule": "memory-graph",
-	"verdict": "V-MEMORY-ROOT-MISSING",
+	"verdict": "memory resolve missing",
 	"subjects": [{"path": root_memory}],
 } if {
 	count(memory_files) > 0
@@ -106,7 +106,7 @@ violation contains {
 # first foreign character.
 violation contains {
 	"rule": "memory-graph",
-	"verdict": "V-MEMORY-NAME-SHADOWED",
+	"verdict": "memory name duplicate",
 	"subjects": [{"path": path}],
 } if {
 	some path in memory_files
@@ -115,7 +115,7 @@ violation contains {
 
 violation contains {
 	"rule": "memory-graph",
-	"verdict": "V-MEMORY-NAME-UNREFERENCABLE",
+	"verdict": "memory name unseen",
 	"subjects": [{"path": path}],
 } if {
 	some path in memory_files
@@ -141,7 +141,7 @@ referrer(path) if {
 
 violation contains {
 	"rule": "memory-graph",
-	"verdict": "V-MEM-REF-STALE",
+	"verdict": "memory point stale",
 	"subjects": [{"path": path, "line": number}],
 } if {
 	some path, lines in input.tree.lines
@@ -162,7 +162,7 @@ violation contains {
 # an unreadable file is loud, and an absent map key is silent.
 violation contains {
 	"rule": "memory-graph",
-	"verdict": "V-MEMORY-SOURCE-UNREAD",
+	"verdict": "memory read unread",
 	"subjects": [{"path": path}],
 } if {
 	some path in input.tree.missing
@@ -191,7 +191,7 @@ test_a_coherent_graph_is_clean if {
 test_a_missing_root_is_reported if {
 	found := violation with input as graph([".serena/memories/other.md"], {})
 	some finding in found
-	finding.verdict == "V-MEMORY-ROOT-MISSING"
+	finding.verdict == "memory resolve missing"
 }
 
 # THE BOUND ARM A NEEDS. A repository with no memories at all is not a repository
@@ -206,7 +206,7 @@ test_a_shadowed_name_is_reported if {
 		{},
 	)
 	some finding in found
-	finding.verdict == "V-MEMORY-NAME-SHADOWED"
+	finding.verdict == "memory name duplicate"
 }
 
 test_an_unreferencable_name_is_reported if {
@@ -215,7 +215,7 @@ test_an_unreferencable_name_is_reported if {
 		{},
 	)
 	some finding in found
-	finding.verdict == "V-MEMORY-NAME-UNREFERENCABLE"
+	finding.verdict == "memory name unseen"
 }
 
 # The predicate that produced the row: a reference with no memory behind it,
@@ -226,7 +226,7 @@ test_a_dangling_reference_is_reported_with_a_pointer if {
 		{"AGENTS.md": ["intro", "see mem:gone-away for detail"]},
 	)
 	some finding in found
-	finding.verdict == "V-MEM-REF-STALE"
+	finding.verdict == "memory point stale"
 	finding.subjects[0].path == "AGENTS.md"
 	finding.subjects[0].line == 2
 }
@@ -263,7 +263,7 @@ test_an_unreadable_referrer_is_loud if {
 		"missing": ["AGENTS.md"],
 	}}
 	some finding in found
-	finding.verdict == "V-MEMORY-SOURCE-UNREAD"
+	finding.verdict == "memory read unread"
 }
 
 test_an_unreadable_non_referrer_is_not_this_rules_business if {
@@ -273,7 +273,7 @@ test_an_unreadable_non_referrer_is_not_this_rules_business if {
 			"lines": {},
 			"missing": ["mise.toml"],
 		}}
-		f.verdict == "V-MEMORY-SOURCE-UNREAD"
+		f.verdict == "memory read unread"
 	}
 	count(found) == 0
 }

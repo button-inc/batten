@@ -34,7 +34,7 @@
 //! this row's, as `foreign-cargo-is-the-declared-spelling`. It reads
 //! `test:cargo`'s body out of the manifest rather than out of `mise tasks info`,
 //! which no policy module can spawn for — and the two are the same bytes only
-//! while that task carries no template. `V-TASK-CARGO-UNREADABLE` is the arm
+//! while that task carries no template. `task read unread` is the arm
 //! that surfaces the day they stop being.
 
 //! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
@@ -157,7 +157,7 @@
 // changed: "the concurrency property judges every workflow, not only the pull_request ones" crates/batten/tests/it/ci_hygiene.rs it judges every workflow whose runs answer about ONE SUBJECT — pull_request, issue_comment, workflow_run and schedule — and no longer a push-only workflow, whose runs are each keyed to a different commit and are therefore two subjects rather than two answers. Every measured instance of the original defect is inside the narrowed set; what it gives up is a preset that refuses an ordinary minimal repository, which this tree's own shipped-config canary in tests/prebuilt-lint.bats is what surfaced
 // changed: "a required check whose workflow cannot see ready_for_review is refused" crates/batten/tests/it/ci_hygiene.rs the preset scopes it to a workflow that DRAFT-GATES rather than to one producing a required check: a roster is a consumer fact and cannot live in a vendored preset (rule 1). Same condition read from the workflow itself, since a job that skips on a draft is one whose verdict can only arrive on the ready event
 // changed: "a workflow producing no required check may omit ready_for_review" crates/batten/tests/it/ci_hygiene.rs the exemption is now 'does not draft-gate' rather than 'produces no required check', for the same rule-1 reason; a workflow whose jobs run on drafts has no skipped run to supersede
-// changed: "finding no pull_request workflow at all is a failure, not a pass" crates/batten/tests/it/ci_parity.rs the engine distinguishes could-not-look from not-applicable through `input.tree.missing`, so an unreadable workflow raises V-CI-WORKFLOW-UNREAD while a tree that genuinely runs no such workflow is not-applicable. The shell had one channel for both and had to refuse the empty case to avoid a vacuous pass
+// changed: "finding no pull_request workflow at all is a failure, not a pass" crates/batten/tests/it/ci_parity.rs the engine distinguishes could-not-look from not-applicable through `input.tree.missing`, so an unreadable workflow raises workflow read unread while a tree that genuinely runs no such workflow is not-applicable. The shell had one channel for both and had to refuse the empty case to avoid a vacuous pass
 // changed: "a missing release config is a failure, not a pass" crates/batten/tests/it/ci_parity.rs a consumer with no release automation is not-applicable rather than refused; the row's `sources` declares the file, so a declared-but-unparseable one raises the could-not-look verdict instead
 // changed: "an empty workflow directory is refused rather than silently green" crates/batten/tests/it/ci_parity.rs the anti-vacuity term moved from the gate's own counter to the rule guards: each rule stands down on a tree carrying no workflow, and the compiled-binary tier's `this_repository_is_clean_today` is what proves the rules are not vacuous over the real tree
 // changed: "a missing renovate config is a failure, not a pass" crates/batten/tests/it/ci_parity.rs same as the release config: absent is not-applicable and unparseable is loud, which is the distinction the shell could not draw
@@ -477,7 +477,7 @@ fn a_foreign_leg_running_a_different_cargo_is_refused() {
     );
     let found = verdicts_raised(&root);
     assert!(
-        found.iter().any(|v| v == "V-FOREIGN-CARGO-SPELLING-DRIFT"),
+        found.iter().any(|v| v == "cargo spelling other"),
         "a foreign leg running a cargo the task does not declare should be refused: {found:?}"
     );
 }
@@ -497,7 +497,7 @@ fn a_tree_with_no_foreign_cargo_leg_is_refused() {
     );
     let found = verdicts_raised(&root);
     assert!(
-        found.iter().any(|v| v == "V-FOREIGN-CARGO-ABSENT"),
+        found.iter().any(|v| v == "cargo reach absent"),
         "a tree with no foreign cargo leg should be refused, not passed: {found:?}"
     );
 }
@@ -519,11 +519,11 @@ fn a_no_run_build_is_exempt_and_does_not_satisfy_the_term() {
     );
     let found = verdicts_raised(&root);
     assert!(
-        found.iter().any(|v| v == "V-FOREIGN-CARGO-ABSENT"),
+        found.iter().any(|v| v == "cargo reach absent"),
         "a --no-run leg is not a subject and must not satisfy the term: {found:?}"
     );
     assert!(
-        !found.iter().any(|v| v == "V-FOREIGN-CARGO-SPELLING-DRIFT"),
+        !found.iter().any(|v| v == "cargo spelling other"),
         "a --no-run leg is exempt from the comparison itself: {found:?}"
     );
 }
@@ -544,7 +544,7 @@ fn a_task_yielding_no_cargo_invocation_is_refused() {
     );
     let found = verdicts_raised(&root);
     assert!(
-        found.iter().any(|v| v == "V-TASK-CARGO-UNREADABLE"),
+        found.iter().any(|v| v == "task read unread"),
         "a task yielding no cargo invocation should be refused, not passed: {found:?}"
     );
 }

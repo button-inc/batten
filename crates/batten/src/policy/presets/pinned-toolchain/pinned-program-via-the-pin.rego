@@ -49,7 +49,7 @@ provided contains name if {
 # exists to prevent.
 violation contains {
 	"rule": "pinned-program-via-the-pin",
-	"verdict": "V-PIN-BYPASSED",
+	"verdict": "pin reach loose",
 	"subjects": [{"artifact": entry.name}],
 } if {
 	some entry in input.call.programs

@@ -1677,7 +1677,7 @@ trace\:"Add everything"))' \
 '--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':token -- The verdict token to resolve, e.g. V-TASK-UNDEFINED:_default' \
+':token -- The verdict token to resolve, e.g. task name undefined:_default' \
 && ret=0
 ;;
 (help)
@@ -2589,7 +2589,7 @@ trace\:"Add everything"))' \
             (request)
 _arguments "${_arguments_options[@]}" : \
 '--rule=[The rule whose refusal is being overridden]: :_default' \
-'--verdict=[The verdict token that refusal carries, e.g. V-PROSE-ONLY-DIFF]: :_default' \
+'--verdict=[The verdict token that refusal carries, e.g. diff ship early]: :_default' \
 '--subject=[The gate'\''s canonical subject, exactly as its refusal names it]: :_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
@@ -2622,7 +2622,7 @@ trace\:"Add everything"))' \
 _arguments "${_arguments_options[@]}" : \
 '--admission=[The admission address to spend]: :_default' \
 '--rule=[The rule whose refusal is being overridden]: :_default' \
-'--verdict=[The verdict token that refusal carries, e.g. V-PROSE-ONLY-DIFF]: :_default' \
+'--verdict=[The verdict token that refusal carries, e.g. diff ship early]: :_default' \
 '--subject=[The gate'\''s canonical subject, exactly as its refusal names it]: :_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"

@@ -17,7 +17,7 @@ rules contains "no-empty-commit"
 
 violation contains {
 	"rule": "no-empty-commit",
-	"verdict": "V-EMPTY-COMMIT",
+	"verdict": "commit ship empty",
 } if {
 	# PER SEGMENT (CLOUD-857), the identical anchoring defect its sibling
 	# `no-force-push` carried: `split(input.call.command, " ")` asks about the

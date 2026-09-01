@@ -91,7 +91,7 @@ fn fixture(name: &str) -> PathBuf {
             "id = \"commit-message-file-flag\"\n",
             "regex = \"^(-[A-Za-z]*F|--file)$\"\n\n",
             "[[verdict]]\n",
-            "id = \"V-COMMIT-WITHOUT-A-MESSAGE-SOURCE\"\n",
+            "id = \"commit write missing\"\n",
             "gloss = \"a `git commit` names no message source, so git opens $EDITOR and blocks\"\n",
             "class = \"\"\"\n",
             "No `-m`, `-F`, `-C`, `--no-edit`, `--fixup` or `--squash`. Git opens $EDITOR and \\\n",
@@ -99,40 +99,40 @@ fn fixture(name: &str) -> PathBuf {
             "a file and use `git commit -F <path>`, the one form that cannot rebind.\n",
             "\"\"\"\n\n",
             "[[verdict.route]]\n",
-            "id = \"R-COMMIT-FROM-A-FILE\"\n",
+            "id = \"patch run first\"\n",
             "kind = \"command\"\n",
             "target = \"git commit -F <path>\"\n\n",
             "[[verdict]]\n",
-            "id = \"V-COMMIT-STDIN-UNBOUND\"\n",
+            "id = \"commit bind missing\"\n",
             "gloss = \"a `git commit -F -` has nothing redirected into the element it is written in\"\n",
             "class = \"\"\"\n",
             "The heredoc binds to the element that WRITES it, so git reads the harness's \\\n",
             "/dev/null — after `pre-commit` has already spent the whole gate.\n",
             "\"\"\"\n\n",
             "[[verdict.route]]\n",
-            "id = \"R-COMMIT-FROM-A-FILE-THAT-CANNOT-REBIND\"\n",
+            "id = \"patch run first\"\n",
             "kind = \"command\"\n",
             "target = \"git commit -F <path>\"\n\n",
             "[[verdict]]\n",
-            "id = \"V-FOREGROUND-SLEEP\"\n",
+            "id = \"sleep run blocked\"\n",
             "gloss = \"a foreground `sleep` spends the session's own turn, and the call is killed at ~2 minutes\"\n",
             "class = \"\"\"\n",
             "A wait longer than about two minutes does not run slowly, it FAILS. Background \\\n",
             "the work and act on its exit notification.\n",
             "\"\"\"\n\n",
             "[[verdict.route]]\n",
-            "id = \"R-WAIT-ON-THE-CONDITION\"\n",
+            "id = \"task run first\"\n",
             "kind = \"command\"\n",
             "target = \"until <test>; do sleep 1; done\"\n\n",
             "[[verdict]]\n",
-            "id = \"V-BACKGROUND-TIMER\"\n",
+            "id = \"timer run refused\"\n",
             "gloss = \"a backgrounded `sleep` with no loop around it is a timer, not a wait\"\n",
             "class = \"\"\"\n",
             "It exits when the clock says so, never when the thing being waited for happens. \\\n",
             "The exit notification already fires.\n",
             "\"\"\"\n\n",
             "[[verdict.route]]\n",
-            "id = \"R-WAIT-ON-THE-CONDITION-NOT-THE-CLOCK\"\n",
+            "id = \"task run first\"\n",
             "kind = \"command\"\n",
             "target = \"until <test>; do sleep 1; done\"\n",
         ),
@@ -400,9 +400,9 @@ fn a_backgrounded_bare_sleep_raises_the_timer_and_not_the_foreground_rule() {
         true,
     );
     assert!(deny, "{text}");
-    assert!(text.contains("V-BACKGROUND-TIMER"), "{text}");
+    assert!(text.contains("timer run refused"), "{text}");
     assert!(
-        !text.contains("V-FOREGROUND-SLEEP"),
+        !text.contains("sleep run blocked"),
         "the call IS backgrounded, so the foreground rule must not fire: {text}"
     );
 }
@@ -556,7 +556,7 @@ fn the_refusal_names_its_predicate_its_class_and_the_route_out() {
         "the predicate id: {text}"
     );
     assert!(
-        text.contains("V-COMMIT-WITHOUT-A-MESSAGE-SOURCE"),
+        text.contains("commit write missing"),
         "the declared class: {text}"
     );
     assert!(

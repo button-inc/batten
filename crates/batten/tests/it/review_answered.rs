@@ -501,7 +501,7 @@ fn the_measured_shape_a_head_carrying_unresolved_threads_is_refused_naming_the_c
     // THE COUNT, as the typed ABI renders it: the token, its gloss, and the
     // `Subject::Count` beside them. The retired case read `4 blocking` out of a
     // free string; the number is the same and it is now a decoded subject.
-    assert!(decision.contains("V-REVIEW-UNANSWERED"), "{decision}");
+    assert!(decision.contains("review answer missing"), "{decision}");
     assert!(
         decision.contains("unresolved review threads) 4"),
         "{decision}"
@@ -603,7 +603,7 @@ fn vacuity_zero_threads_and_no_review_reads_as_unreviewed_not_as_all_addressed()
     record_reviews(&dir, &declared, &reviews(0));
     let decision = ready(&dir);
     denied(&decision);
-    assert!(decision.contains("V-REVIEW-ABSENT"), "{decision}");
+    assert!(decision.contains("review read absent"), "{decision}");
     assert!(decision.contains("nobody has reviewed"), "{decision}");
 }
 
@@ -854,7 +854,7 @@ fn an_undeclared_class_refuses_with_the_token_and_says_the_registry_is_silent() 
     reviewed(&dir, &declared);
     let decision = ready(&dir);
     denied(&decision);
-    assert!(decision.contains("V-REVIEW-UNANSWERED"), "{decision}");
+    assert!(decision.contains("review answer missing"), "{decision}");
     assert!(
         decision.contains("no `[[verdict]]` row declares"),
         "{decision}"
@@ -904,7 +904,7 @@ severity = "deny"
 /// one case above so the registry-is-silent branch is reachable.
 const CLASSES: &str = r#"
 [[verdict]]
-id = "V-REVIEW-UNANSWERED"
+id = "review answer missing"
 gloss = "readying would buy a CI matrix on a head carrying unresolved review threads"
 class = """
 Readying is the event that starts CI, and nothing in `land`'s pre-ready sequence \
@@ -912,19 +912,19 @@ asks about review.
 """
 
 [[verdict.route]]
-id = "R-ANSWER-THE-THREADS"
+id = "task run first"
 kind = "command"
 target = "resolve each thread, then read them again and retry"
 
 [[verdict]]
-id = "V-REVIEW-ABSENT"
+id = "review read absent"
 gloss = "readying would buy a CI matrix on a head nobody has reviewed"
 class = """
 The read found no review at all, which the thread count cannot say.
 """
 
 [[verdict.route]]
-id = "R-FORCE-A-FIRST-REVIEW"
+id = "task run first"
 kind = "command"
 target = "@coderabbitai full review"
 "#;

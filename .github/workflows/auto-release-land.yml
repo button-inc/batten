@@ -313,7 +313,7 @@ jobs:
       # AND IT IS SET HERE RATHER THAN IN THE TASK, which is forced rather than
       # chosen. `mise-tasks/release-due.sh` is `governed_at_head` under
       # `policy/shell-retirement.rego` — it carries a shebang and a `#MISE
-      # description=` line — so editing its default raises V-SHELL-RULE-EDITED,
+      # description=` line — so editing its default raises shell edit refused,
       # which declares no override route and no `bypass_env`; `tests/release-due.bats`
       # is governed the same way. `mise.toml [env]` is ungoverned but WRONG: it
       # leaks into `mise run test:bats` and breaks the three cases pinned to the

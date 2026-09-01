@@ -155,7 +155,7 @@ closes contains key if {
 # `ready` passes and so does `-`; only the tracker's own `unready` refuses.
 violation contains {
 	"rule": "filed-unrefined",
-	"verdict": "V-FILED-UNREFINED",
+	"verdict": "issue file unclear",
 	"subjects": [{"artifact": id}],
 } if {
 	some id
@@ -228,7 +228,7 @@ cites_only(id) if {
 # than a count they have to go and reconstruct.
 violation contains {
 	"rule": "filed-over-own-diff",
-	"verdict": "V-FILED-OVER-OWN-DIFF",
+	"verdict": "issue file same",
 	"subjects": [{"path": path}, {"artifact": id}],
 } if {
 	some id, hits in overlapping
@@ -251,7 +251,7 @@ with_diff(record, closes_record, changed_paths, base) := {"tree": {
 
 test_an_unready_row_is_refused if {
 	some v in violation with input as board(["issue CLOUD-1 2026-01-01T00:00:00Z unready - - -"])
-	v.verdict == "V-FILED-UNREFINED"
+	v.verdict == "issue file unclear"
 }
 
 test_a_ready_row_is_silent if {
@@ -293,7 +293,7 @@ test_a_row_naming_this_branch_s_own_diff_is_refused if {
 		["src/a.rs"],
 		"2026-01-01T00:00:00Z",
 	)
-	v.verdict == "V-FILED-OVER-OWN-DIFF"
+	v.verdict == "issue file same"
 
 	# THE ORDER IS THE STATEMENT: the tracked path leads, because that is what a
 	# reader should open, and `first_pointer` takes the first path-bearing subject
@@ -369,7 +369,7 @@ test_an_unresolvable_base_date_still_judges_the_row if {
 		["src/a.rs"],
 		null,
 	)
-	v.verdict == "V-FILED-OVER-OWN-DIFF"
+	v.verdict == "issue file same"
 }
 
 # BOTH REFUSALS AT ONCE, because neither subsumes the other.
@@ -380,5 +380,5 @@ test_a_row_can_earn_both_refusals if {
 		["src/a.rs"],
 		"2026-01-01T00:00:00Z",
 	)
-	verdicts == {"V-FILED-UNREFINED", "V-FILED-OVER-OWN-DIFF"}
+	verdicts == {"issue file unclear", "issue file same"}
 }

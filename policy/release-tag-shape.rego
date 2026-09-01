@@ -48,7 +48,7 @@ shipped contains tag if {
 
 violation contains {
 	"rule": "release-tag-shape",
-	"verdict": "V-RELEASE-TAG-SHAPE",
+	"verdict": "tag mint wrong",
 	"subjects": [{"count": count(malformed)}],
 } if {
 	count(malformed) > 0
@@ -78,12 +78,12 @@ test_a_conventional_tag_is_clean if {
 
 test_a_tag_missing_its_prefix_is_refused if {
 	some v in violation with input as tags({"0.0.134"})
-	v.verdict == "V-RELEASE-TAG-SHAPE"
+	v.verdict == "tag mint wrong"
 }
 
 test_a_tag_with_a_trailing_label_is_refused if {
 	some v in violation with input as tags({"v0.0.134-rc1"})
-	v.verdict == "V-RELEASE-TAG-SHAPE"
+	v.verdict == "tag mint wrong"
 }
 
 test_no_tags_is_clean if {

@@ -100,7 +100,7 @@ severity = "deny"
 # not merely fail; it fails with a config error that looks nothing like the
 # predicate being wrong, which is how it read the first time.
 [[verdict]]
-id = "V-MEMORY-ROOT-MISSING"
+id = "memory resolve missing"
 gloss = "the memory graph has no root"
 class = "fixture"
 
@@ -110,7 +110,7 @@ kind = "document"
 target = "policy/memories.rego"
 
 [[verdict]]
-id = "V-MEMORY-NAME-SHADOWED"
+id = "memory name duplicate"
 gloss = "a memory name strips to another name"
 class = "fixture"
 
@@ -120,7 +120,7 @@ kind = "document"
 target = "policy/memories.rego"
 
 [[verdict]]
-id = "V-MEMORY-NAME-UNREFERENCABLE"
+id = "memory name unseen"
 gloss = "a memory name carries a character no reference can spell"
 class = "fixture"
 
@@ -130,7 +130,7 @@ kind = "document"
 target = "policy/memories.rego"
 
 [[verdict]]
-id = "V-MEM-REF-STALE"
+id = "memory point stale"
 gloss = "a mem: reference names a memory this tree does not carry"
 class = "fixture"
 
@@ -140,7 +140,7 @@ kind = "document"
 target = "policy/memories.rego"
 
 [[verdict]]
-id = "V-MEMORY-SOURCE-UNREAD"
+id = "memory read unread"
 gloss = "a declared referrer could not be read"
 class = "fixture"
 

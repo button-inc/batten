@@ -460,7 +460,7 @@ fn the_finding_carries_a_count_and_never_a_path() {
 // an append to a log.
 //
 // The remedy is no longer prose this gate composes. It is
-// `V-PROSE-ONLY-DIFF`'s declared `R-BATCH-IT` route, and `verdict::validate`
+// `diff ship early`'s declared `task run first` route, and `verdict::validate`
 // refuses a class that declares no route at all — so "the refusal names
 // something to run" stopped being a property of this gate's message and became a
 // property of the registry. `crates/batten/tests/it/verdict_registry.rs` holds it.

@@ -3,7 +3,7 @@
 //!
 //! # What this tier is for
 //!
-//! `V-PROTECTED-MUTATION`'s override route made a protected write admissible: the
+//! `path write refused`'s override route made a protected write admissible: the
 //! guarded party articulates, an admission is issued and spent, the write goes
 //! through. That much landed and it produced nothing anyone could read. The record
 //! lives under the OS data directory, which in this repository is a container the
@@ -93,7 +93,7 @@ fn articulate(dir: &Path, subject: &str) -> String {
             "--rule",
             "protected-mutation",
             "--verdict",
-            "V-PROTECTED-MUTATION",
+            "path write refused",
             "--subject",
             subject,
         ],
@@ -112,7 +112,7 @@ fn articulate(dir: &Path, subject: &str) -> String {
             "--rule",
             "protected-mutation",
             "--verdict",
-            "V-PROTECTED-MUTATION",
+            "path write refused",
             "--subject",
             subject,
         ],

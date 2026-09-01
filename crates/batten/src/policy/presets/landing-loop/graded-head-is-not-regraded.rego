@@ -73,7 +73,7 @@ graded contains sha if {
 # than mysterious. Never a check body, never a fetched payload.
 violation contains {
 	"rule": "graded-head-is-not-regraded",
-	"verdict": "V-GRADED-HEAD-REGRADED",
+	"verdict": "head grade twice",
 	"subjects": [{"artifact": sha}],
 } if {
 	some sha in graded
@@ -91,7 +91,7 @@ recorded(checks) := {"tree": {"forge": {"1111111": checks}}}
 
 test_a_judged_commit_is_refused if {
 	some v in violation with input as recorded({"final": "success"})
-	v.verdict == "V-GRADED-HEAD-REGRADED"
+	v.verdict == "head grade twice"
 }
 
 # A red verdict is still a verdict, and re-running it is still spend. The

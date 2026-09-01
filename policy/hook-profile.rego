@@ -68,7 +68,7 @@ stray contains name if {
 
 violation contains {
 	"rule": "hook-profile",
-	"verdict": "V-PROFILED-STEP-NOT-IN-CHECK",
+	"verdict": "step declare missing",
 	"subjects": [{"count": count(stray)}],
 } if {
 	count(stray) > 0
@@ -82,7 +82,7 @@ violation contains {
 # never binds `plan` at all, and that is could-not-look rather than a finding.
 violation contains {
 	"rule": "hook-profile",
-	"verdict": "V-SLOW-TIER-EMPTY",
+	"verdict": "tier list empty",
 	"subjects": [{"artifact": "hk-plan"}],
 } if {
 	is_object(plan)
@@ -108,14 +108,14 @@ flagged contains line if {
 
 violation contains {
 	"rule": "hook-profile",
-	"verdict": "V-HOOK-MISSING-PROFILE-FLAG",
+	"verdict": "hook declare missing",
 	"subjects": [{"path": hook}],
 } if {
 	count(invocations) > 0
 	count(flagged) == 0
 }
 
-#MUTANT-EXEMPT CLOUD-931|no `tests/hook-profile.bats` exists and none may be added: `mutant` resolves a gate's suite as `tests/$gate.bats`, and `V-SHELL-RULE-ADDED` refuses adding one, so there is no named case a mutation could turn red. The load-time tier is this file's own `test_` rules and the engine tier is `crates/batten/tests/hook_profile.rs`, neither of which is what the mutation runner drives. The mutation this row WOULD declare is on `status != included` — the load-bearing conjunct, since a slow step the `check` hook does not select is the false green the whole rule exists for — and `a_slow_step_missing_from_check_is_refused` plus its anti-vacuity mirror `a_wired_split_is_clean` are what stand in for it. CLOUD-1267 owns closing this for the Rego layer as a whole
+#MUTANT-EXEMPT CLOUD-931|no `tests/hook-profile.bats` exists and none may be added: `mutant` resolves a gate's suite as `tests/$gate.bats`, and `shell add refused` refuses adding one, so there is no named case a mutation could turn red. The load-time tier is this file's own `test_` rules and the engine tier is `crates/batten/tests/hook_profile.rs`, neither of which is what the mutation runner drives. The mutation this row WOULD declare is on `status != included` — the load-bearing conjunct, since a slow step the `check` hook does not select is the false green the whole rule exists for — and `a_slow_step_missing_from_check_is_refused` plus its anti-vacuity mirror `a_wired_split_is_clean` are what stand in for it. CLOUD-1267 owns closing this for the Rego layer as a whole
 
 # --- the load-time tier ------------------------------------------------------
 #
@@ -136,13 +136,13 @@ test_every_slow_step_selected_by_check_is_clean if {
 
 test_a_slow_step_missing_from_check_is_refused if {
 	some v in violation with input as planned({"test": "included", "batten-check": "skipped"})
-	v.verdict == "V-PROFILED-STEP-NOT-IN-CHECK"
+	v.verdict == "step declare missing"
 }
 
 # An evaporated tier is a FINDING, not a clean read — the anti-vacuity arm.
 test_an_empty_plan_is_refused if {
 	some v in violation with input as planned({})
-	v.verdict == "V-SLOW-TIER-EMPTY"
+	v.verdict == "tier list empty"
 }
 
 # COULD-NOT-LOOK. Nothing has planned this tree, which is not the same as a tier
@@ -163,7 +163,7 @@ test_a_hook_that_stopped_passing_the_flag_is_refused if {
 		"tool-verdict": {"hk-plan": {"test": "included"}},
 		"lines": {".claude/hooks/git-hook.sh": ["hk run pre-commit"]},
 	}}
-	v.verdict == "V-HOOK-MISSING-PROFILE-FLAG"
+	v.verdict == "hook declare missing"
 }
 
 # The measured case: the flag is gone from the COMMAND and still present in the
@@ -173,5 +173,5 @@ test_the_flag_in_a_comment_alone_does_not_satisfy_it if {
 		"tool-verdict": {"hk-plan": {"test": "included"}},
 		"lines": {".claude/hooks/git-hook.sh": ["# we pass --profile '!slow' here", "hk run pre-commit"]},
 	}}
-	v.verdict == "V-HOOK-MISSING-PROFILE-FLAG"
+	v.verdict == "hook declare missing"
 }

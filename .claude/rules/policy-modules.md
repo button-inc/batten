@@ -47,7 +47,7 @@ above rather than with the authoring judgement below.
 ```rego
 violation contains {
 	"rule": "shell-rule-retired",
-	"verdict": "V-SHELL-RULE-EDITED",
+	"verdict": "shell edit refused",
 	"subjects": [{"path": path}],
 } if { ... }
 ```

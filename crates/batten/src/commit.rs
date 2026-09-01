@@ -168,7 +168,7 @@ impl Commit {
 ///
 /// # What this closes
 ///
-/// `V-PROTECTED-MUTATION`'s override route makes a protected write ADMISSIBLE —
+/// `path write refused`'s override route makes a protected write ADMISSIBLE —
 /// the guarded party articulates, an admission is issued and spent, and the write
 /// goes through. That much landed. What it did not do is make the articulation
 /// legible to anyone: the record lives in a container-scoped store, so the

@@ -136,7 +136,7 @@ module_of(path) := name if {
 # all, so there is nothing here for this module to leak even by mistake.
 violation contains {
 	"rule": "spawn-adapters",
-	"verdict": "V-SPAWN-UNPLACED",
+	"verdict": "spawn place missing",
 	"subjects": [{"path": site.path, "line": site.line}, {"artifact": module_of(site.path)}],
 } if {
 	some site in input.tree.symbols.sites
@@ -163,7 +163,7 @@ no_census if not input.tree.symbols.sites
 
 violation contains {
 	"rule": "spawn-adapters",
-	"verdict": "V-SYMBOL-CENSUS-ABSENT",
+	"verdict": "symbol count absent",
 } if {
 	no_census
 }
@@ -172,7 +172,7 @@ violation contains {
 # cannot refuse is off.
 violation contains {
 	"rule": "spawn-adapters",
-	"verdict": "V-ADAPTER-TABLE-EMPTY",
+	"verdict": "adapter table empty",
 } if {
 	count(adapters) == 0
 }

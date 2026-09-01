@@ -998,7 +998,7 @@ expression: stdout_of(&output)
               "short": null,
               "long": "verdict",
               "takes_value": true,
-              "help": "The verdict token that refusal carries, e.g. V-PROSE-ONLY-DIFF"
+              "help": "The verdict token that refusal carries, e.g. diff ship early"
             }
           ],
           "subcommands": []
@@ -1034,7 +1034,7 @@ expression: stdout_of(&output)
               "short": null,
               "long": "verdict",
               "takes_value": true,
-              "help": "The verdict token that refusal carries, e.g. V-PROSE-ONLY-DIFF"
+              "help": "The verdict token that refusal carries, e.g. diff ship early"
             }
           ],
           "subcommands": []
@@ -1132,7 +1132,7 @@ expression: stdout_of(&output)
               "short": null,
               "long": null,
               "takes_value": true,
-              "help": "The verdict token to resolve, e.g. V-TASK-UNDEFINED"
+              "help": "The verdict token to resolve, e.g. task name undefined"
             }
           ],
           "subcommands": []

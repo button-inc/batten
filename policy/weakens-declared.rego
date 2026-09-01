@@ -52,7 +52,7 @@ weakens contains value if {
 
 violation contains {
 	"rule": "weakens-declared",
-	"verdict": "V-WEAKENS-DECLARES-NOTHING",
+	"verdict": "commit declare empty",
 	"subjects": [{"count": count(empty)}],
 } if {
 	count(empty) > 0
@@ -83,12 +83,12 @@ test_a_declared_key_is_clean if {
 
 test_a_trailer_naming_nothing_is_refused if {
 	some v in violation with input as range(["Weakens:"])
-	v.verdict == "V-WEAKENS-DECLARES-NOTHING"
+	v.verdict == "commit declare empty"
 }
 
 test_whitespace_is_not_a_declaration if {
 	some v in violation with input as range(["Weakens:   "])
-	v.verdict == "V-WEAKENS-DECLARES-NOTHING"
+	v.verdict == "commit declare empty"
 }
 
 test_an_unrelated_trailer_is_ignored if {

@@ -30,7 +30,7 @@
 //!
 //! WHY IT WAS MIGRATED AT ALL, which is the campaign working on its author a
 //! second time (after `semver`). CLOUD-875 is a repair to the SKIP, and making it
-//! meant editing an authored shell rule, which `V-SHELL-RULE-EDITED` refuses with
+//! meant editing an authored shell rule, which `shell edit refused` refuses with
 //! no override route. It is also a repair a shell skip could not express: the
 //! widened set is DERIVED from the loaded config — every path a `policy` row
 //! registers — rather than written down, and that is exactly what a `grep -cE`

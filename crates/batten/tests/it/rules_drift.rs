@@ -66,10 +66,10 @@
 // refusal would speak in every fixture repository that inherits this config —
 // the scoping defect CLOUD-1164 records for `tree-clean`. Each guard is now
 // conditioned on there being a claim that depends on the authority, and raises
-// `V-DRIFT-AUTHORITY-UNREADABLE` rather than exiting before any predicate runs.
+// `drift read unread` rather than exiting before any predicate runs.
 //
 // changed: "an empty rules directory is refused rather than silently green" policy/rules-drift.rego a glob that selects nothing is silent here rather than exit 1: `line_sources` is a glob and a repository with no rules tree is an ordinary consumer, which is exactly what the predecessor already said about an ABSENT MEMORY TREE one case below. The refusal it does keep is the one that has a subject — an authority some prose claims against
-// changed: "unreadable wiring is refused rather than reporting every event unwired" policy/rules-drift.rego conditioned on a wiring claim existing: an unreadable `.claude/settings.json` is `V-DRIFT-AUTHORITY-UNREADABLE` when some sentence claims a wiring, and silent when none does
+// changed: "unreadable wiring is refused rather than reporting every event unwired" policy/rules-drift.rego conditioned on a wiring claim existing: an unreadable `.claude/settings.json` is `drift read unread` when some sentence claims a wiring, and silent when none does
 // changed: "unreadable schemas are refused rather than reporting every key unemittable" policy/rules-drift.rego same conditioning, plus a READ-BUT-EMPTY arm the predecessor did not need: this build of regorus has no `walk`, so the recursive descent became one fixed path, and a schema whose shape moved parses fine and yields nothing — invisible to `input.tree.missing`, so `schema_vacuous` covers it
 // changed: "unreadable policy source is refused rather than reporting every name unqueried" policy/rules-drift.rego same conditioning, on a named fixed rule existing
 // changed: "the gate is wired into the hk gate, so a drift reddens a commit" policy/rules-drift.rego the assertion moves from the suite to the wiring itself: hk's `rules-drift` step now runs `mise run rules-drift`, which is an inline `batten check --rule rules-drift`, so the step name and the rule id are one object rather than two that a grep held together
@@ -137,7 +137,7 @@ id = "fixed-rule-ref"
 regex = '`data\.batten\.[a-z_]+`'
 
 [[pattern]]
-id = "policy-rule-const"
+id = "module read first"
 regex = '^const [A-Z_]+_RULE: &str = "[a-z_]+";'
 
 [[pattern]]
@@ -178,7 +178,7 @@ module = "policy/rules-drift.rego"
 severity = "deny"
 
 [[verdict]]
-id = "V-RESTATED-DEFAULT-DRIFTS"
+id = "default state other"
 gloss = "a restated env default disagrees with the mechanism"
 class = "fixture"
 
@@ -188,7 +188,7 @@ kind = "document"
 target = "policy/rules-drift.rego"
 
 [[verdict]]
-id = "V-NAMED-EVENT-UNWIRED"
+id = "event wire missing"
 gloss = "a sentence claims a wiring nothing wires"
 class = "fixture"
 
@@ -198,7 +198,7 @@ kind = "document"
 target = "policy/rules-drift.rego"
 
 [[verdict]]
-id = "V-NAMED-INPUT-KEY-UNEMITTABLE"
+id = "input key dead"
 gloss = "a named policy input key the schema does not carry"
 class = "fixture"
 
@@ -208,7 +208,7 @@ kind = "document"
 target = "policy/rules-drift.rego"
 
 [[verdict]]
-id = "V-NAMED-FIXED-RULE-UNQUERIED"
+id = "rule ask missing"
 gloss = "a named fixed rule the evaluator does not query"
 class = "fixture"
 

@@ -341,6 +341,10 @@
       "format": "uint32",
       "minimum": 0
     },
+    "vocabulary": {
+      "description": "The three positional word lists every class and route name is drawn from\n(CLOUD-1284), and the tokenizer pin they were measured under.\n\nA **dictionary rather than a per-class essay**: a name spends three words\nand each word's meaning is declared once, so the marginal class costs no\nnew prose. `verdict::validate` holds every name to it, which is what makes\nthe naming convention a gate rather than a habit.",
+      "$ref": "#/$defs/Vocabulary"
+    },
     "waiver": {
       "description": "The designed escape hatch (CLOUD-208): per-rule waivers, each carrying a\nrequired justification and a required expiry.\n\nA waiver suppresses findings of the rule it names, and **lapses on its own\ndate** — which is what makes the suppression set stop growing\nmonotonically without anyone having to look at it. Not a severity: the\nfilter runs over findings before the verdict, and [`crate::severity`]'s\nthree axes are untouched. The type and the predicate are\n[`crate::waiver`].",
       "type": "array",
@@ -989,7 +993,7 @@
           "type": "string"
         },
         "id": {
-          "description": "The token, e.g. `V-TASK-UNDEFINED`.",
+          "description": "The token, e.g. `task name undefined`.",
           "type": "string"
         },
         "route": {
@@ -2386,7 +2390,7 @@
       "type": "object",
       "properties": {
         "id": {
-          "description": "The id a rendered refusal names, e.g. `R-DEFINE-THE-TASK`.\n\nStable and referenceable: an agent told `R-DEFINE-THE-TASK` twice has\nbeen told the same thing twice, which a paraphrase cannot establish.",
+          "description": "The id a rendered refusal names, e.g. `task read first`.\n\nStable and referenceable: an agent told `task read first` twice has\nbeen told the same thing twice, which a paraphrase cannot establish.",
           "type": "string"
         },
         "kind": {
@@ -3664,6 +3668,74 @@
       "additionalProperties": false,
       "required": [
         "program"
+      ]
+    },
+    "Vocabulary": {
+      "description": "The three positional lists a name is drawn from, and the pin they were\nmeasured under (CLOUD-1284).\n\n# Why the middle list is `action` and not `verb`\n\nThe grammar is `<subject> <action> <condition>` and the issue writes the\nmiddle slot as \"verb\". The config key cannot be `verb`: `[[verb]]` is already\nthis config's table of mutating **shell** verbs, and two unrelated tables one\nletter apart is the drift a reader pays for every time. The prose keeps the\ngrammatical word; the key states which table it belongs to.\n\n# Why the pin is data and not a constant\n\nThe token counts are model-specific, and `bench/tokens/method.toml` already\nsets this repository's discipline for a constant a published figure depends\non: state it with its source and the date it was read, so a reader checks the\narithmetic against the primary rather than trusting a program. The *ratio*\nargument survives a different tokenizer — common English words are\nsingle-merge in every modern BPE vocabulary — but the exact integer does not,\nso the integer's provenance travels with it.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "Slot 2: what was done, or what relation is being judged.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VocabularyWord"
+          }
+        },
+        "condition": {
+          "description": "Slot 3: the state that makes it a refusal.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VocabularyWord"
+          }
+        },
+        "subject": {
+          "description": "Slot 1: what the finding is about.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VocabularyWord"
+          }
+        },
+        "tokenizer": {
+          "description": "The encoding every word's token count was measured under.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tokenizer_retrieved": {
+          "description": "When it was read.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tokenizer_source": {
+          "description": "Where that encoding is published.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "VocabularyWord": {
+      "description": "One declared vocabulary word: the spelling, and what it means in a name.\n\nThe gloss is what makes dropping the per-class essay from the hot path safe\nrather than merely cheap (CLOUD-1284). A class used to buy a new essay to\nexplain its own free-text name; a word buys one gloss that every name using\nit reuses, so the *marginal* class costs no new prose at all.",
+      "type": "object",
+      "properties": {
+        "gloss": {
+          "description": "What this word contributes to a name that uses it.",
+          "type": "string"
+        },
+        "word": {
+          "description": "The spelling, as it appears in a name. One token under the declared pin.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "word",
+        "gloss"
       ]
     },
     "Waiver": {

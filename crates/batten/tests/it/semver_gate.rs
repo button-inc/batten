@@ -7,7 +7,7 @@
 //! `cargo update` in a scratch crate and so discards `Cargo.lock`, and a yank of
 //! `bisync` on 2026-08-26 made every commit from v0.0.89 on unresolvable seven
 //! minutes after the gate last passed in CI. Repairing that meant editing
-//! `mise-tasks/semver.sh`, and an edit is `V-SHELL-RULE-EDITED`, which declares
+//! `mise-tasks/semver.sh`, and an edit is `shell edit refused`, which declares
 //! no override route by design. So the repair WAS the migration.
 //!
 //! # What this tier can assert and the retired one could not

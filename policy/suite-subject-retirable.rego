@@ -30,7 +30,7 @@
 #
 #   * RE-SUBJECT THEM — rewriting a `# subject:` line means editing a governed
 #     `tests/**/*.bats`. `governed_at_head` selects every bats suite
-#     (`shell-retirement.rego:135`), so each is `V-SHELL-RULE-EDITED`, which
+#     (`shell-retirement.rego:135`), so each is `shell edit refused`, which
 #     declares one route and no `bypass_env`. The one admitted edit requires every
 #     REMOVED line to name a path the same delta deletes, and a re-subjected header
 #     names paths that are staying. Refused.
@@ -115,7 +115,7 @@ suites := {path | some path, _ in input.tree.lines; is_bats(path)}
 # The `# subject:` header, split on whitespace.
 #
 # A partial rule keyed by path rather than a function, so a suite carrying no
-# header simply has no entry — which is what `V-SUITE-SUBJECT-UNDECLARED` below
+# header simply has no entry — which is what `suite declare missing` below
 # catches, rather than letting it fall through as a suite with nothing wrong.
 declared[path] := parts if {
 	some path in suites
@@ -213,7 +213,7 @@ exempt := {
 
 violation contains {
 	"rule": "suite-subject-retirable",
-	"verdict": "V-SUITE-SUBJECT-IMMORTAL",
+	"verdict": "suite retire never",
 	"subjects": [{"path": path}, {"path": subject}],
 } if {
 	some path, subjects in declared
@@ -231,7 +231,7 @@ violation contains {
 # `SubjectFacts::died` would have nothing to decide over.
 violation contains {
 	"rule": "suite-subject-retirable",
-	"verdict": "V-SUITE-SUBJECT-UNDECLARED",
+	"verdict": "suite declare missing",
 	"subjects": [{"path": path}],
 } if {
 	some path in suites
@@ -261,7 +261,7 @@ violation contains {
 # retired suite leaves a spent row until someone reads the table.
 violation contains {
 	"rule": "suite-subject-retirable",
-	"verdict": "V-SUITE-EXEMPTION-STALE",
+	"verdict": "suite admit stale",
 	"subjects": [{"path": path}],
 } if {
 	some path, _ in exempt
@@ -278,7 +278,7 @@ violation contains {
 # is the class `.claude/rules/policy-modules.md` records for this channel.
 violation contains {
 	"rule": "suite-subject-retirable",
-	"verdict": "V-SUITE-SOURCE-UNREAD",
+	"verdict": "suite parse unread",
 	"subjects": [{"path": path}],
 } if {
 	some path in input.tree.missing
@@ -305,7 +305,7 @@ test_an_immortal_subject_is_reported if {
 	found := violation with input as tree({"tests/x.bats": ["# subject: mise.toml"]}, [])
 	count(found) == 1
 	some finding in found
-	finding.verdict == "V-SUITE-SUBJECT-IMMORTAL"
+	finding.verdict == "suite retire never"
 }
 
 # A suite subjecting one retirable path AND one immortal one is reported — the
@@ -313,7 +313,7 @@ test_an_immortal_subject_is_reported if {
 test_one_immortal_subject_among_several_is_reported if {
 	found := violation with input as tree({"tests/x.bats": ["# subject: mise-tasks/x.sh hk.pkl"]}, [])
 	some finding in found
-	finding.verdict == "V-SUITE-SUBJECT-IMMORTAL"
+	finding.verdict == "suite retire never"
 }
 
 # A declared exemption silences arm A and nothing else.
@@ -327,7 +327,7 @@ test_a_suite_declaring_no_subject_is_reported if {
 	found := violation with input as tree({"tests/x.bats": ["@test 'a' { true; }"]}, [])
 	count(found) == 1
 	some finding in found
-	finding.verdict == "V-SUITE-SUBJECT-UNDECLARED"
+	finding.verdict == "suite declare missing"
 }
 
 # AN EXEMPTION WHOSE SUITE IS SIMPLY NOT IN THIS TREE IS NOT A FINDING, which is
@@ -341,21 +341,21 @@ test_a_tree_that_is_not_this_corpus_is_not_judged_against_the_table if {
 test_an_exemption_for_a_now_retirable_suite_is_reported if {
 	found := violation with input as tree({"tests/verify.bats": ["# subject: mise-tasks/verify.sh"]}, [])
 	some finding in found
-	finding.verdict == "V-SUITE-EXEMPTION-STALE"
+	finding.verdict == "suite admit stale"
 }
 
 # COULD NOT LOOK stays loud, and is spelled differently from both answers.
 test_an_unreadable_suite_is_loud if {
 	found := violation with input as tree({}, ["tests/x.bats"])
 	some finding in found
-	finding.verdict == "V-SUITE-SOURCE-UNREAD"
+	finding.verdict == "suite parse unread"
 }
 
 # A non-suite path in `missing` is not this rule's business.
 test_an_unreadable_non_suite_is_not_this_rules_business if {
 	found := {f |
 		some f in violation with input as tree({}, ["mise.toml"])
-		f.verdict == "V-SUITE-SOURCE-UNREAD"
+		f.verdict == "suite parse unread"
 	}
 	count(found) == 0
 }

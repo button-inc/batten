@@ -112,7 +112,7 @@ job_is_draft_gated(path, name) if {
 
 violation contains {
 	"rule": "no-job-runs-on-a-draft",
-	"verdict": "V-JOB-RUNS-ON-DRAFT",
+	"verdict": "job run early",
 	"subjects": [{"path": path}, {"artifact": name}],
 } if {
 	some path, _ in workflow
@@ -131,7 +131,7 @@ supersedes_itself(path) if workflow[path].concurrency["cancel-in-progress"] == t
 
 violation contains {
 	"rule": "pull-request-workflow-supersedes-itself",
-	"verdict": "V-PR-WORKFLOW-NOT-SUPERSEDED",
+	"verdict": "workflow run twice",
 	"subjects": [{"path": path}],
 } if {
 	some path, _ in workflow
@@ -172,7 +172,7 @@ races_itself(path) if {
 
 violation contains {
 	"rule": "workflow-declares-a-concurrency-group",
-	"verdict": "V-WORKFLOW-NO-CONCURRENCY",
+	"verdict": "workflow declare missing",
 	"subjects": [{"path": path}],
 } if {
 	some path, _ in workflow
@@ -197,7 +197,7 @@ subscribes_to_ready(path) if {
 
 violation contains {
 	"rule": "draft-gated-workflow-subscribes-to-ready",
-	"verdict": "V-READY-FOR-REVIEW-UNSUBSCRIBED",
+	"verdict": "review watch missing",
 	"subjects": [{"path": path}],
 } if {
 	some path, _ in workflow
@@ -240,7 +240,7 @@ test_an_ungated_job_is_refused_and_named if {
 	found := violation with input as with_workflow(doc)
 	count(found) == 1
 	some f in found
-	f.verdict == "V-JOB-RUNS-ON-DRAFT"
+	f.verdict == "job run early"
 	some s in f.subjects
 	s.artifact == "build"
 }
@@ -267,7 +267,7 @@ test_a_workflow_that_never_supersedes_is_refused if {
 	found := violation with input as with_workflow(doc)
 	count(found) == 1
 	some f in found
-	f.verdict == "V-PR-WORKFLOW-NOT-SUPERSEDED"
+	f.verdict == "workflow run twice"
 }
 
 # THE STRING SPELLING IS NOT THE VALUE. A parsed `true` is a boolean, so a module
@@ -277,7 +277,7 @@ test_a_quoted_cancel_flag_is_not_the_boolean if {
 	found := violation with input as with_workflow(doc)
 	count(found) == 1
 	some f in found
-	f.verdict == "V-PR-WORKFLOW-NOT-SUPERSEDED"
+	f.verdict == "workflow run twice"
 }
 
 test_a_workflow_with_no_concurrency_at_all_is_refused if {
@@ -288,7 +288,7 @@ test_a_workflow_with_no_concurrency_at_all_is_refused if {
 	found := violation with input as with_workflow(doc)
 	count(found) == 1
 	some f in found
-	f.verdict == "V-WORKFLOW-NO-CONCURRENCY"
+	f.verdict == "workflow declare missing"
 }
 
 # A SCHEDULED WORKFLOW IS NOT ASKED TO CANCEL ITSELF, which is the whole reason
@@ -307,7 +307,7 @@ test_a_draft_gated_workflow_missing_ready_for_review_is_refused if {
 	found := violation with input as with_workflow(doc)
 	count(found) == 1
 	some f in found
-	f.verdict == "V-READY-FOR-REVIEW-UNSUBSCRIBED"
+	f.verdict == "review watch missing"
 }
 
 # NOT DRAFT-GATED, NOT ASKED. A workflow whose jobs run on a draft has no skipped
@@ -321,7 +321,7 @@ test_a_workflow_that_does_not_draft_gate_is_not_asked_for_ready if {
 	}
 	found := violation with input as with_workflow(doc)
 	every f in found {
-		f.verdict != "V-READY-FOR-REVIEW-UNSUBSCRIBED"
+		f.verdict != "review watch missing"
 	}
 }
 

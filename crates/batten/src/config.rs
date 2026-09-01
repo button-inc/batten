@@ -240,6 +240,15 @@ pub struct Config {
     /// [`crate::verdict`].
     #[serde(default, rename = "verdict", skip_serializing_if = "Vec::is_empty")]
     pub verdicts: Vec<crate::verdict::DeclaredVerdict>,
+    /// The three positional word lists every class and route name is drawn from
+    /// (CLOUD-1284), and the tokenizer pin they were measured under.
+    ///
+    /// A **dictionary rather than a per-class essay**: a name spends three words
+    /// and each word's meaning is declared once, so the marginal class costs no
+    /// new prose. `verdict::validate` holds every name to it, which is what makes
+    /// the naming convention a gate rather than a habit.
+    #[serde(default, skip_serializing_if = "crate::verdict::Vocabulary::is_empty")]
+    pub vocabulary: crate::verdict::Vocabulary,
     /// The per-path-class redirect table (CLOUD-280): what to run instead,
     /// keyed by what is protected rather than by the verb reaching for it.
     ///
@@ -1042,7 +1051,7 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // that terminates — so it is knowable without a tree and belongs where a
     // config fault is reported. Registry EQUALITY against what the modules
     // actually emit needs the compiled bundles and lives in `policy::load`.
-    crate::verdict::validate(&config.verdicts)?;
+    crate::verdict::validate(&config.verdicts, &config.vocabulary)?;
     crate::redirect::validate(&config.redirects)?;
     // And the MCP table, at load for the identical reason (CLOUD-1260). Every
     // clause is a property of the TABLE — a duplicated id, a path that would
@@ -1229,6 +1238,7 @@ impl Config {
             rules: Vec::new(),
             patterns: Vec::new(),
             verdicts: Vec::new(),
+            vocabulary: crate::verdict::Vocabulary::default(),
             scope: Vec::new(),
             protected: Vec::new(),
             // No protected paths means the unknown-program clause has nothing to

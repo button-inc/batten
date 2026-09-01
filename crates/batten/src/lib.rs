@@ -4960,10 +4960,10 @@ fn run_hook(
 ///
 /// Not a decision — a gap. `adjudicate` is pure by contract, so the deny site
 /// cannot read a store; and `Refusal` carried no subject, so even at the boundary
-/// there was nothing to bind. The consequence was that `V-PROTECTED-MUTATION` —
+/// there was nothing to bind. The consequence was that `path write refused` —
 /// the class most in need of an audited way through, because the surface it names
 /// as the remedy IS the file it refuses — had only the bare environment variable.
-/// This repository already ruled that shape out for `V-FILED-OVER-OWN-DIFF`: *the
+/// This repository already ruled that shape out for `issue file same`: *the
 /// point of the admission mechanism is that the bare variable stops working*.
 ///
 /// # What it will not do

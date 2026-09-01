@@ -84,7 +84,7 @@ referenced contains key if {
 # so the message is where the pointer lives.
 violation contains {
 	"rule": "workspace-dep-referenced",
-	"verdict": "V-WORKSPACE-DEP-ORPHANED",
+	"verdict": "workspace declare unused",
 	"subjects": [{"artifact": key}],
 } if {
 	some key in declared
@@ -95,7 +95,7 @@ violation contains {
 # in `missing`, and without this the walk above simply does not see it.
 violation contains {
 	"rule": "workspace-dep-referenced",
-	"verdict": "V-MANIFEST-UNPARSED",
+	"verdict": "manifest parse broken",
 	"subjects": [{"path": path}],
 } if {
 	some path in input.tree.missing
@@ -108,7 +108,7 @@ violation contains {
 # input rather than assumed away.
 violation contains {
 	"rule": "workspace-dep-referenced",
-	"verdict": "V-WORKSPACE-TABLE-ABSENT",
+	"verdict": "workspace table absent",
 } if {
 	count(declared) == 0
 }

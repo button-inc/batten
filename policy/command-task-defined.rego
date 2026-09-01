@@ -120,7 +120,7 @@ mise_task(command) := task if {
 violation contains {
 	"rule": "command-task-defined",
 	# The row first, then the task it names: the fix is on the row.
-	"verdict": "V-TASK-UNDEFINED",
+	"verdict": "task name undefined",
 	"subjects": [{"artifact": row.id}, {"artifact": row.task}],
 } if {
 	# ONLY WHERE A TASK SOURCE WAS FOUND. Without this guard the rule reproduces
@@ -142,7 +142,7 @@ violation contains {
 # resolves.
 violation contains {
 	"rule": "command-task-defined",
-	"verdict": "V-AUTHORITY-UNPARSED",
+	"verdict": "config parse broken",
 	"subjects": [{"path": path}],
 } if {
 	# THE AUTHORITY ONLY. `mise.toml` is declared as a source and lands in

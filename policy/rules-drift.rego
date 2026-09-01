@@ -98,7 +98,7 @@ observed(name) if {
 
 violation contains {
 	"rule": "restated-default-drifts",
-	"verdict": "V-RESTATED-DEFAULT-DRIFTS",
+	"verdict": "default state other",
 	"subjects": [{"path": claim.path, "line": claim.line}],
 } if {
 	some claim in restated
@@ -202,7 +202,7 @@ event_pointer(claim, name) := line if {
 
 violation contains {
 	"rule": "named-event-unwired",
-	"verdict": "V-NAMED-EVENT-UNWIRED",
+	"verdict": "event wire missing",
 	"subjects": [{"path": claim.path, "line": event_pointer(claim, name)}],
 } if {
 	some claim in wiring_claims
@@ -298,7 +298,7 @@ named_keys contains {"path": path, "line": index + 1, "surface": surface, "key":
 
 violation contains {
 	"rule": "named-input-key-unemittable",
-	"verdict": "V-NAMED-INPUT-KEY-UNEMITTABLE",
+	"verdict": "input key dead",
 	"subjects": [{"path": named.path, "line": named.line}],
 } if {
 	some named in named_keys
@@ -320,7 +320,7 @@ violation contains {
 # name the evaluator does not query as a rule, and saying so is the honest report.
 queried_rules contains name if {
 	some _, text in input.tree.lines["crates/batten/src/policy.rs"]
-	some found in regex.find_n(data.batten.patterns["policy-rule-const"], text, -1)
+	some found in regex.find_n(data.batten.patterns["module read first"], text, -1)
 	name := split(found, "\"")[1]
 }
 
@@ -333,7 +333,7 @@ named_rules contains {"path": path, "line": index + 1, "name": name} if {
 
 violation contains {
 	"rule": "named-fixed-rule-unqueried",
-	"verdict": "V-NAMED-FIXED-RULE-UNQUERIED",
+	"verdict": "rule ask missing",
 	"subjects": [{"path": named.path, "line": named.line}],
 } if {
 	some named in named_rules
@@ -481,7 +481,7 @@ authority_needed contains "crates/batten/src/policy.rs" if {
 # key simply not being in `documents` is then the honest signal.
 violation contains {
 	"rule": "drift-authority-unreadable",
-	"verdict": "V-DRIFT-AUTHORITY-UNREADABLE",
+	"verdict": "drift read unread",
 	"subjects": [{"path": path}],
 } if {
 	some path in authority_needed
@@ -495,7 +495,7 @@ violation contains {
 # path above buys, paid for here rather than left implicit.
 violation contains {
 	"rule": "drift-authority-unreadable",
-	"verdict": "V-DRIFT-AUTHORITY-UNREADABLE",
+	"verdict": "drift read unread",
 	"subjects": [{"path": schema_path[named.surface]}],
 } if {
 	some named in named_keys
@@ -784,5 +784,5 @@ fixture_patterns := {
 	"shell-default": "\\$\\{[A-Z][A-Z0-9_]*:-[^}]*\\}",
 	"policy-input-key": "`input\\.(tree|call)\\.[a-z][a-z0-9_-]*",
 	"fixed-rule-ref": "`data\\.batten\\.[a-z_]+`",
-	"policy-rule-const": "^const [A-Z_]+_RULE: &str = \"[a-z_]+\";",
+	"module read first": "^const [A-Z_]+_RULE: &str = \"[a-z_]+\";",
 }

@@ -71,7 +71,7 @@ trigger_filters_branches(path) if _ := triggers(path).workflow_run.branches
 
 violation contains {
 	"rule": "workflow-run-filters-at-the-trigger",
-	"verdict": "V-WORKFLOW-RUN-UNSCOPED",
+	"verdict": "workflow run loose",
 	"subjects": [{"path": path}],
 } if {
 	some path, _ in workflow
@@ -93,7 +93,7 @@ violation contains {
 
 violation contains {
 	"rule": "comment-trigger-is-anchored",
-	"verdict": "V-COMMENT-TRIGGER-UNANCHORED",
+	"verdict": "event bind loose",
 	"subjects": [{"path": path}],
 } if {
 	some path, _ in workflow
@@ -123,7 +123,7 @@ reads_draft_state(path) if {
 
 violation contains {
 	"rule": "comment-merge-reads-draft-state",
-	"verdict": "V-COMMENT-MERGE-IGNORES-DRAFT",
+	"verdict": "merge run early",
 	"subjects": [{"path": path}],
 } if {
 	some path, _ in workflow
@@ -157,7 +157,7 @@ admits(path, "workflow_run") if contains(job_conditions[path], "github.event.wor
 
 violation contains {
 	"rule": "declared-trigger-reaches-a-job",
-	"verdict": "V-TRIGGER-REACHES-NO-JOB",
+	"verdict": "event reach dead",
 	"subjects": [{"path": path}, {"artifact": trigger}],
 } if {
 	some path, _ in workflow
@@ -187,7 +187,7 @@ colliding contains expr if {
 
 violation contains {
 	"rule": "schedules-do-not-collide",
-	"verdict": "V-CRON-COLLISION",
+	"verdict": "job start same",
 	"subjects": [{"path": path}, {"artifact": expr}],
 } if {
 	some expr in colliding
@@ -219,7 +219,7 @@ names_the_dependency(path, name, dep) if contains(job_body(path, name), sprintf(
 
 violation contains {
 	"rule": "fan-in-asserts-its-whole-needs",
-	"verdict": "V-FANIN-NEEDS-UNASSERTED",
+	"verdict": "job require unseen",
 	"subjects": [{"path": path}, {"artifact": dep}],
 } if {
 	some path, _ in workflow
@@ -266,7 +266,7 @@ guarded_on_cache_hit(path, name, index) if {
 
 violation contains {
 	"rule": "cache-warm-compile-is-guarded",
-	"verdict": "V-WARM-COMPILE-UNGUARDED",
+	"verdict": "cache build loose",
 	"subjects": [{"path": path}, {"artifact": name}],
 } if {
 	some path, _ in workflow
@@ -303,7 +303,7 @@ step_id_exists(path, id) if {
 
 violation contains {
 	"rule": "cache-warm-compile-is-guarded",
-	"verdict": "V-WARM-GUARD-NAMES-MISSING-ID",
+	"verdict": "cache name unknown",
 	"subjects": [{"path": path}, {"artifact": id}],
 } if {
 	some path, _ in workflow
@@ -357,7 +357,7 @@ swallowed(line) if {
 
 violation contains {
 	"rule": "interpolation-is-not-swallowed",
-	"verdict": "V-INTERPOLATION-SWALLOWED",
+	"verdict": "input render dropped",
 	"subjects": [{"path": path, "line": number}],
 } if {
 	some path, lines in input.tree.lines
@@ -381,7 +381,7 @@ test_a_workflow_run_scoped_only_in_a_job_condition_is_refused if {
 	}
 	found := violation with input as wf(doc)
 	some f in found
-	f.verdict == "V-WORKFLOW-RUN-UNSCOPED"
+	f.verdict == "workflow run loose"
 }
 
 test_a_trigger_level_branches_filter_satisfies_it if {
@@ -395,7 +395,7 @@ test_a_trigger_level_branches_filter_satisfies_it if {
 	}
 	found := violation with input as wf(doc)
 	every f in found {
-		f.verdict != "V-WORKFLOW-RUN-UNSCOPED"
+		f.verdict != "workflow run loose"
 	}
 }
 
@@ -409,7 +409,7 @@ test_a_workflow_run_with_no_branch_condition_is_not_asked if {
 	}
 	found := violation with input as wf(doc)
 	every f in found {
-		f.verdict != "V-WORKFLOW-RUN-UNSCOPED"
+		f.verdict != "workflow run loose"
 	}
 }
 
@@ -421,7 +421,7 @@ test_an_unanchored_comment_predicate_is_refused if {
 	}
 	found := violation with input as wf(doc)
 	some f in found
-	f.verdict == "V-COMMENT-TRIGGER-UNANCHORED"
+	f.verdict == "event bind loose"
 }
 
 test_an_anchored_comment_predicate_passes if {
@@ -432,7 +432,7 @@ test_an_anchored_comment_predicate_passes if {
 	}
 	found := violation with input as wf(doc)
 	every f in found {
-		f.verdict != "V-COMMENT-TRIGGER-UNANCHORED"
+		f.verdict != "event bind loose"
 	}
 }
 
@@ -447,7 +447,7 @@ test_a_comment_merge_that_ignores_draft_state_is_refused if {
 	}
 	found := violation with input as wf(doc)
 	some f in found
-	f.verdict == "V-COMMENT-MERGE-IGNORES-DRAFT"
+	f.verdict == "merge run early"
 }
 
 # A comment-triggered workflow that does NOT merge is not asked the draft
@@ -463,7 +463,7 @@ test_a_comment_workflow_that_does_not_merge_is_not_asked if {
 	}
 	found := violation with input as wf(doc)
 	every f in found {
-		f.verdict != "V-COMMENT-MERGE-IGNORES-DRAFT"
+		f.verdict != "merge run early"
 	}
 }
 
@@ -475,7 +475,7 @@ test_a_trigger_no_condition_admits_is_refused_and_named if {
 	}
 	found := violation with input as wf(doc)
 	some f in found
-	f.verdict == "V-TRIGGER-REACHES-NO-JOB"
+	f.verdict == "event reach dead"
 	some s in f.subjects
 	s.artifact == "workflow_dispatch"
 }
@@ -491,7 +491,7 @@ test_a_workflow_admitting_both_triggers_passes if {
 	}
 	found := violation with input as wf(doc)
 	every f in found {
-		f.verdict != "V-TRIGGER-REACHES-NO-JOB"
+		f.verdict != "event reach dead"
 	}
 }
 
@@ -505,7 +505,7 @@ test_a_condition_mentioning_no_event_is_not_judged if {
 	}
 	found := violation with input as wf(doc)
 	every f in found {
-		f.verdict != "V-TRIGGER-REACHES-NO-JOB"
+		f.verdict != "event reach dead"
 	}
 }
 
@@ -525,7 +525,7 @@ test_two_workflows_sharing_a_cron_are_refused if {
 	found := violation with input as {"tree": {"documents": docs}}
 	count({p |
 		some f in found
-		f.verdict == "V-CRON-COLLISION"
+		f.verdict == "job start same"
 		some s in f.subjects
 		p := s.path
 	}) == 2
@@ -546,7 +546,7 @@ test_a_staggered_pair_passes if {
 	}
 	found := violation with input as {"tree": {"documents": docs}}
 	every f in found {
-		f.verdict != "V-CRON-COLLISION"
+		f.verdict != "job start same"
 	}
 }
 
@@ -568,7 +568,7 @@ test_an_overlapping_but_distinct_expression_is_not_a_collision if {
 	}
 	found := violation with input as {"tree": {"documents": docs}}
 	every f in found {
-		f.verdict != "V-CRON-COLLISION"
+		f.verdict != "job start same"
 	}
 }
 
@@ -584,7 +584,7 @@ test_a_fan_in_that_enumerates_only_some_of_its_needs_is_refused if {
 	}
 	found := violation with input as wf(doc)
 	some f in found
-	f.verdict == "V-FANIN-NEEDS-UNASSERTED"
+	f.verdict == "job require unseen"
 	some s in f.subjects
 	s.artifact == "b"
 }
@@ -602,7 +602,7 @@ test_a_fan_in_asserting_over_the_whole_set_passes if {
 	}
 	found := violation with input as wf(doc)
 	every f in found {
-		f.verdict != "V-FANIN-NEEDS-UNASSERTED"
+		f.verdict != "job require unseen"
 	}
 }
 
@@ -616,7 +616,7 @@ test_a_job_that_names_no_dependency_is_not_judged if {
 	}
 	found := violation with input as wf(doc)
 	every f in found {
-		f.verdict != "V-FANIN-NEEDS-UNASSERTED"
+		f.verdict != "job require unseen"
 	}
 }
 
@@ -631,7 +631,7 @@ test_an_unguarded_cache_warm_compile_is_refused if {
 	}
 	found := violation with input as wf(doc)
 	some f in found
-	f.verdict == "V-WARM-COMPILE-UNGUARDED"
+	f.verdict == "cache build loose"
 }
 
 test_a_guarded_cache_warm_compile_passes if {
@@ -660,7 +660,7 @@ test_a_guard_naming_a_missing_step_id_is_refused if {
 	}
 	found := violation with input as wf(doc)
 	some f in found
-	f.verdict == "V-WARM-GUARD-NAMES-MISSING-ID"
+	f.verdict == "cache name unknown"
 	some s in f.subjects
 	s.artifact == "cache"
 }
@@ -684,7 +684,7 @@ test_an_unquoted_hash_that_swallows_an_interpolation_is_refused if {
 	]}}}
 	count(found) == 1
 	some f in found
-	f.verdict == "V-INTERPOLATION-SWALLOWED"
+	f.verdict == "input render dropped"
 	some s in f.subjects
 	s.line == 2
 }

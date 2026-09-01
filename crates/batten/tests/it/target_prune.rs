@@ -30,7 +30,7 @@
 //! WHY IT WAS MIGRATED AT ALL, and this one is the campaign working on its author
 //! a third time — after `semver` and `perf-pair`, and less creditably than
 //! either. CLOUD-1030 is a repair to the FLOOR, and making it meant editing an
-//! authored shell rule, which `V-SHELL-RULE-EDITED` refuses with no override
+//! authored shell rule, which `shell edit refused` refuses with no override
 //! route. The row was backlogged instead, on a two-part blocker whose decisive
 //! half — "the effect cannot move into a read-only engine" — was asserted without
 //! being checked and is false: `capture prune` has been `Effect::Destructive` in

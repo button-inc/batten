@@ -1001,7 +1001,7 @@ import rego.v1
 
 rules contains "no-force-push"
 
-violation contains {"rule": "no-force-push", "verdict": "V-FORCE-PUSH-AT-TRUNK"} if {
+violation contains {"rule": "no-force-push", "verdict": "trunk push forced"} if {
     input.call.operation == "write"
 }
 "#;
@@ -1026,7 +1026,7 @@ violation contains {"rule": "no-force-push", "verdict": "V-FORCE-PUSH-AT-TRUNK"}
     };
     assert_eq!(
         violations,
-        vec![attributed("no-force-push", "V-FORCE-PUSH-AT-TRUNK")],
+        vec![attributed("no-force-push", "trunk push forced")],
         "the package prefix is `batten` and the RULE NAMES are what is fixed; \
          pinning the whole path leaves this module silently unreachable"
     );
@@ -1067,7 +1067,7 @@ import data.batten.shared
 
 rules contains "no-protected-write"
 
-violation contains {"rule": "no-protected-write", "verdict": "V-PROTECTED-MUTATION"} if {
+violation contains {"rule": "no-protected-write", "verdict": "path write refused"} if {
     shared.is_protected(input.call.path)
 }
 "#;
@@ -1091,7 +1091,7 @@ violation contains {"rule": "no-protected-write", "verdict": "V-PROTECTED-MUTATI
     };
     assert_eq!(
         violations,
-        vec![attributed("no-protected-write", "V-PROTECTED-MUTATION")],
+        vec![attributed("no-protected-write", "path write refused")],
         "module B called module A's helper; under per-module isolation this \
          evaluates to `could not find function shared.is_protected`"
     );

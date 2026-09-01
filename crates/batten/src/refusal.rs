@@ -341,9 +341,9 @@ mod tests {
             }],
             Fix::None,
         );
-        assert_eq!(refusal.verdict(), Some("V-SCANNER-UNPROVISIONED"));
+        assert_eq!(refusal.verdict(), Some("scanner install missing"));
         assert!(
-            refusal.reason().starts_with("V-SCANNER-UNPROVISIONED ("),
+            refusal.reason().starts_with("scanner install missing ("),
             "the hot path leads with the token: {}",
             refusal.reason()
         );

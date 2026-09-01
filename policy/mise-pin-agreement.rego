@@ -135,7 +135,7 @@ reference contains {"server": server, "ref": arg, "tool": tool, "want": want} if
 
 violation contains {
 	"rule": "mise-pin-agreement",
-	"verdict": "V-MCP-PIN-DISAGREES",
+	"verdict": "pin declare other",
 	"subjects": [{"path": ".mcp.json"}, {"artifact": entry.server}, {"artifact": entry.ref}],
 } if {
 	some entry in reference
@@ -150,7 +150,7 @@ violation contains {
 
 violation contains {
 	"rule": "mise-pin-agreement",
-	"verdict": "V-MCP-PIN-UNDECLARED",
+	"verdict": "pin declare missing",
 	"subjects": [{"path": ".mcp.json"}, {"artifact": entry.server}, {"artifact": entry.ref}],
 } if {
 	some entry in reference
@@ -171,7 +171,7 @@ violation contains {
 
 violation contains {
 	"rule": "mise-pin-agreement",
-	"verdict": "V-MCP-EXEC-UNSCOPED",
+	"verdict": "call run loose",
 	"subjects": [{"path": ".mcp.json"}, {"artifact": server}],
 } if {
 	some server, body in servers
@@ -213,7 +213,7 @@ terminator(args) := count(args) if {
 
 violation contains {
 	"rule": "mise-pin-agreement",
-	"verdict": "V-PIN-AUTHORITY-UNREADABLE",
+	"verdict": "pin read unread",
 	"subjects": [{"path": path}],
 } if {
 	some path in input.tree.missing
@@ -247,7 +247,7 @@ test_a_version_the_authority_pins_differently_is_refused if {
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 	count(found) == 1
 	some finding in found
-	finding.verdict == "V-MCP-PIN-DISAGREES"
+	finding.verdict == "pin declare other"
 }
 
 test_a_tool_the_authority_does_not_carry_is_refused if {
@@ -261,7 +261,7 @@ test_a_tool_the_authority_does_not_carry_is_refused if {
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 	count(found) == 1
 	some finding in found
-	finding.verdict == "V-MCP-PIN-UNDECLARED"
+	finding.verdict == "pin declare missing"
 }
 
 # THE REGRESSION. A bare exec names no version to compare, and must not pass.
@@ -276,7 +276,7 @@ test_a_bare_exec_is_refused_even_though_it_names_no_version if {
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 	count(found) == 1
 	some finding in found
-	finding.verdict == "V-MCP-EXEC-UNSCOPED"
+	finding.verdict == "call run loose"
 }
 
 test_a_server_not_launched_through_mise_is_left_alone if {
@@ -306,7 +306,7 @@ test_a_shimmed_bare_exec_is_still_refused if {
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 	count(found) == 1
 	some finding in found
-	finding.verdict == "V-MCP-EXEC-UNSCOPED"
+	finding.verdict == "call run loose"
 }
 
 # A shimmed launch that IS scoped passes, and its pin is still read.
@@ -332,7 +332,7 @@ test_an_absent_authority_is_loud if {
 	}}
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 	some finding in found
-	finding.verdict == "V-PIN-AUTHORITY-UNREADABLE"
+	finding.verdict == "pin read unread"
 }
 
 # ANTI-VACUITY for the clause above: with no manifest there is nothing that would
@@ -358,7 +358,7 @@ test_a_table_valued_pin_reads_as_undeclared if {
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 	count(found) == 1
 	some finding in found
-	finding.verdict == "V-MCP-PIN-UNDECLARED"
+	finding.verdict == "pin declare missing"
 }
 
 # A tool name carrying an `@` keeps its head whole — the last `@` is the split.

@@ -129,7 +129,7 @@ mise_task(command) := task if {
 
 violation contains {
 	"rule": "verdict-routes-resolve",
-	"verdict": "V-ROUTE-TASK-UNDEFINED",
+	"verdict": "route name undefined",
 	"subjects": [{"artifact": entry.verdict}, {"artifact": entry.route}, {"artifact": entry.task}],
 } if {
 	# Could-not-look guard, `command-task-defined`'s: with no task namespace
@@ -148,7 +148,7 @@ violation contains {
 # spelled the same way as a registry whose every route resolves.
 violation contains {
 	"rule": "verdict-routes-resolve",
-	"verdict": "V-AUTHORITY-UNPARSED",
+	"verdict": "config parse broken",
 	"subjects": [{"path": path}],
 } if {
 	some path in input.tree.missing

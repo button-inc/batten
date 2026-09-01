@@ -206,8 +206,8 @@ node = "24.20.0"
 # `mise-tasks/renovate-config-validator.sh:32` used that same name for the path
 # seam its suite set — so the validator was handed `/tmp/.../renovate.json5` as
 # CONTENT and died at `invalid character 't' at 1:2`. Repairing it meant editing
-# authored shell frozen by `V-SHELL-RULE-EDITED`, whose sole route is
-# `R-PORT-AND-RETIRE`, which is why the bump owed a retirement rather than a
+# authored shell frozen by `shell edit refused`, whose sole route is
+# `rule read first`, which is why the bump owed a retirement rather than a
 # rename. That retirement has now landed: the path is an argument in
 # `[tasks.record-verdicts]` and the input is `batten.toml`'s `renovate-config`
 # row, so there is no environment variable left to collide.
@@ -552,7 +552,18 @@ shell = "bash -c"
 # there it fails `no_pending_snapshot_is_left_in_the_tree` inside this very task,
 # so accepting a changed snapshot could never succeed. Measured on the first
 # machine-surface change after this task landed.
-run = "find crates/batten/tests/snapshots -name '*.snap.new' -delete && INSTA_UPDATE=always cargo test --test snapshots"
+# REPOINTED BY THE TARGET CONSOLIDATION (CLOUD-1210), which this task did not
+# follow and which left it unable to run at all: the corpus moved to
+# `tests/it/snapshots` and `--test snapshots` names a target that no longer
+# exists, so `find` failed on a missing directory and the accept half never
+# reached `cargo`. Found by the first machine-surface change after that landed —
+# the same way the note above it was found.
+#
+# THE FILTER IS WHAT KEEPS THE BOUND THE NOTE ABOVE ARGUES FOR. With one target,
+# `--test it` would run the whole suite under `cargo test`'s threads-in-one-
+# process model, which is exactly what `document_read_count` cannot survive. A
+# module filter selects the same cases the old per-file target did.
+run = "find crates/batten/tests/it/snapshots -name '*.snap.new' -delete && INSTA_UPDATE=always cargo test --test it snapshots::"
 
 [tasks.fix]
 description = "Everything `fmt` does, plus clippy's autofixes and the derived artifacts — the one command that empties a messy tree"
@@ -1127,7 +1138,7 @@ description = "Gate: the API delta on this branch is compatible with the bump re
 # discarding `Cargo.lock` — so on 2026-08-26 a yank of `bisync` made every commit
 # from v0.0.89 on unresolvable, seven minutes after this gate passed in CI. The
 # repair was a fallback that builds the baseline from its committed lock, and
-# adding it meant EDITING an authored shell rule, which `V-SHELL-RULE-EDITED`
+# adding it meant EDITING an authored shell rule, which `shell edit refused`
 # refuses with no override route. Maintenance of a shell-tier rule is completed
 # by migrating it; that is the whole claim, and this is the first time it was
 # tested against a repair somebody actually needed.
@@ -1153,7 +1164,7 @@ description = "Gate: the issue you are about to pull is actually unclaimed (read
 # does not, so the two could never agree for any body not already ending in one —
 # the rule refused every claim in every clone, and the only way past it was the
 # bypass it reserves for a human's visible decision. Making that repair meant
-# EDITING an authored shell rule, which `V-SHELL-RULE-EDITED` refuses with no
+# EDITING an authored shell rule, which `shell edit refused` refuses with no
 # override route; and the repair is also the thing the shell could not express
 # safely, because reader and writer had two spellings of one hash. The port shares
 # `git::blob_id` with the minting side, so a second spelling is unwritable rather
@@ -1184,7 +1195,7 @@ description = "Measure this branch and its merge base back to back on one machin
 # config, and the skip could see neither that config nor any path a `policy` row
 # registers. Measured, a policy row alone moved `wired` 5.8ms -> 9.3ms while the
 # gate reported "nothing measured". Making that repair meant EDITING an authored
-# shell rule, which `V-SHELL-RULE-EDITED` refuses with no override route — and the
+# shell rule, which `shell edit refused` refuses with no override route — and the
 # repair is also the thing a shell skip could not express, because the widened set
 # is DERIVED from the loaded config rather than written down.
 #
@@ -1240,7 +1251,7 @@ description = "Reclaim superseded build artifacts, and refuse below a measured d
 # THE TASK NAME SURVIVES THE MIGRATION, for `perf-pair`'s reason above and with
 # the same edge: `verify`'s body and `mise-tasks/land.sh` both invoke
 # `mise run target-prune` by name, and `land.sh` is an authored shell rule
-# `V-SHELL-RULE-EDITED` refuses to see edited. Keeping the name is what holds
+# `shell edit refused` refuses to see edited. Keeping the name is what holds
 # this retirement to the one program being retired.
 #
 # `-y` RATHER THAN A PROMPT, and it is house-style §5's binding on a destructive
@@ -1377,7 +1388,7 @@ description = "Effect: run each declared third-party validator OUTSIDE the engin
 #
 # AN INLINE TASK RATHER THAN A `mise-tasks/` PROGRAM, and it is forced:
 # `governed_at_head` selects any `mise-tasks/` path carrying a shebang or a
-# `#MISE description=`, so a new program there is `V-SHELL-RULE-ADDED` — refused
+# `#MISE description=`, so a new program there is `shell add refused` — refused
 # at `deny`, in the same change that is retiring four of them.
 #
 # THE REDUCTION IS THIS REPOSITORY'S, WHICH IS WHY IT LIVES HERE. `status clean`
@@ -1529,7 +1540,7 @@ description = "Measure tree-surface acquisition cost as declared-document count 
 #
 # THE MEASUREMENT IS `batten perf acquire`, AND IT USED TO BE PYTHON (CLOUD-1229).
 # This comment used to argue that `bench/acquisition/sweep.py` was forced: an
-# authored shell rule cannot be ADDED (`V-SHELL-RULE-ADDED`, one `document` route,
+# authored shell rule cannot be ADDED (`shell add refused`, one `document` route,
 # no override, no `bypass_env`), so the measurement went to the one language the
 # retirement campaign does not watch. That reading was wrong in a way this line
 # then propagated — a second author read it, followed the precedent for the
@@ -2373,7 +2384,7 @@ fi
 # `mise-tasks/` programs and by the Rust tier; `hooks-wiring-check.sh:219`
 # declares the same seam under its own name for its `doctor hooks -J` call and
 # only 2 of its 36 cases ever set it. Exported here so every already-honouring
-# program is reached with ZERO governed-file edits — `V-SHELL-RULE-EDITED`
+# program is reached with ZERO governed-file edits — `shell edit refused`
 # refuses touching any of them, which is the whole reason this change lives in
 # the ungoverned task and nowhere else.
 BATTEN_BIN="$PWD/target/debug/batten"
@@ -2731,7 +2742,7 @@ fi
 # reported as a full volume, which is the misattribution the row is about, one
 # layer out. It cannot be written HERE: `tests/verify.bats`'s "a volume that
 # cannot be recovered is a STOP, not a lap" pins exit 1 to that exact phrase, and
-# `V-SHELL-RULE-EDITED` refuses an edit to a bats suite with no override route
+# `shell edit refused` refuses an edit to a bats suite with no override route
 # and no `bypass_env`. So CLOUD-1153 is a row whose §1 is written in the wrong
 # shape — it needs the classification where a gate can already see it, not a
 # fourth authority in this body — and it is left on the board rather than

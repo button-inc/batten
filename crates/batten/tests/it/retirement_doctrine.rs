@@ -2,7 +2,7 @@
 //! only in a rego header and a refusal (CLOUD-1132).
 //!
 //! `policy/shell-retirement.rego` admits exactly one disposition for a governed
-//! shell gate — retire it whole, or leave it — and `V-SHELL-RULE-EDITED` declares
+//! shell gate — retire it whole, or leave it — and `shell edit refused` declares
 //! one route with no override and no `bypass_env`. That rule was written down in
 //! two places and a reader reached neither before they had already edited the
 //! file: the module's own header, and the refusal itself. Two documents
@@ -95,7 +95,7 @@ fn the_rules_state_both_shapes_and_that_there_is_no_third() {
 #[test]
 fn the_rules_name_the_module_and_the_verdict_that_decide() {
     let text = rules_text();
-    for token in [MODULE, "V-SHELL-RULE-EDITED", "R-PORT-AND-RETIRE"] {
+    for token in [MODULE, "shell edit refused", "rule read first"] {
         assert!(
             text.contains(token),
             "{RULES} must name `{token}` — a reader who meets the refusal has to be \
@@ -214,7 +214,7 @@ fn the_rules_name_the_three_homes_and_the_module_admits_them() {
 #[test]
 fn the_rules_name_the_successor_kind_field_and_the_module_admits_it() {
     let text = squashed(&rules_text());
-    for clause in ["kind:verb", "kind:mechanism", "V-SUCCESSOR-KIND-UNDECLARED"] {
+    for clause in ["kind:verb", "kind:mechanism", "shell port unnamed"] {
         assert!(
             text.contains(&squashed(clause)),
             "{RULES} must name `{clause}` — an engine-source arm now OWES its kind, \
@@ -225,7 +225,7 @@ fn the_rules_name_the_successor_kind_field_and_the_module_admits_it() {
 
     let module = squashed(&fs::read_to_string(at_root(MODULE)).expect("the module is committed"));
     assert!(
-        module.contains("V-SUCCESSOR-KIND-UNDECLARED"),
+        module.contains("shell port unnamed"),
         "{MODULE} must still raise the token {RULES} tells the author about"
     );
     assert!(

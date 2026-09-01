@@ -321,7 +321,7 @@ module_of(path) := name if {
 # that produced them stays on the engine's side.
 violation contains {
 	"rule": "module-layering",
-	"verdict": "V-LAYERING-EDGE-FORBIDDEN",
+	"verdict": "layer reach refused",
 	"subjects": [{"path": path, "line": edge.line}, {"artifact": edge.to}],
 } if {
 	some path, edges in input.tree.uses
@@ -338,7 +338,7 @@ violation contains {
 # close, so it is a finding rather than silence.
 violation contains {
 	"rule": "module-layering",
-	"verdict": "V-LAYER-UNPLACED",
+	"verdict": "module place missing",
 	"subjects": [{"path": path}],
 } if {
 	some path, _ in input.tree.uses
@@ -351,7 +351,7 @@ violation contains {
 # can be switched off by deletion without anything going red.
 violation contains {
 	"rule": "module-layering",
-	"verdict": "V-LAYER-TABLE-DECIDES-NOTHING",
+	"verdict": "layer table dead",
 } if {
 	count(forbidden) == 0
 }
@@ -507,7 +507,7 @@ test_an_unplaced_module_is_refused_rather_than_allowed if {
 	# pins is the class it raises, and a token is what makes that assertion
 	# exact — a `contains` over a message passed for any rewording that kept
 	# three words, and failed for any that did not.
-	v.verdict == "V-LAYER-UNPLACED"
+	v.verdict == "module place missing"
 }
 
 # A selector that matched nothing reaches this module as an empty set and it says

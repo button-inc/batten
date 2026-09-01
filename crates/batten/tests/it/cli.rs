@@ -1844,7 +1844,7 @@ fn a_deny_with_no_consumer_remedy_falls_back_to_the_declared_class() {
         "names the gate, got: {stderr}"
     );
     assert!(
-        stderr.contains("V-PROTECTED-MUTATION ("),
+        stderr.contains("path write refused ("),
         "the hot path leads with the token and its gloss, got: {stderr}"
     );
     assert!(
@@ -4924,7 +4924,7 @@ const CENSUS_POSITIONALS: &[(&str, &[&str])] = &[
     // reason the vendored half exists at all. A consumer token here would make
     // this census depend on the fixture's authority carrying a row, and the
     // fixture's authority is `batten init`'s output.
-    ("policy explain", &["V-PROTECTED-MUTATION"]),
+    ("policy explain", &["path write refused"]),
     // The key the fixture's seeded RESPONSE capture carries. `capture find` is
     // the first verb whose clean run needs a capture of a kind `exec` cannot
     // make: a `Stream::Response`, which only the post-tool event writes.

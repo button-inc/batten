@@ -71,7 +71,7 @@ fn reported(payload: &str) -> String {
 }
 
 fn signals(payload: &str) -> bool {
-    reported(payload).contains("V-SHELL-EDIT-BEFORE-RETIREMENT")
+    reported(payload).contains("shell edit early")
 }
 
 /// A write to an authored shell gate is told at the write.
@@ -289,7 +289,7 @@ fn an_advised_and_allowed_call_still_speaks() {
         String::from_utf8_lossy(&answer.stderr)
     );
     assert!(
-        reported.contains("V-SHELL-EDIT-BEFORE-RETIREMENT"),
+        reported.contains("shell edit early"),
         "an advisory with nothing refusing it still reaches its reader: {reported}"
     );
 }

@@ -59,7 +59,7 @@ rules contains "opa-tracks-regorus-compliance"
 # read — a vacuous pass, indistinguishable from a real one.
 violation contains {
 	"rule": "opa-tracks-regorus-compliance",
-	"verdict": "V-COMPLIANCE-SOURCE-UNPARSED",
+	"verdict": "source parse broken",
 	"subjects": [{"path": path}],
 } if {
 	some path in input.tree.missing
@@ -69,7 +69,7 @@ violation contains {
 # The checker and the evaluator naming different OPA release lines.
 violation contains {
 	"rule": "opa-tracks-regorus-compliance",
-	"verdict": "V-CHECKER-AHEAD-OF-EVALUATOR",
+	"verdict": "version pin ahead",
 	"subjects": [{"artifact": pin}, {"artifact": declared}],
 } if {
 	pin := opa_pin
@@ -82,7 +82,7 @@ violation contains {
 # and that is the point.
 violation contains {
 	"rule": "opa-tracks-regorus-compliance",
-	"verdict": "V-COMPLIANCE-CLAIM-STALE",
+	"verdict": "claim state stale",
 	"subjects": [{"artifact": recorded_for}, {"artifact": regorus_pin}],
 } if {
 	recorded_for := compliance_for
@@ -145,7 +145,7 @@ in_this_workspace if input.tree.documents["Cargo.toml"]
 # name the caller's parse failure as four separate findings.
 violation contains {
 	"rule": "opa-tracks-regorus-compliance",
-	"verdict": "V-COMPLIANCE-DECLARATION-ABSENT",
+	"verdict": "claim declare absent",
 	"subjects": [{"artifact": "opa"}],
 } if {
 	in_this_workspace
@@ -155,7 +155,7 @@ violation contains {
 
 violation contains {
 	"rule": "opa-tracks-regorus-compliance",
-	"verdict": "V-COMPLIANCE-DECLARATION-ABSENT",
+	"verdict": "claim declare absent",
 	"subjects": [{"artifact": "REGORUS_OPA_COMPLIANCE"}],
 } if {
 	in_this_workspace
@@ -165,7 +165,7 @@ violation contains {
 
 violation contains {
 	"rule": "opa-tracks-regorus-compliance",
-	"verdict": "V-COMPLIANCE-DECLARATION-ABSENT",
+	"verdict": "claim declare absent",
 	"subjects": [{"artifact": "REGORUS_OPA_COMPLIANCE_FOR"}],
 } if {
 	in_this_workspace
@@ -175,7 +175,7 @@ violation contains {
 
 violation contains {
 	"rule": "opa-tracks-regorus-compliance",
-	"verdict": "V-COMPLIANCE-DECLARATION-ABSENT",
+	"verdict": "claim declare absent",
 	"subjects": [{"artifact": "regorus"}],
 } if {
 	in_this_workspace
@@ -188,7 +188,7 @@ violation contains {
 # one level in. `"1"` against a declared `1.2.0` was measured passing.
 violation contains {
 	"rule": "opa-tracks-regorus-compliance",
-	"verdict": "V-VERSION-UNREADABLE",
+	"verdict": "version read unread",
 	"subjects": [{"artifact": entry.key}, {"artifact": entry.owner}],
 } if {
 	in_this_workspace

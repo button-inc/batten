@@ -73,7 +73,7 @@ granted contains entry if {
 # refuses, and rule 4's subject vocabulary has a `count` for exactly this.
 violation contains {
 	"rule": "connector-not-granted",
-	"verdict": "V-RAW-CONNECTOR-GRANTED",
+	"verdict": "connector grant loose",
 	"subjects": [{"path": ".claude/settings.json"}, {"count": count(granted)}],
 } if {
 	allows
@@ -96,7 +96,7 @@ test_a_tree_granting_nothing_raw_is_clean if {
 
 test_a_named_raw_tool_is_refused if {
 	some v in violation with input as settings(["mcp__Linear__get_issue"])
-	v.verdict == "V-RAW-CONNECTOR-GRANTED"
+	v.verdict == "connector grant loose"
 }
 
 # THE ANTI-VACUITY MIRROR. Without it the case above is satisfied by a predicate
@@ -104,12 +104,12 @@ test_a_named_raw_tool_is_refused if {
 # wider — would ship past the gate that exists to refuse it.
 test_a_globbed_server_grant_is_refused if {
 	some v in violation with input as settings(["mcp__Linear__*"])
-	v.verdict == "V-RAW-CONNECTOR-GRANTED"
+	v.verdict == "connector grant loose"
 }
 
 test_a_bare_server_grant_is_refused if {
 	some v in violation with input as settings(["mcp__Linear"])
-	v.verdict == "V-RAW-CONNECTOR-GRANTED"
+	v.verdict == "connector grant loose"
 }
 
 # The finding is ONE per file however many entries offend, carrying a count. A
@@ -133,4 +133,4 @@ test_no_settings_file_answers_nothing if {
 	count(violation) == 0 with input as {"tree": {"documents": {}}}
 }
 
-#MUTANT-EXEMPT CLOUD-1260|no `tests/connector-not-granted.bats` exists and none may be added: `mutant` resolves a gate's suite as `tests/$gate.bats`, and `V-SHELL-RULE-ADDED` refuses adding one, so there is no named case a mutation could turn red. The load-time tier is this file's own `test_` rules and the engine tier is `crates/batten/tests/connector_not_granted.rs`, neither of which is what the mutation runner drives
+#MUTANT-EXEMPT CLOUD-1260|no `tests/connector-not-granted.bats` exists and none may be added: `mutant` resolves a gate's suite as `tests/$gate.bats`, and `shell add refused` refuses adding one, so there is no named case a mutation could turn red. The load-time tier is this file's own `test_` rules and the engine tier is `crates/batten/tests/connector_not_granted.rs`, neither of which is what the mutation runner drives

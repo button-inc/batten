@@ -86,32 +86,32 @@ version = "{DECLARED_VERSION}"
 input = "hk.pkl"
 
 [[verdict]]
-id = "V-PROFILED-STEP-NOT-IN-CHECK"
+id = "step declare missing"
 gloss = "a step declaring the slow profile is not selected by the `check` hook"
 class = "A fixture class, mirroring the committed row."
 
 [[verdict.route]]
-id = "R-RESTORE-THE-PROFILED-STEP"
+id = "gate read first"
 kind = "document"
 target = "hk.pkl"
 
 [[verdict]]
-id = "V-SLOW-TIER-EMPTY"
+id = "tier list empty"
 gloss = "something planned this tree and no step declares the slow profile"
 class = "A fixture class, mirroring the committed row."
 
 [[verdict.route]]
-id = "R-RESTORE-THE-SLOW-TIER"
+id = "gate read first"
 kind = "document"
 target = "hk.pkl"
 
 [[verdict]]
-id = "V-HOOK-MISSING-PROFILE-FLAG"
+id = "hook declare missing"
 gloss = "the git hook runs hk without the profile flag"
 class = "A fixture class, mirroring the committed row."
 
 [[verdict.route]]
-id = "R-RESTORE-THE-PROFILE-FLAG"
+id = "source read first"
 kind = "document"
 target = ".claude/hooks/git-hook.sh"
 "#

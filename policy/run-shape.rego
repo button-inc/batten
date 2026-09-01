@@ -84,7 +84,7 @@ rules contains "background-timer"
 
 violation contains {
 	"rule": "commit-names-no-message-source",
-	"verdict": "V-COMMIT-WITHOUT-A-MESSAGE-SOURCE",
+	"verdict": "commit write missing",
 } if {
 	# THE CHEAP TERM FIRST, and it is load-bearing rather than tidy. Everything
 	# below — the heredoc scan, both quote passes, the list and pipe splits — is
@@ -100,7 +100,7 @@ violation contains {
 
 violation contains {
 	"rule": "unsatisfiable-commit",
-	"verdict": "V-COMMIT-STDIN-UNBOUND",
+	"verdict": "commit bind missing",
 } if {
 	some segment in input.call.segments
 
@@ -116,7 +116,7 @@ violation contains {
 
 violation contains {
 	"rule": "foreground-sleep",
-	"verdict": "V-FOREGROUND-SLEEP",
+	"verdict": "sleep run blocked",
 } if {
 	sleeps
 
@@ -130,7 +130,7 @@ violation contains {
 
 violation contains {
 	"rule": "background-timer",
-	"verdict": "V-BACKGROUND-TIMER",
+	"verdict": "timer run refused",
 } if {
 	sleeps
 	input.call["run-in-background"] == true

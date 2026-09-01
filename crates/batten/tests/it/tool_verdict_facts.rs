@@ -64,7 +64,7 @@
 //! the environment variable `RENOVATE_CONFIG` — the same name renovate 44 reads
 //! as INLINE JSON5 config — so the validator was handed a PATH and died parsing
 //! it as content. Renaming the seam meant editing authored shell frozen by
-//! `V-SHELL-RULE-EDITED`, whose sole route is `R-PORT-AND-RETIRE`. This is that
+//! `shell edit refused`, whose sole route is `rule read first`. This is that
 //! route: the path is now an argument in `[tasks.record-verdicts]` and the input
 //! is `batten.toml`'s `renovate-config` row, so there is no variable left to
 //! collide.

@@ -1,7 +1,7 @@
 //! A mediated refusal is admissible by a spent admission, and only by one.
 //!
 //! The tier that proves the ENGINE honours what the route advertises. Without it
-//! `V-PROTECTED-MUTATION`'s `R-ARTICULATE-THE-WRITE` is a promise made in a
+//! `path write refused`'s `R-ARTICULATE-THE-WRITE` is a promise made in a
 //! refusal message: `batten override request` would answer, mint a real record,
 //! and the write would still be refused — the exact defect `verdict.rs`'s header
 //! exists to kill, one layer along.
@@ -40,13 +40,13 @@ const ORDINARY: &str = "notes.md";
 /// that spelled them itself would keep passing after a rename that broke every
 /// consumer.
 const RULE: &str = "protected-mutation";
-const CLASS: &str = "V-PROTECTED-MUTATION";
+const CLASS: &str = "path write refused";
 
 /// A fixture whose committed authority protects itself.
 ///
 /// `protected` naming `batten.toml` is this repository's own row, and it is the
 /// case that matters: the file a registration has to edit is the file the gate
-/// refuses, which is why `R-USE-THE-OWNING-SURFACE` cannot reach it.
+/// refuses, which is why `config read first` cannot reach it.
 fn fixture(name: &str) -> PathBuf {
     Fixture::new(name)
         // THE `[[verb]]` ROW IS LOAD-BEARING AND DOES NOT MATCH THIS CALL, which
@@ -103,7 +103,7 @@ fn request(dir: &Path, subject: &str, reason: &str) -> String {
     let answers = format!(
         "precondition=the owning surface is the file being refused, so it cannot express this\n\
          lost={reason}\n\
-         rejected-route=R-USE-THE-OWNING-SURFACE names batten.toml, which is the subject\n"
+         rejected-route=config read first names batten.toml, which is the subject\n"
     );
     let output = run_with_stdin(
         dir,
