@@ -509,6 +509,18 @@ pub struct Config {
     /// [`crate::commit`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<crate::commit::Commit>,
+    /// The bot lane this repository files rows for (CLOUD-1295). Absent means it
+    /// runs none, and the `pr` verbs say so rather than filing against defaults —
+    /// a lane assembled from engine literals would be a row asserting a bump
+    /// nobody configured.
+    ///
+    /// Consumer-specific by nature, and the reason it lives here rather than in
+    /// the crate: which repository, which bot logins and which manifests a lane
+    /// owns are that repository's business (non-negotiable rule 1), so the core
+    /// carries the matcher and this table carries the answers. The type and the
+    /// predicates are [`crate::bot`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_lane: Option<crate::bot::BotLane>,
     /// How the base-ref authority behaves when the ref cannot be reached
     /// (CLOUD-720). Absent means the strict default: an unreachable ref refuses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1366,6 +1378,7 @@ impl Config {
             // And no commit convention: absent is "no rule was declared", which
             // the gate answers 1 to rather than waving commits through.
             commit: None,
+            bot_lane: None,
             // An authority that cannot be read grants no permission to answer
             // from a pin either. The default is the strict one, and an absent
             // authority must not be the way to reach the lenient one.

@@ -53,7 +53,7 @@ name: auto-bot-land
 #
 # AND THE BOARD MOVES WITH THE WORK (CLOUD-693). A bot proposes with no issue and
 # no session, so every lifecycle gate refuses it by construction and a merge moves
-# nothing. `mise run bot-issue ensure` is the missing step: it derives an issue
+# nothing. `batten pr ensure` is the missing step: it derives an issue
 # from the manifest diff, files it, and writes `Closes CLOUD-<n>` into the PR body
 # so the merge moves the row like any other landing. It runs on every tick, before
 # anything is readied, so the row exists while the PR is still a draft.
@@ -368,10 +368,16 @@ jobs:
           PR_NUM: ${{ steps.target.outputs.num }}
         run: |
           set +e
-          mise run bot-issue ensure "$PR_NUM"
+          batten pr ensure "$PR_NUM"
           verdict=$?
+          # THE ENGINE'S EXIT TABLE, which is not the retired program's
+          # (CLOUD-1295). `bot-issue` used 1 for "refused, not this lane's" and 2
+          # for "could not look"; under house style section 7 a refusal is 2 and a
+          # could-not-look is 3, with 1 reserved for a usage error. A pull request
+          # this lane declines to file for is still an ordinary outcome and passes;
+          # everything else fails the run.
           case "$verdict" in
-            0 | 1) exit 0 ;;
+            0 | 2) exit 0 ;;
             *) exit "$verdict" ;;
           esac
       # IS THIS HEAD LANDABLE AT ALL? `compare/main...SHA` answers in one read:
@@ -583,9 +589,9 @@ jobs:
       # small; it does not close it, and a landing inside it is silent — `main`
       # advances, the bump ships, and the row never leaves Backlog.
       #
-      # Exit 1 "closes nothing" is an ORDINARY outcome, like the `main`-moved
+      # Exit 2 "closes nothing" is an ORDINARY outcome, like the `main`-moved
       # refusal below: the next tick re-runs `ensure`, the key comes back, and it
-      # lands then. Only exit 2, "could not look", fails the run.
+      # lands then. Only exit 3, "could not look", fails the run.
       - name: Does the body still close its row?
         if: steps.checks.outputs.verdict == 'green'
         id: closes
@@ -594,11 +600,14 @@ jobs:
           PR_NUM: ${{ steps.target.outputs.num }}
         run: |
           set +e
-          mise run bot-issue closes "$PR_NUM"
+          batten pr closes "$PR_NUM"
           verdict=$?
+          # The engine's table, as one step up: 2 is the refusal and 3 is the
+          # could-not-look that must fail the run rather than read as "closes
+          # nothing" and hold a landable head forever.
           case "$verdict" in
             0) echo "linked=true" >> "$GITHUB_OUTPUT" ;;
-            1) echo "linked=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "linked=false" >> "$GITHUB_OUTPUT" ;;
             *) exit "$verdict" ;;
           esac
       - name: Fast-forward main to the tested SHA

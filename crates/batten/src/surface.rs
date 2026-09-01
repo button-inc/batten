@@ -487,6 +487,23 @@ const RANGE: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// The pull request every `pr` bot-lane verb is about (CLOUD-1295).
+///
+/// Positional and required, for `RANGE`'s reason: the pull request IS the verb's
+/// object, and there is deliberately no default. Deriving one from the checked-out
+/// branch would be a second authority for "which PR is this", and the lander that
+/// calls these verbs already knows the number — it is the thing the tick is about.
+const PR_NUMBER: FlagDecl =
+    FlagDecl::positional("pr", "The pull request number this verb is about");
+
+/// The tracker key `pr link` writes into a body.
+///
+/// Also positional and also required: `link` takes two objects and neither is
+/// derivable here. The key comes from the tracker's own sync, which `pr ensure`
+/// reads and this verb is handed.
+const ISSUE_KEY: FlagDecl =
+    FlagDecl::positional("key", "The tracker key the pull request should close");
+
 /// `--root <dir>` on `target prune`.
 ///
 /// The suite's seam for WHICH TREE, and the twin of the free-space override the
@@ -2592,6 +2609,71 @@ pub const SURFACE: &[CommandDecl] = &[
             FANIN_CHECK,
         ],
     },
+    // The bot lane (CLOUD-1295), ported off `mise-tasks/bot-issue.sh`. Five verbs
+    // rather than one with a mode word, because they have different effects and
+    // house style §5 declares an effect per row: `derive` and `closes` write
+    // nothing, the other three write to the forge.
+    //
+    // `unclassified`, for `pr watch`'s reason and not for want of thought: this
+    // verb writes nothing at all, and if effect were about MUTATION it would be
+    // `read`. It runs the forge's client — a program the caller named — and
+    // "runs a program somebody else chose" is not `read`, so a row claiming it
+    // would put this verb on the derived read-only allowlist on a promise the
+    // row cannot keep.
+    //
+    // NO `-J`, AND THE DOCUMENT IS UNCONDITIONAL, which is the same call
+    // `pr watch` makes one row down. Its stdout is one JSON payload and there is
+    // no second encoding for a flag to select — the refinement gate reads it
+    // unchanged, which is the whole point. Declaring the channel anyway would
+    // enrol it in the `-J` census, whose contract is byte-stability and
+    // whole-or-nothing across two runs; here that is a property of the FORGE's
+    // answer rather than of this verb, so the row would promise something no
+    // reading of this code can keep.
+    CommandDecl {
+        path: "pr derive",
+        about: "The tracker row a bot's pull request implies, as a payload the refinement gate reads",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[PR_NUMBER],
+    },
+    // `write`: it opens an issue on the forge. Stated rather than guessed — a row
+    // claiming `read` would put a verb that creates a tracker row on the derived
+    // read-only allowlist.
+    CommandDecl {
+        path: "pr file",
+        about: "Open the mirror issue a bot's pull request implies, and report its number",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[PR_NUMBER],
+    },
+    // `write`: it rewrites the pull request's body so the merge moves the row.
+    CommandDecl {
+        path: "pr link",
+        about: "Write the closing key into a bot pull request's body, so its merge moves the row",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[PR_NUMBER, ISSUE_KEY],
+    },
+    // `write`, because it composes the two above. Idempotent at every step, which
+    // is what makes it safe on a lander tick.
+    CommandDecl {
+        path: "pr ensure",
+        about: "File the row and link it, doing whatever this tick can and saying what it did",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[PR_NUMBER],
+    },
+    // `unclassified` for the same reason as `pr derive`, and it is the
+    // last-moment question a landing asks: a bot regenerates its body on every
+    // rebase and the closing line goes with it, so the answer read a step earlier
+    // is not the answer at the ref move.
+    CommandDecl {
+        path: "pr closes",
+        about: "Whether a pull request's body still closes a tracker key, asked at the last moment",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[PR_NUMBER],
+    },
     // The `claim` noun (CLOUD-1121), ported off `mise-tasks/claim-check.sh` on the
     // same terms.
     CommandDecl {
@@ -2616,6 +2698,27 @@ pub const SURFACE: &[CommandDecl] = &[
     // `write`, for `claim check`'s reason one row up: the derivable path MINTS a
     // receipt under the git dir. A row claiming `read` would put a writing verb on
     // the derived read-only allowlist.
+    // `write`, for `claim check`'s reason two rows up, and it is the SECOND
+    // receipt kind because the two attest different things (CLOUD-693,
+    // CLOUD-431). The agent receipt says a human or agent read the issue and
+    // confirmed the refinement predates this session; nothing on a bot branch can
+    // honestly say that, so widening it would make it mean less everywhere. This
+    // attests what IS decidable from public facts: the head was opened by a bot
+    // the lane declares, its diff touches only manifests the lane owns, and its
+    // body names the row derived from that diff.
+    //
+    // NO `-J`, for `pr derive`'s reason: what this verb can say depends on what
+    // the forge answers about the branch's open pull request, so the `-J`
+    // census's byte-stability term would be a claim about the forge. Its sibling
+    // `claim carry` one row down DOES declare the channel, and the difference is
+    // exactly that: that predicate is decided offline against the merge base.
+    CommandDecl {
+        path: "claim bot",
+        about: "Attest a bot branch from the lane's public facts, and mint the receipt when they hold",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
     CommandDecl {
         path: "claim carry",
         about: "Attest that this branch only carries licence rows forward, and mint the receipt when it does",

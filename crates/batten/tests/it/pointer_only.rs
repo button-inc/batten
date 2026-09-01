@@ -627,6 +627,16 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The lane's receipt, driven to the same lane-absent refusal as the five `pr`
+    // verbs above and pointer-only on the same structural terms: `bot::Attested`
+    // holds a key, a login and a number, and there is no field a body could
+    // travel in.
+    Verb {
+        path: "claim bot",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The third board verb, and structurally pointer-only for a reason worth
     // naming because its subject is unusually leaky: the table it judges carries a
     // LICENCE TEXT and a COPYRIGHT HOLDER per row, which is exactly the kind of
@@ -663,6 +673,49 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "pr watch",
         args: &["--sha", "0", "--required", "", "--answered", "success"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // The bot lane's five verbs (CLOUD-1295), and every one of them is driven to
+    // its LANE-ABSENT refusal rather than to the forge, for `pr watch`'s reason
+    // one entry up: a census entry that reached the network would not be a slow
+    // case, it would be one whose answer depends on somebody else's server. This
+    // corpus declares no `[bot_lane]`, so each refuses before the first request.
+    //
+    // That is not a weaker question than it looks. What these verbs could leak is
+    // a bot pull request's BODY — a release-notes dump for every bumped package —
+    // and the structural answer is that `bot::Pull` is the only place a body
+    // lives, no refusal formats one, and the emission paths carry a number, a key
+    // or a path. `crates/batten/tests/it/bot_lane.rs` drives the same law against
+    // a stubbed forge with a canary in the body, which is the half this corpus
+    // cannot reach.
+    Verb {
+        path: "pr derive",
+        args: &["7"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "pr file",
+        args: &["7"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "pr link",
+        args: &["7", "KEY-1"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "pr ensure",
+        args: &["7"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "pr closes",
+        args: &["7"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },

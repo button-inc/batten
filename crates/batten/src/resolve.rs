@@ -697,6 +697,13 @@ pub struct Resolved {
     /// convention — there is no raise-only reading of "match more things".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit: Option<crate::commit::Commit>,
+    /// The bot lane (CLOUD-1295), as the authority states it. Not layered, for
+    /// the reason the neighbours above are not: a local file able to reach this
+    /// table could add a login to `bots` or a path to `owned_manifests`, and
+    /// either one turns a refusal into a filed row — a weakening dressed as an
+    /// addition, which house style §8's raise-only rule does not admit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot_lane: Option<crate::bot::BotLane>,
     /// Which layers set each **emitted** key.
     ///
     /// Keyed by the serialized key name, and total over the document rather
@@ -1632,6 +1639,7 @@ fn assemble(
         transcript: repo.transcript.clone(),
         attribution: repo.attribution.clone(),
         commit: repo.commit.clone(),
+        bot_lane: repo.bot_lane.clone(),
         judge: repo.judge.clone(),
         design: repo.design.clone(),
         ci: repo.ci.clone(),
@@ -1743,6 +1751,7 @@ fn attribution(
         ("transcript", authority_set(repo.transcript.is_some())),
         ("attribution", authority_set(repo.attribution.is_some())),
         ("commit", authority_set(repo.commit.is_some())),
+        ("bot_lane", authority_set(repo.bot_lane.is_some())),
         ("judge", authority_set(repo.judge.is_some())),
         ("design", authority_set(repo.design.is_some())),
         ("ci", authority_set(repo.ci.is_some())),

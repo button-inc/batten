@@ -238,6 +238,24 @@ declared_modules := {
 	# reaches `budget` for the estimator every other ceiling here counts with,
 	# and `findings` to mint the two engine-produced findings it raises.
 	"hookcost",
+	# `carry` and `bot` arrived with CLOUD-1295 and this rule named both — another
+	# module nobody had placed, caught by the absence-is-an-error clause, and the
+	# second such catch on a batch.
+	#
+	# `carry` is a LEAF in `checks_green`'s class: whether a licence-carry branch's
+	# diff is derivable is a pure function of two strings and a path list, with no
+	# clock, no network and no filesystem beyond the receipt it writes. It reaches
+	# `error` alone, which is what lets every case in its unit tier run offline.
+	#
+	# `bot` is TWO HALVES and its placement is the interesting one. Its predicates
+	# are a leaf like `carry`'s; its `forge` submodule is an ACQUISITION site in
+	# `pinned`'s class, reaching `rules` for the process ladder every spawning site
+	# in this crate shares — the same edge `pr_watch` is placed on. They live in one
+	# module rather than two because the lane's facts and its matcher are read from
+	# one config table, and splitting them would put that table's reader in a module
+	# that decides nothing. It reaches no decider: what a filed row MEANS is the
+	# refinement gate's, and this module never mints a `Finding`.
+	"carry", "bot",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

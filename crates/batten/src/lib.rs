@@ -13,6 +13,7 @@ pub mod admission;
 pub mod advisory;
 pub mod attribution;
 pub mod baseline;
+pub mod bot;
 pub mod brief;
 pub mod budget;
 pub mod bypass;
@@ -258,7 +259,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // The green verdict (CLOUD-1143). Reads a reading, never the network:
         // the fetch stays with the poller that already holds the body.
         Some(Command::Checks { command }) => run_checks(command, out, err),
-        Some(Command::Pr { command }) => run_pr(command, out, err),
+        Some(Command::Pr { command }) => run_pr(command, &overrides, mode, out, err),
         // The ledger is a committed file the consumer declares; the §8 config
         // chain supplies its path and taxonomy and nothing else layers.
         Some(Command::Defects { command }) => match command {
@@ -2064,18 +2065,42 @@ fn run_receipt(
     }
 }
 
-fn run_pr(command: PrCommand, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
-    let PrCommand::Watch {
-        sha,
-        repo,
-        interval,
-        progress,
-        progress_id,
-        required,
-        absent_ok,
-        answered,
-        fanin,
-    } = command;
+fn run_pr(
+    command: PrCommand,
+    overrides: &Overrides,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let (sha, repo, interval, progress, progress_id, required, absent_ok, answered, fanin) =
+        match command {
+            PrCommand::Derive { pr } => return run_pr_derive(&pr, overrides, out),
+            PrCommand::File { pr } => return run_pr_file(&pr, overrides, mode, out),
+            PrCommand::Link { pr, key } => return run_pr_link(&pr, &key, overrides, mode, err),
+            PrCommand::Ensure { pr } => return run_pr_ensure(&pr, overrides, mode, err),
+            PrCommand::Closes { pr } => return run_pr_closes(&pr, overrides, mode, err),
+            PrCommand::Watch {
+                sha,
+                repo,
+                interval,
+                progress,
+                progress_id,
+                required,
+                absent_ok,
+                answered,
+                fanin,
+            } => (
+                sha,
+                repo,
+                interval,
+                progress,
+                progress_id,
+                required,
+                absent_ok,
+                answered,
+                fanin,
+            ),
+        };
 
     // A NUMBER OR A REFUSAL, never a silent fallback. An interval that did not
     // parse is a typo in an invocation, and swallowing it would put the poll on
@@ -2124,6 +2149,413 @@ fn run_pr(command: PrCommand, out: &mut dyn Write, err: &mut dyn Write) -> Resul
         fanin: fanin.filter(|name| !name.is_empty()),
     };
     pr_watch::watch(&config, &roster, out, err)
+}
+
+/// The bot lane this repository declares, or a refusal naming what is missing.
+///
+/// Absent is a USAGE ERROR rather than a silent skip: a lane assembled from
+/// engine defaults would file a row asserting a bump nobody configured, which is
+/// the class this whole surface exists to refuse.
+fn bot_lane(overrides: &Overrides) -> Result<bot::BotLane> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    config.bot_lane.ok_or_else(|| {
+        UsageError::raise(
+            "bot lane: this repository declares no [bot_lane] table, so there is no lane to file \
+             for — which is a different claim from a lane that owns nothing"
+                .to_owned(),
+        )
+    })
+}
+
+/// The candidate row a bot's pull request implies, or a refusal.
+///
+/// Refuses rather than inventing, which is the whole posture: a PR opened by
+/// somebody the lane does not know, or whose diff touches no manifest it owns,
+/// gets no row. The alternative is a tracker row asserting a bump nobody
+/// proposed.
+fn derive_row(lane: &bot::BotLane, number: &str) -> Result<(bot::Pull, String, String)> {
+    let pull = bot::forge::pull(&lane.repo, number)?;
+    if !bot::is_lane_bot(&pull.login, &lane.bots) {
+        return Err(Denial::raise(format!(
+            "pr derive: #{number} was opened by '{}', which is not a bot this lane files for — an \
+             agent's pull request carries its own claim receipt and its own issue",
+            pull.login
+        )));
+    }
+    let files = bot::forge::files(&lane.repo, number)?;
+    let owned = bot::owned(&files, &lane.owned_manifests)?;
+    if owned.is_empty() {
+        // Pointer-only: the paths, never their contents.
+        return Err(Denial::raise(format!(
+            "pr derive: #{number} touches no manifest this lane owns, so there is no bump to \
+             describe: {} — filing a row here would assert a change nobody proposed",
+            files.join(" ")
+        )));
+    }
+    // READ from the subject rather than chosen: the bot's own config already
+    // decided it. A subject with no prefix is a lane defect, and the commit gate
+    // would refuse it anyway, so this says so instead of inventing a type.
+    let Some(kind) = bot::conventional_type(&pull.title) else {
+        return Err(Denial::raise(format!(
+            "pr derive: #{number}'s subject carries no Conventional type, so the commit gate would \
+             refuse it and it could never land — fix the bot's configured type rather than filing \
+             a row for a commit that cannot merge"
+        )));
+    };
+    let repo_root = git::repo_root(Path::new("."))?;
+    let template = std::fs::read_to_string(repo_root.join(&lane.body_template)).map_err(|err| {
+        UsageError::raise(format!(
+            "bot lane: cannot read body_template {}: {err}",
+            lane.body_template
+        ))
+    })?;
+    let manifests = owned
+        .iter()
+        .map(|path| format!("- `{path}`"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let body = bot::render(
+        &template,
+        &[
+            ("pr", number.to_owned()),
+            ("branch", pull.head.clone()),
+            ("login", pull.login.clone()),
+            ("manifests", manifests),
+            ("type", kind.to_owned()),
+        ],
+    )?;
+    let title = pull.title.clone();
+    Ok((pull, title, body))
+}
+
+/// `batten pr derive`: the candidate payload, written nowhere.
+///
+/// The shape is the tracker's own `get_issue` answer, and that is the point: the
+/// refinement gate reads it unchanged, so the derived Ready block is checkable by
+/// the same gate that checks a human's — which is what keeps "derived" from
+/// meaning "exempt".
+fn run_pr_derive(number: &str, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
+    let lane = bot_lane(overrides)?;
+    // A lane refusal travels as a `Denial`, which the boundary renders and maps to
+    // the verdict code — so the refusal path is not caught here. Catching it would
+    // put a forge that could not be reached and a pull request the lane declines
+    // to file on the same exit code, and those are different claims.
+    let (_, title, body) = derive_row(&lane, number)?;
+    let payload = serde_json::json!({
+        "id": "CLOUD-NEW",
+        "status": "Todo",
+        "title": title,
+        "description": body,
+        "pr": number,
+        "relations": { "blocks": [], "blockedBy": [], "relatedTo": [] },
+    });
+    // One encoding, unconditionally: the surface row above declares no `-J` for
+    // this verb, so there is no second form for a rung to select.
+    writeln!(out, "{}", serde_json::to_string_pretty(&payload)?)?;
+    Ok(ExitCode::Success)
+}
+
+/// `batten pr file`: open the mirror issue, and report its number.
+///
+/// THE ROW IS FILED AS A FORGE ISSUE AND THE TRACKER MIRRORS IT (CLOUD-750). The
+/// alternative — calling the tracker's API — costs a credential this repository
+/// does not hold, and would be the only place in the tree holding one.
+///
+/// It never CLOSES the mirror, which would move the row to Done: Done means
+/// released, so closing would assert a release that has not happened. The pull
+/// request closes the tracker key instead, and the merge moves the row exactly as
+/// it does for an agent's.
+fn run_pr_file(
+    number: &str,
+    overrides: &Overrides,
+    mode: Mode,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let lane = bot_lane(overrides)?;
+    let (_, title, body) = derive_row(&lane, number)?;
+    let issue = file_mirror(&lane, number, &title, &body)?;
+    output::message(
+        mode,
+        Verbosity::Normal,
+        out,
+        &format!("pr file: #{number} -> issue #{issue}"),
+    )?;
+    Ok(ExitCode::Success)
+}
+
+/// Open the mirror and answer its number, with the marker appended.
+///
+/// The marker goes LAST, after the derived block, so it is the one line a reader
+/// never has to look at and the one line `ensure` always finds.
+fn file_mirror(lane: &bot::BotLane, number: &str, title: &str, body: &str) -> Result<String> {
+    let marked = format!("{body}\n\n<!-- {}{number} -->\n", lane.marker_prefix);
+    bot::forge::open_issue(&lane.repo, title, &marked)
+}
+
+/// `batten pr link`: write the closing key into the pull request's body.
+///
+/// APPENDED rather than templated in, because the bot rewrites its own body on
+/// every rebase and an append survives being reconstructed around.
+fn run_pr_link(
+    number: &str,
+    key: &str,
+    overrides: &Overrides,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let lane = bot_lane(overrides)?;
+    link(&lane, number, key, mode, err)
+}
+
+/// The body rewrite, shared by `pr link` and `pr ensure`.
+fn link(
+    lane: &bot::BotLane,
+    number: &str,
+    key: &str,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let pull = bot::forge::pull(&lane.repo, number)?;
+    let closing = format!("Closes {key}");
+    if pull.body.contains(&closing) {
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!("pr link: #{number} already closes {key}"),
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    bot::forge::set_body(
+        &lane.repo,
+        number,
+        &format!("{}\n\n---\n\n{closing}\n", pull.body),
+    )?;
+    output::message(
+        mode,
+        Verbosity::Normal,
+        err,
+        &format!("pr link: #{number} now closes {key}"),
+    )?;
+    Ok(ExitCode::Success)
+}
+
+/// `batten pr ensure`: the lander's call — file the row and link it.
+///
+/// TWO PHASES, BECAUSE THE KEY ARRIVES ASYNCHRONOUSLY. Filing the issue and
+/// learning its key are separated by however long the tracker's sync takes, and
+/// nothing here may depend on that. So a tick does as much as it can and says
+/// what it did; the lander ticks repeatedly and every step is idempotent.
+///
+/// THAT IS ALSO WHY THIS DOES NOT POLL. A wall-clock wait inside the job would be
+/// a guess about somebody else's latency dressed as a mechanism. A tick that
+/// cannot finish returns `0` having made progress, and the next one finishes.
+fn run_pr_ensure(
+    number: &str,
+    overrides: &Overrides,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let lane = bot_lane(overrides)?;
+    let pull = bot::forge::pull(&lane.repo, number)?;
+    // A body that names any key is done, and nothing is filed. The key travels in
+    // the body rather than in a local record because the body is what the merge
+    // reads — a record this side could go missing and file a second row against a
+    // pull request that already has one.
+    if let Some(existing) = bot::named_key(&pull.body, &lane.key_prefix) {
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!("pr ensure: #{number} already names {existing}; nothing filed"),
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    let existing = bot::forge::mirror(&lane.repo, number, &lane.marker_prefix)?;
+    let issue = if let Some(issue) = existing {
+        issue
+    } else {
+        // `derive_row` refuses a pull request that is not this lane's before
+        // anything is written, which is what keeps a refusal from leaving a
+        // half-filed row.
+        let (_, title, body) = derive_row(&lane, number)?;
+        let filed = file_mirror(&lane, number, &title, &body)?;
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!(
+                "pr ensure: #{number} -> issue #{filed} filed; waiting for the tracker to mirror \
+                 it"
+            ),
+        )?;
+        filed
+    };
+    let comment = bot::forge::linkback(&lane.repo, &issue, &lane.linkback_marker)?;
+    let Some(key) = bot::named_key(&comment, &lane.key_prefix) else {
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!("pr ensure: issue #{issue} is not mirrored yet; the next tick links it"),
+        )?;
+        return Ok(ExitCode::Success);
+    };
+    let code = link(&lane, number, &key, mode, err)?;
+    output::message(
+        mode,
+        Verbosity::Normal,
+        err,
+        &format!("pr ensure: #{number} -> {key} (via issue #{issue})"),
+    )?;
+    Ok(code)
+}
+
+/// `batten pr closes`: does the body STILL close a key?
+///
+/// `link` writes the closing key and NOTHING KEEPS IT THERE — a bot regenerates
+/// its own body on every rebase and the append goes with it. The lane is nearly
+/// right by ordering alone, since `ensure` runs first on each tick, but
+/// "normally" is not a gate and the failure inside that window is silent: the
+/// fast-forward succeeds, the bump ships, and the row sits in the backlog with
+/// nobody looking at it. So the landing asks once more, against the forge rather
+/// than against anything it read a step earlier.
+///
+/// REFUSING IS AN ORDINARY OUTCOME. The next tick re-runs `ensure`, the key comes
+/// back, and it lands then. Nothing is lost but the interval.
+fn run_pr_closes(
+    number: &str,
+    overrides: &Overrides,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let lane = bot_lane(overrides)?;
+    let pull = bot::forge::pull(&lane.repo, number)?;
+    let Some(key) = bot::closing_key(&pull.body, &lane.key_prefix) else {
+        // Pointer-only: the number, never the body — a bot pull request carries a
+        // release-notes dump, and echoing it would put that in every landing's log.
+        output::verdict(
+            err,
+            &format!(
+                "pr closes: #{number}'s body closes no tracker key, so merging it would move \
+                 nothing — not landing; the next tick re-links it"
+            ),
+        )?;
+        return Ok(ExitCode::Violation);
+    };
+    output::message(
+        mode,
+        Verbosity::Normal,
+        err,
+        &format!("pr closes: #{number} closes {key}"),
+    )?;
+    Ok(ExitCode::Success)
+}
+
+/// One `claim bot` refusal: the verdict on stderr and the code that goes with it.
+///
+/// A function rather than a closure, because a closure capturing `err` holds the
+/// mutable borrow for the whole body and the four refusal sites are spread
+/// through it.
+fn refuse_claim_bot(err: &mut dyn Write, text: &str) -> Result<ExitCode> {
+    output::verdict(err, text)?;
+    Ok(ExitCode::Violation)
+}
+
+/// `batten claim bot`: attest a bot branch from the lane's public facts.
+///
+/// THE SECOND RECEIPT KIND, AND IT IS SECOND BECAUSE THE TWO ATTEST DIFFERENT
+/// THINGS (CLOUD-693, CLOUD-431). `claim check` mints `claim.<branch>`, whose
+/// whole content is "a human or agent read this issue, checked it for a
+/// competitor, and confirmed the refinement predates this session". Nothing on a
+/// bot branch can honestly say that: there was no session, and the row was
+/// derived rather than refined. Widening the agent receipt to cover bots would
+/// make it mean less everywhere.
+///
+/// Minted by whoever is at the keyboard, exactly like the agent receipt — the
+/// party that ran the check writes the record of it. A workflow minting one would
+/// be a receipt asserting a check nobody performed.
+fn run_claim_bot(
+    repo: &Path,
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let lane = bot_lane(overrides)?;
+    let Some(branch) = git::current_branch(repo)? else {
+        return Err(UsageError::raise(
+            "claim bot: a detached HEAD carries no branch to key a receipt to — check the bot \
+             branch out by name"
+                .to_owned(),
+        ));
+    };
+    if !branch.starts_with(&lane.branch_prefix) {
+        return refuse_claim_bot(
+            err,
+            &format!(
+                "claim bot: {branch} is not a bot branch, so the agent claim receipt is the one \
+                 that applies here: run `batten claim check` with the issue's payload on stdin"
+            ),
+        );
+    }
+    let Some(number) = bot::forge::open_for(&lane.repo, &branch)? else {
+        return refuse_claim_bot(
+            err,
+            &format!(
+                "claim bot: no open pull request for {branch} — the receipt attests to facts \
+                 about a pull request, so there is nothing to attest"
+            ),
+        );
+    };
+    let pull = bot::forge::pull(&lane.repo, &number)?;
+    if !bot::is_lane_bot(&pull.login, &lane.bots) {
+        return refuse_claim_bot(
+            err,
+            &format!(
+                "claim bot: #{number} was opened by '{}', not by a bot this lane knows",
+                pull.login
+            ),
+        );
+    }
+    // The same derivation `pr derive` performs, for its refusals rather than its
+    // payload: the receipt asserts the diff touches only manifests the lane owns,
+    // and that is the check that decides it.
+    derive_row(&lane, &number)?;
+    let Some(key) = bot::named_key(&pull.body, &lane.key_prefix) else {
+        return refuse_claim_bot(
+            err,
+            &format!(
+                "claim bot: #{number}'s body names no tracker row yet — run `batten pr ensure \
+                 {number}` first, or wait for the lander's next tick"
+            ),
+        );
+    };
+    let attested = bot::Attested {
+        key,
+        login: pull.login,
+        pr: number,
+    };
+    let receipts = git::git_dir(repo)?.join("batten-receipts");
+    let base = git::resolve_ref(repo, "origin/main").ok().flatten();
+    bot::mint(
+        &receipts,
+        &branch,
+        &attested,
+        base.as_deref(),
+        &receipt::rfc3339_utc(now_unix()),
+    )?;
+    output::message(
+        mode,
+        Verbosity::Normal,
+        out,
+        &format!(
+            "claim bot: {branch} attested — opened by {}, manifests owned, row {}. `verify` \
+             accepts this in place of a claim receipt.",
+            attested.login, attested.key
+        ),
+    )?;
+    Ok(ExitCode::Success)
 }
 
 /// Render findings as the pointer coordinate the predecessor emitted.
@@ -2187,6 +2619,7 @@ fn run_claim(
                 err,
             )
         }
+        ClaimCommand::Bot => run_claim_bot(Path::new("."), mode, overrides, out, err),
         ClaimCommand::Carry { json } => run_claim_carry(Path::new("."), mode, json, out, err),
     }
 }

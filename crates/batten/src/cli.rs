@@ -349,6 +349,33 @@ pub enum PrCommand {
         /// The fan-in whose failure a cancelled sibling can manufacture.
         fanin: Option<String>,
     },
+    /// The tracker row a bot's pull request implies, written nowhere.
+    Derive {
+        /// The pull request to describe.
+        pr: String,
+    },
+    /// Open the mirror issue that row is filed as.
+    File {
+        /// The pull request to file for.
+        pr: String,
+    },
+    /// Write the closing key into the pull request's body.
+    Link {
+        /// The pull request whose body is rewritten.
+        pr: String,
+        /// The tracker key it should close.
+        key: String,
+    },
+    /// File and link, doing whatever this tick can.
+    Ensure {
+        /// The pull request this tick is about.
+        pr: String,
+    },
+    /// Whether the body still closes a key, asked at the last moment.
+    Closes {
+        /// The pull request to re-read.
+        pr: String,
+    },
 }
 
 /// Subcommands of `checks`.
@@ -407,6 +434,12 @@ pub enum ClaimCommand {
         /// Emit the refusals on the structured channel.
         json: bool,
     },
+    /// Attest a bot branch from the lane's public facts.
+    ///
+    /// No payload and no flags at all, for `Carry`'s reason below: the subject is
+    /// the branch this checkout is on and the pull request the forge says is open
+    /// for it, so there is nothing for a caller to supply.
+    Bot,
     /// Attest that this branch only carries licence rows forward.
     ///
     /// No payload and no flags but `--json`: the subject is the branch's own diff
@@ -1364,6 +1397,7 @@ fn claim_of(matches: &ArgMatches) -> Option<ClaimCommand> {
             issue: matches.get_one::<String>("issue").cloned(),
             json: flag(matches, "json"),
         }),
+        ("bot", _) => Some(ClaimCommand::Bot),
         ("carry", matches) => Some(ClaimCommand::Carry {
             json: flag(matches, "json"),
         }),
@@ -1404,6 +1438,26 @@ fn pr_of(matches: &ArgMatches) -> Option<PrCommand> {
             absent_ok: matches.get_one::<String>("absent_ok").cloned(),
             answered: matches.get_one::<String>("answered").cloned()?,
             fanin: matches.get_one::<String>("fanin").cloned(),
+        }),
+        // Every one of these is required by the surface, so clap has already
+        // refused an argv without it; `None` is unreachable and maps to a refusal
+        // rather than to a default, which here would be a verb acting on a pull
+        // request nobody named.
+        ("derive", matches) => Some(PrCommand::Derive {
+            pr: matches.get_one::<String>("pr").cloned()?,
+        }),
+        ("file", matches) => Some(PrCommand::File {
+            pr: matches.get_one::<String>("pr").cloned()?,
+        }),
+        ("link", matches) => Some(PrCommand::Link {
+            pr: matches.get_one::<String>("pr").cloned()?,
+            key: matches.get_one::<String>("key").cloned()?,
+        }),
+        ("ensure", matches) => Some(PrCommand::Ensure {
+            pr: matches.get_one::<String>("pr").cloned()?,
+        }),
+        ("closes", matches) => Some(PrCommand::Closes {
+            pr: matches.get_one::<String>("pr").cloned()?,
         }),
         _ => None,
     }

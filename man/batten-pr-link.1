@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-pr-link 1  batten 
+.SH NAME
+batten\-pr\-link \- Write the closing key into a bot pull request\*(Aqs body, so its merge moves the row
+.SH SYNOPSIS
+\fBbatten pr link\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIpr\fR> <\fIkey\fR> 
+.SH DESCRIPTION
+Write the closing key into a bot pull request\*(Aqs body, so its merge moves the row
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIpr\fR>
+The pull request number this verb is about
+.TP
+<\fIkey\fR>
+The tracker key the pull request should close

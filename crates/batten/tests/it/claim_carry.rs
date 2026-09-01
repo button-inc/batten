@@ -29,8 +29,8 @@ const TABLE: &str = "mise-tasks/sbom-actions.tsv";
 
 /// A base table with two mapped repos and a comment the parser must skip.
 const BASE: &str = "# how each row was sourced\n\
-jdx/mise-action@aaa\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors\n\
-taiki-e/install-action@bbb\tApache-2.0 OR MIT\tNONE\n";
+tool/runner-action@aaa\tMIT\tCopyright (c) 2018 A Holder and contributors\n\
+tool/install-action@bbb\tApache-2.0 OR MIT\tNONE\n";
 
 /// A repository whose `origin/main` carries [`BASE`], with `head` then written
 /// over the table and committed as the branch's own work.
@@ -77,7 +77,7 @@ fn receipt(dir: &Path) -> Option<String> {
 #[test]
 fn a_branch_carrying_one_row_forward_mints_the_receipt() {
     let head = format!(
-        "{BASE}jdx/mise-action@ccc\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors\n"
+        "{BASE}tool/runner-action@ccc\tMIT\tCopyright (c) 2018 A Holder and contributors\n"
     );
     let dir = carry_branch("carry-happy", &head);
     let (code, _, err) = carry(&dir);
@@ -94,20 +94,20 @@ fn a_branch_carrying_one_row_forward_mints_the_receipt() {
 #[test]
 fn the_receipt_records_no_licence_and_no_holder() {
     let head = format!(
-        "{BASE}jdx/mise-action@ccc\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors\n"
+        "{BASE}tool/runner-action@ccc\tMIT\tCopyright (c) 2018 A Holder and contributors\n"
     );
     let dir = carry_branch("carry-pointer", &head);
     assert_eq!(carry(&dir).0, Some(0));
     let recorded = receipt(&dir).expect("the receipt is written");
     assert!(!recorded.contains("MIT"), "no licence: {recorded}");
-    assert!(!recorded.contains("GitHub, Inc."), "no holder: {recorded}");
+    assert!(!recorded.contains("A Holder"), "no holder: {recorded}");
 }
 
 /// A second changed path is refused and NAMED, so an author knows which.
 #[test]
 fn a_branch_touching_a_second_path_is_refused() {
     let head = format!(
-        "{BASE}jdx/mise-action@ccc\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors\n"
+        "{BASE}tool/runner-action@ccc\tMIT\tCopyright (c) 2018 A Holder and contributors\n"
     );
     let dir = carry_branch("carry-second-path", &head);
     write(&dir, "notes.md", "an unrelated edit\n");
@@ -140,7 +140,7 @@ fn a_row_for_an_unmapped_repo_is_refused_over_the_binary() {
 #[test]
 fn a_row_whose_licence_moved_is_refused_over_the_binary() {
     let head = format!(
-        "{BASE}jdx/mise-action@ccc\tGPL-3.0\tCopyright (c) 2018 GitHub, Inc. and contributors\n"
+        "{BASE}tool/runner-action@ccc\tGPL-3.0\tCopyright (c) 2018 A Holder and contributors\n"
     );
     let dir = carry_branch("carry-relicensed", &head);
     let (code, report, _) = carry(&dir);
@@ -159,8 +159,8 @@ fn a_row_whose_licence_moved_is_refused_over_the_binary() {
 #[test]
 fn rewriting_a_row_in_place_is_refused_over_the_binary() {
     let head = "# how each row was sourced\n\
-jdx/mise-action@aaa\tGPL-3.0\tCopyright (c) 2018 GitHub, Inc. and contributors\n\
-taiki-e/install-action@bbb\tApache-2.0 OR MIT\tNONE\n";
+tool/runner-action@aaa\tGPL-3.0\tCopyright (c) 2018 A Holder and contributors\n\
+tool/install-action@bbb\tApache-2.0 OR MIT\tNONE\n";
     let dir = carry_branch("carry-rewrite", head);
     let (code, report, _) = carry(&dir);
     assert_eq!(code, Some(2));

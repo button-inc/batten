@@ -71,6 +71,24 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   `-J`?), and a flag carries `hidden` plus `Rung` — which §3 ladder rung it
   selects — so "is this a ladder flag" is a column rather than a naming
   convention, and the ladder's totality is a census test.
+- `bot.rs` — the bot lane, retired off `mise-tasks/bot-issue.sh` (CLOUD-1295).
+  Two halves in one module: the PREDICATES — is this PR one of the lane's, which
+  manifests it touched, what Conventional type its subject declares, whether a
+  body still CLOSES a key rather than merely naming one — are pure functions with
+  no network at all, and the `forge` submodule is the only thing that talks to
+  anybody. It reads through `gh` rather than `fetch.rs` for `pr_watch`'s reason
+  (CLOUD-1143): the client resolves the credential OUTSIDE this crate, where the
+  transport would put token resolution inside it next to no config row declaring
+  one. Every consumer fact — repository, bot logins, owned manifests, the marker
+  strings, the tracker's key prefix, the branch prefix, the body template's path
+  — is `[bot_lane]` in `batten.toml`, so a grep of `crates/batten` for a bot's
+  name or a manifest path returns nothing (rule 1); `document_facts` caught the
+  first draft's doc comment naming one as an example. The verbs are `batten pr
+derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
+  declares `-J`: the `-J` census's byte-stability term would be a claim about the
+  forge's answer rather than about the verb, which is the same call `pr watch`
+  makes. `claim bot` is the SECOND receipt kind and `carry.rs` below is the
+  third; they are separate because they attest different things (CLOUD-431).
 - `carry.rs` — whether a licence-carry branch's diff is DERIVABLE, and the
   receipt that records it (CLOUD-1295). `sbom-actions-currency` (CLOUD-1213)
   opens its PRs on `sbom-actions/carry-<timestamp>`, which neither receipt
