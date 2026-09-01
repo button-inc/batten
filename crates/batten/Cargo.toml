@@ -147,6 +147,11 @@ jsonschema.workspace = true
 # reviewed diff. Never hand-edit a `.snap`.
 insta.workspace = true
 indoc.workspace = true
+# CLOUD-1284 arm 4: every `[verdict.vocabulary]` word is ONE token under the
+# declared pin. The shipped binary must not link a tokenizer (the workspace
+# manifest carries why), and this table is exactly the place a crate the binary
+# does not link belongs.
+tiktoken-rs.workspace = true
 
 [lints]
 workspace = true

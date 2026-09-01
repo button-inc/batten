@@ -202,6 +202,22 @@ insta = { version = "1", default-features = false }
 # Inline fixtures for the snapshot cases, so a multi-line expectation reads as
 # the block it is rather than as escaped `\n`s.
 indoc = "2"
+# The BPE tokenizer the verdict vocabulary is measured against (CLOUD-1284's arm
+# 4). DEV-ONLY, and that placement is the whole of why it is affordable.
+#
+# `budget.rs` estimates bytes/4 on purpose -- "an exact count needs a tokenizer,
+# a vocabulary and a network fetch, and a budget gate that fails because a
+# download failed is worse than one 10% out" -- and `batten hook` runs on every
+# mediated tool call under CLOUD-689's budget. A tokenizer in the SHIPPED binary
+# would put an embedded merge table on the config-load path and contradict both.
+# A tokenizer in the TEST binary contradicts neither: the vocabulary is a fixed
+# table in `batten.toml`, so its token counts are a property of the commit, and
+# the one place that property has to hold is a gate that reads the commit.
+#
+# So arm 4 is enforced where it is decidable and costs nothing at runtime. The
+# pin it measures under is declared as data beside the vocabulary, never baked in
+# here -- `bench/tokens/method.toml`'s discipline for its byte divisor.
+tiktoken-rs = "0.12"
 # `min_batten_version` comparison. Cargo's own flavour of SemVer, so the config
 # key means what a Rust consumer already expects it to.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

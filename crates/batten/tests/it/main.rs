@@ -186,6 +186,7 @@ mod tool_selector;
 mod tool_verdict_facts;
 mod use_graph;
 mod verdict_registry;
+mod verdict_vocabulary;
 mod waivers;
 mod walker;
 mod wiring_reclaim;

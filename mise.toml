@@ -1048,6 +1048,11 @@ env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 [tasks."test:hook-profile"]
 run = "cargo nextest run -p batten --no-tests=fail -E 'binary(hook_profile)'"
 
+[tasks."test:verdict-vocabulary"]
+description = "Gate: every verdict vocabulary word is one token under the declared pin (CLOUD-1284 arm 4)"
+run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^verdict_vocabulary::/)'"
+env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
+
 [tasks."test:config-deprecations"]
 description = "Gate: no config key left the published schema without a deprecation window (CLOUD-360)"
 run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^config_deprecations::/)'"
