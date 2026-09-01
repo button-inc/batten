@@ -422,32 +422,28 @@ fn no_index_file_is_required() {
 /// `.claude/rules/policy-modules.md` asks for exactly this case and says why a
 /// `with input as` version is worthless for it: that fabricates the shape the
 /// engine may be unable to produce, so it passes over a channel nothing fills.
-/// The note adds that a parenthetical calling the engine half unpopulated is
-/// stale since CLOUD-1049, and that the cause must be "distinguishable from
-/// `Absent`… proven in the second tier over the compiled binary".
 ///
-/// # Measured 2026-09-01: for THIS cause, on a `line_sources` glob, it is not
+/// # It fires now, and this case is the inversion CLOUD-1276 asked for
 ///
-/// A tracked `*.md` whose bytes are not UTF-8 is selected by the row's glob and
-/// then simply does not arrive. It reaches neither `lines` nor `missing`, and
-/// the run is **exit 0 with no finding** — a clean pass over a file nobody read,
-/// which is the vacuous pass the channel exists to prevent.
+/// This case used to assert the opposite — exit 0, silence — as MEASURED rather
+/// than endorsed, and it carried its own instruction: *"If this case starts
+/// failing, the boundary began populating `missing` for a `line_sources` miss
+/// (CLOUD-1276) — delete this case and assert the finding instead."* It started
+/// failing the moment CLOUD-1049's guard moved below `deny`, so this is that
+/// instruction carried out rather than a new claim.
 ///
-/// So this case asserts what the engine DOES, and names the gap rather than
-/// asserting a behaviour it does not have. The module's `V-MEMORY-SOURCE-UNREAD`
-/// arm is kept and is correct: it costs nothing, its load-time case pins the
-/// predicate, and it fires the day the boundary populates `missing` for a
-/// `line_sources` miss. What is not claimed is that anything reaches it today.
-///
-/// The gap is CLOUD-1276, filed from this measurement, and it is reported rather
-/// than folded in per CLOUD-1164 §2 — a port that also fixes a defect cannot be
-/// shown to have conserved anything.
+/// One guard closed both rows, which is worth recording because they were filed
+/// as separate causes on separate surfaces: CLOUD-1049 was a `documents` path
+/// that would not parse, CLOUD-1276 a `line_sources` glob whose selected file
+/// would not decode. Neither was ever about acquisition — the projection built a
+/// correct `missing` in both cases and `policy_rule` discarded the document
+/// whole, so both surfaces went dark for the same one-line reason.
 ///
 /// **The predecessor had no equivalent exposure**: `memories-check.sh:102` ran
 /// `xargs grep` over the tracked set, and `grep` on binary bytes is loud. The
-/// silence is the engine's, and it is new to the port.
+/// silence was the engine's, was new to the port, and is now gone.
 #[test]
-fn an_unreadable_referrer_does_not_reach_the_could_not_look_channel_today() {
+fn an_unreadable_referrer_reaches_the_could_not_look_channel() {
     let dir = fixture(
         "memories-unreadable",
         &[(".serena/memories/core.md", "the root\n")],
@@ -462,16 +458,13 @@ fn an_unreadable_referrer_does_not_reach_the_could_not_look_channel_today() {
     let (code, said) = judge(&dir);
     assert_eq!(
         code,
-        Some(0),
-        "MEASURED, not endorsed: a non-UTF-8 referrer is silently absent rather \
-         than could-not-look. If this case starts failing, the boundary began \
-         populating `missing` for a `line_sources` miss (CLOUD-1276) — delete \
-         this case and assert the finding instead.\n{said}"
+        Some(2),
+        "a referrer the boundary cannot decode is could-not-look, not a clean \
+         tree — the whole point of the channel\n{said}"
     );
     assert!(
-        !said.contains("BROKEN.md"),
-        "and nothing names it, which is the half that makes the silence a \
-         vacuous pass rather than a quiet one\n{said}"
+        said.contains("BROKEN.md"),
+        "and the finding points at the file nobody could read\n{said}"
     );
 }
 

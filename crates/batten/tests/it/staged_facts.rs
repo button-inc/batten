@@ -341,18 +341,26 @@ test_a_clean_read_fires_neither_could_not_look if {
 "#;
 
 #[test]
-fn a_declared_lock_path_never_reaches_the_staged_key() {
-    // MEMBER 7'S BLOCKER, MEASURED RATHER THAN READ. `Format::for_path` splits on
-    // the last dot and searches `Format::extensions()`; no variant owns `lock`,
-    // so a declared `.lock` is `NotAcquired::UnknownFormat` before a byte is
-    // parsed — even though the staged bytes here are valid TOML and `staged_facts`
-    // read them fine.
+fn a_declared_lock_path_is_could_not_look_rather_than_a_silent_pass() {
+    // `Format::for_path` splits on the last dot and searches `Format::extensions()`;
+    // no variant owns `lock`, so a declared `.lock` is `NotAcquired::UnknownFormat`
+    // before a byte is parsed — even though the staged bytes here are valid TOML
+    // and `staged_facts` read them fine. That much is unchanged and is still the
+    // reason `input.tree.staged["mise.lock"]` resolves nothing.
     //
-    // The consequence is the one that matters: `input.tree.staged["mise.lock"]`
-    // is undefined, Rego reads undefined as *does not hold*, and every predicate
-    // over it is silent. That is a DEAD GATE that loads clean and passes its own
-    // load-time tier — `.claude/rules/policy-modules.md`'s named class, and the
-    // reason `lock-complete` cannot port today.
+    // WHAT CHANGED IS THE SECOND HALF, and it is the one that made this a DEAD
+    // gate rather than a narrow one. This case used to assert total silence —
+    // exit 0, no finding, no cause — as MEASURED-not-desired, and it recorded
+    // that `rules.rs` pushes the path into `out.missing` with an explicit
+    // `UnknownFormat` cause which then "does not arrive", concluding that "the
+    // loss is DOWNSTREAM of the push". That reading was right, and CLOUD-1049's
+    // fix is exactly there: `policy_rule` was discarding the built document
+    // whenever anything failed to acquire, so the cause never reached the module.
+    //
+    // So an unparseable extension is now a REFUSAL naming the path, which is what
+    // a could-not-look channel is for. The gate is still narrow — nothing here
+    // teaches the engine that a `.lock` is TOML — but a consumer is now told it
+    // could not be read instead of being handed a clean tree.
     let dir = scratch("staged-facts-lock");
     write(&dir, "batten.toml", LOCK);
     write(&dir, "lock.rego", LOCK_PROBE);
@@ -368,30 +376,18 @@ fn a_declared_lock_path_never_reaches_the_staged_key() {
     let (answer, cause) = (stdout(&outcome), stderr(&outcome));
     assert!(
         !answer.contains("lock-staged-read"),
-        "a `.lock` path must not resolve a staged node today — if this fires, \
-         the engine learned the extension and member 7 is unblocked\n{answer}{cause}"
+        "the extension is still unknown, so no staged node resolves — if this \
+         fires, the engine learned `.lock` and the arm below is the wrong \
+         assertion\n{answer}{cause}"
     );
-    // AND IT IS SILENT, WHICH IS THE SHARPER HALF — asserted as MEASURED
-    // behaviour rather than as the property anyone wants, the shape
-    // `crates/batten/tests/privileged_lane.rs` records for its reason.
-    //
-    // `rules.rs:7127-7130` pushes this path into `out.missing` with an explicit
-    // `NotAcquired::UnknownFormat` cause. It does not arrive: the channel is
-    // empty at the module, so the predicate cannot fire and the run is a clean
-    // exit 0. The loss is DOWNSTREAM of the push, which is the part a reader of
-    // that code would not guess — and it is why a fix aimed at the acquisition
-    // site alone would leave this green and unchanged.
-    //
-    // CLOUD-1049, reopened 2026-09-01 on this and three sibling measurements.
     assert!(
-        !answer.contains("lock-could-not-look"),
-        "MEASURED, NOT DESIRED. If this goes red the could-not-look channel is \
-         populated at last — invert this assertion, and the `.lock` finding \
-         becomes a real refusal rather than a silent pass\n{answer}{cause}"
+        answer.contains("lock-could-not-look"),
+        "but it must SAY so: an extension this build cannot parse belongs in \
+         `input.tree.missing` with its cause, not in a clean tree\n{answer}{cause}"
     );
     assert_eq!(
         outcome.status.code(),
-        Some(0),
-        "and the silence is total: no finding, no cause, no non-zero exit\n{answer}{cause}"
+        Some(2),
+        "and it is a verdict rather than an abstention\n{answer}{cause}"
     );
 }

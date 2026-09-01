@@ -276,45 +276,43 @@ source that will not parse belongs there rather than being silently absent, and 
 module that iterates only `documents` reports green over a file it never read.
 Write the `missing` clause.
 
-**AND THE ENGINE DOES NOT FILL IT TODAY, so writing it is necessary and is not
-sufficient.** This paragraph said the opposite — that CLOUD-1049 shipped on
-2026-08-25 and the caveat was stale — and that sentence is the more dangerous of
-the two versions, because it tells an author the channel works. CLOUD-1049 has now
-been reopened twice on measurement; the third reproduction (2026-09-01, from
-`rules-drift`) is on the row.
+**AND IT FIRES — since CLOUD-1049, which this file has now been wrong about in
+both directions.** It first carried a parenthetical saying the engine half did
+not populate; that was replaced by a claim the row had shipped when it had not;
+that was replaced by a measured table saying the channel was dead. The channel is
+live now, and the reason the history is worth keeping is that every one of those
+revisions was written confidently and two of them were false.
 
-What is measured, one tree and one module, varying only the state of a declared
-source:
+**What the defect was, because it decides where you look if it recurs.** The
+projection was never the problem — `tree_document` built a correct
+`input.tree.missing` all along. `policy_rule` then discarded the whole document
+one line later whenever anything failed to acquire, so the clause could not fire
+and neither could any OTHER predicate in the same module, including one whose
+body is `true`. A gate switched off by the state of one of its own inputs, at
+exit 0. One guard, downstream of every push into the channel.
 
-| declared source      | a predicate that reads NOTHING              | exit  |
-| -------------------- | ------------------------------------------- | ----- |
-| valid                | fires                                       | 2     |
-| present, unparseable | **silent**                                  | 0     |
-| absent               | **silent** (`documents`); fires (`sources`) | 0 / 2 |
+**Confirm a channel with an UNCONDITIONAL arm, never with an arm over the channel
+itself.** A probe whose only clause reads `missing` cannot tell an empty channel
+from a module that never ran, and that is precisely why two measurements on
+CLOUD-1049 missed the larger half and reported it as an unfilled channel. Add a
+`violation` with body `true` and see whether it speaks.
 
-So the failure is not merely an empty channel. **An unreadable declared source
-stops the WHOLE RULE evaluating**, taking predicates that never read it down with
-it — a gate switched off by one of its own inputs, at exit 0, with no call site
-left to notice. Confirm it with an unconditional arm rather than an arm over
-`missing`: a probe that only reads `missing` cannot tell an empty channel from a
-module that never ran, which is why two earlier measurements missed this half.
+**The two causes stay distinct and a module may rely on that**: a path that never
+entered the acquisition set is `Absent`, one that was read and would not parse is
+`Unparsed`, and `NotAcquired` keeps them apart deliberately so a policy cannot
+mistake "could not parse" for "not there".
+`crates/batten/tests/it/rules_drift.rs` carries one case per cause, reaching one
+class by two routes, which is what proves the distinction survives projection.
 
-**Declare a document authority under `sources` (the glob form) rather than
-`documents` (the named path).** That is the one difference the tree offers: a
-glob keeps the rule alive across an ABSENT file, so the module can raise its own
-could-not-look from `not input.tree.documents[path]`. `policy/rules-drift.rego`
-is the landed example. Nothing recovers the unparseable case, and a rule whose
-ONLY input is the unreadable one still vanishes either way.
+**A module that carries no `missing` clause still abstains.** The engine reports
+`RuleSkipped` for it rather than a clean tree, so CLOUD-251's "never an empty
+deny set" is intact — but abstention is not a finding and nobody reads it.
+Write the clause; it is the difference between the engine recording that it could
+not look and your gate saying so.
 
-Assert whichever half you get in the second tier over the compiled binary, never
-with `with input as` — that is the only way to tell a populated channel from one
-nothing fills, and it is how all three reproductions were found. Where the arm
-cannot fire, write the case against MEASURED behaviour with an instruction to
-delete it when CLOUD-1049 lands, and declare the dying predecessor case `changed`
-rather than `carried`: `crates/batten/tests/mise_pin_agreement.rs`,
-`crates/batten/tests/privileged_lane.rs` and `crates/batten/tests/rules_drift.rs`
-each record one. A `#MUTANT` row over a predicate that cannot fire is a survivor
-by construction, so it does not get one.
+Assert it in the second tier over the compiled binary, never with `with input
+as` — that fabricates the very shape the engine may be unable to produce, which
+is how the dead clause survived this long.
 
 ## Module or preset
 

@@ -495,31 +495,27 @@ fn an_absent_authority_a_claim_depends_on_is_refused() {
 }
 
 #[test]
-fn an_unparseable_authority_is_silent_today_and_that_is_an_engine_gap() {
-    // THE MEASUREMENT THAT SHAPED THIS ROW, asserted as CURRENT BEHAVIOUR rather
-    // than as a property anybody wants — the same shape `memories.rs` uses for
-    // CLOUD-1276, and for the same reason: a test asserting the behaviour we WISH
-    // for would be red on a defect that is not this member's to fix, and a test
-    // asserting nothing would let the defect change silently under us.
+fn an_unparseable_authority_a_claim_depends_on_is_refused() {
+    // THE OTHER HALF OF THE CLASS, and it used to be this file's standing record
+    // of a defect. It asserted exit 0 as MEASURED-not-desired and carried its own
+    // instruction: "If this goes red the engine learned to route an unreadable
+    // source to `input.tree.missing` instead of silencing the rule — delete this
+    // case and assert the refusal in the one above." CLOUD-1049's fix is what
+    // made it go red, so this is that instruction carried out.
     //
-    // Measured over the compiled binary, a declared source the engine cannot READ
-    // does not reach `input.tree.missing`. It stops the WHOLE RULE from
-    // evaluating — an unconditional predicate that read nothing at all went quiet
-    // with it, and the run exited 0 with no output. Three-way, one tree, one
-    // module:
+    // The two cases are kept SEPARATE rather than folded together, because the
+    // engine reaches them by different routes and a single case would stop
+    // discriminating: `an_absent_authority_...` above is a path that never
+    // entered the acquisition set, this one is a path that was read and would not
+    // parse. `NotAcquired` keeps `Absent` and `Unparsed` distinct precisely so a
+    // policy cannot mistake one for the other, and this pair is what proves the
+    // distinction survives the projection.
     //
-    //   valid            -> the rule evaluates, the predicate fires, exit 2
-    //   absent           -> `sources` keeps the rule alive; the arm above fires
-    //   present, invalid -> NOTHING evaluates, exit 0, silent
-    //
-    // The `documents` (named-path) channel loses the middle row too, which is why
-    // this row declares `sources`. The last row is what no spelling recovers.
-    //
-    // THE COST, STATED RATHER THAN ABSORBED: the predecessor caught both — `jq`
-    // on an unparseable `.claude/settings.json` exited non-zero and the guard
-    // refused. This successor catches the absent case and not the malformed one.
-    // That is a narrow fidelity loss on a defect every `[[rule]]` in this
-    // repository already has, not one this member introduces.
+    // THE FIDELITY LOSS THIS FILE RECORDED IS NOW REPAID. Six `changed:` arms
+    // above say the successor caught an absent authority and not a malformed one,
+    // "a narrow fidelity loss on a defect every `[[rule]]` in this repository
+    // already has". The defect is fixed and the loss is gone: the predecessor's
+    // `jq` refused a malformed `.claude/settings.json` loudly, and so does this.
     let (code, said) = judge_without_settings(
         "rules-drift-unparseable-authority",
         "The guard runs on `PreToolUse` today.\n",
@@ -527,10 +523,44 @@ fn an_unparseable_authority_is_silent_today_and_that_is_an_engine_gap() {
     );
     assert_eq!(
         code,
+        Some(2),
+        "an authority that will not parse is could-not-look, not a clean tree\n{said}"
+    );
+    assert!(
+        said.contains("drift-authority-unreadable"),
+        "and it reaches the same class as the absent case — one channel, two \
+         causes, neither of them silence\n{said}"
+    );
+}
+
+#[test]
+fn an_unparseable_authority_no_prose_claims_against_is_still_silent() {
+    // THE ANTI-VACUITY MIRROR FOR THE ARM CLOUD-1049 BROUGHT TO LIFE, and it is
+    // the case that keeps the fix from over-reaching. Now that an unreadable
+    // source reaches the module, the danger inverts: a row could refuse in every
+    // tree that happens not to carry one of its authorities, which is the
+    // fixture-wide noise `tree-clean` was backed out for.
+    //
+    // The conditioning is what prevents it — this arm fires only where some prose
+    // actually claims against the authority — and that conditioning is invisible
+    // unless a case drives the same malformed file past prose that claims
+    // nothing. Without this, `an_unparseable_authority_a_claim_depends_on_is_refused`
+    // is satisfied by a rule that refuses unconditionally.
+    let (code, said) = judge_without_settings(
+        "rules-drift-unparseable-no-claim",
+        "Ordinary prose that asserts nothing about any mechanism.\n",
+        Some("{ this is not json ,,,"),
+    );
+    assert_eq!(
+        code,
         Some(0),
-        "MEASURED, NOT DESIRED. If this goes red the engine learned to route an \
-         unreadable source to `input.tree.missing` instead of silencing the rule \
-         — delete this case and assert the refusal in the one above\n{said}"
+        "an authority nothing claims against is not this row's business, however \
+         unreadable it is\n{said}"
+    );
+    assert!(
+        !said.contains("drift-authority-unreadable"),
+        "and the could-not-look class must not fire on a tree that asked no \
+         question of the file\n{said}"
     );
 }
 

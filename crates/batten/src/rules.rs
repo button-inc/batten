@@ -7708,15 +7708,36 @@ fn policy_rule(
             captured,
         },
     );
-    if !not_acquired.is_empty() {
-        // COULD NOT LOOK, and never an empty deny set (CLOUD-251). A bundle
-        // handed a document the tree does not carry has not established anything
-        // about it, and the store holds the finding rather than resolving it.
-        return Some(NotObserved::RuleSkipped);
-    }
     let crate::facts::Look::Is(violations) = crate::policy::deny(bundle, &input) else {
         return Some(NotObserved::RuleSkipped);
     };
+    // COULD NOT LOOK, and never an empty deny set (CLOUD-251) — BUT THE MODULE IS
+    // ASKED FIRST (CLOUD-1049). This guard used to sit ABOVE `deny` and return on
+    // a non-empty `not_acquired`, which threw away the very document that names
+    // what could not be looked at: `tree_document` has already built `input` with
+    // a correct `input.tree.missing` (inserted outside the `Fact::ALL` loop,
+    // because `missing` is a channel rather than a fact), and nothing ever read
+    // it. So a module's `missing` clause could not fire — and, because the return
+    // was unconditional, neither could any OTHER predicate in the same module,
+    // including one whose body is `true`.
+    //
+    // Measured over the compiled binary, one tree and one module, varying only
+    // the declared source: valid fires at exit 2; present-and-unparseable and
+    // absent-via-`documents` were both SILENT at exit 0, taking an unconditional
+    // predicate down with them. That is a gate switched off by the state of one
+    // of its own inputs, which is strictly worse than the vacuous pass CLOUD-251
+    // was guarding against — and `.claude/rules/policy-modules.md` requires every
+    // module to write a clause that could never fire.
+    //
+    // Evaluating first preserves what CLOUD-251 actually wanted. A module that
+    // carries the clause SPEAKS: it has established something about the path it
+    // could not read, which is the opposite of reporting clean. A module that
+    // carries no such clause has established nothing, so it still abstains here
+    // rather than reporting clean, and `RuleSkipped` remains the engine's own
+    // record of the abstention.
+    if !not_acquired.is_empty() && violations.is_empty() {
+        return Some(NotObserved::RuleSkipped);
+    }
     for violation in &violations {
         let id = bundle.attribute(violation);
         let severity = rule.severity_for(violation.rule.as_deref());
