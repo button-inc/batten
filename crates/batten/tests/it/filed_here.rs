@@ -550,16 +550,23 @@ fn a_row_recorded_before_the_file_was_touched_is_still_caught() {
         )],
         &["closes 0"],
     );
-    assert!(
-        verdicts(&root).is_empty(),
-        "nothing is in the diff yet, so nothing intersects"
+    // THE ROW MOVES BETWEEN THE TWO ARMS RATHER THAN APPEARING OUT OF SILENCE,
+    // which is the partition made visible on one record. Before the file is
+    // touched its §1 names nothing in the diff, so proximity is silent and the
+    // set refusal takes it; touching the file moves it to proximity and the set
+    // refusal goes quiet. Exactly one finding either side — a reviewer never sees
+    // two for one row.
+    assert_eq!(
+        verdicts(&root),
+        vec![LEFT_OPEN.to_owned()],
+        "nothing intersects yet, so this is a row left open rather than a row over the diff"
     );
     fs::create_dir_all(root.join("src")).expect("src");
     fs::write(root.join("src/a.rs"), "now\n").expect("touch the file");
     assert_eq!(
         verdicts(&root),
         vec![OVER_DIFF.to_owned()],
-        "the same record refuses once the file is open"
+        "the same record refuses on proximity once the file is open"
     );
 }
 
@@ -706,24 +713,21 @@ fn the_set_refusal_carries_the_id_and_nothing_else() {
     );
 }
 
-/// A BRANCH HOLDING NOTHING OPEN DEFERRED NOTHING, so there is no diff for the
-/// row to have been filed instead of. Not a dodge: an empty branch cannot land.
-#[test]
-fn a_branch_with_no_diff_judges_no_row() {
-    let root = repo(
-        "left-open-empty",
-        "work",
-        &[],
-        &[&format!(
-            "issue CLOUD-1 {AFTER} ready 1,src/a.rs - 1,src/b.rs"
-        )],
-        &["closes 0"],
-    );
-    assert!(
-        verdicts(&root).is_empty(),
-        "nothing is open, so nothing was deferred"
-    );
-}
+// A BRANCH HOLDING NOTHING OPEN DEFERRED NOTHING — `test_a_branch_with_no_diff_
+// judges_no_row`, and it is in the MODULE's tier rather than here on purpose.
+//
+// THIS TIER CANNOT BUILD THAT INPUT, and the reason is the fixture itself:
+// `install_module` writes `policy/filed-here.rego` into the working tree, and
+// `base_delta` walks the tree rather than the index, so an untracked file is an
+// added path. Every fixture below therefore has a non-empty delta by
+// construction — measured, this case failed here reporting exactly the one
+// finding it asserted the absence of.
+//
+// Stated rather than dropped, because the pair is the general rule
+// `.claude/rules/policy-modules.md` gives for the two tiers: a `with input as`
+// case cannot prove the ENGINE builds a shape, and this tier cannot construct a
+// shape the engine's own scaffolding excludes. Neither replaces the other, and
+// silently deleting the assertion would have left the guard untested in both.
 
 /// A record from an older recorder has no §1 column, so the partition cannot be
 /// evaluated and the row stays judged exactly as it was before this arm existed.
