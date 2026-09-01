@@ -997,7 +997,8 @@
             "trunk-based",
             "shell-hygiene",
             "pinned-toolchain",
-            "ci-hygiene"
+            "ci-hygiene",
+            "landing-loop"
           ]
         },
         "produces": {

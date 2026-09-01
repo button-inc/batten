@@ -3790,6 +3790,46 @@ sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
 line_sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
 severity = "deny"
 
+# CONSUMER #1 EATS THE SAME FOOD, for the generic third of the landing loop
+# (CLOUD-1269). Whether a commit the forge already judged is judged again is true
+# of the PRACTICE — every project with a landing loop and a forge has that
+# question — so it ships as a preset and this row is what enables it here.
+#
+# `forge = ["HEAD"]` is the whole declaration, and declaration is what makes the
+# fact affordable: a run whose rules name no commit resolves nothing, so the cost
+# is one record read per named commit rather than a sweep of the trunk.
+#
+# NO OVERLAP WITH `ci-hygiene`, and the two are deliberately not one bundle.
+# `ci-hygiene` judges WIRING — whether a job is draft-gated, whether a
+# concurrency block supersedes its own runs, whether a workflow can be reached at
+# all — which is a property of the configuration and is answered before any run
+# has happened. This judges a RUN THAT ALREADY HAPPENED, against a commit. No
+# clause of either can fire on the other's subject, so one practice is never
+# reported twice.
+#
+# NOR WITH `forge-verdict-required`, which reads the same fact and asks the other
+# question. That row asks whether `final` PASSED for this commit, and it is a
+# consumer module precisely because `final` is this repository's name for its
+# fan-in. This asks only whether anything was recorded at all. A commit graded
+# green fires this and not that; a commit graded red fires both, and they say
+# different things — do not re-run it, and do not land it.
+#
+# `warn`, NOT `deny`, AND THE FIRST LANDING IS THE REASON. `land` re-verifies and
+# re-waits every lap by design, because a rebase mints a new SHA and the receipts
+# keyed to the old one are gone — so the loop legitimately reaches graded commits,
+# and a `deny` here would refuse the lap that is working as designed. Land it
+# reporting, read the firing rate over a session, and promote it with the
+# measurement rather than with an argument (CLOUD-320). What it costs meanwhile is
+# stated rather than hidden: at `warn` the refusal is advice, so a re-grade this
+# row exists to stop still runs.
+[[rule]]
+id = "landing-loop-preset"
+kind = "policy"
+scope = "tree"
+preset = "landing-loop"
+forge = ["HEAD"]
+severity = "warn"
+
 # The evaluator's IO-free pin, given a mechanism (CLOUD-831). `policy.rs`'s
 # module doc admits consumer-authored code to the MEDIATED CALL on the claim that
 # a module "cannot open a file, start a process, or reach the network", and cited

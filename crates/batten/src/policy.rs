@@ -320,6 +320,24 @@ const PRESETS: &[(&str, &[(&str, &str)])] = &[
             ),
         ],
     ),
+    // CLOUD-1269. The generic third of a landing loop. Landing judgements split
+    // three ways and only one third belongs here: the effect and the poll stay
+    // outside (CLOUD-1170's own split), the roster and the trunk's name are the
+    // consumer's `batten.toml`, and what is left is a predicate over facts the
+    // boundary already resolved.
+    //
+    // TREE-SCOPED, because it decides over what the forge recorded rather than
+    // over a command. Its sibling `landing-spend` is the same practice on the
+    // other surface, and the two are separate presets rather than one because a
+    // `[[rule]]` row carries ONE scope and `policy::load` refuses two rows
+    // naming one preset — a bundle cannot span both.
+    (
+        "landing-loop",
+        &[(
+            "<preset:landing-loop>/graded-head-is-not-regraded.rego",
+            include_str!("policy/presets/landing-loop/graded-head-is-not-regraded.rego"),
+        )],
+    ),
 ];
 
 /// Every vendored preset's name, in a stable order.

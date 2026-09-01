@@ -409,3 +409,137 @@ fn every_shipped_preset_passes_its_own_suite() {
         );
     }
 }
+
+/// A tree-scoped row enabling a vendored preset by name.
+///
+/// The sibling of [`preset_row`], and separate rather than parameterised because
+/// the two surfaces are different shapes: a tree row's bundle reads
+/// `input.tree.*` and a mediated row's reads `input.call.*` / `input.facts.*`,
+/// and a helper that took the scope as an argument would invite one fixture to
+/// be pointed at both.
+fn tree_preset_row(id: &str, preset: &str) -> Rule {
+    serde_json::from_value(serde_json::json!({
+        "id": id,
+        "kind": "policy",
+        "scope": "tree",
+        "preset": preset,
+        "severity": "deny",
+    }))
+    .expect("a tree preset row the loader accepts")
+}
+
+/// The one bundle a preset row compiles, loaded with the EMPTY vocabulary.
+///
+/// `Vocabulary::EMPTY` is how `patterns: &[]` is spelled here, and it is the
+/// whole point of this tier rather than a convenience: it proves the bundle
+/// loads and decides for a consumer who wrote no `[[pattern]]` and no
+/// `[[verdict]]` row at all. A harness that declared the ids would supply input
+/// no consumer supplies, and the deny cases would then pass for the wrong reason
+/// — which is how CLOUD-1161's `ci-hygiene` shipped two dead predicates under a
+/// green `batten policy test` reporting 330 passed.
+fn loaded(name: &str, row: Rule) -> policy::Bundle {
+    let root = scratch(name);
+    let mut bundles = policy::load(
+        &root,
+        &[row],
+        policy::Vocabulary::EMPTY,
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("a vendored preset loads for a consumer with no vocabulary of its own");
+    bundles.remove(0)
+}
+
+/// The findings a bundle reports over one document, or a panic if it could not
+/// answer at all.
+fn decided(bundle: &policy::Bundle, document: &str) -> Vec<policy::Violation> {
+    let Look::Is(violations) = policy::deny(bundle, document) else {
+        panic!("the preset answered");
+    };
+    violations
+}
+
+/// (CLOUD-1269) `graded-head-is-not-regraded` refuses a judged commit and is
+/// silent on one nothing has looked at.
+///
+/// Both halves, because the first alone passes on a preset that refuses
+/// unconditionally — which is not a gate (CLOUD-418).
+#[test]
+fn the_landing_loop_preset_refuses_a_regrade_and_is_green_by_turns() {
+    let bundle = loaded("landing-loop", tree_preset_row("landing", "landing-loop"));
+
+    let judged = decided(
+        &bundle,
+        r#"{"tree":{"forge":{"1111111":{"final":"success"}}}}"#,
+    );
+    assert_eq!(judged.len(), 1, "a commit the forge already judged");
+    assert_eq!(
+        bundle.attribute(&judged[0]),
+        "graded-head-is-not-regraded",
+        "a preset finding names ITS OWN predicate id — never `preset` as a \
+         category, and never the enabling row"
+    );
+
+    // THE ANTI-VACUITY MIRROR, and then the two states that are not verdicts.
+    assert!(
+        decided(&bundle, r#"{"tree":{"forge":{}}}"#).is_empty(),
+        "a commit with no record has not been judged, so there is nothing to refuse"
+    );
+    assert!(
+        decided(&bundle, r#"{"tree":{"forge":{"1111111":{}}}}"#).is_empty(),
+        "judged and silent is not judged: the forge looked and recorded nothing"
+    );
+    assert!(
+        decided(&bundle, r#"{"tree":{"forge":null}}"#).is_empty(),
+        "could-not-look allows, and without the module's own guard this FAULTS"
+    );
+}
+
+/// (CLOUD-1269, CLOUD-1279) Every preset loads at the scope it is actually
+/// enabled with — which `every_shipped_preset_passes_its_own_suite` cannot do.
+///
+/// **This is the arm that reaches `check_tree_paths_are_emittable` at all.** That
+/// guard opens with `if rule.scope != RuleScope::Tree { return Ok(()) }`, and the
+/// suite above fabricates a `mediated_call` scope for EVERY preset so one loop
+/// can cover the table — so a tree module reading an `input.tree` key the engine
+/// never emits early-returns past the one check that would refuse it, and ships
+/// green in both tiers. CLOUD-1279 owns closing that hole in the guard; this
+/// closes it for the presets whose real scope is known here, and stays useful
+/// after that row lands because it also pins the scope each preset is FOR.
+#[test]
+fn every_preset_loads_at_the_scope_it_is_enabled_with() {
+    // The scope each preset's modules actually decide over. A preset absent from
+    // this table is a preset nobody stated a surface for, which is the state
+    // that lets a wrong-surface key hide.
+    let scopes: &[(&str, bool)] = &[
+        ("commit-hygiene", false),
+        ("trunk-based", false),
+        ("shell-hygiene", true),
+        ("pinned-toolchain", false),
+        ("ci-hygiene", true),
+        ("landing-loop", true),
+    ];
+
+    for name in policy::preset_names() {
+        let (_, is_tree) = scopes
+            .iter()
+            .find(|(preset, _)| *preset == name)
+            .unwrap_or_else(|| {
+                panic!("the preset `{name}` ships and this table does not say which surface it decides over")
+            });
+        let row = if *is_tree {
+            tree_preset_row("row", name)
+        } else {
+            preset_row("row", name)
+        };
+        let root = scratch(&format!("real-scope-{name}"));
+        policy::load(
+            &root,
+            &[row],
+            policy::Vocabulary::EMPTY,
+            policy::ModuleChecks::Run,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("the preset `{name}` does not load at its own scope: {err}"));
+    }
+}

@@ -1044,6 +1044,31 @@ the line because a comment is legal YAML, and review reads it as the thing it wa
 Read pre-parse, because the parse is what destroys the evidence. Quoting the value is the fix.",
         routes: &[read("R-QUOTE-THE-VALUE", "the truncated line")],
     },
+    VendoredVerdict {
+        id: "V-GRADED-HEAD-REGRADED",
+        gloss: "the forge already judged this commit and a second run would re-ask it",
+        class: "A commit that has not changed cannot get a different verdict, so a second \
+run over it buys an answer that is already recorded and spends the metered tier to do it. \
+Measured on one consumer's landing bot over a half hour: 400 runs, 248 executed, against 5 \
+merges. Read the recorded verdict rather than asking for it again; if the intent was to \
+judge different work, the commit is what has to change.",
+        routes: &[
+            read(
+                "R-READ-THE-RECORDED-VERDICT",
+                "the forge record for this commit",
+            ),
+            // THE PRECONDITION IS THE WHOLE OF THIS ROUTE. A re-grade is
+            // legitimate when the recorded verdict is about the RUNNER rather
+            // than about the commit — a lost agent, an evicted node, an
+            // infrastructure fault — because that verdict answers a question
+            // nobody asked. It is not legitimate because the answer was
+            // unwelcome, which is the case this condition exists to exclude.
+            admit(
+                "R-OVERRIDE-THE-REGRADE",
+                "the recorded verdict is about a runner fault rather than about this commit",
+            ),
+        ],
+    },
 ];
 
 /// Every class the binary ships, as the registry carries them.
