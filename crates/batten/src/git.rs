@@ -1491,6 +1491,151 @@ pub fn commits_in_range(dir: &Path, base: &str, head: &str) -> Result<Vec<String
     Ok(out)
 }
 
+/// A git object read straight out of the odb, ready to be packed.
+///
+/// **`body` is the payload with NO loose header**, which is what a packfile
+/// carries — the header is re-derived per member when the pack is written, and
+/// the id is taken over the loose form. Carrying the kind is what keeps those two
+/// agreeing: a tree hashed as a commit yields an id nothing on the remote has.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawObject {
+    /// The object id, forty hex characters.
+    pub id: String,
+    /// What kind of object it is.
+    pub kind: gix::object::Kind,
+    /// The payload.
+    pub body: Vec<u8>,
+}
+
+/// Every object a push of `base..head` must carry.
+///
+/// # What the set is, and why it is not simply "everything reachable from head"
+///
+/// The full closure of `head` is the whole history and is unaffordable to send on
+/// every lap. The set here is the one a receiving end actually needs:
+///
+/// * the commits in `base..head` (or every commit, when `base` is `None`),
+/// * every tree and blob reachable from those commits' trees,
+/// * **minus** everything reachable from `base`'s own tree.
+///
+/// That subtraction is sound because the remote HAS `base` — it is the tip being
+/// pushed onto, or an ancestor of it — so everything reachable from `base` is
+/// already there. An object reachable from a new commit AND from `base` is
+/// excluded; one reachable only from a new commit is sent. Nothing an ancestor
+/// outside the range contributes can be missing, because those ancestors are
+/// themselves reachable from `base`.
+///
+/// **Sending too many is harmless and sending too few is a broken push**, so
+/// every uncertainty here resolves toward including the object.
+///
+/// # Errors
+///
+/// A repository that will not open, a rev that will not resolve, or an object the
+/// odb cannot produce. **A missing object is an error rather than a silent
+/// omission** — a pack quietly short one blob is a push the server rejects with a
+/// message about the wrong thing.
+pub fn objects_to_send(dir: &Path, base: Option<&str>, head: &str) -> Result<Vec<RawObject>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the push range".to_owned());
+    let head_id = repo.rev_parse_single(head).map_err(|_| refused())?;
+    // `None` is a ref the remote does not have yet, and it is a real state rather
+    // than a missing argument: nothing is hidden, nothing is subtracted, and the
+    // walk yields the branch's whole history. That is the one case where the pack
+    // is large, and it is correct — the remote genuinely has none of it.
+    let base_id = match base {
+        Some(base) => Some(repo.rev_parse_single(base).map_err(|_| refused())?.detach()),
+        None => None,
+    };
+    let mut walk = repo.rev_walk([head_id.detach()]);
+    if let Some(base_id) = base_id {
+        walk = walk.with_hidden([base_id]);
+    }
+    let walk = walk.all().map_err(|_| refused())?;
+
+    // The exclusion side FIRST, so a tree the base already carries is never even
+    // read on the send side.
+    let mut carried = std::collections::BTreeSet::new();
+    if let Some(base_id) = base_id
+        && let Ok(commit) = repo.find_commit(base_id)
+        && let Ok(tree) = commit.tree()
+    {
+        collect_tree(&repo, tree.id().detach(), &mut carried, None);
+    }
+
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for step in walk {
+        let Ok(info) = step else {
+            return Err(refused());
+        };
+        let id = info.id;
+        let commit = repo.find_commit(id).map_err(|_| refused())?;
+        // The commit object itself is always sent: it is by construction not in
+        // `base`'s closure, since the walk hid everything `base` reaches.
+        out.push(RawObject {
+            id: id.to_string(),
+            kind: gix::object::Kind::Commit,
+            body: commit.data.clone(),
+        });
+        let tree_id = commit.tree_id().map_err(|_| refused())?.detach();
+        collect_tree(&repo, tree_id, &mut seen, Some(&mut out));
+    }
+    // Subtract after collecting rather than checking during the walk, so the
+    // exclusion is one set operation a reader can see rather than a condition
+    // threaded through the recursion.
+    out.retain(|object| !carried.contains(object.id.as_str()));
+    Ok(out)
+}
+
+/// Walk a tree, recording every tree and blob under it that `seen` does not carry.
+///
+/// **`sink` is `None` for the EXCLUSION walk and `Some` for the send walk**, and
+/// it is an explicit mode rather than something inferred from the sink's state.
+/// An earlier draft told the two apart by whether the vector was already
+/// non-empty, which is the kind of implicit mode that reads fine and is wrong the
+/// first time a caller passes an empty send list.
+///
+/// The exclusion walk still reads each object — a tree has to be decoded to learn
+/// its children — but records no bodies, so the base's closure costs ids and not
+/// megabytes.
+fn collect_tree(
+    repo: &gix::Repository,
+    tree: gix::ObjectId,
+    seen: &mut std::collections::BTreeSet<String>,
+    mut sink: Option<&mut Vec<RawObject>>,
+) {
+    let mut pending = vec![tree];
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id.to_string()) {
+            continue;
+        }
+        let Ok(object) = repo.find_object(id) else {
+            // An object the odb cannot produce on the EXCLUSION side is simply
+            // not excluded, which errs toward sending it — the safe direction,
+            // since an over-full pack is accepted and a short one is refused.
+            continue;
+        };
+        let kind = object.kind;
+        if let Some(out) = sink.as_deref_mut() {
+            out.push(RawObject {
+                id: id.to_string(),
+                kind,
+                body: object.data.clone(),
+            });
+        }
+        if kind != gix::object::Kind::Tree {
+            continue;
+        }
+        let Ok(tree) = object.try_into_tree() else {
+            continue;
+        };
+        for entry in tree.iter() {
+            let Ok(entry) = entry else { continue };
+            pending.push(entry.inner.oid.to_owned());
+        }
+    }
+}
+
 /// The trailers of a message that is on disk and not yet committed.
 ///
 /// `git interpret-trailers --parse` applies git's own rules for where the

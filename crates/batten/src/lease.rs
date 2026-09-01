@@ -1579,6 +1579,103 @@ pub fn health(observed: &Observed, terms: &Terms, now: i64) -> Health {
     Health::Held(format!("held by {}, {left}s left", body.holder))
 }
 
+/// Delete `reference` on `remote`, from whatever it currently reads.
+///
+/// **A delete is the same command with [`ZERO`] on the NEW side**, so it inherits
+/// the CAS: a ref that moved between the read and the write is refused rather
+/// than deleted. That is the property a plain force-delete does not have, and it
+/// matters here for the reason it matters on the lease — the thing being removed
+/// is shared state somebody else may have just written.
+///
+/// The pack carries no objects, because a delete adds none. An empty pack is a
+/// header and a checksum, which is what receive-pack expects for this command.
+///
+/// # This sandbox's git proxy REFUSES a delete, measured 2026-09-01
+///
+/// A push of a new ref applies; a delete of that same ref answers **403**, by
+/// this code and by the `git` binary alike (`send-pack: unexpected disconnect`).
+/// So this function is correct and unexercisable here, and its opt-in driver is
+/// deliberately not run in this environment.
+///
+/// **That costs the landing loop nothing**, which is why it is a note rather than
+/// a blocker: `mem:workflow/landing-loop` already records that the closing
+/// `could not delete origin/<branch>` is *"expected output, not a failure"* —
+/// GitHub's auto-delete-on-merge wins the race, so the branch is normally gone
+/// before anyone asks. A caller treats this as best-effort.
+///
+/// # Errors
+///
+/// A transport failure or an unreadable report. A ref that already reads
+/// something else is [`Outcome::Rejected`], not an error.
+pub fn delete_ref(remote: &str, reference: &str) -> Result<Outcome> {
+    let advertisement = advertise(remote, Service::ReceivePack)?;
+    let old = advertisement.head_of(reference);
+    if old == ZERO {
+        // Already gone. Idempotent in effect, so idempotent in what it reports —
+        // the same reason a release that finds a tombstone says "already
+        // released" rather than minting a second one.
+        return Ok(Outcome::Applied);
+    }
+    let update = Update {
+        old: old.to_owned(),
+        new: ZERO.to_owned(),
+        name: reference.to_owned(),
+    };
+    swap(remote, &update, &pack_of(&[])?)
+}
+
+/// Push `head` to `reference` on `remote`, from whatever the remote currently has.
+///
+/// # This is the same CAS the lease uses, and that is the point
+///
+/// `Update` carries `old` and `new`, and receive-pack applies the change **only
+/// while the ref still reads `old`**, decided under the server's own lock. A
+/// branch push therefore gets the identical guarantee the lease does, and gets it
+/// from the protocol rather than from a flag: `--force-with-lease` compares
+/// against what the CLIENT last observed and races anything that moved in
+/// between, which on a ref the fleet is actively rewriting is exactly the stale
+/// value nothing should trust.
+///
+/// # What is sent
+///
+/// [`crate::git::objects_to_send`] decides the object set — the commits in `base..head`
+/// plus their tree closure, minus what `base` already carries. `base` is the ref's
+/// CURRENT value on the remote, read from the advertisement, so the pack carries
+/// only what this push actually adds.
+///
+/// An absent ref advertises [`ZERO`], which is both "must not exist" to the CAS
+/// and, here, "the remote has nothing to subtract" — so a first push of a branch
+/// sends its whole closure, which is correct and is the one case that is large.
+///
+/// # Errors
+///
+/// A transport failure, an unreadable report, or a repository whose objects will
+/// not enumerate. **A lost race is not an error** — it is [`Outcome::Rejected`],
+/// for the reason [`cas`] states.
+pub fn push(remote: &str, repo: &std::path::Path, reference: &str, head: &str) -> Result<Outcome> {
+    let advertisement = advertise(remote, Service::ReceivePack)?;
+    let old = advertisement.head_of(reference);
+    // The subtraction base is the remote's OWN current value, never a local
+    // guess: a branch this clone rebased carries commits the remote never had,
+    // and any base but the advertised one either sends too little (a broken
+    // push) or re-sends history the remote has had for months.
+    let base = (old != ZERO).then_some(old);
+    let objects: Vec<Object> = crate::git::objects_to_send(repo, base, head)?
+        .into_iter()
+        .map(|raw| Object {
+            id: raw.id,
+            kind: raw.kind,
+            body: raw.body,
+        })
+        .collect();
+    let update = Update {
+        old: old.to_owned(),
+        new: head.to_owned(),
+        name: reference.to_owned(),
+    };
+    swap(remote, &update, &pack_of(&objects)?)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -2304,6 +2401,115 @@ mod tests {
         assert!(
             text.starts_with("tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n"),
             "got: {text}"
+        );
+    }
+
+    /// The live DELETE, gated the same way and for the same reason.
+    ///
+    /// **Do not set this variable in the Batten sandbox**: its git proxy answers
+    /// 403 to a ref deletion, so the case can only fail there. See
+    /// [`delete_ref`]'s own note — the refusal is the environment's, not the
+    /// code's, and the landing loop treats a failed delete as best-effort anyway.
+    #[test]
+    fn a_scratch_ref_deletes_when_asked() {
+        let Ok(reference) = std::env::var("BATTEN_LIVE_DELETE_REF") else {
+            return;
+        };
+        let remote = std::env::var("BATTEN_LIVE_PUSH_REMOTE").expect("remote url");
+        let outcome = delete_ref(&remote, &reference).expect("delete");
+        assert_eq!(outcome, Outcome::Applied, "the scratch delete must apply");
+    }
+
+    /// The live push, run only when the environment names a scratch ref.
+    ///
+    /// **Not a suite case, and it must not become one.** It writes to a real
+    /// remote, so it is gated on an explicit opt-in rather than on a credential
+    /// being present — a case that fires whenever a token happens to exist is a
+    /// case that pushes from CI.
+    #[test]
+    fn a_branch_pushes_to_a_scratch_ref_when_asked() {
+        let Ok(reference) = std::env::var("BATTEN_LIVE_PUSH_REF") else {
+            return;
+        };
+        let repo = std::path::Path::new(".");
+        let remote = std::env::var("BATTEN_LIVE_PUSH_REMOTE").expect("remote url");
+        let head = crate::git::head_commit(repo).expect("head");
+        let outcome = push(&remote, repo, &reference, &head).expect("push");
+        assert_eq!(outcome, Outcome::Applied, "the scratch push must apply");
+    }
+
+    #[test]
+    fn a_real_branch_enumerates_more_than_a_handful_of_objects() {
+        // THE SHAPE EVERY LEASE FIXTURE LACKS. A lease pack carries one commit and
+        // one empty tree; a branch push carries commits, trees and blobs in the
+        // hundreds, and the pack writer had never been asked for one. This drives
+        // the enumeration over THIS repository's own history — the only corpus to
+        // hand that is genuinely branch-shaped.
+        let repo = std::path::Path::new(".");
+        let Ok(head) = crate::git::head_commit(repo) else {
+            // A checkout this test cannot read is not a finding about the pack
+            // writer. Could-not-look, never a pass asserted over nothing.
+            return;
+        };
+        let Ok(parent) = crate::git::commits_in_range(repo, "HEAD~1", "HEAD") else {
+            return;
+        };
+        if parent.is_empty() {
+            return;
+        }
+        let Ok(objects) = crate::git::objects_to_send(repo, Some("HEAD~1"), &head) else {
+            return;
+        };
+        // One commit's worth of change touches at least the commit, the root tree
+        // and one blob. A set smaller than that is an enumeration that walked
+        // nothing, which is the failure a green suite would otherwise hide.
+        assert!(
+            objects.len() >= 3,
+            "one commit should enumerate at least commit + root tree + a blob, got {}",
+            objects.len()
+        );
+        assert!(
+            objects.iter().any(|o| o.kind == gix::object::Kind::Commit),
+            "the commit itself must be in the set"
+        );
+        assert!(
+            objects.iter().any(|o| o.kind == gix::object::Kind::Tree),
+            "the root tree must be in the set"
+        );
+        // And it must round-trip through the pack writer, which is the half the
+        // single-object fixtures never exercised.
+        let packed: Vec<Object> = objects
+            .into_iter()
+            .map(|raw| Object {
+                id: raw.id,
+                kind: raw.kind,
+                body: raw.body,
+            })
+            .collect();
+        let pack = pack_of(&packed).expect("pack a real branch delta");
+        let read = objects_in(&pack).expect("unpack a real branch delta");
+        assert_eq!(read, packed, "every member must survive the round trip");
+    }
+
+    #[test]
+    fn the_base_is_subtracted_rather_than_resent() {
+        // The whole economy of the push. Without the subtraction a lap would
+        // re-send the repository's entire history every time.
+        let repo = std::path::Path::new(".");
+        let Ok(head) = crate::git::head_commit(repo) else {
+            return;
+        };
+        let Ok(narrow) = crate::git::objects_to_send(repo, Some("HEAD~1"), &head) else {
+            return;
+        };
+        let Ok(wide) = crate::git::objects_to_send(repo, Some("HEAD~3"), &head) else {
+            return;
+        };
+        assert!(
+            wide.len() >= narrow.len(),
+            "a wider range cannot enumerate fewer objects: {} vs {}",
+            wide.len(),
+            narrow.len()
         );
     }
 
