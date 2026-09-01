@@ -21,11 +21,23 @@
 #   derivation half needed no porting at all, and the deleted shell was the seam
 #   between the two.
 #
-#   THE MERGED SURFACES ARE `policy/harness-wiring-merged.rego`, and the split is
-#   CLOUD-1307 rather than taste: an absent `[[rule.external]]` source skips its
-#   whole rule, so an out-of-root file on this row would switch these predicates
-#   off on every machine that lacks it -- which is every CI runner and this
-#   container. That module carries its own narrowing note.
+#   ONE MODULE OVER BOTH SURFACE CLASSES, and the merged half is here rather than
+#   in a sibling because there was never a reason to split it. CLOUD-1160 first
+#   landed it as two modules on two rows, citing CLOUD-1307 -- an engine defect
+#   that does not exist. That row was measured with the RELEASED binary on `PATH`
+#   rather than the one built from the tree; the shipping engine runs a rule whose
+#   other declared sources resolved, pushing the unacquired id into
+#   `input.tree.missing` and continuing. The split cost real coverage: one merged
+#   surface watched where the retired shell read four, and no STALE direction over
+#   them at all. Both are restored here.
+#
+#   COULD-NOT-LOOK IS PER SURFACE CLASS, which is what the deleted shell counted
+#   with its own `merged_read` variable and what the restored `stale` guards read.
+#   A committed row is judged only where a committed surface was read; a merged row
+#   only where a merged surface was. A CI runner has no launcher file, so its
+#   merged rows are unenforced there rather than reported stale -- the measured
+#   verify/CI disagreement that made two rows permanently unlandable before the
+#   shell grew that guard.
 #
 #   THE BRACKETS ARE NOT STYLE: the schema file carries a hyphen, so the dotted
 #   form is a parse error reported as `invalid schema reference`.
@@ -57,7 +69,11 @@ mediator := "batten"
 # (`unowned`), and a row matching nothing wired is a refusal too (`stale`), so a
 # retirement that lands must delete its row rather than leave a licence behind
 # for the next command with a similar path.
-declared := {"mise-tasks/run-shape-guard.sh": "CLOUD-821"}
+declared := {
+	"mise-tasks/run-shape-guard.sh": "CLOUD-821",
+	"stop-hook-git-check.sh": "CLOUD-605",
+	"session-start-git-identity.sh": "CLOUD-605",
+}
 
 # The committed hook surfaces, one per harness in `Harness::ALL` that has one.
 #
@@ -71,6 +87,20 @@ committed := {
 	".github/hooks/batten.json",
 	".gemini/settings.json",
 	".codex/hooks.json",
+}
+
+# The surfaces a host MERGES its hook config from beyond the committed one
+# (CLOUD-525), as the ids `[[rule.external]]` declares.
+#
+# This is the same set `Harness::merge_surfaces` states in the core, and the
+# duplication is deliberate rather than a second authority: the core resolves and
+# COUNTS them, this names the commands on them, and only a consumer's module may
+# hold the table saying which of those are legitimate here (rule 1).
+merged_ids := {
+	"harness-settings",
+	"harness-settings-local",
+	"harness-launcher-settings",
+	"harness-gemini-settings",
 }
 
 # A wiring document's event map.
@@ -97,6 +127,33 @@ commands contains {"path": path, "command": command} if {
 	some hook in entry.hooks
 	command := hook.command
 }
+
+# Every command on a MERGED surface, reduced to its BASENAME.
+#
+# NEVER THE PATH, on either field (CLOUD-525 §5). A merged path is under the
+# user's home directory, differs per machine, and emitting one would defeat §6
+# byte-stability as well as non-negotiable rule 4 -- which is why the merged half
+# reports a count where the committed half reports its file.
+merged_commands contains basename(command) if {
+	some id in merged_ids
+	some _, entries in event_map(input.tree.external[id])
+	some entry in entries
+	some hook in entry.hooks
+	command := hook.command
+}
+
+basename(command) := parts[count(parts) - 1] if {
+	parts := split(command, "/")
+}
+
+# How many merged surfaces were actually READ.
+#
+# Zero is COULD-NOT-LOOK, not "nothing is registered there": most machines carry
+# no launcher file and a CI runner never does. Only `stale` turns on it.
+merged_read := count([id |
+	some id in merged_ids
+	input.tree.external[id]
+])
 
 # A registration that is neither the mediator nor declared.
 #
@@ -132,6 +189,22 @@ strays_in(path) := {command |
 	some entry in commands
 	entry.path == path
 	command := entry.command
+	stray(command)
+}
+
+# A COUNT and nothing else, for `merged_commands`' reason: there is no path here
+# that may be emitted, and the declared id would only tell a reader which
+# home-relative file to open on their own machine.
+violation contains {
+	"rule": "harness-wiring",
+	"verdict": "hook wire duplicate",
+	"subjects": [{"count": count(merged_strays)}],
+} if {
+	count(merged_strays) > 0
+}
+
+merged_strays contains command if {
+	some command in merged_commands
 	stray(command)
 }
 
@@ -190,13 +263,32 @@ violation contains {
 
 stale contains pattern if {
 	some pattern, _ in declared
-	committed_read > 0
+	enforced(pattern)
 	not matches_something(pattern)
+}
+
+# A COMMITTED row (it carries a `/`) is judged where a committed surface was read;
+# a MERGED row (a basename) where a merged surface was. The discriminator is the
+# shape the table already uses, so it is one already earning its keep rather than
+# a second list to keep in step.
+enforced(pattern) if {
+	contains(pattern, "/")
+	committed_read > 0
+}
+
+enforced(pattern) if {
+	not contains(pattern, "/")
+	merged_read > 0
 }
 
 matches_something(pattern) if {
 	some entry in commands
 	contains(entry.command, pattern)
+}
+
+matches_something(pattern) if {
+	some command in merged_commands
+	contains(command, pattern)
 }
 
 # THERE IS NO COULD-NOT-LOOK CLAUSE, AND THAT IS A SURFACE LIMIT RATHER THAN AN
@@ -231,6 +323,17 @@ wired(pre_tool, stop) := {"tree": {"documents": {".claude/settings.json": {"hook
 	"PreToolUse": [{"hooks": [{"command": command} | some command in pre_tool]}],
 	"Stop": [{"hooks": [{"command": command} | some command in stop]}],
 }}}}}
+
+# A merged surface carrying the commands given, under the launcher's id.
+launcher(commands) := {"tree": {"external": {"harness-launcher-settings": {"hooks": {"Stop": [{"hooks": [
+{"command": command} |
+	some command in commands
+]}]}}}}}
+
+# Both surface classes at once, which is the only shape that can exercise the
+# STALE union: the table declares one committed row and two merged ones, and each
+# is judged only where its own surface class was read.
+whole(pre_tool, stop, merged) := object.union(wired(pre_tool, stop), launcher(merged))
 
 verdicts := {v.verdict | some v in violation}
 

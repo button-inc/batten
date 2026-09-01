@@ -24,10 +24,11 @@
 //! times before each of 36 cases, which is why the port IS the performance fix.
 //!
 //! Two deleted paths, two file arms. The successor is a consumer module, so
-//! neither arm declares a `kind:` — the path already decides it. The merged half
-//! is `policy/harness-wiring-merged.rego`, a second module for CLOUD-1307's
-//! reason, and `the_committed_half_survives_an_absent_merged_surface` below is
-//! the case that keeps the two from being recombined into one dead row.
+//! neither arm declares a `kind:` — the path already decides it. Both surface
+//! classes live in ONE module: they were briefly split on CLOUD-1307, a row since
+//! measured false (it used the released binary, not the built one), and
+//! `the_committed_half_survives_an_absent_merged_surface` below is the case that
+//! keeps the correction from being re-broken.
 //!
 // carried: mise-tasks/hooks-wiring-check.sh policy/harness-wiring.rego crates/batten/tests/it/harness_wiring.rs
 // carried: tests/hooks-wiring-check.bats policy/harness-wiring.rego crates/batten/tests/it/harness_wiring.rs
@@ -168,6 +169,16 @@ id = "ready-issue-key"
 regex = '[A-Z]+-[0-9]+'
 
 [[verdict]]
+id = "hook wire duplicate"
+gloss = "a registration on a merged surface outside this repository does not reach the mediator"
+class = "A fixture copy of the committed row; the id is what the module raises."
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "harness-wiring.rego"
+
+[[verdict]]
 id = "hook wire loose"
 gloss = "a committed hook surface registers a command that is neither the mediator nor declared"
 class = "A fixture copy of the committed row; the id is what the module raises."
@@ -198,48 +209,15 @@ kind = "document"
 target = "harness-wiring.rego"
 "#;
 
-/// The merged module's own class, registered only where its row is.
+/// The fixture config: one rule over both surface classes.
 ///
-/// SPLIT OUT RATHER THAN SHARED, and the registry is what forced it: a
-/// `[[verdict]]` row nothing raises fails the load, because a class no gate
-/// reaches reads as coverage while its routes have never been walked. So a
-/// fixture omitting the merged rule must omit its class too — which is the same
-/// both-directions check the committed config is held to.
-const MERGED_VERDICT: &str = r#"
-[[verdict]]
-id = "hook wire duplicate"
-gloss = "a registration on a merged surface outside this repository does not reach the mediator"
-class = "A fixture copy of the committed row; the id is what the module raises."
-
-[[verdict.route]]
-id = "R-REGISTER-ONLY-THE-MEDIATOR"
-kind = "document"
-target = "harness-wiring-merged.rego"
-"#;
-
-/// The fixture config: the committed row always, the merged row when asked.
-///
-/// The two are separate rows because the engine binds one module to one rule and
-/// an absent external skips its whole rule (CLOUD-1307) — which is the shape this
-/// fixture has to be able to reproduce, not just tolerate.
-fn config(with_merged: bool) -> String {
-    let merged = if with_merged {
-        r#"
-[[rule]]
-id = "harness-wiring-merged"
-kind = "policy"
-scope = "tree"
-module = "harness-wiring-merged.rego"
-severity = "deny"
-
-[[rule.external]]
-id = "harness-launcher-settings"
-root = "BATTEN_FIXTURE_WIRING_ROOT"
-path = ".claude/launcher-settings.json"
-"#
-    } else {
-        ""
-    };
+/// The launcher external is ALWAYS declared, present or not. It used to be a
+/// second rule guarded by a flag, on CLOUD-1307's claim that an absent source
+/// skips its whole rule — measured against the released binary rather than the
+/// built one, and false of the shipping engine.
+/// `the_committed_half_survives_an_absent_merged_surface` is the case that keeps
+/// that correction from being re-broken.
+fn config() -> String {
     format!(
         r#"version = 1
 
@@ -250,8 +228,12 @@ scope = "tree"
 documents = [".claude/settings.json"]
 module = "harness-wiring.rego"
 severity = "deny"
-{merged}{VERDICTS}{extra}"#,
-        extra = if with_merged { MERGED_VERDICT } else { "" }
+
+[[rule.external]]
+id = "harness-launcher-settings"
+root = "BATTEN_FIXTURE_WIRING_ROOT"
+path = ".claude/launcher-settings.json"
+{VERDICTS}"#
     )
 }
 
@@ -299,15 +281,13 @@ const DECLARED_MERGED: [&str; 2] = [
 /// directory.
 fn fixture(name: &str, committed: &str, merged: Option<&str>) -> (PathBuf, PathBuf) {
     let repo = scratch(&format!("harness-wiring-{name}"));
-    write(&repo, "batten.toml", &config(merged.is_some()));
+    write(&repo, "batten.toml", &config());
 
     // THE REAL MODULES, read off the tree rather than restated. A fixture copy
     // would drift from the thing that ships, which is the whole failure this
     // second tier exists to catch one level up.
-    for module in ["harness-wiring.rego", "harness-wiring-merged.rego"] {
-        let body = std::fs::read_to_string(at_root(&format!("policy/{module}"))).unwrap();
-        write(&repo, module, &body);
-    }
+    let module = std::fs::read_to_string(at_root("policy/harness-wiring.rego")).unwrap();
+    write(&repo, "harness-wiring.rego", &module);
     write(&repo, ".claude/settings.json", committed);
     git_in(&repo, &["init", "-q", "-b", "main", "."]);
     git_in(&repo, &["add", "-A"]);
@@ -489,11 +469,9 @@ fn a_tree_with_no_wiring_surface_is_not_stale() {
     // because that is what makes the mutation on the guard land somewhere a
     // declared `#MUTANT-SUITE` case can turn red (CLOUD-1267).
     let repo = scratch("harness-wiring-no-surface");
-    write(&repo, "batten.toml", &config(false));
-    for module in ["harness-wiring.rego", "harness-wiring-merged.rego"] {
-        let body = std::fs::read_to_string(at_root(&format!("policy/{module}"))).unwrap();
-        write(&repo, module, &body);
-    }
+    write(&repo, "batten.toml", &config());
+    let module = std::fs::read_to_string(at_root("policy/harness-wiring.rego")).unwrap();
+    write(&repo, "harness-wiring.rego", &module);
     git_in(&repo, &["init", "-q", "-b", "main", "."]);
     git_in(&repo, &["add", "-A"]);
     let output = check(&repo, None);
@@ -516,7 +494,7 @@ fn a_merged_registration_the_table_does_not_declare_is_refused() {
     let output = check(&repo, Some(&outside));
     assert!(!output.status.success(), "an undeclared merged hook passed");
     assert!(
-        findings(&output).contains("harness-wiring-merged"),
+        findings(&output).contains("harness-wiring"),
         "wrong finding: {}",
         findings(&output)
     );

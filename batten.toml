@@ -4788,36 +4788,39 @@ documents = [
 module = "policy/harness-wiring.rego"
 severity = "deny"
 
-# THE MERGED HALF IS ITS OWN ROW AND ITS OWN MODULE, and the split is CLOUD-1307
-# rather than taste.
+# The four merged surfaces this host combines its hook config from (CLOUD-525),
+# on the SAME row as the committed ones.
 #
-# An absent `[[rule.external]]` source skips the WHOLE rule — measured 2026-09-01
-# with an unconditional arm, which was silent with the source absent and fired
-# with it present. So an out-of-root file on the row above would switch the
-# committed half off on every machine lacking it, which is every CI runner and
-# this container. The engine binds one module to one rule, so the two halves are
-# two modules; the second's absence now silences only itself, which is the
-# per-surface could-not-look the deleted `hooks-wiring-check.sh` counted with its
-# own `merged_read` variable.
+# They were briefly a second rule and a second module, on CLOUD-1307's claim that
+# an absent `[[rule.external]]` skips its whole rule. That row is FALSE: it was
+# measured with the released binary on `PATH` rather than the one built from the
+# tree, and the shipping engine runs a rule whose other sources resolved, pushing
+# the unacquired id into `input.tree.missing` and continuing. The split cost one
+# watched merged surface where the retired shell read four, and the whole STALE
+# direction over them; both are restored by putting them back here.
 #
-# ONE SURFACE, WHERE THE SHELL READ FOUR, and that narrowing is CLOUD-1307's cost
-# stated rather than absorbed. One rule can declare all four, and would then be
-# off unless all four exist — which is never. The launcher surface is the one
-# watched because it is the only one present here and the only one that has ever
-# carried a non-batten registration in this repository's measured history
-# (CLOUD-525, 2026-08-21). `policy/harness-wiring-merged.rego` carries the rest of
-# the reasoning, including why the STALE direction cannot travel with it.
-[[rule]]
-id = "harness-wiring-merged"
-kind = "policy"
-scope = "tree"
-module = "policy/harness-wiring-merged.rego"
-severity = "deny"
+# `Harness::merge_surfaces` states the same set in the core and RESOLVES it. Only
+# these rows reach a module that NAMES the commands on them, because only a
+# consumer may hold the table saying which are legitimate here (rule 1).
+[[rule.external]]
+id = "harness-settings"
+root = "HOME"
+path = ".claude/settings.json"
+
+[[rule.external]]
+id = "harness-settings-local"
+root = "HOME"
+path = ".claude/settings.local.json"
 
 [[rule.external]]
 id = "harness-launcher-settings"
 root = "HOME"
 path = ".claude/launcher-settings.json"
+
+[[rule.external]]
+id = "harness-gemini-settings"
+root = "HOME"
+path = ".gemini/settings.json"
 
 # CLOUD-1247, and the SIBLING of the row above rather than a duplicate of it.
 # `harness-wiring` reads the MERGED settings under `$HOME` and decides which
