@@ -789,21 +789,50 @@ fn spawn(dir: &Path, program: &str, args: &[String], env: &[(String, String)]) -
 // Running a suite.
 // ---------------------------------------------------------------------------
 
+/// The staged tree's own cargo target directory, and it is NOT the repository's.
+///
+/// Kept under `target/` so one `cargo clean` still reaches it and `.gitignore`
+/// already covers it, but its own directory so the two builds cannot meet.
+const SUITE_TARGET: &str = "target/mutate-cargo";
+
 /// The environment every suite run carries.
 ///
-/// `CARGO_TARGET_DIR` is the repository's own, so the ~400 dependency crates are
-/// reused and only this workspace's own units recompile against the staged
-/// manifest — which is what makes a `.rego` mutation cost no rebuild at all,
-/// since a consumer module is read at run time rather than compiled in.
+/// # The target directory is the sweep's own, and sharing it was a defect
 ///
-/// `BATTEN_TEST_SCRATCH_LANE` is what keeps that sharing safe: the suites
-/// resolve their fixtures under `CARGO_TARGET_TMPDIR`, so without a lane a sweep
-/// and a concurrent local `cargo test` would resolve the same scratch paths.
+/// This used to be `root/target` — the repository's own — so the ~400 dependency
+/// crates were reused and only this workspace's units recompiled against the
+/// staged manifest. The economy was real. What it bought with it was a second
+/// source tree writing `batten`'s artifacts into the directory a developer's own
+/// `cargo nextest run` reads, and cargo then handed those artifacts back as
+/// fresh: measured here, a `mise run test:filter` in the real tree printed
+/// `Compiling batten`, linked a library whose debug info named
+/// `target/mutate/crates/batten/src/policy.rs`, and evaluated an engine that
+/// projected `input.tree.missing` as an array while the source on disk projected
+/// a map. Two hours went into a projection defect that did not exist.
+///
+/// The staged tree carries whatever mutation was applied last, so a sweep killed
+/// mid-row leaves DELIBERATELY CORRUPTED engine bytes in that cache — every later
+/// local run in this tree then verifies code nobody wrote, at exit 0 and with a
+/// reassuring `Compiling` line above it. That is a gate switched off by its own
+/// tooling, which is the class this repository exists to refuse.
+///
+/// **Cleanup cannot fix it and that is why the directory moves.** A sweep is
+/// killed by `SIGKILL` and by a reclaimed container, neither of which runs a
+/// restore; the only property that holds under both is that the two builds never
+/// shared a cache in the first place. The dependency crates are rebuilt once into
+/// the sweep's own directory and cached there across every later sweep, so the
+/// recurring cost is the same and only the first run pays.
+///
+/// `BATTEN_TEST_SCRATCH_LANE` is the neighbouring hazard rather than a mitigation
+/// of this one, and reading it as one is how the sharing survived review: the
+/// suites resolve their fixtures under `CARGO_TARGET_TMPDIR`, so without a lane a
+/// sweep and a concurrent local `cargo test` would resolve the same scratch
+/// PATHS. That says nothing about the artifact cache above it.
 fn suite_env(root: &Path) -> Vec<(String, String)> {
     vec![
         (
             String::from("CARGO_TARGET_DIR"),
-            root.join("target").to_string_lossy().into_owned(),
+            root.join(SUITE_TARGET).to_string_lossy().into_owned(),
         ),
         (
             String::from("BATTEN_TEST_SCRATCH_LANE"),
@@ -1240,6 +1269,38 @@ pub fn census(root: &Path, names: &[String]) -> Census {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sweep's cargo cache is not the repository's, and this is the gate on
+    /// it rather than the doc comment above `suite_env`.
+    ///
+    /// Fails by: putting `root/target` back. That spelling is not a slower build,
+    /// it is a WRONG one — the staged tree writes `batten`'s artifacts into the
+    /// directory a developer's own `cargo nextest run` reads, and a sweep killed
+    /// mid-row leaves the last mutation's bytes there to be linked and verified
+    /// against. Asserted as a prefix relationship rather than a string
+    /// inequality, so a sibling that merely differs in spelling (`target/../
+    /// target`) cannot satisfy it either.
+    #[test]
+    fn the_sweeps_cargo_cache_is_never_the_repositorys_own() {
+        let root = Path::new("/repo");
+        let env = suite_env(root);
+        let target = env
+            .iter()
+            .find(|(key, _)| key == "CARGO_TARGET_DIR")
+            .map(|(_, value)| PathBuf::from(value))
+            .expect("the sweep declares a cargo target directory");
+        assert_ne!(
+            target,
+            root.join("target"),
+            "sharing the repository's own target directory is how a staged \
+             mutation gets linked into a developer's next local run"
+        );
+        assert!(
+            target.starts_with(root.join("target")),
+            "but it stays under `target/`, so one `cargo clean` reaches it and \
+             `.gitignore` already covers it"
+        );
+    }
 
     #[test]
     fn a_row_is_exactly_three_fields() {
