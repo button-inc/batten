@@ -1068,6 +1068,40 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // actually emit needs the compiled bundles and lives in `policy::load`.
     crate::verdict::validate(&config.verdicts, &config.vocabulary)?;
     crate::redirect::validate(&config.redirects)?;
+    // The remedies those two tables carry, resolved against the command surface
+    // and the rule table (CLOUD-1189). Here rather than in `redirect::validate`
+    // because it is the one clause needing a THIRD table — the `[[rule]]` ids —
+    // and a validator reaching past its own argument for them is how one table's
+    // checker quietly becomes the config's.
+    //
+    // Both remedy tables in one call, because they answer one question and two
+    // spellings of "does this remedy name a real command" is the drift a shared
+    // question does not survive — `verdict-routes-resolve`'s note about the two
+    // sources of "what tasks exist" is the same reasoning one table over.
+    {
+        let rule_ids: Vec<String> = config.rules.iter().map(|rule| rule.id.clone()).collect();
+        let remedies = config
+            .redirects
+            .iter()
+            .flat_map(|entry| {
+                std::iter::once((
+                    format!("redirect[{}].mutation", entry.glob),
+                    entry.mutation.as_str(),
+                ))
+                .chain(
+                    entry
+                        .read
+                        .as_deref()
+                        .map(|read| (format!("redirect[{}].read", entry.glob), read)),
+                )
+            })
+            .chain(config.verbs.iter().filter_map(|verb| {
+                verb.redirect
+                    .as_deref()
+                    .map(|text| (format!("verb[{}].redirect", verb.verb), text))
+            }));
+        crate::redirect::validate_remedies(remedies, &rule_ids)?;
+    }
     // And the MCP table, at load for the identical reason (CLOUD-1260). Every
     // clause is a property of the TABLE — a duplicated id, a path that would
     // leave its root, a reduction over no fields at all — so it is knowable

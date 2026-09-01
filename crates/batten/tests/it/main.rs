@@ -151,6 +151,7 @@ mod prospective_facts;
 mod provision;
 mod ratchet;
 mod ready;
+mod redirect_resolves;
 mod reference_coverage;
 mod refusal_ceiling;
 mod remedy_authorship;
