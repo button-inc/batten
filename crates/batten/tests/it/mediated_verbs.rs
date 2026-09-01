@@ -638,6 +638,30 @@ fn an_interpreter_writing_through_its_program_text_is_a_known_gap() {
     assert_allowed(&format!("python3 -c \"open('{AUTHORITY}','w')\""));
 }
 
+/// THE SECOND RESIDUE, AND IT IS STRUCTURAL RATHER THAN A SCANNING LIMIT.
+///
+/// The sibling above loses because the path sits inside a quoted word. This one
+/// loses earlier: the path is inside a HEREDOC BODY, and `hook::segments` drops
+/// bodies before any predicate exists — a body is data, not shell (CLOUD-723).
+/// So the segment's words are `["python3", "-", "<<'PY'"]` and the operand list
+/// contains no path at all. No operand-based check can reach it, however wide.
+///
+/// CLOUD-1141's own commit names this shape as deliberately open, and its body
+/// says closing it "needs the prospective content as a fact rather than a string
+/// to grep, which is its own row". That row is why this is a pin and not a fix.
+///
+/// Written down because it had NO case at all while its sibling had one, which
+/// is the CLOUD-418 shape exactly: a suite that reads complete over a shape it
+/// never exercises. Measured 2026-09-01 on `5a9924b6` — a `python3` heredoc
+/// wrote a registered policy module and was not refused.
+///
+/// Flips when the mediated surface gains that fact. That is the signal, and it
+/// is the same one the sibling carries.
+#[test]
+fn an_interpreter_writing_through_a_heredoc_body_is_a_known_gap() {
+    assert_allowed(&format!("python3 - <<'PY'\nopen('{AUTHORITY}','w')\nPY"));
+}
+
 /// THE DIRECTION A CARELESS FIX BREAKS, and the one that decides whether this
 /// gate survives contact with daily use.
 ///
