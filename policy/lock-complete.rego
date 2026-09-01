@@ -185,7 +185,7 @@ pointer(path, needles) := {"path": path} if not line_of(path, needles)
 # on every run.
 violation contains {
 	"rule": "lock-platform-residue",
-	"verdict": "V-LOCK-PLATFORM-RESIDUE",
+	"verdict": "lock write other",
 	"subjects": [
 		pointer("mise.lock", [sprintf("\"platforms.%s\"", [platform]), name]),
 		{"artifact": name},
@@ -206,7 +206,7 @@ violation contains {
 # down.
 violation contains {
 	"rule": "lock-platform-uninstallable",
-	"verdict": "V-LOCK-PLATFORM-UNINSTALLABLE",
+	"verdict": "lock reach missing",
 	"subjects": [
 		pointer("mise.lock", [sprintf("\"platforms.%s\"", [platform]), name]),
 		{"artifact": name},
@@ -223,7 +223,7 @@ violation contains {
 # reporting it three times here as well would bury the one line a reader acts on.
 violation contains {
 	"rule": "lock-platform-uninstallable",
-	"verdict": "V-LOCK-PLATFORM-UNINSTALLABLE",
+	"verdict": "lock reach missing",
 	"subjects": [
 		pointer("mise.lock", [sprintf("[[tools.%s]]", [name])]),
 		{"artifact": name},
@@ -250,7 +250,7 @@ violation contains {
 # on, where predicate 2 deliberately says nothing.
 violation contains {
 	"rule": "lock-platform-uninstallable",
-	"verdict": "V-LOCK-ENTRY-PARTIAL",
+	"verdict": "lock write partial",
 	"subjects": [
 		pointer("mise.lock", [sprintf("\"platforms.%s\"", [platform]), name]),
 		{"artifact": name},
@@ -273,7 +273,7 @@ violation contains {
 # those "locks nothing" means unlocked rather than exempt.
 violation contains {
 	"rule": "lock-tool-unlocked",
-	"verdict": "V-LOCK-TOOL-UNLOCKED",
+	"verdict": "tool pin missing",
 	"subjects": [
 		pointer("mise.lock", [sprintf("[[tools.%s]]", [name])]),
 		{"artifact": name},
@@ -290,7 +290,7 @@ violation contains {
 # is unverified.
 violation contains {
 	"rule": "lock-tool-unlocked",
-	"verdict": "V-LOCK-TOOL-UNDECLARED",
+	"verdict": "tool declare missing",
 	"subjects": [
 		pointer("mise.lock", [sprintf("[[tools.%s]]", [name])]),
 		{"artifact": name},
@@ -325,7 +325,7 @@ key_backend(name) := sprintf("core:%s", [name]) if not contains(name, ":")
 
 violation contains {
 	"rule": "lock-tool-missing",
-	"verdict": "V-LOCK-TOOL-MISSING",
+	"verdict": "tool pin absent",
 	"subjects": [pointer("mise.toml", [name]), {"artifact": name}],
 } if {
 	lock_readable
@@ -369,7 +369,7 @@ plain_version(pin) if regex.match(data.batten.patterns["plain-dotted-version"], 
 
 violation contains {
 	"rule": "lock-pin-stale",
-	"verdict": "V-LOCK-PIN-STALE",
+	"verdict": "pin read stale",
 	"subjects": [pointer("mise.toml", [name]), {"artifact": name}],
 } if {
 	some name, value in declared_tools
@@ -394,7 +394,7 @@ writes_enabled if manifest.settings.lockfile == 1
 
 violation contains {
 	"rule": "lockfile-writes-enabled",
-	"verdict": "V-LOCKFILE-WRITES-ENABLED",
+	"verdict": "lock write unsafe",
 	"subjects": [pointer("mise.toml", ["lockfile"])],
 } if {
 	writes_enabled
@@ -436,7 +436,7 @@ sets_lockfile(path) if {
 
 violation contains {
 	"rule": "workflow-installs-unlocked",
-	"verdict": "V-WORKFLOW-INSTALLS-UNLOCKED",
+	"verdict": "workflow run unsafe",
 	"subjects": [pointer(path, ["mise-action"])],
 } if {
 	some path, _ in workflows
@@ -460,7 +460,7 @@ declares_tools if {
 
 violation contains {
 	"rule": "lock-unreadable",
-	"verdict": "V-LOCK-UNREADABLE",
+	"verdict": "lock read unread",
 	"subjects": [{"path": "mise.lock"}],
 } if {
 	declares_tools
@@ -558,7 +558,7 @@ test_a_checksum_with_nothing_to_fetch_is_a_finding if {
 		fixture_manifest,
 	)
 		with data.batten.patterns as fixture_patterns
-	v.verdict == "V-LOCK-ENTRY-PARTIAL"
+	v.verdict == "lock write partial"
 }
 
 # THE PAIR THE SUBSUMED MODULE TURNED ON: an entry with NEITHER is simply
@@ -566,7 +566,7 @@ test_a_checksum_with_nothing_to_fetch_is_a_finding if {
 # into "any platform without a url", which is predicate 2 with its scoping thrown
 # away.
 test_an_unlocked_entry_is_not_a_partial_one if {
-	count({v | some v in violation; v.verdict == "V-LOCK-ENTRY-PARTIAL"}) == 0 with input as fixture_input(
+	count({v | some v in violation; v.verdict == "lock write partial"}) == 0 with input as fixture_input(
 		{"tools": {"t": [{
 			"version": "1.0.0",
 			"backend": "aqua:x/t",
@@ -622,7 +622,7 @@ test_a_tool_declaring_no_backend_is_a_finding if {
 		{"settings": {"lockfile": false}, "tools": {}},
 	)
 		with data.batten.patterns as fixture_patterns
-	v.verdict == "V-LOCK-TOOL-UNDECLARED"
+	v.verdict == "tool declare missing"
 }
 
 test_a_declared_tool_with_no_lock_entry_is_a_finding if {

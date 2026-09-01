@@ -397,7 +397,7 @@ arm_count(name) := total if {
 
 violation contains {
 	"rule": "restated-arm-count-drifts",
-	"verdict": "V-RESTATED-ARM-COUNT-DRIFTS",
+	"verdict": "rule count other",
 	"subjects": [{"path": claim.path, "line": claim.line}, {"count": arm_count(claim.name)}],
 } if {
 	some claim in arm_claims
@@ -438,7 +438,7 @@ names_key(path, surface, key) if {
 
 violation contains {
 	"rule": "schema-key-undocumented",
-	"verdict": "V-SCHEMA-KEY-UNDOCUMENTED",
+	"verdict": "input name missing",
 	"subjects": [{"path": claimant.path, "line": claimant.line}, {"artifact": sprintf("input.%s.%s", [surface, key])}],
 } if {
 	some claimant in claimants

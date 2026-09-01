@@ -4710,7 +4710,7 @@ tags = "v*"
 # CLOUD-843. THE WHOLE OF `mise-tasks/lock-complete.sh` LANDS HERE, and the row
 # above's narrow demonstration is subsumed into it rather than left beside it: two
 # rows over "is this lockfile entry usable" would be the second authority this
-# config refuses everywhere else. `V-LOCK-ENTRY-PARTIAL` is raised by the module
+# config refuses everywhere else. `lock write partial` is raised by the module
 # below now, so the registry row is conserved and no class was retired.
 #
 # `line_sources` BESIDE `staged`, AND THE SPLIT IS DELIBERATE. Every VERDICT comes
@@ -6838,115 +6838,115 @@ kind = "document"
 target = "release-plz.toml"
 
 [[verdict]]
-id = "V-LOCK-PLATFORM-RESIDUE"
+id = "lock write other"
 gloss = "a lockfile platform key mise does not emit — install-time residue rather than a lock"
 class = """
-A key outside the set mise emits was written by an install on somebody's machine, not by a lock. The measured instance carried a checksum and no url and `lock-check` reported "complete and current" over it on every run, because regenerate-and-diff detects drift only and `mise lock` never removes an existing entry. Remove the key and regenerate; the setting that permits the write is `V-LOCKFILE-WRITES-ENABLED`'s.
+A key outside the set mise emits was written by an install on somebody's machine, not by a lock. The measured instance carried a checksum and no url and `lock-check` reported "complete and current" over it on every run, because regenerate-and-diff detects drift only and `mise lock` never removes an existing entry. Remove the key and regenerate; the setting that permits the write is `lock write unsafe`'s.
 """
 
 [[verdict.route]]
-id = "R-REGENERATE-AWAY-THE-RESIDUE"
+id = "task run first"
 kind = "command"
 target = "mise run lock-check"
 
 [[verdict]]
-id = "V-LOCK-PLATFORM-UNINSTALLABLE"
+id = "lock reach missing"
 gloss = "a platform this repository installs on has nothing to install from"
 class = """
 Scoped to the REQUIRED platforms deliberately: mise emits a provenance-only stub where upstream ships no artifact, and failing on every url-less block would fail this repository for a decision upstream made — the defect of the gate this replaces, one level down. A required platform with no block, or a block with no url, is the repository unable to provision itself. Regenerate the entry, or move the platform out of the required set in the module if this repository genuinely stopped installing on it.
 """
 
 [[verdict.route]]
-id = "R-REGENERATE-THE-PLATFORM"
+id = "task run first"
 kind = "command"
 target = "mise run lock-check"
 
 [[verdict]]
-id = "V-LOCK-TOOL-UNLOCKED"
+id = "tool pin missing"
 gloss = "a backend that fetches a release asset locks no platform, so it installs an unverified download"
 class = """
 Whether locking nothing is fine depends on the BACKEND, never on the absence: npm, pipx, cargo, go, gem and core:rust resolve through their own package manager and cannot lock a url, while a fetch-an-asset backend can. Keying it on the absence is how the one tool here installed from an unverified download passed for its whole life with a bare version and no checksum (CLOUD-281). Regenerate so the entry carries checksums, or move the tool to a backend that verifies.
 """
 
 [[verdict.route]]
-id = "R-LOCK-THE-ASSET-BACKEND"
+id = "config read first"
 kind = "command"
 target = "mise run lock-check"
 
 [[verdict]]
-id = "V-LOCK-TOOL-UNDECLARED"
+id = "tool declare missing"
 gloss = "a lockfile entry locks no platform and names no backend, so what it installs cannot be determined"
 class = """
-A different sentence from `V-LOCK-TOOL-UNLOCKED` and a different remedy: that one says the tool installs something unverified, this says nothing in the committed bytes says what it installs at all. The entry is not a lock in any sense. Regenerate it, or remove it if the tool is gone.
+A different sentence from `tool pin missing` and a different remedy: that one says the tool installs something unverified, this says nothing in the committed bytes says what it installs at all. The entry is not a lock in any sense. Regenerate it, or remove it if the tool is gone.
 """
 
 [[verdict.route]]
-id = "R-DECLARE-THE-BACKEND"
+id = "config read first"
 kind = "command"
 target = "mise run lock-check"
 
 [[verdict]]
-id = "V-LOCK-TOOL-MISSING"
+id = "tool pin absent"
 gloss = "a `[tools]` pin has no lockfile entry at all, so every CI job that installs it fails before any gate runs"
 class = """
 The omission every other class here is blind to, because each of them judges an entry that is PRESENT — and the one failure a local run structurally cannot see. `[settings] lockfile = false` means nothing here installs `--locked`, so the tool installs fine on this machine forever; CI passes `--locked` and dies at the INSTALL step, before a single gate runs, in every job whose install list names it. Measured on PR #272: a fully green `mise run verify`, then two required checks red for a pin neither of them owns.
 """
 
 [[verdict.route]]
-id = "R-LOCK-THE-DECLARED-TOOL"
+id = "config read first"
 kind = "command"
 target = "mise run lock-check"
 
 [[verdict]]
-id = "V-LOCK-PIN-STALE"
+id = "pin read stale"
 gloss = "a `[tools]` pin names a version its lockfile entry does not"
 class = """
-`V-LOCK-TOOL-MISSING` asks whether a row is THERE; this asks whether it says the same thing as the pin, which is the only question `mise install --locked` actually answers — and the row being present is exactly what makes a stale one invisible locally. Satisfaction rather than equality: a locked version that EXTENDS the pin at a component boundary is fine, because most of this table is pinned that way. Regenerate and commit the result.
+`tool pin absent` asks whether a row is THERE; this asks whether it says the same thing as the pin, which is the only question `mise install --locked` actually answers — and the row being present is exactly what makes a stale one invisible locally. Satisfaction rather than equality: a locked version that EXTENDS the pin at a component boundary is fine, because most of this table is pinned that way. Regenerate and commit the result.
 """
 
 [[verdict.route]]
-id = "R-REGENERATE-THE-STALE-PIN"
+id = "task run first"
 kind = "command"
 target = "mise run lock-check"
 
 [[verdict]]
-id = "V-LOCKFILE-WRITES-ENABLED"
+id = "lock write unsafe"
 gloss = "the manifest re-enables install-time lockfile writes, so any `mise install` can write the residue this row rejects"
 class = """
-The other half of `V-LOCK-PLATFORM-RESIDUE` rather than a separate concern: that class is half a mechanism while any install can produce a residue key. A per-caller opt-out cannot reach a caller it does not own, which is how a sandbox's own provisioning kept dirtying the tree; `[settings] lockfile = false` denies the write to everyone. Set it false — the scheduled currency job opts back in with `MISE_LOCKFILE=true`.
+The other half of `lock write other` rather than a separate concern: that class is half a mechanism while any install can produce a residue key. A per-caller opt-out cannot reach a caller it does not own, which is how a sandbox's own provisioning kept dirtying the tree; `[settings] lockfile = false` denies the write to everyone. Set it false — the scheduled currency job opts back in with `MISE_LOCKFILE=true`.
 """
 
 [[verdict.route]]
-id = "R-DISABLE-LOCKFILE-WRITES"
+id = "task run first"
 kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "V-WORKFLOW-INSTALLS-UNLOCKED"
+id = "workflow run unsafe"
 gloss = "a workflow installs with mise-action and sets no MISE_LOCKFILE, so it installs UNLOCKED and passes"
 class = """
 `lockfile = false` turns off the whole lockfile feature rather than only the write, so `mise install --locked` fails outright with "locked mode requires lockfile to be enabled" and a workflow has to set `MISE_LOCKFILE` itself. One that forgets does not fail loudly: mise-action passes `--locked` only when it detects a lockfile, so the job installs unlocked and goes green. A checksum check silently dropped, which is the class this row exists for. Add `MISE_LOCKFILE: "true"` to the workflow's env.
 """
 
 [[verdict.route]]
-id = "R-SET-THE-WORKFLOW-LOCKFILE-ENV"
+id = "task run first"
 kind = "document"
 target = ".github/workflows/ci.yml"
 
 [[verdict]]
-id = "V-LOCK-UNREADABLE"
+id = "lock read unread"
 gloss = "the manifest declares tools and the lockfile could not be read"
 class = """
 Could-not-look, and it is conditioned on there being a subject rather than fired wherever `batten check` runs: a manifest carrying a `[tools]` table is the repository saying it locks tools, and without one there is nothing to report. That scoping is the defect CLOUD-1164 records for `tree-clean`, avoided here rather than survived. A repository declaring tools with no lockfile in the index cannot be judged, which is not the same answer as a clean one.
 """
 
 [[verdict.route]]
-id = "R-COMMIT-A-LOCKFILE"
+id = "task run first"
 kind = "command"
 target = "mise run lock-check"
 
 [[verdict]]
-id = "V-LOCK-ENTRY-PARTIAL"
+id = "lock write partial"
 gloss = "a staged lockfile entry carries a checksum with no url, so it reads as locked and cannot be used"
 class = """
 A platform entry with a checksum and no url is the partial shape a regenerate-and-diff gate structurally cannot catch: `mise lock` never removes or repairs an existing entry, so a stably wrong lockfile passes forever, and one did. Regenerate the entry with `mise run lock-complete`'s own tooling, or remove it — an absent lock is honest where a half-written one is not. Judged over the INDEX rather than the working tree, because this asks about the commit.
@@ -8791,31 +8791,31 @@ kind = "document"
 target = "crates/batten/src/policy.rs"
 
 [[verdict]]
-id = "V-RESTATED-ARM-COUNT-DRIFTS"
+id = "rule count other"
 gloss = "a rules file states how many arms a rule has and the module has a different number"
 class = """
 Predicate 1 one shape up: a restated VALUE against a restated CLOSED COUNT. CLOUD-1150 measured what one costs — `.claude/rules/toolchain.md` said one sibling-edit admission was allowed where `shell-retirement.rego` carried three, and a grooming session wrote that premise into two dispatched agent prompts and five issue bodies before anyone read the module. The module's own heads are the authority. Correct the number, or drop the `(N arms)` and let the reader read it there — dropping it is always allowed, because this class never demands that a count be restated.
 """
 
 [[verdict.route]]
-id = "R-CORRECT-THE-ARM-COUNT"
+id = "task run first"
 kind = "command"
 target = "mise run rules-drift"
 
 [[verdict]]
-id = "V-SCHEMA-KEY-UNDOCUMENTED"
+id = "input name missing"
 gloss = "a file claiming to enumerate the policy input keys does not name one the engine emits"
 class = """
 Predicate 3 run backwards, and it fails in the opposite direction: a named key the engine cannot emit is a dead gate, and an emittable key the enumerating file omits is an author re-deriving a fact the engine already builds, or filing a fact-family row for something that ships. Measured 2026-08-30 — `base-delta` and `symbols` were declared by the generated schema and named nowhere in the file whose own closing sentence said the lists were held to it. Scoped to the file that makes that claim; a file promising nothing is untouched.
 """
 
 [[verdict.route]]
-id = "R-NAME-THE-EMITTABLE-KEY"
+id = "task run first"
 kind = "document"
 target = ".claude/rules/policy-modules.md"
 
 [[verdict]]
-id = "V-DRIFT-AUTHORITY-UNREADABLE"
+id = "drift read unread"
 gloss = "an authority some prose claims against could not be read"
 class = """
 The could-not-look arm, and it is conditioned on there being a claim to judge rather than fired at startup: an unreadable authority matters exactly where prose depends on it. Without the condition this row would speak in every fixture repository that inherits this config, which is the scoping defect CLOUD-1164 records for `tree-clean`.
