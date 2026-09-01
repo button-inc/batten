@@ -1637,6 +1637,50 @@ regex = 'gh[[:space:]]+pr[[:space:]]+view\b[^|;&]*--jq[[:space:]]+\.body\b'
 id = "shell-script-directory"
 regex = '^\$\(dirname([[:space:]]+--)?[[:space:]]+"[^"]*"\)$|^\$\(cd([[:space:]]+--)?[[:space:]]+"\$\(dirname([[:space:]]+--)?[[:space:]]+"[^"]*"\)"[[:space:]]*&&[[:space:]]*pwd\)$|^\$\{(BASH_SOURCE\[0\]|0)%/\*\}$'
 
+# THE SUBCOMMAND TAIL of a task-name invocation (CLOUD-1299).
+#
+# `shell-retirement`'s repointing arm could only recognise a span that named its
+# callee by PATH, and a caller that names it as a TASK had no landable shape.
+# Measured on `tests/verify.bats:263`, which pins the `verify` remedy's prose:
+# the span is `bot-issue receipt` — a task name plus a subcommand, which is none
+# of a repo-relative path, a `$(dirname "$0")/x.sh` sibling, or a variable bound
+# to one. Retiring the program that name refers to therefore had no admitted
+# edit at all, and CLOUD-1295 shipped a dead task name kept alive in a remedy
+# because a frozen suite pinned it.
+#
+# ANCHORED AT BOTH ENDS, which is the whole of why this is a shape rather than a
+# licence. The module matches this against the text FOLLOWING a naming form, so
+# an unanchored row would let any span merely CONTAINING a subcommand-ish run of
+# characters satisfy the arm — and `contains` on the addition side is exactly
+# what `shell-retirement`'s own comment refuses in as many words.
+#
+# The vocabulary is deliberately narrower than a shell word: lowercase, digits
+# and hyphens, in space-separated runs. That is what a task name and its
+# subcommands are spelled with in this tree, and it admits no quote, no `$`, no
+# redirect and no separator — so a span carrying anything that could change what
+# a line DOES is not a subcommand tail and is refused.
+[[pattern]]
+id = "shell-task-subcommand"
+regex = '^([[:space:]]+[a-z0-9][a-z0-9-]*)*$'
+
+# THE OTHER HALF of the same span, and it is two rows for the reason the two
+# script-directory rows above are: they decide different questions. That one
+# decides what may FOLLOW the name; this decides what may PRECEDE it.
+#
+# A caller naming a task usually names the runner too — `mise run <task> <sub>`
+# is the spelling in this tree — so a span anchored strictly at the name would
+# admit the assertion in `tests/verify.bats` and refuse the comment three lines
+# above it, which is half a repointing and no use to anyone.
+#
+# ANCHORED AT BOTH ENDS AND OPTIONAL. Empty matches, which is what admits a bare
+# `<task> <sub>` span through the same clause; anything else must be exactly the
+# runner invocation. So the prefix cannot be arbitrary text that merely ends
+# before the name — `mise-tasks/` does not match, which is what keeps a path
+# span from being read as a task span.
+[[pattern]]
+id = "shell-task-runner-prefix"
+regex = '^(mise run )?$'
+
 # The MARKER, which is a different question from the expression above and is why
 # there are two rows rather than one. `sibling-resolves` states the reason on its
 # own `script_dir_line`: "the spelling varies more than a single regex should try

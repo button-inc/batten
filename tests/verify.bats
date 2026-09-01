@@ -109,7 +109,7 @@ no_claim_receipt() { receipt_says claim 2 missing; }
 # The state a presence test could not see, and the reason this issue exists: a
 # receipt EXISTS and is void, so the remedy is re-claim rather than claim.
 stale_claim_receipt() { receipt_says claim 2 stale-main; }
-# CLOUD-693's second kind, minted by `mise run bot-issue receipt` on a bot branch.
+# CLOUD-693's second kind, minted by `batten claim bot` on a bot branch.
 bot_receipt() { receipt_says bot 0 valid; }
 no_bot_receipt() { receipt_says bot 2 missing; }
 
@@ -260,7 +260,7 @@ called() {
 	no_claim_receipt
 	run_verify
 	[[ "$output" == *"claim-check"* ]]
-	[[ "$output" == *"bot-issue receipt"* ]]
+	[[ "$output" == *"batten claim bot"* ]]
 	[[ "$output" == *"No receipt written."* ]]
 }
 
