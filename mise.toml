@@ -1634,7 +1634,14 @@ run = "command -v batten && batten --version"
 # a name that promises one.
 [tasks.memories-check]
 description = "Gate: every mem: reference in tracked markdown resolves to a real memory, and every memory is addressable by its name (CLOUD-183)"
-run = "batten check --rule memory-graph"
+# `cargo run` RATHER THAN THE INSTALLED BINARY, on `batten-check`'s precedent
+# and `policy-budget`'s (also a fast-tier step): the gate must judge the tree it
+# is committing, not whatever binary happens to be on PATH. Measured while
+# landing CLOUD-1150 -- a rebase brought `main`'s new `[[mcp.source]]` section
+# under the branch, the installed binary predated it, and BOTH wrappers refused
+# with a config parse error that named a section neither gate reads. Nothing in
+# CI installs `batten` either, so the bare form had never been CI-verified.
+run = "cargo run --quiet -p batten -- check --rule memory-graph"
 
 # CLOUD-843 / CLOUD-1150, and the same wrapper shape one member over: `hk.pkl`'s
 # `rules-drift` step runs `mise run rules-drift` and still does, so the caller
@@ -1651,7 +1658,7 @@ run = "batten check --rule memory-graph"
 # together across two files, and there is one name here.
 [tasks.rules-drift]
 description = "Gate: a value `.claude/rules/*.md` restates still agrees with the mechanism that owns it (CLOUD-506)"
-run = "batten check --rule rules-drift"
+run = "cargo run --quiet -p batten -- check --rule rules-drift"
 
 [tasks.batten-check]
 description = "Consumer #1: evaluate the committed batten.toml with batten's own engine against this repository"
