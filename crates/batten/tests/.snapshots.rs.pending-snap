@@ -1,0 +1,2 @@
+{"run_id":"6e3285b5-e169-46a1-84f4-5b16f9d36987","line":107,"new":{"module_name":"snapshots","snapshot_name":"a_clean_run_is_frozen_as_silent","metadata":{"source":"crates/batten/tests/snapshots.rs","assertion_line":107,"expression":"stdout_of(&output)"},"snapshot":""},"old":{"module_name":"snapshots","metadata":{},"snapshot":""}}
+{"run_id":"1491bddb-2ade-43b8-9a14-6ac587619a4c","line":107,"new":null,"old":null}

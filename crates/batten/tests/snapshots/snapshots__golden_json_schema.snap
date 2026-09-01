@@ -1347,6 +1347,44 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "record",
+      "about": "Out-of-tree verdict stores: what something else judged, keyed so a stale answer cannot answer",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "record forge",
+          "about": "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "ref",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The ref or sha the verdict was taken against"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "record tool",
+          "about": "Record a declared tool row's verdict, read as `<name> <token>` lines on stdin",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "id",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The `[[rule.tools]]` id whose verdict is being recorded"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "semver",
       "about": "Whether this branch's API delta is compatible with the bump it claims",
       "effect": "unclassified",

@@ -609,6 +609,25 @@ mod tests {
                 "receipt".to_owned(),
                 "receipt record".to_owned(),
                 "receipt status".to_owned(),
+                // The out-of-tree verdict stores' write half (CLOUD-1265). §2
+                // gains the noun and its two leaves in the same change, which is
+                // what this assertion exists to prompt.
+                //
+                // TWO LEAVES AND NOT ONE, because the two stores share the
+                // record's line shape and nothing else: `tools::record_key`
+                // composes a triple from a declared row plus bytes read off disk,
+                // `forge::record_path` is a resolved sha. A single verb with a
+                // mode flag would be a second authority over which key gets
+                // composed — and building both is what keeps this off
+                // CLOUD-1184's singleton-noun list.
+                //
+                // Spelled `record <object>` rather than `<object> record`, unlike
+                // its `receipt record` and `state record` neighbours above:
+                // CLOUD-1190 inverts those when the imperative grammar lands, and
+                // a third row spelled the old way would be a third row to invert.
+                "record".to_owned(),
+                "record forge".to_owned(),
+                "record tool".to_owned(),
                 // The API-compatibility noun (CLOUD-1050), ported off
                 // `mise-tasks/semver.sh` when CLOUD-1059 made editing a shell
                 // rule refusable. §2 gains the noun in the same change, which is
