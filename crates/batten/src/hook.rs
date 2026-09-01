@@ -6361,116 +6361,169 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
     ))
 }
 
+/// One segment's words, split where the caller wrote a NEWLINE (CLOUD-1287).
+///
+/// # The defect
+///
+/// A newline is whitespace to [`segments`], so a script written across lines is
+/// one segment and `effective_program` resolves the FIRST line's program for the
+/// whole thing. Measured over the shipped binary, one protected path and two
+/// spellings of the same read: `stat -c %s batten.toml` allowed, and the
+/// identical `stat` written on line two after `cd /tmp` REFUSED, naming `cd` —
+/// so a declared `protected_readers` entry is unreachable from any script, which
+/// is the surface `protected_readers` exists for.
+///
+/// That also makes `.claude/rules/policy-modules.md`'s "it under-denies, which
+/// is the sanctioned direction" measurably backwards for this arm: it
+/// OVER-denies, on a read, which is the direction that gets a guard switched
+/// off. The prose is corrected in the same change.
+///
+/// # NARROW ON PURPOSE, and this is the whole of the narrowing
+///
+/// Segment identity is untouched: promoting a newline to a separator in
+/// [`segments`] would change every landed `pipeline` verdict, and `terminator`
+/// is what those rows are decided by. Only the two arms below — the mutation
+/// walk and the unknown-program walk — stop at a line, because both are asking
+/// "which program was handed this operand", a question a line answers and a
+/// segment does not.
+///
+/// # There is still ONE parser
+///
+/// Each line goes back through [`segments`] rather than through a `split` of any
+/// kind. A second tokenizer here is a second AUTHORITY (CLOUD-857), and it would
+/// disagree with the one `shape` and `pipeline` rows are decided by over exactly
+/// the quoting cases neither author had in mind. Re-entering is safe because a
+/// segment's `raw` carries no separator by construction — it is what the parser
+/// split ON — so each line yields at most one sub-segment.
+///
+/// Heredoc bodies are already gone from `raw`, which is what keeps a `rm` inside
+/// a commit message from becoming a line of its own here (CLOUD-723).
+fn line_bounded_words(segment: &Segment) -> Vec<Vec<String>> {
+    // The common case is one line, and it must cost nothing: `batten hook` runs
+    // on every mediated call under CLOUD-689's budget.
+    if !segment.raw.contains('\n') {
+        return vec![segment.words.clone()];
+    }
+    segment
+        .raw
+        .lines()
+        .flat_map(|line| segments(line).into_iter().map(|parsed| parsed.words))
+        .filter(|words| !words.is_empty())
+        .collect()
+}
+
 fn protected_mutation(policy: &Policy, command: &str) -> Decision {
     for segment in segments(command) {
-        let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
-        // Operands of the effective program, plus any redirect target. Both are
-        // candidates; a redirect needs no program at all.
-        let mut candidates: Vec<Target<'_>> = Vec::new();
-        if let Some(index) = effective_program(&tokens) {
-            let program = tokens[index];
-            // The row is resolved ONCE per segment, from the program and its
-            // arguments together (CLOUD-442). Before this the lookup was by
-            // program alone, so a program that mutates under one subcommand or
-            // behind one flag could only be declared as mutating under all of
-            // them — which is why five write shapes could not be expressed.
-            if let Some(matched) =
-                crate::verbs::qualify(&policy.verbs, program, &tokens[index + 1..])
-            {
-                let operands = operands(&tokens, index + 1 + matched.consumed);
-                // `Last` is the destination-only narrowing. An empty operand
-                // list has no last element and therefore no target, which is the
-                // same answer as before for a program invoked with none.
-                let targets: &[&str] = match matched.operands {
-                    OperandScope::All => &operands,
-                    OperandScope::Last => operands.last().map_or(&[], std::slice::from_ref),
-                };
-                for path in targets {
+        for words in line_bounded_words(&segment) {
+            let tokens: Vec<&str> = words.iter().map(String::as_str).collect();
+            // Operands of the effective program, plus any redirect target. Both are
+            // candidates; a redirect needs no program at all.
+            let mut candidates: Vec<Target<'_>> = Vec::new();
+            if let Some(index) = effective_program(&tokens) {
+                let program = tokens[index];
+                // The row is resolved ONCE per segment, from the program and its
+                // arguments together (CLOUD-442). Before this the lookup was by
+                // program alone, so a program that mutates under one subcommand or
+                // behind one flag could only be declared as mutating under all of
+                // them — which is why five write shapes could not be expressed.
+                if let Some(matched) =
+                    crate::verbs::qualify(&policy.verbs, program, &tokens[index + 1..])
+                {
+                    let operands = operands(&tokens, index + 1 + matched.consumed);
+                    // `Last` is the destination-only narrowing. An empty operand
+                    // list has no last element and therefore no target, which is the
+                    // same answer as before for a program invoked with none.
+                    let targets: &[&str] = match matched.operands {
+                        OperandScope::All => &operands,
+                        OperandScope::Last => operands.last().map_or(&[], std::slice::from_ref),
+                    };
+                    for path in targets {
+                        candidates.push(Target {
+                            program,
+                            subcommand: matched.verb.subcommand.as_deref(),
+                            path,
+                            redirect: matched.verb.redirect.as_deref(),
+                        });
+                    }
+                }
+            }
+            // A redirect is a pseudo-program with no argv of its own, so it carries
+            // no qualifier and is looked up by name.
+            for (operator, path) in redirect_targets(&tokens) {
+                if let Some(verb) = crate::verbs::classify(&policy.verbs, operator) {
                     candidates.push(Target {
-                        program,
-                        subcommand: matched.verb.subcommand.as_deref(),
+                        program: operator,
+                        subcommand: None,
                         path,
-                        redirect: matched.verb.redirect.as_deref(),
+                        redirect: verb.redirect.as_deref(),
                     });
                 }
             }
-        }
-        // A redirect is a pseudo-program with no argv of its own, so it carries
-        // no qualifier and is looked up by name.
-        for (operator, path) in redirect_targets(&tokens) {
-            if let Some(verb) = crate::verbs::classify(&policy.verbs, operator) {
-                candidates.push(Target {
-                    program: operator,
-                    subcommand: None,
-                    path,
-                    redirect: verb.redirect.as_deref(),
-                });
-            }
-        }
 
-        for target in candidates {
-            if !protects(policy, target.path) {
-                continue;
+            for target in candidates {
+                if !protects(policy, target.path) {
+                    continue;
+                }
+                return Decision::Deny(protected_refusal(&policy.redirects, &target));
             }
-            return Decision::Deny(protected_refusal(&policy.redirects, &target));
-        }
 
-        // THE UNKNOWN PROGRAM, WHICH USED TO FALL THROUGH TO ALLOW (CLOUD-1141).
-        //
-        // Everything above decides by NAMING the program: `verbs` enumerates
-        // mutations, so a program it does not name produced no candidate and the
-        // loop ended here allowing. Measured over the shipped binary, one
-        // protected path and five spellings of writing it: `echo x >>`, `sed -i`
-        // and `tee` denied; `python3 -c "open(...,'w')"` and `perl -pi -e`
-        // ALLOWED. An allowlist-by-omission whose omissions are holes, and the
-        // gate `memory-guard` was retired into (CLOUD-442).
-        //
-        // The direction is now inverted rather than the list extended. Adding the
-        // measured interpreters would close two instances and leave the shape —
-        // the next one is unrefused and the table would imply a completeness it
-        // does not have. So an operand that is a protected path refuses unless
-        // the program is KNOWN, and known means one of two things:
-        //
-        //   * it appears in `verbs` at all — the table encodes that program's
-        //     argv grammar, so a non-matching invocation is a considered allow
-        //     rather than an absence. `git add batten.toml` stays allowed because
-        //     `git`'s mutating rows did not match, not because nobody looked.
-        //   * it appears in `protected_readers` — declared to only read.
-        //
-        // Forgetting a reader is now a false refusal somebody fixes in a minute.
-        // Forgetting a writer is no longer a silent hole. That asymmetry is the
-        // whole change; the enumeration did not get longer, it got turned round.
-        if let Some(index) = effective_program(&tokens) {
-            let program = tokens[index];
-            let known = policy
-                .protected_readers
-                .iter()
-                .any(|reader| reader == program)
-                || policy.verbs.iter().any(|verb| verb.verb == program);
-            if !known {
-                // OPERANDS, AND THE WIDER SCAN WAS TRIED AND REVERTED. Scanning
-                // every word for an embedded protected path catches
-                // `python3 -c "open('p','w')"` — the shape an agent actually
-                // reaches for — and it also refuses any unclassified program that
-                // merely MENTIONS a guarded path. Measured immediately: a `for`
-                // loop iterating probe commands was refused because one of its
-                // quoted words contained `batten.toml`. `echo "see batten.toml"`
-                // is the same shape.
-                //
-                // That is disqualifying rather than merely noisy. A guard that
-                // refuses ordinary mentions is one people switch off within a
-                // day, which is how this class of guard dies — the row that
-                // demanded this fix says so in as many words. An operand is a
-                // thing the program was handed; a substring of a quoted argument
-                // is not, and argv cannot tell a path being WRITTEN inside an
-                // interpreter's program text from one being TALKED ABOUT.
-                for path in operands(&tokens, index + 1) {
-                    // CLOUD-1141's arm asks the same membership question, so it
-                    // had the same hole: an absolute operand was not recognised as
-                    // protected here either, and the unknown program was allowed
-                    // through the branch built to refuse it (CLOUD-1236).
-                    if protects(policy, path) {
-                        return Decision::Deny(unknown_program_refusal(program, path));
+            // THE UNKNOWN PROGRAM, WHICH USED TO FALL THROUGH TO ALLOW (CLOUD-1141).
+            //
+            // Everything above decides by NAMING the program: `verbs` enumerates
+            // mutations, so a program it does not name produced no candidate and the
+            // loop ended here allowing. Measured over the shipped binary, one
+            // protected path and five spellings of writing it: `echo x >>`, `sed -i`
+            // and `tee` denied; `python3 -c "open(...,'w')"` and `perl -pi -e`
+            // ALLOWED. An allowlist-by-omission whose omissions are holes, and the
+            // gate `memory-guard` was retired into (CLOUD-442).
+            //
+            // The direction is now inverted rather than the list extended. Adding the
+            // measured interpreters would close two instances and leave the shape —
+            // the next one is unrefused and the table would imply a completeness it
+            // does not have. So an operand that is a protected path refuses unless
+            // the program is KNOWN, and known means one of two things:
+            //
+            //   * it appears in `verbs` at all — the table encodes that program's
+            //     argv grammar, so a non-matching invocation is a considered allow
+            //     rather than an absence. `git add batten.toml` stays allowed because
+            //     `git`'s mutating rows did not match, not because nobody looked.
+            //   * it appears in `protected_readers` — declared to only read.
+            //
+            // Forgetting a reader is now a false refusal somebody fixes in a minute.
+            // Forgetting a writer is no longer a silent hole. That asymmetry is the
+            // whole change; the enumeration did not get longer, it got turned round.
+            if let Some(index) = effective_program(&tokens) {
+                let program = tokens[index];
+                let known = policy
+                    .protected_readers
+                    .iter()
+                    .any(|reader| reader == program)
+                    || policy.verbs.iter().any(|verb| verb.verb == program);
+                if !known {
+                    // OPERANDS, AND THE WIDER SCAN WAS TRIED AND REVERTED. Scanning
+                    // every word for an embedded protected path catches
+                    // `python3 -c "open('p','w')"` — the shape an agent actually
+                    // reaches for — and it also refuses any unclassified program that
+                    // merely MENTIONS a guarded path. Measured immediately: a `for`
+                    // loop iterating probe commands was refused because one of its
+                    // quoted words contained `batten.toml`. `echo "see batten.toml"`
+                    // is the same shape.
+                    //
+                    // That is disqualifying rather than merely noisy. A guard that
+                    // refuses ordinary mentions is one people switch off within a
+                    // day, which is how this class of guard dies — the row that
+                    // demanded this fix says so in as many words. An operand is a
+                    // thing the program was handed; a substring of a quoted argument
+                    // is not, and argv cannot tell a path being WRITTEN inside an
+                    // interpreter's program text from one being TALKED ABOUT.
+                    for path in operands(&tokens, index + 1) {
+                        // CLOUD-1141's arm asks the same membership question, so it
+                        // had the same hole: an absolute operand was not recognised as
+                        // protected here either, and the unknown program was allowed
+                        // through the branch built to refuse it (CLOUD-1236).
+                        if protects(policy, path) {
+                            return Decision::Deny(unknown_program_refusal(program, path));
+                        }
                     }
                 }
             }

@@ -717,3 +717,53 @@ fn the_normalised_write_target_uses_forward_slashes_on_every_platform() {
          spells it with — a rendered `\\` matches no repo-relative glob"
     );
 }
+
+// --- CLOUD-1287: verb/operand attribution stops at a newline ------------------
+//
+// A newline is whitespace to the tokenizer, so a script written across lines was
+// ONE segment and `effective_program` resolved the first line's program for all
+// of it. `protected_readers` was therefore unreachable from any script, which is
+// the surface it exists for.
+//
+// Narrow on purpose: segment identity is untouched, so no landed `pipeline`
+// verdict moves. Only the mutation walk and the unknown-program walk stop at a
+// line.
+
+#[test]
+fn a_declared_reader_is_consulted_whatever_precedes_it_on_an_earlier_line() {
+    // THE MEASURED PAIR, and it is the whole defect: the same read, once alone
+    // and once on line two. Before this the second refused, naming `cd` — a
+    // false refusal on a READ, which is the direction that gets a guard switched
+    // off rather than the sanctioned one.
+    assert_allowed(&format!("stat -c %s {AUTHORITY}"));
+    assert_allowed(&format!("cd /tmp\nstat -c %s {AUTHORITY}"));
+}
+
+#[test]
+fn a_genuine_mutation_on_a_later_line_is_still_refused() {
+    // THE DISCRIMINATOR, without which the fix above is a blanket allow for
+    // every multi-line call. Line one is innocuous; line two is a declared
+    // mutation of a protected path and must still be refused.
+    assert_denied(&format!("cd /tmp\nrm {GUARDED}"));
+    assert_denied(&format!("echo starting\nsed -i s/a/b/ {AUTHORITY}"));
+}
+
+#[test]
+fn an_unknown_program_on_a_later_line_is_still_refused() {
+    // The other arm the narrowing touches (CLOUD-1141's inversion). A program
+    // neither table names, handed a protected path, refuses — and it must keep
+    // refusing when the call is written across lines rather than becoming an
+    // operand of whatever ran first.
+    assert_denied(&format!("echo starting\nperl -pi -e s/a/b/ {AUTHORITY}"));
+}
+
+#[test]
+fn a_newline_did_not_become_a_separator() {
+    // THE BOUND, asserted rather than assumed. Promoting a newline in
+    // `segments` would have changed every landed `pipeline` verdict, so the case
+    // that would notice is a discard shape written across lines: it is still ONE
+    // segment, so the pager still discards the verdict and the call is still
+    // refused. A newline-as-separator would have made these two commands and
+    // allowed the first.
+    assert_denied("mise run verify\n| tail -1");
+}

@@ -241,7 +241,27 @@ A **newline is whitespace, not a separator** — bash disagrees, and the bound i
 deliberate rather than an oversight: promoting it would change every landed
 `pipeline` verdict. So the shell following a heredoc's terminator joins the
 segment its opener was written in, and a two-command call written across lines is
-judged as one. It under-denies, which is the sanctioned direction.
+judged as one segment.
+
+**AND "it under-denies, which is the sanctioned direction" IS MEASURED
+BACKWARDS** (CLOUD-1287). That sentence stood here and was false of the arm that
+matters most: one segment means `effective_program` resolves the FIRST line's
+program for every operand on every line, so a declared `protected_readers` entry
+was unreachable from any script. Measured over the shipped binary, one protected
+path, the same read twice: `stat -c %s batten.toml` allowed, and the identical
+`stat` written on line two after `cd /tmp` REFUSED, naming `cd`. That is an
+OVER-deny, on a read, which is the direction that gets a guard switched off
+rather than the sanctioned one.
+
+The bound above still holds for segment identity — `terminator` is unmoved and no
+landed `pipeline` verdict changed. What changed is narrower and lives in the
+engine rather than in a module: `hook::line_bounded_words` splits a segment's own
+`raw` at newlines and re-enters `segments` per line, and only the mutation walk
+and the unknown-program walk read it. Both ask "which program was handed this
+operand", a question a line answers and a segment does not. So a module reading
+`input.call.segments` sees exactly what it saw before, and must not grow its own
+line splitting to compensate — that would be the second authority two sections
+up already refuses.
 
 There is **one parser**, and a module must not grow a second: no `split` of the
 command line, in Rego or in Rust. **The reason is not effort, and giving it as
