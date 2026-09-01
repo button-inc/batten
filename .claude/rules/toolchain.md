@@ -15,9 +15,21 @@ These load when you touch the workshop; deeper detail is in
 **Use mise for everything** — tools via `[tools]`, env via `[env]`, commands as
 `[tasks]` run with `mise run`; never a bare `cargo`/`export`/one-off install, so
 CI, hk, and your shell run byte-identical commands. Per clone: `mise install`,
-`git submodule update --init` (bats, in `tests/bats`), and the git hooks — which
-`.claude/hooks/session-start.sh` now performs and `doctor` asserts (CLOUD-476),
-so none of the three is left to a human remembering a prose list. Not `hk
+`git submodule update --init` (bats, in `tests/bats`), and the git hooks — none
+of the three left to a human remembering a prose list, because each is a
+`session:*` task that `batten.toml` declares as a `[[hook.handler]] on =
+"session-start"` and `doctor` asserts afterwards (CLOUD-476, CLOUD-312 row 10).
+
+**The provisioning order and its bounds are `batten.toml`'s, not a script's.**
+The ten `session-*` handler rows ARE the sequence: declaration order is running
+order, each row declares its own `timeout_ms`, and `batten hook` dispatches them
+inline at session start. `.claude/hooks/session-start.sh` used to hold all of
+that and was the last by-path hook registration this repository owned; it is
+retired, and `crates/batten/tests/session_provisioning.rs` carries both its
+ledger and the tier that proves the door does what the rows say. Add a
+provisioning step by adding a task and a row — never by putting a second step
+inside an existing task's body, which is the shape that made the script
+unreadable from the committed authority. Not `hk
 install`: its generated hook calls `hk` bare, which does not resolve where
 mise's shims are off PATH, so the installed body is `.claude/hooks/git-hook.sh` —
 which also refuses to re-enter a gate that is already running, the recursion

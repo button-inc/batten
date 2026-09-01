@@ -5485,18 +5485,27 @@ wiring = [".claude/settings.json"]
 # — a declared path beneath a named root variable, which `policy/harness-wiring.rego`
 # already reads as `harness-settings`. The `$HOME` surface is answered.
 #
-# The live obstacle is that `exclusive` refuses EVERY non-batten registration and
-# four are live, measured 2026-09-01 (`doctor hooks -J`: `siblings: 2`,
-# `merged_siblings: 2` for claude-code), each with its own owner:
+# The live obstacle is that `exclusive` refuses EVERY non-batten registration.
+# Four were live when this note was written, measured 2026-09-01 (`doctor hooks
+# -J`: `siblings: 2`, `merged_siblings: 2` for claude-code). **THIS COMMIT
+# CLEARS ONE OF THEM** — the `session-*` handler rows below retire
+# `.claude/hooks/session-start.sh`, so the committed surface now carries one
+# sibling rather than two. Three remain:
 #
 #   mise-tasks/run-shape-guard.sh      committed   CLOUD-856
-#   .claude/hooks/session-start.sh     committed   CLOUD-312 row 10
 #   session-start-git-identity.sh      $HOME       CLOUD-1079
 #   stop-hook-git-check.sh             $HOME       CLOUD-1079
 #
 # The last two are launcher-provisioned and rewritten at every session start, so
 # no commit here can clear them; CLOUD-1079's remedy is the environment
 # configuration that generates them. Evidence on CLOUD-1160.
+#
+# So the flag is now ONE committed retirement away, and that one is CLOUD-856's:
+# `run-shape-guard` cannot move until its last family has a mediated-call
+# surface. The `$HOME` pair does not block the COMMITTED surface — `doctor`
+# reports `siblings` and `merged_siblings` separately — so a per-surface
+# `exclusive` would already be declarable, which is the shape CLOUD-1160 should
+# consider rather than waiting for a global zero.
 #
 # The capability is therefore shipped and unused, which is the honest state: a
 # consumer with no unretired registrations can declare it today, and this one
@@ -5660,6 +5669,208 @@ id = "mcp-allow-check"
 on = "user-prompt-submit"
 run = ["mise-tasks/mcp-allow-check.sh", "--session"]
 timeout_ms = 2000
+owner = "CLOUD-312"
+expires = "2027-02-28"
+
+# ---------------------------------------------------------------------------
+# CLOUD-312 ROW 10: `.claude/hooks/session-start.sh` RETIRES, AND ITS ORDER
+# BECOMES THIS LIST.
+#
+# The last by-path registration in `.claude/settings.json` is gone with it, so
+# every event on every harness now names `batten hook` by bare name and nothing
+# else. `doctor hooks` reports `siblings` for `claude-code` falling from 2 to 1;
+# the remainder is `run-shape-guard`, whose own retirement is CLOUD-856's.
+#
+# WHAT MOVED, AND WHERE. The script did three separable things, and only one of
+# them was its own:
+#
+#   ordering   -> the DECLARATION ORDER of the ten rows below. `dispatch` runs
+#                 handlers for an event in the order the config lists them, which
+#                 `Dispatched::refusal`'s doc states is why order is the running
+#                 order: a reader predicts it from the file rather than from a
+#                 rule. The `install < doctor < preflight` ordering the retired
+#                 suite asserted by grepping a call log is now readable directly.
+#   the bound  -> `timeout_ms`, imposed by the PARENT. The script had none at
+#                 all, on any step, and a hung `mise install` wedged the session.
+#   the report -> `mise.toml`'s `session:*` tasks, which are the `step` helper's
+#                 log-and-tail contract kept verbatim. That half stayed in a task
+#                 because the door does not provide it: stdout on a passing exit
+#                 is ADVISORY TEXT, so a step that prints on success would put a
+#                 line in every session saying nothing went wrong — the
+#                 announcement CLOUD-891 removed from this hook.
+#
+# THE BOOTSTRAP OBJECTION IS ANSWERED RATHER THAN ARGUED. A handler is dispatched
+# BY the binary, so this shape is only sound if something installs `batten`
+# before the first hook fires. #714 pulled this move because nothing did.
+# CLOUD-1085 closed that: `deps-install` runs from the environment's own
+# provisioning script, before Claude launches, and puts the RELEASED binary on
+# PATH. Verified warm on 2026-09-01 — `/root/.local/bin/batten`, v0.0.137,
+# `verified=sha256`, resolving by bare name. `session:batten` below then replaces
+# it with this checkout's build, because consumer #1 judges the engine it ships.
+#
+# THE RESIDUAL EXPOSURE, STATED BECAUSE IT IS REAL AND NOT MINE TO CLOSE. If
+# `deps-install` does not run, no binary dispatches these rows and nothing
+# provisions — where the old script, registered by path, would still have run.
+# Three things stand against it: the environment's setup script independently
+# runs `mise install` and `mise reshim`, so the toolchain survives; every
+# `session:*` task stays reachable by hand, so a degraded container has a manual
+# repair; and `contract::unmediated_session` (#798) reports a session whose
+# SessionStart never reached the engine instead of failing open in silence.
+#
+# EVERY BOUND BELOW IS COLD-SIZED, WHICH IS THE OPPOSITE STANDARD FROM
+# `mcp-attach-check`'s AND DELIBERATELY SO. That row's 2000ms is two orders above
+# a measured warm path, because a handler that reads two `jq` documents has no
+# cold case. These rows ARE the cold case: this whole surface exists because a
+# cold `mise install` took 24s inside the MCP client's startup window, and
+# CLOUD-1085 measured a cold `install:local` at 141s. A bound tighter than the
+# cold path turns a fail-open handler into the absence the hook was built to
+# close, so each is sized against the slowest honest run of that step and not
+# against the warm one this container measures.
+
+[[hook.handler]]
+id = "session-stamp"
+on = "session-start"
+run = ["mise", "run", "session:stamp"]
+# Two `git rev-parse` calls and a truncation. Nothing here can be slow, and a
+# bound this tight is the statement: a stamp that needs ten seconds is broken.
+timeout_ms = 10000
+owner = "CLOUD-312"
+expires = "2027-02-28"
+
+[[hook.handler]]
+id = "session-install"
+on = "session-start"
+run = ["mise", "run", "session:install"]
+# Ten minutes. The measured cold figure for ONE tool was 24s (`pipx:serena-agent`,
+# CLOUD-196); this installs the whole `[tools]` table on a container with no
+# cache, and it is the step every other one depends on.
+timeout_ms = 600000
+owner = "CLOUD-312"
+expires = "2027-02-28"
+
+[[hook.handler]]
+id = "session-submodules"
+on = "session-start"
+run = ["mise", "run", "session:submodules"]
+# A shallow network clone of `tests/bats`. Two minutes is generous for one small
+# repository and short enough that a hung transport does not hold the session.
+timeout_ms = 120000
+owner = "CLOUD-312"
+expires = "2027-02-28"
+
+[[hook.handler]]
+id = "session-doctor"
+on = "session-start"
+run = ["mise", "run", "session:doctor"]
+# Fifteen minutes, the longest bound here and the one with the least measurement
+# behind it: doctor's rustup half installs cross targets over the network, and
+# the failure this step exists to prevent (CLOUD-218's `detected conflict`) is
+# itself a symptom of that install being slow enough to race something else.
+timeout_ms = 900000
+owner = "CLOUD-312"
+expires = "2027-02-28"
+
+[[hook.handler]]
+id = "session-batten"
+on = "session-start"
+run = ["mise", "run", "session:batten"]
+# Ten minutes against a MEASURED 141s cold release build (CLOUD-1085's table,
+# `/tmp/session-start-batten-build.log`). Four times the measurement, because
+# the measurement was taken on a warm dependency cache and a cold one compiles
+# the whole graph.
+timeout_ms = 600000
+owner = "CLOUD-312"
+expires = "2027-02-28"
+
+[[hook.handler]]
+id = "session-git-hooks"
+on = "session-start"
+run = ["mise", "run", "session:git-hooks"]
+# Two symlinks. Same reasoning as `session-stamp`.
+timeout_ms = 10000
+owner = "CLOUD-312"
+expires = "2027-02-28"
+
+[[hook.handler]]
+id = "session-attribution-identity"
+on = "session-start"
+run = ["mise", "run", "session:identity"]
+# AFTER `session-batten`, because this is the ENGINE answering: the policy is
+# `[attribution]` in this file and `batten attribution identity` is what reads
+# it. The task spells `cargo run`, so a cold container pays a debug build here
+# that the release build above does not cover — which is what the ten minutes is
+# for, not the identity write itself.
+#
+# It belongs in the provisioning window at all because the vendor identity is
+# injected at the environment level: a fresh clone carries it before any work
+# starts, and the first thing that would notice is `commit-attribution` refusing
+# a branch whose commits are all already written.
+timeout_ms = 600000
+owner = "CLOUD-312"
+expires = "2027-02-28"
+
+[[hook.handler]]
+id = "session-signing-posture"
+on = "session-start"
+run = ["mise", "run", "session:signing"]
+# The signature half of the same defect (CLOUD-669). CLOUD-591 decided the
+# interim posture is not to sign and shipped no mechanism, so it was never once
+# in force: the launcher writes `commit.gpgsign true` --global every session, and
+# local beats global only if something writes local. `Attribution` has no
+# signature field, so `identity_deny` structurally cannot see it.
+#
+# Before any commit is written, for the reason above it: a repair that lands
+# after the fact leaves signed commits only a rebase can unwind.
+timeout_ms = 600000
+owner = "CLOUD-312"
+expires = "2027-02-28"
+
+[[hook.handler]]
+id = "session-container-preflight"
+on = "session-start"
+run = ["mise", "run", "container-preflight"]
+# LAST OF THE STEPS THAT CAN HALT, and that position is the whole point
+# (CLOUD-261). "The toolchain installed" and "this container can do the work" are
+# different questions, and the second used to be answered three tasks in, by a
+# failure wearing someone else's name.
+#
+# THE `--degraded` ARM IS GONE AND THAT IS A FIDELITY LOSS, recorded here rather
+# than glossed. The script tracked a `fail` variable across its steps and passed
+# `--degraded` when an earlier one had failed, telling the preflight not to trust
+# toolchain-dependent probes. Handlers do not share state — each is its own
+# process with its own outcome — so this now always runs the full probe set. The
+# consequence is a preflight that may report a toolchain-dependent probe failing
+# on a container whose install already failed: a second symptom of one cause
+# rather than a wrong answer, and both refusals are in the same reply. Recovering
+# the arm needs a fact the door does not carry today.
+timeout_ms = 120000
+owner = "CLOUD-312"
+expires = "2027-02-28"
+
+[[hook.handler]]
+id = "session-census"
+on = "session-start"
+run = ["mise", "run", "session:census"]
+# LAST, AND ONE OF THE TWO ROWS THAT MAY SPEAK ON THE NORMAL PATH. Its report is
+# something this hook has to say to a reader with an action to take — what was
+# running when the container we replaced went down (CLOUD-451) — so its stdout is
+# deliberately left to become advisory text.
+#
+# THE OTHER IS `session-container-preflight`, and the count was wrong here until
+# it was measured: dispatching these rows for real on 2026-09-01 returned
+# `signing-posture: …` and `container-preflight: egress fenced, …` in the
+# advisory, where this comment claimed one line. Both were the retired script's
+# behaviour too — it ran `container-preflight` and the census directly and
+# `step`-wrapped everything else — so the preflight's line stays and the signing
+# row was repointed at a wrapped task to restore the silence it had. The lesson is
+# the one this file keeps re-learning: a claim about what a row PRINTS is a
+# measurement, and every other row above is silent by construction only because a
+# task makes it so.
+#
+# It is also the only row that cannot fail the session: the task swallows both
+# its exits, because a verdict about a PAST container is not a provisioning
+# failure.
+timeout_ms = 30000
 owner = "CLOUD-312"
 expires = "2027-02-28"
 

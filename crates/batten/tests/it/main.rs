@@ -160,6 +160,7 @@ mod runner_verdict;
 mod scanner_taxonomy;
 mod secrets_kind;
 mod semver_gate;
+mod session_provisioning;
 mod shell_retirement;
 mod shell_write_advisory;
 mod sinks;

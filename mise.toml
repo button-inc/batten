@@ -1724,6 +1724,157 @@ run = "cargo run --quiet -p batten -- check --rule memory-graph"
 [tasks.rules-drift]
 description = "Gate: a value `.claude/rules/*.md` restates still agrees with the mechanism that owns it (CLOUD-506)"
 run = "cargo run --quiet -p batten -- check --rule rules-drift"
+# ---------------------------------------------------------------------------
+# The session-start provisioning steps, one task each (CLOUD-312 row 10).
+#
+# THESE ARE THE BODY OF `.claude/hooks/session-start.sh`, WHICH THIS CHANGE
+# DELETES. That script was 295 lines of bash registered by path on SessionStart,
+# and it did three separable things: it ORDERED a list of steps, it BOUNDED
+# nothing, and it wrapped each step in a `step` helper that logged to a file and
+# tailed five lines to stderr on failure. Two of those three now belong to
+# `[[hook.handler]]` — the order is the declaration order of the rows in
+# `batten.toml`, and the bound is `timeout_ms`, imposed by the parent. What the
+# door does NOT provide is the third, so it is what stayed, once per step.
+#
+# WHY A TASK PER STEP RATHER THAN ONE TASK RUNNING THEM ALL. One task would be
+# the same bash one layer down, invisible to the committed authority: a reader of
+# `batten.toml` would see one row and could not tell what runs, in what order, or
+# what happens when the fourth thing fails. It would also share one bound across
+# steps whose costs differ by two orders of magnitude. The row-per-step shape is
+# what makes `batten doctor hooks` and `batten config show` able to answer
+# "what does this repository do at session start" from the committed file.
+#
+# WHY THE REDIRECT IS HERE AND NOT IN THE HANDLER ROW. `handler.rs`'s contract
+# reads stdout on a passing exit as ADVISORY TEXT that joins the reply the host
+# sees. Several of these steps print on success — `install:local` echoes its
+# destination — so registered raw they would put a line in every session's
+# advisory saying nothing went wrong, which is exactly the announcement CLOUD-891
+# removed from this hook. `step` solved that by sending both streams to a log,
+# and these tasks solve it the same way: silence on the normal path, and on
+# failure the `::error::` line, the log pointer and the last five lines on
+# STDERR, which is where the door's contract puts a reason.
+#
+# The `|| { …; exit 1; }` is not belt-and-braces: a body declaring no `shell =`
+# runs under `sh -e`, so a bare failing call would abort the task before its own
+# report could run. That is measured — it cost a debugging cycle in #798 — and
+# the three corrected comments in `[tasks."test:bats"]` are the same fact said
+# where the next author reads it.
+
+[tasks."session:stamp"]
+description = "Session start: stamp the beginning of the session, before anything else runs (CLOUD-431)"
+# FIRST, AND THE ORDER IS THE PREDICATE. `claim-check`'s `refined-this-session`
+# rule compares an issue's tracker-minted `updatedAt` against this file's mtime:
+# refinement must PREDATE the session that implements it. A stamp written after
+# the provisioning steps would date the session to whenever provisioning finished,
+# which is exactly the ordering that rule exists to refuse.
+#
+# Silent and non-fatal by construction — `mkdir -p` and a truncation, both
+# idempotent. `claim-check` refuses on a MISSING stamp rather than passing, so a
+# failure here fails closed downstream instead of needing to halt the session.
+run = "mkdir -p \"$(git rev-parse --git-dir)/batten-receipts\" && : > \"$(git rev-parse --git-dir)/batten-receipts/session-start\""
+
+[tasks."session:install"]
+description = "Session start: provision the mise toolchain, purely — the step whose absence was CLOUD-196"
+# The load-bearing one. `.mcp.json` launches Serena with `mise exec --`, and
+# `mise exec` INSTALLS a missing tool on demand: on a cold container that install
+# ran inside the MCP client's startup window, measured 24s for `pipx:serena-agent`,
+# the handshake did not complete, and MCP servers are not retried mid-session.
+# This is what makes that `exec` a pure exec.
+#
+# `MISE_LOCKFILE=false` makes it a PURE install (CLOUD-223). A cold install of
+# `ubi:rust-cross/cargo-zigbuild` otherwise appends a platform key `mise lock`
+# cannot produce, which `lock-complete` rejects by name — so every session opened
+# with a dirty tree and a red gate no branch had caused. `[settings] lockfile =
+# false` is the authority; this is the belt to that suspenders, and it keeps the
+# install pure even under an ambient `MISE_LOCKFILE`.
+run = "env MISE_LOCKFILE=false mise install >/tmp/session-start-install.log 2>&1 || { echo '::error:: session-start: install failed — see /tmp/session-start-install.log' >&2; tail -5 /tmp/session-start-install.log >&2; exit 1; }"
+
+[tasks."session:submodules"]
+description = "Session start: check out the vendored submodules — bats lives in tests/bats"
+run = "git submodule update --init --recursive >/tmp/session-start-submodules.log 2>&1 || { echo '::error:: session-start: submodules failed — see /tmp/session-start-submodules.log' >&2; tail -5 /tmp/session-start-submodules.log >&2; exit 1; }"
+
+[tasks."session:doctor"]
+description = "Session start: provision what mise does not own — the rustup cross targets above all (CLOUD-218)"
+# AFTER `session:install` AND BEFORE THE PREFLIGHT, and both halves of that
+# ordering are load-bearing. Doctor's rustup half needs the mise-provisioned
+# toolchain, so it cannot go first; and left outside the provisioning window it
+# runs for the first time inside the first `mise run verify`, concurrently with
+# whatever else the sandbox is still laying down. Measured on a cold container
+# 2026-08-07: that first verify died in doctor with `detected conflict` on
+# `rust-std-aarch64-apple-darwin`, and a second doctor, nothing changed but time,
+# exited 0. The message names cross-compilation, so it costs the reader a
+# debugging session on a machine where nothing is broken.
+#
+# This is not a retry: it does not make the race survivable, it empties the
+# window the race needs.
+run = "mise run doctor >/tmp/session-start-doctor.log 2>&1 || { echo '::error:: session-start: doctor failed — see /tmp/session-start-doctor.log' >&2; tail -5 /tmp/session-start-doctor.log >&2; exit 1; }"
+
+[tasks."session:batten"]
+description = "Session start: build and install this checkout's own engine over the released one `deps-install` provisioned"
+# THE RELEASED BINARY IS ALREADY ON PATH BY THE TIME THIS RUNS, and that is what
+# makes this row possible at all. `deps-install` puts it there at provisioning
+# (CLOUD-1085, #798) — before Claude launches, so before any hook fires — which
+# is what dispatches the handler this task is registered as. This step then
+# REPLACES it with the working tree's build, because consumer #1 must judge the
+# engine it ships rather than the last release.
+#
+# The ordering consequence, stated because it inverts the old script's: a session
+# whose `deps-install` did not run has no binary to dispatch handlers with, so
+# nothing here runs and the advisory `contract::unmediated_session` reports it.
+# `mise run install:local` stays reachable by hand, which is the manual repair.
+run = "mise run install:local >/tmp/session-start-batten.log 2>&1 || { echo '::error:: session-start: install:local failed — see /tmp/session-start-batten.log' >&2; tail -5 /tmp/session-start-batten.log >&2; exit 1; }"
+
+[tasks."session:git-hooks"]
+description = "Session start: install the repo-owned git hooks, the per-clone step nothing performed for 24 commits (CLOUD-476)"
+# NOT `hk install`. The hook it generates is `exec hk run pre-commit`, calling
+# `hk` BARE, which resolves only where mise's shims are on PATH — in this
+# environment they are not, so that hook makes every `git commit` fail with
+# `hk: not found`. Measured, on the very commit that added the step. The body
+# installed here resolves `hk` through `mise exec --`, which is the form that
+# works, and refuses to re-enter a gate already running.
+#
+# A SYMLINK, NEVER A COPY: a copy is a second authority that goes stale silently
+# the moment the checked-in body changes, and `doctor` would keep passing over
+# it. `-f` so a clone carrying hk's generated hook is repaired rather than
+# skipped, which is the state every existing clone is in. Both hooks `hk.pkl`
+# defines, through one body that dispatches on the name it is invoked as —
+# commit-msg carries the Conventional Commits check release-plz's semver depends
+# on, so leaving it out would gate the expensive half and not the deciding one.
+run = "mkdir -p \"$(git rev-parse --git-path hooks)\" && ln -sfn \"$(git rev-parse --show-toplevel)/.claude/hooks/git-hook.sh\" \"$(git rev-parse --git-path hooks)/pre-commit\" && ln -sfn \"$(git rev-parse --show-toplevel)/.claude/hooks/git-hook.sh\" \"$(git rev-parse --git-path hooks)/commit-msg\""
+
+[tasks."session:identity"]
+description = "Session start: set this clone's repo-local git identity, quietly — the `step`-wrapped call from the retired hook"
+# WRAPPED RATHER THAN REGISTERED DIRECTLY, and the reason is measured. The retired
+# script ran `step attribution-identity mise run attribution-identity`, and `step`
+# sent both streams to a log — so the fixer's own line never reached a session.
+# Registering the bare task as a handler puts its stdout in the advisory instead,
+# which is the CLOUD-891 announcement this hook had already removed. This keeps
+# the old behaviour exactly: silent when it has nothing to repair, loud when it
+# fails.
+run = "mise run attribution-identity >/tmp/session-start-identity.log 2>&1 || { echo '::error:: session-start: attribution-identity failed — see /tmp/session-start-identity.log' >&2; tail -5 /tmp/session-start-identity.log >&2; exit 1; }"
+
+[tasks."session:signing"]
+description = "Session start: put the not-signing posture into force, quietly — the `step`-wrapped call from the retired hook"
+# The same wrapper for the same measured reason, and this is the one that caught
+# it: registered bare, `mise run signing-posture --repair` put
+# `signing-posture: signing disabled in this checkout …` into every session's
+# advisory. Measured 2026-09-01 by dispatching the real rows. The retired script
+# `step`-wrapped this call, so that line was never a session's to read.
+run = "mise run signing-posture --repair >/tmp/session-start-signing.log 2>&1 || { echo '::error:: session-start: signing-posture failed — see /tmp/session-start-signing.log' >&2; tail -5 /tmp/session-start-signing.log >&2; exit 1; }"
+
+[tasks."session:census"]
+description = "Session start: record this boot and read back what was running when the container we replaced went down (CLOUD-451)"
+# RECORD BEFORE READ, and the order is load-bearing: recording this boot after
+# reading would make it part of the evidence it is being compared against.
+#
+# NEVER FATAL, and that is why it is `|| true` rather than the `|| { …; exit 1; }`
+# every other step above carries: a verdict about a PAST container is not a
+# provisioning failure, and halting a session over one would be the sensor
+# deciding something it has no business deciding. Only the positive reading
+# speaks — the report's exit 1 (idle when replaced) and exit 2 (cannot look) are
+# silent, because a line every session start would be noise in the overwhelming
+# case where nothing happened.
+run = "mise run reclaim-census record-boot >/dev/null 2>&1 || true; mise run reclaim-census report 2>/dev/null || true"
 
 [tasks.batten-check]
 description = "Consumer #1: evaluate the committed batten.toml with batten's own engine against this repository"

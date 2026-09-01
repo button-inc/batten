@@ -54,14 +54,6 @@
             "command": "batten hook --harness claude-code"
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh"
-          }
-        ]
       }
     ],
     "TaskCompleted": [
@@ -123,7 +115,7 @@
   "autoMode": {
     "environment": [
       "$defaults",
-      "This checkout is button-inc/batten, whose product IS `batten` — a repo-agnostic completion gate. The binary is built from crates/batten in this working directory and installed to ~/.local/bin/batten by .claude/session-start.sh via `mise run install:local`. It is not a third-party download and will not appear on any known-tool list. Every workflow here runs through it, directly or as a subprocess of a `mise run` task."
+      "This checkout is button-inc/batten, whose product IS `batten` — a repo-agnostic completion gate. The binary is built from crates/batten in this working directory and installed to ~/.local/bin/batten twice over: the released build by `mise run deps-install` at container provisioning, then this checkout's own by the `session-batten` handler `batten.toml` declares. It is not a third-party download and will not appear on any known-tool list. Every workflow here runs through it, directly or as a subprocess of a `mise run` task."
     ],
     "allow": [
       "$defaults",
