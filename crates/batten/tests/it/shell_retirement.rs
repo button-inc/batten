@@ -1500,7 +1500,7 @@ const BIND_SUITE: &str = "#!/usr/bin/env bats\n\
 # subject: mise-tasks/other.sh\n\
 \n\
 setup() {\n\
-\tHOOK=mise-tasks/old-gate.sh\n\
+\tHOOK=\"$BATS_TEST_DIRNAME/../mise-tasks/old-gate.sh\"\n\
 }\n\
 \n\
 @test \"the gate is wired\" {\n\
@@ -1530,7 +1530,7 @@ const BIND_SUITE_BINDING_KEPT: &str = "#!/usr/bin/env bats\n\
 # subject: mise-tasks/other.sh\n\
 \n\
 setup() {\n\
-\tHOOK=mise-tasks/old-gate.sh\n\
+\tHOOK=\"$BATS_TEST_DIRNAME/../mise-tasks/old-gate.sh\"\n\
 }\n\
 \n\
 @test \"something unrelated\" {\n\
