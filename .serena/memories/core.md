@@ -684,11 +684,19 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   `<old> <new> <ref>` and applies it only while the ref still reads `<old>`,
   decided under the server's lock — strictly stronger than `--force-with-lease`,
   which compares against what the CLIENT last observed and races anything that
-  moved in between. **No new dependency and no git binary**: `gix-transport`'s
-  `blocking-client` resolves to `gix-packetline/blocking-io` and nothing else, so
-  the framing is vendored without an HTTP client, a TLS backend or a credential
-  helper, and the bytes go over the hyper + rustls client `fetch.rs` already
-  bounds. The three routes that could not be taken are recorded there rather than
+  moved in between. **No new closure and no git binary**: the framing is
+  `gix-packetline/blocking-io` — the same thing `gix-transport`'s
+  `blocking-client` resolves to, taken directly, since the transport it would
+  supply is not one this crate can use — so there is no HTTP client, no TLS
+  backend and no credential helper, and the bytes go over the hyper + rustls
+  client `fetch.rs` already bounds. The framing is gix's rather than this
+  module's for the reason `.claude/rules/policy-modules.md` gives one domain
+  over: a second parser is a second AUTHORITY. What the module adds is the
+  BOUNDARY between the framed section and the raw packfile that follows a `NAK`,
+  plus a pack writer and reader over `flate2` and a lease commit minted through
+  `gix::objs` — parentless, over the empty tree, and salted, because git
+  addresses by content and two agreeing mints produce one id whose push is an
+  "up to date" no-op that reports success. The three routes that could not be taken are recorded there rather than
   re-derived: gix ships no push at all, gix's own transports resolve `reqwest`
   plus two `FRAMEWORK_CRATES` names, and every git2 configuration that reaches
   HTTPS resolves `openssl-sys`, which `macos-link-check` refuses BY NAME with no
