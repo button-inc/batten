@@ -916,6 +916,13 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "lease check",
+          "about": "Gate: the lease is free or a live, well-formed hold — never a wedge and never garbage",
+          "effect": "read",
+          "flags": [],
+          "subcommands": []
+        },
+        {
           "path": "lease held",
           "about": "Is this clone's lease still held, with a beat of margin to act on?",
           "effect": "read",
@@ -1723,6 +1730,7 @@ expression: stdout_of(&output)
     "generate markdown",
     "generate schema",
     "lease authorises",
+    "lease check",
     "lease held",
     "lease peek",
     "lease status",

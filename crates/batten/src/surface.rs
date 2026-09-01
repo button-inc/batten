@@ -3175,6 +3175,23 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[LEASE_BRANCH],
     },
+    // `read`, and it is a GATE rather than a report — the distinction the status
+    // row cannot carry, because hanging a verdict off a flag is exactly what §5
+    // refuses: the read-only allowlist is `filter(effect == read)` with no second
+    // list, so a refusing flag on a reporting row would drop the reporting
+    // invocation every consumer already uses.
+    //
+    // **It belongs on a CLOCK, never on the landing path.** Neither refusal is a
+    // correctness hazard for the trunk — the lease decides who goes first, never
+    // what may land — so on the landing path it would fail whichever PR happened
+    // to be in flight over a condition that PR did not cause and cannot fix.
+    CommandDecl {
+        path: "lease check",
+        about: "Gate: the lease is free or a live, well-formed hold — never a wedge and never garbage",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[],
+    },
     // `read`. Prose for a human, and `-J` for everyone else — which is what stops
     // a caller parsing the sentence and turning a message into an interface, where
     // the next edit to the wording would be a silent breakage.

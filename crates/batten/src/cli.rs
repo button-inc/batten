@@ -567,6 +567,8 @@ pub enum LeaseCommand {
         /// The branch asking.
         branch: String,
     },
+    /// Is the lease ref free, or a live and well-formed hold?
+    Check,
     /// Who holds it, for how long, and who is admitted behind them.
     Status {
         /// Emit the report as byte-stable JSON instead of a pointer line.
@@ -1303,6 +1305,7 @@ fn lease_of(matches: &ArgMatches) -> Option<LeaseCommand> {
         ("authorises", matches) => Some(LeaseCommand::Authorises {
             branch: branch_of(matches),
         }),
+        ("check", _) => Some(LeaseCommand::Check),
         ("status", matches) => Some(LeaseCommand::Status {
             json: matches.get_flag("json"),
         }),
