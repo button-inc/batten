@@ -225,3 +225,86 @@ fn every_added_target_is_named() {
         "both top-level additions are reported and the grouped one is not"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The other half of the grouping, over the LIVE tree.
+//
+// `policy/test-targets.rego` refuses a new TOP-LEVEL target, which is what stops
+// the count regrowing. It says nothing about a file that lands in the group and
+// is never declared — and cargo says nothing either, because an undeclared `.rs`
+// beside a target is not an error. It is simply not compiled.
+//
+// Measured on `5a9924b6`: `target_consolidation.rs` had no `mod` line for its
+// whole life, so its three cases never ran. That file is the one asserting the
+// isolation property CLOUD-1210 rests on, and its own doc says the claim "ships
+// as a case rather than as a sentence in a commit message" — so the grouping's
+// safety argument was a sentence after all. That is CLOUD-418's class exactly: a
+// suite that reads complete over a shape it never exercises.
+//
+// Over the live tree deliberately, for `mediated_verbs.rs`'s reason: the question
+// is what THIS repository's group declares, and a fixture would assert about a
+// `main.rs` the case wrote itself.
+
+/// Every `.rs` beside `it/main.rs` is declared as a `mod`, and every `mod` names
+/// something that resolves.
+///
+/// Both directions, because one alone is satisfiable by a degenerate tree: an
+/// empty group declares nothing and is missing nothing.
+#[test]
+fn every_grouped_test_file_is_declared_and_every_declaration_resolves() {
+    let group = common::at_root("crates/batten/tests/it");
+    let main = fs::read_to_string(group.join("main.rs")).expect("the group harness");
+
+    let declared: std::collections::BTreeSet<String> = main
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("mod ")?.strip_suffix(';'))
+        .map(str::to_owned)
+        .collect();
+
+    let mut present = std::collections::BTreeSet::new();
+    for entry in fs::read_dir(&group).expect("the group directory") {
+        let path = entry.expect("a group entry").path();
+        // A DIRECTORY is a module too: `mod common;` resolves to
+        // `it/common/mod.rs`. Counting only files would report it missing.
+        if path.is_dir() {
+            if path.join("mod.rs").is_file() {
+                present.insert(name_of(&path));
+            }
+            continue;
+        }
+        if path.extension().is_some_and(|ext| ext == "rs")
+            && path.file_stem().is_some_and(|s| s != "main")
+        {
+            present.insert(name_of(&path));
+        }
+    }
+
+    let undeclared: Vec<&String> = present.difference(&declared).collect();
+    assert!(
+        undeclared.is_empty(),
+        "a file in the group with no `mod` line is never compiled and its cases \
+         never run — add it to `crates/batten/tests/it/main.rs`: {undeclared:?}"
+    );
+
+    let unresolved: Vec<&String> = declared.difference(&present).collect();
+    assert!(
+        unresolved.is_empty(),
+        "a `mod` line naming nothing that resolves: {unresolved:?}"
+    );
+
+    // ANTI-VACUITY. Both assertions above hold over an empty group, so the sets
+    // have to be non-trivial for either to mean anything.
+    assert!(
+        declared.len() > 100,
+        "the group is the whole integration suite; a handful of modules means \
+         this case is asserting over the wrong directory ({} declared)",
+        declared.len()
+    );
+}
+
+/// The file stem, or the directory name for a `mod.rs` module.
+fn name_of(path: &Path) -> String {
+    path.file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}

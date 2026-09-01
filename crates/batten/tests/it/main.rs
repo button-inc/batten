@@ -182,6 +182,7 @@ mod submodule;
 mod suite_subjects;
 mod surface;
 mod symbols;
+mod target_consolidation;
 mod target_prune;
 mod task_prose;
 mod task_receipt;
