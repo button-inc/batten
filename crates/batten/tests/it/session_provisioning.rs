@@ -203,15 +203,24 @@ impl Bench {
 
 /// Build a fixture whose `batten.toml` declares `rows`, in order.
 fn bench(name: &str, rows: &[(&str, u64)]) -> Bench {
+    // `fmt::Write` rather than `push_str(&format!(..))`, which the workspace
+    // lints refuse as `format_push_string` — the same aliased import
+    // `admission.rs` uses, for the same reason: the extra `String` is pure
+    // allocation. Writing to a `String` is infallible, so the `Result` carries
+    // nothing to handle. Before the first statement, or `items_after_statements`
+    // refuses it in turn.
+    use std::fmt::Write as _;
+
     let dir = scratch(name);
     let repo = dir.join("repo");
     std::fs::create_dir_all(repo.join("steps")).expect("the fixture repo");
 
     let mut config = String::from("version = 1\n");
     for (id, timeout_ms) in rows {
-        config.push_str(&format!(
+        let _ = write!(
+            config,
             "\n[[hook.handler]]\nid = \"{id}\"\non = \"session-start\"\nrun = [\"steps/{id}\"]\ntimeout_ms = {timeout_ms}\nowner = \"CLOUD-312\"\nexpires = \"2027-02-28\"\n"
-        ));
+        );
     }
     write(&repo, "batten.toml", &config);
     git_in(&repo, &["init", "-q", "-b", "main", "."]);
