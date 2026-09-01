@@ -23,6 +23,28 @@
 //! be a predicate went.
 //!
 // carried: mise-tasks/stop-guard.sh crates/batten/src/lib.rs kind:mechanism crates/batten/tests/it/stop_posture.rs
+//
+// CLOUD-1163's unlanded unit. The program was spawned by `stop_nudges` with
+// EMPTY stdin and no arguments, and read `batten state list` back from the
+// binary that had just written it; the successor reads the store in process.
+// carried: mise-tasks/unlanded-check.sh crates/batten/src/lib.rs kind:mechanism crates/batten/tests/it/stop_posture.rs
+// carried: tests/unlanded-check.bats crates/batten/src/lib.rs kind:mechanism crates/batten/tests/it/stop_posture.rs
+//
+// carried: "an unlanded finding on this ref is reported" crates/batten/src/lib.rs kind:mechanism
+// carried: "the pointer names the rule and a count, and carries nothing else" crates/batten/src/lib.rs kind:mechanism
+// carried: "another branch's finding is not this turn's" crates/batten/src/lib.rs kind:mechanism
+// carried: "a resolved finding says nothing" crates/batten/src/lib.rs kind:mechanism
+// carried: "a rule that did not look is not a finding" crates/batten/src/lib.rs kind:mechanism
+// carried: "another rule's finding is not this one" crates/batten/src/lib.rs kind:mechanism
+// carried: "it asks once per HEAD, then goes quiet" crates/batten/src/lib.rs kind:mechanism
+// carried: "a new commit earns a fresh pointer" crates/batten/src/lib.rs kind:mechanism
+// SUITE-QUALIFIED, because `stop-guard.bats` carried a case of the same name
+// and an unqualified arm cannot say which of the two it accounts for.
+// carried: "unlanded-check::the bypass is honoured" crates/batten/src/lib.rs kind:mechanism
+// carried: "an empty listing is silence" crates/batten/src/lib.rs kind:mechanism
+//
+// changed: "no binary is silence, never a verdict" crates/batten/src/lib.rs kind:mechanism unreachable by construction rather than handled: the reader IS the binary now, so the case the program guarded against — `command -v batten` finding nothing — cannot arise. An absent store is the remaining could-not-look and is silent for the same reason
+// changed: "a line the reader cannot parse is skipped, never judged" crates/batten/src/lib.rs kind:mechanism there is no line to parse. The program read `batten state list` back as text from the binary that had just written it; the successor reads the records `findings::load_all` returns, so a malformed pointer line is not a state the reader can be in. The fail-closed direction it protected is kept as the `Observed(count) if count > 0` arm, where `skipped` and `errored` are still not findings
 // carried: tests/stop-guard.bats policy/stop-posture.rego crates/batten/tests/it/stop_posture.rs
 //!
 //! # RETIREMENT LEDGER — `tests/stop-guard.bats`, 33 cases
@@ -168,6 +190,102 @@ fn hook(dir: &Path, payload: &str) -> Output {
     command
         .current_dir(dir)
         .args(["hook", "--harness", "claude-code"])
+        .env_remove("BATTEN_HOOK_BYPASS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn batten hook");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(payload.as_bytes())
+        .expect("write payload");
+    child.wait_with_output().expect("run batten hook")
+}
+
+/// A repository whose branch carries a commit the landing target lacks, plus a
+/// transcript declaring the turn complete — and an isolated state home.
+///
+/// Modelled on `done_not_landed.rs`'s own fixture, which is the suite that owns
+/// this producer. `must_land_on` is declared rather than taken from a remote's
+/// recorded default: the target ladder is the same either way, and a declared
+/// key keeps the fixture free of a remote it would have to fake.
+fn unlanded_fixture(name: &str) -> (PathBuf, PathBuf) {
+    completion_fixture(name, true)
+}
+
+/// The same repository with the work already on the landing target.
+fn landed_fixture(name: &str) -> (PathBuf, PathBuf) {
+    completion_fixture(name, false)
+}
+
+/// Both fixtures, differing in ONE fact: whether `work` is ahead of `main`.
+///
+/// One builder rather than two, because the pair only discriminates if
+/// everything else about them is identical — same config, same module, same
+/// transcript, same marker.
+fn completion_fixture(name: &str, diverge: bool) -> (PathBuf, PathBuf) {
+    let root = scratch(name);
+    let repo = root.join("repo");
+    fs::create_dir_all(&repo).expect("repo dir");
+    // COMPOSED, NOT APPENDED. `CONFIG` ends with a `[[rule]]` table, so a
+    // top-level key added after it lands INSIDE that table and the row silently
+    // gains a column it does not declare. `must_land_on` therefore goes beside
+    // `version`, above every table; `[transcript]` is itself a table and is the
+    // one thing that may be appended.
+    fs::write(
+        repo.join("batten.toml"),
+        format!(
+            "{}\n\n[transcript]\npath = \"session.jsonl\"\n",
+            CONFIG.replacen("version = 1", "version = 1\nmust_land_on = \"main\"", 1)
+        ),
+    )
+    .expect("write config");
+    fs::create_dir_all(repo.join("policy")).expect("policy dir");
+    let source = common::at_root("policy/stop-posture.rego")
+        .canonicalize()
+        .expect("the committed module is where the row says it is");
+    fs::copy(source, repo.join("policy/stop-posture.rego")).expect("install committed module");
+    common::write(&repo, ".gitignore", "session.jsonl\n");
+    common::write(&repo, "src/a.rs", "fn main() {}\n");
+    common::git_in(&repo, &["init", "-q", "-b", "main", "."]);
+    common::git_in(&repo, &["config", "user.name", "Fixture Author"]);
+    common::git_in(&repo, &["config", "user.email", "fixture@example.com"]);
+    common::git_in(&repo, &["add", "-A"]);
+    common::git_in(&repo, &["commit", "-q", "-m", "chore: base"]);
+    common::git_in(&repo, &["checkout", "-q", "-b", "work"]);
+    if diverge {
+        // THE WHOLE DIFFERENCE between the two fixtures: a commit on `work`
+        // with no equivalent on `main`.
+        common::write(&repo, "src/b.rs", "pub fn added() {}\n");
+        common::git_in(&repo, &["add", "-A"]);
+        common::git_in(&repo, &["commit", "-q", "-m", "add b"]);
+    }
+    // Untracked, like a real one: a host writes the transcript beside the
+    // checkout, and committing it would assert a shape no consumer produces.
+    let transcript = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/transcripts/completed-session.jsonl.in");
+    let body =
+        fs::read_to_string(&transcript).unwrap_or_else(|_| panic!("read {}", transcript.display()));
+    common::write(&repo, "session.jsonl", &body);
+    let home = root.join("home");
+    fs::create_dir_all(&home).expect("home dir");
+    (repo, home)
+}
+
+/// `batten hook` against an isolated state home, so the store this writes and
+/// reads is the fixture's own.
+fn hook_in(dir: &Path, home: &Path, payload: &str) -> Output {
+    let mut command = batten();
+    // The state home is contained BEFORE anything else: `record_state` writes
+    // the store this then reads, and an ambient one would let a real session's
+    // findings decide a fixture's verdict.
+    common::state_home(&mut command, home);
+    command
+        .current_dir(dir)
+        .args(["hook", "--harness", "claude-code"])
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .env_remove("BATTEN_HOOK_BYPASS")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -533,27 +651,33 @@ fn the_stop_guard_bypass_silences_the_whole_surface() {
     );
 }
 
-/// RULE 4 — a completion signal with no landed commit. `unlanded-check` reads no
-/// stdin, and its pointer is a count and a rule id: never a commit message and
-/// never a line of the transcript the verdict was read from.
-// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
-// Windows ladder's third rung resolves the interpreter a shebang names — which
-// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
-// exactly this reason. The rules above spawn nothing and stay cross-platform.
-#[cfg(unix)]
+/// RULE 4 — a completion signal with no landed commit, over the REAL producer.
+///
+/// # This case used to stub a program, and that is what the port removed
+///
+/// `stop_nudges` spawned `mise-tasks/unlanded-check.sh`, so this planted a fake
+/// one that exited 1 and printed a pointer. It therefore asserted that a
+/// non-zero exit from an arbitrary script reaches the channel — true, and not
+/// what rule 4 is for. The predicate it was standing in for went untested here:
+/// the program shelled back to `batten state list` and re-parsed the pointer
+/// lines the same binary had just written.
+///
+/// So the fixture is now a genuinely unlanded repository — a commit on a branch
+/// with no equivalent on `must_land_on`, and a transcript carrying a completion
+/// marker — and nothing is stubbed. `record_state` mints the verdict and
+/// `unlanded_pointer` reads it back, which is the whole path, and a break in
+/// either half reds this case.
 #[test]
 fn unlanded_work_at_a_declared_stopping_point_is_pointed_at() {
-    let dir = repo("stop-unlanded");
-    stub(
-        &dir,
-        "mise-tasks/unlanded-check.sh",
-        1,
-        "completion.unlanded 1",
-    );
-    let stdout = stdout_of(&hook(&dir, &stop_payload("Landed and pushed.", false)));
+    let (repo, home) = unlanded_fixture("stop-unlanded");
+    let stdout = stdout_of(&hook_in(
+        &repo,
+        &home,
+        &stop_payload("Landed and pushed.", false),
+    ));
     assert!(
-        stdout.contains("completion.unlanded"),
-        "the pointer travels: {stdout}"
+        stdout.contains(batten::completion::RULE_ID),
+        "the pointer travels, and it names the rule that decided it: {stdout}"
     );
     assert!(
         stdout.contains("Land it"),
@@ -563,18 +687,21 @@ fn unlanded_work_at_a_declared_stopping_point_is_pointed_at() {
 
 /// Landed work is silent, which is what keeps the case above from being
 /// satisfied by a rule that fires unconditionally.
-// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
-// Windows ladder's third rung resolves the interpreter a shebang names — which
-// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
-// exactly this reason. The rules above spawn nothing and stay cross-platform.
-#[cfg(unix)]
+///
+/// The ONE difference from the fixture above is that `work` carries no commit
+/// `main` lacks — same config, same transcript, same marker. Without that
+/// symmetry the pair would be comparing two repositories rather than one
+/// predicate.
 #[test]
 fn landed_work_is_silent() {
-    let dir = repo("stop-landed");
-    stub(&dir, "mise-tasks/unlanded-check.sh", 0, "");
-    let stdout = stdout_of(&hook(&dir, &stop_payload("Landed and pushed.", false)));
+    let (repo, home) = landed_fixture("stop-landed");
+    let stdout = stdout_of(&hook_in(
+        &repo,
+        &home,
+        &stop_payload("Landed and pushed.", false),
+    ));
     assert!(
-        !stdout.contains("additionalContext"),
+        !stdout.contains(batten::completion::RULE_ID),
         "nothing at risk, nothing to say: {stdout}"
     );
 }

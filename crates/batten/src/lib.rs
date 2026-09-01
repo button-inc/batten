@@ -6230,7 +6230,7 @@ fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope) -> Option<Strin
     // and a store write per turn for an answer nobody reads.
     if std::env::var_os(UNLANDED_BYPASS).is_none() {
         record_state(overrides);
-        if let Some(pointer) = spawn_reading(root, "mise-tasks/unlanded-check.sh", "") {
+        if let Some(pointer) = unlanded_pointer() {
             return Some(format!(
                 "{pointer}\nThis turn declared a stopping point and the work is not on the \
                  landing target. Land it, or say what blocks it."
@@ -6312,6 +6312,90 @@ const UNLANDED_BYPASS: &str = "BATTEN_UNLANDED_CHECK_BYPASS";
 fn record_state(overrides: &Overrides) {
     let mut sink = std::io::sink();
     let _ = run_state_record(overrides, Mode::default(), &mut sink);
+}
+
+/// The `completion.unlanded` verdict for this branch, or nothing (CLOUD-1163).
+///
+/// # It decides NOTHING, which is the whole shape of the predecessor
+///
+/// [`completion::RULE_ID`] — a completion marker in the session transcript with no
+/// patch-id-equivalent commit on the landing target — is [`record_state`]'s
+/// verdict, minted two lines above this is called. This READS the store and
+/// points at it. A re-derivation here would answer by ancestry where the engine
+/// answers by patch identity, and a rebased-then-landed branch is clean to one
+/// and dirty to the other.
+///
+/// # Why this stopped being a spawn
+///
+/// `mise-tasks/unlanded-check.sh` did exactly this by shelling to `batten state
+/// list` and parsing the pointer lines back — from inside the engine that had
+/// just written them. It read the PLAIN listing rather than `-J` because a
+/// by-path hook gets no mise env and so has no pinned `jq`; in process there is
+/// no listing to re-parse and no `jq` to want.
+///
+/// # Fail-open on everything except the observation
+///
+/// A detached HEAD, an unresolvable head, no bound store, an unreadable store:
+/// all silence, because this runs inside a Stop hook and a nudge is never the
+/// reason a turn stalls. The one CLOSED direction is the observation itself —
+/// `skipped` and `errored` are the engine's words for "did not look", and a
+/// question asked on the strength of a scan that never ran is the false green in
+/// nudge form. Only an observed, positive count is a finding.
+fn unlanded_pointer() -> Option<String> {
+    let branch = git::current_branch(Path::new(".")).ok().flatten()?;
+    let context = format!("refs/heads/{branch}");
+    let head = git::head_commit(Path::new(".")).ok()?;
+    // THE REPO ROOT, NOT THE HOOK'S ANCHOR, and the two are not the same object.
+    // `run_state_record` — which minted this verdict moments ago — keys the store
+    // on `git::repo_root`, so a reader anchored anywhere else looks in a store
+    // nothing wrote to and reports silence. Measured: the nudge went quiet over a
+    // fixture whose `batten state list` showed the finding.
+    let repo = git::repo_root(Path::new(".")).ok()?;
+    let opened = store::resolve(&repo).ok()?;
+    let dir = store::bound_dir(&opened)?;
+    let records = findings::load_all(&dir).ok()?;
+
+    let count = records
+        .iter()
+        .filter(|record| record.rule == completion::RULE_ID)
+        .flat_map(|record| &record.instances)
+        .filter(|instance| instance.context.to_string() == context)
+        .find_map(|instance| match instance.occurrences {
+            // FAIL-CLOSED ON THE OBSERVATION, and this is the arm that carries it.
+            findings::Observation::Observed(count) if count > 0 => Some(count),
+            _ => None,
+        })?;
+
+    // ONCE PER HEAD, because the finding HOLDS while the work is unlanded. An
+    // unsuppressed rule repeats one pointer every turn until nobody reads it,
+    // and a new commit is a new answer to the question. The receipt lives beside
+    // the lease and board-write records in the git dir — out of the tree, so a
+    // nudge never dirties the worktree it is asking about.
+    let seen = git::git_dir(Path::new(".")).ok().map(|dir| {
+        dir.join("batten-receipts")
+            .join(format!("unlanded-nudged.{}", branch.replace('/', "-")))
+    });
+    if let Some(path) = seen.as_deref() {
+        if std::fs::read_to_string(path).is_ok_and(|seen| seen.lines().any(|line| line == head)) {
+            return None;
+        }
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        // Best-effort: an unwritable receipt costs a repeated nudge, never the
+        // nudge itself, so it must not swallow the finding.
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .and_then(|mut file| {
+                std::io::Write::write_all(&mut file, format!("{head}\n").as_bytes())
+            });
+    }
+    Some(format!(
+        "unlanded: {count} commit(s) not on the landing target ({})",
+        completion::RULE_ID
+    ))
 }
 
 /// What the `filed-here` row says about this branch, suppressed and rendered.
