@@ -6081,6 +6081,12 @@ fn run(
         }
     };
 
+    // The union the engine DECIDES against, built once for the run (CLOUD-1220).
+    // `registry_for` is the one authority on it and refuses a consumer row that
+    // collides with a vendored class, so resolving a module's token against
+    // anything narrower would answer for half the classes a module may raise.
+    let registry = crate::policy::registry_for(vocabulary.verdicts)?;
+
     let inputs = RunInputs {
         provisions,
         files: &files,
@@ -6097,6 +6103,7 @@ fn run(
         tool_verdicts: tool_verdicts.as_ref(),
         captured: captured.as_ref(),
         bundles,
+        verdicts: &registry,
     };
 
     let mut scan = Scan::default();
@@ -6403,6 +6410,17 @@ struct RunInputs<'a> {
     /// an environment variable at all.
     external: &'a BTreeMap<String, Acquired>,
     bundles: &'a [crate::policy::Bundle],
+    /// The verdict registry a `policy` row's finding takes its remedy from
+    /// (CLOUD-1220).
+    ///
+    /// The UNION — consumer rows plus this binary's vendored classes — because a
+    /// module may raise a preset's class as readily as a consumer's, and a
+    /// registry missing half of them would resolve one and not the other.
+    ///
+    /// Here rather than re-resolved per violation: it is config, fixed for the
+    /// life of the run, and this is the shape `Vocabulary` already threads for
+    /// exactly that reason.
+    verdicts: &'a [crate::verdict::DeclaredVerdict],
 }
 
 fn run_rule(
@@ -8104,6 +8122,7 @@ fn policy_rule(
         tool_verdicts,
         captured,
         bundles,
+        verdicts: registry,
         ..
     } = inputs;
     let Some(bundle) = bundles.iter().find(|bundle| bundle.id() == rule.id) else {
@@ -8288,11 +8307,77 @@ fn policy_rule(
             }),
             line,
             check: rule.settling_check().unwrap_or(Check::Reevaluate),
-            remediation: rule.remediation(),
+            // THE REMEDY COMES FROM THE CLASS, NOT THE ROW (CLOUD-1220).
+            //
+            // `rule.remediation()` reads the row's own `fix`/`no_fix_reason`, and a
+            // `policy` row carries neither: `RuleKind::Policy` requires only
+            // `severity`, where `RuleKind::Judge` requires `no_fix_reason` outright —
+            // with a comment saying exactly why, that a judge finding "reaches the
+            // store and CLOUD-81's ingest refuses one nothing can close". Policy rows
+            // never got that treatment, so every one of their findings was dropped
+            // before `findings::record`, and the whole findings subsystem — baseline,
+            // dedup, disposition, sink accounting — was blind to the one rule kind
+            // CLOUD-843's campaign is porting ~132 gates onto.
+            //
+            // The remedy was never missing, only unreachable: the `[[verdict]]` token
+            // this violation raises declares its routes, and this is the hop that was
+            // absent. No row's `fix` column is consulted for a policy finding — a
+            // second spelling of a remedy the registry already carries is the
+            // duplication that registry exists to remove.
+            remediation: policy_remediation(registry, &violation.verdict),
             identity,
         });
     }
     None
+}
+
+/// The remedy a raised class declares, as a [`Remediation`] (CLOUD-1220).
+///
+/// # Why a policy finding cannot take the row's own remedy
+///
+/// [`Rule::remediation`] reads the `fix`/`no_fix_reason` columns, and a `policy`
+/// row carries neither — `RuleKind::Policy` requires only `severity`. That is
+/// not an oversight in the row: a module's remedy is per PREDICATE, and one row
+/// can carry many (CLOUD-832), so a single column on the row could not say which
+/// violation it answered. The `[[verdict]]` registry is where it already lives.
+///
+/// # The two shapes, and why the second is not "no remedy"
+///
+/// A `command` route is a runnable fix and becomes [`Remediation::Fix`]. Every
+/// other route — a document to read, an issue to file, an override to request —
+/// is a remedy a human performs, so it becomes [`Remediation::NoFix`] carrying
+/// the route ids and kinds. That is a real answer rather than an absence:
+/// `verdict::validate` already refuses a class with no route at all, and one
+/// whose only route is an override, so a resolved class always names somewhere
+/// to go.
+///
+/// **Pointer-only** (rule 4): route ids and kinds, never a route's target prose
+/// and never the finding's content. The full text is one hop away through
+/// `batten policy explain`, which is CLOUD-1286's settled position.
+///
+/// `None` only where the token resolves to nothing — which
+/// `check_verdicts_are_declared` refuses at load, so it is the residue of a
+/// registry narrower than the one the module was compiled against rather than a
+/// state a loaded config can reach.
+fn policy_remediation(
+    registry: &[crate::verdict::DeclaredVerdict],
+    token: &str,
+) -> Option<Remediation> {
+    if let Some(command) = crate::verdict::first_command_route(registry, token) {
+        return Some(Remediation::Fix(
+            command.split_whitespace().map(ToOwned::to_owned).collect(),
+        ));
+    }
+    let (entry, _) = crate::verdict::resolve(registry, token)?;
+    let routes: Vec<String> = entry
+        .routes
+        .iter()
+        .map(|route| format!("{} ({})", route.id, route.kind.as_str()))
+        .collect();
+    Some(Remediation::NoFix(format!(
+        "{token}: {} — `batten policy explain` carries the detail",
+        routes.join(", ")
+    )))
 }
 
 /// The first subject a violation carries, as a finding's pointer (CLOUD-1050).
@@ -12242,6 +12327,13 @@ mod tests {
                 tool_verdicts: None,
                 captured: None,
                 bundles: &[],
+                // Empty, and that is honest for this harness: it builds no
+                // bundle, so no `policy` row runs and nothing here resolves a
+                // class. A fixture supplying a registry no consumer supplies is
+                // how a deny case passes for the wrong reason
+                // (`.claude/rules/policy-modules.md`), and the tier that DOES
+                // drive a module is the compiled-binary one.
+                verdicts: &[],
             }
         }
     }

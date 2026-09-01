@@ -203,6 +203,151 @@ fn with_command(check: &str) -> String {
     )
 }
 
+/// A repository whose ONLY violation comes from a `policy/*.rego` module
+/// (CLOUD-1220).
+///
+/// `no_fix_reason` is deliberately ABSENT from the row: `RuleKind::Policy`
+/// requires only `severity`, and a module's remedy is per PREDICATE rather than
+/// per row — one row can carry many (CLOUD-832) — so the registry is the only
+/// place it can live. A fixture that put a remedy on the row would test a
+/// column no real policy row carries and pass over the defect.
+fn policy_only(route: &str) -> String {
+    format!(
+        "version = 1\n\n\
+         [[rule]]\n\
+         id = \"probe\"\n\
+         kind = \"policy\"\n\
+         scope = \"tree\"\n\
+         module = \"policy/probe.rego\"\n\
+         severity = \"deny\"\n\n\
+         [[verdict]]\n\
+         id = \"probe read refused\"\n\
+         gloss = \"the probe module refused this tree\"\n\
+         class = \"A fixture class, raised only by this suite's probe module.\"\n\n\
+         {route}"
+    )
+}
+
+/// A module that always refuses, so the case is about the FINDING rather than
+/// about a predicate.
+const PROBE_MODULE: &str = r#"package batten.probe
+
+import rego.v1
+
+rules contains "probe"
+
+violation contains {
+	"rule": "probe",
+	"verdict": "probe read refused",
+	"subjects": [{"path": "README.md"}],
+} if {
+	true
+}
+"#;
+
+// --- (a2) a policy-module finding reaches the store, with its class's remedy ---
+
+/// **The case CLOUD-1220 was found by, and it was red before the fix.**
+///
+/// Measured on `main`: `enforce` printed `2 finding(s) carry no remediation:
+/// persisted:false` and both were `kind = "policy"` rows whose `[[verdict]]`
+/// tokens declared routes. `policy_rule` took `rule.remediation()` — the ROW's
+/// `fix`/`no_fix_reason` — and a policy row carries neither, so every module
+/// finding was dropped before `findings::record` and the whole findings
+/// subsystem was blind to the one rule kind CLOUD-843's campaign ports onto.
+///
+/// Asserting the store rather than the exit code is the whole point: `enforce`
+/// exited 2 and printed the class correctly the entire time. What was lost was
+/// persistence, so only a store read can see it.
+#[test]
+fn a_policy_module_finding_reaches_the_store_carrying_its_classs_remedy() {
+    let env = Env::new("enforce-journal-policy-remedy");
+    // BEFORE the config, because `bind_store` writes its own `batten.toml`
+    // and would otherwise clobber this fixture's — which it did, and the case
+    // then measured a tree with no policy row at all.
+    env.bind_store();
+    env.file("README.md", "base\n");
+    env.file("policy/probe.rego", PROBE_MODULE);
+    env.file(
+        "batten.toml",
+        &policy_only(
+            "[[verdict.route]]\n\
+             id = \"probe run first\"\n\
+             kind = \"command\"\n\
+             target = \"mise run probe-fix\"\n",
+        ),
+    );
+
+    let run = env.run(&["enforce"]);
+    assert_eq!(
+        run.status.code(),
+        Some(2),
+        "the module refuses, which it always did: {}",
+        common::stderr(&run)
+    );
+    assert!(
+        !common::stderr(&run).contains("carry no remediation"),
+        "no finding may be dropped as unrecordable: {}",
+        common::stderr(&run)
+    );
+
+    let found = env
+        .record("probe")
+        .expect("the policy module's finding reached the store");
+    assert_eq!(
+        found["remediation"]["fix"],
+        serde_json::json!(["mise", "run", "probe-fix"]),
+        "a `command` route becomes the runnable fix, taken from the class rather \
+         than from the row: {found}"
+    );
+}
+
+/// The other route shape, and it is NOT "no remedy".
+///
+/// A document, issue or override route is a remedy a human performs, so it
+/// records as a pointer naming the route ids and kinds rather than being dropped.
+/// Without this arm, a fix that only handled `command` routes would leave every
+/// class whose remedy is a read or an override exactly as broken as before —
+/// which is most of this repository's own registry.
+#[test]
+fn a_class_whose_only_route_is_a_read_still_records_a_remedy() {
+    let env = Env::new("enforce-journal-policy-read-route");
+    // BEFORE the config, because `bind_store` writes its own `batten.toml`
+    // and would otherwise clobber this fixture's — which it did, and the case
+    // then measured a tree with no policy row at all.
+    env.bind_store();
+    env.file("README.md", "base\n");
+    env.file("policy/probe.rego", PROBE_MODULE);
+    env.file(
+        "batten.toml",
+        &policy_only(
+            "[[verdict.route]]\n\
+             id = \"probe read first\"\n\
+             kind = \"document\"\n\
+             target = \"README.md\"\n",
+        ),
+    );
+
+    let run = env.run(&["enforce"]);
+    assert_eq!(run.status.code(), Some(2), "{}", common::stderr(&run));
+    let found = env
+        .record("probe")
+        .expect("a class with no command route still records");
+    let remedy = found["remediation"]["no-fix"]
+        .as_str()
+        .expect("a non-command route records as `no-fix` (serde kebab-case)");
+    assert!(
+        remedy.contains("probe read first") && remedy.contains("document"),
+        "the remedy names the route id and its kind: {remedy}"
+    );
+    // POINTER-ONLY (rule 4): the route's target is one hop away through
+    // `policy explain`, and must not be copied into the record.
+    assert!(
+        !remedy.contains("README.md"),
+        "a route's target is not a pointer this record carries: {remedy}"
+    );
+}
+
 // --- (a) an enforce-only kind reaches the store, idempotently -----------------
 
 #[test]
