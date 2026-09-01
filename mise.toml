@@ -1983,7 +1983,40 @@ description = "Session start: record this boot and read back what was running wh
 # speaks — the report's exit 1 (idle when replaced) and exit 2 (cannot look) are
 # silent, because a line every session start would be noise in the overwhelming
 # case where nothing happened.
-run = "mise run reclaim-census record-boot >/dev/null 2>&1 || true; mise run reclaim-census report 2>/dev/null || true"
+#
+# AND IT SPEAKS ONCE PER BOOT, NOT ONCE PER SESSION (CLOUD-1301). `report`
+# classifies the PREVIOUS boot, which is immutable history: no landing completed
+# here changes what the last container was doing when it died. So on a container
+# whose predecessor was reclaimed mid-landing the verdict is TRUE and repeats at
+# every session start for the life of the container — and after the first read it
+# is exactly the noise CLOUD-891 removed. The comment above already makes that
+# argument for the negative readings and did not apply it to the positive one.
+#
+# THE MARK SITS BESIDE THE LOG, NEVER IN IT, and is keyed to the boot time. Both
+# paths come from the census's own `log-path` and `boot` accessors rather than
+# being rebuilt here, so this body holds no second opinion about where the store
+# lives — `mise-tasks/reclaim-census.sh` is governed by `shell-retirement` and is
+# not this row's to edit, which is also why the whole fix is expressible here.
+# Keying on the boot is what makes it self-clearing: a new container has a new
+# boot time, so its own first reclaim verdict is reported rather than suppressed
+# by a mark the previous container left.
+#
+# EVERY FAILURE PATH STILL REPORTS. If the mark cannot be resolved or written —
+# no git dir, no readable boot time — the verdict is printed, because a sensor
+# that goes quiet when its bookkeeping breaks has deleted the instrument
+# CLOUD-451 built. Suppression is the thing that must fail closed, never the
+# report.
+run = """
+mise run reclaim-census record-boot >/dev/null 2>&1 || true
+verdict=$(mise run reclaim-census report 2>/dev/null) || exit 0
+[ -n "$verdict" ] || exit 0
+log=$(mise run reclaim-census log-path 2>/dev/null) || { printf '%s\n' "$verdict"; exit 0; }
+boot=$(mise run reclaim-census boot 2>/dev/null) || { printf '%s\n' "$verdict"; exit 0; }
+mark="$log.reported"
+[ "$(cat "$mark" 2>/dev/null)" = "$boot" ] && exit 0
+printf '%s\n' "$verdict"
+printf '%s\n' "$boot" >"$mark" 2>/dev/null || true
+"""
 
 # CLOUD-843. The successor to `mise-tasks/lock-complete.sh`, and the same wrapper
 # shape `rules-drift` above takes: the step name and the rule id are one object,
