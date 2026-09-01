@@ -429,6 +429,123 @@ fn an_edit_truncating_a_line_at_a_retired_reference_is_admitted() {
 /// ANTI-VACUITY for the case above, and it is not optional: a bare prefix
 /// relation would admit any shortening at all. What this truncation drops names
 /// a path that is still in the tree, so it is ordinary maintenance.
+/// ARM 5 — a caller that names its callee as a TASK, not as a path (CLOUD-1299).
+///
+/// The measured instance is a governed `.bats` pinning a remedy's PROSE:
+/// `tests/verify.bats` asserted that `verify`'s refusal names `bot-issue
+/// receipt`. Retiring the program that names makes the remedy false, changing
+/// the remedy fails the assertion, and editing a governed suite is refused with
+/// no override route — so the retirement had no landable shape at all. Both
+/// spellings are driven here because they are the two the tree carries and only
+/// one of them is anchored at the name: the bare `<task> <sub>` span, and the
+/// `mise run <task> <sub>` span a comment three lines away used.
+#[test]
+fn an_edit_repointing_a_task_name_at_the_declared_invocation_is_admitted() {
+    let root = repo(
+        "task-name-repointed",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "tests/pinned.bats",
+                "# minted by `mise run old-gate receipt` on a branch.\n@test \"it holds\" {\n  [[ \"$output\" == *\"old-gate receipt\"* ]]\n}\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "tests/pinned.bats",
+                    "# minted by `batten claim bot` on a branch.\n@test \"it holds\" {\n  [[ \"$output\" == *\"batten claim bot\"* ]]\n}\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger_running("mise-tasks/old-gate.sh", "batten claim bot"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "a caller naming its callee as a task may be repointed at the declared \
+         invocation, same as one naming it by path: {:?}",
+        findings(&root)
+    );
+}
+
+/// ANTI-VACUITY for the case above, and the one CLOUD-1299 names by hand: an arm
+/// that admitted any span merely CONTAINING a naming form would be the licence
+/// the module refuses in as many words. This edit repoints the same span AND
+/// flips the comparison on the same line, so nothing about the retirement
+/// accounts for the second change.
+#[test]
+fn an_edit_repointing_a_task_name_while_rewriting_the_line_is_refused() {
+    let root = repo(
+        "task-name-rewritten",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "tests/pinned.bats",
+                "@test \"it holds\" {\n  [[ \"$output\" == *\"old-gate receipt\"* ]]\n}\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "tests/pinned.bats",
+                    "@test \"it holds\" {\n  [[ \"$output\" != *\"batten claim bot\"* ]]\n}\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger_running("mise-tasks/old-gate.sh", "batten claim bot"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert_eq!(
+        findings(&root),
+        vec![String::from("shell-rule-retired")],
+        "the span is derived from the diff, so a line that also changed elsewhere \
+         has no single repointed span and is refused"
+    );
+}
+
+/// The second anti-vacuity axis: the TARGET still comes from the ledger. A task
+/// span may only be repointed at an invocation the retirement committed to, so
+/// an arm carrying no `runs:` field admits nothing.
+#[test]
+fn a_task_name_repointed_at_an_undeclared_invocation_is_refused() {
+    let root = repo(
+        "task-name-undeclared",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "tests/pinned.bats",
+                "@test \"it holds\" {\n  [[ \"$output\" == *\"old-gate receipt\"* ]]\n}\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "tests/pinned.bats",
+                    "@test \"it holds\" {\n  [[ \"$output\" == *\"batten claim bot\"* ]]\n}\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger("mise-tasks/old-gate.sh"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert_eq!(
+        findings(&root),
+        vec![String::from("shell-rule-retired")],
+        "without a `runs:` arm there is no declared invocation, so nothing admits \
+         the repointing"
+    );
+}
+
 #[test]
 fn an_edit_truncating_a_line_at_a_live_reference_is_refused() {
     let root = repo(

@@ -626,6 +626,60 @@ is_retired_reference(path, span, gone) if {
 	form in {concat("", ["$", variable]), concat("", ["${", variable, "}"])}
 }
 
+# ARM 5 — THE SPAN NAMES THE PROGRAM AS A TASK (CLOUD-1299).
+#
+# Arms 1-4 all resolve a PATH: the repo-relative one, a constructed sibling, a
+# directory in a variable, the whole path in a variable. A caller that names its
+# callee as a task carries none of them, and had no landable shape at all.
+#
+# The measured instance is `tests/verify.bats:263`, which asserts that `verify`'s
+# no-receipt refusal names its remedies:
+#
+#     [[ "$output" == *"bot-issue receipt"* ]]
+#
+# That is a pin on PROSE. Retiring `mise-tasks/bot-issue.sh` makes the remedy
+# name a task that no longer exists, so the message must change — and changing it
+# fails that assertion, so the suite must change too, which `V-SHELL-RULE-EDITED`
+# refuses with no override route. The two landable shapes were retire the suite
+# whole (a different unit's work: its subject is `verify`, not `bot-issue`) or
+# leave it alone. CLOUD-1295 took neither and kept the dead name alive inside the
+# live remedy, which is the shape this arm exists to make unnecessary.
+#
+# ON `is_retired_reference` RATHER THAN `is_retired_reference_by_text`, and that
+# placement is the narrowing. The `_by_text` family is what `retired_path_vars`
+# reads to decide whether a VARIABLE holds the retired path; a task name is not a
+# path, so admitting one there would loosen the variable resolution as well —
+# widening arms 3 and 4 for no reason anyone measured. This reads only through
+# the full-span test, so exactly one question gets a new answer.
+#
+# WHAT KEEPS IT FROM BEING THE LICENCE THE MODULE REFUSES. `is_retired_reference`
+# is `contains`-free on purpose, and this arm stays that way. The naming form is
+# located, and then BOTH SIDES OF IT ARE MATCHED WHOLE against anchored rows:
+# everything before it must be `shell-task-runner-prefix` (empty, or exactly the
+# runner invocation) and everything after it `shell-task-subcommand` (empty, or
+# space-separated lowercase words). So the form is not merely CONTAINED — every
+# byte of the span is accounted for by one of the three parts, which is the same
+# property the byte-exact substitution has, spelled for a span whose middle is
+# dynamic. Neither vocabulary admits a quote, a `$`, a redirect or a separator,
+# so a span carrying anything able to change what the line DOES is refused; and
+# `mise-tasks/` fails the prefix row, so a path span cannot be read as a task
+# span. Every other narrowing on the clause that calls this is
+# untouched: the span is still derived from the diff rather than declared, and
+# the replacement still comes from `invocations_for(gone)`, so a caller can only
+# be repointed at a command the retirement's own ledger committed to.
+is_retired_reference(_, span, gone) if {
+	some form in spellings(span)
+	some name in naming_forms(gone)
+
+	at := indexof(form, name)
+	at >= 0
+	regex.match(data.batten.patterns["shell-task-runner-prefix"], substring(form, 0, at))
+	regex.match(
+		data.batten.patterns["shell-task-subcommand"],
+		substring(form, at + count(name), -1),
+	)
+}
+
 # DOES THIS WHOLE LINE NAME A PATH THIS DELTA RETIRES? The removal clause's
 # question, and it is deliberately looser than the span test above: a removed
 # line is going away whole, so nothing on it has to be byte-checked. Nothing is
