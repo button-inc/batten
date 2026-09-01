@@ -703,6 +703,212 @@ pub fn fetch_object(remote: &str, id: &str) -> Result<Object> {
         .ok_or_else(|| anyhow::anyhow!("lease: the answer does not carry the object asked for"))
 }
 
+/// The lease body's own fields, as `mint` writes them and `observe` reads them.
+///
+/// **Three of these are ADVISORY and three are not, and the separation is
+/// load-bearing rather than documentary.** `holder` decides ownership and nothing
+/// else does; `expires` decides liveness. `branch`, `head`, `next` and `progress`
+/// are read by waiters and by CI and by NO predicate that decides who holds the
+/// lease — because an identity another clone could DERIVE (from a branch, a head,
+/// an issue key) is an identity another clone could accidentally claim, which is
+/// the two-holders bug the whole design exists to prevent.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Body {
+    /// The clone that holds it. The ONE field ownership is decided by.
+    pub holder: String,
+    /// The instant it lapses, or `0` for a tombstone.
+    ///
+    /// **`0` is a sentinel and not an instant.** A release is a DECLARATION and an
+    /// expiry is an INFERENCE, and only the second needs a clock; epoch 0 is
+    /// unmistakable under any clock and on any machine. Conflating the two made a
+    /// release wait a full beat before anyone could take it, and made three
+    /// separate renderers print a wall-clock epoch as an age.
+    pub expires: i64,
+    /// The branch this lease authorises to spend a matrix. Advisory.
+    pub branch: String,
+    /// The commit that is about to become trunk, for a waiter deciding what to
+    /// rebase onto. Advisory.
+    pub head: String,
+    /// The one admitted successor, or empty. Advisory.
+    pub next: String,
+    /// The holder's own progress token. **Opaque by design**: a rival tests it for
+    /// EQUALITY OVER TIME and never interprets it, so no clock crosses the wire.
+    /// Advisory.
+    pub progress: String,
+    /// What makes every mint a distinct object. See [`lease_object`].
+    pub nonce: String,
+}
+
+/// The banner every lease body opens with, so a commit that is not a lease is not
+/// read as one.
+const BANNER: &str = "land-lock";
+
+impl Body {
+    /// The body as [`lease_object`] takes it.
+    #[must_use]
+    pub fn render(&self) -> String {
+        // `nonce:` STAYS LAST. Its uniqueness argument is what makes every mint a
+        // distinct sha, and the check half treats it as the terminal line.
+        format!(
+            "{BANNER}\nholder: {}\nexpires: {}\nbranch: {}\nhead: {}\nnext: {}\nprogress: {}\nnonce: {}\n",
+            self.holder, self.expires, self.branch, self.head, self.next, self.progress, self.nonce
+        )
+    }
+
+    /// Explicitly handed over, as opposed to merely lapsed. No clock involved.
+    #[must_use]
+    pub const fn released(&self) -> bool {
+        self.expires == 0
+    }
+
+    /// Lapsed as of `now`.
+    ///
+    /// `>=`, not `>`: a lease with zero seconds left has none, and the release
+    /// tombstone sets the expiry to exactly now. Under `>` that read as still-held
+    /// for one more second, so a release did not free the lease until the clock
+    /// ticked — measured, as a release the releaser itself still saw as held.
+    #[must_use]
+    pub const fn expired(&self, now: i64) -> bool {
+        now >= self.expires
+    }
+}
+
+/// Read a lease body out of a commit object.
+///
+/// **A commit that does not open with the banner is not a lease**, and returning
+/// `None` for it is the same refusal [`parse_advertisement`] makes about a body
+/// that never announced a service: a foreign object parsed loosely yields empty
+/// fields, which read as an unheld lease.
+///
+/// A body with no `expires:` line yields `None` for the same reason rather than
+/// defaulting here — the default belongs to the caller that knows its own TTL, and
+/// a parser inventing one would report a lease it could not read as one it could.
+#[must_use]
+pub fn parse_body(object: &[u8]) -> Option<Body> {
+    let text = String::from_utf8_lossy(object);
+    let mut body = Body::default();
+    let mut banner = false;
+    let mut expires = None;
+    for line in text.lines() {
+        if line == BANNER {
+            banner = true;
+            continue;
+        }
+        let Some((key, value)) = line.split_once(": ") else {
+            // The commit's own headers and its blank separator land here, as does
+            // a field written with an empty value — `branch: ` has no `": "` to
+            // split on once the trailing space is gone, and an empty advisory
+            // field is a READING rather than an absence.
+            if let Some(key) = line.strip_suffix(':') {
+                match key {
+                    "branch" => body.branch.clear(),
+                    "head" => body.head.clear(),
+                    "next" => body.next.clear(),
+                    "progress" => body.progress.clear(),
+                    _ => {}
+                }
+            }
+            continue;
+        };
+        match key {
+            "holder" => value.clone_into(&mut body.holder),
+            "expires" => expires = value.parse().ok(),
+            "branch" => value.clone_into(&mut body.branch),
+            "head" => value.clone_into(&mut body.head),
+            "next" => value.clone_into(&mut body.next),
+            "progress" => value.clone_into(&mut body.progress),
+            "nonce" => value.clone_into(&mut body.nonce),
+            _ => {}
+        }
+    }
+    if !banner {
+        return None;
+    }
+    body.expires = expires?;
+    Some(body)
+}
+
+/// What a read of the remote lease found.
+///
+/// **Absent and unreadable are different states and must never collapse.** An
+/// unreachable remote read as an unheld lease is precisely the misread that lets
+/// two sessions land at once, so "could not look" is `Err` from the reader and
+/// never a variant here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Observed {
+    /// No lease ref on the remote. The next acquire wins.
+    Absent,
+    /// A lease is there, at `sha`, saying `body`.
+    Held {
+        /// The lease object's id — the CAS's expected value.
+        sha: String,
+        /// What it says.
+        body: Body,
+    },
+}
+
+/// May this branch spend a matrix right now?
+///
+/// **The one question a runner can ask.** Every other verb answers about a CLONE
+/// — ownership is a holder id minted per clone, which a runner has nothing to
+/// compare against. A branch name is the one identifier both ends see.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Authority {
+    /// Run, for the reason given.
+    Run(String),
+    /// Stop: the lease authorises somebody else, named in the reason.
+    Stop(String),
+}
+
+/// Decide [`Authority`] over a lease reading.
+///
+/// **`None` IS COULD-NOT-LOOK AND IT ANSWERS `Run`.** Every other refusal in this
+/// design fails closed and this one deliberately does not: a lease it cannot read
+/// stops EVERY job in the fleet, where waving one matrix through costs one matrix.
+/// The asymmetry is the whole justification, and it is why an unreachable remote
+/// answers `Run` here while it is an error to a status reader.
+///
+/// A lease carrying no branch is the same reading one level in — during the
+/// rollout of the field that row was not an edge case, it was every lease.
+#[must_use]
+pub fn authorises(observed: Option<&Observed>, want: &str, now: i64) -> Authority {
+    let Some(observed) = observed else {
+        return Authority::Run(String::from(
+            "cannot read the lease; running rather than stopping the fleet",
+        ));
+    };
+    let Observed::Held { body, .. } = observed else {
+        return Authority::Run(format!("no lease is held; {want} may run"));
+    };
+    if body.released() || body.expired(now) {
+        return Authority::Run(format!("no lease is held; {want} may run"));
+    }
+    if body.branch.is_empty() {
+        return Authority::Run(String::from(
+            "the lease names no branch; running rather than guessing",
+        ));
+    }
+    if body.branch == want {
+        return Authority::Run(format!("the lease authorises {want}"));
+    }
+    // THE ADMITTED SUCCESSOR, and the reason the bound is two rather than one. A
+    // branch that reserved the slot behind this holder is buying the matrix that
+    // OVERLAPS the holder's merge — so stopping it here would cancel the very run
+    // the reservation exists to start, and the queue would be cold again with the
+    // mechanism intact and useless. Exactly one, by construction: the slot is
+    // filled by a CAS, so nothing here counts, compares ages or breaks ties.
+    if !body.next.is_empty() && body.next == want {
+        return Authority::Run(format!(
+            "the lease authorises {want} as the successor behind {}",
+            body.branch
+        ));
+    }
+    // Pointer-only (non-negotiable rule 4): the holder's branch is a ref name the
+    // caller could read for itself, and naming it is what makes a stopped run
+    // diagnosable rather than mysterious. No lease body, no expiry arithmetic.
+    Authority::Stop(format!("the lease authorises {}, not {want}", body.branch))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -825,6 +1031,126 @@ mod tests {
         // and saying otherwise is the direction that loses a lease silently.
         let body = framed(&["ok refs/heads/batten-land-lock\n", ""]);
         assert!(parse_report(&body).is_err());
+    }
+
+    fn held(branch: &str, next: &str, expires: i64) -> Observed {
+        Observed::Held {
+            sha: String::from("1111111111111111111111111111111111111111"),
+            body: Body {
+                holder: String::from("host-1-aa"),
+                expires,
+                branch: branch.to_owned(),
+                next: next.to_owned(),
+                ..Body::default()
+            },
+        }
+    }
+
+    #[test]
+    fn a_lease_that_cannot_be_read_lets_the_fleet_run() {
+        // THE ASYMMETRY IS THE WHOLE JUSTIFICATION. Failing closed here stops
+        // EVERY job in the fleet; failing open costs one matrix. Every other
+        // refusal in this design goes the other way, so this case is asserted
+        // rather than left to follow from the code reading naturally.
+        assert!(matches!(
+            authorises(None, "claude/x", 100),
+            Authority::Run(_)
+        ));
+    }
+
+    #[test]
+    fn a_lease_naming_no_branch_lets_the_fleet_run() {
+        // Every lease minted before the field existed is this row, so during a
+        // rollout it is not an edge case, it is all of them.
+        assert!(matches!(
+            authorises(Some(&held("", "", 900)), "claude/x", 100),
+            Authority::Run(_)
+        ));
+    }
+
+    #[test]
+    fn a_lease_held_by_another_branch_stops_this_one() {
+        let Authority::Stop(why) = authorises(Some(&held("claude/a", "", 900)), "claude/b", 100)
+        else {
+            panic!("a held lease must stop a branch it does not name");
+        };
+        // Pointer-only: the holder's branch is a ref name, never a lease body.
+        assert_eq!(why, "the lease authorises claude/a, not claude/b");
+    }
+
+    #[test]
+    fn the_admitted_successor_runs_beside_the_holder() {
+        // The bound is TWO, not one: stopping the reserved branch would cancel
+        // the very run the reservation exists to start.
+        assert!(matches!(
+            authorises(Some(&held("claude/a", "claude/b", 900)), "claude/b", 100),
+            Authority::Run(_)
+        ));
+    }
+
+    #[test]
+    fn a_released_lease_authorises_everyone_without_consulting_the_clock() {
+        // A tombstone satisfies `expired` trivially, so a reader that checked the
+        // clock first would render an epoch-scale age for it. It is a HANDOVER.
+        let lease = held("claude/a", "", 0);
+        assert!(matches!(
+            authorises(Some(&lease), "claude/b", 0),
+            Authority::Run(_)
+        ));
+    }
+
+    #[test]
+    fn an_expired_lease_stops_nobody() {
+        assert!(matches!(
+            authorises(Some(&held("claude/a", "", 100)), "claude/b", 100),
+            Authority::Run(_)
+        ));
+    }
+
+    #[test]
+    fn a_body_round_trips_through_its_own_rendering() {
+        let body = Body {
+            holder: String::from("host-1-aa"),
+            expires: 1_700_000_060,
+            branch: String::from("claude/x"),
+            head: String::from("2222222222222222222222222222222222222222"),
+            next: String::from("claude/y"),
+            progress: String::from("1700000000.1700000030"),
+            nonce: String::from("deadbeefdeadbeef"),
+        };
+        let object = lease_object(&body.render(), 1_700_000_000).expect("mint");
+        assert_eq!(parse_body(&object.body), Some(body));
+    }
+
+    #[test]
+    fn a_commit_that_is_not_a_lease_does_not_parse_as_an_unheld_one() {
+        // The same refusal the advertisement makes: a foreign object parsed
+        // loosely yields empty fields, which read as a lease nobody holds.
+        let object = lease_object("some other commit\n", 1_700_000_000).expect("mint");
+        assert_eq!(parse_body(&object.body), None);
+    }
+
+    #[test]
+    fn a_lease_with_no_expiry_does_not_parse() {
+        // The default belongs to the caller that knows its own TTL. A parser
+        // inventing one would report a lease it could not read as one it could.
+        let object =
+            lease_object("land-lock\nholder: a\nnonce: bb\n", 1_700_000_000).expect("mint");
+        assert_eq!(parse_body(&object.body), None);
+    }
+
+    #[test]
+    fn an_empty_advisory_field_is_a_reading_rather_than_an_absence() {
+        let body = Body {
+            holder: String::from("host-1-aa"),
+            expires: 1_700_000_060,
+            nonce: String::from("deadbeefdeadbeef"),
+            ..Body::default()
+        };
+        let object = lease_object(&body.render(), 1_700_000_000).expect("mint");
+        let read = parse_body(&object.body).expect("parse");
+        assert_eq!(read, body);
+        assert!(read.branch.is_empty());
     }
 
     #[test]
