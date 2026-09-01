@@ -1092,10 +1092,15 @@ description = "Gate: batten.toml carries no policy smell, and no weakening the g
 # are one change, which is the campaign working as designed rather than a
 # coincidence.
 #
-# ONE LINE, DELIBERATELY. `inline-task-bodies-not-growing` counts `run = '''` and
-# its `"""` twin — multi-line bodies, where a predicate can hide. A single-line
-# dispatch carries no predicate at all: every decision is the verb's, and the
-# `${VAR:+...}` is argv assembly rather than a judgement.
+# ONE LINE, DELIBERATELY. `inline-task-bodies-not-growing` and its twin count the
+# two TRIPLE-QUOTED spellings of a task body — multi-line, where a predicate can
+# hide. A single-line dispatch carries no predicate at all: every decision is the
+# verb's, and the `${VAR:+...}` is argv assembly rather than a judgement.
+#
+# THE SPELLINGS ARE DESCRIBED RATHER THAN QUOTED, and that is this comment's own
+# measurement: writing the literal here incremented the ratchet by one, because it
+# counts the substring anywhere in the file and strips no comments. A note
+# explaining the rule tripped the rule.
 #
 # ARMED BY THE CALLER, NEVER HERE. `CONFIG_LINT_BASE` unset is a local run over
 # the working config alone; `verify` and CI arm it, and CI arms it with the PR's

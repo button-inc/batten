@@ -42,7 +42,6 @@
 // carried: "a groomed clause plus a matching commit trailer admits the weakening" crates/batten/tests/it/config_lint.rs
 // carried: "a commit trailer the groom does not name is refused" crates/batten/src/lint.rs
 // carried: "a groomed clause with no commit trailer is refused" crates/batten/src/lint.rs
-// carried: "with no claim receipt the trailer alone admits, which is CI's shape" crates/batten/tests/it/config_lint.rs
 // carried: "an admission is keyed to the smell AND the key, not to either alone" crates/batten/src/lint.rs
 // carried: "one unadmitted smell keeps the whole run a verdict" crates/batten/src/lint.rs
 // carried: "the admission reports a pointer, never the clause's prose" crates/batten/tests/it/config_lint.rs
