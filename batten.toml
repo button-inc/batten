@@ -4413,6 +4413,24 @@ severity = "deny"
 # paths it was going to accept anyway — a gate reading a pre-filtered input cannot
 # tell "nothing was added" from "the filter removed it". The depth test lives in
 # the module, where a reader can check it against Cargo's autodiscovery rule.
+# CLOUD-472. The plan a branch declared, held to its own end.
+#
+# `delta_sources` is the whole tree because the vacuity arm asks whether this
+# branch is holding ANYTHING open, and a narrower delta would hand it a
+# pre-filtered answer — a gate that cannot tell "nothing changed" from "the
+# filter removed it" is the class `test-targets` below states for its own reason.
+#
+# NO `line_sources`: the subject is the record `batten record plan` wrote and the
+# delta the engine already resolved. This row opens no file.
+[[rule]]
+id = "plan-complete"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["**"]
+module = "policy/plan-complete.rego"
+severity = "deny"
+
 [[rule]]
 id = "test-targets"
 kind = "policy"
@@ -6497,6 +6515,10 @@ word = "program"
 gloss = "an executable"
 
 [[vocabulary.subject]]
+word = "plan"
+gloss = "the work a branch declared it would do"
+
+[[vocabulary.subject]]
 word = "prose"
 gloss = "authored text"
 
@@ -7510,7 +7532,7 @@ precondition = "the row DOCUMENTS the change being landed, so naming its files i
 # — and an agent reasons past it, because a nudge costs nothing to answer wrongly
 # and the answer dies with the turn. Measured 2026-09-01: four deferrals in one
 # session, each with a principled-sounding blocker, every one of them false. Three
-# were invisible to `V-FILED-OVER-OWN-DIFF` because their §1 named paths outside
+# were invisible to `issue file same` because their §1 named paths outside
 # the diff, which `cites_only` exempts by design. The detector was a human asking
 # twice.
 #
@@ -7528,12 +7550,74 @@ precondition = "the row DOCUMENTS the change being landed, so naming its files i
 # which is free for a row you genuinely could not close and expensive for one you
 # could. That is CLOUD-514's own "the friction must sit only on the impulsive
 # path", spent where it belongs.
+# CLOUD-472. The agent's own declared work, held to its end.
+#
+# THE SENSOR WAS ALWAYS THERE. A task list is displayed every turn and is the
+# most legible statement of what an agent believes is outstanding — and nothing
+# in the tree could see it, so a branch landed with entries `pending` and every
+# gate stayed green. That is this repository's recurring defect rather than a new
+# one: `stop_nudges` rule 5 asked the right question with no exit code,
+# `ready.rs` emitted `dialect prose` with no ratchet, and `graph-check` counts a
+# `wip` in the wrong unit. A reporting surface with nothing downstream of it.
 [[verdict]]
-id = "V-FILED-AND-LEFT-OPEN"
+id = "plan declare held"
+gloss = "an entry this branch declared is neither completed nor withdrawn"
+class = """
+The agent said it would do this and is landing without having done it. The gate \
+reads a status TOKEN and nothing else: it does not judge whether the entry was \
+worth doing, whether its text is honest, or whether the work behind `completed` \
+happened — those are model verdicts and no gate here makes one. Three exits, and \
+two of them are free: finish it, withdraw it deliberately so the store records \
+that the decision was made, or spend an admission saying why it is not this \
+branch's to finish. The store is written by `batten record plan` rather than \
+scraped from a harness's todo tool, because a hook needs a spelling per host and \
+records nothing where one is unsurveyed or switched off — a missing verb call \
+refuses everywhere instead.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "do the entry, then re-record the plan with it completed"
+
+[[verdict.route]]
+id = "task run other"
+kind = "command"
+target = "batten record plan"
+
+[[verdict.route]]
+id = "path admit first"
+kind = "override"
+precondition = "the entry is work this branch could not have done — it needs a decision, a mechanism, or an artifact that does not exist yet — rather than work you declared and declined to finish while holding the file open"
+
+# The anti-vacuity half, and it is not optional: a refusal over unfinished
+# entries is satisfied completely by never recording one, so silence is the
+# cheapest route past it and must be priced. Same shape as `mutate` REPORTING a
+# declared mutation whose named case does not exist rather than counting it.
+[[verdict]]
+id = "plan declare absent"
+gloss = "this branch is holding work open and declared no plan at all"
+class = """
+Not an exhortation to plan: it closes the hole the other class would otherwise \
+leave wide open, because a gate over entries left in flight costs nothing to \
+satisfy if you simply never record an entry. Gated on a NON-EMPTY diff, so it \
+prices work rather than existence and a fresh checkout is never refused — and \
+satisfied by an EMPTY record, so a genuinely trivial change costs one call \
+saying so rather than a fabricated entry, which is what a gate demanding a \
+non-empty list would have bought.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "batten record plan"
+
+[[verdict]]
+id = "issue file held"
 gloss = "a row this branch put on the board is neither closed here nor closed by the body"
 class = """
-The punt the other two refusals cannot see. `V-FILED-UNREFINED` prices \
-refinement and is payable in typing; `V-FILED-OVER-OWN-DIFF` prices proximity \
+The punt the other two refusals cannot see. `issue file unclear` prices \
+refinement and is payable in typing; `issue file same` prices proximity \
 and is silent by design on a row whose declared source of truth lies outside \
 this diff — which is exactly where a deferral hides, because the cheapest punt \
 names somebody else's file. This reads the set of rows the branch filed, \
@@ -7545,22 +7629,22 @@ a reviewer reads in the commit message.
 """
 
 [[verdict.route]]
-id = "R-FIX-IT-HERE"
+id = "task run first"
 kind = "command"
 target = "close the row you filed and fix it in this diff"
 
 [[verdict.route]]
-id = "R-CLOSE-IT-IN-THE-BODY"
+id = "task run other"
 kind = "command"
 target = "name it in closing form in the PR body, so the merge lands it"
 
 [[verdict.route]]
-id = "R-FILE-IT-AFTER-LANDING"
+id = "task run last"
 kind = "command"
 target = "file it from a clean tree, when it is no longer your branch's deferral"
 
 [[verdict.route]]
-id = "R-OVERRIDE-FILED-AND-LEFT-OPEN"
+id = "path admit first"
 kind = "override"
 precondition = "the row is work this branch could not have done — it needs a decision, a mechanism, or an artifact that does not exist yet — rather than work you declined to do while holding the file open"
 

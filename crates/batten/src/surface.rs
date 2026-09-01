@@ -3217,6 +3217,22 @@ pub const SURFACE: &[CommandDecl] = &[
             "The ref or sha the verdict was taken against",
         )],
     },
+    // CLOUD-472. A VERB rather than a `[[recorder]]` on the harness's own todo
+    // tool, and the direction is the point: a hook mediates a call to somebody
+    // else's tool and is per-harness by nature, so an unsurveyed host, a tool a
+    // setting disabled, and a compliant agent all record nothing and the gate
+    // reads clean. Telling the engine fails closed everywhere instead.
+    //
+    // No positional: the branch is the key and the engine resolves it, so a
+    // caller cannot record against a branch it is not on — `record tool`'s
+    // anti-staleness argument, applied to a different key.
+    CommandDecl {
+        path: "record plan",
+        about: "Record this branch's plan, read as `<id> <status>` lines on stdin",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
     // A NEW NOUN rather than a flag on an existing verb, and two shapes were
     // considered and died on the same rule (CLOUD-893). `generate hooks --write`
     // and `doctor hooks --repair` both hang the effect off a FLAG, where §5 hangs

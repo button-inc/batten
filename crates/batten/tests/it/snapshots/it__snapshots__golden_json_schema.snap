@@ -1509,6 +1509,13 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "record plan",
+          "about": "Record this branch's plan, read as `<id> <status>` lines on stdin",
+          "effect": "write",
+          "flags": [],
+          "subcommands": []
+        },
+        {
           "path": "record tool",
           "about": "Record a declared tool row's verdict, read as `<name> <token>` lines on stdin",
           "effect": "write",

@@ -432,6 +432,13 @@ fn forge_verdict() -> String {
     format!("{} failure\n", canary("concluded"))
 }
 
+/// Plan entries read on stdin by `record plan`. The id carries the canary, so a
+/// refusal that echoed an entry back — the one thing this store must never put in
+/// a diagnostic, since an id is the agent's own text — fails the census.
+fn plan_entries() -> String {
+    format!("{} pending\n", canary("entry"))
+}
+
 /// A ledger row read on stdin by `defects add -n`. The caller wrote it, so its
 /// bytes are a declaration.
 fn incoming_record() -> String {
@@ -469,6 +476,7 @@ enum Stdin {
     DesignClaims,
     ToolVerdict,
     ForgeVerdict,
+    PlanEntries,
 }
 
 struct Verb {
@@ -1221,6 +1229,16 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::ForgeVerdict,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-472. The entry id piped in carries the canary, because an id is the
+    // AGENT's own text and is the one thing a refusal here must never echo — a
+    // malformed line is reported by its NUMBER and the closed status vocabulary,
+    // which is `record tool`'s discipline over a different payload.
+    Verb {
+        path: "record plan",
+        args: &[],
+        stdin: Stdin::PlanEntries,
+        disposition: Disposition::PointerOnly,
+    },
 ];
 
 /// Every path of [`SURFACE`] that RUNS — the object this census must be total
@@ -1292,6 +1310,7 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
         Stdin::DesignClaims => design_claims(),
         Stdin::ToolVerdict => tool_verdict(),
         Stdin::ForgeVerdict => forge_verdict(),
+        Stdin::PlanEntries => plan_entries(),
     };
     // A BROKEN PIPE HERE IS THE CHILD BEING FAST, NOT A FAILURE. This corpus runs
     // every verb, and a verb that reads no stdin may exit before the write lands —
