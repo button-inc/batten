@@ -98,7 +98,7 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use common::{at_root, run_with_stdin, scratch};
+use common::{at_root, run, run_with_stdin, scratch};
 
 /// The declaration both rows carry, read out of this repository's own committed
 /// config.
@@ -484,8 +484,22 @@ fn a_ready_with_no_record_at_all_is_refused_and_the_remedy_names_the_read() {
     let dir = repo("review-answered-no-record", &declared, true);
     let decision = ready(&dir);
     denied(&decision);
-    assert!(decision.contains(&declared.selector), "{decision}");
-    assert!(decision.contains("get_review_comments"), "{decision}");
+    // CLOUD-1286: the row's prose remedy is one hop from the rule id on the
+    // line. The point this case makes survives the move — what a reader reaches
+    // is still a ROUTE that can mint the record rather than a shell command no
+    // selector would accept.
+    assert!(
+        decision.contains("ready-needs-the-threads-answered"),
+        "{decision}"
+    );
+    let explained = run(
+        &dir,
+        &["policy", "explain", "ready-needs-the-threads-answered"],
+    );
+    assert_eq!(explained.status.code(), Some(0), "the row resolves");
+    let routes = String::from_utf8_lossy(&explained.stdout);
+    assert!(routes.contains(&declared.selector), "{routes}");
+    assert!(routes.contains("get_review_comments"), "{routes}");
 }
 
 #[test]
@@ -498,14 +512,11 @@ fn the_measured_shape_a_head_carrying_unresolved_threads_is_refused_naming_the_c
     let decision = ready(&dir);
     denied(&decision);
     assert!(decision.contains("review-unanswered"), "{decision}");
-    // THE COUNT, as the typed ABI renders it: the token, its gloss, and the
-    // `Subject::Count` beside them. The retired case read `4 blocking` out of a
-    // free string; the number is the same and it is now a decoded subject.
-    assert!(decision.contains("review answer missing"), "{decision}");
-    assert!(
-        decision.contains("unresolved review threads) 4"),
-        "{decision}"
-    );
+    // THE COUNT, as the typed ABI renders it: the token and the `Subject::Count`
+    // beside it. The retired case read `4 blocking` out of a free string; the
+    // number is the same and it is now a decoded subject, and since CLOUD-1286
+    // the gloss that used to sit between them is one hop away.
+    assert!(decision.contains("review answer missing 4"), "{decision}");
     // Pointer-only (non-negotiable rule 4): the ids are not in the engine, so a
     // refusal naming one would be a payload this channel refuses to carry.
     assert!(!decision.contains("PRRT_"), "{decision}");
@@ -540,11 +551,8 @@ fn the_discriminating_pair_two_matching_beside_three_that_do_not_records_two() {
     reviewed(&dir, &declared);
     let decision = ready(&dir);
     denied(&decision);
-    assert!(
-        decision.contains("unresolved review threads) 2"),
-        "{decision}"
-    );
-    assert!(!decision.contains(") 5"), "{decision}");
+    assert!(decision.contains("review answer missing 2"), "{decision}");
+    assert!(!decision.contains("review answer missing 5"), "{decision}");
 }
 
 // --- the conditions the projection carried, restored ------------------------
@@ -567,10 +575,7 @@ fn the_page_guard_an_unread_page_refuses_where_a_full_page_of_the_same_threads_a
     reviewed(&truncated, &declared);
     let decision = ready(&truncated);
     denied(&decision);
-    assert!(
-        decision.contains("unresolved review threads) 1"),
-        "{decision}"
-    );
+    assert!(decision.contains("review answer missing 1"), "{decision}");
 }
 
 #[test]
@@ -585,10 +590,7 @@ fn the_page_guard_adds_to_the_thread_count_rather_than_replacing_it() {
     reviewed(&dir, &declared);
     let decision = ready(&dir);
     denied(&decision);
-    assert!(
-        decision.contains("unresolved review threads) 3"),
-        "{decision}"
-    );
+    assert!(decision.contains("review answer missing 3"), "{decision}");
 }
 
 #[test]
@@ -603,8 +605,10 @@ fn vacuity_zero_threads_and_no_review_reads_as_unreviewed_not_as_all_addressed()
     record_reviews(&dir, &declared, &reviews(0));
     let decision = ready(&dir);
     denied(&decision);
+    // CLOUD-1286: the class is what says nobody has reviewed, and the gloss
+    // that used to spell it out is one `batten policy explain` away.
     assert!(decision.contains("review read absent"), "{decision}");
-    assert!(decision.contains("nobody has reviewed"), "{decision}");
+    assert!(!decision.contains("nobody has reviewed"), "{decision}");
 }
 
 #[test]
@@ -636,7 +640,9 @@ fn two_rows_sharing_a_selector_each_record_from_their_own_result() {
     record_reviews(&dir, &declared, &reviews(2));
     let half = ready(&dir);
     denied(&half);
-    assert!(half.contains("get_review_comments"), "{half}");
+    // The threads check is the one still Missing, and its NAME is the pointer
+    // on the line; the read that mints it is one hop away (CLOUD-1286).
+    assert!(half.contains("review-threads-clear"), "{half}");
 
     record_threads(&dir, &declared, &threads(false, &[true]));
     allowed(&ready(&dir));
@@ -668,7 +674,19 @@ fn a_sibling_method_answering_the_same_shape_is_not_a_review() {
         decision.contains("ready-needs-a-review-to-exist"),
         "{decision}"
     );
-    assert!(decision.contains("get_reviews"), "{decision}");
+    // The remedy naming the RIGHT method is one hop away (CLOUD-1286), and it is
+    // the half worth reaching for here: this whole case is about a sibling
+    // method being counted as a review, so a remedy pointing at the wrong one
+    // would be the same defect in the fix.
+    let explained = run(
+        &dir,
+        &["policy", "explain", "ready-needs-a-review-to-exist"],
+    );
+    assert_eq!(explained.status.code(), Some(0), "the row resolves");
+    assert!(
+        String::from_utf8_lossy(&explained.stdout).contains("get_reviews"),
+        "{decision}"
+    );
 }
 
 #[test]
@@ -698,7 +716,9 @@ fn vacuity_a_result_that_is_not_the_declared_shape_records_nothing_rather_than_o
     reviewed(&dir, &declared);
     let decision = ready(&dir);
     denied(&decision);
-    assert!(decision.contains("get_review_comments"), "{decision}");
+    // The did-you-look refusal stands, and the CHECK it names is the pointer
+    // — the read that mints it is one hop away (CLOUD-1286).
+    assert!(decision.contains("review-threads-clear"), "{decision}");
 }
 
 #[test]
@@ -774,10 +794,7 @@ fn the_bypass_a_compound_command_is_still_a_ready() {
     reviewed(&dir, &declared);
     let decision = call(&dir, "cd /repo && gh pr ready 702");
     denied(&decision);
-    assert!(
-        decision.contains("unresolved review threads) 2"),
-        "{decision}"
-    );
+    assert!(decision.contains("review answer missing 2"), "{decision}");
 }
 
 #[test]
@@ -854,12 +871,19 @@ fn an_undeclared_class_refuses_with_the_token_and_says_the_registry_is_silent() 
     reviewed(&dir, &declared);
     let decision = ready(&dir);
     denied(&decision);
+    // CLOUD-1286: the line is the token and its pointers, so an undeclared class
+    // renders as ITSELF plus the count and gets no composed apology. That is the
+    // honest answer rather than a regression — the token is the thing a reader
+    // looks up, and saying "the registry is silent" on every firing would be a
+    // sentence about the config paid for on the hot path.
     assert!(decision.contains("review answer missing"), "{decision}");
     assert!(
-        decision.contains("no `[[verdict]]` row declares"),
+        !decision.contains("no `[[verdict]]` row declares"),
         "{decision}"
     );
-    assert!(decision.contains(") 3"), "{decision}");
+    // The count still travels: a subject is decoded from the violation, never
+    // from the registry, which is what makes the undeclared case still useful.
+    assert!(decision.contains("review answer missing 3"), "{decision}");
 }
 
 /// The rows that judge the call: ONE RECEIPT ROW PER CHECK, as the committed

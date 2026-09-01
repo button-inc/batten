@@ -345,9 +345,10 @@ fn equal_force_leaves_declaration_order_as_the_tie_break() {
     let output = hook(&dir, &command_payload("PreToolUse", CALL));
     let stdout = stdout_of(&output);
     assert!(
-        // The class is rendered followed by its gloss, so anchor on that rather
-        // than on a delimiter the projection does not emit.
-        stdout.contains("fixture severity probe ("),
+        // CLOUD-1286: the class is rendered alone, so anchor on it. The negative
+        // arm below is what keeps this discriminating, since the two fixture
+        // class names share a prefix.
+        stdout.contains("fixture severity probe"),
         "the first-declared class of two equally strong ones: {stdout}"
     );
     assert!(

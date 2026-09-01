@@ -559,8 +559,13 @@ fn the_refusal_names_its_predicate_its_class_and_the_route_out() {
         text.contains("commit write missing"),
         "the declared class: {text}"
     );
+    // The route is one hop from the class on the line (CLOUD-1286), and this
+    // still asserts it comes off the CLASS rather than out of the module's
+    // prose — which is what the `changed:` arm above records.
+    let explained = common::run(&root, &["policy", "explain", "commit write missing"]);
+    assert_eq!(explained.status.code(), Some(0), "the class resolves");
     assert!(
-        text.contains("git commit -F <path>"),
+        String::from_utf8_lossy(&explained.stdout).contains("git commit -F <path>"),
         "the route out, taken off the class rather than out of the module: {text}"
     );
 }

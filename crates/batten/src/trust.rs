@@ -722,6 +722,11 @@ pub enum WeakeningKind {
     /// The transcript path is gone, so `check` stops reading the completed
     /// session it judged against (CLOUD-95).
     TranscriptPathRemoved,
+    /// The `[refusal]` ceiling rose, or stopped being declared (CLOUD-1286).
+    /// Same direction as a budget's: smaller is stricter, so §8's "may not
+    /// weaken" reads as "may not raise", and an absent ceiling is unenforced
+    /// rather than zero — which is why dropping the table is this kind too.
+    RefusalCeilingRaised,
     /// A `[budget.<name>]` table is gone, so nothing is counted for it
     /// (CLOUD-50).
     BudgetSetRemoved,
@@ -821,6 +826,7 @@ impl WeakeningKind {
         WeakeningKind::DefectsLedgerRemoved,
         WeakeningKind::DefectsClassAdded,
         WeakeningKind::TranscriptPathRemoved,
+        WeakeningKind::RefusalCeilingRaised,
         WeakeningKind::BudgetSetRemoved,
         WeakeningKind::BudgetFileRemoved,
         WeakeningKind::BudgetEmbeddedRemoved,
@@ -874,6 +880,7 @@ impl WeakeningKind {
             WeakeningKind::DefectsLedgerRemoved => "defects-ledger-removed",
             WeakeningKind::DefectsClassAdded => "defects-class-added",
             WeakeningKind::TranscriptPathRemoved => "transcript-path-removed",
+            WeakeningKind::RefusalCeilingRaised => "refusal-ceiling-raised",
             WeakeningKind::BudgetSetRemoved => "budget-set-removed",
             WeakeningKind::BudgetFileRemoved => "budget-file-removed",
             WeakeningKind::BudgetEmbeddedRemoved => "budget-embedded-removed",
@@ -1088,6 +1095,10 @@ pub const CENSUS: &[FieldCoverage] = &[
             WeakeningKind::BudgetEmbeddedRemoved,
             WeakeningKind::BudgetLimitRaised,
         ]),
+    },
+    FieldCoverage {
+        field: "refusal",
+        coverage: Coverage::Compared(&[WeakeningKind::RefusalCeilingRaised]),
     },
     FieldCoverage {
         field: "must_land_on",
@@ -1701,6 +1712,17 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     found.extend(budget_weakenings(
         base.budget.as_ref(),
         working.budget.as_ref(),
+    ));
+
+    // The same direction one table over (CLOUD-1286). `ceiling_raised` already
+    // reads an absent working value as a raise, which is the right reading here
+    // too: an undeclared ceiling is unenforced, so deleting the table buys
+    // exactly what raising it to infinity would.
+    found.extend(ceiling_raised(
+        WeakeningKind::RefusalCeilingRaised,
+        "refusal.max_tokens",
+        base.refusal.as_ref().map(|ceiling| ceiling.max_tokens),
+        working.refusal.as_ref().map(|ceiling| ceiling.max_tokens),
     ));
 
     // `must_land_on` gone leaves `worktree status` with no target — exit 1, and
@@ -3636,6 +3658,57 @@ mod tests {
                 kind.as_str()
             );
         }
+    }
+
+    #[test]
+    fn raising_or_dropping_the_refusal_ceiling_is_a_weakening() {
+        // CLOUD-1286's gate is a number in config, so the two ways to switch it
+        // off are to raise it past anything it could refuse and to delete the
+        // table. Both are one kind, because `ceiling_raised` already treats an
+        // absent working value as the widest raise there is.
+        let mut base = Config::declaring_nothing();
+        base.refusal = Some(crate::refusal::Ceiling { max_tokens: 24 });
+
+        let mut raised = Config::declaring_nothing();
+        raised.refusal = Some(crate::refusal::Ceiling { max_tokens: 200 });
+        assert_eq!(
+            only(&base, &raised),
+            Weakening::new(
+                WeakeningKind::RefusalCeilingRaised,
+                "refusal.max_tokens",
+                "24",
+                "200",
+            )
+        );
+
+        assert_eq!(
+            only(&base, &Config::declaring_nothing()),
+            Weakening::new(
+                WeakeningKind::RefusalCeilingRaised,
+                "refusal.max_tokens",
+                "24",
+                "absent",
+            )
+        );
+    }
+
+    #[test]
+    fn lowering_the_refusal_ceiling_is_not_reported() {
+        // The direction that must stay quiet, or the arm above fires on the work
+        // it exists to protect: tightening a ceiling is the ratchet turning the
+        // way it is supposed to.
+        let mut base = Config::declaring_nothing();
+        base.refusal = Some(crate::refusal::Ceiling { max_tokens: 24 });
+        let mut working = Config::declaring_nothing();
+        working.refusal = Some(crate::refusal::Ceiling { max_tokens: 12 });
+
+        let found = weakenings(&base, &working);
+        assert!(
+            !found
+                .iter()
+                .any(|weakening| weakening.kind == WeakeningKind::RefusalCeilingRaised),
+            "a tightened ceiling is not a weakening: {found:?}"
+        );
     }
 
     #[test]

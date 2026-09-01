@@ -3228,13 +3228,40 @@ fn run_policy_explain(
     // second reader of one table always produces.
     let registry = policy::registry_for(&config.verdicts)?;
     let Some((resolved, retired)) = verdict::resolve(&registry, token) else {
+        // A RULE ID RESOLVES HERE TOO (CLOUD-1286), and that is what makes "the
+        // token is the pointer to the fix" true rather than aspirational. The
+        // emitted line carries a class AND the rule id that fired, and the two
+        // answer different halves: the class is Batten's, the row's `reason` is
+        // the CONSUMER's remedy — "use `mise run land`", "reach for the
+        // structured surface". Taking that prose off the hot path without giving
+        // it a lookup would be a refusal naming no remedy, which is the class
+        // `crate::verdict`'s own header exists to kill.
+        //
+        // Tried second rather than first because a class is what a reader most
+        // often has, and the two namespaces cannot collide: a class is three
+        // lowercase words and a rule id is a kebab-case identifier.
+        if let Some(rule) = config.rules.iter().find(|rule| rule.id == token) {
+            return explain_rule(rule, &config.facts, json, out);
+        }
+        // THE DERIVED PROTECTED GATE HAS NO `[[rule]]` ROW, and its remedy is
+        // per PATH CLASS rather than per rule (CLOUD-280): a `[[redirect]]`
+        // row's `mutation`, chosen by which glob matched. That remedy left the
+        // emitted line with everything else, and it is the one that had nowhere
+        // to land — a class hop answers about `path write refused` generically
+        // and a rule hop has no row to find. So the gate's own id resolves here,
+        // to the table that answers "what do I do instead for THIS path".
+        if token == hook::PROTECTED_MUTATION {
+            return explain_redirects(&config.redirects, &config.verbs, json, out);
+        }
         // Named, and the token is the caller's own argument rather than
         // anything read out of the tree. A list of what IS declared would be the
         // whole registry on stderr; the count plus the verb to run is the
         // pointer-shaped answer.
         return Err(error::UsageError::raise(format!(
-            "no `[[verdict]]` row declares `{token}`; this registry declares {} class(es)",
-            registry.len()
+            "no `[[verdict]]` row and no `[[rule]]` row declares `{token}`; this registry \
+             declares {} class(es) and this config declares {} rule(s)",
+            registry.len(),
+            config.rules.len(),
         )));
     };
     if json {
@@ -3258,6 +3285,101 @@ fn run_policy_explain(
             None => route.target.as_str(),
         };
         writeln!(out, "{}  {}  {target}", route.id, route.kind.as_str())?;
+    }
+    Ok(ExitCode::Success)
+}
+
+/// Resolve a `[[rule]]` id to the remedy its row declares (CLOUD-1286).
+///
+/// The consumer half of `explain`. A row's `reason` is documented as "what to do
+/// instead", so it is the remedy a reader wants after a deny — and since the
+/// emitted line stopped carrying it, this is where it went. Same shape as the
+/// class half above and the same exception to pointer-only output, for the same
+/// stated reason: the text is the config author's own declaration, echoed back,
+/// never content read out of a subject file.
+/// Resolve the derived protected gate to the table that answers it (CLOUD-1286).
+///
+/// Both tiers, in the order the boundary applies them: a `[[redirect]]` row's
+/// `mutation` speaks for a PATH CLASS and wins, and a `[[verb]]` row's
+/// `redirect` is the general remedy for the program. Printing only the first
+/// would leave the fallback unreachable, which is the tier this repository's own
+/// `rm` and `mv` rows land in.
+fn explain_redirects(
+    redirects: &[redirect::Redirect],
+    verbs: &[verbs::MutatingVerb],
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    if json {
+        writeln!(
+            out,
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "rule": hook::PROTECTED_MUTATION,
+                "redirects": redirects,
+                "verbs": verbs,
+            }))?
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    writeln!(out, "{} protected", hook::PROTECTED_MUTATION)?;
+    writeln!(out)?;
+    for row in redirects {
+        writeln!(out, "{}  {}", row.glob, row.mutation)?;
+    }
+    for row in verbs {
+        if let Some(redirect) = row.redirect.as_deref() {
+            writeln!(out, "{}  {redirect}", row.verb)?;
+        }
+    }
+    Ok(ExitCode::Success)
+}
+
+/// THE DECLARED COMMANDS ARE PART OF THE ANSWER, not decoration. Where a
+/// `receipt` row's checks name agent-sourced facts, the remedy is the exact
+/// command whose output will be accepted (CLOUD-776) — byte-identical to what
+/// the record is then verified against, which is what closes the loop and what a
+/// second wording of it would break. That command left the emitted line with
+/// everything else, so it has to arrive here or the loop does not close.
+fn explain_rule(
+    rule: &rules::Rule,
+    facts: &[facts::Declared],
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let commands: Vec<&str> = rule
+        .checks
+        .iter()
+        .flatten()
+        .filter_map(|check| facts.iter().find(|fact| &fact.name == check))
+        .filter_map(|fact| fact.command.as_deref())
+        .collect();
+    if json {
+        writeln!(
+            out,
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "rule": rule.id,
+                "kind": rule.kind.as_str(),
+                "reason": rule.reason,
+                "commands": commands,
+            }))?
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    writeln!(out, "{} {}", rule.id, rule.kind.as_str())?;
+    writeln!(out)?;
+    match rule.reason.as_deref() {
+        Some(reason) => writeln!(out, "{}", reason.trim())?,
+        // Stated rather than silent, exactly as `Fix::None` is: a reader cannot
+        // tell an absent remedy from a verb that forgot to print one.
+        None => writeln!(out, "this row declares no remedy of its own")?,
+    }
+    if !commands.is_empty() {
+        writeln!(out)?;
+        for command in commands {
+            writeln!(out, "{command}")?;
+        }
     }
     Ok(ExitCode::Success)
 }

@@ -1767,21 +1767,45 @@ fn every_hook_policy_table_deny_names_its_fix() {
         let output = run_hook_in(&dir, "exit-code", &claude_payload(case.command), false);
         assert_eq!(output.status.code(), Some(2), "{}: deny", case.command);
         let stderr = String::from_utf8_lossy(&output.stderr);
+        // CLOUD-1286: the sanctioned command is ONE HOP away rather than
+        // inline, and this case is what proves the hop actually lands. The
+        // emitted line carries the rule id; `batten policy explain <rule>`
+        // resolves that id to the row's own remedy. Asserting only the absence
+        // would pass over a refusal that points nowhere, which is worse than
+        // the repetition it replaced.
+        let row = stderr
+            .split_whitespace()
+            .next_back()
+            .expect("a deny names the rule that fired");
+        let explained = batten_with(&dir, &["policy", "explain", row], &[]);
+        assert_eq!(
+            explained.status.code(),
+            Some(0),
+            "{}: the rule on the line must resolve, got: {stderr}",
+            case.command
+        );
+        let text = String::from_utf8_lossy(&explained.stdout);
         assert!(
-            stderr.contains(&format!("Fix: {}", case.fix)),
-            "{}: the refusal must name the sanctioned command, got: {stderr}",
+            text.contains(case.fix),
+            "{}: the hop must reach the sanctioned command, got: {text}",
             case.command
         );
     }
 }
 
 #[test]
-fn the_in_band_hosts_carry_the_fix_in_their_decision_document() {
+fn the_in_band_hosts_carry_the_decision_in_their_document() {
     // The contract is not stderr-only. Claude discards stdout on exit 2 and
     // Cursor assigns stderr no meaning at all, so on those two hosts the decision
-    // document is the ONLY place a fix pointer can travel — the case that would
+    // document is the ONLY place the refusal can travel — the case that would
     // silently regress to a bare "deny" if the projection happened per channel
     // instead of once.
+    //
+    // CLOUD-1286 shortened WHAT travels, not WHERE: the class, the pointers and
+    // the rule id, with the fix one `batten policy explain <rule>` away. That
+    // this file's projection is still one function rather than one per host is
+    // exactly what this case pins, and it pins it on the shorter line just as
+    // well.
     let dir = repo_with_gh_policy("refusal-in-band");
     for (harness, pointer) in [
         (
@@ -1799,8 +1823,12 @@ fn the_in_band_hosts_carry_the_fix_in_their_decision_document() {
             .and_then(serde_json::Value::as_str)
             .unwrap_or_else(|| panic!("{harness}: no reason at {pointer}: {body}"));
         assert!(
-            reason.contains("Fix: use `mise run land`"),
-            "{harness}: the document must carry the fix, got: {reason}"
+            reason.contains("call name refused"),
+            "{harness}: the document must carry the class, got: {reason}"
+        );
+        assert!(
+            reason.contains("gh-pr-merge"),
+            "{harness}: and the rule the hop takes, got: {reason}"
         );
     }
 }
@@ -1839,17 +1867,27 @@ fn a_deny_with_no_consumer_remedy_falls_back_to_the_declared_class() {
     );
     assert_eq!(output.status.code(), Some(2), "the protected gate denies");
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // CLOUD-1286: the emitted line is the class, the pointers, and the rule id.
+    // The FLOOR itself — that a native refusal falls back to its class's own
+    // `command` route rather than to a generic apology — is asserted on the
+    // typed field by `hook::tests::a_verb_with_no_redirect_falls_back_to_the_
+    // classs_own_route`, which is the stronger read: a substring here could be
+    // satisfied by the same words appearing anywhere in the line.
     assert!(
-        stderr.contains("Refused by protected-mutation:"),
+        stderr.contains("protected-mutation"),
         "names the gate, got: {stderr}"
     );
     assert!(
-        stderr.contains("path write refused ("),
-        "the hot path leads with the token and its gloss, got: {stderr}"
+        stderr.contains("path write refused"),
+        "the hot path leads with the token, got: {stderr}"
     );
     assert!(
-        stderr.contains("Fix: git restore"),
-        "the class's own route is the floor, got: {stderr}"
+        !stderr.contains("path write refused ("),
+        "and does not inline the class's own definition, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Fix: "),
+        "nor the remedy, which `batten policy explain` prints, got: {stderr}"
     );
 }
 
@@ -1885,13 +1923,39 @@ fn a_deny_names_the_path_classs_own_mutation_over_the_verbs() {
     );
     assert_eq!(claimed.status.code(), Some(2), "the protected gate denies");
     let stderr = String::from_utf8_lossy(&claimed.stderr);
+    // CLOUD-1286 took the remedy off the emitted line, so what this case can
+    // still assert over the compiled binary is that the two paths are told
+    // apart AT ALL and that neither remedy is inlined. WHICH remedy wins — the
+    // path class's over the verb's, CLOUD-280's tiering — is asserted on the
+    // typed `Refusal::fix()` by `hook::tests::the_deny_names_the_sanctioned_
+    // mutation_declared_beside_the_verb`.
+    //
+    // The hop for THIS remedy is the derived gate's own id rather than a class
+    // or a rule, because the answer is per path glob: `batten policy explain
+    // protected-mutation` prints the `[[redirect]]` table and the `[[verb]]`
+    // fallback under it, in the order the boundary applies them.
+    let explained = batten_with(&dir, &["policy", "explain", "protected-mutation"], &[]);
+    assert_eq!(explained.status.code(), Some(0), "the gate resolves");
+    let routes = String::from_utf8_lossy(&explained.stdout);
     assert!(
-        stderr.contains("Fix: change it in a pull request"),
-        "the declared class answers, got: {stderr}"
+        routes.contains("change it in a pull request"),
+        "the path class's remedy is reachable, got: {routes}"
+    );
+    assert!(
+        routes.contains("restore it with git"),
+        "and so is the verb's fallback, got: {routes}"
+    );
+    assert!(
+        stderr.contains("guarded/thing.md"),
+        "the path class that matched is the pointer, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("change it in a pull request"),
+        "the remedy is dereferenced rather than inlined, got: {stderr}"
     );
     assert!(
         !stderr.contains("restore it with git"),
-        "the verb's general remedy must not also appear, got: {stderr}"
+        "the verb's general remedy must not appear either, got: {stderr}"
     );
 
     let unclaimed = run_hook_in(
@@ -1903,8 +1967,8 @@ fn a_deny_names_the_path_classs_own_mutation_over_the_verbs() {
     assert_eq!(unclaimed.status.code(), Some(2), "still denied");
     let stderr = String::from_utf8_lossy(&unclaimed.stderr);
     assert!(
-        stderr.contains("Fix: restore it with git"),
-        "an unclaimed class leaves the verb's redirect standing, got: {stderr}"
+        stderr.contains("vendor/thing.md"),
+        "an unclaimed class still points at what it refused, got: {stderr}"
     );
 }
 
@@ -2206,7 +2270,10 @@ fn a_quoted_invocation_denies_on_both_harness_channels() {
             assert!(stdout.contains("\"deny\""), "{harness}: got {stdout}");
         } else {
             assert_eq!(output.status.code(), Some(2), "{harness}");
-            assert!(stderr.contains("Refused by"), "{harness}: got {stderr}");
+            // The row's id on the line is what says a deny reached this channel
+            // — CLOUD-1286 took the `Refused by` prefix off it, and this case
+            // is about the CHANNEL rather than about the wording.
+            assert!(stderr.contains("gh-pr-merge"), "{harness}: got {stderr}");
         }
     }
 }
@@ -2425,12 +2492,25 @@ fn hook_denies_a_mutating_verb_against_a_protected_path_on_both_channels() {
         if reads_a_deny_body(harness) {
             assert_eq!(output.status.code(), Some(0), "{harness}");
             assert!(stdout.contains("\"deny\""), "{harness}: got {stdout}");
-            assert!(stdout.contains("restore it with git"), "names the redirect");
+            // CLOUD-1286: the redirect is dereferenced; what every channel
+            // carries is the class and the path it refused.
+            assert!(
+                stdout.contains("path write refused"),
+                "{harness}: names the class, got {stdout}"
+            );
+            assert!(
+                stdout.contains("guarded/thing"),
+                "{harness}: and the pointer, got {stdout}"
+            );
         } else {
             assert_eq!(output.status.code(), Some(2), "{harness}");
             assert!(
-                stderr.contains("restore it with git"),
-                "{harness}: names the redirect, got {stderr}"
+                stderr.contains("path write refused"),
+                "{harness}: names the class, got {stderr}"
+            );
+            assert!(
+                stderr.contains("guarded/thing"),
+                "{harness}: and the pointer, got {stderr}"
             );
         }
     }
@@ -2935,8 +3015,13 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
             case.call.describe()
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
+        // The rule id is still the engine's own attribution and is still what
+        // this census reads; CLOUD-1286 took the `Refused by` framing off it,
+        // and the id now ENDS the line, which is why this is an `ends_with`
+        // rather than a bare `contains` — the stricter read, and the one that
+        // still tells a row that spoke from a row it merely mentioned.
         assert!(
-            stderr.contains(&format!("Refused by {}:", case.rule)),
+            stderr.trim().ends_with(&case.rule),
             "{:?} must be refused by {}, got: {stderr}",
             case.call.describe(),
             case.rule
@@ -2986,8 +3071,16 @@ fn the_bare_cargo_refusal_names_the_sanctioned_route() {
     );
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("mise exec -- cargo"), "got: {stderr}");
-    assert!(stderr.contains("mise run"), "got: {stderr}");
+    // CLOUD-1286: the route is one hop from the row id on the line. The claim
+    // this case makes is unchanged and still asserted end to end — a reader must
+    // be able to reach "the program is fine, the route is not" rather than
+    // reading the deny as "cargo is banned".
+    assert!(stderr.contains("no-bare-cargo"), "got: {stderr}");
+    let explained = batten_with(&root, &["policy", "explain", "no-bare-cargo"], &[]);
+    assert_eq!(explained.status.code(), Some(0), "the row resolves");
+    let text = String::from_utf8_lossy(&explained.stdout);
+    assert!(text.contains("mise exec -- cargo"), "got: {text}");
+    assert!(text.contains("mise run"), "got: {text}");
 }
 
 #[test]
@@ -3236,9 +3329,11 @@ fn hook_denies_a_blocked_shape_in_the_harness_channel() {
         stdout.contains("\"permissionDecision\":\"deny\""),
         "got: {stdout}"
     );
+    // CLOUD-1286: the redirect is one hop off the line, so what the channel must
+    // carry is the row that refused — the handle that hop takes.
     assert!(
-        stdout.contains("mise run land"),
-        "the deny must name the redirect the fixture policy declares"
+        stdout.contains("gh-pr-merge"),
+        "the deny must name the row the fixture policy declares, got: {stdout}"
     );
 }
 
@@ -3279,9 +3374,13 @@ fn every_host_denies_the_same_call_through_its_own_channel() {
             stdout.contains(marker),
             "{harness}: wrong deny shape, got: {stdout}"
         );
+        // CLOUD-1286: the redirect is one hop away, so what every channel must
+        // carry is the ROW that refused — the handle the hop takes. This case is
+        // about the channel, and the hop itself is proven by
+        // `every_hook_policy_table_deny_names_its_fix`.
         assert!(
-            stdout.contains("mise run land"),
-            "{harness}: the deny must name the redirect"
+            stdout.contains("gh-pr-merge"),
+            "{harness}: the deny must name the row that refused, got: {stdout}"
         );
     }
 
@@ -3302,8 +3401,8 @@ fn every_host_denies_the_same_call_through_its_own_channel() {
             "{harness}: stray stdout on these hosts risks being read as an allow"
         );
         assert!(
-            common::stderr(&output).contains("mise run land"),
-            "{harness}: the reason travels on stderr here"
+            common::stderr(&output).contains("gh-pr-merge"),
+            "{harness}: the decision travels on stderr here"
         );
     }
 }
@@ -3596,7 +3695,7 @@ fn hook_exit_code_harness_denies_with_exit_2() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Refused by"), "got: {stderr}");
+    assert!(stderr.contains("gh-pr-merge"), "got: {stderr}");
     // A verdict is an answer, not a crash. The host hands this text back to the
     // model as the deny reason, so it must not wear the binary's error prefix.
     assert!(
@@ -9079,24 +9178,36 @@ fn hatch_call(command: &str) -> String {
 }
 
 #[test]
-fn a_deny_names_the_hatch_its_own_row_declared() {
-    // CLOUD-437's worked case, in both directions at once: the row that owns
-    // `BATTEN_GH_GUARD_BYPASS` names it, and the row that does not must NOT —
-    // which is the defect, a deny pointing at another subsystem's variable.
+fn no_deny_advertises_a_hatch_on_the_hot_path() {
+    // CLOUD-437 CLOSED RATHER THAN NARROWED (CLOUD-1286). That row's defect was
+    // a deny pointing at another subsystem's variable, and the fix at the time
+    // was to advertise the RIGHT one. The fix now is to advertise none: the
+    // sentence was byte-identical on every firing of every row, so it was pure
+    // per-firing cost carrying no per-firing information, and naming the wrong
+    // variable was only the most visible symptom of printing it at all.
+    //
+    // The hatch is not removed and this is not a weakening — `the_hatch_a_deny_
+    // advertises_actually_suppresses_that_deny` below still proves each row's
+    // own variable suppresses its own deny, which was always the load-bearing
+    // half. What is gone is the advertisement.
     let dir = repo_with_config("hatch-named", HATCH_POLICY_CONFIG);
 
     let owned = run_hook_with_env(&dir, "claude-code", &hatch_call("gh pr merge 42"), &[]);
     let owned_text = String::from_utf8_lossy(&owned.stdout).into_owned();
     assert!(
-        owned_text.contains("Bypass with BATTEN_GH_GUARD_BYPASS=1."),
-        "the row that declared it advertises it: {owned_text}"
+        owned_text.contains("owns-its-hatch"),
+        "the row that refused is still named: {owned_text}"
+    );
+    assert!(
+        !owned_text.contains("BATTEN_GH_GUARD_BYPASS"),
+        "but it does not advertise its hatch: {owned_text}"
     );
 
     let general = run_hook_with_env(&dir, "claude-code", &hatch_call("danger-zone --now"), &[]);
     let general_text = String::from_utf8_lossy(&general.stdout).into_owned();
     assert!(
-        general_text.contains("Bypass with BATTEN_HOOK_BYPASS=1."),
-        "a row declaring none takes the general hatch: {general_text}"
+        !general_text.contains("BATTEN_HOOK_BYPASS"),
+        "and neither does a row taking the general hatch: {general_text}"
     );
     assert!(
         !general_text.contains("GH_GUARD"),
@@ -10699,9 +10810,21 @@ fn the_agent_sourced_fact_loop_closes_end_to_end() {
     let denied = run_hook_in(&dir, "exit-code", PR_CREATE, false);
     assert_eq!(denied.status.code(), Some(2), "a missing fact must deny");
     let reason = common::stderr(&denied);
+    // CLOUD-1286 moved the command one hop out, and this case is what proves the
+    // hop lands: the loop's whole content is that the agent runs the EXACT
+    // string the record is verified against, so a dereference that lost it would
+    // be a broken loop rather than a shorter line.
     assert!(
-        reason.contains("gh pr list --state open --json headRefName"),
-        "the deny must name the command whose output will be accepted; got: {reason}"
+        reason.contains("claim-not-raced"),
+        "the deny names the row that refused; got: {reason}"
+    );
+    let explained = batten_with(&dir, &["policy", "explain", "claim-not-raced"], &[]);
+    assert_eq!(explained.status.code(), Some(0), "the row resolves");
+    assert!(
+        String::from_utf8_lossy(&explained.stdout)
+            .contains("gh pr list --state open --json headRefName"),
+        "the hop must reach the command whose output will be accepted; got: {}",
+        String::from_utf8_lossy(&explained.stdout)
     );
 
     // 2. The agent runs it. The harness hands the buffer back.

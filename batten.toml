@@ -3224,6 +3224,28 @@ max_lines = 199
 path = ".serena/project.yml"
 key = "initial_prompt"
 
+# What ONE emitted mediated refusal line may cost (CLOUD-1286).
+#
+# The neighbouring budget above bounds what loads once per session. This bounds
+# what is emitted ~300 times in one, so it is the ceiling that actually
+# compounds: measured live on 2026-09-01, a `no-tool-substitution` refusal was 88
+# words / ~115 tokens, and ~300 firings of it is ~34,500 tokens against a ~175k
+# window — 20%, which is CLOUD-417's headline figure arrived at independently
+# from the other direction.
+#
+# 24 is chosen against the longest line the tree can actually emit rather than
+# against the shortest: a three-word class is ~3 tokens and the pointers are the
+# rest, so a deeply-nested `path:line` plus an artifact fits with room, while the
+# ~43-token rendered form this row retires does not. A ceiling only the shortest
+# class clears would fire on correct output, and the first person it fires on
+# switches it off (CLOUD-418).
+#
+# Declared here rather than as a constant in `crates/batten` for the reason
+# non-negotiable rule 1 gives: a consumer whose harness renders wider cannot move
+# a number compiled into the engine.
+[refusal]
+max_tokens = 24
+
 # The test suite is half of this repository's definition of green, and was the
 # unguarded half (CLOUD-55). It cannot be a `protected` path — tests are edited
 # every day, so a protected glob would block writing them — so the computable

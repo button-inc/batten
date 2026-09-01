@@ -30,7 +30,7 @@ use crate::common;
 
 use std::path::PathBuf;
 
-use common::{run_with_stdin, stderr};
+use common::{run, run_with_stdin, stderr};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -216,8 +216,15 @@ fn the_refusal_states_the_principle_rather_than_naming_one_command() {
         refusal.contains("verdict read dropped"),
         "states the principle: {refusal}"
     );
+    // The remedy is one hop from the rule id on the line (CLOUD-1286), and it is
+    // the row's own — which is what makes the generalisation this case is about
+    // survive the move: `explain` prints the principle in full rather than the
+    // narrower wording an agent complied with literally and then re-broke on the
+    // next command (CLOUD-199).
+    let explained = run(&root(), &["policy", "explain", "verdict-not-discarded"]);
+    assert_eq!(explained.status.code(), Some(0), "the row resolves");
     assert!(
-        refusal.contains("run_in_background"),
+        String::from_utf8_lossy(&explained.stdout).contains("run_in_background"),
         "names the remedy: {refusal}"
     );
     // Pointer-only: the caller's own command line is never echoed back.

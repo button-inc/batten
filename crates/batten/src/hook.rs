@@ -3963,29 +3963,27 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
 /// whose way through is its declared `override` route, and `Refusal::render`
 /// already carries that route as the fix. So the hatch sentence is simply
 /// omitted, and what remains is the remedy that works.
+/// # CLOUD-1286: a declared refusal emits its line and stops
+///
+/// Everything below this paragraph applies to a refusal with NO declared class.
+/// A declared one emits `<token> <pointer…>` and nothing else — no `Refused by`
+/// prefix, no gloss, no `Fix:` clause, and **no hatch sentence**, which is
+/// CLOUD-437's defect finally removed rather than narrowed: it was identical on
+/// every deny, so it was pure per-firing cost carrying no per-firing
+/// information. The way through a class is its declared routes, and
+/// `batten policy explain <token>` prints all of them; the hatch is a fact about
+/// mediation that `crate::hook`'s own module header states once, where it costs
+/// nothing to have already read.
+///
+/// The `path write refused` arm below therefore also goes: its whole purpose was
+/// to surface an override route the `Fix:` clause could not reach, and `explain`
+/// now reaches every route including that one. Composing an
+/// `override request` command line per firing was ~40 tokens spent to save one
+/// lookup.
 #[must_use]
 pub fn deny_text(refusal: &Refusal, hatch: &str) -> String {
-    let class = crate::verdict::Native::ProtectedMutation.id();
-    if refusal.verdict() == Some(class) {
-        // THE ROUTE, RENDERED AS THE COMMAND THAT TAKES IT. `Refusal::render`'s
-        // fix comes from `first_command_route`, which by construction cannot be
-        // the override — so without this the way through is declared, honoured,
-        // and undiscoverable from the one place a caller is looking.
-        //
-        // Composed from the refusal's own fields rather than written as prose: the
-        // three arguments ARE the binding `admission::admitted` checks, so a
-        // caller who runs this line back gets an admission for the situation they
-        // are actually in, and cannot be handed a command for a different one.
-        let Some(subject) = refusal.subject() else {
-            return refusal.render();
-        };
-        return format!(
-            "{} No hatch opens this class — take the declared route: \
-             `batten override request --rule {} --verdict {class} --subject {subject}`, \
-             answer its questions on stdin, then spend the admission it issues.",
-            refusal.render(),
-            refusal.rule(),
-        );
+    if refusal.verdict().is_some() {
+        return refusal.line();
     }
     format!("{} Bypass with {hatch}=1.", refusal.render())
 }
@@ -9020,13 +9018,29 @@ mod tests {
     }
 
     #[test]
-    fn the_deny_names_the_rule_and_its_reason() {
-        // Acceptance (c). The id is what a reviewer greps for in `batten.toml`;
-        // the reason is what the model acts on.
-        let reason = denial_text(adjudicate_command("gh pr merge 42"));
+    fn the_deny_names_the_rule_and_its_class() {
+        // Acceptance (c), as CLOUD-1286 leaves it. The id is still what a
+        // reviewer looks up in `batten.toml` and still travels; the row's own
+        // prose and the hatch do not, because neither varies between firings and
+        // both are one `batten policy explain` away.
+        let decision = adjudicate_command("gh pr merge 42");
+        let refusal = denial(decision.clone());
+        let reason = denial_text(decision);
         assert!(reason.contains("gh-pr-merge"), "names the rule: {reason}");
-        assert!(reason.contains("sanctioned path"), "names why: {reason}");
-        assert!(reason.contains(BYPASS_ENV), "names the hatch: {reason}");
+        assert!(
+            reason.contains("call name refused"),
+            "and the class, which is what carries the why now: {reason}"
+        );
+        assert!(
+            !reason.contains(BYPASS_ENV),
+            "the hatch sentence is off the hot path: {reason}"
+        );
+        // The row's prose is not lost, it is dereferenced — asserted on the
+        // typed field so this case still fails if a deny stops carrying it.
+        assert_eq!(
+            refusal.fix().declared_alternative(),
+            Some("use the sanctioned path for gh-pr-merge"),
+        );
     }
 
     #[test]
@@ -9737,9 +9751,15 @@ deny contains "refused by themodule" if {
                     rendered.contains("refused by themodule"),
                     "the class the module raised travels: {rendered}"
                 );
+                // THE GLOSS DOES NOT (CLOUD-1286). It was inlined on every
+                // firing and it is the class's own definition, which the
+                // registry declares once and `batten policy explain` prints on
+                // request. Asserted in the negative rather than dropped, because
+                // a silent re-inlining is the exact regression this row exists
+                // to stop and nothing else in this test would see it.
                 assert!(
-                    rendered.contains("the fixture class"),
-                    "and so does the gloss the registry declares for it: {rendered}"
+                    !rendered.contains("the fixture class"),
+                    "and the gloss is dereferenced rather than carried: {rendered}"
                 );
                 assert!(
                     !rendered.contains("deny contains"),
@@ -9953,7 +9973,17 @@ deny contains "refused by themodule" if {
             !reason.contains("this commit"),
             "must not name a commit: {reason}"
         );
-        assert!(reason.contains("claim-check"), "names the route: {reason}");
+        // THE ROUTE IS NO LONGER ON THIS LINE, and that is CLOUD-1286 rather
+        // than a loss: `mise run claim-check` is the class's declared route, it
+        // does not vary between firings, and `batten policy explain` prints it
+        // along with every other route the class carries. What must stay inline
+        // is the pointer — the check whose receipt is missing — because that is
+        // the half that changes per firing and the half a reader acts on.
+        assert!(reason.contains("claim"), "names the check: {reason}");
+        assert!(
+            !reason.contains("Fix:"),
+            "and dereferences the remedy rather than inlining it: {reason}"
+        );
     }
 
     #[test]
@@ -10197,9 +10227,20 @@ deny contains "refused by themodule" if {
         };
         let rendered = refusal.render();
         assert!(rendered.contains("linear-check"), "got: {rendered}");
+        // WHAT INVALIDATED IT IS THE CLASS, not a phrase inside a sentence
+        // (CLOUD-1285, then CLOUD-1286). `receipt read other` is the amend-or-
+        // rebase case and `receipt read stale` is the moved-trunk one; they are
+        // separate declared classes precisely so this distinction survives
+        // without the prose that used to carry it, and `batten policy explain`
+        // is where the words "amend" and "rebase" now live.
+        assert_eq!(
+            refusal.verdict(),
+            Some(crate::verdict::Native::ReceiptSuperseded.id()),
+            "the class must say what invalidated it; got: {rendered}"
+        );
         assert!(
-            rendered.contains("amend") || rendered.contains("rebase"),
-            "the cause must say what invalidated it; got: {rendered}"
+            rendered.contains("receipt read other"),
+            "and it travels on the line: {rendered}"
         );
     }
 
@@ -10561,14 +10602,20 @@ deny contains "refused by themodule" if {
 
     #[test]
     fn the_deny_names_the_sanctioned_mutation_declared_beside_the_verb() {
-        let reason = denial_text(guarded("rm .serena/memories/core.md"));
+        let decision = guarded("rm .serena/memories/core.md");
+        let reason = denial_text(decision.clone());
         assert!(
             reason.contains(PROTECTED_MUTATION),
             "names the gate: {reason}"
         );
-        assert!(
-            reason.contains("restore it with git"),
-            "names the fix: {reason}"
+        // The verb's declared redirect is the fix, and CLOUD-1286 moved it off
+        // the emitted line onto the dereference. Asserted on the typed field,
+        // which is the stronger read anyway: a substring could be satisfied by
+        // the same words appearing in the class prose.
+        assert_eq!(
+            denial(decision).fix().declared_alternative(),
+            Some("restore it with git"),
+            "the verb's own redirect is still the fix"
         );
         assert!(
             reason.contains(".serena/memories/core.md"),
@@ -10591,48 +10638,60 @@ deny contains "refused by themodule" if {
         // no third, and a fourth could not be added without stating a `Fix`,
         // because `Refusal::new` requires one.
         //
-        // THE SHARED PROJECTION IS NOW TWO CLAUSES, NOT THREE, and that is a real
-        // split rather than a weakened assertion. This used to require the hatch
-        // sentence on every deny, which was right while the hatch reached every
-        // row. `path write refused` is adjudicated under the hatch now, so
-        // printing it there would name a remedy that does nothing — the defect
-        // `crate::verdict`'s header exists to kill. What every deny still owes is
-        // a `Refused by` clause and a `Fix:` clause.
+        // THE SHARED PROJECTION IS THE DECLARED LINE (CLOUD-1286): a class and
+        // its pointers, the rule id among them, and nothing else. The three
+        // clauses this used to require — `Refused by`, `Fix:`, and the hatch
+        // sentence — were each a copy of something declared once, restated on
+        // every one of a session's ~300 firings.
+        //
+        // The contract they enforced is NOT weakened, it MOVED, and asserting
+        // that move is the whole of what remains here: every deny still owes a
+        // fix, so the fix is asserted on the typed field, where it cannot be
+        // satisfied by a substring and where a deny that offers nothing still
+        // fails.
+        for decision in [
+            adjudicate_command("gh pr merge 42"),
+            guarded("rm .serena/memories/core.md"),
+            guarded("mv batten.toml elsewhere"),
+        ] {
+            let refusal = denial(decision.clone());
+            assert!(
+                matches!(refusal.fix(), Fix::Run(_)),
+                "every deny still points to a fix: {refusal:?}"
+            );
+            let text = denial_text(decision);
+            assert!(
+                !text.starts_with("Refused by "),
+                "and the emitted line carries no prefix restating the token: {text}"
+            );
+            assert!(
+                !text.contains(" Fix: "),
+                "nor the remedy, which `batten policy explain` prints: {text}"
+            );
+            assert!(
+                text.contains(refusal.rule()),
+                "the rule that fired stays inline, because two rows can raise one \
+                 class and `explain` cannot say which: {text}"
+            );
+        }
+        // THE HATCH SENTENCE IS GONE FROM EVERY DENY, which is CLOUD-437 closed
+        // rather than narrowed. It was byte-identical on every firing, so it was
+        // pure per-firing cost carrying no per-firing information — and the one
+        // deny that used to omit it was omitting it because it was WRONG there,
+        // never because the sentence was worth its price anywhere else.
         for decision in [
             adjudicate_command("gh pr merge 42"),
             guarded("rm .serena/memories/core.md"),
             guarded("mv batten.toml elsewhere"),
         ] {
             let text = denial_text(decision);
-            assert!(text.starts_with("Refused by "), "got: {text}");
-            assert!(
-                text.contains(" Fix: "),
-                "every deny points to a fix: {text}"
-            );
-        }
-        // The hatch, where it still applies: a `[[rule]]` row is the rest of the
-        // mediated surface and the variable is still its way out.
-        assert!(
-            denial_text(adjudicate_command("gh pr merge 42"))
-                .ends_with(&format!("Bypass with {BYPASS_ENV}=1.")),
-            "an explicit row still advertises the hatch"
-        );
-        // And where it does not: the two protected denies must not advertise it,
-        // AND must name what does work. Asserting only the absence would pass over
-        // a refusal that offers nothing at all, which is worse than the wrong
-        // remedy it replaced.
-        for decision in [
-            guarded("rm .serena/memories/core.md"),
-            guarded("mv batten.toml elsewhere"),
-        ] {
-            let text = denial_text(decision);
             assert!(
                 !text.contains(BYPASS_ENV),
-                "a class the hatch cannot open must not advertise it: {text}"
+                "no deny advertises the hatch on the hot path: {text}"
             );
             assert!(
-                text.contains("batten override request"),
-                "and must name the route that does work: {text}"
+                !text.contains("batten override request"),
+                "and none composes an override command line per firing: {text}"
             );
         }
     }
@@ -10667,9 +10726,17 @@ deny contains "refused by themodule" if {
             "and the refusal says which class it belongs to"
         );
         let reason = denial_text(decision);
+        // The FIX is still on the refusal — the assertion above reads it off the
+        // typed field — and it is what `explain` prints. What the hot path emits
+        // is the token and the pointer and stops (CLOUD-1286), so the gloss's
+        // opening parenthesis is the thing that must NOT be there.
         assert!(
-            reason.contains("path write refused ("),
-            "the hot path leads with the token and its gloss: {reason}"
+            reason.starts_with("path write refused"),
+            "the hot path leads with the token: {reason}"
+        );
+        assert!(
+            !reason.contains("path write refused ("),
+            "and does not inline the class's own definition after it: {reason}"
         );
         assert!(
             reason.contains("batten.toml"),

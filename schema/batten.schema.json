@@ -267,6 +267,17 @@
         "$ref": "#/$defs/Redirect"
       }
     },
+    "refusal": {
+      "description": "What ONE emitted mediated refusal line may cost (CLOUD-1286). Absent\nmeans no ceiling is declared and none is enforced, on the same reading as\n`[budget]` above. The type and the predicate are [`crate::refusal`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Ceiling"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "rule": {
       "description": "The declarative rules run against the repository. Absent or empty means\n\"no rules configured\" and nothing is reported. Which of these a given\nverb admits is the §5 effect split: `check` runs only non-spawning kinds\nand refuses the rest, `enforce` runs all of them (CLOUD-170).\n\nEvery rule pins its `severity` explicitly — the key is required, with no\nimplicit fallback — and carries a separate `scope` key whose vocabulary\nnever conflates with severity's (CLOUD-61). Both disciplines are\nenforced at parse time: omission or conflation is a usage error here,\nnever a value quietly assumed.",
       "type": "array",
@@ -587,6 +598,22 @@
         "key",
         "node",
         "reduce"
+      ]
+    },
+    "Ceiling": {
+      "description": "The `[refusal]` table: what one emitted mediated line may cost.\n\n**Declared, never a literal in the crate** (non-negotiable rule 2, and the\nsame reasoning `[budget.instructions]` is built on): a ceiling written into\n`crates/batten` is this repository's judgement compiled into every consumer's\nengine, and a consumer whose harness renders differently could not move it\nwithout a release. [`crate::budget::BudgetSet`] is the landed shape this\ncopies — a ceiling and nothing else, absent meaning unenforced, because a\nthreshold nobody declared is not a threshold of zero.\n\nThe unit is **estimated tokens**, on `budget.rs`'s own bytes-per-token\nconvention rather than a tokenizer: this is a ceiling on a line, checked off\nthe hot path, and a real BPE pass here would be the dependency CLOUD-1284\ndeliberately kept to `[dev-dependencies]`.\n\nIt is not [`crate::verdict`]'s `GLOSS_MAX`, which stays. That bounds one\nFIELD — the gloss `explain` prints — and this bounds the emitted LINE. Both\nexist for the same reason and neither substitutes for the other: with the\ngloss off the hot path, `GLOSS_MAX` is what stops it growing back into a\nparagraph where nothing measures it.",
+      "type": "object",
+      "properties": {
+        "max_tokens": {
+          "description": "The ceiling on estimated tokens for ONE emitted mediated refusal line.\nThe boundary is `<=`: exactly at budget passes, matching\n[`crate::budget::Report::over_budget`] so the two thresholds in this tree\ndo not disagree about their own edge.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "max_tokens"
       ]
     },
     "CeilingUnit": {

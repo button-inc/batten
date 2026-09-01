@@ -39,7 +39,67 @@
 //! `crates/batten`, constructed at every deny site, never re-typed per harness —
 //! is what this module is.
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
+
+/// The `[refusal]` table: what one emitted mediated line may cost.
+///
+/// **Declared, never a literal in the crate** (non-negotiable rule 2, and the
+/// same reasoning `[budget.instructions]` is built on): a ceiling written into
+/// `crates/batten` is this repository's judgement compiled into every consumer's
+/// engine, and a consumer whose harness renders differently could not move it
+/// without a release. [`crate::budget::BudgetSet`] is the landed shape this
+/// copies — a ceiling and nothing else, absent meaning unenforced, because a
+/// threshold nobody declared is not a threshold of zero.
+///
+/// The unit is **estimated tokens**, on `budget.rs`'s own bytes-per-token
+/// convention rather than a tokenizer: this is a ceiling on a line, checked off
+/// the hot path, and a real BPE pass here would be the dependency CLOUD-1284
+/// deliberately kept to `[dev-dependencies]`.
+///
+/// It is not [`crate::verdict`]'s `GLOSS_MAX`, which stays. That bounds one
+/// FIELD — the gloss `explain` prints — and this bounds the emitted LINE. Both
+/// exist for the same reason and neither substitutes for the other: with the
+/// gloss off the hot path, `GLOSS_MAX` is what stops it growing back into a
+/// paragraph where nothing measures it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Ceiling {
+    /// The ceiling on estimated tokens for ONE emitted mediated refusal line.
+    /// The boundary is `<=`: exactly at budget passes, matching
+    /// [`crate::budget::Report::over_budget`] so the two thresholds in this tree
+    /// do not disagree about their own edge.
+    pub max_tokens: usize,
+}
+
+impl Ceiling {
+    /// Whether one emitted line is over the declared ceiling.
+    #[must_use]
+    pub fn over(&self, line: &str) -> bool {
+        crate::budget::estimate_tokens(line) > self.max_tokens
+    }
+}
+
+/// Refuse a `[refusal]` table that declares a ceiling nothing could satisfy.
+///
+/// A zero ceiling would refuse every line including the shortest possible one,
+/// which is the switched-off gate CLOUD-418 names: it fires on everything, so
+/// the first person to run it turns it off. Refused at load, in the same
+/// direction and for the same reason `budget.rs` refuses an empty set.
+///
+/// # Errors
+///
+/// When the declared ceiling is zero.
+pub fn validate(ceiling: Option<&Ceiling>) -> Result<(), String> {
+    match ceiling {
+        Some(declared) if declared.max_tokens == 0 => Err(
+            "`[refusal] max_tokens = 0` refuses every line a refusal could emit, including the \
+             shortest one the grammar can spell — a ceiling nothing can satisfy is a gate that \
+             gets switched off rather than one that holds"
+                .to_owned(),
+        ),
+        _ => Ok(()),
+    }
+}
 
 /// What to run instead — the half of a refusal that makes it actionable.
 ///
@@ -285,6 +345,52 @@ impl Refusal {
         )
     }
 
+    /// What the HOT PATH emits: the declared class and its pointers, and nothing
+    /// else (CLOUD-1286).
+    ///
+    /// [`Refusal::render`] is the projection for a surface with no budget
+    /// pressure — `check`'s findings, a report, anything a human reads once. This
+    /// is the projection for a surface that pays for every byte on every
+    /// subsequent turn, and the two are deliberately different rather than one
+    /// wrapper being shortened for everybody.
+    ///
+    /// **Three clauses go, and each is a copy of something already declared.**
+    /// `Refused by <rule>:` restates a token that names its own class; the
+    /// parenthetical gloss IS the class's definition inlined; `Fix:` is the
+    /// class's first `command` route, which `batten policy explain <token>`
+    /// prints along with every other route the class declares — the override
+    /// route included, which the `Fix:` clause could never reach by construction.
+    /// So the decision this row owed in writing is: **the token is the pointer to
+    /// the fix**, one hop, and the hop is the same command for all four clauses
+    /// rather than a different lookup for each.
+    ///
+    /// **The RULE ID stays, as a trailing pointer rather than as a prefix.** What
+    /// goes is `Refused by <rule>:` — five tokens of framing around one useful
+    /// word. The word itself is not framing: two rows can raise the same class,
+    /// and `explain` answers about the class and cannot say which row fired, so
+    /// dropping the id would leave a reader unable to find the config line that
+    /// refused them. It varies per firing, which is exactly the test this row
+    /// applies — the prose that repeats is what moves behind the dereference,
+    /// and the pointers that change stay inline.
+    ///
+    /// **An UNDECLARED refusal keeps the long form**, and that is not a hole. A
+    /// refusal composed from consumer prose carries no token, so a bare line
+    /// would be a bare "no" — precisely the thing CLOUD-122 exists to forbid.
+    /// Concision is bought with a class a reader can look up; where there is no
+    /// class there is nothing to buy it with, and the long form is the honest
+    /// answer rather than a fallback.
+    #[must_use]
+    pub fn line(&self) -> String {
+        match self.verdict() {
+            // `reason` already IS `render_line`'s output for a declared refusal —
+            // token plus pointers — so this is a projection rather than a second
+            // renderer. Composing the line here from the token and the subject
+            // would be a second authority over a string the composer built.
+            Some(_) => format!("{} {}", self.reason, self.rule),
+            None => self.render(),
+        }
+    }
+
     /// The machine-readable payload: `{rule, reason, fix}`, byte-stable.
     ///
     /// `hook` has no `-J` channel by design — its stdout is already a
@@ -363,8 +469,13 @@ mod tests {
         );
         assert_eq!(refusal.verdict(), Some("scanner install missing"));
         assert!(
-            refusal.reason().starts_with("scanner install missing ("),
+            refusal.reason().starts_with("scanner install missing"),
             "the hot path leads with the token: {}",
+            refusal.reason()
+        );
+        assert!(
+            !refusal.reason().contains('('),
+            "and does not inline the class's own definition after it (CLOUD-1286): {}",
             refusal.reason()
         );
         assert!(

@@ -385,6 +385,11 @@ pub struct Config {
     /// predicate are [`crate::budget`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<crate::budget::Budget>,
+    /// What ONE emitted mediated refusal line may cost (CLOUD-1286). Absent
+    /// means no ceiling is declared and none is enforced, on the same reading as
+    /// `[budget]` above. The type and the predicate are [`crate::refusal`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<crate::refusal::Ceiling>,
     /// The ref work must land on (CLOUD-51) — the target `worktree status`
     /// judges at-risk work against. Consumer-specific by nature: which ref is
     /// the trunk is a property of the repository being gated, never of Batten
@@ -1112,6 +1117,10 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // the same one: a table that parses and gates nothing. A `[budget]` header
     // with no `[budget.instructions]` under it is refused here (CLOUD-50).
     crate::budget::validate(config.budget.as_ref())?;
+    // Same shape, same reason, one table over: a `[refusal]` ceiling nothing can
+    // satisfy is refused at load rather than discovered by the first person it
+    // fires on.
+    crate::refusal::validate(config.refusal.as_ref()).map_err(UsageError::raise)?;
     // Validated at parse, like `[[verb]]` and `[[marker]]`: CLOUD-242's lesson
     // is that a table nothing validates is coverage that means nothing.
     if let Some(ci) = &config.ci {
@@ -1263,6 +1272,7 @@ impl Config {
             // An authority that declares no budget grants no exemption from one
             // either — there is simply no threshold, which is what `None` says.
             budget: None,
+            refusal: None,
             must_land_on: None,
             // An authority that cannot be read attaches no side effects. The
             // safe direction is unambiguous here: firing a command an

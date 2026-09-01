@@ -27,7 +27,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, git_in, run_with_stdin, scratch_outside_tree, stderr};
+use common::{Fixture, git_in, run, run_with_stdin, scratch_outside_tree, stderr};
 
 /// The policy under test: the committed rows' shape, with nothing else declared.
 ///
@@ -309,19 +309,27 @@ fn the_refusal_names_the_route_and_leaks_no_evidence() {
         refusal.contains("pr-names-an-issue"),
         "names the rule: {refusal}"
     );
+    // WHAT IS MISSING IS THE CLASS (CLOUD-1286): `issue name missing` says the
+    // key is absent rather than that the shape is banned, in three words, and it
+    // is a name a reader can look up. The sentence that used to say it, and the
+    // places to put a key, are what `batten policy explain` prints.
     assert!(
-        refusal.contains("names no tracker key"),
+        refusal.contains("issue name missing"),
         "says what is missing rather than that the shape is banned: {refusal}"
     );
+    let explained = run(&dir, &["policy", "explain", "pr-names-an-issue"]);
+    assert_eq!(explained.status.code(), Some(0), "the row resolves");
     assert!(
-        refusal.contains("branch"),
-        "names a place to put one: {refusal}"
+        String::from_utf8_lossy(&explained.stdout).contains("branch"),
+        "and the hop names a place to put one"
     );
     // CLOUD-403 measured that the bash guard's deny text advertised no reachable
-    // hatch. The engine supplies one for free, and this is what keeps it there.
+    // hatch, and CLOUD-437 that advertising one on every deny was itself the
+    // defect. CLOUD-1286 settles it: the hatch is not advertised at all, because
+    // the sentence was byte-identical on every firing of every row.
     assert!(
-        refusal.contains("Bypass with"),
-        "the documented hatch is reachable from the refusal: {refusal}"
+        !refusal.contains("Bypass with"),
+        "and the hatch sentence is off the hot path: {refusal}"
     );
     // Pointer-only (non-negotiable rule 4). The gate read the branch name and
     // every commit message on the range; the refusal must quote none of them.

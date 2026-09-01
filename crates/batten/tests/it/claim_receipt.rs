@@ -143,7 +143,7 @@ fn a_write_with_no_claim_receipt_is_refused() {
 }
 
 #[test]
-fn the_refusal_names_the_route_and_the_keying() {
+fn the_refusal_names_the_check_and_the_keying() {
     let dir = repo("claim-refusal");
     let refusal = stderr(&run_with_stdin(
         &dir,
@@ -155,9 +155,14 @@ fn the_refusal_names_the_route_and_the_keying() {
         "names the rule: {refusal}"
     );
     assert!(refusal.contains("branch"), "names the keying: {refusal}");
+    // The ROUTE (`mise run claim-check`) is the class's declared remedy and is
+    // one `batten policy explain` away since CLOUD-1286: it is the same string
+    // on every firing, so inlining it was pure repetition. The CHECK whose
+    // receipt is missing does vary, so it stays — and it is what turns "refused"
+    // into something a reader can act on.
     assert!(
-        refusal.contains("claim-check"),
-        "names the route rather than only refusing: {refusal}"
+        refusal.contains("claim"),
+        "names the check rather than only refusing: {refusal}"
     );
     // The wrong pointer this avoids: a per-commit remedy for a branch-wide claim.
     assert!(

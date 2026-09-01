@@ -376,34 +376,47 @@ pub fn render_subjects(subjects: &[Subject]) -> String {
         .join(" ")
 }
 
-/// What a refusal says on the hot path: the token, its gloss, its pointers
-/// (CLOUD-1053).
+/// What a refusal says on the hot path: the token and its pointers, and stops
+/// (CLOUD-1053, narrowed by CLOUD-1286).
 ///
 /// ```text
-/// task name undefined (a command row names a task this tree does not define) batten.toml:1604
+/// task name undefined batten.toml:1604
 /// ```
+///
+/// **The gloss is gone from this line and that is the whole change.** It used to
+/// be emitted unconditionally, and it was ~28 of the ~43 tokens a rendered line
+/// cost — the class's own definition, inlined on every one of the ~300 firings a
+/// long session pays for, when the class is declared once and a reader who wants
+/// it can ask. `batten policy explain <token>` is where it went, together with
+/// the `class` prose that was never on this line at all.
+///
+/// **Dropping it is safe only because the token is a THREE-WORD DECLARED NAME**
+/// (CLOUD-1284). Under the old SCREAMING-KEBAB free text this would have traded
+/// concision for opacity; under the grammar the name is the gloss's short form,
+/// which is what that row bought.
 ///
 /// **The subject stays inline** rather than being dereferenced through
 /// `explain`. Making a reader run a second command to learn WHICH file would
-/// make the common case slower, which is the opposite of the point; what moves
-/// behind `explain` is the class definition, which the common case does not
-/// need.
+/// make the common case slower, which is the opposite of the point. This
+/// shortens the prose, never the pointer.
 ///
-/// A token the registry does not carry renders as itself with the gap stated.
-/// `policy::load` refuses that at load, so it is reachable only on the mediated
-/// path, where the AST check is skipped for CLOUD-689's budget — and there
-/// saying so beats either inventing a gloss or dropping the refusal.
+/// A token the registry does not carry still renders as itself. It gets no
+/// composed apology: `policy::load` refuses an undeclared token at load, so this
+/// is reachable only on the mediated path where the AST check is skipped for
+/// CLOUD-689's budget, and there the token alone is both the honest answer and
+/// the one a reader can look up.
 #[must_use]
-pub fn render_line(registry: &[DeclaredVerdict], token: &str, subjects: &[Subject]) -> String {
-    let gloss = resolve(registry, token).map_or(
-        "no `[[verdict]]` row declares this class, so it carries no gloss",
-        |(entry, _)| entry.gloss.as_str(),
-    );
+/// The registry parameter is kept though this line no longer reads it: it is
+/// what `explain` resolves the token against, and every call site already holds
+/// it. Dropping it from the signature would be a churn across ten composers to
+/// buy back one unused reference, and would have to be undone the moment the
+/// line carries anything registry-derived again.
+pub fn render_line(_registry: &[DeclaredVerdict], token: &str, subjects: &[Subject]) -> String {
     let pointers = render_subjects(subjects);
     if pointers.is_empty() {
-        format!("{token} ({gloss})")
+        token.to_owned()
     } else {
-        format!("{token} ({gloss}) {pointers}")
+        format!("{token} {pointers}")
     }
 }
 

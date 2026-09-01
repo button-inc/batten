@@ -34,7 +34,7 @@ use crate::common;
 
 use std::path::PathBuf;
 
-use common::{run_with_stdin, stderr};
+use common::{run, run_with_stdin, stderr};
 
 /// A protected path this repository declares, and one it does not.
 ///
@@ -285,10 +285,6 @@ fn the_deny_names_the_whole_action_and_the_serena_tool_to_use_instead() {
     ));
     assert!(refusal.contains("git mv"), "names the action: {refusal}");
     assert!(refusal.contains(GUARDED), "names where: {refusal}");
-    assert!(
-        refusal.contains("rename_memory"),
-        "names the route that rewrites referrers: {refusal}"
-    );
 
     let edit = stderr(&run_with_stdin(
         &root(),
@@ -296,8 +292,24 @@ fn the_deny_names_the_whole_action_and_the_serena_tool_to_use_instead() {
         &bash_payload(&format!("sed -i s/a/b/ {GUARDED}")),
     ));
     assert!(
-        edit.contains("edit_memory"),
-        "an in-place edit names the editing tool: {edit}"
+        edit.contains("sed"),
+        "an in-place edit names the action too: {edit}"
+    );
+
+    // THE ROUTES ARE ONE HOP OFF THE LINE (CLOUD-1286), and this asserts the hop
+    // reaches BOTH — the move's and the edit's — because they are different
+    // Serena tools and only `rename_memory` rewrites `mem:` referrers. A single
+    // assertion here would pass over the two collapsing into one.
+    let explained = run(&root(), &["policy", "explain", "protected-mutation"]);
+    assert_eq!(explained.status.code(), Some(0), "the gate resolves");
+    let routes = String::from_utf8_lossy(&explained.stdout);
+    assert!(
+        routes.contains("rename_memory"),
+        "names the route that rewrites referrers: {routes}"
+    );
+    assert!(
+        routes.contains("edit_memory"),
+        "and the one that edits in place: {routes}"
     );
 }
 
@@ -335,9 +347,17 @@ fn a_registered_module_gets_its_own_route_and_not_the_memory_one() {
         !module.contains("write_memory") && !module.contains("edit_memory"),
         "a module must not be sent to a memory tool: {module}"
     );
+    // CLOUD-1286: the per-path-class remedy is one hop from the gate id on the
+    // line, and this asserts the hop lands rather than that a substring appears.
+    // The gate is the DERIVED protected one, so it has no `[[rule]]` row — the
+    // hop resolves to the `[[redirect]]` table instead, which is where the
+    // per-class answer actually lives.
+    let explained = run(&root(), &["policy", "explain", "protected-mutation"]);
+    assert_eq!(explained.status.code(), Some(0), "the gate resolves");
+    let routes = String::from_utf8_lossy(&explained.stdout);
     assert!(
-        module.contains("policy-test"),
-        "names the route that checks a module edit before it lands: {module}"
+        routes.contains("policy-test"),
+        "names the route that checks a module edit before it lands: {routes}"
     );
 
     // THE MIRROR. Without it the assertions above pass over a build that simply
@@ -348,8 +368,12 @@ fn a_registered_module_gets_its_own_route_and_not_the_memory_one() {
         &bash_payload(&format!("sed -i s/a/b/ {GUARDED}")),
     ));
     assert!(
-        memory.contains("edit_memory"),
-        "a memory still names the Serena route: {memory}"
+        memory.contains(GUARDED),
+        "a memory write still points at the memory it refused: {memory}"
+    );
+    assert!(
+        routes.contains("edit_memory"),
+        "and the memory class still declares the Serena route: {routes}"
     );
 }
 

@@ -1064,6 +1064,11 @@ description = "Gate: every verdict vocabulary word is one token under the declar
 run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^verdict_vocabulary::/)'"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
+[tasks."test:refusal-ceiling"]
+description = "Gate: every emitted mediated refusal line is within the declared `[refusal]` ceiling (CLOUD-1286)"
+run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^refusal_ceiling::/)'"
+env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
+
 [tasks."test:config-deprecations"]
 description = "Gate: no config key left the published schema without a deprecation window (CLOUD-360)"
 run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^config_deprecations::/)'"

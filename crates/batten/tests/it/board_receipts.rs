@@ -329,11 +329,14 @@ fn filing_without_a_search_is_refused_and_with_one_is_allowed() {
         &payload("mcp__Linear__save_issue", r#"{"title":"a finding"}"#),
     );
     let text = stderr(&refusal);
+    // The CALL that mints the receipt is the class's declared route, which
+    // CLOUD-1286 moved behind `batten policy explain` — it does not vary
+    // between firings, and paying for it on each one was the defect. What must
+    // stay inline is the pointer: WHICH receipt is missing, and which row wants
+    // it.
     assert!(
-        text.contains("list_issues"),
-        "the refusal must name the CALL that mints the receipt (CLOUD-1024: there \
-         is no mint command any more, so naming one would send the reader to a \
-         task this tree deleted): {text}"
+        text.contains("issue-search"),
+        "the refusal must name the receipt that is absent: {text}"
     );
     assert!(
         text.contains("filing-needs-a-search"),
@@ -370,19 +373,21 @@ fn an_update_is_not_row_ones_business() {
         ),
     );
     let text = stderr(&refusal);
-    // THE REFUSING ROW IS READ FROM THE PREFIX, not by searching the whole
-    // refusal for a row id. Measured: a bare `contains("filing-needs-a-search")`
-    // fails here, because row 2's own reason ENDS by naming row 1 — "Creating an
-    // issue is never gated by this row (that is `filing-needs-a-search`)" — which
-    // is exactly the cross-reference the two complements should carry. A substring
-    // test over a refusal cannot tell a row that spoke from a row it pointed at;
-    // `Refused by <id>` is the engine's own attribution and can.
+    // THE REFUSING ROW IS THE ONLY ROW ID ON THE LINE, which is what CLOUD-1286
+    // changed here and it changed it for the better. This case used to have to
+    // read attribution off the `Refused by <id>` PREFIX, because a bare
+    // `contains("filing-needs-a-search")` matched row 2's own reason — which
+    // ENDS by naming row 1, "Creating an issue is never gated by this row (that
+    // is `filing-needs-a-search`)". That cross-reference is prose, so it now
+    // lives behind `batten policy explain` with the rest of it, and the id on
+    // the emitted line is the engine's own attribution and nothing else. The
+    // negative assertion is what keeps that claim honest.
     assert!(
-        !text.contains("Refused by filing-needs-a-search"),
+        !text.contains("filing-needs-a-search"),
         "an update names an id, so the row that gates FILING must stay silent: {text}"
     );
     assert!(
-        text.contains("Refused by an-update-owes-a-recent-read"),
+        text.contains("an-update-owes-a-recent-read"),
         "and the row that does answer an edit is the one that spoke: {text}"
     );
 }
@@ -555,10 +560,13 @@ fn an_update_with_no_receipt_is_refused() {
         text.contains("an-update-owes-a-recent-read"),
         "the row that refused, so a reader can find it in the config: {text}"
     );
+    // The CALL that mints the receipt is the class's declared route and is one
+    // `batten policy explain` away (CLOUD-1286). It is the same string on every
+    // firing, which is exactly what does not belong on a line an agent pays for
+    // ~300 times a session.
     assert!(
-        text.contains("get_issue"),
-        "and the CALL that mints the receipt, which is the fix (CLOUD-1024: the \
-         mint follows the read, so the remedy is the read): {text}"
+        !text.contains("Fix: "),
+        "the remedy is dereferenced rather than inlined: {text}"
     );
     // THE VERDICT WORDING FOR `ReceiptKey::Named`, pinned because it was missing:
     // `receipt_refusal` had arms for `Branch` and for the commit-keyed default,
@@ -882,12 +890,21 @@ fn a_move_with_no_adjudication_is_refused() {
     );
     let text = stderr(&refusal);
     assert!(
-        text.contains("Refused by a-move-to-in-review-owes-an-adjudication"),
+        text.contains("a-move-to-in-review-owes-an-adjudication"),
         "the row that refused: {text}"
     );
+    // The check whose receipt is missing is the pointer and stays inline; the
+    // COMMAND that mints it is the class's declared route, which CLOUD-1286
+    // moved behind `batten policy explain`. Both halves asserted, because
+    // dropping the first would be a real loss and dropping the second is the
+    // change.
     assert!(
-        text.contains("graph-check"),
-        "and the command that decides whether the closure is real: {text}"
+        text.contains("board-move"),
+        "and the check whose receipt is absent: {text}"
+    );
+    assert!(
+        !text.contains("Refused by "),
+        "with no prefix restating the class: {text}"
     );
 
     mint_move_receipt(&repo, "CLOUD-1", 5);
@@ -924,9 +941,12 @@ fn an_adjudication_past_the_bound_is_refused() {
     );
     let text = stderr(&refusal);
     assert!(
-        text.contains("Refused by a-move-to-in-review-owes-an-adjudication"),
+        text.contains("a-move-to-in-review-owes-an-adjudication"),
         "the row that refused: {text}"
     );
+    // The bound the age was measured against travels as a pointer, because it
+    // is the difference between "run it again" and a row nobody can satisfy.
+    assert!(text.contains("900s"), "and the bound it crossed: {text}");
 
     mint_move_receipt(&repo, "CLOUD-1", 5);
     assert_eq!(

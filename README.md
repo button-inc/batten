@@ -112,9 +112,25 @@ Batten's output contract answers all three at once. A finding is a **pointer, no
 a payload** — a count and a `path:line`, never the matched content — so a wrapped
 tool's two thousand lines become one. Output is **byte-stable**, so an unchanged
 repository renders identical bytes and the agent's prefix cache stays warm instead
-of being invalidated by a reordered map or a timestamp. And a refusal **points at
-the fix**: a deny names the rule, the reason, and the command to run instead,
-which is one hop to right rather than a round of guessing.
+of being invalidated by a reordered map or a timestamp.
+
+And a refusal **points at the fix — the class name IS the pointer.** A mediated
+deny emits one line: a declared three-word class and the pointers it applies to,
+as in `shell edit refused mise-tasks/land.sh:845`. The reason, the routes out
+(the escape hatch and the override alike) and the class's full definition are
+one hop away, at `batten policy explain "shell edit refused"`.
+
+That is a decision rather than an omission, and it is the same argument as the
+three pains above turned on the tool's own output. The reason and the remedy do
+not change between firings, and a mediated refusal fires hundreds of times in a
+long session, so inlining them means paying per firing for text that was
+declared once. The name carries the class because the names are a declared
+vocabulary rather than free text — three positional words, each glossed — which
+is what makes one hop cheap and the elision honest rather than merely shorter.
+The pointer, which DOES change per firing, stays inline: this shortens the
+prose, never the operand a reader acts on. The ceiling on that line is declared
+in `batten.toml` and gated, so "one line" is a property of the data and not of
+an author's restraint.
 
 Magnitude belongs to the benchmark, not to this page. A benchmark is the proof,
 measured per capability against a named workload with a stated baseline and run

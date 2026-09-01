@@ -384,9 +384,12 @@ fn a_hand_written_row_outranks_a_module() {
     let answer = String::from_utf8_lossy(&outcome.stdout);
     let said = format!("{answer}{cause}");
 
+    // CLOUD-1286: WHICH row answered is read off the id on the line rather than
+    // off its remedy, and that is the stricter test of precedence anyway — a
+    // remedy is prose two rows could share, an id is not.
     assert!(
-        said.contains("mise exec -- probe-tool"),
-        "the hand-written row's own remedy is what the reader must see: {said}"
+        said.contains("probe-pinned"),
+        "the hand-written row is what answered: {said}"
     );
     assert!(
         !said.contains("task argv probe"),

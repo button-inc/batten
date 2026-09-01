@@ -72,7 +72,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, run_with_stdin, stderr};
+use common::{Fixture, run, run_with_stdin, stderr};
 
 /// This repository's own rows, as committed — never a fixture rewriting them.
 fn repo(name: &str) -> PathBuf {
@@ -135,8 +135,11 @@ fn every_spelling_of_a_decided_verb_is_refused() {
                 "whatever name the host minted, this verb is denied: {tool}"
             );
             let text = stderr(&refusal);
+            // CLOUD-1286 took the `Refused by` framing off the line; the rule id
+            // is still the engine's attribution and now ends it, which is the
+            // stricter read of the same question.
             assert!(
-                text.contains(&format!("Refused by {rule}:")),
+                text.trim().ends_with(rule),
                 "{tool} must be refused by {rule}, got: {text}"
             );
         }
@@ -175,7 +178,7 @@ fn a_verb_merely_containing_a_decided_one_is_untouched() {
         let text = stderr(&output);
         for (_, rule) in DECIDED {
             assert!(
-                !text.contains(&format!("Refused by {rule}:")),
+                !text.contains(rule),
                 "{rule} has no verdict on {tool}, got: {text}"
             );
         }
@@ -212,9 +215,21 @@ fn each_refusal_names_its_own_remedy() {
         );
         assert_eq!(refusal.status.code(), Some(2), "{verb} is refused");
         let text = stderr(&refusal);
+        // CLOUD-1286: the remedy is one hop from the rule id on the line, and
+        // this case still asserts it PER ROW — which is what caught the test
+        // being wrong before, when it demanded `mise run land` from a verb whose
+        // remedy is to background the command. A generic assertion, or one that
+        // only checked the hop resolved, would pass over the same mismatch.
+        let row = text
+            .split_whitespace()
+            .next_back()
+            .expect("a deny names the rule that fired");
+        let explained = run(&repo, &["policy", "explain", row]);
+        assert_eq!(explained.status.code(), Some(0), "{verb}: the row resolves");
+        let explained_text = String::from_utf8_lossy(&explained.stdout);
         assert!(
-            text.contains(remedy),
-            "{verb}'s refusal must name its own remedy ({remedy}), got: {text}"
+            explained_text.contains(remedy),
+            "{verb}'s refusal must reach its own remedy ({remedy}), got: {explained_text}"
         );
     }
 }
