@@ -475,7 +475,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,attestation-check,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,bot-issue,branch-age-check,cap-drift,ci-drift,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-race-check,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-matcher-check,hook-pin-check,hooks-wiring-check,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,license-table-check,linear-check,lock-complete,lock-entry-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pinned-toolchain,pipefail-grep-check,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reclaim-census,release-assets-check,release-due,release-tag-shape,release-tracking-check,released,remedy-authorship,report-only-check,review-answered,run-shape,run-shape-guard,rust-paths-check,sbom,sbom-check,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared"
+MUTANT_GATES = "alive,attestation-check,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,bot-issue,branch-age-check,cap-drift,ci-drift,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-race-check,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-matcher-check,hook-pin-check,hooks-wiring-check,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pinned-toolchain,pipefail-grep-check,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reclaim-census,release-assets-check,release-due,release-tag-shape,release-tracking-check,released,remedy-authorship,report-only-check,review-answered,run-shape,run-shape-guard,rust-paths-check,sbom,sbom-check,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1911,6 +1911,17 @@ description = "Session start: record this boot and read back what was running wh
 # silent, because a line every session start would be noise in the overwhelming
 # case where nothing happened.
 run = "mise run reclaim-census record-boot >/dev/null 2>&1 || true; mise run reclaim-census report 2>/dev/null || true"
+
+# CLOUD-843. The successor to `mise-tasks/lock-complete.sh`, and the same wrapper
+# shape `rules-drift` above takes: the step name and the rule id are one object,
+# so hk's step, this task and `batten.toml`'s row cannot drift apart.
+#
+# `--rule` SELECTS ONE ROW. A bare `batten check` under a name that promises the
+# lockfile gate would report every other tree rule through it, which is the
+# predecessor's own scope stated as a flag.
+[tasks.lock-complete]
+description = "Gate: mise.lock has no partial or bogus platform entry — a pure function of the committed lockfile, no network, no write"
+run = "cargo run --quiet -p batten -- check --rule lock-complete"
 
 [tasks.batten-check]
 description = "Consumer #1: evaluate the committed batten.toml with batten's own engine against this repository"

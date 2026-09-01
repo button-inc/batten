@@ -489,68 +489,73 @@ fn a_declared_format_does_not_override_an_extension_that_names_one() {
     );
 }
 
-/// The committed row's own verdict, so the fixture loads the real module.
-const LOCK_ENTRY_CONFIG: &str = r#"version = 1
-
-[[rule]]
-id = "lock-entry-complete"
-kind = "policy"
-scope = "tree"
-staged = ["mise.lock"]
-format = "toml"
-module = "policy/lock-entry-complete.rego"
-severity = "deny"
-
-[[verdict]]
-id = "V-LOCK-ENTRY-PARTIAL"
-gloss = "a locked platform entry carries a checksum and nothing to fetch"
-class = "A fixture class, standing in for the committed row's own."
-
-[[verdict.route]]
-id = "R-FIXTURE-LOCK-ENTRY"
-kind = "document"
-target = "policy/lock-entry-complete.rego"
-"#;
-
-/// A lockfile whose one platform entry is the partial shape: locked, unusable.
-const PARTIAL_LOCK: &str = r#"[[tools."aqua:example/tool"]]
+/// A lockfile locking every platform this repository installs on, complete.
+///
+/// The base the two cases below vary, and it has to be complete rather than
+/// minimal: `lock-complete` decides eight predicates over one file, so a fixture
+/// carrying a single platform would be refused for a reason neither case is
+/// about and the anti-vacuity mirror could never be green.
+const COMPLETE_LOCK: &str = r#"[[tools."aqua:example/tool"]]
 version = "1.0.0"
 backend = "aqua:example/tool"
 
 [tools."aqua:example/tool"."platforms.linux-x64"]
 checksum = "sha256:abc"
+url = "https://example.invalid/tool.tar.gz"
+
+[tools."aqua:example/tool"."platforms.linux-arm64"]
+checksum = "sha256:abc"
+url = "https://example.invalid/tool.tar.gz"
+
+[tools."aqua:example/tool"."platforms.macos-arm64"]
+checksum = "sha256:abc"
+url = "https://example.invalid/tool.tar.gz"
 "#;
 
-#[test]
-fn the_committed_lock_entry_rule_refuses_a_partial_entry_over_the_binary() {
-    // THE PROOF THAT A REGISTERED ROW STOPPED BEING DEAD, and it needs the real
-    // module rather than a probe: `policy/lock-entry-complete.rego` has been in
-    // `batten.toml` deciding NOTHING on every run, because `mise.lock` resolved
-    // no staged node and Rego reads undefined as *does not hold*. Its four
-    // `test_` rules passed throughout on `with input as`, which fabricates the
-    // shape the engine could not produce — and the module's own header names
-    // THIS FILE as the tier that would catch it.
-    //
-    // So the case drives the committed module, over the compiled binary, against
-    // the exact defect its row exists for: a platform entry carrying a checksum
-    // and nothing to fetch. `mise lock` never repairs an existing entry, so a
-    // stably wrong lockfile passes a regenerate-and-diff gate forever — and one
-    // did, which is why the row was written.
+/// The partial shape: locked, and nothing to fetch.
+const PARTIAL_ENTRY: &str = r#"
+[tools."aqua:example/tool"."platforms.linux-x64-musl"]
+checksum = "sha256:abc"
+"#;
+
+/// Materialize a repository carrying the committed `lock-complete` module.
+fn lock_fixture(name: &str, lock: &str) -> PathBuf {
     let module = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
-            .join("policy/lock-entry-complete.rego"),
+            .join("policy/lock-complete.rego"),
     )
     .expect("the committed module");
-    let dir = scratch("staged-facts-lock-entry");
-    write(&dir, "batten.toml", LOCK_ENTRY_CONFIG);
-    write(&dir, "policy/lock-entry-complete.rego", &module);
-    write(&dir, "mise.lock", PARTIAL_LOCK);
+    let dir = scratch(name);
+    write(&dir, "batten.toml", crate::lock_complete::CONFIG);
+    write(&dir, "policy/lock-complete.rego", &module);
+    write(&dir, "mise.lock", lock);
     git_in(&dir, &["init", "-q", "-b", "main", "."]);
     git_in(&dir, &["config", "user.name", "Fixture Author"]);
     git_in(&dir, &["config", "user.email", "fixture@example.com"]);
     git_in(&dir, &["add", "-A"]);
     git_in(&dir, &["commit", "-q", "-m", "chore: base"]);
+    dir
+}
+
+#[test]
+fn the_committed_lock_rule_refuses_a_partial_entry_over_the_binary() {
+    // THE PROOF THAT A REGISTERED ROW STOPPED BEING DEAD, and it needs the real
+    // module rather than a probe: the row deciding this predicate was in
+    // `batten.toml` deciding NOTHING on every run, because `mise.lock` carries an
+    // extension no `Format` owns, so it resolved no staged node and Rego reads
+    // undefined as *does not hold*. Its `test_` rules passed throughout on `with
+    // input as`, which fabricates the shape the engine could not produce.
+    //
+    // So the case drives the committed module, over the compiled binary, against
+    // the exact defect the row exists for: a platform entry carrying a checksum
+    // and nothing to fetch. `mise lock` never repairs an existing entry, so a
+    // stably wrong lockfile passes a regenerate-and-diff gate forever — and one
+    // did, which is why the row was written.
+    let dir = lock_fixture(
+        "staged-facts-lock-entry",
+        &format!("{COMPLETE_LOCK}{PARTIAL_ENTRY}"),
+    );
     let outcome = check(&dir);
     let (answer, cause) = (stdout(&outcome), stderr(&outcome));
     assert_eq!(
@@ -559,37 +564,23 @@ fn the_committed_lock_entry_rule_refuses_a_partial_entry_over_the_binary() {
         "the committed rule must refuse a partial entry — if this is 0 the row is \
          registered and deciding nothing again\n{answer}{cause}"
     );
+    // THE PREDICATE ID, NOT THE ROW ID. A module's finding carries the `rule` id
+    // the `violation` object declares — `lock-complete` is what `--rule` selects
+    // and `lock-platform-uninstallable` is what decided — so asserting the row
+    // name here would pass over any module that raised anything at all.
     assert!(
-        answer.contains("lock-entry-complete"),
-        "and the finding names the rule that decided it\n{answer}{cause}"
+        answer.contains("lock-platform-uninstallable"),
+        "and the finding names the predicate that decided it\n{answer}{cause}"
     );
 }
 
 #[test]
-fn the_committed_lock_entry_rule_passes_a_complete_entry() {
+fn the_committed_lock_rule_passes_a_complete_entry() {
     // THE ANTI-VACUITY MIRROR. Without it the case above is satisfied by a rule
     // that refuses every lockfile, which is the failure mode a newly-live gate is
     // most likely to have: the predicate was never exercised against the engine,
     // so nothing has ever shown it discriminating.
-    let module = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("policy/lock-entry-complete.rego"),
-    )
-    .expect("the committed module");
-    let dir = scratch("staged-facts-lock-entry-clean");
-    write(&dir, "batten.toml", LOCK_ENTRY_CONFIG);
-    write(&dir, "policy/lock-entry-complete.rego", &module);
-    write(
-        &dir,
-        "mise.lock",
-        &format!("{PARTIAL_LOCK}url = \"https://example.invalid/tool.tar.gz\"\n"),
-    );
-    git_in(&dir, &["init", "-q", "-b", "main", "."]);
-    git_in(&dir, &["config", "user.name", "Fixture Author"]);
-    git_in(&dir, &["config", "user.email", "fixture@example.com"]);
-    git_in(&dir, &["add", "-A"]);
-    git_in(&dir, &["commit", "-q", "-m", "chore: base"]);
+    let dir = lock_fixture("staged-facts-lock-entry-clean", COMPLETE_LOCK);
     let outcome = check(&dir);
     let (answer, cause) = (stdout(&outcome), stderr(&outcome));
     assert_eq!(

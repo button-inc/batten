@@ -590,8 +590,12 @@ local gate = new Mapping<String, Step> {
   // stably-wrong lockfile passed forever. One did: a cargo-zigbuild platform key
   // with a checksum and no url, which lock-check called "complete and current"
   // on every run. Currency now runs on a schedule, off the landing path.
+  // The workflow surface joins the glob with CLOUD-843's port: the successor rule
+  // decides `workflow-installs-unlocked` too, so a change touching only a
+  // workflow must fire the step that reads it. The predecessor read the same
+  // files and this glob did not say so.
   ["lock-complete"] {
-    glob = List("mise.lock", "mise.toml")
+    glob = List("mise.lock", "mise.toml", ".github/workflows/*.yml")
     check = "mise run lock-complete"
   }
   // Every job already declared a timeout, so the absence of a limit was never

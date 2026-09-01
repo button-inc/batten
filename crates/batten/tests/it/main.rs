@@ -116,6 +116,7 @@ mod init;
 mod inverted_board_cases;
 mod issue_key;
 mod judge_kind;
+mod lock_complete;
 mod mcp_dispatch;
 mod mediated_admission;
 mod mediated_verbs;
