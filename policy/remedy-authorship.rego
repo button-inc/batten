@@ -57,6 +57,7 @@
 #MUTANT remedy-judges-the-source-line|s@text := trim_left(trim_space(substring(trimmed, count(verb), -1)), "\\"'")@text := trimmed@|the_same_block_fully_prefixed_is_clean_and_was_evaluated
 #MUTANT remedy-block-unbounded|s@stderr_block\[path\]\[i\]@lines_of[path][i]@|a_block_that_does_not_redirect_to_stderr_is_not_judged
 #MUTANT bypass-author-unchecked|s@not implements_bypass(name, var)@false@|a_caller_naming_a_bypass_it_does_not_implement_is_a_finding
+#MUTANT-OWNER CLOUD-989|the mutation applies and alters reachable code, and the case it names cannot observe the change — a downstream guard or a second arm masks it. That is a defect in the DECLARATION, which `SURVIVED` mis-attributes to the suite; CLOUD-989's fork is what reports it correctly, and these are the live instances its own acceptance says it lacked
 #MUTANT bypass-implementer-ignored|s@some l in task_program_lines(name)@some l in []@|the_task_whose_program_reads_the_bypass_may_name_it
 #
 # The rows above declare what each predicate must not survive; what CANNOT run

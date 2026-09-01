@@ -27,6 +27,7 @@
 # re-derived in Rego. It is the one clause of the retired program that is not in
 # this file, and it is absent on purpose.
 #
+#MUTANT-OWNER CLOUD-989|the mutation applies and alters reachable code, and the case it names cannot observe the change — a downstream guard or a second arm masks it. That is a defect in the DECLARATION, which `SURVIVED` mis-attributes to the suite; CLOUD-989's fork is what reports it correctly, and these are the live instances its own acceptance says it lacked
 #MUTANT roster-may-miss-a-job|s@not job_in_roster(name)@false@|a_pull_request_job_missing_from_the_roster_is_refused
 #MUTANT roster-may-name-a-ghost|s@not roster_name_has_a_job(name)@false@|a_roster_name_matching_no_job_is_refused
 #MUTANT dependabot-may-return|s@not dependabot_absent@false@|a_returned_dependabot_config_is_refused

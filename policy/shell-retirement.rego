@@ -86,6 +86,7 @@
 # old-gate`, which is CLOUD-1219's decomposition — so a mutation of
 # `repoints_at_the_declared_successor`'s exactness never reached it and
 # SURVIVED. The exactness this case decides is the prefix/suffix pair.
+#MUTANT-OWNER CLOUD-989|the mutation applies and alters reachable code, and the case it names cannot observe the change — a downstream guard or a second arm masks it. That is a defect in the DECLARATION, which `SURVIVED` mis-attributes to the suite; CLOUD-989's fork is what reports it correctly, and these are the live instances its own acceptance says it lacked
 #MUTANT repointing-not-exact|s@^\tendswith(was, after)$@\ttrue@|a_repointing_that_also_changes_the_rest_of_the_line_is_refused
 # THE BRACKETS ARE ESCAPED, and the spelling without them was inert for this
 # row's whole life: `[before, after]` is a sed BRACKET EXPRESSION matching one
