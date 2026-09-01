@@ -93,6 +93,14 @@
 # character, so the pattern could never match the line it names. Nothing caught
 # it because nothing could reach a module to run it (CLOUD-1267).
 #MUTANT list-drop-not-exact|s@line == concat("", \[before, after\])@startswith(line, before)@|dropping_the_name_while_also_changing_the_line_is_refused
+# CLOUD-1294's three arms, and the case fields name the cases that observe them
+# — the exemption withdrawn above binds these too. The first keeps a half-deleted
+# case from buying its own removal; the second keeps a case whose binding
+# survives from doing the same; the third keeps the arm from becoming a licence
+# to delete any case during any retirement.
+#MUTANT case-half-deleted|s@body in removed@true@|a_half_deleted_bats_case_is_still_refused
+#MUTANT case-binding-survives|s@binding in removed@true@|a_bats_case_spending_a_surviving_binding_is_refused
+#MUTANT case-names-nothing-retired|s@mentions_retired(path, body, gone)@true@|a_bats_case_testing_a_live_path_is_still_refused
 #
 #MUTANT-SUITE crates/batten/tests/it/shell_retirement.rs
 
@@ -225,15 +233,14 @@ only_drops_a_retired_reference(path) if {
 	# neither is a retirement's cleanup.
 	count(removed) > 0
 
-	# Every removed line names a path this change retires.
-	#
-	# `mentions_retired` rather than a bare `contains` since CLOUD-1149: bash does
-	# not spell a sibling as a repo-relative path, so `$(dirname "$0")/x.sh` named
-	# nothing this clause could see and every such cleanup was refused.
+	# EVERY REMOVED LINE IS ADMITTED, by one of the two shapes below. Factored out
+	# of this body since CLOUD-1294, mirroring `admitted_addition` — the addition
+	# side has had four shapes behind one name since CLOUD-1224, and the removal
+	# side reading as a single inline predicate is what made its second shape look
+	# like a change to this clause rather than a sibling of it.
 	count({line |
 		some line in removed
-		some gone in delta.deleted
-		mentions_retired(path, line, gone)
+		admitted_removal(path, line, removed)
 	}) == count(removed)
 
 	# AND NOTHING WAS ADDED THAT IS NOT A TRUNCATION OF A REMOVED LINE. Without a
@@ -260,6 +267,51 @@ only_drops_a_retired_reference(path) if {
 	}) == count(added)
 }
 
+# A removed line names a path this change retires.
+#
+# `mentions_retired` rather than a bare `contains` since CLOUD-1149: bash does
+# not spell a sibling as a repo-relative path, so `$(dirname "$0")/x.sh` named
+# nothing this clause could see and every such cleanup was refused.
+admitted_removal(path, line, _) if {
+	some gone in delta.deleted
+	mentions_retired(path, line, gone)
+}
+
+# OR IT IS ONE OF THE LINES OF A `@test` CASE THAT DIES WITH THE PATH IT TESTED
+# (CLOUD-1294), and this is the second shape the campaign could not complete
+# without.
+#
+# THE MEASURED INSTANCE. Retiring `.claude/hooks/session-start.sh` (CLOUD-312 row
+# 10) leaves three cases in two suites greping a file that is gone —
+# `tests/commit-attribution.bats` and `tests/container-preflight.bats`. Neither
+# landable shape reaches them: deleting a suite whole is refused because both
+# declare subjects that SURVIVE (`hk.pkl`, `mise.toml`,
+# `mise-tasks/container-preflight.sh`), and the arm above admits only a removed
+# LINE that names the retired path — a removed case's opener, its assertions and
+# its closing brace name nothing. So the campaign again mandated a retirement it
+# could not land, which is CLOUD-1051's own words for why the arm above exists.
+#
+# THE CASE MUST BE GONE, NOT MERELY EDITED. `@test` titles are unique within a
+# suite, so an opener absent from the head identifies a block that died. Deleting
+# only the opener and keeping the body is NOT that, and it is refused by the
+# clause below rather than by taste: the line that names the retired path must
+# itself be among the removed, so a half-deleted case buys nothing.
+#
+# AND THE CASE MUST HAVE EARNED ITS OWN REMOVAL, by naming a path this delta
+# retires. Without that term this is a licence to delete any case during any
+# retirement — precisely the maintaining-in-place that arm B exists to refuse —
+# and `a_bats_case_testing_a_live_path_is_still_refused` is the mirror that fails
+# if it is ever dropped.
+#
+# THE BOUND, STATED RATHER THAN DISCOVERED: `removed` is a set of LINES, so a
+# removed line whose text exactly matches one inside the dying case is admitted
+# even if it came from elsewhere in the same file. Positional alignment would
+# close that, and Rego cannot compute one without a diff algorithm the engine
+# does not hand over. It is narrow — the match must be exact, nothing may be
+# ADDED under the clause below, and a stray identical line removed elsewhere
+# breaks the case it was taken from.
+admitted_removal(path, line, removed) if line_of_a_retired_case(path, line, removed)
+
 # An added line is admitted three ways, and all three are shapes rather than
 # judgements.
 admitted_addition(_, line, removed) if truncates_a_retired_reference(line, removed)
@@ -269,6 +321,97 @@ admitted_addition(_, line, removed) if repoints_at_the_declared_successor(line, 
 admitted_addition(path, line, removed) if repoints_at_the_declared_invocation(path, line, removed)
 
 admitted_addition(_, line, removed) if drops_a_retired_name(line, removed)
+
+# ---------------------------------------------------------------------------
+# A `@test` case that goes with the path it tested (CLOUD-1294).
+# ---------------------------------------------------------------------------
+
+# A BOOLEAN RULE, NEVER A FUNCTION RETURNING A SET, and the distinction is
+# load-bearing rather than stylistic. A function whose body cannot bind — a path
+# with no `base-lines`, a caller that is not a bats suite at all — is UNDEFINED,
+# and an undefined term inside `only_drops_a_retired_reference` would make that
+# whole admission undefined and refuse the `mise-tasks/` cleanups that work
+# today. A rule that simply does not hold is false, which is the only safe shape
+# for an additive arm.
+line_of_a_retired_case(path, line, removed) if {
+	base := delta["base-lines"][path]
+	head := {l | some l in input.tree.lines[path]}
+
+	# A case whose opener the head no longer carries.
+	some start, opener in base
+	startswith(opener, "@test ")
+	not opener in head
+	stop := case_end(base, start)
+
+	case_earns_removal(path, base, start, stop, removed)
+
+	# `line` is one of that case's own lines.
+	some at, own in base
+	at >= start
+	at <= stop
+	own == line
+}
+
+# HOW A CASE EARNS ITS OWN REMOVAL. Two spellings, because a suite references the
+# program it tests in two ways and only one of them is a path.
+
+# It NAMES the retired path, and that line is going away too.
+#
+# The second conjunct is what refuses a half-deleted case: an absent opener is
+# what identifies a dead block, so without it, deleting only the opener and
+# keeping the body would pass.
+case_earns_removal(path, base, start, stop, removed) if {
+	some named, body in base
+	named >= start
+	named <= stop
+	body in removed
+	some gone in delta.deleted
+	mentions_retired(path, body, gone)
+}
+
+# Or it SPENDS a variable this file bound to the retired path, and the BINDING is
+# going away in the same delta.
+#
+# THE MEASURED INSTANCE, and it is why the arm above is not enough on its own.
+# `tests/container-preflight.bats` binds `HOOK` once in `setup()` and every case
+# then greps `"$HOOK"`. No line inside either case carries a path at all, so
+# `mentions_retired` sees nothing — and the one case that WAS admitted by the arm
+# above was admitted because the retired program's stem happened to appear in its
+# title, which is an accident of wording rather than a predicate.
+#
+# `retired_path_vars` is not reused here, deliberately: it reads
+# `is_retired_reference_by_text`, which requires the bound value to BE the path or
+# to resolve through a script-directory marker, and a suite spells it relative to
+# its own directory (`$BATS_TEST_DIRNAME/../.claude/hooks/…`). Loosening that
+# function would loosen the repointing arms on the ADDITION side with it, where
+# nothing is going away and the byte-check is the whole safety property. This
+# reads the same binding through `mentions_retired`, which is already the looser
+# going-away test, and requires the binding line itself to be removed — so a
+# variable that survives buys nothing.
+case_earns_removal(path, base, start, stop, removed) if {
+	some binding in base
+	binding in removed
+	some gone in delta.deleted
+	mentions_retired(path, binding, gone)
+	variable := assigned_name(binding)
+
+	some spent, body in base
+	spent >= start
+	spent <= stop
+	some spelling in {concat("", ["$", variable]), concat("", ["${", variable, "}"])}
+	contains(body, spelling)
+}
+
+# The `}` closing the case opened at `start`.
+#
+# Column 0 is the whole test: bats closes an `@test` there and every nested
+# closer inside one is indented. An unterminated case yields an empty set, `min`
+# is undefined over it, and the arm does not hold — the safe direction for a rule
+# whose failure mode is a silent licence.
+case_end(base, start) := stop if {
+	closers := {i | some i, l in base; i > start; l == "}"}
+	stop := min(closers)
+}
 
 # ---------------------------------------------------------------------------
 # How a caller SPELLS the program it is losing (CLOUD-1149).

@@ -38,11 +38,6 @@ setup() {
 	[ "$output" = "wired" ]
 }
 
-@test "the fixer is wired: session-start runs it, so a clone is compliant before it commits" {
-	run grep -c 'step attribution-identity mise run attribution-identity' .claude/hooks/session-start.sh
-	[ "$output" = "1" ]
-}
-
 @test "both tasks resolve to the engine, not to a second implementation" {
 	# The policy has exactly one evaluator. A shell task that re-implemented any
 	# part of the predicate would be the second authority this issue moved the

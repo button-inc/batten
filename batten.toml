@@ -2578,11 +2578,26 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "declare it as a `[[pattern]]` row and read it by id; a tracker's vocabulary in the core is rule 1's violation, and moving it is the fix rather than rewording it"
 
+# A RETIREMENT LEDGER ARM IS EXEMPT, and this is a structural collision rather
+# than a convenience (CLOUD-1294). `bats-tests-not-deleted` matches an arm by the
+# deleted case's title QUOTED VERBATIM, and its `declared_in` puts every arm under
+# `crates/batten/tests/**` — inside this row's glob. So a governed bats case whose
+# TITLE happens to carry this word can never be recorded, and therefore never
+# retired, however honest the retirement is.
+#
+# Measured on CLOUD-312 row 10: `"the fixer is wired: session-start runs it, so a
+# clone is compliant before it commits"`.
+#
+# It is not a weakening of what this row decides. The row bans a consumer's name
+# appearing in the core; an arm is DATA ABOUT A LINE THAT NO LONGER EXISTS, and
+# the four markers anchor it at the start of a line, so nothing but a ledger row
+# can reach the exemption.
 [[rule]]
 id = "no-consumer-repo-name"
 kind = "forbid"
 glob = "crates/**"
 regex = "(?i)complian"
+exclude = "^// (carried|subsumed|changed|withdrawn): "
 severity = "deny"
 scope = "tree"
 
@@ -4113,7 +4128,18 @@ base = "origin/main"
 # withdrawal as one over a live subject and refuses it. A false refusal, in the
 # direction that blocks correct work.
 delta_sources = ["**"]
-line_sources = ["mise-tasks/*.sh", "crates/batten/tests/**/*.rs"]
+# `tests/**/*.bats` IS HALF THE GOVERNED SET AND WAS NOT A DECLARED SOURCE
+# (CLOUD-1294). `governed_at_head` selects every bats suite, but the lines of one
+# were never read — so `only_drops_a_retired_reference` bound `base` from
+# `base-lines` and came back UNDEFINED for every suite, and arm B refused every
+# edited `.bats` unconditionally, whatever the edit was. The one admitted edit
+# has been unreachable for half the corpus since it was written, and the refusal
+# was indistinguishable from a real one because the finding is byte-identical.
+#
+# Measured on CLOUD-312 row 10: three cases in two suites, no landable spelling.
+# The cost of reading them is `.claude/rules/rust.md`'s ~5.4 µs per declared
+# document against ~137 suites — under a millisecond, on a 100 ms budget.
+line_sources = ["mise-tasks/*.sh", "crates/batten/tests/**/*.rs", "tests/**/*.bats"]
 module = "policy/shell-retirement.rego"
 severity = "deny"
 

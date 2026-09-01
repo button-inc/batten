@@ -43,7 +43,11 @@ fn row() -> Rule {
         // declared subject is routinely under neither governed prefix, and a
         // narrow delta hides its death rather than reporting it.
         "delta_sources": ["**"],
-        "line_sources": ["mise-tasks/*.sh", "crates/batten/tests/*.rs"],
+        // MIRRORS THE COMMITTED ROW, including `tests/**/*.bats` (CLOUD-1294).
+        // Without that entry a suite's lines are never read, `base-lines` has no
+        // entry for it, and every case below would pass or fail for the wrong
+        // reason — which is the state the committed row was in.
+        "line_sources": ["mise-tasks/*.sh", "crates/batten/tests/*.rs", "tests/**/*.bats"],
         "module": "policy/shell-retirement.rego",
         "severity": "deny",
     }))
@@ -1364,5 +1368,218 @@ fn an_invocation_field_does_not_satisfy_the_successor_obligations() {
         !findings(&root).is_empty(),
         "a `runs:` field is not a policy surface and not a compiled-binary test: {:?}",
         findings(&root)
+    );
+}
+
+/// A bats suite whose two cases differ only in what they name, so the pair below
+/// is byte-identical apart from which one the head drops (CLOUD-1294).
+///
+/// The first case greps the path the delta retires; the second names nothing
+/// this change touches. Both close with `}` at column 0 and both carry the same
+/// assertion line, which is deliberate: `removed` is a set of LINES, so the
+/// shared lines are still present at head and never enter it. What the arm has
+/// to admit is the opener and the naming line, and nothing else.
+const CASE_SUITE: &str = "#!/usr/bin/env bats\n\
+# subject: mise-tasks/other.sh\n\
+\n\
+@test \"the gate is wired\" {\n\
+\trun grep -q mise-tasks/old-gate.sh wiring\n\
+\t[ \"$status\" -eq 0 ]\n\
+}\n\
+\n\
+@test \"something unrelated\" {\n\
+\trun true\n\
+\t[ \"$status\" -eq 0 ]\n\
+}\n";
+
+/// The retired case dropped, the unrelated one kept.
+const CASE_SUITE_RETIRED_DROPPED: &str = "#!/usr/bin/env bats\n\
+# subject: mise-tasks/other.sh\n\
+\n\
+@test \"something unrelated\" {\n\
+\trun true\n\
+\t[ \"$status\" -eq 0 ]\n\
+}\n";
+
+/// The unrelated case dropped, the retired one kept. The anti-vacuity mirror.
+const CASE_SUITE_LIVE_DROPPED: &str = "#!/usr/bin/env bats\n\
+# subject: mise-tasks/other.sh\n\
+\n\
+@test \"the gate is wired\" {\n\
+\trun grep -q mise-tasks/old-gate.sh wiring\n\
+\t[ \"$status\" -eq 0 ]\n\
+}\n";
+
+/// Only the retired case's OPENER dropped; its body, naming line included, stays.
+const CASE_SUITE_OPENER_ONLY: &str = "#!/usr/bin/env bats\n\
+# subject: mise-tasks/other.sh\n\
+\n\
+\trun grep -q mise-tasks/old-gate.sh wiring\n\
+\t[ \"$status\" -eq 0 ]\n\
+}\n\
+\n\
+@test \"something unrelated\" {\n\
+\trun true\n\
+\t[ \"$status\" -eq 0 ]\n\
+}\n";
+
+fn suite_repo(name: &str, head_suite: &str) -> PathBuf {
+    repo(
+        name,
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            ("mise-tasks/other.sh", GATE),
+            ("tests/suite.bats", CASE_SUITE),
+        ],
+        &Head {
+            written: &[
+                ("tests/suite.bats", head_suite),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger("mise-tasks/old-gate.sh"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    )
+}
+
+/// CLOUD-1294. Retiring a program leaves the suites that TESTED it greping a file
+/// that is gone, and dropping those cases is the cleanup the campaign mandates.
+///
+/// The arm above it admits only a removed LINE that names the retired path; a
+/// case's opener, its assertions and its closing brace name nothing. Measured on
+/// CLOUD-312 row 10 — three cases in two suites, and neither landable shape
+/// reached them, because both suites declare subjects that survive.
+#[test]
+fn a_bats_case_testing_a_retired_path_may_be_dropped_with_it() {
+    let root = suite_repo("bats-case-retired", CASE_SUITE_RETIRED_DROPPED);
+    assert!(
+        findings(&root).is_empty(),
+        "a case that tested the retired path goes with it, exactly as the line that \
+         named it does: {:?}",
+        findings(&root)
+    );
+}
+
+/// ANTI-VACUITY, and without it this arm is a licence to delete any case during
+/// any retirement — the maintaining-in-place arm B exists to refuse.
+///
+/// Byte-identical to the case above apart from WHICH block the head drops.
+#[test]
+fn a_bats_case_testing_a_live_path_is_still_refused() {
+    let root = suite_repo("bats-case-live", CASE_SUITE_LIVE_DROPPED);
+    assert_eq!(
+        findings(&root),
+        vec![String::from("shell-rule-retired")],
+        "the surviving case names nothing this delta retires, so dropping it is an \
+         ordinary edit to a governed suite"
+    );
+}
+
+/// A case is admitted when it DIES, never when it is merely opened up.
+///
+/// Deleting the opener and keeping the body would otherwise pass: the opener is
+/// absent from the head, which is what identifies a dead block. The clause that
+/// refuses it is `body in removed` — the line that named the retired path has to
+/// have gone too.
+#[test]
+fn a_half_deleted_bats_case_is_still_refused() {
+    let root = suite_repo("bats-case-half", CASE_SUITE_OPENER_ONLY);
+    assert_eq!(
+        findings(&root),
+        vec![String::from("shell-rule-retired")],
+        "a case whose naming line survives was edited, not retired"
+    );
+}
+
+/// CLOUD-1283's bound-and-spent shape, one arm over. `container-preflight.bats`
+/// binds its program once in `setup()` and every case greps `"$HOOK"`, so no line
+/// inside a case carries a path at all and the first arm cannot reach it.
+const BIND_SUITE: &str = "#!/usr/bin/env bats\n\
+# subject: mise-tasks/other.sh\n\
+\n\
+setup() {\n\
+\tHOOK=mise-tasks/old-gate.sh\n\
+}\n\
+\n\
+@test \"the gate is wired\" {\n\
+\trun grep -q \"$HOOK\" wiring\n\
+\t[ \"$status\" -eq 0 ]\n\
+}\n\
+\n\
+@test \"something unrelated\" {\n\
+\trun true\n\
+\t[ \"$status\" -eq 0 ]\n\
+}\n";
+
+/// The binding goes with the case that spent it.
+const BIND_SUITE_DROPPED: &str = "#!/usr/bin/env bats\n\
+# subject: mise-tasks/other.sh\n\
+\n\
+setup() {\n\
+}\n\
+\n\
+@test \"something unrelated\" {\n\
+\trun true\n\
+\t[ \"$status\" -eq 0 ]\n\
+}\n";
+
+/// The case goes, the binding stays. The anti-vacuity mirror for the same arm.
+const BIND_SUITE_BINDING_KEPT: &str = "#!/usr/bin/env bats\n\
+# subject: mise-tasks/other.sh\n\
+\n\
+setup() {\n\
+\tHOOK=mise-tasks/old-gate.sh\n\
+}\n\
+\n\
+@test \"something unrelated\" {\n\
+\trun true\n\
+\t[ \"$status\" -eq 0 ]\n\
+}\n";
+
+fn bind_repo(name: &str, head_suite: &str) -> PathBuf {
+    repo(
+        name,
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            ("mise-tasks/other.sh", GATE),
+            ("tests/binding.bats", BIND_SUITE),
+        ],
+        &Head {
+            written: &[
+                ("tests/binding.bats", head_suite),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger("mise-tasks/old-gate.sh"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    )
+}
+
+/// A case naming the retired path only through a variable dies with it, provided
+/// the binding dies too.
+#[test]
+fn a_bats_case_spending_a_retired_binding_may_be_dropped_with_it() {
+    let root = bind_repo("bats-bind-retired", BIND_SUITE_DROPPED);
+    assert!(
+        findings(&root).is_empty(),
+        "the case spent a binding this delta retires, and the binding went with \
+         it: {:?}",
+        findings(&root)
+    );
+}
+
+/// ANTI-VACUITY for the binding arm: a variable that survives buys nothing, so
+/// dropping a case that spends it is an ordinary edit to a governed suite.
+#[test]
+fn a_bats_case_spending_a_surviving_binding_is_refused() {
+    let root = bind_repo("bats-bind-kept", BIND_SUITE_BINDING_KEPT);
+    assert_eq!(
+        findings(&root),
+        vec![String::from("shell-rule-retired")],
+        "the binding is still there, so nothing about this case is going away"
     );
 }

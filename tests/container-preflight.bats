@@ -12,7 +12,6 @@
 
 setup() {
 	PREFLIGHT="$BATS_TEST_DIRNAME/../mise-tasks/container-preflight.sh"
-	HOOK="$BATS_TEST_DIRNAME/../.claude/hooks/session-start.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
 	# A fenced environment by default, so a test that is not about egress does
@@ -126,16 +125,4 @@ EOF
 	run env NO_PROXY="localhost" no_proxy="localhost" HTTPS_PROXY="http://proxy:8080" "$PREFLIGHT" --degraded
 	[[ "$output" == *"a defect in this repository"* ]]
 	[[ "$output" == *"memories"* ]]
-}
-
-@test "the session-start hook calls it — the whole point is WHEN it runs" {
-	# A preflight nothing runs at startup is the state this issue found: the
-	# diagnosis existed (gh-preflight) and no session ever consulted it.
-	run grep -q "container-preflight" "$HOOK"
-	[ "$status" -eq 0 ]
-}
-
-@test "the hook passes --degraded when provisioning failed" {
-	run grep -q -- "container-preflight -- --degraded" "$HOOK"
-	[ "$status" -eq 0 ]
 }
