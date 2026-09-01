@@ -10,6 +10,7 @@
 
 pub mod action;
 pub mod admission;
+pub mod advisory;
 pub mod attribution;
 pub mod baseline;
 pub mod brief;
@@ -4732,7 +4733,10 @@ fn run_hook(
     // host would read the first and discard the rest. Coalescing here is also
     // the honest shape — they are two findings of one advisory, not two
     // channels.
-    let mut advice: Vec<String> = Vec::new();
+    // TIERED SINCE CLOUD-896. Every producer carries the latency its content
+    // demands, so the channel's ceiling can admit what must be answered soonest
+    // rather than whichever producer the boundary happened to reach first.
+    let mut advice: Vec<advisory::Advice> = Vec::new();
     collect_batch_advice(harness, &envelope, overrides, mode, err, &mut advice)?;
     // NOT EMITTED HERE ANY MORE (CLOUD-898). A third producer arrived — a
     // dispatched handler — and its answer does not exist until config is
@@ -5056,10 +5060,8 @@ fn run_hook(
     // The `Allow` path is untouched — advice is the only document there, which is
     // the behaviour CLOUD-1131 measured and shipped. Suppressing advice generally
     // would trade a dropped deny for a dropped advisory.
-    let speaks_a_verdict = matches!(decision, hook::Decision::Deny(_) | hook::Decision::Ask(_));
-    if !advice.is_empty() && !speaks_a_verdict {
-        emit_advisory(harness, &envelope, out, err, &advice.join("\n\n"))?;
-    }
+    let ceiling = policy.advisory.as_ref();
+    emit_channel(harness, &envelope, out, err, advice, ceiling, &decision)?;
     // Resolved HERE rather than inside `render`, because `render` deliberately
     // cannot see the policy (CLOUD-898) and that property is worth more than the
     // convenience: a renderer that cannot see the inputs cannot re-decide by
@@ -5150,13 +5152,16 @@ fn fill_turn_advice(
     envelope: &hook::Envelope,
     facts: &hook::Facts<'_>,
     overrides: &Overrides,
-    advice: &mut Vec<String>,
+    advice: &mut Vec<advisory::Advice>,
 ) {
     if advice.is_empty()
         && let Some(nudge) =
             hook::stop_advice(policy, envelope, facts).or_else(|| stop_nudges(overrides, envelope))
     {
-        advice.push(nudge);
+        advice.push(advisory::Advice::new(
+            severity::AdvisoryTier::Caution,
+            nudge,
+        ));
     }
     // THE WRITE-TIME SIGNAL (CLOUD-1131), and it is the delivery half of the
     // demotion `hook::policy_rules` performs. A `mediated_call` module enabled at
@@ -5174,9 +5179,12 @@ fn fill_turn_advice(
     // violation through the same function, so the equality test is what keeps one
     // finding from arriving twice rather than a second rule about which one wins.
     if let Some(signal) = hook::policy_advice(policy, envelope, facts)
-        && !advice.contains(&signal)
+        && !advice.iter().any(|entry| entry.text == signal)
     {
-        advice.push(signal);
+        advice.push(advisory::Advice::new(
+            severity::AdvisoryTier::Warning,
+            signal,
+        ));
     }
 }
 
@@ -5242,7 +5250,7 @@ fn collect_batch_advice(
     overrides: &Overrides,
     mode: Mode,
     err: &mut dyn Write,
-    advice: &mut Vec<String>,
+    advice: &mut Vec<advisory::Advice>,
 ) -> Result<()> {
     if Some(envelope.event) == harness.capabilities().degrade(hook::Event::PostToolBatch) {
         drain_advisories(envelope, overrides, mode, err, advice)?;
@@ -5333,7 +5341,7 @@ fn dispatch_handlers(
     raw: &str,
     bypass: bool,
     overrides: &Overrides,
-    advice: &mut Vec<String>,
+    advice: &mut Vec<advisory::Advice>,
 ) -> Result<Option<hook::Decision>> {
     if bypass {
         return Ok(None);
@@ -5360,8 +5368,22 @@ fn dispatch_handlers(
         &envelope.raw_tool,
         raw,
     );
-    advice.extend(dispatched.advice());
-    advice.extend(dispatched.violations());
+    // TIERED AT THE PUSH SITE (CLOUD-896), because "how soon must this be
+    // answered" is a property of what is being said and the boundary has only
+    // the string. A handler's advice is `Advisory`; a contract violation is
+    // `Warning`, because it is a statement that a declared invariant is broken.
+    advice.extend(
+        dispatched
+            .advice()
+            .into_iter()
+            .map(|text| advisory::Advice::new(severity::AdvisoryTier::Advisory, text)),
+    );
+    advice.extend(
+        dispatched
+            .violations()
+            .into_iter()
+            .map(|text| advisory::Advice::new(severity::AdvisoryTier::Warning, text)),
+    );
     // A REFUSAL IS DEMOTED TO ADVICE ON A MOMENT THAT CANNOT CARRY ONE, and this
     // is the door's own loophole rather than a hypothetical. CLOUD-889 made
     // `adjudicate` structurally unable to refuse at `Stop` — that is what ended
@@ -5399,7 +5421,10 @@ fn dispatch_handlers(
         return Ok(None);
     };
     if !envelope.event.carries_a_verdict() {
-        advice.push(format!("hook.handler.{id}: {reason}"));
+        advice.push(advisory::Advice::new(
+            severity::AdvisoryTier::Caution,
+            format!("hook.handler.{id}: {reason}"),
+        ));
         return Ok(None);
     }
     Ok(Some(hook::Decision::Deny(
@@ -5629,6 +5654,36 @@ fn fire_actions(
 /// `Allow` — so stdout carries at most one document per invocation and none of
 /// them can refuse a call. An advisory surface that could block would be a gate
 /// (house-style §0.3), and `drain.rs` states that as its own contract.
+/// Admit this call's advice to one emission, under the channel's own ceiling
+/// (CLOUD-896).
+///
+/// **The whole set is only in hand here**, which is why the ceiling is applied at
+/// this point and not at any producer: `[drain] token_budget` bounds ONE
+/// producer, and N producers under N budgets is a channel whose real ceiling is
+/// whatever the set happens to sum to.
+///
+/// **A refusal outranks advice about the same call**, which is why the decision
+/// reaches here rather than a boolean the caller derived: `Ask` is a verdict
+/// document too, and the escalation is what the reader must answer. The `Allow`
+/// path is untouched — advice is the only document there, which is the behaviour
+/// CLOUD-1131 measured and shipped.
+fn emit_channel(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    advice: Vec<advisory::Advice>,
+    ceiling: Option<&advisory::Channel>,
+    decision: &hook::Decision,
+) -> Result<()> {
+    let speaks_a_verdict = matches!(decision, hook::Decision::Deny(_) | hook::Decision::Ask(_));
+    if advice.is_empty() || speaks_a_verdict {
+        return Ok(());
+    }
+    let emission = advisory::admit(advice, ceiling);
+    emit_advisory(harness, envelope, out, err, &emission.text)
+}
+
 fn emit_advisory(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -5665,7 +5720,7 @@ fn emit_advisory(
 fn report_contract_drift(
     envelope: &hook::Envelope,
     overrides: &Overrides,
-    advice: &mut Vec<String>,
+    advice: &mut Vec<advisory::Advice>,
 ) {
     // The two events that carry the predicate, tested HERE rather than at the
     // call site so the function owns which moments it serves.
@@ -5726,7 +5781,12 @@ fn report_contract_drift(
     let facts::Look::Is(previous) = contract::previous(&git_dir, session) else {
         drop(contract::record(&git_dir, session, &current));
         if !matches!(envelope.event, hook::Event::SessionStart) {
-            advice.push(contract::unmediated_session());
+            // WARNING: the engine is not mediating this session at all, which is
+            // the one advisory whose subject is the gate rather than the work.
+            advice.push(advisory::Advice::new(
+                severity::AdvisoryTier::Warning,
+                contract::unmediated_session(),
+            ));
         }
         return;
     };
@@ -5741,7 +5801,10 @@ fn report_contract_drift(
     // toward an unbounded stream of the same one.
     // An unwritable snapshot costs a repeated notice, never a refused call.
     drop(contract::record(&git_dir, session, &current));
-    advice.push(contract::render(&change, &declared.wiring));
+    advice.push(advisory::Advice::new(
+        severity::AdvisoryTier::Caution,
+        contract::render(&change, &declared.wiring),
+    ));
 }
 
 /// What this call's write would land, resolved only if a row asks (CLOUD-758).
@@ -5892,7 +5955,7 @@ fn drain_advisories(
     overrides: &Overrides,
     mode: Mode,
     err: &mut dyn Write,
-    advice: &mut Vec<String>,
+    advice: &mut Vec<advisory::Advice>,
 ) -> Result<()> {
     // The repository, resolved through the one finder (CLOUD-824). This read
     // asked TWO different questions before: whether an authority sits in the cwd,
@@ -6027,9 +6090,15 @@ fn drain_advisories(
     // both outcomes on the surface the host actually delivers, and keeps stderr
     // for the hosts that declare no channel, where it is still the operator's.
     if emitted {
-        advice.push(drain::render(&drained));
+        advice.push(advisory::Advice::new(
+            severity::AdvisoryTier::Advisory,
+            drain::render(&drained),
+        ));
     } else if repeat && !drained.lines.is_empty() {
-        advice.push(drain::UNCHANGED.to_owned());
+        advice.push(advisory::Advice::new(
+            severity::AdvisoryTier::Advisory,
+            drain::UNCHANGED,
+        ));
     }
 
     // Volume and suppression counts are the operator's, not the agent's: they
@@ -6218,7 +6287,7 @@ fn record_post_tool(
     overrides: &Overrides,
     envelope: &hook::Envelope,
     harness: hook::Harness,
-    advice: &mut Vec<String>,
+    advice: &mut Vec<advisory::Advice>,
 ) {
     // GATED ONLY ON THE RESPONSE MEMBER, never on the command. The
     // `!command.is_empty()` conjunct below is correct for a FACT — a fact is
@@ -6869,11 +6938,18 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
 /// non-empty one is its bytes at the declared fidelity. The provenance row is
 /// what tells the first two apart — one carries a digest, the other a reason id,
 /// and they differ in which keys exist rather than in a count.
-fn capture_response(envelope: &hook::Envelope, harness: hook::Harness, advice: &mut Vec<String>) {
+fn capture_response(
+    envelope: &hook::Envelope,
+    harness: hook::Harness,
+    advice: &mut Vec<advisory::Advice>,
+) {
     let mut note = |reason: &str| {
         // Pointer-only: the reason id, never a path and never a byte count that
         // could fingerprint the content. The same id reaches `doctor`.
-        advice.push(format!("hook.capture.response: {reason}"));
+        advice.push(advisory::Advice::new(
+            severity::AdvisoryTier::Advisory,
+            format!("hook.capture.response: {reason}"),
+        ));
     };
     // NO FALLBACK TO THE CWD, which is what makes the doc above true: resolving
     // to wherever the agent happens to be standing would mint a state root there
@@ -6955,7 +7031,7 @@ fn capture_response(envelope: &hook::Envelope, harness: hook::Harness, advice: &
 fn record_absent_response(
     envelope: &hook::Envelope,
     harness: hook::Harness,
-    advice: &mut Vec<String>,
+    advice: &mut Vec<advisory::Advice>,
 ) {
     let Ok(root) = git::repo_root(hook_authority_root()) else {
         return;
@@ -6966,9 +7042,9 @@ fn record_absent_response(
     // and mints no blob, so nothing else would ever bring the log inside its
     // record bound — and `next_order` scans that log on every later call.
     if capture::evict_to_budget(&root, capture_budget().as_ref()).is_err() {
-        advice.push(format!(
-            "hook.capture.response: {}",
-            capture::STORE_UNWRITABLE
+        advice.push(advisory::Advice::new(
+            severity::AdvisoryTier::Advisory,
+            format!("hook.capture.response: {}", capture::STORE_UNWRITABLE),
         ));
     }
 }
@@ -6979,7 +7055,7 @@ fn record_absence(
     envelope: &hook::Envelope,
     harness: hook::Harness,
     reason: &'static str,
-    advice: &mut Vec<String>,
+    advice: &mut Vec<advisory::Advice>,
 ) {
     let row = capture::CallRow {
         order: 0,
@@ -7001,9 +7077,9 @@ fn record_absence(
         absent: Some(reason.to_owned()),
     };
     if capture::record_call(root, &row).is_err() {
-        advice.push(format!(
-            "hook.capture.response: {}",
-            capture::STORE_UNWRITABLE
+        advice.push(advisory::Advice::new(
+            severity::AdvisoryTier::Advisory,
+            format!("hook.capture.response: {}", capture::STORE_UNWRITABLE),
         ));
     }
 }

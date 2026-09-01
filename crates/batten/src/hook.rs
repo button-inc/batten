@@ -2815,6 +2815,11 @@ pub struct Policy {
     /// the cross product as rules would need one row per verb × path pair, and
     /// the config would restate what an intersection already says.
     protected: PathSet,
+    /// What one emission of the advisory channel may cost (CLOUD-896).
+    ///
+    /// Engine-side plumbing on `harness`'s reading: resolved at the boundary and
+    /// carried in, so the emission site can ask without reaching for config.
+    pub advisory: Option<crate::advisory::Channel>,
     /// Programs known to only READ their operands (CLOUD-1141).
     ///
     /// The other half of the gate above, and the half that decides what an
@@ -2914,6 +2919,7 @@ impl Policy {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
             facts: Vec::new(),
@@ -2991,6 +2997,7 @@ impl Policy {
                     )
                     .collect::<Vec<String>>(),
             )?,
+            advisory: resolved.advisory.clone(),
             protected_readers: resolved.protected_readers.clone(),
             redirects: resolved.redirects.clone(),
             facts: resolved.facts.clone(),
@@ -3579,6 +3586,7 @@ impl Policy {
             fail_on_warning: self.fail_on_warning,
             verbs: self.verbs.clone(),
             protected: self.protected.clone(),
+            advisory: self.advisory.clone(),
             protected_readers: self.protected_readers.clone(),
             redirects: self.redirects.clone(),
             facts: self.facts.clone(),
@@ -8183,6 +8191,7 @@ mod tests {
             // unknown-program half — so a case here that starts refusing is the
             // new clause reaching a shape the old gate let through, which is
             // exactly what should be visible rather than absorbed.
+            advisory: None,
             protected_readers: Vec::new(),
             redirects,
         }
@@ -8221,6 +8230,7 @@ mod tests {
             root: None,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
             shapes: rows,
@@ -8290,6 +8300,7 @@ mod tests {
             root: None,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
             shapes: vec![
@@ -8798,6 +8809,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
@@ -8880,6 +8892,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
@@ -9378,6 +9391,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
@@ -9414,6 +9428,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
@@ -9444,6 +9459,7 @@ mod tests {
             fail_on_warning: true,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
@@ -9485,6 +9501,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
@@ -9532,6 +9549,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
@@ -9597,6 +9615,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
@@ -9687,6 +9706,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
@@ -10158,6 +10178,7 @@ deny contains "refused by themodule" if {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
@@ -10455,6 +10476,7 @@ deny contains "refused by themodule" if {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
@@ -11260,6 +11282,7 @@ deny contains "refused by themodule" if {
             fail_on_warning: false,
             verbs: vec![verb("rm", None)],
             protected: PathSet::empty(),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
@@ -11391,6 +11414,7 @@ deny contains "refused by themodule" if {
             verbs: verbs.clone(),
             protected: PathSet::includes("protected", &["guarded/**".to_owned()])
                 .expect("well formed"),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
@@ -11409,6 +11433,7 @@ deny contains "refused by themodule" if {
             verbs,
             protected: PathSet::includes("protected", &["other/**".to_owned()])
                 .expect("well formed"),
+            advisory: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         };

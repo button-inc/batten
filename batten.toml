@@ -3276,6 +3276,36 @@ key = "initial_prompt"
 [refusal]
 max_tokens = 24
 
+# What the whole advisory CHANNEL may cost on one boundary (CLOUD-896).
+#
+# `hookSpecificOutput.additionalContext` has two producers today — `drain::render`
+# and `contract::render` — with a third queued behind them, and until now the only
+# declared number was `[drain] token_budget`, which bounds ONE of them. Coalescing
+# bounded how many documents are emitted; nothing bounded how much any of them
+# said, so N producers cost N budgets and the channel's real ceiling was whatever
+# the set happened to sum to. One fact, one authority: this supersedes the
+# per-producer key rather than sitting beside it.
+#
+# 1024 is `drain::DEFAULT_TOKEN_BUDGET`'s number read as the channel's rather than
+# one producer's. That is deliberately the tighter reading of the same figure: the
+# drain document is the largest of the three, so it keeps essentially its whole
+# allowance when it fires alone, and the change bites exactly where it should —
+# when two or three producers fire on one boundary, which is the case that had no
+# bound at all.
+#
+# Producers are admitted in `AdvisoryTier` order (CLOUD-80: severity as required
+# response latency), so what survives a tight boundary is what needs answering
+# soonest. The remainder is dropped AND COUNTED: a truncated report that reads as
+# complete is the false green in advisory form, so the suppressed count is a line
+# in the emitted document rather than a silence.
+#
+# An undeclared ceiling is no ceiling — `advisory::admit` emits everything — which
+# is what keeps this consumer's number out of every other consumer's engine
+# (non-negotiable rule 1) and is why the anti-vacuity case asserts the undeclared
+# path rather than assuming it.
+[advisory]
+max_tokens = 1024
+
 # The test suite is half of this repository's definition of green, and was the
 # unguarded half (CLOUD-55). It cannot be a `protected` path — tests are edited
 # every day, so a protected glob would block writing them — so the computable

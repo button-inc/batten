@@ -390,6 +390,11 @@ pub struct Config {
     /// `[budget]` above. The type and the predicate are [`crate::refusal`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refusal: Option<crate::refusal::Ceiling>,
+    /// What ONE emission of the advisory channel may cost, across every producer
+    /// (CLOUD-896). Absent means unenforced, on `[budget]`'s reading. The type
+    /// and the predicate are [`crate::advisory`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advisory: Option<crate::advisory::Channel>,
     /// The ref work must land on (CLOUD-51) — the target `worktree status`
     /// judges at-risk work against. Consumer-specific by nature: which ref is
     /// the trunk is a property of the repository being gated, never of Batten
@@ -1121,6 +1126,9 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // satisfy is refused at load rather than discovered by the first person it
     // fires on.
     crate::refusal::validate(config.refusal.as_ref()).map_err(UsageError::raise)?;
+    // Same shape, same reason, one table over: a ceiling nothing can satisfy is
+    // refused at load rather than discovered by the first advisory it silences.
+    crate::advisory::validate(config.advisory.as_ref()).map_err(UsageError::raise)?;
     // Validated at parse, like `[[verb]]` and `[[marker]]`: CLOUD-242's lesson
     // is that a table nothing validates is coverage that means nothing.
     if let Some(ci) = &config.ci {
@@ -1273,6 +1281,7 @@ impl Config {
             // either — there is simply no threshold, which is what `None` says.
             budget: None,
             refusal: None,
+            advisory: None,
             must_land_on: None,
             // An authority that cannot be read attaches no side effects. The
             // safe direction is unambiguous here: firing a command an

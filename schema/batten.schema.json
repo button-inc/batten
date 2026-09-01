@@ -4,6 +4,17 @@
   "description": "A parsed, validated `batten.toml`.\n\n`deny_unknown_fields` makes an unrecognised key a hard error (§8): the config\nsurface stays narrow and a typo can never silently disable a gate.",
   "type": "object",
   "properties": {
+    "advisory": {
+      "description": "What ONE emission of the advisory channel may cost, across every producer\n(CLOUD-896). Absent means unenforced, on `[budget]`'s reading. The type\nand the predicate are [`crate::advisory`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Channel"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "attribution": {
       "description": "What produced commits may carry about the tooling that made them\n(CLOUD-274), enforcing the attribution decision record (CLOUD-268).\nAbsent means this repository declares no attribution policy and the gate\nis simply not active — not that everything is permitted, which is why an\nabsent table is a usage error at the gate rather than a silent pass.\n\nConsumer-specific by nature, and the reason it lives here: the engine\ncarries the matcher, this file carries the vendor literals. That extends\nnon-negotiable rule 1 from consumers to vendors — a grep of `crates/` for\nthe configured patterns returns nothing. The type and the predicate are\n[`crate::attribution`].",
       "anyOf": [
@@ -629,6 +640,22 @@
           "type": "string",
           "const": "tracked_artifacts"
         }
+      ]
+    },
+    "Channel": {
+      "description": "The `[advisory]` table: what ONE emission of the whole channel may cost.\n\n**The channel, not the producer**, which is the whole of this row. Absent\nmeans unenforced, on `[budget]`'s reading — a threshold nobody declared is\nnot a threshold of zero — so a consumer that has not adopted it emits exactly\nwhat it emitted before.",
+      "type": "object",
+      "properties": {
+        "max_tokens": {
+          "description": "The ceiling on estimated tokens for one emission, across every producer.\nThe boundary is `<=`, matching `[budget]` and `[refusal]` so the three\nthresholds in this tree do not disagree about their own edge.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "max_tokens"
       ]
     },
     "Ci": {

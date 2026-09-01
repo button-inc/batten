@@ -214,6 +214,19 @@ declared_modules := {
 	# recorded verdict MEANS is `policy/validator-verdict-clean.rego`'s, and this
 	# module never reads a finding.
 	"record",
+	# `advisory` arrived with CLOUD-896 and this rule named it a tenth time: the
+	# module was written, `test:cargo` was green over its six cases, and this is
+	# what said nobody had placed it.
+	#
+	# It is a LEAF beside `refusal`, and the pairing is the placement's content:
+	# `refusal` bounds ONE emitted deny line and this bounds ONE emission of the
+	# whole advisory channel, so the two answer the same question over the two
+	# documents a boundary can produce. It reaches `severity` for the tier it
+	# orders by and `budget` for the estimator — the same estimator `refusal`
+	# reaches, because a second one would be a second authority over what a token
+	# costs. It reaches no decider and no store: WHICH producers exist is `lib`'s,
+	# and `lib` is the caller that hands the whole set over.
+	"advisory",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

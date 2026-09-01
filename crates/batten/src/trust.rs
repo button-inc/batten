@@ -722,6 +722,10 @@ pub enum WeakeningKind {
     /// The transcript path is gone, so `check` stops reading the completed
     /// session it judged against (CLOUD-95).
     TranscriptPathRemoved,
+    /// The `[advisory]` channel ceiling rose, or stopped being declared
+    /// (CLOUD-896). Same direction as the two below: smaller is stricter, and an
+    /// absent ceiling is unenforced rather than zero.
+    AdvisoryCeilingRaised,
     /// The `[refusal]` ceiling rose, or stopped being declared (CLOUD-1286).
     /// Same direction as a budget's: smaller is stricter, so §8's "may not
     /// weaken" reads as "may not raise", and an absent ceiling is unenforced
@@ -826,6 +830,7 @@ impl WeakeningKind {
         WeakeningKind::DefectsLedgerRemoved,
         WeakeningKind::DefectsClassAdded,
         WeakeningKind::TranscriptPathRemoved,
+        WeakeningKind::AdvisoryCeilingRaised,
         WeakeningKind::RefusalCeilingRaised,
         WeakeningKind::BudgetSetRemoved,
         WeakeningKind::BudgetFileRemoved,
@@ -880,6 +885,7 @@ impl WeakeningKind {
             WeakeningKind::DefectsLedgerRemoved => "defects-ledger-removed",
             WeakeningKind::DefectsClassAdded => "defects-class-added",
             WeakeningKind::TranscriptPathRemoved => "transcript-path-removed",
+            WeakeningKind::AdvisoryCeilingRaised => "advisory-ceiling-raised",
             WeakeningKind::RefusalCeilingRaised => "refusal-ceiling-raised",
             WeakeningKind::BudgetSetRemoved => "budget-set-removed",
             WeakeningKind::BudgetFileRemoved => "budget-file-removed",
@@ -1099,6 +1105,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "refusal",
         coverage: Coverage::Compared(&[WeakeningKind::RefusalCeilingRaised]),
+    },
+    FieldCoverage {
+        field: "advisory",
+        coverage: Coverage::Compared(&[WeakeningKind::AdvisoryCeilingRaised]),
     },
     FieldCoverage {
         field: "must_land_on",
@@ -1723,6 +1733,14 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         "refusal.max_tokens",
         base.refusal.as_ref().map(|ceiling| ceiling.max_tokens),
         working.refusal.as_ref().map(|ceiling| ceiling.max_tokens),
+    ));
+
+    // One table over, one direction (CLOUD-896).
+    found.extend(ceiling_raised(
+        WeakeningKind::AdvisoryCeilingRaised,
+        "advisory.max_tokens",
+        base.advisory.as_ref().map(|channel| channel.max_tokens),
+        working.advisory.as_ref().map(|channel| channel.max_tokens),
     ));
 
     // `must_land_on` gone leaves `worktree status` with no target — exit 1, and
@@ -3658,6 +3676,35 @@ mod tests {
                 kind.as_str()
             );
         }
+    }
+
+    #[test]
+    fn raising_or_dropping_the_advisory_ceiling_is_a_weakening() {
+        // The channel budget's own ratchet, and the kind's exercising case.
+        let mut base = Config::declaring_nothing();
+        base.advisory = Some(crate::advisory::Channel { max_tokens: 400 });
+
+        let mut raised = Config::declaring_nothing();
+        raised.advisory = Some(crate::advisory::Channel { max_tokens: 4000 });
+        assert_eq!(
+            only(&base, &raised),
+            Weakening::new(
+                WeakeningKind::AdvisoryCeilingRaised,
+                "advisory.max_tokens",
+                "400",
+                "4000",
+            )
+        );
+
+        assert_eq!(
+            only(&base, &Config::declaring_nothing()),
+            Weakening::new(
+                WeakeningKind::AdvisoryCeilingRaised,
+                "advisory.max_tokens",
+                "400",
+                "absent",
+            )
+        );
     }
 
     #[test]

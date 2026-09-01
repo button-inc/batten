@@ -426,6 +426,7 @@ local gate = new Mapping<String, Step> {
     glob =
       List(
         "crates/batten/src/action.rs",
+        "crates/batten/src/advisory.rs",
         "crates/batten/src/attribution.rs",
         "crates/batten/src/budget.rs",
         "crates/batten/src/capture.rs",

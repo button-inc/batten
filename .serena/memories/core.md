@@ -134,6 +134,31 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   no locking at all — and the questions come off a class's declared
   `override.precondition` in `verdict.rs`. The gate never grades an answer;
   presence and non-emptiness are the whole predicate (rule 3).
+- `advisory.rs` — the advisory CHANNEL and what it may cost (CLOUD-896). A LEAF
+  beside `refusal.rs`, and the pairing is the whole placement: `refusal` bounds
+  ONE emitted deny line, this bounds ONE emission of the whole channel, so the two
+  answer the same question over the two documents a boundary can produce.
+  CLOUD-461 coalesced the FRAMING — one `additionalContext` object per call — and
+  bounded nothing about volume: three producers (`drain::render`,
+  `contract::render`, the dispatched handler) shared no rate budget, and
+  `[drain] token_budget` bounds only one of them, so the channel's real ceiling
+  was whatever the set summed to. `[advisory] max_tokens` supersedes it — one
+  fact, one authority. `admit` sorts by `AdvisoryTier` (CLOUD-80's severity as
+  required response latency, `Reverse` because the derive is weakest-first) and
+  fills until the ceiling is spent; the tier is carried from the PUSH SITE in
+  `lib.rs` rather than inferred here, because "how soon must this be answered" is
+  a property of what is said and the boundary has only a string. **The remainder
+  is dropped AND COUNTED** — a truncated report that reads as complete is the
+  false green in advisory form — and the count line is a count and a ceiling,
+  never the dropped text. **The first entry is always admitted**, even alone over
+  budget, so the count line can never be the only thing said. An UNDECLARED
+  ceiling emits exactly what it emitted before, in the boundary's own order: that
+  is the anti-vacuity half, and it is what keeps this consumer's number out of
+  every other consumer's engine (rule 1). `validate` refuses `max_tokens = 0` at
+  load — a channel switched off wearing a budget's clothes. `trust.rs` carries
+  `AdvisoryCeilingRaised`: smaller is stricter, absent is unenforced rather than
+  zero. It reaches `budget` for the estimator `refusal` already reaches, because a
+  second one would be a second authority over what a token costs.
 - `action.rs` — the `[[hook.action]]` plugin surface (CLOUD-91), house-style §9's
   "repo-specific cleanup or keepalive is reconstructed here, not hardcoded". A row
   names an event and argv already on the operator's PATH. **`fire` returns
