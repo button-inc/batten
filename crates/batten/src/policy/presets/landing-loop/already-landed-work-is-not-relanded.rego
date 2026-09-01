@@ -93,7 +93,7 @@ relanded contains target if {
 # several targets are declared. Never a commit, never the unlanded list.
 violation contains {
 	"rule": "already-landed-work-is-not-relanded",
-	"verdict": "V-WORK-ALREADY-LANDED",
+	"verdict": "patch ship twice",
 	"subjects": [{"artifact": target}],
 } if {
 	some target in relanded
@@ -111,7 +111,7 @@ answered(answer) := {"tree": {"landing": {"origin/main": answer}}}
 
 test_work_already_on_the_target_is_refused if {
 	some v in violation with input as answered({"verdict": "landed", "landed": true, "unlanded": []})
-	v.verdict == "V-WORK-ALREADY-LANDED"
+	v.verdict == "patch ship twice"
 }
 
 # THE SQUASH SHAPE, and the case that discriminates this module from one written

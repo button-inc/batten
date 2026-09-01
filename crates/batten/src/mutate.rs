@@ -25,8 +25,8 @@
 //! that exact hole, 0 with a bats suite, and 141 compiled-binary tiers the
 //! runner could not see.
 //!
-//! That hole was unfixable in place. `V-SHELL-RULE-EDITED` declares one route,
-//! `R-PORT-AND-RETIRE`, with no override and no `bypass_env`, so the coverage
+//! That hole was unfixable in place. `shell edit refused` declares one route,
+//! `rule read first`, with no override and no `bypass_env`, so the coverage
 //! mechanism could only be retired (CLOUD-1111 enumerated the three resolutions
 //! and rejected the two that meant editing the program). This module is that
 //! retirement.

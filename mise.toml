@@ -1109,7 +1109,7 @@ description = "Gate: batten.toml carries no policy smell, and no weakening the g
 # nothing could reach past it (CLOUD-841) — a receipt naming no weakening read as
 # no receipt, so a trailer minted inside the change that performs a weakening
 # admitted it — and repairing that meant EDITING authored shell, which
-# `V-SHELL-RULE-EDITED` refuses with no override. So the fix and the retirement
+# `shell edit refused` refuses with no override. So the fix and the retirement
 # are one change, which is the campaign working as designed rather than a
 # coincidence.
 #
@@ -1225,7 +1225,7 @@ description = "Gate: every declared gate has a mutation its own suite is PROVEN 
 # had no suite that could turn red: 32 modules, 32 `#MUTANT-EXEMPT` rows, 29 of
 # them citing that exact hole, and 141 compiled-binary tiers the runner could not
 # see. Repairing it meant EDITING an authored shell rule, which
-# `V-SHELL-RULE-EDITED` refuses with one route and no override — so the coverage
+# `shell edit refused` refuses with one route and no override — so the coverage
 # mechanism could only be retired.
 #
 # STILL OFF THE LANDING PATH. This is a proof about the SUITES, not a property of

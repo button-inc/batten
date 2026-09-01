@@ -140,7 +140,7 @@ refused if {
 # cause, and a reader wanting the holder asks the producer.
 violation contains {
 	"rule": "lease-authorises-the-branch",
-	"verdict": "V-LEASE-AUTHORISES-ANOTHER-BRANCH",
+	"verdict": "lease grant other",
 	"subjects": [{"artifact": latest.branch}],
 } if {
 	refused
@@ -170,7 +170,7 @@ lease_line(line) := {"tree": {"records": {"any-record-name": [line]}}}
 
 test_a_live_lease_naming_another_branch_is_refused if {
 	some v in violation with input as lease_line("lease held-elsewhere - mine")
-	v.verdict == "V-LEASE-AUTHORISES-ANOTHER-BRANCH"
+	v.verdict == "lease grant other"
 }
 
 # THE ANTI-VACUITY MIRROR. Without it every case here is satisfied by a module

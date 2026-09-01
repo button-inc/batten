@@ -63,7 +63,7 @@
 //! case that vanishes without a reason is indistinguishable from one forgotten.
 //!
 // withdrawn: "the task carries no bypass branch at all" the case greps the program's own bytes for a BYPASS branch, and the program is deleted; the property it protected is now structural, since `config lint` reads no environment variable on this path and `lint::admissions` takes its two sources as arguments
-// withdrawn: "the refusal points at grooming, not at a flag to set" the shell composed that refusal text and no longer exists; the verb emits a pointer plus a verdict token, and the remedy prose it used to print is `V-CONFIG-WEAKENING-UNGROOMED`'s registry row rather than a string in a gate
+// withdrawn: "the refusal points at grooming, not at a flag to set" the shell composed that refusal text and no longer exists; the verb emits a pointer plus a verdict token, and the remedy prose it used to print is `config weakens unnamed`'s registry row rather than a string in a gate
 // withdrawn: "the rationale claims no caller that grep cannot find" the case gated the deleted program's own header against the workflow tree, and a header that no longer exists cannot make a claim to reconcile
 //!
 //! ## SUBSUMED — the four wiring cases, which `ci-local-parity` already owns

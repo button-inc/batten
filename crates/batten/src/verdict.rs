@@ -1544,7 +1544,7 @@ judge different work, the commit is what has to change.",
         ],
     },
     VendoredVerdict {
-        id: "V-WORK-ALREADY-LANDED",
+        id: "patch ship twice",
         gloss: "the target already carries this branch's changes, so landing them again buys nothing",
         class: "A landing attempt over work the target already has runs a matrix, holds the \
 fleet's landing slot while it does, and merges a no-op or a conflict. The answer is decided by \
@@ -1553,10 +1553,7 @@ squash-merged or cherry-picked branch leaves the same change on the target under
 commit with no ancestry path back, and on a fast-forward trunk that is the ordinary way work \
 lands. Close the branch, or rebase onto the target and see what is genuinely left.",
         routes: &[
-            read(
-                "R-READ-THE-LANDING-ANSWER",
-                "the landing verdict for this target",
-            ),
+            read("record read first", "the landing verdict for this target"),
             // The one legitimate re-land, and it is narrow on purpose. Patch
             // identity answers about CONTENT, so deliberately re-applying a
             // change the target once carried and later reverted is
@@ -1564,13 +1561,13 @@ lands. Close the branch, or rebase onto the target and see what is genuinely lef
             // arriving for a different reason. That is the case this admits, and
             // it is not "the answer was inconvenient".
             admit(
-                "R-OVERRIDE-THE-RELAND",
+                "patch admit first",
                 "the change is being deliberately re-applied after the target reverted it, so identical content is the intent rather than a duplicate",
             ),
         ],
     },
     VendoredVerdict {
-        id: "V-LEASE-AUTHORISES-ANOTHER-BRANCH",
+        id: "lease grant other",
         gloss: "a live landing lease names a different branch, and no reservation names this one",
         class: "A landing lease is how a fleet keeps two branches from buying overlapping CI for \
 a trunk only one of them can fast-forward onto. This branch is neither the holder nor the \
@@ -1581,7 +1578,7 @@ cannot take ALLOWS: an unreadable lease stops every job in the fleet, where wavi
 through costs one matrix.",
         routes: &[
             read(
-                "R-READ-THE-LEASE",
+                "lease read first",
                 "the lease grading recorded for this branch",
             ),
             // The wedged holder, and it is narrow on purpose. The lease grades
@@ -1591,7 +1588,7 @@ through costs one matrix.",
             // inconvenient" — a holder that is merely slow is the mechanism
             // working.
             admit(
-                "R-OVERRIDE-THE-LEASE",
+                "lease admit first",
                 "the holder is wedged rather than slow — it is beating without advancing, so waiting for a lapse it keeps renewing starves the fleet indefinitely",
             ),
         ],

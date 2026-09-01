@@ -151,7 +151,7 @@ declared[path] := parts if {
 #   * STRUCTURE (3 rows, 9.2s). `replay` subjects `mise-tasks/replay-pointers.py`,
 #     which `governed_when_deleted` excludes by extension; `release-tracking-check`
 #     and `remedy-payload-source` each name a subject that is GOVERNED and alive,
-#     which `V-PORT-SUBJECT-GOVERNED` refuses on purpose — a live governed path is
+#     which `suite port held` refuses on purpose — a live governed path is
 #     something the campaign retires, and porting a suite away from one is the
 #     claim `named_and_alive` already refuses under the other four markers. No
 #     amount of willingness moves these; each owes its own row.

@@ -320,7 +320,7 @@ fn a_port_naming_no_subject_is_refused() {
 
 /// THE ARM THAT KEEPS CLOUD-1130 WHOLE. A live GOVERNED subject must be retired
 /// rather than ported around: without this, naming `mise-tasks/old-gate.sh` as the
-/// survivor buys exactly the deletion `V-RETIREMENT-SUBJECT-ALIVE` refuses under
+/// survivor buys exactly the deletion `shell retire never` refuses under
 /// the other four markers — the same claim, decided by which word was typed.
 #[test]
 fn a_port_naming_a_live_governed_subject_is_refused() {

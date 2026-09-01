@@ -672,7 +672,7 @@ pub fn declared(dir: &Path, base: &str) -> Result<BTreeSet<String>> {
                 .and_then(|rest| rest.strip_prefix(": "))
                 .map(str::trim)
                 // An EMPTY trailer declares nothing while reading as a
-                // declaration — `V-WEAKENS-DECLARES-NOTHING`'s class. Dropping it
+                // declaration — `config weakens unnamed`'s class. Dropping it
                 // here means it can never admit anything.
                 .filter(|pair| !pair.is_empty())
             {

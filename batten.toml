@@ -3455,7 +3455,7 @@ no_fix_reason = "restore the tests, or waive the reduction deliberately; which o
 # `tests/helpers.bash`, Rust source. `SubjectFacts::died` is `.all()`, so it can
 # never hold for them, so those suites were undeletable BY CONSTRUCTION: 217.9s of
 # a 1097.1s corpus, in a lane whose makespan cannot fall below its longest suite.
-# Both other routes EDIT a governed `.bats`, which `V-SHELL-RULE-EDITED` refuses
+# Both other routes EDIT a governed `.bats`, which `shell edit refused` refuses
 # with no override — so the spelling had to live here, in the ledger.
 #
 # IT OBLIGES MORE THAN `carried`, NEVER LESS, which is what makes it additive
@@ -7939,7 +7939,7 @@ target = "batten.toml"
 # keeps it additive: it waives exactly one obligation (a policy surface, which a
 # port lands none of) and adds two that no other marker carries.
 [[verdict]]
-id = "V-PORT-SUBJECT-UNNAMED"
+id = "suite port unnamed"
 gloss = "a `ported` retirement arm names no surviving subject"
 class = """
 The fifth arm claims that the cases moved and the thing under test STAYED, so the \
@@ -7951,15 +7951,15 @@ row, naming the path this suite's own `# subject:` header declared.
 """
 
 [[verdict.route]]
-id = "R-NAME-THE-SURVIVING-SUBJECT"
+id = "config read first"
 kind = "document"
 target = "batten.toml"
 
 [[verdict]]
-id = "V-PORT-SUBJECT-RETIRED"
+id = "suite port dead"
 gloss = "a `ported` retirement arm names a subject this same change retires"
 class = """
-The mirror of `V-WITHDRAWAL-SUBJECT-ALIVE`, and what keeps the two arms from \
+The mirror of `shell retire never`, and what keeps the two arms from \
 recording one event in two vocabularies. A port describes a subject that SURVIVED; \
 where the subject went with the suite this is a plain retirement, and \
 `// carried:` already spells it with one obligation fewer. Use that marker, or \
@@ -7967,25 +7967,25 @@ name the subject that actually survives.
 """
 
 [[verdict.route]]
-id = "R-SPELL-A-RETIREMENT-AS-CARRIED"
+id = "config read first"
 kind = "document"
 target = "batten.toml"
 
 [[verdict]]
-id = "V-PORT-SUBJECT-GOVERNED"
+id = "suite port held"
 gloss = "a `ported` retirement arm names a governed path this change leaves standing"
 class = """
 This is what keeps CLOUD-1130 whole in the presence of a fifth marker. A live \
 `mise-tasks/` program or a live bats suite is something the campaign RETIRES, so \
 porting a suite's cases away while its governed subject stands is exactly the \
-deletion `V-RETIREMENT-SUBJECT-ALIVE` refuses under the other four markers — the \
+deletion `shell retire never` refuses under the other four markers — the \
 same claim, decided by which word the author typed. The arm is for a subject the \
 campaign never retires. Retire the named path in this same change and spell the \
 row `// carried:` instead.
 """
 
 [[verdict.route]]
-id = "R-RETIRE-THE-GOVERNED-SUBJECT"
+id = "config read first"
 kind = "document"
 target = "batten.toml"
 

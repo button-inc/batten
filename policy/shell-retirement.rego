@@ -968,7 +968,7 @@ named_and_alive(path) := subjects if {
 # it being that.
 violation contains {
 	"rule": "shell-rule-retired",
-	"verdict": "V-PORT-SUBJECT-UNNAMED",
+	"verdict": "suite port unnamed",
 	"subjects": [{"path": path}],
 } if {
 	some path in delta.deleted
@@ -979,14 +979,14 @@ violation contains {
 }
 
 # A SUBJECT THAT DIED IS NOT A SURVIVING ONE, and this is the mirror of
-# `V-WITHDRAWAL-SUBJECT-ALIVE` rather than a second reading of it. `withdrawn`
+# `shell retire never` rather than a second reading of it. `withdrawn`
 # is refused where its subject STANDS; `ported` is refused where its subject WENT
 # — which is a plain retirement, and `carried` already spells that with less.
 # Admitting it under both markers would let the ledger record one event in two
 # vocabularies, which is the drift every seam in this module is written against.
 violation contains {
 	"rule": "shell-rule-retired",
-	"verdict": "V-PORT-SUBJECT-RETIRED",
+	"verdict": "suite port dead",
 	"subjects": [{"path": path}, {"path": subject}],
 } if {
 	some path in delta.deleted
@@ -1016,7 +1016,7 @@ violation contains {
 # arrives.
 violation contains {
 	"rule": "shell-rule-retired",
-	"verdict": "V-PORT-SUBJECT-GOVERNED",
+	"verdict": "suite port held",
 	"subjects": [{"path": path}, {"path": subject}],
 } if {
 	some path in delta.deleted
@@ -1054,7 +1054,7 @@ arm_markers := ["// carried:", "// subsumed:", "// changed:", "// withdrawn:", "
 # THE FIFTH ARM IS THE ONE WHOSE SUBJECT SURVIVES (CLOUD-1268), and it is in the
 # list above for the reason the other four are: `arms_for` reads
 # `[rule.conserves]`'s declaration one level up, and a marker missing here is a row
-# this module cannot SEE — so a conforming port would raise `V-RETIREMENT-UNMAPPED`
+# this module cannot SEE — so a conforming port would raise `shell retire missing`
 # over a ledger that maps it completely.
 #
 # WHAT IT IS FOR, measured rather than supposed. 16 of this repository's suites
@@ -1847,7 +1847,7 @@ test_the_surface_obligation_still_binds_a_carried_row if {
 		"base-delta": {"added": [], "edited": [], "deleted": ["tests/old-gate.bats"]},
 		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: tests/old-gate.bats crates/batten/tests/old_gate.rs"]},
 	}}
-	v.verdict == "V-SUCCESSOR-NO-SURFACE"
+	v.verdict == "shell port missing"
 }
 
 # (c) AND THE TEST OBLIGATION IS NOT WAIVED FOR A PORT. The coverage is the whole
@@ -1858,7 +1858,7 @@ test_a_port_naming_no_binary_test_is_refused if {
 		"base-delta": {"added": [], "edited": [], "deleted": ["tests/old-gate.bats"]},
 		"lines": {"crates/batten/tests/old_gate.rs": ["// ported: tests/old-gate.bats policy/old-gate.rego subject:tests/helpers.bash"]},
 	}}
-	v.verdict == "V-SUCCESSOR-NO-TEST"
+	v.verdict == "test port missing"
 }
 
 # (d) A PORT THAT NAMES NO SURVIVOR IS A WEAKER `carried`, and refusing it is what
@@ -1868,10 +1868,10 @@ test_a_port_naming_no_subject_is_refused if {
 		"base-delta": {"added": [], "edited": [], "deleted": ["tests/old-gate.bats"]},
 		"lines": {"crates/batten/tests/old_gate.rs": ["// ported: tests/old-gate.bats crates/batten/tests/old_gate.rs"]},
 	}}
-	v.verdict == "V-PORT-SUBJECT-UNNAMED"
+	v.verdict == "suite port unnamed"
 }
 
-# (e) THE MIRROR OF `V-WITHDRAWAL-SUBJECT-ALIVE`. A subject that went with the
+# (e) THE MIRROR OF `shell retire never`. A subject that went with the
 # suite makes this a retirement, and `carried` is its spelling.
 test_a_port_whose_subject_died_is_refused if {
 	some v in violation with input as {"tree": {
@@ -1881,7 +1881,7 @@ test_a_port_whose_subject_died_is_refused if {
 			"// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs",
 		]},
 	}}
-	v.verdict == "V-PORT-SUBJECT-RETIRED"
+	v.verdict == "suite port dead"
 }
 
 # (f) THE ARM THAT KEEPS CLOUD-1130 WHOLE. A live GOVERNED subject must be retired
@@ -1893,7 +1893,7 @@ test_a_port_naming_a_live_governed_subject_is_refused if {
 		"base-delta": {"added": [], "edited": [], "deleted": ["tests/old-gate.bats"]},
 		"lines": {"crates/batten/tests/old_gate.rs": ["// ported: tests/old-gate.bats crates/batten/tests/old_gate.rs subject:mise-tasks/old-gate.sh"]},
 	}}
-	v.verdict == "V-PORT-SUBJECT-GOVERNED"
+	v.verdict == "suite port held"
 }
 
 # (g) THE SUBJECT FIELD IS NOT A PATH SUCCESSOR, which is the additive half and the
@@ -1905,7 +1905,7 @@ test_a_subject_field_is_not_a_binary_test if {
 		"base-delta": {"added": [], "edited": [], "deleted": ["tests/old-gate.bats"]},
 		"lines": {"crates/batten/tests/old_gate.rs": ["// ported: tests/old-gate.bats subject:crates/batten/tests/old_gate.rs"]},
 	}}
-	v.verdict == "V-SUCCESSOR-NO-TEST"
+	v.verdict == "test port missing"
 }
 
 # The anti-vacuity arm on the OTHER axis: an untouched tree, and a generated or
