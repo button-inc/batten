@@ -320,7 +320,7 @@ violation contains {
 # name the evaluator does not query as a rule, and saying so is the honest report.
 queried_rules contains name if {
 	some _, text in input.tree.lines["crates/batten/src/policy.rs"]
-	some found in regex.find_n(data.batten.patterns["module read first"], text, -1)
+	some found in regex.find_n(data.batten.patterns["policy-rule-const"], text, -1)
 	name := split(found, "\"")[1]
 }
 
@@ -784,5 +784,5 @@ fixture_patterns := {
 	"shell-default": "\\$\\{[A-Z][A-Z0-9_]*:-[^}]*\\}",
 	"policy-input-key": "`input\\.(tree|call)\\.[a-z][a-z0-9_-]*",
 	"fixed-rule-ref": "`data\\.batten\\.[a-z_]+`",
-	"module read first": "^const [A-Z_]+_RULE: &str = \"[a-z_]+\";",
+	"policy-rule-const": "^const [A-Z_]+_RULE: &str = \"[a-z_]+\";",
 }

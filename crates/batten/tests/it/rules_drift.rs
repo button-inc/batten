@@ -137,7 +137,7 @@ id = "fixed-rule-ref"
 regex = '`data\.batten\.[a-z_]+`'
 
 [[pattern]]
-id = "module read first"
+id = "policy-rule-const"
 regex = '^const [A-Z_]+_RULE: &str = "[a-z_]+";'
 
 [[pattern]]
