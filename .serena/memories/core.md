@@ -738,6 +738,19 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   (never `#[tokio::main]`), and a status as a typed value so a 404 cannot digest
   as a checksum mismatch. `hook` never reaches here, so CLOUD-689's ceiling is
   untouched.
+- `gitwrite.rs` — the LOCAL git writes: a loose object into the odb, and a ref
+  moved (CLOUD-1274's D2). Placed by EFFECT rather than by subject, which is the
+  whole reason it is not part of `git.rs`: that module is read-only over gix and
+  says so, and the only REMOTE write in the crate is `lease::swap`. Deciding
+  which objects a push must carry stays `git::objects_to_send`, because that is a
+  read. Writes go through the odb handle rather than `Repository::write_object`,
+  which re-serialises a typed value — the handle takes the payload and the kind it
+  was hashed as, so what lands is what the pack reader produced, and the returned
+  id is checked against the derived one because a disagreement is a delta applied
+  wrongly. Loose rather than a pack: `gix-pack`'s bundle writer is behind
+  `streaming-input`, which is off and would pull `parking_lot` and `gix-tempfile`,
+  and a lap's fetch is a handful of commits. `module-layering` forbids
+  `hook -> gitwrite` and `check -> gitwrite`.
 - `lease.rs` — the landing lease's compare-and-swap, spoken as git smart-HTTP
   over `fetch.rs` (CLOUD-1274). The CAS is the PROTOCOL'S OWN: receive-pack takes
   `<old> <new> <ref>` and applies it only while the ref still reads `<old>`,

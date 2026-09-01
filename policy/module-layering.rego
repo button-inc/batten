@@ -169,6 +169,17 @@ declared_modules := {
 	# from becoming a second authority on the lease's meaning, which is
 	# `wiring`'s argument one domain over.
 	"lease",
+	# `gitwrite` arrived with CLOUD-1274's D2, and it is placed by EFFECT rather
+	# than by subject. `git` is read-only over gix and says so in its own header
+	# and in `mem:core`; the only remote write in the crate is `lease::swap`. The
+	# local writes a fetch needs — a loose object, a remote-tracking ref — would
+	# have made that documented property false if they had landed in `git`, so
+	# they live in their own module and `git` keeps its character.
+	#
+	# Its `hook` and `check` edges are forbidden below for the reason `lease`'s
+	# are: a gate declared `read` must not reach a write, and the read-only
+	# allowlist is derived from that declaration rather than reviewed.
+	"gitwrite",
 	# `forge`, `tools`, `captured`, `taskset` arrived with CLOUD-843's substrate
 	# wave, and this rule named all four before a human did — the eighth time the
 	# absence-is-an-error clause has earned its keep, and the first on a batch.
@@ -317,8 +328,8 @@ forbidden[from] contains to if {
 		# (house style §5) and the read-only allowlist is DERIVED from that
 		# declaration, so a `check` path reaching a network write would put a
 		# writing prefix on the allowlist itself (CLOUD-90's shape).
-		"hook": {"fetch", "mcp", "lease"},
-		"check": {"lease"},
+		"hook": {"fetch", "mcp", "lease", "gitwrite"},
+		"check": {"lease", "gitwrite"},
 		# And the other direction, which is `symbols`' and `pinned`'s row again: the
 		# dispatcher sits below the engine and must not reach the module that
 		# adjudicates a mediated call. `mcp -> rules` is deliberately NOT here --

@@ -2755,6 +2755,46 @@ mod tests {
         );
     }
 
+    /// The full D2 round trip: fetch, write into the odb, move the ref.
+    ///
+    /// **The half a wire test cannot reach.** Reading objects off the network
+    /// proves the reader; only writing them and finding them again proves the
+    /// engine can USE what it fetched, which is the whole point of the capability.
+    #[test]
+    fn fetched_objects_land_in_the_odb_and_the_ref_moves() {
+        let Ok(reference) = std::env::var("BATTEN_LIVE_ROUNDTRIP_REF") else {
+            return;
+        };
+        let remote = std::env::var("BATTEN_LIVE_PUSH_REMOTE").expect("remote url");
+        let repo = std::path::Path::new(".");
+        let fetched = fetch(&remote, repo, &reference).expect("fetch");
+        let written =
+            crate::gitwrite::write_objects(repo, &fetched.objects).expect("write the objects");
+        // Every object must be findable afterwards, by the id the reader derived.
+        // A write that "succeeded" and left nothing readable is the failure this
+        // case exists for.
+        for object in &fetched.objects {
+            assert!(
+                crate::git::has_object(repo, &object.id),
+                "{} was written and cannot be found",
+                object.id
+            );
+        }
+        // The ref goes somewhere this repository does not otherwise use, so the
+        // case never moves a ref a lap depends on.
+        let landed = "refs/batten-fetch-probe/head";
+        crate::gitwrite::set_ref(repo, landed, &fetched.head).expect("move the ref");
+        assert_eq!(
+            crate::git::resolve_ref(repo, landed).expect("read it back"),
+            Some(fetched.head.clone()),
+            "the ref must read what the fetch landed"
+        );
+        assert!(
+            written <= fetched.objects.len(),
+            "writing cannot invent objects"
+        );
+    }
+
     /// The live DELETE, gated the same way and for the same reason.
     ///
     /// **Do not set this variable in the Batten sandbox**: its git proxy answers

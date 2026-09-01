@@ -1491,6 +1491,27 @@ pub fn commits_in_range(dir: &Path, base: &str, head: &str) -> Result<Vec<String
     Ok(out)
 }
 
+/// Open the repository for a WRITE.
+///
+/// **A separate door from [`open`], and the difference is the point.** `open`
+/// takes `gix::open::Options::isolated`, which declines the ambient environment
+/// as a class — right for every read this module makes, because a `GIT_DIR` in
+/// the environment names a different repository and honouring one is the
+/// mis-rooting bug that isolation exists to kill.
+///
+/// A write needs the same isolation for the same reason, so this is `open` under
+/// another name today. It exists as its own function so that `gitwrite`'s callers
+/// name their intent at the call site, and so a future divergence — a write that
+/// needs a config a read does not — has somewhere to land other than inside
+/// `open`.
+///
+/// # Errors
+///
+/// A directory that is not a repository, or one discovery cannot reach.
+pub fn open_for_write(dir: &Path) -> Result<gix::Repository> {
+    open(dir)
+}
+
 /// Does the local odb already carry this object?
 ///
 /// **A read, and a total one**: a repository that will not open answers `false`,

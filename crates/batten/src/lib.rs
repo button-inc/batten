@@ -45,6 +45,7 @@ pub mod fetch;
 pub mod findings;
 pub mod forge;
 pub mod git;
+pub mod gitwrite;
 pub mod handler;
 pub mod hook;
 pub mod hookcost;
