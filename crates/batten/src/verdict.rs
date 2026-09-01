@@ -1244,10 +1244,15 @@ the wrong repair.",
     VendoredVerdict {
         id: "receipt read stale",
         gloss: "the receipt was taken against a trunk this branch has moved off",
-        class: "The check ran against an `origin/main` that has since advanced, so its \
-verdict is about a base this branch no longer sits on. Rebase and re-run. Distinct from \
-the amend case: there the branch's own bytes changed, here the trunk under them did, and \
-only one of the two is fixed by rebasing.",
+        class: "The branch MOVED FORWARD off the base the receipt was taken against -- \
+`git checkout -B <name> origin/main` after a merge, which repoints the name at a new base \
+and discards the commits that were the branch, while the receipt survives keyed by that \
+name. Re-take the evidence on the branch as it now stands. Distinct from the amend case: \
+there the branch's own bytes changed, here the branch is a different branch wearing the \
+same name. THE DIRECTION IS THE PREDICATE (CLOUD-1091): a branch merely BEHIND the trunk \
+keeps its receipt, because the receipt is then more current than the branch and no amount \
+of re-taking it can help -- this text said the opposite for its whole life and prescribed \
+the one action guaranteed not to work.",
         routes: &[read("config read first", "batten.toml")],
     },
     VendoredVerdict {

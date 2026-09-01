@@ -315,7 +315,12 @@ pub struct IdentityRef {
     pub version: String,
 }
 
-/// The receipt-validity verdict — the four states of the output contract.
+/// The receipt-validity verdict — the SIX states of the output contract.
+///
+/// It said "four" for its whole life while six variants stood below it
+/// (CLOUD-1091, fixed in passing). A count in prose beside the thing it counts
+/// is the drift `.claude/rules/toolchain.md` records for its own tables, and the
+/// two staleness variants are exactly the pair a reader would assume away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Validity {
     /// The receipt exists, was taken in this checkout, and both recorded refs
@@ -943,13 +948,27 @@ fn named_validity(git_dir: &str, check: &str, subject: &str) -> Validity {
 /// ([`Validity::StaleMain`]) when **both** halves hold:
 ///
 /// ```text
-/// situation                                      base moved   own commits   verdict
+/// situation                                    base moved   own   ahead   verdict
 /// ---------------------------------------------------------------------------------
-/// claim, then work                               no           0 -> n        valid
-/// a lap rebases onto newer main                  yes          >=1           VALID
-/// main moves, branch untouched                   yes          >=1           valid
-/// checkout -B <name> origin/main after a merge   yes          0             VOID
+/// claim, then work                             no           0->n  -       valid
+/// a lap rebases onto newer main                yes          >=1   -       VALID
+/// main moves, branch untouched                 yes          >=1   -       valid
+/// checkout -B <name> origin/main after a merge yes          0     >0      VOID
+/// branch cut from an earlier main, unrebased   yes          0     0       VALID
 /// ```
+///
+/// **The last row is CLOUD-1091 and it is the one this comparison got wrong for
+/// its whole life.** `recorded != head` is symmetric and the situation is not:
+/// it fires just as readily when the receipt's base is NEWER than HEAD, which is
+/// an ordinary freshly-cut branch in a repository landing ~40 commits a day. The
+/// receipt is then more current than the branch, and the remedy the refusal
+/// prescribes — take the evidence again — appends a correct base and changes
+/// nothing, because the comparison still runs against HEAD. Measured
+/// 2026-08-28: three honest searches, three identical refusals, cleared only by
+/// a fast-forward merge the message never mentions.
+///
+/// So the conjunct is the DIRECTION: void only where HEAD carries commits the
+/// recorded base does not, which is the restart and nothing else.
 ///
 /// **The own-commits half is what makes this safe to ship.** The obvious rule —
 /// void it whenever the base moves — fires on every `land` lap, because a lap
@@ -971,6 +990,31 @@ fn named_validity(git_dir: &str, check: &str, subject: &str) -> Validity {
 /// Read from `--git-dir`, so it resolves per worktree and one worktree's claim
 /// cannot vouch for another's.
 fn branch_validity(git_dir: &str, check: &str, branch: &str, head: &str, own: usize) -> Validity {
+    branch_validity_with(git_dir, check, branch, head, own, moved_forward)
+}
+
+/// How many commits `head` carries that `base` does not, or `None` for "could
+/// not look".
+///
+/// A RANGE, exactly as [`own_commit_count`] is one, and legal for its reason:
+/// CLOUD-36 forbids concluding that one commit CONTAINS another, and leaves
+/// range forms alone because selecting which commits to count is a different act
+/// from drawing that conclusion. This counts; it concludes nothing about
+/// landing.
+fn moved_forward(base: &str, head: &str) -> Option<usize> {
+    git::commit_count(Path::new("."), &format!("{base}..{head}")).ok()
+}
+
+/// [`branch_validity`] with the range reader injected, so the direction below is
+/// testable without a repository per case.
+fn branch_validity_with(
+    git_dir: &str,
+    check: &str,
+    branch: &str,
+    head: &str,
+    own: usize,
+    ahead: impl Fn(&str, &str) -> Option<usize>,
+) -> Validity {
     let path = Path::new(git_dir)
         .join("batten-receipts")
         .join(branch_receipt_name(check, branch));
@@ -983,10 +1027,34 @@ fn branch_validity(git_dir: &str, check: &str, branch: &str, head: &str, own: us
     let Some(recorded) = recorded else {
         return Validity::StaleMain;
     };
-    if own == 0 && recorded != head {
-        return Validity::StaleMain;
+    if own != 0 || recorded == head {
+        return Validity::Valid;
     }
-    Validity::Valid
+    // THE DIRECTION IS THE MISSING CONJUNCT (CLOUD-1091). `recorded != head` is
+    // symmetric and the situation is not:
+    //
+    //   * CLOUD-516's RESTART — `checkout -B <name> origin/main` after a merge —
+    //     moves the branch FORWARD off a base the receipt predates. `recorded`
+    //     is an older main, so `head` carries commits `recorded` does not, and
+    //     the receipt describes work that is gone. Void.
+    //   * A branch merely BEHIND `origin/main` — cut from an earlier main and
+    //     not yet rebased — has a receipt taken against the CURRENT main, so
+    //     `head` carries nothing `recorded` does not. The receipt is MORE
+    //     current than the branch, not less. Valid.
+    //
+    // Measured 2026-08-28 on `claude/stage-2-3-grooming-uqk71k`: an
+    // `issue-search` receipt recording the current `origin/main` was voided, and
+    // three fresh searches refused identically, because the remedy the refusal
+    // prescribes appends a correct base that the comparison then ignores. The
+    // loop broke only on a fast-forward merge, which the message never asks for.
+    //
+    // Could-not-look stays VOID rather than becoming valid: this change widens
+    // what passes only where the repository can actually be read, so an
+    // unreadable range cannot be the thing that admits a stale claim.
+    match ahead(&recorded, head) {
+        Some(0) => Validity::Valid,
+        Some(_) | None => Validity::StaleMain,
+    }
 }
 
 /// The `base <sha>` line a claim receipt carries, or `None` when it carries none.
@@ -1883,6 +1951,33 @@ mod tests {
         body
     }
 
+    /// The range reader every case supplies for itself (CLOUD-1091).
+    ///
+    /// Injected rather than resolved, because the DIRECTION is now the predicate
+    /// and a scratch directory is not a repository — a case reading the real
+    /// range would get could-not-look and pass for that reason instead of for
+    /// the one it is about.
+    fn judge_ahead(
+        case: &str,
+        body: &str,
+        head: &str,
+        own: usize,
+        ahead: Option<usize>,
+    ) -> Validity {
+        let dir = tempdir(case);
+        let receipts = dir.join("batten-receipts");
+        std::fs::create_dir_all(&receipts).expect("create the store");
+        std::fs::write(receipts.join("claim.branch"), body).expect("mint");
+        branch_validity_with(
+            dir.to_str().expect("utf-8 scratch path"),
+            "claim",
+            "branch",
+            head,
+            own,
+            |_, _| ahead,
+        )
+    }
+
     fn judge(case: &str, body: &str, head: &str, own: usize) -> Validity {
         let dir = tempdir(case);
         let receipts = dir.join("batten-receipts");
@@ -1903,8 +1998,51 @@ mod tests {
         // moved AND the branch carries nothing of its own, which is what
         // `git checkout -B <name> origin/main` after a merge produces and what
         // nothing else produces.
+        // AHEAD BY ONE is what a restart looks like: `head` carries a commit
+        // the recorded base does not, because the base is the OLDER main the
+        // receipt was taken against. That is the conjunct CLOUD-1091 added, and
+        // this case is what keeps the widening from swallowing this row.
         assert_eq!(
-            judge("restart", &minted(Some("aaa")), "bbb", 0),
+            judge_ahead("restart", &minted(Some("aaa")), "bbb", 0, Some(1)),
+            Validity::StaleMain
+        );
+    }
+
+    #[test]
+    fn a_branch_behind_its_own_receipt_keeps_it() {
+        // CLOUD-1091, and RED against the predicate this replaces: `recorded !=
+        // head` fired here just as readily as on the restart above, because the
+        // comparison is symmetric and the situation is not.
+        //
+        // AHEAD BY ZERO is what "behind" looks like from the receipt's side:
+        // the base is the CURRENT `origin/main`, `head` is an older commit, so
+        // `head` carries nothing the base does not. The receipt is more current
+        // than the branch.
+        assert_eq!(
+            judge_ahead("behind", &minted(Some("bbb")), "aaa", 0, Some(0)),
+            Validity::Valid
+        );
+    }
+
+    #[test]
+    fn a_base_equal_to_head_needs_no_range_at_all() {
+        // The third case, and it is the cheap one: equality short-circuits
+        // before the range is read, so an unreadable repository cannot make the
+        // ordinary claim-then-work state look stale.
+        assert_eq!(
+            judge_ahead("equal", &minted(Some("aaa")), "aaa", 0, None),
+            Validity::Valid
+        );
+    }
+
+    #[test]
+    fn a_range_nobody_can_read_stays_void() {
+        // The direction the widening must NOT take. This change admits more only
+        // where the repository can actually be read; could-not-look keeps the
+        // verdict it had, so an unreadable range can never be the thing that
+        // admits a claim that expired.
+        assert_eq!(
+            judge_ahead("unreadable", &minted(Some("aaa")), "bbb", 0, None),
             Validity::StaleMain
         );
     }
