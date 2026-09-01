@@ -10,10 +10,20 @@
 # complete Ready block is what flips that, without anything judging whether a
 # given spin-off was lazy.
 #
-# TWO REFUSALS, AND NEITHER SUBSUMES THE OTHER. `filed-unrefined` prices
-# REFINEMENT; `filed-over-own-diff` prices PROXIMITY. A row can earn both —
-# "never groomed to Ready" and "names code this branch is holding open" are
-# different facts — so they are separate predicates over one parse.
+# THREE REFUSALS, AND NO ONE OF THEM SUBSUMES ANOTHER. `filed-unrefined` prices
+# REFINEMENT; `filed-over-own-diff` prices PROXIMITY; `filed-and-left-open` prices
+# a row this branch opened and simply LEFT OPEN. A row can earn the first
+# alongside either of the others — "never groomed to Ready" and "names code this
+# branch is holding open" are different facts — so they are separate predicates
+# over one parse.
+#
+# THE LAST TWO ARE PARTITIONED RATHER THAN NESTED, and that is a correction rather
+# than a taste. `filed-over-own-diff` requires `not cites_only(id)` and
+# `filed-and-left-open` requires `cites_only(id)`, so no row can earn both and a
+# reviewer never sees two findings for one cause. Drafted without that
+# requirement the third arm was strictly WIDER than the second — every row the
+# second refused, the third refused too — and the sentence above stopped being
+# true of the module it heads.
 #
 # The second exists because the first turned out to be payable in typing. A Ready
 # block is prose, and prose is the one currency an agent has without limit:
@@ -50,6 +60,8 @@
 #MUTANT-SUITE crates/batten/tests/it/filed_here.rs
 #MUTANT unrefined-row-unread|s@^\tlatest\[id\].verdict == "unready"$@\tfalse@|an_unready_create_stops_the_lap
 #MUTANT closing-row-still-priced|s@^\tnot id in closes$@\ttrue@|a_row_the_pr_closes_is_exempt
+#MUTANT left-open-arm-unpartitioned|s@^\tcites_only(id)$@\ttrue@|a_row_recorded_after_the_base_whose_sec1_names_the_diff_still_refuses
+#MUTANT left-open-judges-an-unread-body|s@^\tbody_read$@\ttrue@|an_unread_pr_body_leaves_the_set_unjudged
 
 # METADATA
 # description: |
@@ -65,6 +77,8 @@ import rego.v1
 rules contains "filed-unrefined"
 
 rules contains "filed-over-own-diff"
+
+rules contains "filed-and-left-open"
 
 # The record, or nothing. ABSENT IS NOT EMPTY: a branch whose recorder never ran
 # has no key here at all, Rego reads that as *does not hold*, and every rule below
@@ -148,6 +162,26 @@ closes contains key if {
 	columns := split(raw, " ")
 	columns[0] == "closes"
 	some key in split(substring(columns[1], indexof(columns[1], ":") + 1, -1), ",")
+}
+
+# THE BODY WAS READ, so "this PR closes nothing" is a MEASUREMENT rather than an
+# absence — the third state the `pr-closes` recorder writes `zero-is-a-count` for.
+#
+# `closes` alone cannot carry this. An empty `closes` set has three causes that a
+# set-membership test flattens into one: the body closes nothing, no PR exists
+# yet, and the key reader could not run. The first is a reading and the other two
+# are could-not-look, and `filed-and-left-open` refuses over the WHOLE SET rather
+# than over a row's properties, so flattening them would refuse every row a branch
+# ever filed the first time `verify` runs before the PR is opened — for a remedy
+# ("name it in closing form in the PR body") that has nowhere to be written yet.
+#
+# `-` is the recorder saying it could not read the keys and leaves the set
+# unjudged; `0` is a measured nothing and judges it.
+body_read if {
+	some raw in input.tree.records["pr-closes"]
+	columns := split(raw, " ")
+	columns[0] == "closes"
+	columns[1] != "-"
 }
 
 # `filed-unrefined`: a row this branch created was never groomed to Ready.
@@ -238,6 +272,43 @@ violation contains {
 	not cites_only(id)
 }
 
+# `filed-and-left-open`: a row this branch filed, that this branch does not close.
+#
+# THE ARM THE MEASUREMENT ASKED FOR (CLOUD-1311). Three of one session's four
+# deferrals were invisible to `filed-over-own-diff` precisely BECAUSE their §1
+# named paths outside the diff — `cites_only` exempts those by design, and rightly
+# so for a refusal about proximity. Nothing then priced them at all, and the
+# detector was a human asking twice.
+#
+# IT CLASSIFIES NOTHING, which is what keeps non-negotiable rule 3 satisfied. It
+# reports a SET: the rows this branch put on the board that it is not landing. The
+# author closes one, lets the body close it, or spends an admission whose
+# articulation says why it is independent work — and that articulation is
+# hash-bound into the commit message, where a reviewer reads it, rather than into
+# a turn that ends.
+#
+# THREE COULD-NOT-LOOKS GUARD IT, and each is a different question.
+#   * `body_read` — the forge's answer has not been captured, so the closing
+#     remedy is unreachable and the set is unjudged rather than refused.
+#   * a non-empty `changed` — a branch holding nothing open has fixed nothing and
+#     deferred nothing, so "you filed instead of fixing" is a claim about a diff
+#     that does not exist. It is not a dodge: an empty branch cannot land either.
+#   * `cites_only`'s own `-` — a record from an older recorder has no §1 column,
+#     so the partition cannot be evaluated and the row stays judged as it was
+#     before this arm existed.
+violation contains {
+	"rule": "filed-and-left-open",
+	"verdict": "V-FILED-AND-LEFT-OPEN",
+	"subjects": [{"artifact": id}],
+} if {
+	some id, _ in latest
+	body_read
+	count(changed) > 0
+	not id in closes
+	not predates_the_branch(id)
+	cites_only(id)
+}
+
 # The predicate's own tests. The SILENT cases are the load-bearing half: every
 # skip above is a pass-side property, and a rule that fired on every row would
 # satisfy the denies while deciding nothing.
@@ -320,11 +391,89 @@ test_a_row_written_before_the_branch_cannot_be_its_punt if {
 	)
 }
 
-# CITING IS NOT CLAIMING. The row names the path in its body but its declared
-# source of truth is somewhere else entirely.
+# CITING IS NOT CLAIMING — for the PROXIMITY refusal, which is the only one it
+# was ever about. The row names the path in its body but its declared source of
+# truth is somewhere else entirely, so `filed-over-own-diff` is silent.
+#
+# IT IS NOT SILENT ALTOGETHER, AND THAT IS THE PARTITION. This is the exact shape
+# of the three punts nothing caught: a row filed while the branch was open, whose
+# §1 points somewhere else, so proximity exempts it and — before this arm — no
+# refusal reached it. The case asserts the SET of verdicts rather than a count, so
+# a later change collapsing the two arms back together reddens here.
 test_a_row_that_only_cites_the_path_is_not_claiming_it if {
+	verdicts := {v.verdict | some v in violation} with input as with_diff(
+		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/b.rs"],
+		["closes 0"],
+		["src/a.rs"],
+		"2026-01-01T00:00:00Z",
+	)
+	verdicts == {"V-FILED-AND-LEFT-OPEN"}
+}
+
+# NO PR BODY YET IS COULD-NOT-LOOK, not a measured nothing. Without this the arm
+# refuses every row a branch filed the first time `verify` runs before the PR is
+# opened, naming a remedy that has nowhere to be written.
+test_an_unread_body_leaves_the_set_unjudged if {
 	count(violation) == 0 with input as with_diff(
 		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/b.rs"],
+		[],
+		["src/a.rs"],
+		"2026-01-01T00:00:00Z",
+	)
+}
+
+# AND A FETCH WHOSE KEY READER COULD NOT RUN IS THE SAME ANSWER, which is what
+# `zero-is-a-count` exists to keep distinct from `closes 0`.
+test_an_unreadable_closing_key_column_leaves_the_set_unjudged if {
+	count(violation) == 0 with input as with_diff(
+		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/b.rs"],
+		["closes -"],
+		["src/a.rs"],
+		"2026-01-01T00:00:00Z",
+	)
+}
+
+# A BRANCH HOLDING NOTHING OPEN DEFERRED NOTHING. `changed` is empty, so there is
+# no diff for the row to have been filed instead of.
+test_a_branch_with_no_diff_judges_no_row if {
+	count(violation) == 0 with input as with_diff(
+		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/b.rs"],
+		["closes 0"],
+		[],
+		"2026-01-01T00:00:00Z",
+	)
+}
+
+# THE CLOSING REMEDY REACHES THIS ARM TOO, and a body closing a DIFFERENT row does
+# not — the anti-vacuity half, without which one closing key buys the whole set.
+test_a_left_open_row_the_body_closes_is_exempt if {
+	count(violation) == 0 with input as with_diff(
+		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/b.rs"],
+		["closes 1:CLOUD-1"],
+		["src/a.rs"],
+		"2026-01-01T00:00:00Z",
+	)
+}
+
+test_closing_one_row_does_not_close_the_set if {
+	verdicts := {v.verdict | some v in violation} with input as with_diff(
+		[
+			"issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/b.rs",
+			"issue CLOUD-2 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/b.rs",
+		],
+		["closes 1:CLOUD-1"],
+		["src/a.rs"],
+		"2026-01-01T00:00:00Z",
+	)
+	verdicts == {"V-FILED-AND-LEFT-OPEN"}
+}
+
+# A ROW WRITTEN BEFORE THE BRANCH IS EXEMPT FROM THIS ARM ON THE SAME GROUND it is
+# exempt from the proximity one: it cannot be a deferral of a diff that did not
+# exist.
+test_a_left_open_row_predating_the_branch_is_exempt if {
+	count(violation) == 0 with input as with_diff(
+		["issue CLOUD-1 2025-12-01T00:00:00Z ready 1,src/a.rs - 1,src/b.rs"],
 		["closes 0"],
 		["src/a.rs"],
 		"2026-01-01T00:00:00Z",
@@ -350,14 +499,17 @@ test_an_unanswered_overlap_passes if {
 	)
 }
 
-# A NAMED PATH THIS BRANCH IS NOT TOUCHING IS NOT A PUNT AGAINST ITS DIFF.
-test_a_row_naming_a_path_outside_the_diff_passes if {
-	count(violation) == 0 with input as with_diff(
+# A NAMED PATH THIS BRANCH IS NOT TOUCHING IS NOT A PUNT AGAINST ITS DIFF — and
+# that is still true of the proximity refusal, which stays silent here. It is a
+# row left open, so the third arm takes it.
+test_a_row_naming_a_path_outside_the_diff_is_not_a_proximity_refusal if {
+	verdicts := {v.verdict | some v in violation} with input as with_diff(
 		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/z.rs - 1,src/z.rs"],
 		["closes 0"],
 		["src/a.rs"],
 		"2026-01-01T00:00:00Z",
 	)
+	verdicts == {"V-FILED-AND-LEFT-OPEN"}
 }
 
 # COULD NOT READ THE BASE DATE LEAVES EVERY ROW JUDGED AS BEFORE, rather than

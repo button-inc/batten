@@ -261,6 +261,7 @@ fn pointers(root: &Path) -> Vec<String> {
 
 const UNREFINED: &str = "filed-unrefined";
 const OVER_DIFF: &str = "filed-over-own-diff";
+const LEFT_OPEN: &str = "filed-and-left-open";
 
 // ---------------------------------------------------------------------------
 // The pass side first: without it every refusal below is satisfied by a module
@@ -407,8 +408,12 @@ fn a_row_naming_a_file_this_branch_is_changing_stops_the_lap() {
     assert_eq!(verdicts(&root), vec![OVER_DIFF.to_owned()]);
 }
 
+/// A path outside the diff is not a punt against it — for the PROXIMITY refusal,
+/// which is the only one this case was ever about. `filed-and-left-open` takes it
+/// instead, and asserting the exact verdict rather than "not empty" is what makes
+/// the partition falsifiable from this tier.
 #[test]
-fn a_recorded_path_the_branch_does_not_change_is_not_reported() {
+fn a_recorded_path_the_branch_does_not_change_is_not_a_proximity_refusal() {
     let root = repo(
         "elsewhere",
         "work",
@@ -418,10 +423,7 @@ fn a_recorded_path_the_branch_does_not_change_is_not_reported() {
         )],
         &["closes 0"],
     );
-    assert!(
-        verdicts(&root).is_empty(),
-        "a path outside the diff is not a punt against it"
-    );
+    assert_eq!(verdicts(&root), vec![LEFT_OPEN.to_owned()]);
 }
 
 /// ONE POINTER PER PATH, as the shell emitted, so a reviewer sees which file
@@ -594,6 +596,149 @@ fn a_six_field_record_with_no_sec1_column_is_judged_exactly_as_before() {
         verdicts(&root),
         vec![OVER_DIFF.to_owned()],
         "an absent §1 leaves the row judged as it was before that column existed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `filed-and-left-open` (CLOUD-1311). The set refusal: a row this branch put on
+// the board that it is not landing.
+//
+// Its whole reason for existing is the class the two arms above cannot see — a
+// row filed while the branch was open whose §1 points somewhere else, which
+// `cites_only` exempts from the proximity refusal by design. Three of the four
+// deferrals that motivated this issue sat exactly there.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_row_the_branch_filed_and_does_not_close_stops_the_lap() {
+    let root = repo(
+        "left-open",
+        "work",
+        &["src/a.rs"],
+        &[&format!(
+            "issue CLOUD-1 {AFTER} ready 1,src/a.rs - 1,src/b.rs"
+        )],
+        &["closes 0"],
+    );
+    assert_eq!(verdicts(&root), vec![LEFT_OPEN.to_owned()]);
+}
+
+/// NO PR YET IS COULD-NOT-LOOK. `verify` runs before the PR exists on most laps,
+/// and refusing there would name a remedy — "close it in the body" — with no body
+/// to write it in. The absent record is the signal; there is nothing to tune.
+#[test]
+fn an_unread_pr_body_leaves_the_set_unjudged() {
+    let root = repo(
+        "no-body",
+        "work",
+        &["src/a.rs"],
+        &[&format!(
+            "issue CLOUD-1 {AFTER} ready 1,src/a.rs - 1,src/b.rs"
+        )],
+        &[],
+    );
+    assert!(
+        verdicts(&root).is_empty(),
+        "the forge's answer has not been captured, so the set is not judged"
+    );
+}
+
+/// AND A FETCH WHOSE KEY READER COULD NOT RUN IS THE SAME ANSWER, which is the
+/// distinction `zero-is-a-count` exists to preserve: `closes 0` is a measurement
+/// and `closes -` is not.
+#[test]
+fn an_unreadable_closing_key_column_leaves_the_set_unjudged() {
+    let root = repo(
+        "unreadable-body",
+        "work",
+        &["src/a.rs"],
+        &[&format!(
+            "issue CLOUD-1 {AFTER} ready 1,src/a.rs - 1,src/b.rs"
+        )],
+        &["closes -"],
+    );
+    assert!(verdicts(&root).is_empty(), "`-` is could-not-look");
+}
+
+/// ANTI-VACUITY ON THE EXEMPTION: one closing key must not buy the whole set.
+/// Without this, an author closes the cheapest row they filed and the gate goes
+/// quiet about every other one — which is the arm switched off by its own remedy.
+#[test]
+fn closing_one_row_does_not_close_the_set() {
+    let root = repo(
+        "close-one",
+        "work",
+        &["src/a.rs"],
+        &[
+            &format!("issue CLOUD-1 {AFTER} ready 1,src/a.rs - 1,src/b.rs"),
+            &format!("issue CLOUD-2 {AFTER} ready 1,src/a.rs - 1,src/b.rs"),
+        ],
+        &["closes 1:CLOUD-1"],
+    );
+    assert_eq!(verdicts(&root), vec![LEFT_OPEN.to_owned()]);
+    assert!(
+        pointers(&root).iter().any(|line| line.contains("CLOUD-2")),
+        "the row still open is the one reported: {:?}",
+        pointers(&root)
+    );
+}
+
+/// POINTER, NEVER PAYLOAD (rule 4) for this arm too. The recorder wrote no title
+/// and no body, and this is the assertion that keeps a later edit from adding
+/// one — an articulation's prose especially, which is the one thing this class
+/// collects that a finding must never carry.
+#[test]
+fn the_set_refusal_carries_the_id_and_nothing_else() {
+    let root = repo(
+        "left-open-pointer",
+        "work",
+        &["src/a.rs"],
+        &[&format!(
+            "issue CLOUD-1 {AFTER} ready 1,src/a.rs - 1,src/b.rs"
+        )],
+        &["closes 0"],
+    );
+    let rendered = pointers(&root).join("\n");
+    assert!(rendered.contains("CLOUD-1"), "the id is the pointer");
+    assert!(
+        !rendered.contains("src/b.rs"),
+        "a §1 path is not this arm's subject: {rendered}"
+    );
+}
+
+/// A BRANCH HOLDING NOTHING OPEN DEFERRED NOTHING, so there is no diff for the
+/// row to have been filed instead of. Not a dodge: an empty branch cannot land.
+#[test]
+fn a_branch_with_no_diff_judges_no_row() {
+    let root = repo(
+        "left-open-empty",
+        "work",
+        &[],
+        &[&format!(
+            "issue CLOUD-1 {AFTER} ready 1,src/a.rs - 1,src/b.rs"
+        )],
+        &["closes 0"],
+    );
+    assert!(
+        verdicts(&root).is_empty(),
+        "nothing is open, so nothing was deferred"
+    );
+}
+
+/// A record from an older recorder has no §1 column, so the partition cannot be
+/// evaluated and the row stays judged exactly as it was before this arm existed.
+#[test]
+fn a_record_with_no_sec1_column_is_outside_this_arm() {
+    let root = repo(
+        "left-open-six-field",
+        "work",
+        &["src/a.rs"],
+        &[&format!("issue CLOUD-1 {AFTER} ready 0 -")],
+        &["closes 0"],
+    );
+    assert!(
+        verdicts(&root).is_empty(),
+        "could-not-look on §1 is not a refusal"
     );
 }
 
