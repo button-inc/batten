@@ -128,7 +128,7 @@ fn notice(output: &Output) -> Option<String> {
 ///
 /// The reporter serves exactly two events and seeds at whichever arrives first,
 /// so a seed at `PostToolBatch` means `SessionStart` never reached the engine.
-/// Measured on the container that produced CLOUD-1085: SessionStart receipt at
+/// Measured on the container that produced CLOUD-1085: `SessionStart` receipt at
 /// 04:37:21, binary at 04:39:58, first snapshot at 04:40:48 — every mediated call
 /// in that window failed open in silence, and nothing said so. This case is what
 /// makes that observable.

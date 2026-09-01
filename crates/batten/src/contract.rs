@@ -323,7 +323,7 @@ pub fn render(change: &ChangeSet, wiring: &[String]) -> String {
 /// happening at `PostToolBatch` means `SessionStart` did not reach this code —
 /// and since the host registers the engine by bare name on every event, the
 /// overwhelmingly likely cause is that no `batten` resolved when that event
-/// fired. Measured on the container that produced CLOUD-1085: the SessionStart
+/// fired. Measured on the container that produced CLOUD-1085: the `SessionStart`
 /// receipt was written at 04:37:21, the binary appeared at 04:39:58, and the
 /// first snapshot landed at 04:40:48 — at `PostToolBatch`, three and a half
 /// minutes late, with every mediated call in between failing open in silence.
