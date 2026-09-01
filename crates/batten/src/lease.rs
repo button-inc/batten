@@ -906,6 +906,21 @@ pub enum Observed {
         /// What it says.
         body: Body,
     },
+    /// The ref is there and carries no lease body.
+    ///
+    /// **A separate state rather than a default body, and that distinction is the
+    /// whole of what the health gate reads.** Substituting a full-TTL body keeps
+    /// the SAFE behaviour — a lease we do not understand is respected until it
+    /// ages out, never treated as free — but it also makes the wrong ref
+    /// indistinguishable from a healthy hold, so a stray push blocks landing for a
+    /// TTL with nothing anywhere saying why. Every decision below still treats
+    /// this as held; only the report can now tell them apart.
+    Garbage {
+        /// The object the ref points at, for the CAS's expected value.
+        sha: String,
+        /// Why it did not read as a lease. A pointer, never the ref body.
+        why: String,
+    },
 }
 
 /// May this branch spend a matrix right now?
@@ -938,9 +953,21 @@ pub fn authorises(observed: Option<&Observed>, want: &str, now: i64) -> Authorit
             "cannot read the lease; running rather than stopping the fleet",
         ));
     };
-    let Observed::Held { body, .. } = observed else {
-        return Authority::Run(format!("no lease is held; {want} may run"));
+    // GARBAGE FAILS OPEN HERE like everything else this arm cannot read. It is the
+    // health gate's finding, not this one's: stopping the fleet over a ref
+    // somebody mis-pushed is the cost this arm exists never to pay.
+    let observed = match observed {
+        Observed::Held { body, .. } => body,
+        Observed::Garbage { .. } => {
+            return Authority::Run(String::from(
+                "the lease does not parse; running rather than stopping the fleet",
+            ));
+        }
+        Observed::Absent => {
+            return Authority::Run(format!("no lease is held; {want} may run"));
+        }
     };
+    let body = observed;
     if body.released() || body.expired(now) {
         return Authority::Run(format!("no lease is held; {want} may run"));
     }
@@ -1026,19 +1053,22 @@ impl Default for Terms {
 /// lease. **An unreachable remote read as free is the misread that lets two
 /// sessions land at once**, so it is an error here and every caller decides for
 /// itself which way to fail.
-pub fn observe(terms: &Terms, now: i64) -> Result<Observed> {
+pub fn observe(terms: &Terms) -> Result<Observed> {
     let advertisement = advertise(&terms.remote, Service::ReceivePack)?;
     let Some(sha) = advertisement.refs.get(&terms.reference) else {
         return Ok(Observed::Absent);
     };
     let object = fetch_object(&terms.remote, sha)?;
     // A LEASE WE CANNOT PARSE IS ONE WE DO NOT UNDERSTAND, and treating it as free
-    // would be the same misread as an unreachable remote. Give it a full TTL from
-    // now so it is respected until it ages out, never ignored.
-    let body = parse_body(&object.body).unwrap_or(Body {
-        expires: now + terms.ttl,
-        ..Body::default()
-    });
+    // would be the same misread as an unreachable remote. It stays HELD to every
+    // decision here — and is reported as what it is rather than as a hold, which
+    // is the half a substituted default body silently threw away.
+    let Some(body) = parse_body(&object.body) else {
+        return Ok(Observed::Garbage {
+            sha: sha.clone(),
+            why: String::from("the ref carries no lease body"),
+        });
+    };
     Ok(Observed::Held {
         sha: sha.clone(),
         body,
@@ -1063,7 +1093,7 @@ pub fn observe(terms: &Terms, now: i64) -> Result<Observed> {
 pub fn cas(terms: &Terms, observed: &Observed, body: &Body, now: i64) -> Result<Outcome> {
     let old = match observed {
         Observed::Absent => ZERO,
-        Observed::Held { sha, .. } => sha.as_str(),
+        Observed::Held { sha, .. } | Observed::Garbage { sha, .. } => sha.as_str(),
     };
     let object = lease_object(&body.render(), now)?;
     // A FAILED MINT MUST NEVER BECOME A DELETE. The bash predecessor interpolated
@@ -1310,8 +1340,14 @@ pub fn turn(
     stall_beats: i64,
     now: i64,
 ) -> Turn {
-    let Observed::Held { body, .. } = observed else {
-        return Turn::Take(String::from("no lease is held"));
+    // GARBAGE IS WAIT, and it is the one place this differs from `authorises`:
+    // taking a ref nobody can read means overwriting whatever a stray push put
+    // there, and a well-meant fix that races a real holder is worse than waiting
+    // out a TTL. The health gate reports it; nothing here repairs it.
+    let body = match observed {
+        Observed::Held { body, .. } => body,
+        Observed::Garbage { .. } => return Turn::Wait,
+        Observed::Absent => return Turn::Take(String::from("no lease is held")),
     };
     if body.holder == holder && !body.expired(now) {
         return Turn::Mine;
@@ -1459,6 +1495,88 @@ pub fn holder_alive(pid: u32, marker: &str) -> bool {
     };
     let command = String::from_utf8_lossy(&raw).replace('\0', " ");
     command.contains(marker)
+}
+
+/// The lease ref's health, as a gate rather than a report.
+///
+/// **This runs on a CLOCK, never on the landing path**, and the split is the one
+/// the tree already draws between a property of the COMMIT and a property of the
+/// WORLD. Neither refusal below is a correctness hazard for the trunk — the lease
+/// decides who goes first, never what may land — so on the landing path it would
+/// fail whichever PR happened to be in flight over a condition that PR did not
+/// cause and cannot fix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Health {
+    /// Nobody has ever taken it, or a holder handed it back, or it lapsed. All
+    /// three are healthy and all three mean the next claimant wins.
+    Free(String),
+    /// Somebody is landing right now, within one term.
+    Held(String),
+    /// **Nothing legitimate produces this.** A lease is only ever minted at one
+    /// term from now, so a horizon further out means somebody wrote the ref by
+    /// hand or under a different term — and it would block the fleet for however
+    /// long it says.
+    Wedged(String),
+    /// The ref exists and is not a lease. Every decision above treats it as held,
+    /// which is safe and silent — so without this it blocks landing for a term
+    /// with nothing anywhere saying why.
+    Garbage(String),
+}
+
+impl Health {
+    /// Whether this is a state a fleet can land through.
+    #[must_use]
+    pub const fn healthy(&self) -> bool {
+        matches!(self, Health::Free(_) | Health::Held(_))
+    }
+}
+
+/// Judge the lease ref's health.
+///
+/// **Reported, never repaired.** Overwriting a lease this cannot understand is how
+/// a well-meant fix races a real holder, and the two refusals below are both
+/// "something that is not this protocol wrote the ref" — a human's decision, not
+/// a gate's.
+///
+/// Pointer-only throughout: a state, a holder id and a count of seconds. Never the
+/// ref body.
+#[must_use]
+pub fn health(observed: &Observed, terms: &Terms, now: i64) -> Health {
+    let body = match observed {
+        Observed::Absent => {
+            return Health::Free(String::from("absent — nobody holds the landing lease"));
+        }
+        Observed::Garbage { why, .. } => {
+            return Health::Garbage(format!(
+                "{why}. It reads as held, so landing is blocked until it expires or is overwritten"
+            ));
+        }
+        Observed::Held { body, .. } => body,
+    };
+    // A LEASE WITH NO HOLDER CANNOT BE RELEASED BY ANYONE, since release requires
+    // recognising your own id. Checked before the arithmetic for the same reason
+    // the parse is: a state nobody can leave is a wedge whatever its expiry says.
+    if body.holder.is_empty() {
+        return Health::Garbage(String::from(
+            "a lease with no holder cannot be released by anyone",
+        ));
+    }
+    // The release sentinel, reported as a declaration rather than as an expiry
+    // fifty-odd years in the past.
+    if body.released() {
+        return Health::Free(format!("free — released by {}", body.holder));
+    }
+    let left = body.expires - now;
+    if left <= 0 {
+        return Health::Free(format!("free — lapsed by {} {}s ago", body.holder, -left));
+    }
+    if left > terms.ttl {
+        return Health::Wedged(format!(
+            "held by {} for another {left}s, beyond the {}s any lease may claim",
+            body.holder, terms.ttl
+        ));
+    }
+    Health::Held(format!("held by {}, {left}s left", body.holder))
 }
 
 #[cfg(test)]
@@ -1610,6 +1728,105 @@ mod tests {
                 ..Body::default()
             },
         }
+    }
+
+    fn at(expires: i64, holder: &str) -> Observed {
+        Observed::Held {
+            sha: String::from("1111111111111111111111111111111111111111"),
+            body: Body {
+                holder: holder.to_owned(),
+                expires,
+                ..Body::default()
+            },
+        }
+    }
+
+    #[test]
+    fn the_three_free_states_are_all_healthy_and_all_distinguishable() {
+        let terms = Terms::default();
+        assert!(matches!(
+            health(&Observed::Absent, &terms, 1000),
+            Health::Free(_)
+        ));
+        let Health::Free(released) = health(&at(0, "a"), &terms, 1000) else {
+            panic!("a tombstone is free");
+        };
+        assert!(released.contains("released"), "got: {released}");
+        let Health::Free(lapsed) = health(&at(900, "a"), &terms, 1000) else {
+            panic!("a lapsed lease is free");
+        };
+        // A declaration and an inference are reported differently, or a release
+        // renders as an expiry half a century in the past.
+        assert!(lapsed.contains("lapsed by a 100s ago"), "got: {lapsed}");
+    }
+
+    #[test]
+    fn a_horizon_beyond_one_term_is_wedged() {
+        // NOTHING LEGITIMATE PRODUCES THIS: a lease is only ever minted at one
+        // term from now, so a longer horizon means somebody wrote the ref by hand
+        // or under a different term — and it blocks the fleet for as long as it
+        // says.
+        let terms = Terms::default();
+        assert!(matches!(
+            health(&at(1000 + terms.ttl, "a"), &terms, 1000),
+            Health::Held(_)
+        ));
+        assert!(matches!(
+            health(&at(1000 + terms.ttl + 1, "a"), &terms, 1000),
+            Health::Wedged(_)
+        ));
+    }
+
+    #[test]
+    fn a_ref_that_is_not_a_lease_is_garbage_rather_than_a_hold() {
+        // Every decision treats it as held, which is safe and SILENT — so without
+        // this it blocks landing for a term with nothing anywhere saying why.
+        let garbage = Observed::Garbage {
+            sha: String::from("2222222222222222222222222222222222222222"),
+            why: String::from("the ref carries no lease body"),
+        };
+        let verdict = health(&garbage, &Terms::default(), 1000);
+        assert!(matches!(verdict, Health::Garbage(_)));
+        assert!(!verdict.healthy());
+    }
+
+    #[test]
+    fn a_lease_nobody_can_release_is_garbage_whatever_its_expiry_says() {
+        // Release requires recognising your own id, so a lease with no holder is
+        // a state nobody can leave — a wedge, however healthy its clock looks.
+        assert!(matches!(
+            health(&at(1_000_000, ""), &Terms::default(), 1000),
+            Health::Garbage(_)
+        ));
+    }
+
+    #[test]
+    fn garbage_is_waited_out_rather_than_taken() {
+        // TAKING IT MEANS OVERWRITING WHATEVER A STRAY PUSH PUT THERE, and a
+        // well-meant fix that races a real holder is worse than waiting a term.
+        let garbage = Observed::Garbage {
+            sha: String::from("2222222222222222222222222222222222222222"),
+            why: String::from("the ref carries no lease body"),
+        };
+        assert_eq!(
+            turn(&Terms::default(), &garbage, "me", 10_000, 10_000, 60, 1000),
+            Turn::Wait
+        );
+    }
+
+    #[test]
+    fn garbage_still_lets_the_fleet_run() {
+        // The other direction, and the asymmetry is the same one everywhere else:
+        // stopping the fleet over a ref somebody mis-pushed is the cost the
+        // authorising arm exists never to pay. The health gate is what reports it.
+        let garbage = Observed::Garbage {
+            sha: String::from("2222222222222222222222222222222222222222"),
+            why: String::from("the ref carries no lease body"),
+        };
+        assert!(matches!(
+            authorises(Some(&garbage), "claude/x", 1000),
+            Authority::Run(_)
+        ));
     }
 
     #[test]

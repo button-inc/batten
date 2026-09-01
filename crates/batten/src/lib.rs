@@ -4752,7 +4752,7 @@ fn run_lease(
     match command {
         // FAIL OPEN, and only here. Both `Err` arms below run rather than stop.
         cli::LeaseCommand::Authorises { branch } => {
-            let observed = lease::observe(&terms, now).ok();
+            let observed = lease::observe(&terms).ok();
             match lease::authorises(observed.as_ref(), &branch, now) {
                 lease::Authority::Run(why) => {
                     writeln!(out, "lease: {why}")?;
@@ -4764,6 +4764,7 @@ fn run_lease(
                 }
             }
         }
+        cli::LeaseCommand::Check => run_lease_check(&terms, now, out, err),
         cli::LeaseCommand::Status { json } => run_lease_status(&terms, json, now, out, err),
         cli::LeaseCommand::Peek { field } => run_lease_peek(&terms, &field, now, out, err),
         cli::LeaseCommand::Held => run_lease_held(root, &terms, now, out, err),
@@ -4841,6 +4842,43 @@ fn lease_stall_beats() -> i64 {
     env_secs("LAND_LOCK_STALL_BEATS").unwrap_or(60)
 }
 
+/// `lease check`: the lease ref is free, or a live and well-formed hold.
+///
+/// **Reported, never repaired.** Overwriting a lease this cannot understand is how
+/// a well-meant fix races a real holder, so both refusals name what is wrong and
+/// leave the decision to a human.
+fn run_lease_check(
+    terms: &lease::Terms,
+    now: i64,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let observed = match lease::observe(terms) {
+        Ok(observed) => observed,
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    match lease::health(&observed, terms, now) {
+        lease::Health::Free(why) | lease::Health::Held(why) => {
+            writeln!(out, "lease: {why}")?;
+            Ok(ExitCode::Success)
+        }
+        lease::Health::Wedged(why) => {
+            writeln!(
+                err,
+                "::error:: lease: WEDGED — {why}. Landing is blocked until it expires."
+            )?;
+            Ok(ExitCode::Violation)
+        }
+        lease::Health::Garbage(why) => {
+            writeln!(err, "::error:: lease: GARBAGE — {why}.")?;
+            Ok(ExitCode::Violation)
+        }
+    }
+}
+
 /// `lease status`, which is prose for a human and `-J` for everything else.
 fn run_lease_status(
     terms: &lease::Terms,
@@ -4849,7 +4887,7 @@ fn run_lease_status(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let observed = match lease::observe(terms, now) {
+    let observed = match lease::observe(terms) {
         Ok(observed) => observed,
         Err(reason) => {
             // COULD NOT LOOK IS NOT UNHELD. Reporting it as an unheld lease is
@@ -4859,8 +4897,13 @@ fn run_lease_status(
             return Ok(ExitCode::Internal);
         }
     };
-    let lease::Observed::Held { body, .. } = &observed else {
-        return lease_report(json, "unheld", &[], out);
+    let body = match &observed {
+        lease::Observed::Held { body, .. } => body,
+        lease::Observed::Absent => return lease_report(json, "unheld", &[], out),
+        // Reported as what it is rather than as a hold. Every DECISION still
+        // treats it as held; this is the one place the two can be told apart,
+        // which is the whole reason it is a state and not a default body.
+        lease::Observed::Garbage { .. } => return lease_report(json, "garbage", &[], out),
     };
     // Checked BEFORE expiry, because a tombstone satisfies both: its expiry is the
     // sentinel, so `now >= 0` is trivially true and the expired arm would render a
@@ -4960,7 +5003,7 @@ fn run_lease_peek(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let observed = match lease::observe(terms, now) {
+    let observed = match lease::observe(terms) {
         Ok(observed) => observed,
         Err(reason) => {
             writeln!(err, "::error:: lease: {reason}")?;
@@ -5019,7 +5062,7 @@ fn run_lease_held(
         }
     };
     let _ = local;
-    let observed = match lease::observe(terms, now) {
+    let observed = match lease::observe(terms) {
         Ok(observed) => observed,
         Err(reason) => {
             writeln!(err, "::error:: lease: {reason}")?;
@@ -5078,7 +5121,7 @@ fn run_lease_acquire(
             return Ok(ExitCode::Internal);
         }
     };
-    let observed = match lease::observe(terms, now) {
+    let observed = match lease::observe(terms) {
         Ok(observed) => observed,
         Err(reason) => {
             writeln!(err, "::error:: lease: {reason}")?;
@@ -5098,7 +5141,10 @@ fn run_lease_acquire(
                 local.held_for("seen-progress", &body.progress, now)
             },
         ),
-        lease::Observed::Absent => (0, 0),
+        // A ref that is not a lease has no sha-of-a-lease to corroborate and no
+        // token to compare, so both clocks read zero — which is what keeps it in
+        // `Turn::Wait` rather than letting a long watch make it stealable.
+        lease::Observed::Absent | lease::Observed::Garbage { .. } => (0, 0),
     };
     let head = git::head_commit(root).unwrap_or_default();
     match lease::turn(
@@ -5167,7 +5213,7 @@ fn run_lease_renew(
             return Ok(ExitCode::Internal);
         }
     };
-    let observed = match lease::observe(terms, now) {
+    let observed = match lease::observe(terms) {
         Ok(observed) => observed,
         Err(reason) => {
             writeln!(err, "::error:: lease: {reason}")?;
@@ -5292,7 +5338,7 @@ fn run_lease_hold(
             }
             return Ok(ExitCode::Violation);
         }
-        let Ok(observed) = lease::observe(terms, now) else {
+        let Ok(observed) = lease::observe(terms) else {
             misses += 1;
             if misses >= 3 {
                 writeln!(
@@ -5349,7 +5395,7 @@ fn run_lease_hold(
 /// ending; a clone that cannot reach the remote here has a problem, but the caller
 /// is stopping anyway and reporting it would replace the reason it is stopping.
 fn lease_hand_back(root: &Path, terms: &lease::Terms, holder: &str, now: i64) {
-    let Ok(observed) = lease::observe(terms, now) else {
+    let Ok(observed) = lease::observe(terms) else {
         return;
     };
     let lease::Observed::Held { body, .. } = &observed else {
@@ -5419,7 +5465,7 @@ fn run_lease_release(
             return Ok(ExitCode::Internal);
         }
     };
-    let observed = match lease::observe(terms, now) {
+    let observed = match lease::observe(terms) {
         Ok(observed) => observed,
         Err(reason) => {
             writeln!(err, "::error:: lease: {reason}")?;
@@ -5472,7 +5518,7 @@ fn run_lease_reserve(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let observed = match lease::observe(terms, now) {
+    let observed = match lease::observe(terms) {
         Ok(observed) => observed,
         Err(reason) => {
             writeln!(err, "::error:: lease: {reason}")?;
@@ -5481,8 +5527,9 @@ fn run_lease_reserve(
     };
     let held = match &observed {
         lease::Observed::Held { body, .. } if !body.released() && !body.expired(now) => body,
-        // Nothing to reserve behind. Not an error: a free lease means the caller
-        // should be ACQUIRING, and saying so is more useful than a refusal.
+        // Nothing to reserve behind, or a ref that is not a lease. Neither is an
+        // error: a free lease means the caller should be ACQUIRING, and a ref
+        // nobody can read is the health gate's finding rather than this one's.
         _ => {
             writeln!(out, "lease: no lease is held; acquire rather than reserve")?;
             return Ok(ExitCode::Violation);
