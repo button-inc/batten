@@ -1507,6 +1507,32 @@ description = "Measure tree-surface acquisition cost as declared-document count 
 depends = ["build:release"]
 run = "BENCH_METRIC=acquisition-wall-clock cargo run --quiet --release -p batten --example acquisition-bench"
 
+[tasks.config-load-bench]
+description = "Price `config::load` over the committed batten.toml, with its own null (CLOUD-1291)"
+# CLOUD-1291. The harness re-reads and re-parses this repository's 354 KB
+# `batten.toml` on every fixture command — 761 static call sites, none memoized —
+# and nothing had priced it. The row's own first estimate was refuted: it took the
+# cost through `batten config show`, which measures the same to within noise from a
+# directory with no config at all, so a 29 ms verb cannot resolve a call that may
+# be a millisecond. This times the function.
+#
+# NO `--release`, WHICH IS THE ONE DELIBERATE DEPARTURE from `acquisition-bench`
+# above. That arm times the SHIPPED binary, so release is what it is about. This
+# one is about what the TEST SUITE pays, and the suite runs under `dev` — where
+# workspace code is unoptimised and the dependency closure is `opt-level = 2`
+# (CLOUD-1211). Measuring release here would answer a question nobody asked and
+# would flatter the number in the direction that argues for the change.
+#
+# No `build:release` dependency for the same reason, and a stronger one: this
+# target spawns nothing and times no binary, so there is nothing for it to build.
+#
+# BENCH_METRIC IS THE LOAD-BEARING LINE, for the reason recorded at
+# `acquisition-bench`: `perf-record` stamps the series from it and defaults to the
+# INVOCATION series' `wall-clock`. This is a third axis — a per-call in-process
+# figure — so it takes a third stamp, and `crates/batten/tests/acquisition_metric.rs`
+# asserts every bench task carries one and that no two of them collide.
+run = "BENCH_METRIC=config-load-wall-clock cargo run --quiet -p batten --example config-load-bench"
+
 [tasks."install:local"]
 description = "Put the built binary where the hook registrations resolve it — `install.sh`'s own destination"
 depends = ["build:release"]

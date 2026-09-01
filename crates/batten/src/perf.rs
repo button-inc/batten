@@ -825,7 +825,7 @@ fn state_prefixed(state: &str, argv: &[String]) -> Vec<String> {
 
 /// One arm's record, with `perf`'s own percentile convention.
 fn record(arm: &'static str, id: &str, result: &serde_json::Value) -> Result<Record> {
-    let mut times: Vec<f64> = result
+    let times: Vec<f64> = result
         .get("times")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| anyhow::anyhow!("perf-pair: the {id} {arm} arm carried no times."))?
@@ -834,6 +834,30 @@ fn record(arm: &'static str, id: &str, result: &serde_json::Value) -> Result<Rec
         .collect();
     if times.is_empty() {
         bail!("perf-pair: the {id} {arm} arm carried no times.");
+    }
+    let mean = result
+        .get("mean")
+        .and_then(serde_json::Value::as_f64)
+        .ok_or_else(|| anyhow::anyhow!("perf-pair: the {id} {arm} arm carried no mean."))?;
+    summarise(arm, id, times, Some(mean))
+}
+
+/// A set of SECOND-valued samples reduced to one [`Record`], in milliseconds.
+///
+/// Extracted from [`record`] rather than re-derived beside it, because the
+/// percentile convention is the thing two readings must share: `perf-compare`
+/// decides on `p50`, so a second measurement rounding or indexing differently
+/// would produce records that look comparable and are not. `mean` is optional
+/// only because hyperfine reports its own and an in-process arm has none to
+/// quote — the fallback is the arithmetic mean of the same samples.
+fn summarise(
+    arm: &'static str,
+    id: &str,
+    mut times: Vec<f64>,
+    reported_mean: Option<f64>,
+) -> Result<Record> {
+    if times.is_empty() {
+        bail!("perf: the {id} {arm} arm carried no times.");
     }
     times.sort_by(f64::total_cmp);
 
@@ -856,10 +880,11 @@ fn record(arm: &'static str, id: &str, result: &serde_json::Value) -> Result<Rec
     )]
     let i95 = (last * 0.95).ceil() as usize;
 
-    let mean = result
-        .get("mean")
-        .and_then(serde_json::Value::as_f64)
-        .ok_or_else(|| anyhow::anyhow!("perf-pair: the {id} {arm} arm carried no mean."))?;
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a sample count is a small integer and this is a divisor, not a measurement"
+    )]
+    let mean = reported_mean.unwrap_or_else(|| times.iter().sum::<f64>() / n as f64);
 
     Ok(Record {
         arm,
@@ -1137,6 +1162,132 @@ pub fn acquire(repo: &Path) -> Result<Sweep> {
         ratios,
         nulls,
         per_document,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// The config-load reading (CLOUD-1291).
+// ---------------------------------------------------------------------------
+//
+// WHY IT LIVES HERE, and it is the acquisition sweep's argument one measurement
+// over: `Record` is a CONTRACT with two frozen callers (`perf-compare` parses it,
+// `perf-gate` greps `^arm=`), and the percentile convention behind `p50` is the
+// thing two readings have to share before their numbers can be put side by side.
+// A bench with its own struct and its own idea of a median produces records that
+// look comparable and are not.
+//
+// WHAT MAKES THIS ARM DIFFERENT from every other one in this module: it spawns
+// NOTHING. There is no hyperfine, no binary to build, no fixture tree. The
+// subject is one function call in this process, which is also why CLOUD-1291
+// forbids pricing it through a CLI verb — measured, `batten config show` is
+// insensitive to config size, so the verb's 29 ms of startup swallows the answer.
+
+/// The default sample count. Large enough that a sub-millisecond call is not
+/// being timed against the clock's own resolution, small enough that the whole
+/// reading is seconds.
+const DEFAULT_LOAD_SAMPLES: &str = "200";
+
+/// The environment override for it.
+const LOAD_SAMPLES_VAR: &str = "BENCH_LOAD_SAMPLES";
+
+/// Price [`crate::config::load`] over one committed authority.
+///
+/// # The experiment
+///
+/// Three arms over the same file, back to back in one process so the noise the
+/// ratios divide out is the same noise:
+///
+/// * `load` — the whole of what the harness calls: read plus parse plus every
+///   `validate` pass.
+/// * `parse` — the same text already in memory, so the difference between the two
+///   is the READ rather than a guess about it.
+/// * `load-null` — `load` again. Its ratio against the first is 1.0 plus pure
+///   noise by construction, which is what makes the spread a measured quantity
+///   rather than a number in a comment.
+///
+/// # Reading it
+///
+/// The arm records are per-call milliseconds, so the `mean` on the `load` arm IS
+/// the per-call cost the row asks for. Multiply by the harness's call count to
+/// get the suite delta, and read that against the null spread: a saving inside it
+/// has measured no effect, and recording that is the row's sanctioned outcome.
+///
+/// # Errors
+///
+/// A file that cannot be read or does not parse — properties of the checkout
+/// rather than verdicts about the cost — and a sample count that is zero or
+/// unparseable. Never an empty measurement reported as a reading.
+pub fn config_load(path: &Path) -> Result<Sweep> {
+    let samples: usize = env_or(LOAD_SAMPLES_VAR, DEFAULT_LOAD_SAMPLES)
+        .parse()
+        .with_context(|| format!("perf-config-load: {LOAD_SAMPLES_VAR} is not a count"))?;
+    if samples == 0 {
+        bail!("perf-config-load: {LOAD_SAMPLES_VAR} declared no samples. Nothing measured.");
+    }
+
+    let source = path.display().to_string();
+    // Read once, up front, for two reasons: it is the `parse` arm's input, and a
+    // missing or unparseable file is a could-not-look that must be reported
+    // BEFORE any timing rather than as a zero.
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("perf-config-load: could not read {source}"))?;
+    crate::config::parse(&text, &source)
+        .with_context(|| format!("perf-config-load: {source} does not parse"))?;
+
+    let bytes = text.len();
+
+    // WARMUP, discarded. The first call pays page faults on a 354 KB file and
+    // whatever the allocator has to grow, and including that in a per-call figure
+    // reports a one-off as a recurring cost.
+    for _ in 0..samples.min(16) {
+        crate::config::load(path)?;
+    }
+
+    let time = |mut body: Box<dyn FnMut() -> Result<()>>| -> Result<Vec<f64>> {
+        let mut times = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let started = std::time::Instant::now();
+            body()?;
+            times.push(started.elapsed().as_secs_f64());
+        }
+        Ok(times)
+    };
+
+    let load_arm = summarise(
+        "load",
+        &format!("config-load-{bytes}b"),
+        time(Box::new(|| crate::config::load(path).map(|_| ())))?,
+        None,
+    )?;
+    let parse_arm = summarise(
+        "parse",
+        &format!("config-parse-{bytes}b"),
+        time(Box::new(|| {
+            crate::config::parse(&text, &source).map(|_| ())
+        }))?,
+        None,
+    )?;
+    let null_arm = summarise(
+        "null",
+        &format!("config-load-null-{bytes}b"),
+        time(Box::new(|| crate::config::load(path).map(|_| ())))?,
+        None,
+    )?;
+
+    if load_arm.p50 <= 0.0 {
+        bail!("perf-config-load: the load arm measured zero, so no ratio can be taken.");
+    }
+    let ratios = vec![("parse/load".to_owned(), parse_arm.p50 / load_arm.p50)];
+    let nulls = vec![null_arm.p50 / load_arm.p50];
+
+    Ok(Sweep {
+        arms: vec![load_arm, parse_arm, null_arm],
+        ratios,
+        nulls,
+        // There is no swept variable here — one file, one size — so the
+        // per-document term has nothing to be about. Reporting a zero would read
+        // as a measured slope rather than as an absent one.
+        per_document: None,
     })
 }
 

@@ -71,6 +71,16 @@ pub(crate) fn target_tmp() -> PathBuf {
 /// a grammar, and `batten ready lint` tells it so by id. That is the behaviour,
 /// so a fixture opts IN by calling this rather than getting the rows by default.
 pub(crate) fn declared_patterns() -> String {
+    // Memoized for the reason `bypass_env_vars` is (CLOUD-1291): one committed
+    // file that cannot change during a run. This one only re-READS rather than
+    // re-parsing, so its own share is the smaller one — it is here because
+    // leaving one of the three unmemoized is how the next reader concludes the
+    // pattern was deliberate somewhere and accidental here.
+    static ROWS: std::sync::LazyLock<String> = std::sync::LazyLock::new(scan_declared_patterns);
+    ROWS.clone()
+}
+
+fn scan_declared_patterns() -> String {
     let text = std::fs::read_to_string(at_root("batten.toml")).expect("the committed config");
     let mut rows = String::new();
     let mut inside = false;
@@ -153,18 +163,32 @@ fn declared_env_vars() -> Vec<&'static str> {
 /// panic — this is a scrub, and a fixture with no committed config is a fixture
 /// that has no per-row hatches to inherit.
 fn bypass_env_vars() -> Vec<String> {
-    let mut names = vec![batten::hook::BYPASS_ENV.to_owned()];
-    if let Ok(config) = batten::config::load(&at_root("batten.toml")) {
-        names.extend(
-            config
-                .rules
-                .iter()
-                .filter_map(|rule| rule.bypass_env.clone()),
-        );
-    }
-    names.sort();
-    names.dedup();
-    names
+    // MEMOIZED, AND THE DERIVATION IS UNCHANGED (CLOUD-1291). `batten()` calls
+    // this on every fixture command it constructs, and `config::load` over the
+    // committed 356 KB authority was measured at **10.48 ms per call** — a full
+    // parse plus every `validate` pass, of which the file read is 1.2%
+    // (`mise run config-load-bench`). The file is committed and cannot change
+    // during a run, so the memoized value is identical by construction.
+    //
+    // What is memoized is the RESULT of reading the config, never a hand-written
+    // list of hatch names. CLOUD-1227 is explicit about why: a list "stops
+    // covering the next row somebody adds, silently, in the direction that
+    // weakens the suite". The signature is unchanged so no caller has to know.
+    static NAMES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+        let mut names = vec![batten::hook::BYPASS_ENV.to_owned()];
+        if let Ok(config) = batten::config::load(&at_root("batten.toml")) {
+            names.extend(
+                config
+                    .rules
+                    .iter()
+                    .filter_map(|rule| rule.bypass_env.clone()),
+            );
+        }
+        names.sort();
+        names.dedup();
+        names
+    });
+    NAMES.clone()
 }
 
 /// The compiled binary, with the ambient environment scrubbed.
@@ -704,6 +728,16 @@ pub(crate) fn verdicts(ids: &[&str]) -> Vec<batten::verdict::DeclaredVerdict> {
 /// engine could never resolve.
 #[must_use]
 pub(crate) fn committed_patterns() -> Vec<batten::pattern::NamedPattern> {
+    // The third of CLOUD-1291's re-reads, memoized on the same reasoning: the
+    // committed file cannot change during a run, so the parse is repeated work
+    // over identical bytes. The panics above stay panics — they fire on the first
+    // call rather than on every one, which is where a reader wants them anyway.
+    static PATTERNS: std::sync::LazyLock<Vec<batten::pattern::NamedPattern>> =
+        std::sync::LazyLock::new(parse_committed_patterns);
+    PATTERNS.clone()
+}
+
+fn parse_committed_patterns() -> Vec<batten::pattern::NamedPattern> {
     let text = std::fs::read_to_string(at_root("batten.toml")).expect("batten.toml is committed");
     // `Table` rather than `Value`: this crate's `toml` parses a bare `Value` as a
     // single VALUE, so a whole document comes back as "unexpected content,
