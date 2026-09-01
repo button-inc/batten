@@ -4211,6 +4211,24 @@ severity = "deny"
 # paths it was going to accept anyway — a gate reading a pre-filtered input cannot
 # tell "nothing was added" from "the filter removed it". The depth test lives in
 # the module, where a reader can check it against Cargo's autodiscovery rule.
+# CLOUD-472. The plan a branch declared, held to its own end.
+#
+# `delta_sources` is the whole tree because the vacuity arm asks whether this
+# branch is holding ANYTHING open, and a narrower delta would hand it a
+# pre-filtered answer — a gate that cannot tell "nothing changed" from "the
+# filter removed it" is the class `test-targets` below states for its own reason.
+#
+# NO `line_sources`: the subject is the record `batten record plan` wrote and the
+# delta the engine already resolved. This row opens no file.
+[[rule]]
+id = "plan-complete"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["**"]
+module = "policy/plan-complete.rego"
+severity = "deny"
+
 [[rule]]
 id = "test-targets"
 kind = "policy"
@@ -6583,6 +6601,68 @@ precondition = "the row DOCUMENTS the change being landed, so naming its files i
 # which is free for a row you genuinely could not close and expensive for one you
 # could. That is CLOUD-514's own "the friction must sit only on the impulsive
 # path", spent where it belongs.
+# CLOUD-472. The agent's own declared work, held to its end.
+#
+# THE SENSOR WAS ALWAYS THERE. A task list is displayed every turn and is the
+# most legible statement of what an agent believes is outstanding — and nothing
+# in the tree could see it, so a branch landed with entries `pending` and every
+# gate stayed green. That is this repository's recurring defect rather than a new
+# one: `stop_nudges` rule 5 asked the right question with no exit code,
+# `ready.rs` emitted `dialect prose` with no ratchet, and `graph-check` counts a
+# `wip` in the wrong unit. A reporting surface with nothing downstream of it.
+[[verdict]]
+id = "V-PLAN-UNFINISHED"
+gloss = "an entry this branch declared is neither completed nor withdrawn"
+class = """
+The agent said it would do this and is landing without having done it. The gate \
+reads a status TOKEN and nothing else: it does not judge whether the entry was \
+worth doing, whether its text is honest, or whether the work behind `completed` \
+happened — those are model verdicts and no gate here makes one. Three exits, and \
+two of them are free: finish it, withdraw it deliberately so the store records \
+that the decision was made, or spend an admission saying why it is not this \
+branch's to finish. The store is written by `batten record plan` rather than \
+scraped from a harness's todo tool, because a hook needs a spelling per host and \
+records nothing where one is unsurveyed or switched off — a missing verb call \
+refuses everywhere instead.
+"""
+
+[[verdict.route]]
+id = "R-FINISH-IT"
+kind = "command"
+target = "do the entry, then re-record the plan with it completed"
+
+[[verdict.route]]
+id = "R-WITHDRAW-IT"
+kind = "command"
+target = "batten record plan"
+
+[[verdict.route]]
+id = "R-OVERRIDE-PLAN-UNFINISHED"
+kind = "override"
+precondition = "the entry is work this branch could not have done — it needs a decision, a mechanism, or an artifact that does not exist yet — rather than work you declared and declined to finish while holding the file open"
+
+# The anti-vacuity half, and it is not optional: a refusal over unfinished
+# entries is satisfied completely by never recording one, so silence is the
+# cheapest route past it and must be priced. Same shape as `mutate` REPORTING a
+# declared mutation whose named case does not exist rather than counting it.
+[[verdict]]
+id = "V-PLAN-UNRECORDED"
+gloss = "this branch is holding work open and declared no plan at all"
+class = """
+Not an exhortation to plan: it closes the hole the other class would otherwise \
+leave wide open, because a gate over entries left in flight costs nothing to \
+satisfy if you simply never record an entry. Gated on a NON-EMPTY diff, so it \
+prices work rather than existence and a fresh checkout is never refused — and \
+satisfied by an EMPTY record, so a genuinely trivial change costs one call \
+saying so rather than a fabricated entry, which is what a gate demanding a \
+non-empty list would have bought.
+"""
+
+[[verdict.route]]
+id = "R-RECORD-THE-PLAN"
+kind = "command"
+target = "batten record plan"
+
 [[verdict]]
 id = "V-FILED-AND-LEFT-OPEN"
 gloss = "a row this branch put on the board is neither closed here nor closed by the body"

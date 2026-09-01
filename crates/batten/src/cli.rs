@@ -821,6 +821,12 @@ pub enum RecordCommand {
         /// The ref or sha the verdict was taken against.
         reference: String,
     },
+    /// Record this branch's plan: `<id> <status>` per line, on stdin.
+    ///
+    /// No argument, for [`RecordCommand::Tool`]'s reason one layer over: the
+    /// branch is the key and the engine reads it, so a caller cannot record
+    /// against a branch it is not on.
+    Plan,
 }
 
 /// Subcommands of `receipt`.
@@ -1477,6 +1483,9 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
         ("forge", matches) => Some(RecordCommand::Forge {
             reference: matches.get_one::<String>("ref")?.clone(),
         }),
+        // No positional to read: the branch is the key and the engine resolves
+        // it, so this arm takes the sub-verb and nothing else.
+        ("plan", _) => Some(RecordCommand::Plan),
         _ => None,
     }
 }

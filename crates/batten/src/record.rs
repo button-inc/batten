@@ -199,5 +199,92 @@ pub fn run(command: crate::cli::RecordCommand, overrides: &Overrides) -> Result<
     match command {
         crate::cli::RecordCommand::Tool { id } => run_tool(&id, overrides),
         crate::cli::RecordCommand::Forge { reference } => run_forge(&reference, overrides),
+        crate::cli::RecordCommand::Plan => run_plan(),
     }
+}
+
+/// The record names this crate's own VERBS write, as opposed to the ones a
+/// `[[recorder]]` row mints from a tool envelope (CLOUD-472).
+///
+/// # Why a verb writes this at all, which is the whole design decision
+///
+/// A hook mediates a call the agent makes to somebody ELSE's tool, so it is
+/// per-harness by nature: `TaskCreate`/`TaskUpdate` here, `write_todos` on
+/// Gemini CLI, `todowrite` on `OpenCode`, `update_plan` on Codex. Recording from
+/// those envelopes needs a spelling per host, and its failure mode is the one
+/// this whole module exists to name — an unsurveyed harness, a tool a setting
+/// switched off, and a compliant agent all produce NOTHING, so the gate reads
+/// clean. `OpenCode` makes that concrete: `todowrite` is denied to subagents at
+/// session creation regardless of configuration.
+///
+/// A verb inverts the direction. The agent TELLS the engine, so a missing record
+/// refuses on every harness identically — no survey, no per-host spelling, and no
+/// setting that can quietly disarm it. Discovery still has a job (reporting which
+/// native surface exists, so a mirror can be kept for the human's benefit), but
+/// the gate reads this store and only this store.
+/// `claim` is here for a second reason worth stating: `claim check` writes it and
+/// nothing read it from a module before, but it is the honest signal for "this
+/// branch is doing tracked work". A gate that demands a plan from EVERY tree with
+/// a diff refuses every scratch fixture and every consumer checkout — measured,
+/// it reddened four `cli.rs` cases that only wanted to exercise other rules.
+/// Keyed to a claim, it asks the question exactly where the answer is owed.
+pub const VERB_WRITTEN: &[&str] = &["claim", "plan"];
+
+/// The statuses a plan entry may carry.
+///
+/// The vocabulary four harnesses already converged on, which is what makes a
+/// mirror possible in either direction — but the tokens are the ENGINE's, not any
+/// host's, so a harness that spells them differently is translated at the mirror
+/// rather than teaching this store a dialect.
+const PLAN_STATUSES: [&str; 4] = ["pending", "in_progress", "completed", "deleted"];
+
+/// Record this branch's plan: one `<id> <status>` line per entry.
+///
+/// # Errors
+///
+/// A [`UsageError`] when a line is not `<id> <status>`, when a status is not one
+/// of [`PLAN_STATUSES`], or when there is no branch to key on — a detached HEAD
+/// has nothing to record against, exactly as the claim receipt has nothing to key
+/// on there. An internal error when the store cannot be written.
+pub fn run_plan() -> Result<ExitCode> {
+    let raw = verdict_lines()?;
+    for (index, line) in raw.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut words = line.split_whitespace();
+        let (Some(_id), Some(status)) = (words.next(), words.next()) else {
+            return Err(UsageError::raise(format!(
+                "plan line {} is not `<id> <status>`",
+                index + 1
+            )));
+        };
+        // THE TOKEN, NEVER THE LINE (rule 4). An entry's id is the agent's own
+        // text and a status is a closed vocabulary, so the closed half is what a
+        // diagnostic may echo.
+        if !PLAN_STATUSES.contains(&status) {
+            return Err(UsageError::raise(format!(
+                "plan line {} carries an unknown status; one of {}",
+                index + 1,
+                PLAN_STATUSES.join(", ")
+            )));
+        }
+    }
+
+    let root = Path::new(".");
+    let git_dir = git::git_dir(root).map_err(|_| {
+        UsageError::raise(
+            "record plan: not a git repository, so there is nothing to key on".to_owned(),
+        )
+    })?;
+    let Ok(Some(branch)) = git::current_branch(root) else {
+        return Err(UsageError::raise(
+            "record plan: a detached HEAD has no branch to key the plan on".to_owned(),
+        ));
+    };
+    store(
+        &crate::recorder::record_path(&git_dir, "plan", &branch),
+        &raw,
+    )?;
+    Ok(ExitCode::Success)
 }

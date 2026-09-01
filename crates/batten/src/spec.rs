@@ -653,6 +653,12 @@ mod tests {
                 // a third row spelled the old way would be a third row to invert.
                 "record".to_owned(),
                 "record forge".to_owned(),
+                // CLOUD-472. Stated here rather than absorbed, which is what
+                // this list is for: the plan store's writer is a VERB because a
+                // recorder on the harness's own todo tool needs a spelling per
+                // host and records nothing where one is unsurveyed or switched
+                // off — so the surface grows by one row and says why.
+                "record plan".to_owned(),
                 "record tool".to_owned(),
                 // The API-compatibility noun (CLOUD-1050), ported off
                 // `mise-tasks/semver.sh` when CLOUD-1059 made editing a shell

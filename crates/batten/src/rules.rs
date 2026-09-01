@@ -5616,13 +5616,19 @@ fn run(
     // recorder is config: the fact is "what this repository's recorders
     // accumulated", so a repository declaring none has nothing to read and a
     // per-rule declaration would be a second place for the same answer to live.
-    let records = if recorders.is_empty() {
-        BTreeMap::new()
-    } else {
-        match (crate::git::git_dir(root), crate::git::current_branch(root)) {
-            (Ok(git_dir), Ok(Some(branch))) => recorder_records(&git_dir, &branch, recorders),
-            _ => BTreeMap::new(),
+    // VERB-WRITTEN STORES ARE READ UNCONDITIONALLY, which is why the guard above
+    // is no longer the whole answer (CLOUD-472). A `[[recorder]]` store exists
+    // because config declared one, so a repository declaring none has nothing to
+    // read. `crate::record::VERB_WRITTEN` is different in kind: the ENGINE owns
+    // both the writer and the reader, so there is no declaration for a consumer
+    // to forget and no config to make the gate conditional on. Reading them only
+    // when some unrelated recorder happened to be declared would make a gate's
+    // liveness depend on a table it has nothing to do with.
+    let records = match (crate::git::git_dir(root), crate::git::current_branch(root)) {
+        (Ok(git_dir), Ok(Some(branch))) => {
+            recorder_records(&git_dir, &branch, recorders, crate::record::VERB_WRITTEN)
         }
+        _ => BTreeMap::new(),
     };
 
     let inputs = RunInputs {
@@ -5879,20 +5885,31 @@ fn recorder_records(
     git_dir: &std::path::Path,
     branch: &str,
     recorders: &[crate::recorder::Declared],
+    verb_written: &[&str],
 ) -> BTreeMap<String, Vec<String>> {
     let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for recorder in recorders {
-        if found.contains_key(&recorder.record) {
+    // The declared stores first, then the engine's own. Order decides nothing —
+    // the names cannot collide, because a `[[recorder]]` naming a verb-written
+    // record would be a second writer for one store and `config lint` refuses it
+    // — but reading declared config first keeps the consumer's table the one a
+    // reader looks at when a name is ambiguous.
+    let names = recorders
+        .iter()
+        .map(|recorder| recorder.record.as_str())
+        .chain(verb_written.iter().copied());
+    for name in names {
+        if found.contains_key(name) {
             continue;
         }
-        let path = crate::recorder::record_path(git_dir, &recorder.record, branch);
+        let path = crate::recorder::record_path(git_dir, name, branch);
+        // ABSENT STAYS ABSENT, and that is the three-valued read this whole
+        // surface rests on: an unreadable store leaves the key out of the map so
+        // a module sees *does not hold*, where an empty file is a key whose value
+        // is the empty list — "nothing was recorded" rather than "nothing looked".
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
-        found.insert(
-            recorder.record.clone(),
-            text.lines().map(str::to_owned).collect(),
-        );
+        found.insert(name.to_owned(), text.lines().map(str::to_owned).collect());
     }
     found
 }
