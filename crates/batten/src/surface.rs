@@ -973,6 +973,25 @@ const OVERRIDE_VERDICT: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `<branch>`: the branch a lease verb is asked about.
+///
+/// **Positional and REQUIRED, and the requirement is the point.** A lease verb
+/// with no branch cannot answer, and a verb that cannot answer must say so rather
+/// than defaulting to either verdict — defaulting to the checkout's own branch
+/// would be worse than either, since the caller may legitimately be asking on
+/// behalf of a checkout this process is not in.
+const LEASE_BRANCH: FlagDecl = FlagDecl::positional("branch", "The branch being asked about");
+
+/// `<field>`: which advisory field `lease peek` prints.
+///
+/// A closed set, because the whole value of `peek` over reading the status prose
+/// is that a caller can ACT on the answer: a field name that is merely echoed back
+/// would make an unknown one print nothing and read as an unset field.
+const LEASE_FIELD: FlagDecl = FlagDecl::positional(
+    "field",
+    "Which advisory field to print: branch, head or next",
+);
+
 /// `--subject <s>`: the gate's own canonical spelling of what it refused about.
 const OVERRIDE_SUBJECT: FlagDecl = FlagDecl {
     id: "subject",
@@ -3450,6 +3469,122 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         effect: Effect::Destructive,
         flags: &[DRY_RUN],
+    },
+    // CLOUD-1274. THE LANDING LEASE, and the noun is `unclassified` for
+    // `provision`'s reason rather than `policy`'s: the subtree writes — a
+    // compare-and-swap over a remote ref is a write to somebody else's server —
+    // and a write-bearing subtree under a `read` noun leaks onto the derived
+    // allowlist for any consumer that treats an entry as a prefix (CLOUD-90).
+    CommandDecl {
+        path: "lease",
+        about: "The landing lease: one branch spends a matrix at a time",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `read`, and it is the ONE row a GitHub runner calls. Every other verb here
+    // answers about a CLONE — ownership is a holder id minted per clone, which a
+    // runner has nothing to compare against — so this is the only question the
+    // thing spending the money can ask for itself.
+    //
+    // **The predecessor's own exit vocabulary is NOT carried, and dropping it is
+    // the correction rather than a loss.** `land-lock authorises` answered `0`
+    // run / `3` stop / `2` could not look, because its file's `1` already meant
+    // "held by someone else". The engine has one table and no per-verb exception
+    // (non-negotiable rule 5): `2` is the policy verdict everywhere and `1`/`3`
+    // are the only codes a Batten failure produces. So a stop is `2` and a lease
+    // that cannot be read is `3`, which is what every other verb here already
+    // means by those codes — and a CI caller keying on the old numbers reads a
+    // refusal as an error, which is why the workflow moves in the same change.
+    CommandDecl {
+        path: "lease authorises",
+        about: "May this branch spend a matrix right now?",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[LEASE_BRANCH],
+    },
+    // `read`. Prose for a human, and `-J` for everyone else — which is what stops
+    // a caller parsing the sentence and turning a message into an interface, where
+    // the next edit to the wording would be a silent breakage.
+    CommandDecl {
+        path: "lease status",
+        about: "Report who holds the lease, for how much longer, and who is admitted behind them",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
+    // `read`. ONE ADVISORY FIELD, ON STDOUT, FOR A CALLER THAT MEANS TO ACT ON IT
+    // — the machine-readable half of `status` for the fields a waiter reads.
+    // Silent and `0` when the lease is absent, released or expired: "no lease
+    // names a head" is a legitimate reading a waiter handles by staying on trunk,
+    // not an error it should report.
+    CommandDecl {
+        path: "lease peek",
+        about: "Print one advisory field of the held lease, or nothing",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[LEASE_FIELD],
+    },
+    // `read`, and it is a read despite being the fence a holder checks before it
+    // acts: it mints nothing and swaps nothing. It demands MARGIN rather than
+    // merely a lease that has not expired — "not expired" is a fact about the
+    // instant of the check, and the caller then goes on to post a comment or wait
+    // for a bot, so a lease with one second left passes and is gone before the
+    // action it authorised takes effect. One beat is the right margin because it
+    // is the interval at which the holder proves it is alive.
+    CommandDecl {
+        path: "lease held",
+        about: "Is this clone's lease still held, with a beat of margin to act on?",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[],
+    },
+    // `write`: a compare-and-swap over a remote ref.
+    CommandDecl {
+        path: "lease acquire",
+        about: "Take the lease, waiting out a live holder and reaping a dead one",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[LEASE_BRANCH],
+    },
+    // `write`. One-shot, as against `hold`'s loop.
+    CommandDecl {
+        path: "lease renew",
+        about: "Extend this clone's lease by one term",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
+    // `write`. The heartbeat, which a caller backgrounds for the length of a hold
+    // and kills from the same trap that releases.
+    CommandDecl {
+        path: "lease hold",
+        about: "Renew this clone's lease every beat until it is lost or the hold ends",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
+    // `write` rather than `destructive`, and the distinction is the tombstone's:
+    // a release CASes the expiry to a sentinel and deletes nothing, so there is no
+    // ref to recover and nothing a `-y` would be protecting. Releasing a lease
+    // this clone does not hold is not an error either — the trap that calls it
+    // fires on every exit path, including ones that never acquired.
+    CommandDecl {
+        path: "lease release",
+        about: "Hand the lease back, leaving a tombstone rather than deleting the ref",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
+    // `write`. The second matrix, and the only one: admitting one successor while
+    // the holder is still merging is what overlaps the window in which the queue
+    // would otherwise be cold.
+    CommandDecl {
+        path: "lease reserve",
+        about: "Take the one slot behind the current holder",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[LEASE_BRANCH],
     },
 ];
 

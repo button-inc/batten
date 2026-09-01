@@ -3,19 +3,15 @@ source: crates/batten/tests/it/snapshots.rs
 expression: stdout_of(&output)
 ---
 {
-  "spec_version": 1,
   "path": "batten",
-  "id": null,
   "about": "Agent-era completion gate: repo-state conformance checks enforced at the agent's tool call.",
   "effect": "ask",
-  "data_channel": false,
   "flags": [
     {
       "name": "config_from",
       "short": null,
       "long": "config-from",
       "takes_value": true,
-      "positional": false,
       "help": "Read the committed config from a git ref (e.g. origin/main) instead of the working tree"
     },
     {
@@ -23,7 +19,6 @@ expression: stdout_of(&output)
       "short": null,
       "long": "config-in",
       "takes_value": true,
-      "positional": false,
       "help": "Read the committed config from this directory instead of the directory being judged"
     },
     {
@@ -31,7 +26,6 @@ expression: stdout_of(&output)
       "short": null,
       "long": "debug",
       "takes_value": false,
-      "positional": false,
       "help": "Add resolution detail"
     },
     {
@@ -39,7 +33,6 @@ expression: stdout_of(&output)
       "short": null,
       "long": "fail-on-warning",
       "takes_value": false,
-      "positional": false,
       "help": "Promote a warn-severity finding to a violation (an override may only turn this on)"
     },
     {
@@ -47,7 +40,6 @@ expression: stdout_of(&output)
       "short": null,
       "long": "log-level",
       "takes_value": true,
-      "positional": false,
       "help": "Set the verbosity rung by name"
     },
     {
@@ -55,7 +47,6 @@ expression: stdout_of(&output)
       "short": null,
       "long": "no-color",
       "takes_value": false,
-      "positional": false,
       "help": "Never colour stderr, whatever it is attached to"
     },
     {
@@ -63,7 +54,6 @@ expression: stdout_of(&output)
       "short": null,
       "long": "no-input",
       "takes_value": false,
-      "positional": false,
       "help": "Never prompt; treat the run as unattended"
     },
     {
@@ -71,7 +61,6 @@ expression: stdout_of(&output)
       "short": "q",
       "long": "quiet",
       "takes_value": false,
-      "positional": false,
       "help": "Suppress ordinary progress (repeatable: -qq is silent)"
     },
     {
@@ -79,7 +68,6 @@ expression: stdout_of(&output)
       "short": null,
       "long": "silent",
       "takes_value": false,
-      "positional": false,
       "help": "Say nothing but a verdict or a usage error"
     },
     {
@@ -87,7 +75,6 @@ expression: stdout_of(&output)
       "short": null,
       "long": "strictness",
       "takes_value": true,
-      "positional": false,
       "help": "Raise how strictly gates apply (an override may only tighten policy)"
     },
     {
@@ -95,7 +82,6 @@ expression: stdout_of(&output)
       "short": null,
       "long": "trace",
       "takes_value": false,
-      "positional": false,
       "help": "Add everything"
     },
     {
@@ -103,7 +89,6 @@ expression: stdout_of(&output)
       "short": "v",
       "long": "verbose",
       "takes_value": false,
-      "positional": false,
       "help": "Explain what is being checked (repeatable: -vv is debug)"
     },
     {
@@ -111,32 +96,26 @@ expression: stdout_of(&output)
       "short": "y",
       "long": "yes",
       "takes_value": false,
-      "positional": false,
       "help": "Confirm a destructive operation that would otherwise refuse"
     }
   ],
   "subcommands": [
     {
       "path": "attribution",
-      "id": "attribution",
       "about": "What produced commits may carry about the tooling that made them",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "attribution check",
-          "id": "attribution.check",
           "about": "Refuse vendor authorship, branding or session links in commit metadata",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "harness",
               "short": null,
               "long": "harness",
               "takes_value": true,
-              "positional": false,
               "help": "Report the attribution capabilities this host declares, and capture at that fidelity"
             },
             {
@@ -144,7 +123,6 @@ expression: stdout_of(&output)
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             },
             {
@@ -152,7 +130,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "message",
               "takes_value": true,
-              "positional": false,
               "help": "Judge one pending commit message file, before the commit exists"
             },
             {
@@ -160,7 +137,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": null,
               "takes_value": true,
-              "positional": true,
               "help": "Judge every non-merge commit in this range (<base>..<head>)"
             }
           ],
@@ -168,10 +144,8 @@ expression: stdout_of(&output)
         },
         {
           "path": "attribution identity",
-          "id": "attribution.identity",
           "about": "Set this clone's repo-local git identity when it is unset or denied",
           "effect": "write",
-          "data_channel": false,
           "flags": [],
           "subcommands": []
         }
@@ -179,17 +153,14 @@ expression: stdout_of(&output)
     },
     {
       "path": "baseline",
-      "id": "baseline",
       "about": "Record the findings that already exist, so only new ones fail",
       "effect": "write",
-      "data_channel": false,
       "flags": [
         {
           "name": "dry_run",
           "short": "n",
           "long": "dry-run",
           "takes_value": false,
-          "positional": false,
           "help": "Preview what would be applied, writing nothing"
         },
         {
@@ -197,7 +168,6 @@ expression: stdout_of(&output)
           "short": null,
           "long": "prune",
           "takes_value": false,
-          "positional": false,
           "help": "Drop baseline entries whose finding no longer exists, and ratchet reduced counts down"
         }
       ],
@@ -205,25 +175,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "capture",
-      "id": "capture",
       "about": "Captured command output: navigate what `exec` already ran, without running it again",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "capture find",
-          "id": "capture.find",
           "about": "Resolve a stored tool response by the key it carries, with no handle to look up first",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "json",
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             },
             {
@@ -231,7 +196,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": null,
               "takes_value": true,
-              "positional": true,
               "help": "The key the response must carry, e.g. an issue id"
             },
             {
@@ -239,7 +203,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "key-at",
               "takes_value": true,
-              "positional": false,
               "help": "The dotted path the key sits at in the response"
             },
             {
@@ -247,7 +210,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "raw",
               "takes_value": false,
-              "positional": false,
               "help": "Write the selected bytes to stdout verbatim, with no decode and no added newline"
             },
             {
@@ -255,7 +217,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "tool",
               "takes_value": true,
-              "positional": false,
               "help": "The tool whose response to resolve, matched whole or as a `__`-delimited final segment; repeatable"
             }
           ],
@@ -263,17 +224,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "capture list",
-          "id": "capture.list",
           "about": "List this repository's captures as handles, in a fixed order",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "calls",
               "short": null,
               "long": "calls",
               "takes_value": false,
-              "positional": false,
               "help": "List recorded calls instead of stored captures, in a byte-stable order"
             },
             {
@@ -281,7 +239,6 @@ expression: stdout_of(&output)
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             },
             {
@@ -289,7 +246,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "stream",
               "takes_value": true,
-              "positional": false,
               "help": "Only captures of this stream"
             }
           ],
@@ -297,17 +253,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "capture prune",
-          "id": "capture.prune",
           "about": "Remove this repository's captures — the one removal path; captures never expire on their own",
           "effect": "destructive",
-          "data_channel": false,
           "flags": [
             {
               "name": "dry_run",
               "short": "n",
               "long": "dry-run",
               "takes_value": false,
-              "positional": false,
               "help": "Preview what would be applied, writing nothing"
             }
           ],
@@ -315,17 +268,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "capture show",
-          "id": "capture.show",
           "about": "Print a capture's pointer, or the lines a selection asks for, with no second run",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "bytes",
               "short": null,
               "long": "bytes",
               "takes_value": true,
-              "positional": false,
               "help": "A 0-indexed half-open byte range, `FROM:TO`, either side omittable, clamped to the capture"
             },
             {
@@ -333,7 +283,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "grep",
               "takes_value": true,
-              "positional": false,
               "help": "Only lines containing this literal substring"
             },
             {
@@ -341,7 +290,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": null,
               "takes_value": true,
-              "positional": true,
               "help": "The `<stream>:<digest>` handle to read"
             },
             {
@@ -349,7 +297,6 @@ expression: stdout_of(&output)
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             },
             {
@@ -357,7 +304,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "lines",
               "takes_value": true,
-              "positional": false,
               "help": "A 1-indexed inclusive line range, `FROM:TO`, clamped to the capture"
             },
             {
@@ -365,7 +311,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "raw",
               "takes_value": false,
-              "positional": false,
               "help": "Write the selected bytes to stdout verbatim, with no decode and no added newline"
             }
           ],
@@ -375,17 +320,14 @@ expression: stdout_of(&output)
     },
     {
       "path": "check",
-      "id": "check",
       "about": "Run the applicable read-only gates against the repository",
       "effect": "read",
-      "data_channel": true,
       "flags": [
         {
           "name": "json",
           "short": "J",
           "long": "json",
           "takes_value": false,
-          "positional": false,
           "help": "Emit byte-stable JSON instead of pointer lines"
         },
         {
@@ -393,7 +335,6 @@ expression: stdout_of(&output)
           "short": null,
           "long": "rule",
           "takes_value": true,
-          "positional": false,
           "help": "Run only the declared rule with this id"
         },
         {
@@ -401,7 +342,6 @@ expression: stdout_of(&output)
           "short": null,
           "long": "since",
           "takes_value": true,
-          "positional": false,
           "help": "Judge only the paths changed against this rev"
         },
         {
@@ -409,7 +349,6 @@ expression: stdout_of(&output)
           "short": null,
           "long": "staged",
           "takes_value": false,
-          "positional": false,
           "help": "Judge only the paths staged in the git index"
         }
       ],
@@ -417,25 +356,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "checks",
-      "id": "checks",
       "about": "Whether a commit's check runs answer the question a landing depends on",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "checks green",
-          "id": "checks.green",
           "about": "Refuse a head whose required checks are red, still running, or not yet registered",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "absent_ok",
               "short": null,
               "long": "absent-ok",
               "takes_value": true,
-              "positional": false,
               "help": "Comma-separated check names for which having no run at all is a legitimate reading"
             },
             {
@@ -443,7 +377,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "answered",
               "takes_value": true,
-              "positional": false,
               "help": "Comma-separated conclusions that constitute an answer; anything else is not yet one"
             },
             {
@@ -451,7 +384,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "fanin",
               "takes_value": true,
-              "positional": false,
               "help": "The fan-in check whose failure a cancelled sibling can manufacture"
             },
             {
@@ -459,7 +391,6 @@ expression: stdout_of(&output)
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             },
             {
@@ -467,7 +398,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "required",
               "takes_value": true,
-              "positional": false,
               "help": "Comma-separated check names that carry a verdict about this repository"
             }
           ],
@@ -477,10 +407,8 @@ expression: stdout_of(&output)
     },
     {
       "path": "claim",
-      "id": "claim",
       "about": "Whether the issue you are about to pull is actually unclaimed",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
@@ -512,17 +440,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "claim check",
-          "id": "claim.check",
           "about": "Refuse a pull of an issue somebody is already on, and mint the receipt when it is free",
           "effect": "write",
-          "data_channel": true,
           "flags": [
             {
               "name": "adopt",
               "short": null,
               "long": "adopt",
               "takes_value": false,
-              "positional": false,
               "help": "Re-key an orphaned claim receipt onto this branch instead of judging a payload"
             },
             {
@@ -530,7 +455,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "adopt-from",
               "takes_value": true,
-              "positional": false,
               "help": "The branch name the receipt being adopted was minted under"
             },
             {
@@ -538,7 +462,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "bypass-sequence",
               "takes_value": false,
-              "positional": false,
               "help": "Skip the refinement-sequence rules, recorded in the receipt as a bypass"
             },
             {
@@ -546,7 +469,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "issue",
               "takes_value": true,
-              "positional": false,
               "help": "Resolve the payload from the capture store by this issue key instead of reading stdin"
             },
             {
@@ -554,7 +476,6 @@ expression: stdout_of(&output)
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             },
             {
@@ -562,7 +483,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "takeover",
               "takes_value": false,
-              "positional": false,
               "help": "Claim over the competitor refusals, recording in the receipt which ones were overridden"
             }
           ],
@@ -572,25 +492,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "commit",
-      "id": "commit",
       "about": "The shape a commit must take here: what its subject may say",
       "effect": "read",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "commit check",
-          "id": "commit.check",
           "about": "Refuse a commit subject that does not follow the configured convention",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "json",
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             },
             {
@@ -598,7 +513,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "message",
               "takes_value": true,
-              "positional": false,
               "help": "Judge one pending commit message file, before the commit exists"
             },
             {
@@ -606,7 +520,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": null,
               "takes_value": true,
-              "positional": true,
               "help": "Judge every non-merge commit in this range (<base>..<head>)"
             }
           ],
@@ -616,25 +529,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "config",
-      "id": "config",
       "about": "Inspect configuration",
       "effect": "read",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "config deprecations",
-          "id": "config.deprecations",
           "about": "Report schema keys removed since a published release with no deprecation window",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "against",
               "short": null,
               "long": null,
               "takes_value": true,
-              "positional": true,
               "help": "The git ref whose published schema is the baseline (e.g. v0.0.111)"
             },
             {
@@ -642,7 +550,6 @@ expression: stdout_of(&output)
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
@@ -650,17 +557,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "config epoch",
-          "id": "config.epoch",
           "about": "Print the content hash of the governing config surface",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "json",
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             },
             {
@@ -668,7 +572,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "no-cache",
               "takes_value": false,
-              "positional": false,
               "help": "Recompute the epoch from the tracked files' bytes, ignoring the cached value"
             }
           ],
@@ -676,17 +579,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "config lint",
-          "id": "config.lint",
           "about": "Report policy smells in batten.toml (any smell is a violation)",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "host_rules",
               "short": null,
               "long": "host-rules",
               "takes_value": true,
-              "positional": false,
               "help": "Compare the committed [ci] table against a host ruleset payload (path, or - for stdin)"
             },
             {
@@ -694,7 +594,6 @@ expression: stdout_of(&output)
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
@@ -702,17 +601,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "config show",
-          "id": "config.show",
           "about": "Print the effective configuration",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "json",
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
@@ -722,25 +618,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "defects",
-      "id": "defects",
       "about": "The append-only defect ledger: the lessons this repository has already paid for",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "defects add",
-          "id": "defects.add",
           "about": "Append defect records read as JSONL on stdin",
           "effect": "write",
-          "data_channel": false,
           "flags": [
             {
               "name": "dry_run",
               "short": "n",
               "long": "dry-run",
               "takes_value": false,
-              "positional": false,
               "help": "Preview what would be applied, writing nothing"
             }
           ],
@@ -748,17 +639,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "defects query",
-          "id": "defects.query",
           "about": "List recorded defects, as pointers",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "class",
               "short": null,
               "long": "class",
               "takes_value": true,
-              "positional": false,
               "help": "Only records in this taxonomy class"
             },
             {
@@ -766,7 +654,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "id",
               "takes_value": true,
-              "positional": false,
               "help": "Only the record with this id"
             },
             {
@@ -774,7 +661,6 @@ expression: stdout_of(&output)
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             },
             {
@@ -782,7 +668,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "ungated",
               "takes_value": false,
-              "positional": false,
               "help": "Only records no rule or gate discharges yet"
             }
           ],
@@ -792,25 +677,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "design",
-      "id": "design",
       "about": "Design-evidence claims: the integrity of the record behind a decision",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "design audit",
-          "id": "design.audit",
           "about": "Audit a JSONL design-evidence claim stream on stdin for record integrity",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "json",
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
@@ -820,34 +700,28 @@ expression: stdout_of(&output)
     },
     {
       "path": "doctor",
-      "id": "doctor",
       "about": "Diagnose whether Batten can run in this repository",
       "effect": "read",
-      "data_channel": true,
       "flags": [
         {
           "name": "json",
           "short": "J",
           "long": "json",
           "takes_value": false,
-          "positional": false,
           "help": "Emit byte-stable JSON instead of pointer lines"
         }
       ],
       "subcommands": [
         {
           "path": "doctor hooks",
-          "id": "doctor.hooks",
           "about": "Diagnose whether batten is wired on every hook surface of every harness",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "json",
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
@@ -857,17 +731,14 @@ expression: stdout_of(&output)
     },
     {
       "path": "enforce",
-      "id": "enforce",
       "about": "Run every configured rule, including kinds that execute a configured command",
       "effect": "unclassified",
-      "data_channel": true,
       "flags": [
         {
           "name": "json",
           "short": "J",
           "long": "json",
           "takes_value": false,
-          "positional": false,
           "help": "Emit byte-stable JSON instead of pointer lines"
         }
       ],
@@ -875,17 +746,14 @@ expression: stdout_of(&output)
     },
     {
       "path": "exec",
-      "id": "exec",
       "about": "Run a command — or a `:::` bundle — and report a pointer to what it wrote",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [
         {
           "name": "capture_only",
           "short": null,
           "long": "capture-only",
           "takes_value": false,
-          "positional": false,
           "help": "Store the child's streams and report their handles instead of passing the bytes through"
         },
         {
@@ -893,7 +761,6 @@ expression: stdout_of(&output)
           "short": null,
           "long": null,
           "takes_value": true,
-          "positional": true,
           "help": "The command to run, after `--`, with its own arguments intact"
         },
         {
@@ -901,7 +768,6 @@ expression: stdout_of(&output)
           "short": null,
           "long": "continue-on-error",
           "takes_value": false,
-          "positional": false,
           "help": "Run the rest of a `:::` bundle after a command fails"
         },
         {
@@ -909,7 +775,6 @@ expression: stdout_of(&output)
           "short": null,
           "long": "format",
           "takes_value": true,
-          "positional": false,
           "help": "How Batten's own record is encoded (hk's axis)"
         },
         {
@@ -917,7 +782,6 @@ expression: stdout_of(&output)
           "short": null,
           "long": "jobs",
           "takes_value": true,
-          "positional": false,
           "help": "How many of a `:::` bundle's commands run at once"
         },
         {
@@ -925,7 +789,6 @@ expression: stdout_of(&output)
           "short": null,
           "long": "style",
           "takes_value": true,
-          "positional": false,
           "help": "How a teed child's bytes are presented, and whose output is suppressed (mise's axis)"
         },
         {
@@ -933,7 +796,6 @@ expression: stdout_of(&output)
           "short": null,
           "long": "tee",
           "takes_value": false,
-          "positional": false,
           "help": "Copy the child's streams onto Batten's own, as well as capturing them"
         }
       ],
@@ -941,25 +803,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "generate",
-      "id": "generate",
       "about": "Emit artifacts derived from the command spec, on stdout",
       "effect": "read",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "generate completions",
-          "id": "generate.completions",
           "about": "Emit the shell completion script for one shell",
           "effect": "read",
-          "data_channel": false,
           "flags": [
             {
               "name": "shell",
               "short": null,
               "long": "shell",
               "takes_value": true,
-              "positional": false,
               "help": "The shell whose completion script to emit"
             }
           ],
@@ -967,17 +824,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "generate hooks",
-          "id": "generate.hooks",
           "about": "Emit one harness's hook registrations, on stdout",
           "effect": "read",
-          "data_channel": false,
           "flags": [
             {
               "name": "harness",
               "short": null,
               "long": "harness",
               "takes_value": true,
-              "positional": false,
               "help": "The harness whose hook registrations to emit"
             }
           ],
@@ -985,17 +839,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "generate man",
-          "id": "generate.man",
           "about": "Emit the roff man page for one command, on stdout",
           "effect": "read",
-          "data_channel": false,
           "flags": [
             {
               "name": "command",
               "short": null,
               "long": null,
               "takes_value": true,
-              "positional": true,
               "help": "The root-relative command path to document ('config show'); omit for the root page"
             }
           ],
@@ -1003,26 +854,21 @@ expression: stdout_of(&output)
         },
         {
           "path": "generate markdown",
-          "id": "generate.markdown",
           "about": "Emit the whole command surface as one markdown reference, on stdout",
           "effect": "read",
-          "data_channel": false,
           "flags": [],
           "subcommands": []
         },
         {
           "path": "generate schema",
-          "id": "generate.schema",
           "about": "Emit the JSON Schema for a config or policy-input surface, derived from the types that define it",
           "effect": "read",
-          "data_channel": false,
           "flags": [
             {
               "name": "surface",
               "short": null,
               "long": "surface",
               "takes_value": true,
-              "positional": false,
               "help": "Which surface to describe: the committed authority, the override layer, or a policy-input document"
             }
           ],
@@ -1032,17 +878,14 @@ expression: stdout_of(&output)
     },
     {
       "path": "hook",
-      "id": "hook",
       "about": "Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [
         {
           "name": "harness",
           "short": null,
           "long": "harness",
           "takes_value": true,
-          "positional": false,
           "help": "The harness whose payload to decode and whose decision channel to answer in"
         }
       ],
@@ -1050,43 +893,146 @@ expression: stdout_of(&output)
     },
     {
       "path": "init",
-      "id": "init",
       "about": "Write a starter batten.toml, refusing to overwrite an existing one",
       "effect": "write",
-      "data_channel": false,
       "flags": [
         {
           "name": "dry_run",
           "short": "n",
           "long": "dry-run",
           "takes_value": false,
-          "positional": false,
           "help": "Preview what would be applied, writing nothing"
         }
       ],
       "subcommands": []
     },
     {
+      "path": "lease",
+      "about": "The landing lease: one branch spends a matrix at a time",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "lease acquire",
+          "about": "Take the lease, waiting out a live holder and reaping a dead one",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "branch",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The branch being asked about"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "lease authorises",
+          "about": "May this branch spend a matrix right now?",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "branch",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The branch being asked about"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "lease held",
+          "about": "Is this clone's lease still held, with a beat of margin to act on?",
+          "effect": "read",
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "lease hold",
+          "about": "Renew this clone's lease every beat until it is lost or the hold ends",
+          "effect": "write",
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "lease peek",
+          "about": "Print one advisory field of the held lease, or nothing",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "field",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "Which advisory field to print: branch, head or next"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "lease release",
+          "about": "Hand the lease back, leaving a tombstone rather than deleting the ref",
+          "effect": "write",
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "lease renew",
+          "about": "Extend this clone's lease by one term",
+          "effect": "write",
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "lease reserve",
+          "about": "Take the one slot behind the current holder",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "branch",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The branch being asked about"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "lease status",
+          "about": "Report who holds the lease, for how much longer, and who is admitted behind them",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "lint",
-      "id": "lint",
       "about": "Lint an artifact against a declared schema",
       "effect": "read",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "lint brief",
-          "id": "lint.brief",
           "about": "Check a delegation brief against the handoff schema (any missing section is a violation)",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "brief",
               "short": null,
               "long": null,
               "takes_value": true,
-              "positional": true,
               "help": "The brief to read; omitted or `-` reads stdin"
             },
             {
@@ -1094,7 +1040,6 @@ expression: stdout_of(&output)
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
@@ -1104,25 +1049,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "mcp",
-      "id": "mcp",
       "about": "Dispatch a declared MCP call and hand back a reduction instead of the payload",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "mcp call",
-          "id": "mcp.call",
           "about": "Dispatch one declared method, store the response, and print the declared reduction",
           "effect": "unclassified",
-          "data_channel": false,
           "flags": [
             {
               "name": "method",
               "short": null,
               "long": null,
               "takes_value": true,
-              "positional": true,
               "help": "The method to call"
             },
             {
@@ -1130,7 +1070,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": null,
               "takes_value": true,
-              "positional": true,
               "help": "The method's arguments, as a JSON object; omitted is `{}`"
             },
             {
@@ -1138,7 +1077,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": null,
               "takes_value": true,
-              "positional": true,
               "help": "The server to dispatch to, as a `[[mcp.source]]` names it"
             }
           ],
@@ -1148,27 +1086,21 @@ expression: stdout_of(&output)
     },
     {
       "path": "mutate",
-      "id": "mutate",
       "about": "Decide whether this repository's gates discriminate, rather than merely parse",
       "effect": "write",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "mutate census",
-          "id": "mutate.census",
           "about": "Report every gate in the tree that is neither mutation-enforced nor carrying a filed exemption",
           "effect": "read",
-          "data_channel": false,
           "flags": [],
           "subcommands": []
         },
         {
           "path": "mutate sweep",
-          "id": "mutate.sweep",
           "about": "Apply every declared mutation to its source and report the ones its declared suite did not catch",
           "effect": "write",
-          "data_channel": false,
           "flags": [],
           "subcommands": []
         }
@@ -1176,25 +1108,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "override",
-      "id": "override",
       "about": "Issued admissions: an override is a record, never a variable somebody knows",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "override request",
-          "id": "override.request",
           "about": "Answer a class's declared precondition and receive an admission for one situation",
           "effect": "write",
-          "data_channel": false,
           "flags": [
             {
               "name": "rule",
               "short": null,
               "long": "rule",
               "takes_value": true,
-              "positional": false,
               "help": "The rule whose refusal is being overridden"
             },
             {
@@ -1202,7 +1129,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "subject",
               "takes_value": true,
-              "positional": false,
               "help": "The gate's canonical subject, exactly as its refusal names it"
             },
             {
@@ -1210,7 +1136,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "verdict",
               "takes_value": true,
-              "positional": false,
               "help": "The verdict token that refusal carries, e.g. diff ship early"
             }
           ],
@@ -1218,17 +1143,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "override spend",
-          "id": "override.spend",
           "about": "Spend an issued admission against the situation it was issued for",
           "effect": "write",
-          "data_channel": false,
           "flags": [
             {
               "name": "admission",
               "short": null,
               "long": "admission",
               "takes_value": true,
-              "positional": false,
               "help": "The admission address to spend"
             },
             {
@@ -1236,7 +1158,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "rule",
               "takes_value": true,
-              "positional": false,
               "help": "The rule whose refusal is being overridden"
             },
             {
@@ -1244,7 +1165,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "subject",
               "takes_value": true,
-              "positional": false,
               "help": "The gate's canonical subject, exactly as its refusal names it"
             },
             {
@@ -1252,7 +1172,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "verdict",
               "takes_value": true,
-              "positional": false,
               "help": "The verdict token that refusal carries, e.g. diff ship early"
             }
           ],
@@ -1262,25 +1181,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "payload",
-      "id": "payload",
       "about": "Read a hook payload from stdin",
       "effect": "read",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "payload field",
-          "id": "payload.field",
           "about": "Print one field of a hook payload read from stdin, for a shell hook that must not depend on jq",
           "effect": "read",
-          "data_channel": false,
           "flags": [
             {
               "name": "harness",
               "short": null,
               "long": "harness",
               "takes_value": true,
-              "positional": false,
               "help": "The harness whose payload dialect to decode"
             },
             {
@@ -1288,7 +1202,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "name",
               "takes_value": true,
-              "positional": false,
               "help": "Which payload field to print; an allowlist, never a JSON path"
             }
           ],
@@ -1298,25 +1211,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "perf",
-      "id": "perf",
       "about": "Measure this repository's own invocation cost",
       "effect": "write",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "perf pair",
-          "id": "perf.pair",
           "about": "Measure this branch and its merge base back to back on one machine, and print both arms as paired records",
           "effect": "write",
-          "data_channel": false,
           "flags": [
             {
               "name": "null",
               "short": null,
               "long": "null",
               "takes_value": false,
-              "positional": false,
               "help": "Measure HEAD against itself, so the ratio is the noise floor rather than a comparison"
             }
           ],
@@ -1326,25 +1234,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "policy",
-      "id": "policy",
       "about": "Inspect the thresholds and path sets this repository holds itself to",
       "effect": "read",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "policy budget",
-          "id": "policy.budget",
           "about": "Judge the always-loaded instruction set against its declared token budget",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "json",
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
@@ -1352,17 +1255,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "policy explain",
-          "id": "policy.explain",
           "about": "Resolve a verdict token to its class definition and the routes out of it",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "json",
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             },
             {
@@ -1370,7 +1270,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": null,
               "takes_value": true,
-              "positional": true,
               "help": "The verdict token to resolve, e.g. task name undefined"
             }
           ],
@@ -1378,17 +1277,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "policy hooks",
-          "id": "policy.hooks",
           "about": "Judge this session's hook output against its declared per-session budget",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "json",
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
@@ -1396,17 +1292,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "policy test",
-          "id": "policy.test",
           "about": "Run each registered module's own `test_` rules and report the predicates none exercised",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "json",
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
@@ -1414,17 +1307,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "policy tools",
-          "id": "policy.tools",
           "about": "Print the tool names the mediated-call rows decide, one per line",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "json",
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
@@ -1434,10 +1324,8 @@ expression: stdout_of(&output)
     },
     {
       "path": "pr",
-      "id": "pr",
       "about": "The pull request a landing drives, and the answers it waits on",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
@@ -1540,17 +1428,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "pr watch",
-          "id": "pr.watch",
           "about": "Poll a head's check runs until the required set answers, then report the verdict",
           "effect": "unclassified",
-          "data_channel": false,
           "flags": [
             {
               "name": "absent_ok",
               "short": null,
               "long": "absent-ok",
               "takes_value": true,
-              "positional": false,
               "help": "Comma-separated check names for which having no run at all is a legitimate reading"
             },
             {
@@ -1558,7 +1443,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "answered",
               "takes_value": true,
-              "positional": false,
               "help": "Comma-separated conclusions that constitute an answer; anything else is not yet one"
             },
             {
@@ -1566,7 +1450,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "fanin",
               "takes_value": true,
-              "positional": false,
               "help": "The fan-in check whose failure a cancelled sibling can manufacture"
             },
             {
@@ -1574,7 +1457,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "interval",
               "takes_value": true,
-              "positional": false,
               "help": "Seconds between requests; a server-requested floor raises it and nothing lowers it"
             },
             {
@@ -1582,7 +1464,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "progress",
               "takes_value": true,
-              "positional": false,
               "help": "Program to record the poll's tick and reading-change signals"
             },
             {
@@ -1590,7 +1471,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "progress-id",
               "takes_value": true,
-              "positional": false,
               "help": "The identity the progress recorder keys its entries on"
             },
             {
@@ -1598,7 +1478,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "repo",
               "takes_value": true,
-              "positional": false,
               "help": "The repository to read, in the forge client's own spelling"
             },
             {
@@ -1606,7 +1485,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "required",
               "takes_value": true,
-              "positional": false,
               "help": "Comma-separated check names that carry a verdict about this repository"
             },
             {
@@ -1614,7 +1492,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "sha",
               "takes_value": true,
-              "positional": false,
               "help": "The commit whose check runs to read"
             }
           ],
@@ -1624,25 +1501,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "provision",
-      "id": "provision",
       "about": "Pinned tools this repository provisions, cached out of tree",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "provision apply",
-          "id": "provision.apply",
           "about": "Fetch, verify against the pinned checksum, and install into the out-of-tree cache",
           "effect": "write",
-          "data_channel": false,
           "flags": [
             {
               "name": "dry_run",
               "short": "n",
               "long": "dry-run",
               "takes_value": false,
-              "positional": false,
               "help": "Preview what would be applied, writing nothing"
             }
           ],
@@ -1650,17 +1522,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "provision status",
-          "id": "provision.status",
           "about": "Report which provisioned tools do not match the manifest",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "json",
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
@@ -1670,25 +1539,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "ready",
-      "id": "ready",
       "about": "Whether an issue's Ready block satisfies the checkable clauses of the gate",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "ready lint",
-          "id": "ready.lint",
           "about": "Refuse an issue whose Ready block fails a checkable clause of the Definition of Ready",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "issue",
               "short": null,
               "long": "issue",
               "takes_value": true,
-              "positional": false,
               "help": "Resolve the payload from the capture store by this issue key instead of reading stdin"
             },
             {
@@ -1696,7 +1560,6 @@ expression: stdout_of(&output)
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
@@ -1706,25 +1569,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "receipt",
-      "id": "receipt",
       "about": "Verification receipts: SHA-keyed claims a named check passed, invalidated by git facts",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "receipt record",
-          "id": "receipt.record",
           "about": "Record that the named check concluded pass against the current HEAD",
           "effect": "write",
-          "data_channel": false,
           "flags": [
             {
               "name": "check",
               "short": null,
               "long": null,
               "takes_value": true,
-              "positional": true,
               "help": "The check whose conclusion is being recorded"
             }
           ],
@@ -1732,17 +1590,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "receipt status",
-          "id": "receipt.status",
           "about": "Judge the named check's recorded receipt against HEAD and origin/main",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "check",
               "short": null,
               "long": null,
               "takes_value": true,
-              "positional": true,
               "help": "The check whose receipt is judged"
             },
             {
@@ -1750,7 +1605,6 @@ expression: stdout_of(&output)
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             },
             {
@@ -1758,7 +1612,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "key",
               "takes_value": true,
-              "positional": false,
               "help": "Which git fact the receipt is judged against: the exact commit, or the branch"
             }
           ],
@@ -1768,10 +1621,8 @@ expression: stdout_of(&output)
     },
     {
       "path": "record",
-      "id": "record",
       "about": "Out-of-tree verdict stores: what something else judged, keyed so a stale answer cannot answer",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
@@ -1785,17 +1636,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "record forge",
-          "id": "record.forge",
           "about": "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin",
           "effect": "write",
-          "data_channel": false,
           "flags": [
             {
               "name": "ref",
               "short": null,
               "long": null,
               "takes_value": true,
-              "positional": true,
               "help": "The ref or sha the verdict was taken against"
             }
           ],
@@ -1812,17 +1660,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "record tool",
-          "id": "record.tool",
           "about": "Record a declared tool row's verdict, read as `<name> <token>` lines on stdin",
           "effect": "write",
-          "data_channel": false,
           "flags": [
             {
               "name": "id",
               "short": null,
               "long": null,
               "takes_value": true,
-              "positional": true,
               "help": "The `[[rule.tools]]` id whose verdict is being recorded"
             }
           ],
@@ -1832,25 +1677,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "semver",
-      "id": "semver",
       "about": "Whether this branch's API delta is compatible with the bump it claims",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "semver check",
-          "id": "semver.check",
           "about": "Refuse an API break this branch's commits do not declare",
           "effect": "write",
-          "data_channel": false,
           "flags": [
             {
               "name": "baseline",
               "short": null,
               "long": "baseline",
               "takes_value": true,
-              "positional": false,
               "help": "The rev to measure the API delta against (default: origin/main)"
             },
             {
@@ -1858,7 +1698,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "package",
               "takes_value": true,
-              "positional": false,
               "help": "The package whose public API is compared (default: batten)"
             },
             {
@@ -1866,7 +1705,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "release-type",
               "takes_value": true,
-              "positional": false,
               "help": "The bump being claimed, which is what the delta is judged against"
             }
           ],
@@ -1876,17 +1714,14 @@ expression: stdout_of(&output)
     },
     {
       "path": "spec",
-      "id": "spec",
       "about": "Print the tool's own command spec",
       "effect": "read",
-      "data_channel": false,
       "flags": [
         {
           "name": "format",
           "short": null,
           "long": "format",
           "takes_value": true,
-          "positional": false,
           "help": "The output format for the spec"
         }
       ],
@@ -1894,25 +1729,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "state",
-      "id": "state",
       "about": "The out-of-tree findings store: which store belongs to this checkout",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "state adopt",
-          "id": "state.adopt",
           "about": "Bind this checkout to its findings store, minting one only if none exists",
           "effect": "write",
-          "data_channel": false,
           "flags": [
             {
               "name": "store",
               "short": null,
               "long": null,
               "takes_value": true,
-              "positional": true,
               "help": "The store id to bind, when resolution cannot decide for itself"
             }
           ],
@@ -1920,17 +1750,14 @@ expression: stdout_of(&output)
         },
         {
           "path": "state list",
-          "id": "state.list",
           "about": "List stored findings and the refs they were observed in",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "json",
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
@@ -1938,71 +1765,36 @@ expression: stdout_of(&output)
         },
         {
           "path": "state migrate",
-          "id": "state.migrate",
           "about": "Upgrade the findings store to this binary's record version",
           "effect": "write",
-          "data_channel": false,
           "flags": [],
           "subcommands": []
         },
         {
           "path": "state record",
-          "id": "state.record",
           "about": "Record this ref's findings into the store, and GC instances whose ref is gone",
           "effect": "write",
-          "data_channel": false,
           "flags": [],
-          "subcommands": []
-        },
-        {
-          "path": "state settle",
-          "id": "state.settle",
-          "about": "Record what was decided about a stored finding",
-          "effect": "write",
-          "data_channel": false,
-          "flags": [
-            {
-              "name": "disposition",
-              "short": null,
-              "long": null,
-              "takes_value": true,
-              "positional": true,
-              "help": "What was decided: acted, rejected-by-design or rejected-wrong"
-            },
-            {
-              "name": "identity",
-              "short": null,
-              "long": null,
-              "takes_value": true,
-              "positional": true,
-              "help": "The stored finding's identity, as `state list` prints it"
-            }
-          ],
           "subcommands": []
         }
       ]
     },
     {
       "path": "target",
-      "id": "target",
       "about": "Inspect and reclaim this repository's build tree",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "target prune",
-          "id": "target.prune",
           "about": "Reclaim superseded build artifacts, and refuse below the measured disk floor for the build the next lap will run",
           "effect": "destructive",
-          "data_channel": false,
           "flags": [
             {
               "name": "dry_run",
               "short": "n",
               "long": "dry-run",
               "takes_value": false,
-              "positional": false,
               "help": "Preview what would be applied, writing nothing"
             },
             {
@@ -2010,7 +1802,6 @@ expression: stdout_of(&output)
               "short": null,
               "long": "root",
               "takes_value": true,
-              "positional": false,
               "help": "The build directory to prune, instead of the configured one"
             }
           ],
@@ -2020,25 +1811,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "wiring",
-      "id": "wiring",
       "about": "Repair a host's hook registrations",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "wiring reclaim",
-          "id": "wiring.reclaim",
           "about": "Remove non-batten hook registrations from this host's merged surfaces",
           "effect": "destructive",
-          "data_channel": false,
           "flags": [
             {
               "name": "dry_run",
               "short": "n",
               "long": "dry-run",
               "takes_value": false,
-              "positional": false,
               "help": "Preview what would be applied, writing nothing"
             }
           ],
@@ -2048,25 +1834,20 @@ expression: stdout_of(&output)
     },
     {
       "path": "worktree",
-      "id": "worktree",
       "about": "Worktrees and the work in them: what is at risk",
       "effect": "unclassified",
-      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "worktree status",
-          "id": "worktree.status",
           "about": "Report work that is uncommitted, unpushed, or not landed on the configured target",
           "effect": "read",
-          "data_channel": true,
           "flags": [
             {
               "name": "json",
               "short": "J",
               "long": "json",
               "takes_value": false,
-              "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
@@ -2076,165 +1857,49 @@ expression: stdout_of(&output)
     }
   ],
   "read_only_allowlist": [
-    {
-      "id": "attribution.check",
-      "path": "attribution check"
-    },
-    {
-      "id": "capture.find",
-      "path": "capture find"
-    },
-    {
-      "id": "capture.list",
-      "path": "capture list"
-    },
-    {
-      "id": "capture.show",
-      "path": "capture show"
-    },
-    {
-      "id": "check",
-      "path": "check"
-    },
-    {
-      "id": "checks.green",
-      "path": "checks green"
-    },
-    {
-      "id": "commit",
-      "path": "commit"
-    },
-    {
-      "id": "commit.check",
-      "path": "commit check"
-    },
-    {
-      "id": "config",
-      "path": "config"
-    },
-    {
-      "id": "config.deprecations",
-      "path": "config deprecations"
-    },
-    {
-      "id": "config.epoch",
-      "path": "config epoch"
-    },
-    {
-      "id": "config.lint",
-      "path": "config lint"
-    },
-    {
-      "id": "config.show",
-      "path": "config show"
-    },
-    {
-      "id": "defects.query",
-      "path": "defects query"
-    },
-    {
-      "id": "design.audit",
-      "path": "design audit"
-    },
-    {
-      "id": "doctor",
-      "path": "doctor"
-    },
-    {
-      "id": "doctor.hooks",
-      "path": "doctor hooks"
-    },
-    {
-      "id": "generate",
-      "path": "generate"
-    },
-    {
-      "id": "generate.completions",
-      "path": "generate completions"
-    },
-    {
-      "id": "generate.hooks",
-      "path": "generate hooks"
-    },
-    {
-      "id": "generate.man",
-      "path": "generate man"
-    },
-    {
-      "id": "generate.markdown",
-      "path": "generate markdown"
-    },
-    {
-      "id": "generate.schema",
-      "path": "generate schema"
-    },
-    {
-      "id": "lint",
-      "path": "lint"
-    },
-    {
-      "id": "lint.brief",
-      "path": "lint brief"
-    },
-    {
-      "id": "mutate.census",
-      "path": "mutate census"
-    },
-    {
-      "id": "payload",
-      "path": "payload"
-    },
-    {
-      "id": "payload.field",
-      "path": "payload field"
-    },
-    {
-      "id": "policy",
-      "path": "policy"
-    },
-    {
-      "id": "policy.budget",
-      "path": "policy budget"
-    },
-    {
-      "id": "policy.explain",
-      "path": "policy explain"
-    },
-    {
-      "id": "policy.hooks",
-      "path": "policy hooks"
-    },
-    {
-      "id": "policy.test",
-      "path": "policy test"
-    },
-    {
-      "id": "policy.tools",
-      "path": "policy tools"
-    },
-    {
-      "id": "provision.status",
-      "path": "provision status"
-    },
-    {
-      "id": "ready.lint",
-      "path": "ready lint"
-    },
-    {
-      "id": "receipt.status",
-      "path": "receipt status"
-    },
-    {
-      "id": "spec",
-      "path": "spec"
-    },
-    {
-      "id": "state.list",
-      "path": "state list"
-    },
-    {
-      "id": "worktree.status",
-      "path": "worktree status"
-    }
+    "attribution check",
+    "capture find",
+    "capture list",
+    "capture show",
+    "check",
+    "checks green",
+    "commit",
+    "commit check",
+    "config",
+    "config deprecations",
+    "config epoch",
+    "config lint",
+    "config show",
+    "defects query",
+    "design audit",
+    "doctor",
+    "doctor hooks",
+    "generate",
+    "generate completions",
+    "generate hooks",
+    "generate man",
+    "generate markdown",
+    "generate schema",
+    "lease authorises",
+    "lease held",
+    "lease peek",
+    "lease status",
+    "lint",
+    "lint brief",
+    "mutate census",
+    "payload",
+    "payload field",
+    "policy",
+    "policy budget",
+    "policy explain",
+    "policy hooks",
+    "policy test",
+    "policy tools",
+    "provision status",
+    "ready lint",
+    "receipt status",
+    "spec",
+    "state list",
+    "worktree status"
   ]
 }

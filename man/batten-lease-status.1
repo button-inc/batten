@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-lease-status 1  batten 
+.SH NAME
+batten\-lease\-status \- Report who holds the lease, for how much longer, and who is admitted behind them
+.SH SYNOPSIS
+\fBbatten lease status\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Report who holds the lease, for how much longer, and who is admitted behind them
+.SH OPTIONS
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

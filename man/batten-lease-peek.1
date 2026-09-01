@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-lease-peek 1  batten 
+.SH NAME
+batten\-lease\-peek \- Print one advisory field of the held lease, or nothing
+.SH SYNOPSIS
+\fBbatten lease peek\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIfield\fR> 
+.SH DESCRIPTION
+Print one advisory field of the held lease, or nothing
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIfield\fR>
+Which advisory field to print: branch, head or next
