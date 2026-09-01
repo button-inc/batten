@@ -257,6 +257,13 @@ pub struct Grammar {
     unanchored_clause: Regex,
     open_questions: Regex,
     legacy_clause_notation: Regex,
+    /// The keys still allowed to write a Ready block as prose (CLOUD-472).
+    ///
+    /// **A THRESHOLD, NOT A SWITCH.** Issue keys are minted in order, so a key
+    /// pattern IS a creation-order cutover — and it is one the consumer can read
+    /// and move, in the consumer's own key space, with none of the timezone,
+    /// format or clock-skew hazard a date literal carries.
+    prose_dialect_exempt: Regex,
     bump_label: Regex,
     commit_type: Regex,
     bump_token: Regex,
@@ -391,6 +398,7 @@ impl Grammar {
             blocks_tail: find("ready-blocks-tail")?,
             relatedto_tail: find("ready-relatedto-tail")?,
             defer_verb: find("ready-defer-verb")?,
+            prose_dialect_exempt: find("ready-prose-dialect-exempt")?,
             key: find("ready-issue-key")?,
             mention_markup: find("ready-issue-mention-markup")?,
         })
@@ -690,14 +698,52 @@ pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report>
     // can adjudicate.
     let structured = check_claims(grammar, payload, root, &block, ready_start, &mut report)?;
 
-    // THE DIALECT, AS A FACT RATHER THAN A VERDICT. A prose-only block still
-    // PASSES — every issue Ready today stays Ready, which is what lets the
-    // corpus converge deliberately instead of in one sweep — and is named, so a
-    // caller can find the ones still to convert without re-reading any body.
+    // THE DIALECT, AS A FACT. Named so a caller can find the blocks still to
+    // convert without re-reading any body — and it is the sensor the ratchet
+    // below reads, rather than a second derivation of the same question.
     report.emissions.push(format!(
         "dialect {}",
         if structured { "json" } else { "prose" }
     ));
+
+    // THE PROSE DIALECT IS A LEGACY, NOT AN ALTERNATIVE (CLOUD-472).
+    //
+    // This clause used to say a prose-only block "still PASSES — every issue
+    // Ready today stays Ready, which is what lets the corpus converge
+    // deliberately instead of in one sweep". The first half is still true below
+    // the threshold. The second half was left to intent, **and intent did not
+    // converge it**: measured 2026-09-01 over the 50-row Todo queue, the object
+    // was used by nothing, and CLOUD-1306 — filed that day — carried a §7 naming
+    // three obligations in prose, none of them joinable to anything. A sensor
+    // with no ratchet on it reports a defect forever.
+    //
+    // WHY THE OBJECT IS THE THING BEING DEMANDED, rather than a new grammar:
+    // `REQUIRED_CLAIMS` already forces `tests`, and `check_claimed_tests`
+    // already forces `file` AND `mutation` on every entry — CLOUD-418's
+    // obligation as a field, where an entry that cannot name the mutation which
+    // would kill it cannot be written. That mechanism landed and was simply
+    // unreachable, because `check_claims` returns `false` on an absent fence and
+    // the caller falls back here.
+    //
+    // A RATCHET RATHER THAN A FLIP, and the cost is why. `graph-check` enforces
+    // `Todo ⇒ ready-lint exits 0`, so refusing every prose block at once takes
+    // the board's whole ready frontier dark in one step — CLOUD-858's measured
+    // shape, where three rows did exactly that.
+    //
+    // COULD-NOT-LOOK PASSES, and it is the id that decides. A payload carrying
+    // no readable key cannot be placed against the threshold at all, so it is
+    // judged exactly as it was before this clause existed. Reading "no key" as
+    // "past the cutover" would turn a verdict about the payload into a verdict
+    // about the row.
+    if !structured
+        && grammar.key.is_match(&payload.id)
+        && !grammar.prose_dialect_exempt.is_match(&payload.id)
+    {
+        report.findings.push(Finding {
+            line: ready_start,
+            rule: "claims-object-absent".to_owned(),
+        });
+    }
 
     if !structured {
         check_bump(grammar, root, &block_lines, &line_of, &mut report)?;

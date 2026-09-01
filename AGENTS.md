@@ -37,8 +37,8 @@ stopping short to ask is the deviation. **The gates ARE your authorization** —
 you run them yourself, and they halt you by _failing_, not by needing a blessing.
 So **`git commit` needs no asking** — local, reversible, and commit early and
 often, since a sprawling uncommitted tree is what this kills. Establish base
-state first (`git fetch origin main`), work on a short-lived branch, never author
-on `main`, and carry the lifecycle without stopping between steps to report.
+state first (`git fetch origin main`), never author on `main`, and work ONE
+short-lived branch: one commit one issue, one branch many rows, one PR all of it.
 
 **When you SHOULD still stop** (real exceptions, not an escape hatch): a gate
 fails and the fix is genuinely ambiguous; a rebase conflict needs a human

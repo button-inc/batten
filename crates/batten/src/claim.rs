@@ -575,6 +575,41 @@ pub fn receipt_name(branch: &str) -> String {
     format!("claim.{}", branch.replace('/', "-"))
 }
 
+/// The ids an existing receipt for this branch still speaks for.
+///
+/// Empty for every reason that is not "the same branch, still on the same base":
+/// no receipt, an unreadable one, one with no `base` line, or one whose base is
+/// not the base being claimed against now. **Could-not-look drops the list rather
+/// than carrying it**, which is the safe direction here — a lost claim costs one
+/// re-run of `claim check`, while a carried-over stale one is the defect
+/// CLOUD-516 measured, where a receipt sat on a restarted branch through four
+/// unrelated stories reporting nothing.
+///
+/// `-` never matches, because [`mint`] writes it for a base that did not resolve
+/// and two unresolvable bases are not evidence of the same branch.
+fn carried_ids(receipt: &Path, base: Option<&str>) -> Vec<String> {
+    let Some(base) = base else {
+        return Vec::new();
+    };
+    let Ok(existing) = std::fs::read_to_string(receipt) else {
+        return Vec::new();
+    };
+    let same_base = existing
+        .lines()
+        .filter_map(|line| line.strip_prefix("base "))
+        .any(|recorded| recorded == base && recorded != "-");
+    if !same_base {
+        return Vec::new();
+    }
+    existing
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect()
+}
+
 /// Write the claim receipt.
 ///
 /// **Only on the pullable path**, which is what makes it a claim rather than a
@@ -601,11 +636,39 @@ pub fn mint(
     base: Option<&str>,
     claimed_at: &str,
 ) -> Result<PathBuf> {
-    let mut body = String::new();
+    let dest = receipts.join(receipt_name(branch));
+
     // LINE 1 IS THE ID LIST, exactly where it has always been, so any reader that
     // did parse it still finds it. Everything below is read BY KEY for the same
     // reason: a line added here must not move one somebody else counts on.
-    let ids: Vec<&str> = issues.iter().map(|issue| issue.id.as_str()).collect();
+    //
+    // A SECOND CLAIM ON AN OPEN BRANCH ADDS TO THE LIST RATHER THAN REPLACING IT
+    // (CLOUD-472). `mint` has always taken a SLICE, so the many-row shape was
+    // expressible in one invocation — but the write is `fs::write`, so a second
+    // INVOCATION dropped the first row's claim on the floor. That is the model
+    // backwards: one commit is one issue, one branch is as many issues as the
+    // work needs, and a second row found mid-branch is claimed and worked there.
+    //
+    // Measured 2026-09-01: an agent read the branch-keyed receipt as forbidding a
+    // second row, declined to pull one onto an open branch, and reported the
+    // storage key as the rule. The prose that pointed it there is corrected in
+    // `.claude/rules/toolchain.md`; this is the half that makes the correction
+    // true rather than merely stated.
+    //
+    // THE BASE IS WHAT MAKES THE UNION SAFE, and it is CLOUD-516's arm reused
+    // rather than a new judgement. A branch NAME outlives the branch it described
+    // — `git checkout -B <name> origin/main` discards the commits while this file,
+    // keyed by the name, survives — so ids carry over only when the recorded base
+    // still matches. A restarted branch starts a fresh list, which is exactly the
+    // stale-claim defect CLOUD-516 records rather than a case this widens.
+    let mut ids: Vec<String> = carried_ids(&dest, base);
+    for issue in issues {
+        if !ids.iter().any(|held| held == &issue.id) {
+            ids.push(issue.id.clone());
+        }
+    }
+
+    let mut body = String::new();
     body.push_str(&ids.join(" "));
     body.push('\n');
     if request.bypass_sequence {
@@ -661,7 +724,6 @@ pub fn mint(
     // only record and it names something that no longer exists.
     writeln!(body, "branch {branch}")?;
 
-    let dest = receipts.join(receipt_name(branch));
     std::fs::create_dir_all(receipts)
         .and_then(|()| std::fs::write(&dest, body))
         .map_err(|_| {
@@ -818,6 +880,81 @@ mod tests {
             live_pr: None,
             description: None,
         }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join("batten-claim-tests").join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Mint through the real function, so these cases exercise the write the
+    /// engine actually performs rather than a hand-rolled file.
+    fn mint_one(receipts: &Path, id: &str, base: Option<&str>) -> String {
+        let dest = mint(
+            receipts,
+            "user/branch",
+            &[issue(id, "Todo")],
+            &Verdict::default(),
+            &Request::default(),
+            base,
+            "2026-09-01T00:00:00Z",
+        )
+        .unwrap();
+        std::fs::read_to_string(dest).unwrap()
+    }
+
+    /// ONE BRANCH, MANY ISSUES (CLOUD-472). The receipt's first line has always
+    /// been an id LIST and `mint` has always taken a slice, but the write is a
+    /// whole-file replace — so a second `claim check` INVOCATION dropped the first
+    /// row's claim silently. That is the branching model backwards: a second row
+    /// found mid-branch is claimed and worked there.
+    #[test]
+    fn a_second_claim_on_an_open_branch_joins_the_first() {
+        let receipts = scratch("second-claim");
+        mint_one(&receipts, "CLOUD-1", Some("abc123"));
+        let body = mint_one(&receipts, "CLOUD-2", Some("abc123"));
+        assert_eq!(
+            body.lines().next().unwrap(),
+            "CLOUD-1 CLOUD-2",
+            "the branch speaks for both rows:\n{body}"
+        );
+    }
+
+    /// ANTI-VACUITY: the union must not turn a re-claim into a duplicate, or the
+    /// list grows without bound across the laps a long branch makes.
+    #[test]
+    fn re_claiming_the_same_row_does_not_duplicate_it() {
+        let receipts = scratch("re-claim");
+        mint_one(&receipts, "CLOUD-1", Some("abc123"));
+        let body = mint_one(&receipts, "CLOUD-1", Some("abc123"));
+        assert_eq!(body.lines().next().unwrap(), "CLOUD-1", "{body}");
+    }
+
+    /// A RESTARTED BRANCH STARTS A FRESH LIST, which is CLOUD-516's arm reused
+    /// rather than widened. `git checkout -B <name> origin/main` discards the
+    /// commits while the receipt, keyed by the NAME, survives — so carrying ids
+    /// across a changed base is exactly the stale claim that sat through four
+    /// unrelated stories reporting nothing.
+    #[test]
+    fn a_branch_restarted_on_a_new_base_carries_no_earlier_ids() {
+        let receipts = scratch("restarted");
+        mint_one(&receipts, "CLOUD-1", Some("abc123"));
+        let body = mint_one(&receipts, "CLOUD-2", Some("def456"));
+        assert_eq!(body.lines().next().unwrap(), "CLOUD-2", "{body}");
+    }
+
+    /// COULD-NOT-LOOK DROPS THE LIST rather than carrying it. `mint` writes `-`
+    /// for a base that did not resolve, and two unresolvable bases are not
+    /// evidence of the same branch — a lost claim costs one re-run, a carried
+    /// stale one is the defect.
+    #[test]
+    fn an_unresolvable_base_carries_nothing_in_either_direction() {
+        let receipts = scratch("no-base");
+        mint_one(&receipts, "CLOUD-1", None);
+        let body = mint_one(&receipts, "CLOUD-2", None);
+        assert_eq!(body.lines().next().unwrap(), "CLOUD-2", "{body}");
     }
 
     #[test]
