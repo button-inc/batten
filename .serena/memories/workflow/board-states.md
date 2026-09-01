@@ -245,6 +245,30 @@ which is what this wanted: the predicate needs a network call, and no rule kind
 can make one on a mediated call (CLOUD-446). `verify` is the earliest surface
 that still sits on every path to a published PR.
 
+**ONE COMMIT ONE ISSUE; ONE BRANCH MANY ISSUES; ONE PR EVERYTHING, NO PUNTS.**
+AGENTS.md carries the rule; this is why it needs saying at all. **The commit is
+the unit of work and the branch is not a row.** A second row you find mid-branch
+is claimed and worked THERE — cutting a fresh branch for it is precisely the
+batching `land`'s lap loop exists to prevent (each lap rebases onto a little more
+landed work, so conflicts arrive one resolvable increment at a time), and
+stopping at the first row is the punt `filed-and-left-open` prices. Drafts run no
+CI, so the PR is finished before a runner is spent; readying to "get a first
+signal" spends a matrix on work you already know is incomplete.
+
+**Nothing keys work to a branch except the claim receipt's FILENAME, and that is
+storage rather than the model.** The distinction is worth spelling out because
+both the prose and the mechanism used to point the other way. `.claude/rules/toolchain.md`
+explained the branch keying as attesting "a decision about an _issue_ that every
+commit on the branch continues to serve" — singular, and the only sentence in the
+whole instruction surface touching issue-per-branch cardinality. Meanwhile
+`claim::mint` took a slice and wrote line 1 as an id LIST, but wrote the file
+with `fs::write`, so a second `claim check` INVOCATION replaced the first row's
+claim silently. Measured 2026-09-01: an agent read the receipt as forbidding a
+second row on an open branch and reported the filename as the rule. Both halves
+are fixed — the ids union now, guarded by the recorded `base` so a restarted
+branch (`git checkout -B <name> origin/main`, which keeps the name and discards
+the commits) starts a fresh list rather than carrying CLOUD-516's stale claim.
+
 **`claim-check` runs BEFORE the board move, not after — and the order is not
 interchangeable.** It refuses `not-todo`, so once the issue is In Progress it
 refuses the very claim you just made, and it cannot tell your own move from a
