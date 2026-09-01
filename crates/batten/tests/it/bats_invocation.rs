@@ -399,7 +399,7 @@ fn helper_status(script: &str) -> i32 {
     // shared where the bats harness's per-test dir was not.
     #[expect(
         clippy::disallowed_types,
-        reason = "CLOUD-1268: the subject is a bash library, so exercising it means running bash — the same spawn `tests/helpers.bats` made, moved rather than added"
+        reason = "stays — CLOUD-1268: the subject IS a bash library, so exercising it means running bash. The retired suite made this same spawn; it moved rather than being added, and it goes when `tests/helpers.bash` does"
     )]
     let output = std::process::Command::new("bash")
         .arg("-c")

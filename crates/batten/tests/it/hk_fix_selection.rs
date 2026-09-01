@@ -439,7 +439,7 @@ fn run_fixture_gate(dir: &Path) -> Option<()> {
     let hk = hk_binary()?;
     #[expect(
         clippy::disallowed_types,
-        reason = "CLOUD-1268: the subject is a gate definition, so exercising it means running hk — the same spawn tests/pre-commit-staging.bats made, moved rather than added"
+        reason = "stays — CLOUD-1268: the subject IS a gate definition, so exercising it means running hk. The retired suite made this same spawn; it moved rather than being added, and it goes when `hk.pkl` does"
     )]
     let status = std::process::Command::new(hk)
         .args(["run", "pre-commit"])
@@ -459,7 +459,7 @@ fn run_fixture_gate(dir: &Path) -> Option<()> {
 fn hk_binary() -> Option<PathBuf> {
     #[expect(
         clippy::disallowed_types,
-        reason = "CLOUD-1268: resolving the pinned tool is what `mise which hk` did in the retired suite"
+        reason = "stays — CLOUD-1268: resolving the pinned tool is what `mise which hk` did in the retired suite's own setup, and a fixture repo has no mise config for `mise exec` to read"
     )]
     let output = std::process::Command::new("mise")
         .args(["which", "hk"])
