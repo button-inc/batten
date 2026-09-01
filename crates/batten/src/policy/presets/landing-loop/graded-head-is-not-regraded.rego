@@ -39,6 +39,17 @@ import rego.v1
 
 rules contains "graded-head-is-not-regraded"
 
+# The compiled tier is the one that runs this the way a consumer gets it, with
+# the empty vocabulary — the doc above says so, and CLOUD-1267 makes it the
+# DECLARED suite rather than a `tests/<gate>.bats` no preset may have.
+#
+# The mutation raises the judged threshold past anything a fixture supplies, so
+# a commit the forge recorded a verdict for stops being refused. It is aimed at
+# the case's FIRST half deliberately: the second asserts silence, which survives
+# a predicate that has stopped firing.
+#MUTANT-SUITE crates/batten/tests/policy_presets.rs
+#MUTANT judged-threshold-unreachable|s@count(checks) > 0@count(checks) > 999@|the_landing_loop_preset_refuses_a_regrade_and_is_green_by_turns
+
 # Every declared commit the forge has recorded a verdict for.
 #
 # GUARDED on `is_object`, and the guard is load-bearing rather than defensive:
