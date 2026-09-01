@@ -1396,6 +1396,101 @@ install -m 0755 target/release/batten "$dest/batten"
 echo "install:local: batten -> $dest/batten"
 """
 
+# The provisioning seam the environment's setup script ALREADY CALLS, and which
+# this repository never defined (CLOUD-1085).
+#
+# THE CALL SITE IS NOT OURS AND IT IS NOT NEW. The container's setup script runs
+# `mise run deps-install` on every provision, before any session starts, and
+# soft-fails with a stderr line when the task is absent — which is what it did for
+# the whole life of this defect. So the bootstrap seam was never missing; it was a
+# DANGLING CALL, and defining the task is the entire fix. Nothing outside this
+# repository changes, which is exactly what §1 asks for: the change is in the
+# environment configuration that provisions a container, and that configuration
+# already makes the call.
+#
+# `install.sh`, NEVER `install:local`, and the distinction is this row's own.
+# The local task builds the WORKING TREE's binary — "a dev-clone convenience that
+# supersedes a release build, not a provisioning path". A provisioning path cannot
+# assume a Rust toolchain, a 141-second compile (measured, CLOUD-1085), or that the
+# checkout builds at all. One install interface (§1); this is the caller it lacked.
+#
+# WHY ROUTING THROUGH `mise run` IS LOAD-BEARING rather than incidental. The setup
+# script shadows `mise` with a wrapper that prepends the GitHub API and asset hosts
+# to NO_PROXY and sets MISE_GITHUB_TOKEN from the session PAT, because the agent
+# proxy answers 403 for third-party release repos. A task body inherits that
+# wrapper's environment, so the release API is reachable here and would NOT be from
+# a bare `./install.sh` in the setup script. The seam and the proxy fix are the same
+# mechanism.
+#
+# LOUD ON FAILURE, because the defect this closes is a SILENT absence: an absent
+# reference monitor and a passing one are indistinguishable from outside, and every
+# mediated call in a session without a binary fails open with nothing said. The
+# caller appends its own line; this supplies the `::error::` and the non-zero exit
+# that make it a report rather than a shrug — CLOUD-824's posture of moving the
+# missing-binary report to provisioning time, where it can still be fixed.
+#
+# `2` STAYS DISTINCT FROM `1` (house style §7). `install.sh` answers 1 for a refusal
+# it decided — a bad digest, an unwritable destination — and 2 for could-not-look:
+# no curl, or an unreachable release API. Collapsing them sends a reader with a
+# network problem hunting a corrupted asset.
+#
+# `|| status=$?` RATHER THAN A BARE CALL, and this is measured rather than
+# stylistic. A default inline body runs under `sh -e` — unlike the `shell =
+# "bash -c"` bodies `.claude/rules/toolchain.md` describes, which do not — so a
+# bare `./install.sh` ABORTS the task at the failure and the branch below never
+# runs. Observed exactly that on the first version of this body: the install
+# refused, mise printed its own `ERROR task failed`, and the `::error::` line that
+# names WHICH failure was never emitted. The capture shape is the one
+# `tests/task-fail-closed.bats` already admits (CLOUD-318) and it is what keeps
+# the code readable instead of merely propagated.
+#
+# NO BACKTICKS IN THE MESSAGES, and not for prose reasons: these are double-quoted
+# shell strings, where a backtick opens COMMAND SUBSTITUTION. Quoting the binary's
+# name the way every comment here does would run it. The first draft of this body
+# did exactly that.
+#
+# The refusal arm does NOT claim nothing was written. `install.sh` installs and
+# THEN refuses when the destination is off PATH ("Off PATH is a refusal, not a
+# warning over exit 0"), so a message saying no binary exists is false in the one
+# failure mode most likely to be hit. What is true in every arm — and what actually
+# matters, since `.claude/settings.json` registers the engine by BARE NAME — is
+# that the name does not resolve.
+[tasks."deps-install"]
+description = "Provision the host dependencies mise does not: the released `batten`, before any hook fires (CLOUD-1085)"
+run = '''
+status=0
+./install.sh || status=$?
+if [ "$status" -eq 0 ]; then exit 0; fi
+if [ "$status" -eq 2 ]; then
+  echo "::error:: deps-install: could not look — the release API was unreachable, so nothing was installed and batten does not resolve by name. Every mediated call this session then fails open in silence. See the install output above." >&2
+else
+  echo "::error:: deps-install: install.sh refused with exit $status, so batten does not resolve by name — it may have written a binary somewhere PATH does not reach. Every mediated call this session then fails open in silence. See the install output above." >&2
+fi
+exit "$status"
+'''
+
+# The report half of the same seam, and the setup script calls this one too.
+#
+# A REPORT, NOT A GATE: the caller discards the status, so this exists to put the
+# answer in the provisioning log where a human reads it, rather than leaving the
+# absence to surface as an unrelated failure at first use. That is the same reason
+# the setup script ends with `mise ls --current`.
+#
+# It names the resolved PATH entry, because "a batten exists" and "the batten the
+# hook registrations resolve" are different claims — `.claude/settings.json`
+# registers `batten hook` by BARE NAME on every event, so what decides whether the
+# engine mediates is which one PATH finds first.
+[tasks.deps]
+description = "Report the host dependencies `deps-install` provisions, so an absent one is visible in the setup log and not at first use"
+run = '''
+if command -v batten >/dev/null 2>&1; then
+  echo "deps: batten at $(command -v batten) — $(batten --version 2>/dev/null || echo 'version unreadable')"
+  exit 0
+fi
+echo "::error:: deps: no batten on PATH, so the engine mediates nothing. Run: mise run deps-install" >&2
+exit 1
+'''
+
 [tasks.batten-check]
 description = "Consumer #1: evaluate the committed batten.toml with batten's own engine against this repository"
 # `cargo run` rather than an installed binary, so the gate always judges the
