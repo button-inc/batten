@@ -2124,6 +2124,117 @@ fn walk_blob_ids(
     Ok(())
 }
 
+/// One commit, its whole message, and which of `globs`' paths it moved
+/// (CLOUD-1278).
+///
+/// The message rather than the subject, which is the difference from
+/// [`CommitSubject`]: `commit::judge`'s question is about the subject line and
+/// this one's is about a block in the body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitWrite {
+    /// The full hex object id.
+    pub commit: String,
+    /// Every byte of the commit message.
+    pub message: String,
+    /// Repo-relative paths this commit changed that at least one glob selects —
+    /// added, edited or deleted alike, because a protected path DELETED is as much
+    /// a write to it as one edited.
+    pub paths: BTreeSet<String>,
+}
+
+/// Every non-merge commit in `base..head`, with its message and the paths it
+/// moved under `globs` (CLOUD-1278).
+///
+/// # Why the glob narrows the walk rather than the result
+///
+/// [`walk_blob_ids`] is a tree traversal reading tree objects only, and the
+/// selector is applied inside it — so a commit that touched nothing under `globs`
+/// costs two tree walks and no blob reads. The alternative, a full diff per
+/// commit, prices every commit at the size of its whole change for an answer that
+/// is almost always empty. The range this runs over is a branch, so "almost
+/// always empty" is the case to make cheap.
+///
+/// # Comparison is by BLOB ID, and a merge is skipped
+///
+/// The same reading [`base_delta`] takes one function up: an id settles whether a
+/// path moved without decompressing either side. A merge commit has no single
+/// parent to compare against and introduces no change of its own on a
+/// fast-forward-only trunk, so it is skipped exactly as [`subjects_in_range`]
+/// skips it — one rule about what a commit IS, not two.
+///
+/// A ROOT COMMIT COMPARES AGAINST THE EMPTY TREE, so every path it carries under
+/// `globs` counts as written. Treating it as "no parent, therefore nothing
+/// changed" would make the first commit of a repository the one place a protected
+/// path could be introduced unarticulated.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when the range does not resolve or a tree
+/// cannot be walked — "could not look", never a clean pass over commits nobody
+/// read.
+pub fn writes_in_range(
+    dir: &Path,
+    base: &str,
+    head: &str,
+    globs: &[String],
+) -> Result<Vec<CommitWrite>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the commit range".to_owned());
+    let (base_id, head_id) = (
+        repo.rev_parse_single(base).map_err(|_| refused())?,
+        repo.rev_parse_single(head).map_err(|_| refused())?,
+    );
+    let walk = repo
+        .rev_walk([head_id.detach()])
+        .with_hidden([base_id.detach()])
+        .all()
+        .map_err(|_| refused())?;
+
+    let ids_at = |rev: &str| -> Result<BTreeMap<String, gix::ObjectId>> {
+        let mut found = BTreeMap::new();
+        for glob in globs {
+            walk_blob_ids(&repo, rev, glob, |path, id| {
+                found.insert(path.to_owned(), id);
+            })?;
+        }
+        Ok(found)
+    };
+
+    let mut out = Vec::new();
+    for step in walk {
+        let info = step.map_err(|_| refused())?;
+        if info.parent_ids().count() > 1 {
+            continue;
+        }
+        let commit = repo.find_commit(info.id).map_err(|_| refused())?;
+        let sha = info.id().to_hex().to_string();
+        let now = ids_at(&sha)?;
+        // A root commit has no parent, so its whole tree is the change. An empty
+        // map is exactly that comparison and needs no special case below.
+        let was = match info.parent_ids().next() {
+            Some(parent) => ids_at(&parent.to_hex().to_string())?,
+            None => BTreeMap::new(),
+        };
+        let mut paths: BTreeSet<String> = BTreeSet::new();
+        for (path, id) in &now {
+            if was.get(path) != Some(id) {
+                paths.insert(path.clone());
+            }
+        }
+        for path in was.keys() {
+            if !now.contains_key(path) {
+                paths.insert(path.clone());
+            }
+        }
+        out.push(CommitWrite {
+            commit: sha,
+            message: commit.message_raw().map_err(|_| refused())?.to_string(),
+            paths,
+        });
+    }
+    Ok(out)
+}
+
 /// How a declared glob's paths differ between a base rev and the working tree
 /// (CLOUD-1059).
 ///

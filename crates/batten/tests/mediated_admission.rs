@@ -21,6 +21,9 @@
 //! nothing would pass the admission case for the wrong reason — the gate never
 //! fired, so nothing needed admitting.
 
+// Panicking on setup failure is the idiomatic way for a test to fail loudly.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 mod common;
 
 use std::path::{Path, PathBuf};

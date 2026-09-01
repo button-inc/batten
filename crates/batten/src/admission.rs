@@ -329,6 +329,198 @@ fn string(text: &str) -> String {
     out
 }
 
+/// The commit-message spelling of a record: where the articulation goes to
+/// survive the store (CLOUD-1278).
+///
+/// # The store is the wrong and only home the scheme shipped with
+///
+/// `store_dir` resolves under the OS data directory, so a record lives exactly as
+/// long as the machine that minted it. In this repository that is a container the
+/// platform reclaims, which means the reasoning an override cost — the entire
+/// diagnostic point, in this module's own words — was unreadable by anyone but the
+/// session that wrote it, and unreadable by that session too once it ended. There
+/// was not even a read verb: `override` offered `request` and `spend` and nothing
+/// that could show a record back.
+///
+/// A commit message is the one destination that is durable by construction,
+/// travels with the change it justifies, needs no network to read, and is already
+/// in front of every reviewer and review bot per-commit. A pull request body is
+/// worse on all three of the counts that matter here: it is mutable after the
+/// fact, it is one blob for N commits so the per-write binding is lost, and
+/// writing it is `land.sh`'s job — authored shell frozen by `V-SHELL-RULE-EDITED`.
+///
+/// # The block, and why it is verifiable with the store deleted
+///
+/// ```text
+/// Admits: <address>
+/// Admits-rule: protected-mutation
+/// Admits-verdict: V-PROTECTED-MUTATION
+/// Admits-subject: .claude/rules/toolchain.md
+/// Admits-head: <sha>
+/// Admits-epoch: <generation>
+/// Admits-author: <git identity>
+/// Admits-prev: -
+/// Admits-answer-precondition: <the author's own words>
+/// Admits-answer-lost: <...>
+/// Admits-answer-rejected-route: <...>
+/// ```
+///
+/// EVERY BINDING FIELD IS THERE, which is what makes the block self-verifying
+/// rather than a reference: [`address`] over the parsed binding must equal the
+/// address the block names, so editing the reasoning after the fact breaks the
+/// pairing and no store access is needed to notice. A block carrying only the
+/// address would be a pointer into a store that has already been reclaimed — the
+/// exact failure this exists to end.
+///
+/// # One long line per answer, and no folding
+///
+/// A folded continuation has to be unfolded to hash, and unfolding is lossy the
+/// moment an answer contains a run of spaces or the emitter breaks where the
+/// author did not. That lossiness would show up as an address that does not
+/// recompute over text nobody edited, which is a false tamper report — strictly
+/// worse than a long line. Git does not wrap a message body, `commit-lint` here
+/// judges the SUBJECT, and prettier never sees a commit message, so nothing in the
+/// pipeline shortens these lines. [`request`]'s own refusal of a newline in an
+/// answer is the other half: it keeps one answer to one line by construction.
+///
+/// [`request`]: crate::admission::issue
+pub const BLOCK_PREFIX: &str = "Admits";
+
+/// The token a `None` `prev` is written as, so an empty value and "no previous
+/// link" are not the same spelling.
+///
+/// A bare `Admits-prev:` would round-trip to `Some("")`, an address that can never
+/// resolve, and the block would then fail to recompute for a reason having nothing
+/// to do with what the author wrote.
+pub const NO_PREV: &str = "-";
+
+/// A record as it appears in a commit message, before it has been checked.
+///
+/// Carries the address AS WRITTEN rather than as recomputed, because the whole
+/// question this type exists to answer is whether those two agree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Articulation {
+    /// The address the block claims.
+    pub claimed: String,
+    /// The binding the block spells out.
+    pub binding: Binding,
+}
+
+impl Articulation {
+    /// Whether the block's own fields hash to the address it claims.
+    ///
+    /// The offline half of [`Record::recomputes`]: same predicate, no store.
+    #[must_use]
+    pub fn recomputes(&self) -> bool {
+        address(&self.binding) == self.claimed
+    }
+}
+
+/// Render `record` as the commit-message block above.
+///
+/// Field order is fixed here and irrelevant to the address ([`canonical`] sorts),
+/// so a reader gets a stable shape and a re-ordered block still verifies.
+#[must_use]
+pub fn block(record: &Record) -> String {
+    // `fmt::Write`, aliased away: this module already imports `io::Write` for the
+    // store's own file writes, and the two traits share a method name.
+    use std::fmt::Write as _;
+
+    let binding = &record.binding;
+    let mut out = format!("{BLOCK_PREFIX}: {}\n", record.admission);
+    for (key, value) in [
+        ("rule", binding.rule.as_str()),
+        ("verdict", binding.verdict.as_str()),
+        ("subject", binding.subject.as_str()),
+        ("head", binding.head.as_str()),
+        ("epoch", binding.epoch.as_str()),
+        ("author", binding.author.as_str()),
+        ("prev", binding.prev.as_deref().unwrap_or(NO_PREV)),
+    ] {
+        // Infallible on a String sink; the `_ =` is what says so.
+        _ = writeln!(out, "{BLOCK_PREFIX}-{key}: {value}");
+    }
+    for (id, answer) in &binding.answers {
+        _ = writeln!(out, "{BLOCK_PREFIX}-answer-{id}: {answer}");
+    }
+    out
+}
+
+/// Every block `message` carries, in the order they appear.
+///
+/// A block opens at an `Admits:` line and takes every `Admits-*` line that follows
+/// it until the next opener. Anything else is ignored, so the block sits at the end
+/// of an ordinary message without the prose above it having to be escaped or
+/// fenced.
+///
+/// A block missing a required field yields nothing for that opener rather than a
+/// partially-filled binding: a binding assembled from defaults would hash to an
+/// address the author never articulated, and the caller would report a tamper where
+/// the truth is an incomplete block.
+#[must_use]
+pub fn blocks(message: &str) -> Vec<Articulation> {
+    let mut found = Vec::new();
+    let mut open: Option<(String, BTreeMap<String, String>)> = None;
+    for line in message.lines() {
+        if let Some(address) = field(line, BLOCK_PREFIX) {
+            if let Some((claimed, fields)) = open.take() {
+                found.extend(assemble(&claimed, &fields));
+            }
+            open = Some((address, BTreeMap::new()));
+            continue;
+        }
+        let Some((_, fields)) = open.as_mut() else {
+            continue;
+        };
+        let Some(rest) = line
+            .strip_prefix(BLOCK_PREFIX)
+            .and_then(|rest| rest.strip_prefix('-'))
+        else {
+            continue;
+        };
+        if let Some((key, value)) = rest.split_once(':') {
+            fields.insert(key.to_owned(), value.trim_start().to_owned());
+        }
+    }
+    if let Some((claimed, fields)) = open {
+        found.extend(assemble(&claimed, &fields));
+    }
+    found
+}
+
+/// One `<prefix>: <value>` line's value, or `None` when the line is something
+/// else.
+fn field(line: &str, prefix: &str) -> Option<String> {
+    let rest = line.strip_prefix(prefix)?.strip_prefix(':')?;
+    Some(rest.trim_start().to_owned())
+}
+
+/// A binding from a block's collected fields, or `None` when one is missing.
+fn assemble(claimed: &str, fields: &BTreeMap<String, String>) -> Option<Articulation> {
+    let take = |key: &str| fields.get(key).cloned();
+    let answers: BTreeMap<String, String> = fields
+        .iter()
+        .filter_map(|(key, value)| Some((key.strip_prefix("answer-")?.to_owned(), value.clone())))
+        .collect();
+    if answers.is_empty() {
+        return None;
+    }
+    let prev = take("prev")?;
+    Some(Articulation {
+        claimed: claimed.to_owned(),
+        binding: Binding {
+            rule: take("rule")?,
+            verdict: take("verdict")?,
+            subject: take("subject")?,
+            head: take("head")?,
+            epoch: take("epoch")?,
+            answers,
+            prev: (prev != NO_PREV).then_some(prev),
+            author: take("author")?,
+        },
+    })
+}
+
 /// The directory the override store lives in.
 ///
 /// The canonical out-of-tree receipt store, beside [`crate::receipt`]'s own

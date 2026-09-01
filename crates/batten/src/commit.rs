@@ -77,16 +77,36 @@ pub struct Subject {
 pub struct Finding {
     /// The commit the refusal is about.
     pub label: String,
-    /// Which surface carried it. Always `subject` today; a field rather than a
-    /// constant so a second commit-shape rule does not change the output schema.
+    /// Which surface carried it. `subject` for the convention clause, `admits`
+    /// and `admits-tampered` for the articulation one — a field rather than a
+    /// constant, exactly so a second commit-shape rule does not change the output
+    /// schema. CLOUD-1278 is that second rule arriving, and this is the field
+    /// doing the job it was written for.
     pub field: String,
+    /// The protected path the refusal is about, where the clause has one.
+    ///
+    /// **A path is a pointer, which is why this does not breach rule 4**: §6 names
+    /// `path:line` as an allowed shape outright, and the thing that may not be
+    /// carried is the file's or the message's CONTENT. Without it an author is
+    /// told a commit lacks an articulation and left to work out which of its
+    /// protected paths — the one piece of information that makes the finding
+    /// actionable.
+    ///
+    /// `skip_serializing_if` rather than a bare `Option`, so `-J` over a
+    /// subject-clause run is byte-identical to what it was before this field
+    /// existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
 }
 
 impl Finding {
     /// The pointer line, house style §6.
     #[must_use]
     pub fn line(&self) -> String {
-        format!("{} {}", self.label, self.field)
+        match &self.subject {
+            Some(path) => format!("{} {} {path}", self.label, self.field),
+            None => format!("{} {}", self.label, self.field),
+        }
     }
 }
 
@@ -137,9 +157,94 @@ impl Commit {
             .map(|subject| Finding {
                 label: subject.label.clone(),
                 field: "subject".to_owned(),
+                subject: None,
             })
             .collect())
     }
+}
+
+/// Judge the articulation clause: a commit that wrote a protected path carries
+/// the block that says why (CLOUD-1278).
+///
+/// # What this closes
+///
+/// `V-PROTECTED-MUTATION`'s override route makes a protected write ADMISSIBLE —
+/// the guarded party articulates, an admission is issued and spent, and the write
+/// goes through. That much landed. What it did not do is make the articulation
+/// legible to anyone: the record lives in a container-scoped store, so the
+/// reasoning an override cost was readable only inside the session that wrote it,
+/// and only until that session ended. A forcing function whose product nobody can
+/// read is a toll, not an audit trail.
+///
+/// This is the half that makes it one. The block travels in the commit message,
+/// which is durable, offline, and already in front of every reviewer and review
+/// bot on the change it justifies.
+///
+/// # Two findings, and they mean opposite things
+///
+/// * `admits` — the commit wrote this protected path and no block claims it. The
+///   author owes an articulation.
+/// * `admits-tampered` — a block claims this path and does not hash to the
+///   address it names. Somebody edited the reasoning after it was issued, or
+///   assembled a block by hand. That is the graver one, and separating it is the
+///   point: rolling both into "missing" would let a doctored block read as an
+///   honest omission.
+///
+/// # The store is never consulted
+///
+/// [`crate::admission::Articulation::recomputes`] is a pure function of the block,
+/// so this clause decides identically on a runner that has never seen the store —
+/// which is the whole reason the block spells every binding field out instead of
+/// carrying a reference. A tier that needed the store would pass locally and
+/// abstain in CI, which is the shape of a gate that is not there.
+#[must_use]
+pub fn judge_admissions(writes: &[crate::git::CommitWrite]) -> Vec<Finding> {
+    let mut found = Vec::new();
+    for write in writes {
+        let blocks = crate::admission::blocks(&write.message);
+        for path in &write.paths {
+            let claims: Vec<_> = blocks
+                .iter()
+                .filter(|block| block.binding.subject == *path)
+                .collect();
+            // A path with no block at all is the missing case. A path with blocks
+            // of which at least one verifies is clean — several are legitimate,
+            // since re-articulating the same path on one commit chains rather than
+            // replaces.
+            let field = if claims.is_empty() {
+                "admits"
+            } else if claims.iter().any(|block| block.recomputes()) {
+                continue;
+            } else {
+                "admits-tampered"
+            };
+            found.push(Finding {
+                label: short(&write.commit),
+                field: field.to_owned(),
+                subject: Some(path.clone()),
+            });
+        }
+    }
+    found
+}
+
+/// The pending-commit twin of [`judge_admissions`]: the message on disk, judged
+/// against the paths the INDEX is about to commit.
+///
+/// The earliest computable moment, for [`read_message`]'s own reason one function
+/// down — a refusal here means the unarticulated commit is never created, rather
+/// than created and found later in a range where the fix is a rewrite.
+///
+/// `staged` rather than the working tree: an unstaged edit to a protected path is
+/// explicitly not what this commit is about, and demanding a block for it would
+/// refuse a commit that does not touch the path at all.
+#[must_use]
+pub fn judge_pending(message: &str, staged: &std::collections::BTreeSet<String>) -> Vec<Finding> {
+    judge_admissions(&[crate::git::CommitWrite {
+        commit: "pending".to_owned(),
+        message: message.to_owned(),
+        paths: staged.clone(),
+    }])
 }
 
 /// Read every non-merge commit's subject in `base..head`.

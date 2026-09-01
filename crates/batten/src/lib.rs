@@ -3350,10 +3350,31 @@ fn run_override_spend(
     };
     match admission::consume(root, admission, &situation)? {
         Ok(record) => {
-            // POINTER, NEVER THE ANSWERS (rule 4). The address and the class,
-            // which is what a reader needs to find the record; the reasoning the
-            // author typed stays in the store where it was written.
+            // The pointer line first and unchanged: the address and the class,
+            // which is what a reader needs to find the record.
             writeln!(out, "{} {} spent", record.binding.verdict, admission)?;
+            // THEN THE BLOCK, AND THE COMMENT THIS REPLACES HAD RULE 4 BACKWARDS
+            // (CLOUD-1278). It read "POINTER, NEVER THE ANSWERS (rule 4) … the
+            // reasoning the author typed stays in the store where it was
+            // written", and that reflex is what made the whole mechanism a toll
+            // with no product. Rule 4 keeps a gate from republishing REPOSITORY
+            // CONTENT — a secret it scanned, a subject line somebody typed, a
+            // file it read. An articulation is none of those. It is the caller's
+            // own words, composed for the express purpose of being read by a
+            // reviewer, and `admission.rs`'s header says so outright: an address
+            // "authorizes nothing on its own", so a record is "safe to print,
+            // log, quote in a commit and leave in a transcript".
+            //
+            // `refusal.rs` already calls this "rule 4's deliberate inversion".
+            // Keeping the answers in a container-scoped store honoured the letter
+            // of a rule that was not about them, and cost the design its entire
+            // point: nobody could read the reasoning an override had bought, so
+            // there was nothing to diagnose after the fact and nothing for a
+            // review bot to bound a blast radius with.
+            //
+            // Printed AFTER the pointer line rather than instead of it, so a
+            // caller parsing the first line is unaffected.
+            write!(out, "{}", admission::block(&record))?;
             Ok(ExitCode::Success)
         }
         Err(refused) => {
@@ -3936,6 +3957,67 @@ fn semver_commits(root: &Path, baseline: &str) -> Vec<semver::Commit> {
         .collect()
 }
 
+/// The articulation clause over whichever mode `commit check` is running in
+/// (CLOUD-1278).
+///
+/// # Why this is a second pass rather than a wider `Subject`
+///
+/// The convention clause reads one line; this one reads the whole message AND the
+/// paths the commit moved. Widening `Subject` to carry both would charge every
+/// consumer of the subject clause a tree walk per commit for a field it does not
+/// read, and `commit::Subject` is what `read_message` returns before a commit
+/// exists — a shape with no paths to put in it.
+///
+/// # A repository declaring no protected paths is judged, and passes
+///
+/// The glob list being empty makes [`git::writes_in_range`] select nothing, so
+/// every commit yields no paths and no finding. That is the honest answer rather
+/// than a short-circuit: a consumer that protects nothing has nothing to
+/// articulate, and the distinction only matters if somebody later reads a clean
+/// run as evidence the clause fired.
+fn commit_admissions(
+    range: Option<&str>,
+    message: Option<&str>,
+    overrides: &Overrides,
+) -> Result<Vec<commit::Finding>> {
+    let root = Path::new(".");
+    let protected = resolve::resolve(root, overrides)?.protected.clone();
+    match (range, message) {
+        (Some(range), None) => {
+            // Already validated above; re-split rather than threaded, because a
+            // second parameter carrying a value derived from an existing one is a
+            // second chance for the two to disagree.
+            let Some((base, head)) = range.split_once("..") else {
+                return Ok(Vec::new());
+            };
+            Ok(commit::judge_admissions(&git::writes_in_range(
+                root, base, head, &protected,
+            )?))
+        }
+        (None, Some(message)) => {
+            let body = std::fs::read_to_string(message).map_err(|error| {
+                UsageError::raise(format!(
+                    "commit check: cannot read the commit message file `{message}`: {error}"
+                ))
+            })?;
+            // The STAGED set, narrowed to the protected globs by the same
+            // `Selector` the range half walks with — one authority on "does this
+            // glob select this path", never a second matcher here.
+            let selectors = protected
+                .iter()
+                .map(|glob| rules::Selector::new(glob))
+                .collect::<Result<Vec<_>>>()?;
+            let staged = git::staged_paths(root)?
+                .into_iter()
+                .filter(|path| selectors.iter().any(|selector| selector.matches(path)))
+                .collect();
+            Ok(commit::judge_pending(&body, &staged))
+        }
+        // Both modes and neither are refused above, before this is reached.
+        _ => Ok(Vec::new()),
+    }
+}
+
 fn run_commit_check(
     json: bool,
     range: Option<&str>,
@@ -3970,7 +4052,8 @@ fn run_commit_check(
         (None, Some(message)) => vec![commit::read_message(Path::new(message))?],
     };
 
-    let findings = commit_policy(overrides)?.judge(&subjects)?;
+    let mut findings = commit_policy(overrides)?.judge(&subjects)?;
+    findings.extend(commit_admissions(range, message, overrides)?);
 
     if json {
         // Emitted unconditionally, including for a clean run: JSON that is

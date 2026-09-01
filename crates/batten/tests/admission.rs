@@ -677,15 +677,46 @@ fn the_verb_spends_a_legitimate_admission_and_reports_it() {
     );
     assert_eq!(output.status.code(), Some(0), "a bound admission spends");
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    // The pointer line is FIRST and unchanged, which is what keeps a caller that
+    // parses one line working across this change.
+    let first = stdout.lines().next().unwrap_or_default();
     assert!(
-        stdout.contains("V-PROSE-ONLY-DIFF") && stdout.contains("spent"),
-        "the class and the outcome: {stdout:?}"
+        first.contains("V-PROSE-ONLY-DIFF") && first.contains("spent"),
+        "the class and the outcome, on line one: {stdout:?}"
     );
-    // POINTER, NEVER THE ANSWERS (rule 4). The reasoning the author typed lives
-    // in the record; a verb that echoed it would republish it on every gate run.
+    // THIS ASSERTION IS INVERTED, AND IT IS THE CHANGE RATHER THAN COLLATERAL
+    // (CLOUD-1278). It read `!stdout.contains("deliverable")` under the comment
+    // "POINTER, NEVER THE ANSWERS (rule 4) … a verb that echoed it would republish
+    // it on every gate run", and that reading of rule 4 was wrong in a way that
+    // cost the mechanism its entire product.
+    //
+    // Rule 4 stops a gate republishing REPOSITORY CONTENT — a secret it scanned,
+    // a file it read, a subject line somebody typed. An articulation is none of
+    // those: it is the caller's own words, composed to be read by a reviewer, and
+    // `admission.rs`'s header says an address "authorizes nothing on its own" so a
+    // record is "safe to print, log, quote in a commit and leave in a transcript".
+    // `refusal.rs` already calls this "rule 4's deliberate inversion".
+    //
+    // Under the old assertion the reasoning existed only in a store scoped to the
+    // machine that minted it — a container the platform reclaims here — so nobody
+    // could ever read what an override had bought. The forcing function was a toll
+    // with no audit trail, which is the opposite of why it was built.
     assert!(
-        !stdout.contains("deliverable"),
-        "no answer text crosses stdout: {stdout:?}"
+        stdout.contains("deliverable"),
+        "the answers ARE the product: spend prints the block a caller pastes into \
+         the commit message, or the articulation dies with the container: {stdout:?}"
+    );
+    // And the block it prints must be one the offline checker accepts, or `spend`
+    // is handing the caller something `commit check` will then refuse.
+    let block = batten::admission::blocks(&stdout);
+    assert_eq!(block.len(), 1, "exactly one block: {stdout:?}");
+    assert!(
+        block[0].recomputes(),
+        "the printed block verifies with no store access: {stdout:?}"
+    );
+    assert_eq!(
+        block[0].claimed, admission,
+        "it names the address just spent"
     );
 }
 
