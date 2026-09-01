@@ -6003,6 +6003,7 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // adjudicating a validator is a `batten check` run by construction,
             // so no mediated-call consumer is being turned away.
             crate::facts::Fact::ToolVerdict => None,
+            crate::facts::Fact::Minted => None,
             // CLOUD-1188. `Surface::Check` in `facts.rs`, so this arm is `None`
             // by the model rather than by this function's opinion. Answering
             // means reading and parsing the capture store until a declared key
@@ -8100,6 +8101,7 @@ mod tests {
             state: Vec::new(),
             forge: Vec::new(),
             tools: Vec::new(),
+            minted: Vec::new(),
             captured: Vec::new(),
             tasks: Vec::new(),
             extract: Vec::new(),

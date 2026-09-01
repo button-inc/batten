@@ -1139,6 +1139,24 @@ transcript CONTENT needs 1029 first, and nothing landed authorises one.
   Every tracker identifier is the consumer's, in `batten.toml` (rule 1); the crate
   knows only _dispatch a declared method, reduce by a declared projection_.
   Network goes through `fetch::spend`, one current-thread runtime per sequence.
+- `minted.rs` — one declared FIELD of a receipt `mint.rs` already wrote, read on
+  the TREE surface and bounded by age (CLOUD-1310). **`tools.rs`'s mechanism a
+  family over**: the fetch happened at the mediated boundary, in a session that
+  had a credential, so what remains here is a line off disk and a clock
+  comparison and `check` stays `read`. Answers the question `hooks-wiring-check`
+  decided from piped-in payloads — _has the issue owning this exemption CLOSED_ —
+  which CLOUD-1160 retired with no successor because a tree-scoped module has no
+  stdin. **The age bound is why this is not `captured.rs`**: that store is keyed
+  by content and carries no clock, so a MUTABLE field answers from whichever read
+  sorts first in digest order, which `batten.toml`'s `claim-before-code` row
+  records being refused from as a pre-claim capture. Positional, because
+  `claim.rs` already reads this store with `nth(3)`; `field` and `recency` are
+  separate indices and the load refuses them equal, since collapsing them projects
+  the timestamp as the value while the bound compares it against itself.
+  **Could-not-look is the ORDINARY answer** — the store is under the git
+  directory, never committed, empty on every CI runner — so `None` covers both of
+  its conditions and a readable store holding nothing is present and EMPTY, a
+  different answer.
 - `mint.rs` — receipts minted from the tool result that earned them
   (CLOUD-1024): the `[[mint]]` table, the closed six-form body template
   (`{path}`, `{now}`, `{digest:}`, `{slug:}`, `{join:}`, `{git:}`), the dotted

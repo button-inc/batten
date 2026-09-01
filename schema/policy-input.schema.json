@@ -307,6 +307,19 @@
           "description": "Fact::Lines. Path -> the file's lines, unparsed (CLOUD-846).",
           "type": "object"
         },
+        "minted": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "description": "Fact::Minted (CLOUD-1310). Declared id -> the field that row names, as `subject -> value` TOKENS, read off receipts the MEDIATED boundary already minted. The engine fetches nothing: the credential existed in the session that read the subject, and what happens here is a line off disk and a clock comparison. BOUNDED BY AGE -- a receipt older than the row's declared max_age is not evidence about now, so it is simply not in the map; that bound is why this is not Fact::Captured, whose store is keyed by content, carries no clock, and would answer from whichever read sorts first by digest. POSITIONAL, because `claim::read_baseline` already reads this store with nth() and a body template is the consumer's, so a field has an index and not a name. One token per subject -- never a line of the receipt and never the prose the subject came from. NULL when no row declared a mint and when no receipt store is readable; a subject with no receipt, or with one too old, is ABSENT from the map. Absent is could-not-look and never agreement: on a fresh clone or any CI runner the store is empty, so the ordinary answer here is that nobody has read this subject.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "missing": {
           "additionalProperties": {
             "type": "string"

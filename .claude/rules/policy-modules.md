@@ -138,7 +138,7 @@ family —
 `input.tree.git-head`, `input.tree.git-refs`, `input.tree.git-ranges`,
 `input.tree.git-remote`, `input.tree.git-status`.
 
-**Ten of those keys are DECLARED READS whose subject is not the working tree**,
+**Eleven of those keys are DECLARED READS whose subject is not the working tree**,
 and grouping them is worth a sentence because each answers a question no walk
 can: `input.tree["base-delta"]` is how the declared globs' paths differ from a
 declared base rev — `added`, `edited`, `deleted`, `code-changed` and the base side
@@ -157,7 +157,12 @@ declared ref (CLOUD-1203); `input.tree.forge` is the forge's verdict for a
 declared SHA, from a record a producer wrote outside the engine (CLOUD-1154);
 `input.tree["tool-verdict"]` is a third-party tool's verdict keyed to
 (tool, pinned version, input digest), so a differently-pinned or stale record
-does not answer (CLOUD-1171); and `input.tree.captured` is a declared REDUCTION
+does not answer (CLOUD-1171); `input.tree.minted` is one declared FIELD of a
+receipt the MEDIATED boundary already wrote, bounded by how old the reading is —
+which is what makes it a different family from `captured`, whose store is keyed
+by content, carries no clock, and would answer a question about a mutable field
+from whichever read sorts first in digest order (CLOUD-1310); and
+`input.tree.captured` is a declared REDUCTION
 over the capture store — `present`, `count` or a bounded token, never a payload
 (CLOUD-1188).
 
@@ -306,7 +311,7 @@ projection a Todo row was about to re-derive a diff for. A false assurance is
 worse than an unclaimed gap, and the sentence above is the anchor
 `schema-key-undocumented` keys on: it fires over the file that makes this claim
 and is silent over every file that does not, which is what keeps it from
-demanding that 24 keys be enumerated everywhere.
+demanding that 25 keys be enumerated everywhere.
 
 **`input.tree.missing` is the could-not-look channel, not a fact.** A declared
 source that will not parse belongs there rather than being silently absent, and a

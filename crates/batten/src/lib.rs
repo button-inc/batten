@@ -56,6 +56,7 @@ pub mod lint;
 pub mod markers;
 pub mod mcp;
 pub mod mint;
+pub mod minted;
 pub mod mutate;
 pub mod output;
 pub mod outputs;
@@ -3239,6 +3240,7 @@ fn suite_input(
             state: None,
             forge: None,
             tool_verdicts: None,
+            minted: None,
             captured: None,
         },
     ))

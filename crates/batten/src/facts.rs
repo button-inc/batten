@@ -551,6 +551,39 @@ pub enum Fact {
     /// also owe a machine identity and a declared null spread, which is a
     /// different design and not this one.
     ToolVerdict,
+    /// A **declared FIELD** of a receipt the mediated boundary already minted,
+    /// read on the TREE surface and bounded by how old the reading is
+    /// (CLOUD-1310).
+    ///
+    /// **[`Fact::Receipts`] is the same store and a different question, which is
+    /// why this is a second variant rather than a widened one.** That fact
+    /// answers *is this check's receipt valid for this call*, on
+    /// [`Surface::Hook`], as a validity token. This one answers *what did the
+    /// boundary record about this subject*, on [`Surface::Check`], as one
+    /// declared field. A tree-scoped module has no stdin and no mediated facts,
+    /// so before this the answer existed in the store with no route to a
+    /// predicate at all.
+    ///
+    /// **The bound is AGE, and it is why this is not [`Fact::Captured`].** The
+    /// capture store is keyed by CONTENT and carries no clock — that is what
+    /// makes a reduction byte-stable — so a mutable field answers from whichever
+    /// read sorts first by digest, which on any branch that read the subject
+    /// before working it is the state BEFORE the work. `batten.toml`'s
+    /// `claim-before-code` row records that measured: it asked exactly that at
+    /// first and `check` refused from a pre-claim capture. So staleness is keyed
+    /// IN here, [`Fact::ToolVerdict`]'s property rather than
+    /// [`Fact::Captured`]'s: a reading older than the row declares does not
+    /// answer, and absent is could-not-look rather than agreement.
+    ///
+    /// **Positional, because that is how this store is already read.**
+    /// `claim::read_baseline` takes its digest with `nth(3)` over one
+    /// whitespace-split line; a body template is the consumer's, so the engine
+    /// cannot know a field by name without inventing a second schema for it.
+    ///
+    /// **Nothing here names a tracker** (non-negotiable rule 1). A mint name, a
+    /// field index and an age are the whole vocabulary; which mint, and what its
+    /// fields mean, is the consumer's `batten.toml`.
+    Minted,
     /// A **declared** reduction over a response the agent already captured
     /// (CLOUD-1188).
     ///
@@ -1106,6 +1139,17 @@ pub const FORGE: Class = Class::new(Cost::Read, Surface::Check);
 /// The bound is the declaration: a tool no row names resolves nothing.
 pub const TOOL_VERDICT: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::Minted`] — a declared field of an already-minted receipt (CLOUD-1310).
+///
+/// `read` x `check`, and it is [`FORGE`]'s argument once more: the fetch that
+/// produced the record happened at the mediated boundary, in a session that had
+/// a credential, and what remains here is a line off disk plus a clock
+/// comparison. Nothing is fetched, so `check` stays `read`.
+///
+/// The bound is the declaration: a mint no row names resolves nothing, so this
+/// cannot become an ambient sweep of the receipt store.
+pub const MINTED: Class = Class::new(Cost::Read, Surface::Check);
+
 /// [`Fact::Captured`] — a declared reduction over a captured response
 /// (CLOUD-1188).
 ///
@@ -1259,6 +1303,7 @@ impl Fact {
         Fact::State,
         Fact::Forge,
         Fact::ToolVerdict,
+        Fact::Minted,
         Fact::Captured,
         Fact::Tasks,
         Fact::Extracted,
@@ -1298,6 +1343,7 @@ impl Fact {
             Fact::State => "state",
             Fact::Forge => "forge",
             Fact::ToolVerdict => "tool-verdict",
+            Fact::Minted => "minted",
             Fact::Captured => "captured",
             Fact::Tasks => "tasks",
             Fact::Extracted => "extracted",
@@ -1345,6 +1391,7 @@ impl Fact {
             Fact::State => STATE,
             Fact::Forge => FORGE,
             Fact::ToolVerdict => TOOL_VERDICT,
+            Fact::Minted => MINTED,
             Fact::Captured => CAPTURED,
             Fact::Tasks => TASKS,
             Fact::Extracted => EXTRACTED,
@@ -1422,6 +1469,7 @@ impl Fact {
             // digest half opens the declared input, which is a `check`-surface
             // cost and not a mediated call's.
             Fact::ToolVerdict => Some("tool-verdict"),
+            Fact::Minted => Some("minted"),
             // CLOUD-1188. Tree-only: reducing a response means reading and
             // parsing every capture the store holds until a declared key
             // matches, which is a `check`-surface cost. The consumers are board
@@ -1538,6 +1586,7 @@ impl Fact {
             | Fact::State
             | Fact::Forge
             | Fact::ToolVerdict
+            | Fact::Minted
             | Fact::Captured
             | Fact::Produced
             | Fact::Records => Self::keyed_read_schema_fragment(self),
@@ -1748,6 +1797,7 @@ impl Fact {
             | Fact::State
             | Fact::Forge
             | Fact::ToolVerdict
+            | Fact::Minted
             | Fact::Captured => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
             }),
@@ -1822,6 +1872,14 @@ impl Fact {
             Fact::ToolVerdict => serde_json::json!({
                 "type": ["object", "null"],
                 "description": "Fact::ToolVerdict (CLOUD-1171). Declared id -> a third-party tool's verdict for it, as `finding name -> pointer` TOKENS. Read back from a record a producer wrote OUTSIDE the engine, because `check` is read-only and structurally cannot run a validator. KEYED BY (tool, pinned version, input digest) -- a record from a differently-pinned tool, or one taken over bytes that have since changed, lives under a different name and does not answer; that keying is the safety property and closes CLOUD-646's shape for this path. Pointers only -- a finding id and a `path:line`, never a tool's report. NULL when no row declared a tool and when no record store is readable; a declared id whose key has no record is ABSENT from the map, and one whose record holds no findings is present with an EMPTY object. Those three are different answers and a gate that confuses them reports clean over a validator that never ran.",
+                "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+            }),
+            Fact::Minted => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::Minted (CLOUD-1310). Declared id -> the field that row names, as `subject -> value` TOKENS, read off receipts the MEDIATED boundary already minted. The engine fetches nothing: the credential existed in the session that read the subject, and what happens here is a line off disk and a clock comparison. BOUNDED BY AGE -- a receipt older than the row's declared max_age is not evidence about now, so it is simply not in the map; that bound is why this is not Fact::Captured, whose store is keyed by content, carries no clock, and would answer from whichever read sorts first by digest. POSITIONAL, because `claim::read_baseline` already reads this store with nth() and a body template is the consumer's, so a field has an index and not a name. One token per subject -- never a line of the receipt and never the prose the subject came from. NULL when no row declared a mint and when no receipt store is readable; a subject with no receipt, or with one too old, is ABSENT from the map. Absent is could-not-look and never agreement: on a fresh clone or any CI runner the store is empty, so the ordinary answer here is that nobody has read this subject.",
                 "additionalProperties": {
                     "type": "object",
                     "additionalProperties": {"type": "string"},
@@ -2050,6 +2108,7 @@ impl Fact {
             | Fact::State
             | Fact::Forge
             | Fact::ToolVerdict
+            | Fact::Minted
             | Fact::Captured
             | Fact::Tasks
             | Fact::Extracted
@@ -2864,6 +2923,81 @@ impl ToolQuery {
 /// site, which is the two-authorities shape `.claude/rules/policy-modules.md`
 /// records for patterns, one layer down.
 pub const KEY_SEPARATOR: char = '@';
+
+// ---------------------------------------------------------------------------
+// Minted receipt fields (CLOUD-1310)
+// ---------------------------------------------------------------------------
+/// One `[[rule.minted]]` row: a field of a receipt the mediated boundary already
+/// wrote, projected onto the tree surface and bounded by age (CLOUD-1310).
+///
+/// **The age bound is the whole safety property, and it is what makes this a
+/// different family from [`crate::rules::Rule::captured`].** The capture store is
+/// keyed by content and has no clock, so a question about a MUTABLE field
+/// answers from whichever read sorts first by digest — the state before the work
+/// rather than the state now. Here a reading older than [`Self::max_age_days`]
+/// is not evidence about now, so the subject is simply absent, exactly as a
+/// re-digested [`ToolQuery`] input is absent rather than found-and-wrong.
+///
+/// **Positional, and that is the store's existing idiom rather than a new one.**
+/// `claim::read_baseline` already takes its digest with `nth(3)` over one
+/// whitespace-split line. A `[[mint]]` body is a consumer's template, so the
+/// engine cannot know a field by name without inventing a second schema
+/// describing what the consumer already wrote.
+///
+/// The engine knows nothing about what any mint records or what its fields mean.
+/// It reads a line and counts words, which is where non-negotiable rule 1 is
+/// paid: the mint's name, the index that matters and what counts as too old are
+/// the consumer's facts, in the consumer's `batten.toml`.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct MintedQuery {
+    /// The key this field is projected under in `input.tree.minted`.
+    pub id: String,
+    /// The `[[mint]]` name whose receipts are read, as that row declares it.
+    ///
+    /// The engine matches receipt files by this prefix and takes what follows as
+    /// the SUBJECT. It does not resolve the name against the mint table here: a
+    /// mint that never fires leaves no receipts, which is could-not-look and is
+    /// the ordinary state, so refusing the row at load would refuse the common
+    /// case rather than an authoring error.
+    pub mint: String,
+    /// Which whitespace-separated field of the receipt line is the value,
+    /// counting from zero.
+    ///
+    /// A line with fewer fields than this leaves the subject ABSENT rather than
+    /// present with an empty token: a receipt that does not carry the field was
+    /// not an answer about it.
+    pub field: usize,
+    /// Which field carries the time the reading was taken, counting from zero.
+    ///
+    /// Separate from [`Self::field`] because the value and its recency are
+    /// different columns of the same line, and collapsing them would make a
+    /// timestamp the only projectable field.
+    pub recency: usize,
+    /// How old a reading may be and still answer, in days.
+    ///
+    /// Declared rather than defaulted: what counts as stale is a property of the
+    /// subject, and a default would silently pick one for every consumer.
+    pub max_age_days: u32,
+}
+
+impl MintedQuery {
+    /// Whether the row names a mint that cannot address a receipt file.
+    ///
+    /// Refused at LOAD for [`ToolQuery::malformed`]'s reason: no state of the
+    /// filesystem makes an empty name or one carrying a path separator an
+    /// admissible declaration, so reporting it as could-not-look would present a
+    /// permanent authoring error as a transient one.
+    #[must_use]
+    pub fn malformed(&self) -> bool {
+        self.mint.is_empty()
+            || self.mint.contains('/')
+            || self.mint.contains('\\')
+            || self.id.is_empty()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Agent-sourced facts (CLOUD-776)

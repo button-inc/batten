@@ -2234,6 +2234,28 @@ pub struct Rule {
     /// than by a comparison a module could forget.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<crate::facts::ToolQuery>,
+    /// The already-minted receipt fields this policy row reads, **declared**
+    /// (CLOUD-1310).
+    ///
+    /// Each row becomes an entry of `input.tree.minted` under its own `id`,
+    /// carrying `subject -> value` tokens taken from receipts the MEDIATED
+    /// boundary wrote. The engine fetches nothing: the credential existed in the
+    /// session that read the subject, and what happens here is a line off disk.
+    ///
+    /// **Bounded by AGE, and that is why this is not [`Rule::captured`].** The
+    /// capture store is keyed by content and carries no clock, so a question
+    /// about a MUTABLE field answers from whichever read sorts first by digest —
+    /// the state before the work. Here a reading older than the row declares is
+    /// simply absent, which is [`Rule::tools`]' stale-by-construction property
+    /// rather than the capture store's.
+    ///
+    /// **Absent is the ORDINARY answer.** The receipt store lives under the git
+    /// directory and is never committed, so on a fresh clone and on every CI
+    /// runner it is empty. A module over this column therefore refuses narrowly
+    /// and abstains widely, and one that read absence as agreement would report
+    /// clean everywhere it matters least.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub minted: Vec<crate::facts::MintedQuery>,
     /// The reductions this policy row reads out of the capture store,
     /// **declared** (CLOUD-1188).
     ///
@@ -3311,6 +3333,10 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         }),
     },
     ColumnCensus {
+        field: "minted",
+        declares: Declares::Fact(crate::facts::Fact::Minted, |rule| !rule.minted.is_empty()),
+    },
+    ColumnCensus {
         field: "captured",
         declares: Declares::Fact(crate::facts::Fact::Captured, |rule| {
             !rule.captured.is_empty()
@@ -4163,6 +4189,7 @@ impl Rule {
         }
         self.validate_external_rows()?;
         self.validate_tool_rows()?;
+        self.validate_minted_rows()?;
         self.validate_pipeline_tables()?;
         self.validate_sink()?;
         self.validate_exclude_paths()?;
@@ -4497,6 +4524,59 @@ impl Rule {
             {
                 return Err(UsageError::raise(format!(
                     "rule {}: `tools` id {:?} is declared twice with different keys; one id names one verdict, or which record a module reads depends on rule order",
+                    self.id, row.id
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuse a `[[rule.minted]]` row that cannot address a receipt, or an id
+    /// declared twice over different questions (CLOUD-1310).
+    ///
+    /// **The mint NAME is not resolved against the mint table, and that is
+    /// deliberate.** A mint that has never fired leaves no receipts, which is
+    /// could-not-look and is the ordinary state on any fresh clone — so refusing
+    /// the row at load would refuse the common case rather than an authoring
+    /// error. What is refused here is only what no state of the filesystem could
+    /// make admissible.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) for a row naming an unusable mint or
+    /// id, for a row whose two column indices are the same, and for one id
+    /// declared twice over different questions.
+    fn validate_minted_rows(&self) -> anyhow::Result<()> {
+        let mut seen: BTreeMap<&str, &crate::facts::MintedQuery> = BTreeMap::new();
+        for row in &self.minted {
+            if row.malformed() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: a `minted` row needs a non-empty `id` and a `mint` that is non-empty and carries no path separator; the mint names the receipt files this reads and a separator would send it outside the store",
+                    self.id
+                )));
+            }
+            // THE TWO-COLUMNS-ARE-DIFFERENT HALF. The value and the time it was
+            // read are different columns of one line; declaring them the same
+            // index projects the timestamp as the value while the bound compares
+            // the timestamp against itself, so the row is always fresh and always
+            // answers with a clock. It reads as a working gate.
+            if row.field == row.recency {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `minted` row {:?} declares `field` and `recency` at the same index {}; the value and the time it was read are different columns, and collapsing them projects the timestamp as the value while the age bound compares it against itself",
+                    self.id, row.id, row.field
+                )));
+            }
+            // THE ONE-ID-ONE-QUESTION HALF, for `tools`' reason one function up:
+            // acquisition keys by id, so two rows declaring one id differently
+            // would resolve by whichever the loop reached first.
+            if let Some(first) = seen.insert(&row.id, row)
+                && (first.mint != row.mint
+                    || first.field != row.field
+                    || first.recency != row.recency
+                    || first.max_age_days != row.max_age_days)
+            {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `minted` id {:?} is declared twice with different questions; one id names one field of one mint at one bound, or which reading a module gets depends on rule order",
                     self.id, row.id
                 )));
             }
@@ -6041,6 +6121,7 @@ fn run(
     // THE TOOL VERDICTS (CLOUD-1171) — `forge_facts`' mechanism with a different
     // key, extracted for the same reason.
     let tool_verdicts = tool_facts(rules, root);
+    let minted = minted_facts(rules, root);
     // THE CAPTURED REDUCTIONS (CLOUD-1188) — guarded on the declaration for
     // `forge_facts`' reason, and here the guard matters more: resolving this
     // reads and parses every response in the store, so a run whose rows ask for
@@ -6100,6 +6181,7 @@ fn run(
         state: state.as_ref(),
         forge: forge.as_ref(),
         tool_verdicts: tool_verdicts.as_ref(),
+        minted: minted.as_ref(),
         captured: captured.as_ref(),
         bundles,
         verdicts: &registry,
@@ -6399,6 +6481,7 @@ struct RunInputs<'a> {
     /// A third-party tool's verdicts, per declared id (CLOUD-1171). `None` is
     /// could-not-look, for `forge`'s two reasons.
     tool_verdicts: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
+    minted: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
     /// The declared reductions over the capture store (CLOUD-1188). `None` is
     /// could-not-look: nobody asked, or no store is readable.
     captured: Option<&'a BTreeMap<String, serde_json::Value>>,
@@ -7361,6 +7444,9 @@ pub(crate) struct Resolved<'a> {
     /// A third-party tool's verdicts, per declared id (CLOUD-1171), read back
     /// from a record keyed to (tool, pinned version, input digest).
     pub tool_verdicts: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
+    /// One declared field of each already-minted receipt, per `[[rule.minted]]`
+    /// row (CLOUD-1310). `None` is could-not-look for both of its conditions.
+    pub minted: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
     /// The declared reductions over the capture store (CLOUD-1188) — the answers
     /// a row asked for, never the responses they came from.
     pub captured: Option<&'a BTreeMap<String, serde_json::Value>>,
@@ -7818,6 +7904,47 @@ fn tool_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, BTreeMap<S
     Some(crate::tools::verdicts(&git_dir, root, &declared))
 }
 
+/// Read one declared field of each already-minted receipt (CLOUD-1310).
+///
+/// [`tool_facts`]' shape a family over: **the declaration is the bound**, so a
+/// run whose rows declare no mint never lists the receipt store, and the engine
+/// fetches nothing — the boundary already did, in a session that had a
+/// credential.
+///
+/// The CLOCK is read here rather than declared, for the reason the digest is
+/// taken in [`tool_facts`]: a caller that supplied "now" could supply a time that
+/// makes a stale reading answer, which is the one direction this fact must not
+/// fail in.
+///
+/// `None` covers BOTH could-not-look conditions — nobody declared a mint, and no
+/// git directory is resolvable. An empty MAP would be a third claim ("the store
+/// was listed and holds nothing"), and on a fresh clone or any CI runner that is
+/// precisely the wrong claim to make: the store is empty there by construction,
+/// so a gate reading it as agreement would report clean exactly where it matters
+/// least.
+fn minted_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, BTreeMap<String, String>>> {
+    let declared: Vec<crate::facts::MintedQuery> = rules
+        .iter()
+        .flat_map(|rule| rule.minted.iter().cloned())
+        .collect();
+    if declared.is_empty() {
+        return None;
+    }
+    let git_dir = crate::git::git_dir(root).ok()?;
+    Some(crate::minted::fields(&git_dir, &declared, now_unix()))
+}
+
+/// Seconds since the epoch, or zero where the clock will not read.
+///
+/// Zero makes every reading look ancient, so the bound refuses rather than
+/// admits — the fail-closed direction for a fact whose whole job is to stop a
+/// stale answer being trusted.
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
 /// Reduce the capture store for each DECLARED row (CLOUD-1188).
 ///
 /// [`tool_facts`]' shape and its reason: **the declaration is the bound**, and a
@@ -8003,6 +8130,7 @@ pub(crate) fn tree_document(
             // whose KEY has no record is ABSENT from the map, which is the third
             // answer and the one the whole keying exists to produce.
             crate::facts::Fact::ToolVerdict => serde_json::json!(resolved.tool_verdicts),
+            crate::facts::Fact::Minted => serde_json::json!(resolved.minted),
             // CLOUD-1188. `null` for both could-not-look conditions — nobody
             // declared a reduction, and no store is readable. A declared id no
             // capture answered is ABSENT from the map, which is the third answer
@@ -8122,6 +8250,29 @@ pub(crate) fn tree_document(
 /// always the working tree — `--config-from` redirects the policy AUTHORITY
 /// (which rules and which module bytes), never what is being judged. So there is
 /// no ref branch here and no could-not-look arm for one.
+/// The resolved half of [`tree_document`]'s input, projected out of one run's
+/// [`RunInputs`].
+///
+/// Extracted for the reason `Projected` and `Declared` were: [`policy_rule`] sits
+/// on clippy's line ceiling, and a struct literal that grows a line every time
+/// the fact model does is what puts it over. The mapping is mechanical and every
+/// field is already a reference, so this copies no fact and resolves nothing —
+/// it only says which half of a run's inputs the tree surface reads.
+fn resolved_of<'a>(inputs: &RunInputs<'a>) -> Resolved<'a> {
+    Resolved {
+        produced: inputs.produced,
+        records: inputs.records,
+        git: inputs.git,
+        symbols: inputs.symbols,
+        external: inputs.external,
+        state: inputs.state,
+        forge: inputs.forge,
+        tool_verdicts: inputs.tool_verdicts,
+        minted: inputs.minted,
+        captured: inputs.captured,
+    }
+}
+
 fn policy_rule(
     rule: &Rule,
     inputs: &RunInputs<'_>,
@@ -8130,18 +8281,13 @@ fn policy_rule(
     // the time a `Finding` exists it is gone (CLOUD-1120).
     classes: &mut BTreeMap<String, String>,
 ) -> Option<NotObserved> {
+    // Only the three this function itself reads. Everything else the tree surface
+    // needs goes through `resolved_of`, which is what keeps this destructure from
+    // growing a line every time the fact model does.
     let &RunInputs {
         files: tracked,
         documents,
-        produced,
-        records,
         git,
-        symbols,
-        external,
-        state,
-        forge,
-        tool_verdicts,
-        captured,
         bundles,
         verdicts: registry,
         ..
@@ -8224,17 +8370,7 @@ fn policy_rule(
             external: &rule.external,
         },
         tracked,
-        &Resolved {
-            produced,
-            records,
-            git,
-            symbols,
-            external,
-            state,
-            forge,
-            tool_verdicts,
-            captured,
-        },
+        &resolved_of(inputs),
     );
     let crate::facts::Look::Is(violations) = crate::policy::deny(bundle, &input) else {
         return Some(NotObserved::RuleSkipped);
@@ -11633,6 +11769,7 @@ mod tests {
                 state: None,
                 forge: None,
                 tool_verdicts: None,
+                minted: None,
                 captured: None,
             },
         );
@@ -12208,6 +12345,7 @@ mod tests {
                 state: None,
                 forge: None,
                 tool_verdicts: None,
+                minted: None,
                 captured: None,
             },
         );
@@ -12345,6 +12483,7 @@ mod tests {
                 state: None,
                 forge: None,
                 tool_verdicts: None,
+                minted: None,
                 captured: None,
                 bundles: &[],
                 // Empty, and that is honest for this harness: it builds no
@@ -12431,6 +12570,7 @@ mod tests {
             state: Vec::new(),
             forge: Vec::new(),
             tools: Vec::new(),
+            minted: Vec::new(),
             captured: Vec::new(),
             tasks: Vec::new(),
             extract: Vec::new(),

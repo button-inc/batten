@@ -1287,8 +1287,10 @@ mod tests {
         let target = env
             .iter()
             .find(|(key, _)| key == "CARGO_TARGET_DIR")
-            .map(|(_, value)| PathBuf::from(value))
-            .expect("the sweep declares a cargo target directory");
+            .map(|(_, value)| PathBuf::from(value));
+        let Some(target) = target else {
+            panic!("the sweep declares a cargo target directory");
+        };
         assert_ne!(
             target,
             root.join("target"),
