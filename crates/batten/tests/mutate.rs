@@ -141,14 +141,21 @@ fn track(root: &Path) {
 /// Borrow this repository's vendored bats submodule rather than checking out a
 /// second copy: it is the same binary either way.
 fn lend_bats(root: &Path) {
-    let real = common::at_root("tests/bats")
-        .canonicalize()
-        .expect("the vendored runner is where the manifest says it is");
     fs::create_dir_all(root.join("tests")).expect("scratch tests dir");
     let link = root.join("tests/bats");
+    // A stale lend is a directory on one path and a symlink on the other, and
+    // `remove_dir_all` refuses the second — so clear both spellings.
     let _ = fs::remove_dir_all(&link);
+    let _ = fs::remove_file(&link);
+    // The resolved source is read only where a symlink can be made, or it is a
+    // binding no arm consumes and `-D warnings` is right to refuse it.
     #[cfg(unix)]
-    std::os::unix::fs::symlink(real, link).expect("lend the runner");
+    {
+        let real = common::at_root("tests/bats")
+            .canonicalize()
+            .expect("the vendored runner is where the manifest says it is");
+        std::os::unix::fs::symlink(real, link).expect("lend the runner");
+    }
 }
 
 /// A toy repository carrying one gate, one suite and the declared rows.
