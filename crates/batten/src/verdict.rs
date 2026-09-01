@@ -490,7 +490,7 @@ pub fn validate(verdicts: &[DeclaredVerdict], vocabulary: &Vocabulary) -> anyhow
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     // Arm 5's evidence, gathered while walking rather than by a second pass: a
     // word is used if some class or route name spends it in its own slot.
-    let mut used: BTreeSet<(usize, &str)> = BTreeSet::new();
+    let mut used: BTreeSet<(usize, String)> = BTreeSet::new();
     for verdict in verdicts {
         validate_one(verdict, grammar, &mut used)?;
         // ARM 3, uniqueness of the TRIPLE — and it is the duplicate-id refusal
@@ -505,7 +505,23 @@ pub fn validate(verdicts: &[DeclaredVerdict], vocabulary: &Vocabulary) -> anyhow
         }
     }
     if grammar.is_some() {
-        validate_no_orphan_words(vocabulary, &used)?;
+        // ARM 5 COUNTS THE VENDORED NAMES TOO, and without this the arm would
+        // refuse a word only a `Native` or preset class spends (CLOUD-1285).
+        // The vocabulary serves BOTH halves of the registry — `policy::
+        // registry_for` unions them — so a word is an orphan only when nothing
+        // in that union spends it. Membership is deliberately NOT checked
+        // against the vendored half: a third-party consumer never declared the
+        // words Batten's own classes use, and holding them to it would refuse
+        // every config that has not copied this repository's vocabulary.
+        let vendored = vendored();
+        let mut spent = used;
+        for entry in &vendored {
+            mark_spent(&entry.id, &mut spent);
+            for route in &entry.routes {
+                mark_spent(&route.id, &mut spent);
+            }
+        }
+        validate_no_orphan_words(vocabulary, &spent)?;
     }
     validate_chains(verdicts, &seen)
 }
@@ -554,6 +570,16 @@ fn validate_vocabulary(vocabulary: &Vocabulary) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Record each slot's word from a name that is already known to be well formed.
+///
+/// Takes owned copies because the vendored table is built on the fly, where the
+/// consumer half is borrowed from the config that outlives this call.
+fn mark_spent(name: &str, spent: &mut BTreeSet<(usize, String)>) {
+    for (slot, word) in name.split(' ').enumerate().take(SLOTS) {
+        spent.insert((slot, word.to_owned()));
+    }
+}
+
 /// ARM 5: a word no name spends fails the load.
 ///
 /// The mirror of the landed rule that a `[[verdict]]` row nothing raises fails
@@ -563,10 +589,10 @@ fn validate_vocabulary(vocabulary: &Vocabulary) -> anyhow::Result<()> {
 /// lists are honest about what is in them.
 fn validate_no_orphan_words(
     vocabulary: &Vocabulary,
-    used: &BTreeSet<(usize, &str)>,
+    used: &BTreeSet<(usize, String)>,
 ) -> anyhow::Result<()> {
     for (slot, entry) in vocabulary.words() {
-        if !used.contains(&(slot, entry.word.as_str())) {
+        if !used.contains(&(slot, entry.word.clone())) {
             return Err(UsageError::raise(format!(
                 "vocabulary `{}`: `{}` is declared and no class or route name spends it — \
                  a word nothing uses is dead vocabulary, which reads as headroom while \
@@ -582,11 +608,11 @@ fn validate_no_orphan_words(
 ///
 /// `kind` names what is being judged (`verdict` or a verdict's `route`) so the
 /// refusal points at the right table.
-fn check_name<'a>(
+fn check_name(
     kind: &str,
-    name: &'a str,
+    name: &str,
     vocabulary: &Vocabulary,
-    used: &mut BTreeSet<(usize, &'a str)>,
+    used: &mut BTreeSet<(usize, String)>,
 ) -> anyhow::Result<()> {
     let words: Vec<&str> = name.split(' ').collect();
     // ARM 1.
@@ -613,16 +639,16 @@ fn check_name<'a>(
                 SLOT_NAMES[slot]
             )));
         }
-        used.insert((slot, word));
+        used.insert((slot, (*word).to_owned()));
     }
     Ok(())
 }
 
 /// The per-entry half of [`validate`].
-fn validate_one<'a>(
-    verdict: &'a DeclaredVerdict,
+fn validate_one(
+    verdict: &DeclaredVerdict,
     grammar: Option<&Vocabulary>,
-    used: &mut BTreeSet<(usize, &'a str)>,
+    used: &mut BTreeSet<(usize, String)>,
 ) -> anyhow::Result<()> {
     let id = verdict.id.as_str();
     if let Some(vocabulary) = grammar {
@@ -703,11 +729,11 @@ fn validate_one<'a>(
 }
 
 /// The per-route half of [`validate_one`].
-fn validate_route<'a>(
+fn validate_route(
     verdict: &str,
-    route: &'a Route,
+    route: &Route,
     grammar: Option<&Vocabulary>,
-    used: &mut BTreeSet<(usize, &'a str)>,
+    used: &mut BTreeSet<(usize, String)>,
 ) -> anyhow::Result<()> {
     let id = route.id.as_str();
     if let Some(vocabulary) = grammar {
@@ -876,6 +902,44 @@ pub enum Native {
     SpawningRuleOnReadVerb,
     /// The end-of-turn facts do not permit stopping.
     StopConditionUnmet,
+    // ─── the mediated composers' own classes (CLOUD-1285) ────────────────────
+    //
+    // These are Batten's OWN words about generic concepts, which is what puts
+    // them here rather than in a consumer `[[verdict]]` row. The engine composed
+    // each cause as a hardcoded `format!` in `hook.rs` and then threw the class
+    // away by calling `Refusal::new`, so `refusal.verdict()` was `None` on eight
+    // of ten mediated deny paths and `batten policy explain` was unreachable from
+    // every path that actually fires.
+    //
+    // The consumer's `[[rule]]` row still supplies the FIX -- `Refusal::declared`
+    // takes it as a parameter and a narrower one wins -- so this does not move
+    // the remedy into the crate. It moves the CAUSE, which was already here.
+    /// No receipt at all for what the row keys on.
+    ReceiptUnusable,
+    /// The receipt exists and is older than the row allows.
+    ReceiptExpired,
+    /// The receipt records something the row does not accept.
+    ReceiptRefuted,
+    /// An amend or a rebase replaced the bytes the receipt validated.
+    ReceiptSuperseded,
+    /// The receipt was taken against a trunk this branch has moved off.
+    ReceiptOffTrunk,
+    /// A shell text utility stood in for the structured file surface.
+    ToolSubstituted,
+    /// A verdict-bearing command was piped into a pager or filter.
+    VerdictPiped,
+    /// A verdict-bearing command was followed by `;` or `||`.
+    VerdictTrailing,
+    /// A verdict-bearing command was detached from its tool call.
+    RunOrphaned,
+    /// The call measures over a declared ceiling.
+    CeilingExceeded,
+    /// The call matches a refused command shape.
+    ShapeRefused,
+    /// The content this call would write matches a refused shape.
+    ContentRefused,
+    /// The work this call publishes names no tracker key.
+    KeyMissing,
 }
 
 impl Native {
@@ -892,6 +956,19 @@ impl Native {
         Native::ScannerUnprovisioned,
         Native::SpawningRuleOnReadVerb,
         Native::StopConditionUnmet,
+        Native::ReceiptUnusable,
+        Native::ReceiptExpired,
+        Native::ReceiptRefuted,
+        Native::ReceiptSuperseded,
+        Native::ReceiptOffTrunk,
+        Native::ToolSubstituted,
+        Native::VerdictPiped,
+        Native::VerdictTrailing,
+        Native::RunOrphaned,
+        Native::CeilingExceeded,
+        Native::ShapeRefused,
+        Native::ContentRefused,
+        Native::KeyMissing,
     ];
 
     /// The token this class is declared and rendered under.
@@ -905,6 +982,19 @@ impl Native {
             Native::ScannerUnprovisioned => "scanner install missing",
             Native::SpawningRuleOnReadVerb => "spawn run refused",
             Native::StopConditionUnmet => "turn finish unmet",
+            Native::ReceiptUnusable => "receipt read missing",
+            Native::ReceiptExpired => "receipt read late",
+            Native::ReceiptRefuted => "receipt carry other",
+            Native::ReceiptSuperseded => "receipt read other",
+            Native::ReceiptOffTrunk => "receipt read stale",
+            Native::ToolSubstituted => "tool run loose",
+            Native::VerdictPiped => "verdict read dropped",
+            Native::VerdictTrailing => "verdict carry other",
+            Native::RunOrphaned => "turn watch dropped",
+            Native::CeilingExceeded => "call count over",
+            Native::ShapeRefused => "call name refused",
+            Native::ContentRefused => "input write refused",
+            Native::KeyMissing => "issue name missing",
         }
     }
 }
@@ -1092,6 +1182,134 @@ the thing rather than to re-declare that it is finished.",
             run("task run first", "mise run land"),
             read("config read first", "batten.toml"),
         ],
+    },
+    // ── the mediated composers' classes (CLOUD-1285) ────────────────────────
+    //
+    // The cause each of these carries used to be a hardcoded `format!` in
+    // `hook.rs` that `Refusal::new` then dropped the class for. Moving the prose
+    // here is what makes it dereferenceable: `batten policy explain <token>`
+    // answers with the `class` below, so the hot path can carry the token and the
+    // pointers and stop repeating the paragraph on every firing.
+    VendoredVerdict {
+        id: "receipt read missing",
+        gloss: "a declared receipt does not attest the commit this call is made against",
+        class: "A `receipt` row names checks whose verdict must already exist for this \
+commit, in this checkout. The receipt is missing, older than the row allows, recorded \
+against a different head, or records something the row does not accept -- and the refusal \
+names which, because the four call for different repairs. Re-running the check is the \
+remedy for a missing one and useless for a refuted one.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "receipt read late",
+        gloss: "the receipt exists and is older than the row allows",
+        class: "The step RAN, and not recently enough for its verdict to still be evidence. \
+That is a different repair from a missing receipt and is why it is a different class: \
+re-run the check. A row declaring a `max_age` is saying the world can move underneath the \
+answer, so an old verdict is could-not-look rather than a pass.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "receipt carry other",
+        gloss: "the receipt records something this row does not accept",
+        class: "The step ran and what it recorded is not what the row requires. This is the \
+one receipt class that is a statement about what was READ rather than about the read, so \
+re-running the check changes nothing until the thing it reports is fixed. An ABSENT field \
+is could-not-look and is not this class.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "receipt read other",
+        gloss: "an amend or a rebase replaced the bytes this receipt validated",
+        class: "The receipt is keyed to a commit this branch no longer carries. Its verdict \
+covered the bytes it read and nothing later, so it is not evidence about this head. Re-run \
+the check against what is here now. Kept apart from the trunk case because the two name \
+different things that moved, and a refusal that says the wrong one sends the reader after \
+the wrong repair.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "receipt read stale",
+        gloss: "the receipt was taken against a trunk this branch has moved off",
+        class: "The check ran against an `origin/main` that has since advanced, so its \
+verdict is about a base this branch no longer sits on. Rebase and re-run. Distinct from \
+the amend case: there the branch's own bytes changed, here the trunk under them did, and \
+only one of the two is fixed by rebasing.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "tool run loose",
+        gloss: "a shell text utility stood in for the structured file surface",
+        class: "The call reaches for a text utility over a path this repository tracks, as \
+its FIRST stage, to answer a question the structured surface answers directly and better: \
+a range of one file's contents, a pattern across the tree, paths by glob, or what a name \
+resolves to. Which instruments a session carries varies, so the refusal names the question \
+classes rather than a product. The same utility DOWNSTREAM of a pipe is untouched, because \
+filtering another command's output is not standing in for anything.",
+        routes: &[read("rule read first", ".claude/rules/scanning.md")],
+    },
+    VendoredVerdict {
+        id: "verdict read dropped",
+        gloss: "piping a verdict-bearing command into a pager or filter discards its status",
+        class: "The pipeline exits with the FILTER's status, which is 0 whether the command \
+passed or failed. A verdict is read from the harness, never inferred from output. Redirect \
+to a file and read the file in a separate call; a pager over a FILE is fine, a pager over a \
+live task is not.",
+        routes: &[read("rule read first", ".claude/rules/toolchain.md")],
+    },
+    VendoredVerdict {
+        id: "verdict carry other",
+        gloss: "a verdict-bearing command followed by `;` or `||` has its status replaced",
+        class: "Only the last element's status survives, so the compound reports the wrong \
+command's verdict. This is the laundered shape: it reads as correct, and backgrounded it is \
+worse than a misread, because the completion notification then carries the compound's \
+status. `&&` is fine -- it short-circuits, so a failure still propagates.",
+        routes: &[read("rule read first", ".claude/rules/toolchain.md")],
+    },
+    VendoredVerdict {
+        id: "turn watch dropped",
+        gloss: "detaching a verdict-bearing command orphans it from the tool call",
+        class: "`nohup` or a trailing `&` returns the call at once, the harness records it \
+complete, and the session loses the wake-up it would get when the work actually exits. \
+Backgrounding the tool call is the supported shape and keeps the notification; detaching \
+inside the call throws it away.",
+        routes: &[read("rule read first", ".claude/rules/toolchain.md")],
+    },
+    VendoredVerdict {
+        id: "call count over",
+        gloss: "this call measures over a ceiling the config declares",
+        class: "A `ceiling` row counts something about the call and refuses above a declared \
+maximum. The count and the maximum are the whole finding -- what was counted is the row's \
+subject, and the refusal carries neither the measured content nor the call text, which is \
+non-negotiable rule 4 decided at the composer rather than at the report.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "call name refused",
+        gloss: "the mediated call matches a command shape the config refuses",
+        class: "A `shape` row declares a command spelling that is refused outright. The \
+refusal names the row rather than echoing the command, because the command is the caller's \
+own text and could carry anything. What to run instead is the row's declared remedy.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "input write refused",
+        gloss: "the content this call would write matches a refused shape",
+        class: "A `content` row judges what a write would PUT somewhere rather than which \
+path it targets, so it fires before the bytes land. The refusal names the row and the \
+destination and never the matched content -- this rule reads exactly the text somebody \
+wanted checked, which is the likeliest place in the surface for a secret to appear.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "issue name missing",
+        gloss: "the work this call publishes names no tracker key",
+        class: "A `requires_key` row narrows a refusal from \"this command is banned\" to \
+\"this command is banned unless the work is keyed\". Three evidence sources are read and any \
+one of them allows: the command itself, the branch name, and the commit subjects on the \
+range the row declares. None carried a key, so nothing on the published work says which row \
+it serves.",
+        routes: &[read("config read first", "batten.toml")],
     },
     // ── vendored presets ────────────────────────────────────────────────────
     VendoredVerdict {
@@ -1488,8 +1706,11 @@ mod tests {
         // has walked it.
         let mut wider = vocab();
         wider.condition.push(VocabularyWord {
-            word: "stale".to_owned(),
-            gloss: "answers for a state that has moved".to_owned(),
+            // Deliberately a word no VENDORED name spells: `mark_spent` walks the
+            // vendored table too, so a plausible-looking condition can be spent
+            // from under this case by a class landed elsewhere in the crate.
+            word: "unwalked".to_owned(),
+            gloss: "answers for a route nothing has taken".to_owned(),
         });
         assert!(validate(&[named("task read first")], &wider).is_err());
     }
@@ -1639,7 +1860,20 @@ mod tests {
                 | Native::ScannerUnpinned
                 | Native::ScannerUnprovisioned
                 | Native::SpawningRuleOnReadVerb
-                | Native::StopConditionUnmet => native.id(),
+                | Native::StopConditionUnmet
+                | Native::ReceiptUnusable
+                | Native::ReceiptExpired
+                | Native::ReceiptRefuted
+                | Native::ReceiptSuperseded
+                | Native::ReceiptOffTrunk
+                | Native::ToolSubstituted
+                | Native::VerdictPiped
+                | Native::VerdictTrailing
+                | Native::RunOrphaned
+                | Native::CeilingExceeded
+                | Native::ShapeRefused
+                | Native::ContentRefused
+                | Native::KeyMissing => native.id(),
             };
             // The prefix is gone (CLOUD-1284), so what makes this a token is the
             // ARITY: exactly three words. Asserting that here rather than a

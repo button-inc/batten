@@ -4567,76 +4567,29 @@ fn receipt_refusal(
     verdict: Validity,
     sourced: Option<&crate::facts::Declared>,
 ) -> Refusal {
-    let cause = match verdict {
-        // The cause names what the receipt is keyed to (CLOUD-444), because that
-        // is what the reader has to act on: "no receipt for this commit" sends
-        // someone looking for a per-commit step when what is missing is a claim
-        // the whole branch shares, and a wrong pointer is CLOUD-122's failure in
-        // its most confusing form.
-        Validity::Missing if rule.receipt_key() == ReceiptKey::Branch => {
-            format!("this branch carries no `{check}` receipt")
-        }
-        // `Named` was added by CLOUD-987 and this match was not extended with it,
-        // so a subject-keyed row fell through to the commit wording below — the
-        // exact wrong pointer the paragraph above calls CLOUD-122's failure in its
-        // most confusing form, sending the reader after a per-commit step when what
-        // is missing is a read of one row. Caught while retiring CLOUD-312 row 2,
-        // the first consumer of this key.
-        //
-        // The SUBJECT IS NOT NAMED, and that is rule 4 rather than reticence: it is
-        // read from the call's own arguments, so echoing it would put payload in a
-        // refusal. Naming the *kind* of thing keyed on is what the reader needs to
-        // act, and it is what the branch arm above does too.
-        Validity::Missing if rule.receipt_key() == ReceiptKey::Named => {
-            format!("no `{check}` receipt for the row this call names")
-        }
-        // A DIFFERENT REMEDY FROM `Missing`, which is why it is a different
-        // variant: the step ran, and the answer it recorded is too old for what
-        // this row declares. Naming the bound rather than the age keeps this a
-        // pointer (rule 4) and keeps the line byte-stable — an elapsed second in
-        // the output would make every run's bytes differ, and CLOUD-521 is the
-        // recorded cost of grading anything on one.
-        Validity::Expired => match rule.max_age {
-            Some(seconds) => format!(
-                "the `{check}` receipt is older than the {seconds}s this row allows — the step ran, \
-                 but not recently enough to still be evidence"
-            ),
-            // Unreachable through `receipt::verdicts`, which only mints this
-            // verdict from a declared bound. Stated rather than `unreachable!`:
-            // library code does not panic on a reachable path, and a wrong-but-
-            // honest sentence beats a crash inside a guard.
-            None => format!("the `{check}` receipt is older than this row allows"),
-        },
-        // A DIFFERENT REMEDY AGAIN, and the one furthest from the others: every
-        // verdict above says *run the step*, and this one says *the step ran and
-        // said no*. Naming the required value rather than the recorded one is
-        // rule 4 — the recorded value came out of the subject, and echoing it
-        // would put a judgement about somebody's row into a refusal — and it is
-        // also what the reader needs, because the required value is the state
-        // they have to reach.
-        Validity::Refuted => match rule.requires_field.as_ref() {
-            Some(bound) => format!(
-                "the `{check}` receipt does not record `{}` — the step ran, and what it recorded \
-                 is not what this row requires",
-                bound.is
-            ),
-            // Unreachable through `receipt::verdicts`, which only mints this
-            // verdict from a declared bound. Stated rather than `unreachable!`
-            // for `Expired`'s reason one arm up.
-            None => format!("the `{check}` receipt does not record what this row requires"),
-        },
-        Validity::Missing => {
-            format!("`{check}` has recorded no receipt for this commit in this checkout")
-        }
-        Validity::StaleHead => format!(
-            "the `{check}` receipt was taken against a different commit — an amend or a rebase replaced the bytes it validated"
-        ),
-        Validity::StaleMain => format!(
-            "the `{check}` receipt was taken against an older origin/main, which has since moved"
-        ),
-        // Not reachable from the caller, which only refuses a non-valid
-        // verdict. Stated rather than unwrapped so the match stays total.
-        Validity::Valid => format!("`{check}` is valid"),
+    // FOUR CLASSES, NOT ONE (CLOUD-1285). These were seven arms of one `format!`
+    // and they are not one thing: a MISSING receipt is repaired by running the
+    // check, an EXPIRED one by running it again, a REFUTED one by fixing what it
+    // reported — running it again changes nothing — and a SUPERSEDED one is
+    // evidence about bytes this head no longer carries. Collapsing them would
+    // make the registry less precise than the prose it replaced, which is the
+    // one way this conversion could lose something.
+    //
+    // The check NAME is the pointer and is the whole of what travels. The row's
+    // subject is deliberately not named even where one exists: it is read from
+    // the call's own arguments, so echoing it would put payload in a refusal
+    // (rule 4). Which KIND of thing the receipt is keyed to is the class's, and
+    // `batten policy explain` answers it.
+    let native = match verdict {
+        Validity::Expired => crate::verdict::Native::ReceiptExpired,
+        Validity::Refuted => crate::verdict::Native::ReceiptRefuted,
+        Validity::StaleHead => crate::verdict::Native::ReceiptSuperseded,
+        Validity::StaleMain => crate::verdict::Native::ReceiptOffTrunk,
+        // `Valid` is not reachable from the caller, which only refuses a
+        // non-valid verdict. It resolves here rather than panicking so the match
+        // stays total, and it renders as the missing case, which is the honest
+        // reading of "there is no usable receipt".
+        Validity::Missing | Validity::Valid => crate::verdict::Native::ReceiptUnusable,
     };
     // An agent-sourced fact's remedy is the DECLARED COMMAND, not the row's
     // prose (CLOUD-776). That is what makes the loop close: the agent is told
@@ -4660,7 +4613,41 @@ fn receipt_refusal(
         },
         None => Fix::declared(rule.reason.as_deref()),
     };
-    Refusal::new(&rule.id, cause, fix)
+    // THE KEYING TRAVELS AS A SUBJECT, because it is what the reader acts on and
+    // dropping it was a real loss the suite caught. "No receipt for this commit"
+    // sends someone looking for a per-commit step when what is missing is a claim
+    // the whole branch shares — the wrong pointer this composer's own comment
+    // calls CLOUD-122's failure in its most confusing form. It is the KIND of
+    // thing keyed on, never the subject itself, which is read from the call's own
+    // arguments and would be payload (rule 4).
+    let keyed = match rule.receipt_key() {
+        ReceiptKey::Branch => "branch",
+        ReceiptKey::Named => "row",
+        ReceiptKey::Head => "commit",
+    };
+    // THE BOUND TRAVELS TOO, and only on the class it is the measure for. A
+    // reader acting on an expiry needs to know what the age was measured
+    // against — `300s` is the difference between "run it again" and "this row
+    // wants a step nobody can satisfy" — and it is a declared number rather
+    // than a byte of the call, so rule 4 is satisfied. It is omitted on every
+    // other class because there it is not what refused.
+    let mut subjects = vec![
+        crate::verdict::Subject::Artifact {
+            artifact: check.to_owned(),
+        },
+        crate::verdict::Subject::Artifact {
+            artifact: keyed.to_owned(),
+        },
+    ];
+    if let Some(bound) = rule
+        .max_age
+        .filter(|_| matches!(verdict, Validity::Expired))
+    {
+        subjects.push(crate::verdict::Subject::Artifact {
+            artifact: format!("{bound}s"),
+        });
+    }
+    Refusal::declared(&rule.id, native, &subjects, fix)
 }
 
 /// The id-free half of the pipeline verdict: which shape a command commits.
@@ -4943,15 +4930,24 @@ fn repo_relative_path(token: &str) -> bool {
 /// names the questions and lets the caller map them onto what it has, which is
 /// the one part of this it can do and the engine cannot.
 fn substitution_refusal(rule: &Rule, program: &str, target: &str) -> Refusal {
-    let cause = format!(
-        "`{program}` was aimed at `{target}`, a path in this repository, as the first stage of the \
-         call — a question the structured file surface answers directly, and better: reading a \
-         range of one file's contents, matching a pattern across the tree, listing paths by glob, \
-         or resolving what a NAME refers to. Reach for whichever of those this session offers. The \
-         same utility DOWNSTREAM of a pipe is untouched, because filtering another command's \
-         output is not standing in for anything"
-    );
-    Refusal::new(&rule.id, &cause, Fix::declared(rule.reason.as_deref()))
+    // THE TWO POINTERS STAY INLINE and the paragraph does not (CLOUD-1285). Which
+    // program was aimed at which path is what the caller acts on; the four
+    // question classes and the downstream-of-a-pipe bound are the CLASS, and
+    // `batten policy explain` is what fetches them. The path is first because
+    // `Refusal::declared` binds an admission to the first path-bearing subject.
+    Refusal::declared(
+        &rule.id,
+        crate::verdict::Native::ToolSubstituted,
+        &[
+            crate::verdict::Subject::Path {
+                path: target.to_owned(),
+            },
+            crate::verdict::Subject::Artifact {
+                artifact: program.to_owned(),
+            },
+        ],
+        Fix::declared(rule.reason.as_deref()),
+    )
 }
 
 /// Compose a pipeline refusal: which shape, and the row's declared remedy.
@@ -4961,26 +4957,17 @@ fn substitution_refusal(rule: &Rule, program: &str, target: &str) -> Refusal {
 /// was worded around one command string, an agent complied with it exactly, and
 /// made the identical error on the next command in the same session.
 fn pipeline_refusal(rule: &Rule, discard: Discard) -> Refusal {
-    let cause = match discard {
-        Discard::Piped => {
-            "piping a verdict-bearing command into a pager or filter discards its \
-             exit status — the pipeline exits with the filter's, which is 0 whether the command \
-             passed or failed. A verdict is read from the harness, never inferred from output"
-        }
-        Discard::Trailing => {
-            "a verdict-bearing command followed by `;` or `||` has its exit \
-             status replaced — only the last element's survives. This is the laundered shape: it \
-             reads as correct, and backgrounded it is worse than a misread, because the completion \
-             notification then carries the compound's status. (`&&` is fine: it short-circuits, \
-             so a failure still propagates.)"
-        }
-        Discard::Orphaned => {
-            "detaching a verdict-bearing command with `nohup` or a trailing `&` \
-             orphans it from the tool call: the call returns at once, the harness records it \
-             complete, and the session loses the wake-up it would get when the work exits"
-        }
+    // THREE SHAPES, THREE CLASSES (CLOUD-1285). They were three branches of one
+    // `format!` and they are three different defects with three different
+    // repairs, so collapsing them into one token would have made the registry
+    // less precise than the prose it replaced. Each carries its own `class`, and
+    // `batten policy explain` answers with the one that fired.
+    let native = match discard {
+        Discard::Piped => crate::verdict::Native::VerdictPiped,
+        Discard::Trailing => crate::verdict::Native::VerdictTrailing,
+        Discard::Orphaned => crate::verdict::Native::RunOrphaned,
     };
-    Refusal::new(&rule.id, cause, Fix::declared(rule.reason.as_deref()))
+    Refusal::declared(&rule.id, native, &[], Fix::declared(rule.reason.as_deref()))
 }
 
 /// Judge the tool a mediated call names (CLOUD-924).
@@ -5220,13 +5207,43 @@ fn manifest_ceiling(policy: &Policy, envelope: &Envelope, counted: ManifestFacts
 /// [`Refusal`], and the measured value is never passed to this function — so
 /// there is no field a byte of it could occupy. That is what makes counting a
 /// prompt admissible where echoing one is not.
+/// A row's declared `policy_url` as a subject, so a converted refusal keeps it.
+///
+/// It was appended to four composers' cause strings as `". See <url>"`, and the
+/// conversion to a declared class dropped it — a real pointer lost, which is the
+/// one thing CLOUD-1285 must not do. It is the CONSUMER's declared pointer, so it
+/// belongs beside the class's own route rather than inside the class prose, and a
+/// tagged `Artifact` is what carries it without inventing a subject kind.
+fn policy_url_subject(rule: &Rule) -> Vec<crate::verdict::Subject> {
+    rule.policy_url
+        .as_deref()
+        .map(|url| {
+            vec![crate::verdict::Subject::Artifact {
+                artifact: url.to_owned(),
+            }]
+        })
+        .unwrap_or_default()
+}
+
 fn ceiling_refusal(rule: &Rule, count: usize, max: usize) -> Refusal {
-    let mut cause = format!("this call measures {count} against a declared ceiling of {max}");
-    if let Some(url) = rule.policy_url.as_deref() {
-        cause.push_str(". See ");
-        cause.push_str(url);
-    }
-    Refusal::new(&rule.id, cause, Fix::declared(rule.reason.as_deref()))
+    // THE COUNT AND THE CEILING TRAVEL AS SUBJECTS (CLOUD-1285), not as prose.
+    // `Subject::Count` is a tagged pointer, so the two numbers a reader acts on
+    // stay in the line while the paragraph explaining what a ceiling IS moves
+    // behind `batten policy explain`. The `policy_url` was a fourth copy of the
+    // same "See <url>" tail in this file; it is the class's route now.
+    let mut subjects = vec![
+        crate::verdict::Subject::Count {
+            count: count as u64,
+        },
+        crate::verdict::Subject::Count { count: max as u64 },
+    ];
+    subjects.extend(policy_url_subject(rule));
+    Refusal::declared(
+        &rule.id,
+        crate::verdict::Native::CeilingExceeded,
+        &subjects,
+        Fix::declared(rule.reason.as_deref()),
+    )
 }
 
 fn shape_rules(policy: &Policy, envelope: &Envelope, command: &str, keys: &KeyFacts) -> Decision {
@@ -5516,17 +5533,20 @@ fn policy_refusal(
             if strongest.as_ref().is_none_or(|(held, _)| severity > *held) {
                 strongest = Some((
                     severity,
-                    Refusal::new(
+                    // RECORDS THE TOKEN IT ALREADY RENDERS (CLOUD-1285). This
+                    // path was half-converted: it took the line from
+                    // `render_line` and the fix from the class's first `command`
+                    // route, and then called `Refusal::new`, which sets
+                    // `verdict: None`. So `refusal.verdict()` was `None` on the
+                    // module path too and `batten policy explain` was
+                    // unreachable from the one surface that had already done the
+                    // work of resolving the class.
+                    Refusal::from_class(
                         bundle.attribute(violation),
-                        crate::verdict::render_line(
-                            &policy.verdicts,
-                            &violation.verdict,
-                            &violation.subjects,
-                        ),
-                        Fix::declared(crate::verdict::first_command_route(
-                            &policy.verdicts,
-                            &violation.verdict,
-                        )),
+                        &policy.verdicts,
+                        &violation.verdict,
+                        &violation.subjects,
+                        Fix::None,
                     ),
                 ));
             }
@@ -6692,12 +6712,15 @@ fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
 ///
 /// [`RuleKind::Shape`]: crate::rules::RuleKind::Shape
 fn shape_refusal(rule: &Rule) -> Refusal {
-    let mut cause = "the mediated call matches a refused command shape".to_owned();
-    if let Some(url) = rule.policy_url.as_deref() {
-        cause.push_str(". See ");
-        cause.push_str(url);
-    }
-    Refusal::new(&rule.id, cause, Fix::declared(rule.reason.as_deref()))
+    // NO SUBJECT, and that is rule 4 rather than an omission: the only thing this
+    // refusal could point at is the command itself, which is the caller's own
+    // text and could carry anything. The row id is the pointer.
+    Refusal::declared(
+        &rule.id,
+        crate::verdict::Native::ShapeRefused,
+        &policy_url_subject(rule),
+        Fix::declared(rule.reason.as_deref()),
+    )
 }
 
 /// Compose a content-keyed row's refusal (CLOUD-758).
@@ -6709,15 +6732,27 @@ fn shape_refusal(rule: &Rule) -> Refusal {
 /// learns which row fired and which file to open, and the refusal cannot leak
 /// the thing it refused.
 fn content_refusal(rule: &Rule, envelope: &Envelope) -> Refusal {
-    let mut cause = match envelope.writes.as_deref() {
-        Some(path) => format!("the content this would write to {path} matches a refused shape"),
-        None => "the content this would write matches a refused shape".to_owned(),
-    };
-    if let Some(url) = rule.policy_url.as_deref() {
-        cause.push_str(". See ");
-        cause.push_str(url);
-    }
-    Refusal::new(&rule.id, cause, Fix::declared(rule.reason.as_deref()))
+    // THE DESTINATION IS THE POINTER, when the host reported one. What the
+    // content IS never appears — this rule reads exactly the text somebody
+    // wanted checked, which is the likeliest place in the surface for a secret,
+    // so rule 4 is decided here at the composer rather than at the report.
+    let subjects: Vec<crate::verdict::Subject> = envelope
+        .writes
+        .as_deref()
+        .map(|path| {
+            vec![crate::verdict::Subject::Path {
+                path: path.to_owned(),
+            }]
+        })
+        .unwrap_or_default();
+    let mut subjects = subjects;
+    subjects.extend(policy_url_subject(rule));
+    Refusal::declared(
+        &rule.id,
+        crate::verdict::Native::ContentRefused,
+        &subjects,
+        Fix::declared(rule.reason.as_deref()),
+    )
 }
 
 /// Compose a keyed shape row's refusal (CLOUD-446).
@@ -6733,15 +6768,15 @@ fn content_refusal(rule: &Rule, envelope: &Envelope) -> Refusal {
 /// and the cause names **none** of it (non-negotiable rule 4). What the author
 /// needs is where to put a key, which is the row's own `reason`.
 fn unkeyed_refusal(rule: &Rule) -> Refusal {
-    let mut cause =
-        "the work this call publishes names no tracker key — not in the command, the branch, \
-         or any commit on it"
-            .to_owned();
-    if let Some(url) = rule.policy_url.as_deref() {
-        cause.push_str(". See ");
-        cause.push_str(url);
-    }
-    Refusal::new(&rule.id, cause, Fix::declared(rule.reason.as_deref()))
+    // No subject: the three evidence sources are the CLASS, and none of them
+    // produced a key to point at. Naming the command would be the caller's own
+    // text back again.
+    Refusal::declared(
+        &rule.id,
+        crate::verdict::Native::KeyMissing,
+        &policy_url_subject(rule),
+        Fix::declared(rule.reason.as_deref()),
+    )
 }
 
 /// One shell-separated span of a mediated command, in the two forms policy needs.

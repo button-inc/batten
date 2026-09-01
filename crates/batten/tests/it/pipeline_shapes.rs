@@ -207,8 +207,13 @@ fn the_refusal_states_the_principle_rather_than_naming_one_command() {
         refusal.contains("verdict-not-discarded"),
         "names the rule: {refusal}"
     );
+    // The principle now travels as the declared class rather than as a sentence
+    // composed at the boundary: the token generalises by construction, because
+    // it names the STRUCTURE (a verdict that was read and dropped) and not the
+    // command that happened to be written. That is CLOUD-1285's whole claim, and
+    // this is the case that would notice it being untrue.
     assert!(
-        refusal.contains("exit status"),
+        refusal.contains("verdict read dropped"),
         "states the principle: {refusal}"
     );
     assert!(
@@ -227,9 +232,18 @@ fn each_shape_renders_its_own_cause() {
     // Three causes from one row, in `receipt_refusal`'s idiom. A single generic
     // message would leave the reader to work out which of three structures they
     // wrote.
-    assert!(cause("mise run verify | tail -1").contains("pager or filter"));
-    assert!(cause("mise run verify >log 2>&1; ls").contains("only the last element"));
-    assert!(cause("nohup mise run verify &").contains("orphans it"));
+    // CLOUD-1285 made each of the three a DECLARED class rather than a `format!`
+    // arm, so the discrimination this case asserts is now over three registry
+    // tokens — the same three structures, reachable from `batten policy explain`
+    // instead of only from this file.
+    assert!(cause("mise run verify | tail -1").contains("verdict read dropped"));
+    assert!(cause("mise run verify >log 2>&1; ls").contains("verdict carry other"));
+    assert!(cause("nohup mise run verify &").contains("turn watch dropped"));
+    // And they are three, not one wearing three hats: no shape renders another's
+    // class. Without this arm a composer collapsing all three onto one token
+    // would still satisfy the three assertions above via a substring.
+    assert!(!cause("mise run verify | tail -1").contains("turn watch dropped"));
+    assert!(!cause("nohup mise run verify &").contains("verdict read dropped"));
 }
 
 // --- the substitution family (CLOUD-864) --------------------------------------

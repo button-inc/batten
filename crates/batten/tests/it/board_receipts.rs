@@ -565,12 +565,22 @@ fn an_update_with_no_receipt_is_refused() {
     // and a subject-keyed row fell through to the commit one — telling the reader
     // to re-run a per-commit step when what is absent is a read of one row. Found
     // by this row, the key's first consumer.
+    // CLOUD-1285 moved the wording into a declared class and its POINTERS, so
+    // the sentence this case used to pin no longer exists. What it was actually
+    // asserting does: the check name and the KIND of thing the receipt is keyed
+    // to both travel, and the keying is `row` rather than `branch`. The negative
+    // arm is what keeps this discriminating — a composer that dropped the keying
+    // subject entirely would satisfy the first assertion alone.
     assert!(
-        text.contains("no `issue-read` receipt for the row this call names"),
-        "the verdict must name what is missing in this row's own terms: {text}"
+        text.contains("issue-read"),
+        "the verdict must name the check whose receipt is missing: {text}"
     );
     assert!(
-        !text.contains("this branch carries no"),
+        text.contains("row"),
+        "and the keying, in this row's own terms: {text}"
+    );
+    assert!(
+        !text.contains("branch"),
         "and not in the branch-keyed terms, which is the neighbouring arm: {text}"
     );
 

@@ -191,15 +191,35 @@ impl Refusal {
         fix: Fix,
     ) -> Refusal {
         let registry = crate::verdict::vendored();
-        let token = native.id();
+        Refusal::from_class(rule, &registry, native.id(), subjects, fix)
+    }
+
+    /// The same constructor, over a registry and a token the caller resolved.
+    ///
+    /// **Not a third constructor** (CLOUD-1285 is explicit about not writing
+    /// one): [`Refusal::declared`] is this function with the token taken from a
+    /// [`crate::verdict::Native`], and every line below used to live there. It is
+    /// split out because a POLICY MODULE's refusal carries a token the module
+    /// raised and the consumer's registry declares, so there is no `Native` to
+    /// name — and before this that path called [`Refusal::new`] and threw the
+    /// class away, leaving `verdict()` as `None` even though it had already
+    /// rendered the class's own line.
+    #[must_use]
+    pub fn from_class(
+        rule: impl Into<String>,
+        registry: &[crate::verdict::DeclaredVerdict],
+        token: &str,
+        subjects: &[crate::verdict::Subject],
+        fix: Fix,
+    ) -> Refusal {
         let fix = match fix {
             Fix::Run(text) => Fix::Run(text),
-            Fix::None => Fix::declared(crate::verdict::first_command_route(&registry, token)),
+            Fix::None => Fix::declared(crate::verdict::first_command_route(registry, token)),
         };
         Refusal {
             rule: rule.into(),
             verdict: Some(token.to_owned()),
-            reason: crate::verdict::render_line(&registry, token, subjects),
+            reason: crate::verdict::render_line(registry, token, subjects),
             fix,
             subject: subjects.iter().find_map(|subject| match subject {
                 crate::verdict::Subject::Path { path }
