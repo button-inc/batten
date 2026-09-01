@@ -133,6 +133,24 @@ declared[path] := parts if {
 # this is five kinds rather than eighteen accidents — a task manifest, a hook
 # config, the policy authority, a launcher hook, and a source file.
 #
+# WHAT AN EXEMPTION MEANS NOW, AND IT IS NO LONGER "THE SUBJECT CANNOT DIE"
+# (CLOUD-1268). That reason was true when this table was written and is answered:
+# `// ported:` admits a deletion whose subject survives, and two rows have already
+# left this table by spending it. So every row remaining is exempt on COST, not on
+# impossibility — measured, the thirteen below total 11.4s against a 667.4s corpus,
+# and each would owe a ledger block and a Rust port for a sub-second yield. The
+# distinction matters to the next reader: these are unported, not unportable, and a
+# row that wants one only has to be worth writing.
+#
+# ONE IS NOT ABOUT COST AND HAS ITS OWN ROW. `session-start` is the largest suite
+# here by two orders of magnitude, and porting it would move its seconds rather
+# than remove them — the cost is `mise install` in the two cases that opt back in
+# through `real_install_or_skip`, not the bats harness. Its remedy is warming the
+# toolchain once in `[tasks."test:bats"]`, which is CLOUD-1273's and is not a
+# retirement at all. `.claude/hooks/session-start.sh` was never governed for edits
+# OR for deletion either, so filing it under an immortal subject sent every pass at
+# it toward a retirement it never needed.
+#
 # TWO CARRY A SECOND VERDICT THE ROW OWES SEPARATELY. `release-tracking-check` and
 # `remedy-payload-source` each glue a GOVERNED program to an immortal subject, so
 # `mise-tasks/release-tracking-check.sh` and `mise-tasks/board-payloads.sh` are
