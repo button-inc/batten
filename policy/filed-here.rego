@@ -298,7 +298,7 @@ violation contains {
 #     before this arm existed.
 violation contains {
 	"rule": "filed-and-left-open",
-	"verdict": "V-FILED-AND-LEFT-OPEN",
+	"verdict": "issue file held",
 	"subjects": [{"artifact": id}],
 } if {
 	some id, _ in latest
@@ -407,7 +407,7 @@ test_a_row_that_only_cites_the_path_is_not_claiming_it if {
 		["src/a.rs"],
 		"2026-01-01T00:00:00Z",
 	)
-	verdicts == {"V-FILED-AND-LEFT-OPEN"}
+	verdicts == {"issue file held"}
 }
 
 # NO PR BODY YET IS COULD-NOT-LOOK, not a measured nothing. Without this the arm
@@ -465,7 +465,7 @@ test_closing_one_row_does_not_close_the_set if {
 		["src/a.rs"],
 		"2026-01-01T00:00:00Z",
 	)
-	verdicts == {"V-FILED-AND-LEFT-OPEN"}
+	verdicts == {"issue file held"}
 }
 
 # A ROW WRITTEN BEFORE THE BRANCH IS EXEMPT FROM THIS ARM ON THE SAME GROUND it is
@@ -509,7 +509,7 @@ test_a_row_naming_a_path_outside_the_diff_is_not_a_proximity_refusal if {
 		["src/a.rs"],
 		"2026-01-01T00:00:00Z",
 	)
-	verdicts == {"V-FILED-AND-LEFT-OPEN"}
+	verdicts == {"issue file held"}
 }
 
 # COULD NOT READ THE BASE DATE LEAVES EVERY ROW JUDGED AS BEFORE, rather than

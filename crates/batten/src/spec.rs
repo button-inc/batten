@@ -775,6 +775,9 @@ mod tests {
             // a third row spelled the old way would be a third row to invert.
             "record".to_owned(),
             "record forge".to_owned(),
+            // The plan a branch declared, so `plan-complete` decides over a
+            // record rather than over a transcript it cannot re-read.
+            "record plan".to_owned(),
             "record tool".to_owned(),
             // The API-compatibility noun (CLOUD-1050), ported off
             // `mise-tasks/semver.sh` when CLOUD-1059 made editing a shell
