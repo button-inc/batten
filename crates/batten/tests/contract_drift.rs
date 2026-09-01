@@ -259,9 +259,25 @@ fn each_session_is_told_about_what_moved_under_it_and_not_about_the_rest() {
     let dir = fixture("contract-sessions");
     drift(&dir, "early");
     std::fs::write(dir.join("AGENTS.md"), "# the contract\nmid\n").unwrap();
-    // A session whose first batch is now: it reads the CURRENT files at start,
-    // so its snapshot is seeded with them and it is told nothing.
-    assert_eq!(drift(&dir, "late").pipe_notice(), None);
+    // A session whose first batch is now: it reads the CURRENT files at start, so
+    // its snapshot is seeded with them and it is told nothing ABOUT THE DRIFT.
+    //
+    // Asserted over what the notice CLAIMS rather than over its presence, since
+    // CLOUD-1085. This fixture drives `PostToolBatch` only, which is by
+    // construction the "SessionStart never ran" condition, so `late` does now
+    // receive that advisory — a different notice about a different fact. The
+    // property this case owns is isolation: `late` never hears about a change-set
+    // that predates it. Asserting silence would couple this case to the presence
+    // of every other advisory the channel ever carries.
+    let late = drift(&dir, "late").pipe_notice().unwrap_or_default();
+    assert!(
+        !late.contains("AGENTS.md"),
+        "a session seeded now is not told about drift that predates it: {late}"
+    );
+    assert!(
+        !late.contains("changed or added"),
+        "and is told of no change-set at all: {late}"
+    );
     // The session that was already running is told.
     assert!(drift(&dir, "early").pipe_notice().is_some());
 }
