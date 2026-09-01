@@ -421,6 +421,32 @@ bypass. `.claude/rules/toolchain.md` is where that binds; read it there rather
 than here, because a second copy of the governed-path predicate is exactly the
 drift these notes exist to avoid (CLOUD-1132).
 
+**AND THE CASE THAT ACTUALLY ARISES IS THE ONE NEITHER SHAPE NAMES: you find a
+BUG in a governed program.** "Leave it alone" is the shape for a file that needs
+no change. It is not an answer to one that does — and read as though it were, it
+turns every defect in this layer into a permanent one, which is precisely
+backwards, since the layer is where the defects are. A needed fix in a governed
+`mise-tasks/*.sh` is a **RETIREMENT ROW**: land the predicate as a
+`policy/*.rego` module plus a `crates/batten/tests/**/*.rs` tier, delete the
+program and its suite with one `conserves` arm per path, and drop it from
+`$MUTANT_GATES`. Never a block, and never a filed-and-deferred note that leaves
+the bug standing.
+
+**Measured, three times in one session (PR #794).** `mise-tasks/replay.sh` and
+`mise-tasks/config-lint.sh` were each reported as carrying an unlandable fix,
+with "the file is governed" given as the reason — and in the `config-lint` case
+the defect was real, verified, and was the thing that had just admitted that
+same PR's own config smell. Each was a retirement whose §1 had been written in
+the wrong shape, which is the sentence `.claude/rules/toolchain.md` already
+spends a paragraph on. **The tell is reaching for the word _unlandable_ about a
+path this campaign exists to retire**: the campaign IS the route, so a governed
+path is the one place a fix is guaranteed to have one.
+
+Scoping it is usually smaller than it looks — ask what the shell actually still
+owns. `config-lint`'s smell detection is already `batten config lint`; only the
+admission layer (a claim receipt plus a `Weakens:` trailer) is bash, and the
+engine already owns hash-bound admissions in `batten override request`/`spend`.
+
 The `*-check` decision halves — `graph-check`, `landed-check`, `ready-lint`,
 `verified` — use **exit 1 = violation, exit 2 = could not read the input**.
 Batten's contract (house-style §7, CLOUD-226) is the exact opposite: **1 =

@@ -339,6 +339,44 @@ fn a_port_naming_a_live_governed_subject_is_refused() {
     );
 }
 
+/// THE THIRD `ported` REFUSAL, and the one that shipped with no mutation over
+/// it. A subject that DIED is not a surviving one: that is a plain retirement,
+/// which `carried` already spells with less, and admitting the same event under
+/// both markers lets the ledger record it in two vocabularies.
+///
+/// Its absence from THIS file is what the missing `#MUTANT` row was hiding, and
+/// the gap was two-deep rather than one. The load-time tier pinned the predicate
+/// and `ratchet.rs` pinned the case granularity, but neither is the suite
+/// `#MUTANT-SUITE` names — so a mutation of this arm had nothing here to redden
+/// and could only ever have been declared as a survivor (CLOUD-1302).
+///
+/// `tests/helpers.bash` is deliberately the dying subject. It is neither a
+/// `.bats` nor under `mise-tasks/`, so `governed_when_deleted` does not select
+/// it and its own deletion owes no arm — which leaves this arm the only one that
+/// can fire, and is what makes the mutation discriminate rather than survive
+/// behind a conjunct some other arm already excludes.
+#[test]
+fn a_port_over_a_subject_that_died_is_refused() {
+    let root = repo(
+        "ported-subject-died",
+        &[
+            ("tests/old-gate.bats", IMMORTAL_SUITE),
+            ("tests/helpers.bash", "helpers\n"),
+        ],
+        &Head {
+            written: &[(
+                "crates/batten/tests/old_gate.rs",
+                &ledger_ported("tests/old-gate.bats", "tests/helpers.bash"),
+            )],
+            removed: &["tests/old-gate.bats", "tests/helpers.bash"],
+        },
+    );
+    assert!(
+        !findings(&root).is_empty(),
+        "a port whose subject died is a retirement, and `carried` is its spelling"
+    );
+}
+
 /// The truncation arm, over the engine — and it is the shape that forced the
 /// clause rather than one imagined for it.
 ///

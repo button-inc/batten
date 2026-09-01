@@ -159,6 +159,30 @@ performed; whether it produces the property is the question the edit does not as
    Symmetric with Done: the Done _gate_ ("landed on `main` by fast-forward, CI
    green") is a predicate; the `Done` _column_ is where issues land once it holds.
 
+1b. **An In Review row is LANDED, NOT OCCUPIED — so its open work is pullable,
+not somebody else's.** Item 2 below says In Review means already merged; this
+is the inference a reader takes from it and gets backwards. A row sitting In
+Review with attachments looks exactly like a row somebody is actively
+working, and the attachments are the strongest-looking evidence — they are
+evidence of work **already landed**, which is the opposite of a competitor.
+
+So a row In Review whose body declares a still-open acceptance bullet ("still
+open, and the reason this row is not Done") is **available work**. Pull it:
+`claim-check`, board move, branch, as for any other row. The duplicate-claim
+fear the entry further down records is about the pull-time window, where a
+competitor has published nothing — In Review is the state where a competitor
+has published everything, which is why it cannot be that case.
+
+Measured 2026-09-01: CLOUD-1218 was declined as "owned, actively — racing it
+is CLOUD-230's defect", citing its four attached PRs. All four had landed;
+`crates/batten/src/prune.rs` was ungoverned; the row's own last bullet named
+the remaining work. Nothing was blocking anything.
+
+The neighbouring rule is real and is about **content, not availability**: item
+0's table says an In Review body is a RECORD, so a wrong design there is fixed
+by a new row rather than a rewrite. That constrains what you may edit in the
+body. It says nothing about whether you may do the work the body asks for.
+
 2. **In Review means already merged — this is trunk-based.** Per
    https://trunkbaseddevelopment.com/ we review _after_ merge, before release, to
    avoid large divergence on `main`. Unreviewed code paths are kept out of

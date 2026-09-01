@@ -144,7 +144,7 @@ declared[path] := parts if {
 # table would conclude the other four are cheap ports nobody got to, which is the
 # opposite of true for every one of them.
 #
-#   * COST (13 rows, 11.4s total against a 667.4s corpus). Portable today — each
+#   * COST (13 rows, 11.4s total). Portable today — each
 #     would owe a ledger block and a Rust port spawning whatever its subject is,
 #     for a sub-second yield. Unported, NOT unportable, and a row that wants one
 #     only has to be worth writing.
@@ -155,14 +155,23 @@ declared[path] := parts if {
 #     something the campaign retires, and porting a suite away from one is the
 #     claim `named_and_alive` already refuses under the other four markers. No
 #     amount of willingness moves these; each owes its own row.
-#   * ITS OWN ROW (`session-start`, 97.8s), below.
+#   * ITS OWN ROW (`session-start`), below.
 #
-# ONE IS NOT ABOUT COST AND HAS ITS OWN ROW. `session-start` is the largest suite
-# here by two orders of magnitude, and porting it would move its seconds rather
-# than remove them — the cost is `mise install` in the two cases that opt back in
-# through `real_install_or_skip`, not the bats harness. Its remedy is warming the
-# toolchain once in `[tasks."test:bats"]`, which is CLOUD-1273's and is not a
-# retirement at all. `.claude/hooks/session-start.sh` was never governed for edits
+# THE SECONDS ABOVE ARE READ FROM `bench/suites/RESULTS.md` AND NOTHING HOLDS THEM
+# THERE. They are stated because the classification is about relative cost, and a
+# corpus DENOMINATOR is deliberately not: it moves every time a suite retires, so
+# restating one here is a number that goes stale silently (CLOUD-770's rule).
+# The first version of this table carried one, and it was wrong within a week.
+#
+# ONE IS NOT ABOUT COST AND HAS ITS OWN ROW, and its cost is the one number no
+# reading of this tree settles. `session-start`'s seconds are `mise install` in
+# the two cases that opt back in through `real_install_or_skip`, not the bats
+# harness — so it is the corpus's second-largest suite on a COLD container and
+# unremarkable on a warm one, and the generated table reports whichever the run
+# that produced it had. Porting it would move those seconds rather than remove
+# them. Its remedy is warming the toolchain once in `[tasks."test:bats"]`, which
+# is CLOUD-1273's and is not a retirement at all; that row carries both readings
+# and is where a number for this suite belongs. `.claude/hooks/session-start.sh` was never governed for edits
 # OR for deletion either, so filing it under an immortal subject sent every pass at
 # it toward a retirement it never needed.
 #
