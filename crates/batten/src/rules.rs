@@ -5881,11 +5881,19 @@ fn recorder_records(
     recorders: &[crate::recorder::Declared],
 ) -> BTreeMap<String, Vec<String>> {
     let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // THE SAME PARTITION THE WRITER USED (CLOUD-1300). A branch name outlives the
+    // branch it described, so reading by name alone let this attempt read the
+    // previous one's lines — and the dangerous direction is the silent one, where a
+    // key from a merged PR's record exempts a row the current PR does not close.
+    // Resolved once, for `append_all`'s reason: every record on this run belongs to
+    // one attempt.
+    let claim = crate::claim::claimed_token(&git_dir.join("batten-receipts"), branch);
     for recorder in recorders {
         if found.contains_key(&recorder.record) {
             continue;
         }
-        let path = crate::recorder::record_path(git_dir, &recorder.record, branch);
+        let path =
+            crate::recorder::record_path(git_dir, &recorder.record, branch, claim.as_deref());
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };

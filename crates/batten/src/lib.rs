@@ -6446,7 +6446,11 @@ fn filed_here_pointers(
             // named paths intersect the diff is marked so the reader can see
             // which ones rule 3 already asked about; the rest are `filed`, and
             // the judgement about all of them is the agent's.
-            let record = recorder::record_path(&git_dir, BOARD_RECORD, &branch);
+            // The same partition the writer used (CLOUD-1300): this checklist is
+            // about rows THIS attempt filed, so a previous attempt's rows on a
+            // reused branch name are not its business either.
+            let claim = claim::claimed_token(&git_dir.join("batten-receipts"), &branch);
+            let record = recorder::record_path(&git_dir, BOARD_RECORD, &branch, claim.as_deref());
             let text = std::fs::read_to_string(record).ok()?;
             let mut seen = std::collections::BTreeSet::new();
             text.lines()
