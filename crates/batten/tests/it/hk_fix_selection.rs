@@ -36,6 +36,19 @@
 //! no-op a step with no fixer under `fix`; it runs the step's check. Measured
 //! end to end on one machine, `mise run fmt` went from **931s to 2s**.
 
+// CLOUD-1268's fifth arm. `hk.pkl` is this repository's gate definition: it does
+// not die and is not touched, so what is spelled here is a port WITHOUT a
+// retirement, and every arm names the survivor it still accounts for.
+//
+// ported: tests/pre-commit-staging.bats crates/batten/tests/hk_fix_selection.rs subject:hk.pkl
+// ported: "a commit contains only what was staged, with another change dirty in the tree" crates/batten/tests/hk_fix_selection.rs subject:hk.pkl
+// ported: "THE DEFECT: the unstaged change survives the fixer byte-for-byte" crates/batten/tests/hk_fix_selection.rs subject:hk.pkl
+// ported: "SHOWN ABLE TO FAIL: without the setting, the fixer clobbers the unstaged change" crates/batten/tests/hk_fix_selection.rs subject:hk.pkl
+// ported: "the fixer's own change to a staged file reaches the commit" crates/batten/tests/hk_fix_selection.rs subject:hk.pkl
+// ported: "an all-staged commit is unchanged in shape: every path still staged, fixes applied" crates/batten/tests/hk_fix_selection.rs subject:hk.pkl
+// ported: "a clean tree with nothing staged commits nothing and rewrites nothing" crates/batten/tests/hk_fix_selection.rs subject:hk.pkl
+// ported: "hk.pkl declares stash on the pre-commit hook" crates/batten/tests/hk_fix_selection.rs subject:hk.pkl
+
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -308,5 +321,274 @@ fn a_tree_with_no_hook_config_is_not_judged() {
         findings(&root).is_empty(),
         "a tree with no hk config is answering for nothing: {:?}",
         findings(&root)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The pre-commit STAGING contract (CLOUD-250, ported under CLOUD-1268).
+//
+// PORTED, NOT RETIRED. `hk.pkl` is this repository's gate definition; it does not
+// die and is not touched. What died is `tests/pre-commit-staging.bats`, whose
+// seven cases are these — the second spend of the fifth ledger arm.
+//
+// THE DEFECT, measured 2026-08-08: two changesets in the tree, one staged, and
+// the commit captured all five files — so the second issue got no `Refs:` trailer,
+// no board transition, and landed anonymously. `hk`'s pre-commit runs the gate in
+// FIX mode, and this repo's fixers are whole-tree by nature (`cargo fmt --all`
+// ignores the file list it is handed), so a dirty tree at commit time is enough.
+// AGENTS.md tells agents to commit early and often, which makes a dirty tree the
+// normal case rather than an edge one.
+//
+// WHAT THE SETTING BUYS, measured rather than assumed: not that unstaged work gets
+// STAGED, but that a whole-tree fixer REWRITES it in place. With `stash`, the
+// untouched file comes out byte-identical; without it, the fixer has stamped a
+// file the author never staged.
+//
+// SIX CASES DRIVE A THROWAWAY REPO with its own minimal `hk.pkl`, for the reason
+// the suite gave: this repo's gate would cost a cargo build per case and would
+// assert about whichever fixers happen to be configured. The seventh reads THIS
+// repository's committed bytes, and it is the one that keeps the other six from
+// being vacuous — they run a fixture config, so they would all stay green if the
+// real `hk.pkl` dropped the line, which is exactly how the setting arrived
+// unasserted in the first place.
+// ---------------------------------------------------------------------------
+
+/// Whether this checkout's own `hk.pkl` declares `stash` on the pre-commit hook.
+///
+/// The COMMITTED bytes, read the way the suite read them: the setting must sit
+/// inside the `["pre-commit"]` block and not merely somewhere in the file, or a
+/// `stash` on another hook would answer for this one.
+#[test]
+fn this_repositorys_hk_pkl_declares_stash_on_the_pre_commit_hook() {
+    let source = fs::read_to_string(common::at_root("hk.pkl")).expect("read the committed gate");
+    let mut inside = false;
+    let mut declared = false;
+    for line in source.lines() {
+        if line == r#"  ["pre-commit"] {"# {
+            inside = true;
+            continue;
+        }
+        if inside {
+            if line == "  }" {
+                break;
+            }
+            if line == r#"    stash = "patch-file""# {
+                declared = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        declared,
+        "the pre-commit hook must declare `stash`, or a whole-tree fixer rewrites what the author did not stage"
+    );
+}
+
+/// Build a fixture repository whose pre-commit gate has one whole-tree fixer.
+///
+/// `stashing` decides the ONE line under test. The fixer deliberately globs
+/// `*.txt` rather than using hk's `{{files}}`: that is the shape of this repo's
+/// real fixers, and a fixer confined to the staged list cannot exhibit the defect
+/// at all.
+fn staging_fixture(name: &str, stashing: bool) -> PathBuf {
+    let dir = common::scratch(&format!("pre-commit-staging-{name}"));
+    common::git_in(&dir, &["init", "-q", "-b", "main"]);
+    common::git_in(&dir, &["config", "user.name", "Fixture"]);
+    common::git_in(&dir, &["config", "user.email", "fixture@example.test"]);
+    let stash = if stashing {
+        "    stash = \"patch-file\"\n"
+    } else {
+        ""
+    };
+    common::write(
+        &dir,
+        "hk.pkl",
+        &format!(
+            "amends \"package://github.com/jdx/hk/releases/download/v1.54.0/hk@1.54.0#/Config.pkl\"\n\
+             \n\
+             hooks {{\n\
+             \x20 [\"pre-commit\"] {{\n\
+             {stash}    fix = true\n\
+             \x20   steps {{\n\
+             \x20     [\"stamp\"] {{\n\
+             \x20       glob = List(\"*.txt\")\n\
+             \x20       check = \"! grep -L STAMPED *.txt | grep -q .\"\n\
+             \x20       fix = \"sed -i s/^/STAMPED\\\\ /  *.txt\"\n\
+             \x20     }}\n\
+             \x20   }}\n\
+             \x20 }}\n\
+             }}\n"
+        ),
+    );
+    common::write(&dir, "a.txt", "a\n");
+    common::write(&dir, "b.txt", "b\n");
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "-q", "-m", "chore: base", "--no-verify"]);
+    dir
+}
+
+/// Run the fixture's pre-commit gate, or `None` where hk is not installed.
+///
+/// `BATTEN_GATE_PID` is cleared deliberately. This runs INSIDE the real gate, and
+/// the installed hook body refuses to re-enter one already running (exit 9) — a
+/// guard that exists because `doctor` runs inside the gate and would recurse. The
+/// fixture's gate is one `sed` and reaches nothing of this repo's, so there is no
+/// recursion to guard against here; leaving the marker set would make every case
+/// refuse rather than measure.
+fn run_fixture_gate(dir: &Path) -> Option<()> {
+    let hk = hk_binary()?;
+    #[expect(
+        clippy::disallowed_types,
+        reason = "CLOUD-1268: the subject is a gate definition, so exercising it means running hk — the same spawn tests/pre-commit-staging.bats made, moved rather than added"
+    )]
+    let status = std::process::Command::new(hk)
+        .args(["run", "pre-commit"])
+        .current_dir(dir)
+        .env_remove("BATTEN_GATE_PID")
+        .status()
+        .expect("hk runs the fixture gate");
+    // The gate's own verdict is not the property under test — the `stamp` step
+    // fails its check before fixing and that is the run being measured. What each
+    // case asserts is the TREE afterwards.
+    let _ = status;
+    Some(())
+}
+
+/// The hk this clone pins, or `None` where it is not installed — in which case a
+/// case has learned nothing and says so rather than failing.
+fn hk_binary() -> Option<PathBuf> {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "CLOUD-1268: resolving the pinned tool is what `mise which hk` did in the retired suite"
+    )]
+    let output = std::process::Command::new("mise")
+        .args(["which", "hk"])
+        .current_dir(common::at_root("."))
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
+    path.is_file().then_some(path)
+}
+
+/// What the next commit would contain, as `path:content` lines.
+fn staged_content(dir: &Path) -> Vec<String> {
+    let names = common::git_in(dir, &["diff", "--cached", "--name-only"]);
+    names
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|path| {
+            let blob = common::git_in(dir, &["show", &format!(":{path}")]);
+            format!("{path}:{}", blob.trim_end())
+        })
+        .collect()
+}
+
+#[test]
+fn a_commit_contains_only_what_was_staged_with_another_change_dirty() {
+    let dir = staging_fixture("one-staged", true);
+    common::write(&dir, "a.txt", "a-changed\n");
+    common::write(&dir, "b.txt", "b-changed\n");
+    common::git_in(&dir, &["add", "a.txt"]);
+
+    if run_fixture_gate(&dir).is_none() {
+        return;
+    }
+    let staged = common::git_in(&dir, &["diff", "--cached", "--name-only"]);
+    assert_eq!(staged.trim(), "a.txt");
+}
+
+#[test]
+fn the_unstaged_change_survives_the_fixer_byte_for_byte() {
+    // THE DISCRIMINATING CASE. A fix that ate the second changeset would be worse
+    // than the sweep it replaced, so "survives" means both halves: still unstaged,
+    // and still exactly what the author wrote.
+    let dir = staging_fixture("survives", true);
+    common::write(&dir, "a.txt", "a-changed\n");
+    common::write(&dir, "b.txt", "b-changed\n");
+    common::git_in(&dir, &["add", "a.txt"]);
+
+    if run_fixture_gate(&dir).is_none() {
+        return;
+    }
+    assert_eq!(
+        fs::read_to_string(dir.join("b.txt")).expect("read b.txt"),
+        "b-changed\n"
+    );
+    let dirty = common::git_in(&dir, &["diff", "--name-only"]);
+    assert_eq!(dirty.trim(), "b.txt");
+}
+
+#[test]
+fn shown_able_to_fail_without_the_setting_the_fixer_clobbers_the_unstaged_change() {
+    // THE NEGATIVE CONTROL, and the reason the case above is not vacuous. Identical
+    // fixture, one line removed. If hk ever stops honouring `stash`, this case goes
+    // green and its neighbour goes red — the pair saying the same thing from both
+    // sides (CLOUD-418).
+    let dir = staging_fixture("bare", false);
+    common::write(&dir, "a.txt", "a-changed\n");
+    common::write(&dir, "b.txt", "b-changed\n");
+    common::git_in(&dir, &["add", "a.txt"]);
+
+    if run_fixture_gate(&dir).is_none() {
+        return;
+    }
+    assert_eq!(
+        fs::read_to_string(dir.join("b.txt")).expect("read b.txt"),
+        "STAMPED b-changed\n",
+        "without `stash` the whole-tree fixer stamps a file the author never staged"
+    );
+}
+
+#[test]
+fn the_fixers_own_change_to_a_staged_file_reaches_the_commit() {
+    // The behaviour worth keeping. A change that disabled formatting-on-commit
+    // would satisfy every other case here and defeat the point of the hook.
+    let dir = staging_fixture("staged-fix", true);
+    common::write(&dir, "a.txt", "a-changed\n");
+    common::git_in(&dir, &["add", "a.txt"]);
+
+    if run_fixture_gate(&dir).is_none() {
+        return;
+    }
+    assert_eq!(staged_content(&dir), vec!["a.txt:STAMPED a-changed"]);
+}
+
+#[test]
+fn an_all_staged_commit_is_unchanged_in_shape() {
+    let dir = staging_fixture("all-staged", true);
+    common::write(&dir, "a.txt", "a-changed\n");
+    common::write(&dir, "b.txt", "b-changed\n");
+    common::git_in(&dir, &["add", "-A"]);
+
+    if run_fixture_gate(&dir).is_none() {
+        return;
+    }
+    assert_eq!(
+        staged_content(&dir),
+        vec!["a.txt:STAMPED a-changed", "b.txt:STAMPED b-changed"]
+    );
+    assert!(
+        common::git_in(&dir, &["diff", "--name-only"])
+            .trim()
+            .is_empty(),
+        "every path stays staged and nothing is left dirty"
+    );
+}
+
+#[test]
+fn a_clean_tree_with_nothing_staged_rewrites_nothing() {
+    let dir = staging_fixture("clean", true);
+
+    if run_fixture_gate(&dir).is_none() {
+        return;
+    }
+    assert!(
+        common::git_in(&dir, &["status", "--porcelain"])
+            .trim()
+            .is_empty(),
+        "a gate with nothing to do leaves the tree alone"
     );
 }

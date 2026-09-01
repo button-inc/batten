@@ -53,6 +53,22 @@
 // carried: "CI installs the parallel backend — an absent rush is a missing TOOL, not a slow suite" policy/bats-invocation.rego
 // changed: "the test:bats invocation was found at all — this suite is not passing vacuously" crates/batten/tests/it/bats_invocation.rs the suite asserted its own subject exists, which a module cannot: a tree with no `test:bats` task is not-applicable rather than in violation, or the row fires on every fixture that copies this config (`command-task-defined` measured seven such findings). The property survives as `this_repository_is_clean_today` plus `a_tree_with_no_such_task_is_not_judged`, which together say the same thing about THIS tree without claiming it about every tree
 
+// CLOUD-1268's fifth arm, and the first ledger block in this tree to use it. The
+// four above describe a subject that went with its suite; `tests/helpers.bash` is
+// loaded by eleven other suites, does not die, and is not touched — so every arm
+// names it as the survivor it still accounts for. The file arm and the eight case
+// arms are one delta.
+//
+// ported: tests/helpers.bats crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
+// ported: "a command that finishes in time keeps its OWN exit status" crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
+// ported: "a timed-out command is 124, GNU's timed-out status" crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
+// ported: "-s KILL reports 137, because the child died of SIGKILL" crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
+// ported: "-k on a subject that dies to TERM is 124 — the escalation never fires" crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
+// ported: "-k that actually escalates is 137, matching GNU" crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
+// ported: "a command killed by a signal it raised ITSELF is not a timeout" crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
+// ported: "sed_i edits in place and leaves no backup behind" crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
+// ported: "sed_i propagates a failing sed rather than reporting success" crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
+
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -345,5 +361,139 @@ fn a_tree_with_no_such_task_is_not_judged() {
         findings(&root).is_empty(),
         "a tree with no pole is answering for nothing: {:?}",
         findings(&root)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `tests/helpers.bash`'s exit contract (CLOUD-282, ported under CLOUD-1268).
+//
+// PORTED, NOT RETIRED, AND THE SUBJECT IS THE WHOLE REASON. `tests/helpers.bash`
+// is loaded by eleven other suites; it does not die and is not touched. What died
+// is `tests/helpers.bats`, whose 8 cases are these — a port-without-retirement,
+// which is the shape the fifth ledger arm exists to spell.
+//
+// WHY THE COVERAGE MOVED RATHER THAN GOING. `run_timeout` stands in for a GNU
+// `timeout(1)` macOS does not ship, at call sites that assert exact numbers. Nine
+// of them across three suites depend on the mapping, so a helper that returned
+// merely "non-zero" would make every one pass vacuously. Each branch stays pinned.
+//
+// WHY IT IS FASTER HERE, which is the point of the port rather than a side effect:
+// `test:bats` runs `--no-parallelize-within-files`, so these eight cases were
+// serial by construction and several of them WAIT. nextest parallelises per test.
+// ---------------------------------------------------------------------------
+
+/// Run one expression against the committed helper library and return its status.
+///
+/// The library is SOURCED from the real checkout rather than copied into a
+/// fixture: it is the subject, it survives this change, and a copy would drift
+/// and pass while the shipped helper was broken — the same argument
+/// `install_module` above makes for a policy module.
+fn helper_status(script: &str) -> i32 {
+    let root = common::at_root(".")
+        .canonicalize()
+        .expect("this checkout is where the manifest says it is");
+    let tmp = common::scratch("helpers-bash");
+    // `run_timeout` writes its flag file under `$BATS_TEST_TMPDIR`, falling back
+    // to `/tmp`. Pointing it at a scratch dir keeps concurrent cases from sharing
+    // one path — nextest runs each case in its own process, and the fallback is
+    // shared where the bats harness's per-test dir was not.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "CLOUD-1268: the subject is a bash library, so exercising it means running bash — the same spawn `tests/helpers.bats` made, moved rather than added"
+    )]
+    let output = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(format!(
+            "source '{}/tests/helpers.bash'\n{script}",
+            root.display()
+        ))
+        .env("BATS_TEST_TMPDIR", &tmp)
+        .current_dir(&root)
+        .output()
+        .expect("bash runs the committed helper");
+    output.status.code().unwrap_or(-1)
+}
+
+#[test]
+fn a_command_that_finishes_in_time_keeps_its_own_exit_status() {
+    // The pass-through case, and the one a naive implementation gets wrong by
+    // reporting the watchdog's status instead.
+    assert_eq!(helper_status("run_timeout 10 bash -c 'exit 7'"), 7);
+    assert_eq!(helper_status("run_timeout 10 true"), 0);
+}
+
+#[test]
+fn a_timed_out_command_is_124() {
+    // `tests/land.bats` asserts this number directly: 124 is GNU's timed-out
+    // status and the result that case is proving, not a failure of it.
+    assert_eq!(helper_status("run_timeout 1 sleep 30"), 124);
+}
+
+#[test]
+fn kill_reports_137_because_the_child_died_of_sigkill() {
+    // `tests/main-watch.bats` asserts 137. It uses KILL rather than the default
+    // TERM because bash defers a trapped signal until the running `sleep` returns,
+    // so a TERM would cost every blocking case a full poll interval.
+    assert_eq!(helper_status("run_timeout -s KILL 1 sleep 30"), 137);
+}
+
+#[test]
+fn an_escalation_that_never_fires_is_124() {
+    // `tests/land.bats`' shape: `land` takes the TERM, so `-k` is insurance and
+    // the answer is the plain timed-out status. Measured against GNU coreutils
+    // and matched here rather than assumed.
+    assert_eq!(helper_status("run_timeout -k 1 1 sleep 30"), 124);
+}
+
+#[test]
+fn an_escalation_that_actually_fires_is_137() {
+    // The half worth measuring rather than guessing: GNU reports the SIGNAL that
+    // ended the child, not the timeout, once the escalation is what ended it. A
+    // helper answering 124 here would disagree with the tool it replaces in the
+    // one case the two could differ.
+    assert_eq!(
+        helper_status("run_timeout -k 1 1 bash -c 'trap \"\" TERM; sleep 30'"),
+        137
+    );
+}
+
+#[test]
+fn a_command_killed_by_a_signal_it_raised_itself_is_not_a_timeout() {
+    // The distinction the flag file exists for: 143 is TERM, the same status a
+    // TERM-timeout produces, so an implementation reading only the exit status
+    // would report this as 124 and hide a genuine crash.
+    assert_eq!(helper_status("run_timeout 10 bash -c 'kill -TERM $$'"), 143);
+}
+
+#[test]
+fn sed_i_edits_in_place_and_leaves_no_backup_behind() {
+    // `-i.bak` is the one spelling GNU and BSD both accept; the backup is an
+    // artifact of portability, so the helper removes it and no call site has to
+    // know it existed. A stray `.bak` would break suites that list a fixture dir.
+    let dir = common::scratch("helpers-sed-i");
+    let subject = dir.join("subject");
+    fs::write(&subject, "alpha\nbeta\n").expect("write the subject");
+    let status = helper_status(&format!("sed_i 's/alpha/gamma/' '{}'", subject.display()));
+    assert_eq!(status, 0, "a well-formed edit succeeds");
+    assert_eq!(
+        fs::read_to_string(&subject).expect("read back"),
+        "gamma\nbeta\n"
+    );
+    assert!(
+        !dir.join("subject.bak").exists(),
+        "the portability backup is removed rather than left in the tree"
+    );
+}
+
+#[test]
+fn sed_i_propagates_a_failing_sed_rather_than_reporting_success() {
+    // A gate helper that swallowed the status would be the CLOUD-199 shape in
+    // miniature: the edit silently not happening, reported green.
+    let dir = common::scratch("helpers-sed-i-fail");
+    let absent = dir.join("absent");
+    assert_ne!(
+        helper_status(&format!("sed_i 's/unterminated' '{}'", absent.display())),
+        0,
+        "a failing sed is a failing helper"
     );
 }

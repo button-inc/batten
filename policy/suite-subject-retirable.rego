@@ -44,11 +44,21 @@
 # `governed_at_head` selects `mise-tasks/` paths and `.bats` suites and nothing
 # else.
 #
-# THE THIRD ROUTE IS STILL OPEN AND IS NOT THIS MODULE'S. A suite over
+# THE THIRD ROUTE IS OPEN NOW, AND IT IS STILL NOT THIS MODULE'S. A suite over
 # `batten.toml` has cases worth porting into `crates/batten/tests/*.rs` even
-# though nothing dies — a port WITHOUT a retirement, which the ledger has no
-# spelling for. Each such port is its own row. This module only refuses a
-# NINETEENTH instance arriving unnoticed, which is the acceptance CLOUD-1156 owes.
+# though nothing dies — a port WITHOUT a retirement. This paragraph used to end
+# "which the ledger has no spelling for"; CLOUD-1268 landed one, so the sentence
+# is corrected rather than left to send the next reader looking for a route that
+# now exists. The spelling is `[rule.conserves]`'s fifth arm, `// ported:`: a
+# target the tree carries plus a `subject:` field naming the survivor, admitted
+# only where that subject LIVES — the exact mirror of `// withdrawn:`, and
+# refused over a subject the campaign governs, which is what keeps CLOUD-1130
+# whole.
+#
+# EACH SUCH PORT IS STILL ITS OWN ROW, and a ported suite's row LEAVES the table
+# below rather than staying in it: arm C holds the table in both directions, so an
+# exemption outliving its suite is a finding. This module only refuses a new
+# instance arriving unnoticed, which is the acceptance CLOUD-1156 owes.
 #
 # ABSENCE IS AN ERROR, NOT AN ALLOW, and the table is held in BOTH directions —
 # `module-layering`'s posture, for its reason. An unexempted immortal subject is
@@ -137,12 +147,10 @@ exempt := {
 	"tests/cross-check.bats": "mise.toml",
 	"tests/fact-record-keying.bats": "crates/batten/src/facts.rs",
 	"tests/git-hook.bats": ".claude/hooks/git-hook.sh",
-	"tests/helpers.bats": "tests/helpers.bash",
 	"tests/hk-selection.bats": "hk.pkl",
 	"tests/install.bats": "install.sh",
 	"tests/lint-deno.bats": "mise.toml",
 	"tests/lint-rego.bats": "mise.toml",
-	"tests/pre-commit-staging.bats": "hk.pkl",
 	# THE MEMBER A PREFIX SCAN MISSES, and the reason this table is derived from
 	# `retirable` rather than from "is it under `mise-tasks/`". A `.py` sibling
 	# LOOKS governed and is excluded by extension, so a census testing the prefix
