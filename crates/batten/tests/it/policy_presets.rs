@@ -768,3 +768,98 @@ fn the_landing_loop_preset_refuses_a_reland_and_is_green_by_turns() {
         "could-not-look allows, and without the module's own guard this FAULTS"
     );
 }
+
+/// (CLOUD-1280) `lease-authorises-the-branch` refuses a live lease held by
+/// another branch, and ALLOWS every reading it cannot take.
+///
+/// The fail-open asymmetry is the load-bearing half of this predicate, so the
+/// suite has to show three outcomes rather than two: a refusal, a clean
+/// authorisation, and a could-not-look that is distinguishable from both. A pair
+/// alone cannot tell a gate that allows on doubt from one that refuses on it.
+#[test]
+fn the_landing_loop_preset_refuses_a_lease_held_elsewhere_and_fails_open() {
+    let bundle = loaded("landing-lease", tree_preset_row("landing", "landing-loop"));
+
+    // ONE RECORD NAME, AND IT IS DELIBERATELY NOT A PLAUSIBLE ONE. The record's
+    // name is the CONSUMER's, so a preset must not read it by name — a fixture
+    // naming something this repository actually declares would let a module that
+    // does read it by name pass here (non-negotiable rule 1).
+    let recorded = |line: &str| format!(r#"{{"tree":{{"records":{{"x":["{line}"]}}}}}}"#);
+
+    let held = decided(&bundle, &recorded("lease held-elsewhere - mine"));
+    assert_eq!(held.len(), 1, "a live lease grading this clone out");
+    assert_eq!(
+        bundle.attribute(&held[0]),
+        "lease-authorises-the-branch",
+        "a preset finding names its own predicate id"
+    );
+
+    // THE ANTI-VACUITY MIRROR.
+    assert!(
+        decided(&bundle, &recorded("lease authorised - mine")).is_empty(),
+        "a lease that authorises this branch allows, or this refuses everything"
+    );
+
+    // THE THIRD OUTCOME, and the one the whole asymmetry turns on. An exit status
+    // the consumer's table left unmapped records `-`, which equals neither
+    // verdict token — so the refusal cannot hold and the fleet keeps moving. A
+    // port that got this backwards would stop EVERY job on a lease it could not
+    // read, where waving one matrix through costs one matrix.
+    assert!(
+        decided(&bundle, &recorded("lease - - mine")).is_empty(),
+        "an unreadable lease ALLOWS, and is distinguishable from both verdicts"
+    );
+
+    // THE ADMITTED SUCCESSOR (CLOUD-369) — the row that needed `Value::Branch` to
+    // exist at all, because it is the one comparison `land-lock status` cannot
+    // make: it grades the lease against the CLONE, never against the branch. A
+    // module without this clause denies where the bash it replaces allows, and
+    // cancels the very run the reservation exists to start.
+    assert!(
+        decided(&bundle, &recorded("lease held-elsewhere mine mine")).is_empty(),
+        "a branch that reserved the slot behind the holder may spend"
+    );
+    assert_eq!(
+        decided(&bundle, &recorded("lease held-elsewhere theirs mine")).len(),
+        1,
+        "and a reservation for SOMEBODY ELSE does not admit this branch — without \
+         this the clause above is satisfied by any reservation at all"
+    );
+
+    // A detached HEAD has no branch to compare, which is a state rather than an
+    // error, so it allows.
+    assert!(
+        decided(&bundle, &recorded("lease held-elsewhere - -")).is_empty(),
+        "a clone with no branch cannot be compared, so it allows"
+    );
+
+    // THE HISTORY. `recorder_records` appends and never truncates, so yesterday's
+    // refusal sits above today's authorisation in one file — a module reading the
+    // whole list refuses forever. This is what holds the last-line reading, and
+    // it is also why the module builds an ARRAY rather than a `contains` set: a
+    // set is unordered and de-duplicating, so "the last line" is not recoverable
+    // from one. The module had that defect first.
+    assert!(
+        decided(
+            &bundle,
+            r#"{"tree":{"records":{"x":["lease held-elsewhere - mine","lease authorised - mine"]}}}"#
+        )
+        .is_empty(),
+        "a stale refusal does not outlive the lease it graded"
+    );
+
+    // A line of another shape is not a lease: the store holds every recorder's
+    // lines, so selecting on position alone would read an unrelated row's columns
+    // through this lens.
+    assert!(
+        decided(&bundle, &recorded("filed CLOUD-1 ready mine")).is_empty(),
+        "another recorder's line is not read as a lease"
+    );
+
+    // Could-not-look, and without the module's own guard this FAULTS rather than
+    // merely missing — taking the whole bundle down at exit 0's expense.
+    assert!(
+        decided(&bundle, r#"{"tree":{"records":null}}"#).is_empty(),
+        "no recorder declared is could-not-look, and it allows"
+    );
+}

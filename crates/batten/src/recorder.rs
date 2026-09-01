@@ -231,6 +231,31 @@ pub struct Column {
 pub enum Value {
     /// A constant the consumer wrote. What a `kind` column is made of.
     Literal(String),
+    /// The branch this record is being written on (CLOUD-1280).
+    ///
+    /// **The record is already branch-keyed and this exposes what the writer
+    /// holds** — [`crate::lib`]'s `write_records` resolves the branch to choose
+    /// the record's own path and, until this variant, never handed it to an
+    /// expression. So a column could name what the LEASE says and nothing it
+    /// could compare that against.
+    ///
+    /// The measured need is one row of a port rather than a general convenience.
+    /// `land-lock status` grades the lease against the CLONE (`mine`), which is
+    /// the question a developer's checkout asks; `authorises` grades it against
+    /// the BRANCH and admits one case `status` cannot — the successor a rival
+    /// reserved behind the holder (CLOUD-369). A predicate without this variant
+    /// therefore refuses a reserved successor that the bash it replaces allows,
+    /// which is a fail-CLOSED deviation and exactly the laundering CLOUD-1269
+    /// forbids: *"a port that quietly makes it fail closed has laundered a
+    /// stop-the-world into a gate."*
+    ///
+    /// **Could-not-look is a real answer here and is spelled `None`**: a detached
+    /// HEAD has no branch, which is a state rather than an error, and rendering
+    /// some placeholder would let a comparison against it succeed by accident.
+    ///
+    /// Names nothing (non-negotiable rule 1): it yields whatever ref the clone is
+    /// standing on, so a consumer's trunk name never reaches the crate.
+    Branch,
     /// The scalar at a dotted path into the tool RESULT.
     Result(String),
     /// The scalar at a dotted path into the tool INPUT.
@@ -483,6 +508,13 @@ pub struct Context<'a> {
     pub grammar: Option<&'a crate::ready::Grammar>,
     /// Where a relative program path resolves against.
     pub root: &'a Path,
+    /// The branch the record is keyed by, where the clone is on one.
+    ///
+    /// `None` on a detached HEAD, and [`Value::Branch`] renders that as
+    /// could-not-look rather than as a name. Carried on the context rather than
+    /// resolved inside [`evaluate`] for this struct's whole reason: the function
+    /// stays a pure function of its inputs and needs no world to test.
+    pub branch: Option<&'a str>,
 }
 
 /// Evaluate one expression, or `None` where it could not be resolved.
@@ -496,6 +528,9 @@ pub struct Context<'a> {
 pub fn evaluate(value: &Value, context: &Context<'_>) -> Option<serde_json::Value> {
     match value {
         Value::Literal(text) => Some(serde_json::Value::String(text.clone())),
+        Value::Branch => context
+            .branch
+            .map(|branch| serde_json::Value::String(branch.to_owned())),
         Value::Inputs(paths) => Some(serde_json::Value::String(
             paths
                 .iter()
@@ -845,6 +880,7 @@ fn validate_value(
 ) -> Result<()> {
     match value {
         Value::Literal(_)
+        | Value::Branch
         | Value::Result(_)
         | Value::Input(_)
         | Value::Inputs(_)

@@ -1095,6 +1095,33 @@ lands. Close the branch, or rebase onto the target and see what is genuinely lef
             ),
         ],
     },
+    VendoredVerdict {
+        id: "V-LEASE-AUTHORISES-ANOTHER-BRANCH",
+        gloss: "a live landing lease names a different branch, and no reservation names this one",
+        class: "A landing lease is how a fleet keeps two branches from buying overlapping CI for \
+a trunk only one of them can fast-forward onto. This branch is neither the holder nor the \
+successor admitted behind it, so a matrix spent now is a matrix the holder's merge invalidates. \
+Wait for the lease to lapse or be released, or reserve the slot behind the holder — the loop that \
+does both lives outside the engine, which only reads the answer. Every reading this refusal \
+cannot take ALLOWS: an unreadable lease stops every job in the fleet, where waving one matrix \
+through costs one matrix.",
+        routes: &[
+            read(
+                "R-READ-THE-LEASE",
+                "the lease grading recorded for this branch",
+            ),
+            // The wedged holder, and it is narrow on purpose. The lease grades
+            // LIVENESS rather than PROGRESS (CLOUD-499), so a holder that beats
+            // steadily while making none holds forever and starves the fleet.
+            // That is the case this admits, and it is not "the wait was
+            // inconvenient" — a holder that is merely slow is the mechanism
+            // working.
+            admit(
+                "R-OVERRIDE-THE-LEASE",
+                "the holder is wedged rather than slow — it is beating without advancing, so waiting for a lapse it keeps renewing starves the fleet indefinitely",
+            ),
+        ],
+    },
 ];
 
 /// Every class the binary ships, as the registry carries them.

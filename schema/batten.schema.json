@@ -3424,6 +3424,11 @@
           ]
         },
         {
+          "description": "The branch this record is being written on (CLOUD-1280).\n\n**The record is already branch-keyed and this exposes what the writer\nholds** — [`crate::lib`]'s `write_records` resolves the branch to choose\nthe record's own path and, until this variant, never handed it to an\nexpression. So a column could name what the LEASE says and nothing it\ncould compare that against.\n\nThe measured need is one row of a port rather than a general convenience.\n`land-lock status` grades the lease against the CLONE (`mine`), which is\nthe question a developer's checkout asks; `authorises` grades it against\nthe BRANCH and admits one case `status` cannot — the successor a rival\nreserved behind the holder (CLOUD-369). A predicate without this variant\ntherefore refuses a reserved successor that the bash it replaces allows,\nwhich is a fail-CLOSED deviation and exactly the laundering CLOUD-1269\nforbids: *\"a port that quietly makes it fail closed has laundered a\nstop-the-world into a gate.\"*\n\n**Could-not-look is a real answer here and is spelled `None`**: a detached\nHEAD has no branch, which is a state rather than an error, and rendering\nsome placeholder would let a comparison against it succeed by accident.\n\nNames nothing (non-negotiable rule 1): it yields whatever ref the clone is\nstanding on, so a consumer's trunk name never reaches the crate.",
+          "type": "string",
+          "const": "branch"
+        },
+        {
           "description": "The scalar at a dotted path into the tool RESULT.",
           "type": "object",
           "properties": {

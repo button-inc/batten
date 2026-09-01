@@ -352,6 +352,14 @@ const PRESETS: &[(&str, &[(&str, &str)])] = &[
                     "policy/presets/landing-loop/already-landed-work-is-not-relanded.rego"
                 ),
             ),
+            // The lease, and the one predicate here that reads a record the
+            // CONSUMER's own `[[recorder]]` wrote rather than a fact the engine
+            // acquires. It selects on a generic `lease` kind column instead of on
+            // the record's name, which is the consumer's (rule 1).
+            (
+                "<preset:landing-loop>/lease-authorises-the-branch.rego",
+                include_str!("policy/presets/landing-loop/lease-authorises-the-branch.rego"),
+            ),
         ],
     ),
 ];

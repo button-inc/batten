@@ -6388,6 +6388,7 @@ fn write_records(overrides: &Overrides, envelope: &hook::Envelope) {
         patterns: &patterns,
         grammar: grammar.as_ref(),
         root,
+        branch: Some(&branch),
     };
     crate::recorder::append_all(
         recorders,
