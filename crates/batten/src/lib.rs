@@ -2187,6 +2187,7 @@ fn run_claim(
                 err,
             )
         }
+        ClaimCommand::Carry { json } => run_claim_carry(Path::new("."), mode, json, out, err),
     }
 }
 
@@ -2475,6 +2476,122 @@ fn run_claim_check(
         )?;
     }
     Ok(ExitCode::Success)
+}
+
+/// The `-J` document `claim carry` emits, on either arm.
+///
+/// One shape for both answers rather than a list on one and an object on the
+/// other: a parser that has to branch on the document's TYPE to learn the verdict
+/// is reading the exit code twice, and the second reading can disagree.
+///
+/// Pointer-only per non-negotiable rule 4: a branch, a count, and the refusal id
+/// with whatever pointer it carries. Never a licence and never a holder — those
+/// are the bytes the table exists to hold.
+fn carry_document(branch: &str, carried: usize, refusal: Option<&str>) -> Result<String> {
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "branch": branch,
+        "carried": carried,
+        "refusals": refusal.map_or_else(Vec::new, |line| vec![line]),
+    }))?)
+}
+
+/// `batten claim carry`: does this branch only carry licence rows forward?
+///
+/// # Why it takes no argument
+///
+/// The subject is the branch's own diff against its merge base. A caller that
+/// could name its own subject could name one that is derivable while changing
+/// something else, which is the whole property being attested.
+///
+/// # Errors
+///
+/// [`UsageError`] when there is no branch to key a receipt to, or when the merge
+/// base or the table cannot be read — could-not-look, never a silent pass.
+fn run_claim_carry(
+    repo: &Path,
+    mode: Mode,
+    json: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let Some(branch) = git::current_branch(repo)? else {
+        return Err(UsageError::raise(
+            "claim carry: a detached HEAD carries no branch to key a receipt to".to_owned(),
+        ));
+    };
+    let Some(base) = git::merge_base(repo, "origin/main")? else {
+        return Err(UsageError::raise(
+            "claim carry: no merge base with origin/main, so there is nothing to carry against"
+                .to_owned(),
+        ));
+    };
+
+    // The table on each side. An absent base copy reads as empty, which the
+    // predicate then refuses as `no-prior-row` rather than admitting a first row
+    // that vouches for itself.
+    let before = match git::read_at(repo, &base, carry::TABLE)? {
+        git::BaseBlob::Found { text, .. } => text,
+        git::BaseBlob::AbsentAtRef { .. } | git::BaseBlob::RefUnreachable { .. } => String::new(),
+    };
+    let after = std::fs::read_to_string(repo.join(carry::TABLE)).unwrap_or_default();
+
+    // Every OTHER path this branch moved. `writes_in_range` answers per commit
+    // over declared globs, so `**` is the whole tree and the table is filtered out
+    // here — one differ, rather than a second opinion about what changed.
+    let mut other: Vec<String> = Vec::new();
+    for write in git::writes_in_range(repo, &base, "HEAD", &["**".to_owned()])? {
+        for path in write.paths {
+            if path != carry::TABLE && !other.contains(&path) {
+                other.push(path);
+            }
+        }
+    }
+    other.sort();
+
+    match carry::judge(&before, &after, &other) {
+        Ok(carried) => {
+            let receipts = git::git_dir(repo)?.join("batten-receipts");
+            let at = receipt::rfc3339_utc(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since| since.as_secs()),
+            );
+            carry::mint(&receipts, &branch, carried, Some(base.as_str()), &at)?;
+            if json {
+                writeln!(out, "{}", carry_document(&branch, carried, None)?)?;
+            } else {
+                // On STDOUT and gated on `-J`, for `claim check`'s reason one
+                // function up: stdout is one document under the data channel, and a
+                // summary on stderr is progress — which the output contract admits
+                // only when a rung asked for it.
+                output::message(
+                    mode,
+                    Verbosity::Normal,
+                    out,
+                    &format!(
+                        "claim carry: {branch} carries {carried} licence row(s) forward and \
+                         nothing else — `verify` accepts this in place of a claim receipt."
+                    ),
+                )?;
+            }
+            Ok(ExitCode::Success)
+        }
+        Err(refusal) => {
+            let line = refusal.line();
+            if json {
+                writeln!(out, "{}", carry_document(&branch, 0, Some(&line))?)?;
+            } else {
+                writeln!(out, "{line}")?;
+            }
+            output::verdict(
+                err,
+                "claim carry: this branch is not a licence carry, so no receipt is minted. A \
+                 carry appends rows whose repo the base table already maps, changing only the \
+                 sha, and touches nothing else.",
+            )?;
+            Ok(ExitCode::Violation)
+        }
+    }
 }
 
 /// Re-key a stranded claim receipt onto this branch.

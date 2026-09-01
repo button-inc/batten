@@ -627,6 +627,19 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The third board verb, and structurally pointer-only for a reason worth
+    // naming because its subject is unusually leaky: the table it judges carries a
+    // LICENCE TEXT and a COPYRIGHT HOLDER per row, which is exactly the kind of
+    // third-party string rule 4 is about. `carry::Refusal` has nowhere to put one
+    // — every variant carries a repo, a path or a line number and there is no
+    // field a verdict body could travel in — so a refusal names which row is
+    // wrong without ever quoting what it compared.
+    Verb {
+        path: "claim carry",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The green verdict (CLOUD-1143), pointer-only on the same structural terms.
     // `checks_green::Finding` carries a check name and a conclusion and has
     // nowhere to put anything else, so a run's log cannot travel even when the

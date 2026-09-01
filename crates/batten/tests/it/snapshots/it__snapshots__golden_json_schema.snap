@@ -412,6 +412,21 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
+          "path": "claim carry",
+          "about": "Attest that this branch only carries licence rows forward, and mint the receipt when it does",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "claim check",
           "about": "Refuse a pull of an issue somebody is already on, and mint the receipt when it is free",
           "effect": "write",
