@@ -5529,14 +5529,33 @@ measured = "2026-09-01"
 # exactly this basis move. Refreshing the count without claiming a floor
 # measurement I did not take is the honest half of the remedy.
 
+# THE 2026-09-01 REFRESH, and it is the same half-remedy the block above already
+# names (CLOUD-1295). Live is 164 against a declared 152, past the tolerance:
+# this branch adds `bot_lane`, `claim_carry` and `reclaim_report_once` to a tree
+# `main` was meanwhile adding its own suites to.
+#
+# `count` and `measured` move TOGETHER, as the block instructs — and here
+# `measured` is ALREADY `2026-09-01`, set by that same-day move, so the pair is
+# satisfied by the count alone rather than by back-dating anything. THE FLOORS
+# — for CLOUD-1210's reason, restated rather than re-derived.
+# Grouping the test targets severed the premise that a tracked FILE proxies a
+# linked STEM: 147 linked artifacts became 4, and `target/debug` went 7.76 GB to
+# 2.05 GB. Both floors have been far above what the tree needs ever since, so a
+# refreshed count cannot make them too low, which is the direction that fails
+# silently.
+#
+# Moving them DOWN needs the independent measurement the block names — a build
+# from an empty `target` for cold, a minimal post-prune tree for warm — and that
+# is CLOUD-1158's. Refreshing the count without claiming a floor measurement I
+# did not take is the honest half, and it is the half this change owes.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 152
+count = 164
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 152
+count = 164
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
