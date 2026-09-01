@@ -34,6 +34,21 @@
 //!
 //! The adopted arm takes 2.3x off the bytes by stripping the dependency closure,
 //! which is where they were, while every `batten` frame keeps its file and line.
+//!
+//! # `opt-level` is the larger half, and it was unpinned until CLOUD-1289
+//!
+//! The three arms above are all about `debug`, and so were all four of this
+//! file's cases — it contained zero occurrences of `opt-level`. But the same
+//! `[profile.dev.package."*"]` block carries `opt-level = 2`, and CLOUD-1211
+//! measured that as its **biggest single win**: `mise run test:cargo` warm
+//! 100.189s to 48.581s, **2.06x on the whole suite**, because `batten hook`
+//! against this repository's own ruleset is dominated by dependency code
+//! evaluating Rego and unoptimised that work is 6.8x what the shipped binary
+//! does.
+//!
+//! Dropping that key today reds nothing and exits 0. It simply doubles every
+//! suite run, for every developer, until somebody thinks to time it — the same
+//! silent shape as the byte regression above, one dial over.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -48,6 +63,15 @@ const ADOPTED_DEBUG: i64 = 1;
 /// What the adopted arm sets for the DEPENDENCY closure, which is where the
 /// bytes actually were — 124.3 MB to 54.5 MB per linked binary.
 const ADOPTED_DEPENDENCY_DEBUG: i64 = 0;
+
+/// What CLOUD-1289's adopted arm sets. A STRING, because cargo spells this one
+/// as an enum rather than a number, and `"packed"` and `"off"` are the other two
+/// values a later edit could land here without noticing.
+const ADOPTED_SPLIT_DEBUGINFO: &str = "unpacked";
+
+/// What the adopted arm sets for the DEPENDENCY closure's optimisation, which is
+/// where the SUITE'S WALL CLOCK was — 100.189s to 48.581s warm, 2.06x.
+const ADOPTED_DEPENDENCY_OPT_LEVEL: i64 = 2;
 
 /// The glob cargo spells "every dependency, but not workspace members".
 const DEPENDENCY_GLOB: &str = "*";
@@ -66,6 +90,22 @@ fn dev_profile() -> toml::Value {
         .expect("[profile.dev] is declared")
 }
 
+/// `[profile.dev.package."*"]` — the override both adopted values live on.
+///
+/// Panics rather than returning an option, because an absent block is itself the
+/// regression: without it every dependency carries debuginfo again AND compiles
+/// unoptimised, which is both halves of CLOUD-1211 undone at once.
+fn dependency_override() -> toml::Value {
+    dev_profile()
+        .get("package")
+        .and_then(|package| package.get(DEPENDENCY_GLOB))
+        .cloned()
+        .expect(
+            "[profile.dev.package.\"*\"] is declared — without it every dependency \
+             carries debuginfo again and the linked binaries go back to ~124 MB",
+        )
+}
+
 /// `debug` normalised across the two spellings cargo accepts. Panics on an
 /// absent key rather than defaulting, which is the reading
 /// `an_absent_debug_key_is_not_read_as_the_adopted_value` pins.
@@ -79,6 +119,24 @@ fn declared_debug(profile: &toml::Value) -> i64 {
         toml::Value::Boolean(true) => 2,
         toml::Value::Boolean(false) => 0,
         other => panic!("`debug` is neither an integer nor a bool: {other:?}"),
+    }
+}
+
+/// `opt-level` read the same panicking way `declared_debug` is, and for the same
+/// reason: an absent key is cargo's own default (`0` for the dev profile), so a
+/// defaulting lookup would report the regression as satisfied.
+///
+/// Cargo also accepts `"s"` and `"z"` here. Neither is the adopted value, and
+/// both panic naming what they found rather than being silently coerced to a
+/// number they are not.
+fn declared_opt_level(profile: &toml::Value) -> i64 {
+    let value = profile.get("opt-level").expect(
+        "this profile declares `opt-level` — an absent key is cargo's own default \
+         of 0, which is the regression this asserts against",
+    );
+    match value {
+        toml::Value::Integer(level) => *level,
+        other => panic!("`opt-level` is not an integer: {other:?}"),
     }
 }
 
@@ -98,22 +156,30 @@ fn workspace_code_keeps_its_line_tables() {
 
 #[test]
 fn the_dependency_closure_carries_no_debuginfo() {
-    let debug = manifest()
-        .get("profile")
-        .and_then(|profile| profile.get("dev"))
-        .and_then(|dev| dev.get("package"))
-        .and_then(|package| package.get(DEPENDENCY_GLOB))
-        .map(declared_debug)
-        .expect(
-            "[profile.dev.package.\"*\"] is declared — without it every dependency \
-             carries debuginfo again and the linked binaries go back to ~124 MB",
-        );
+    let debug = declared_debug(&dependency_override());
     assert_eq!(
         debug, ADOPTED_DEPENDENCY_DEBUG,
         "[profile.dev.package.\"*\"] debug is {debug}, not the adopted \
          {ADOPTED_DEPENDENCY_DEBUG}. This override is where the byte saving comes \
          from — 15.53 GB to 6.82 GB across 125 linked artifacts — and dropping it \
          is silent until a session runs out of disk (CLOUD-766)."
+    );
+}
+
+/// The wall-clock half of the same override, and the one nothing asserted until
+/// CLOUD-1289. `debug` above is about `target/debug`'s bytes; this is about how
+/// long every suite run takes, and it is the larger of the two numbers.
+#[test]
+fn the_dependency_closure_is_optimised() {
+    let level = declared_opt_level(&dependency_override());
+    assert_eq!(
+        level, ADOPTED_DEPENDENCY_OPT_LEVEL,
+        "[profile.dev.package.\"*\"] opt-level is {level}, not the adopted \
+         {ADOPTED_DEPENDENCY_OPT_LEVEL}. This is CLOUD-1211's biggest single win — \
+         `mise run test:cargo` warm 100.189s to 48.581s, 2.06x — and dropping it \
+         reds nothing, exits 0, and doubles every suite run for everybody \
+         (CLOUD-1289). If this is a deliberate change, move the constant and say \
+         why in the same commit."
     );
 }
 
@@ -140,6 +206,61 @@ fn an_absent_debug_key_is_not_read_as_the_adopted_value() {
         caught.is_err(),
         "an absent `debug` is cargo's own default, not the adopted value — reading \
          it as satisfied is exactly the silent regression this file refuses"
+    );
+}
+
+/// CLOUD-1289's arm, and the assertion is over the byte finding rather than the
+/// time one: `unpacked` was 2.04x off the linked binaries against a null of zero
+/// width, and inside the null on wall clock. Dropping it is silent for exactly
+/// the reason the `debug` keys are — `target/debug` grows back by 5.2 GB and
+/// nothing reds until a session runs out of disk.
+#[test]
+fn debuginfo_stays_out_of_the_linked_binaries() {
+    let profile = dev_profile();
+    let declared = profile
+        .get("split-debuginfo")
+        .and_then(toml::Value::as_str)
+        .map(str::to_owned)
+        .expect(
+            "[profile.dev] declares `split-debuginfo` — an absent key is cargo's own \
+             default, which on this host triple is the packed form CLOUD-1289 measured \
+             at 2.04x more linked bytes",
+        );
+    assert_eq!(
+        declared, ADOPTED_SPLIT_DEBUGINFO,
+        "[profile.dev] split-debuginfo is {declared:?}, not the adopted \
+         {ADOPTED_SPLIT_DEBUGINFO:?}. Measured 2026-09-01 as a paired A/B on one \
+         machine: 10.19 GB of linked binaries to 4.99 GB, and `target/debug` 13.03 GB \
+         to 7.76 GB, with the two identical baselines byte-identical to each other \
+         (CLOUD-1289). If this is a deliberate change, move the constant and say why \
+         in the same commit."
+    );
+}
+
+/// ANTI-VACUITY for the case above, and it is not the same assertion twice: the
+/// dev profile's `opt-level` default is `0` rather than an absent key, so a
+/// defaulting lookup here would read the UNOPTIMISED build — the exact 2x
+/// regression — as the adopted value. This pins the panicking read.
+#[test]
+fn an_absent_opt_level_key_is_not_read_as_the_adopted_value() {
+    let fixture: toml::Value =
+        toml::from_str("[profile.dev.package.\"*\"]\ndebug = 0\n").expect("fixture parses");
+    let profile = fixture
+        .get("profile")
+        .and_then(|profile| profile.get("dev"))
+        .and_then(|dev| dev.get("package"))
+        .and_then(|package| package.get(DEPENDENCY_GLOB))
+        .expect("the fixture declares the dependency override");
+
+    assert!(
+        profile.get("opt-level").is_none(),
+        "the fixture is the absent-key case this asserts over"
+    );
+    let caught = std::panic::catch_unwind(|| declared_opt_level(profile));
+    assert!(
+        caught.is_err(),
+        "an absent `opt-level` is cargo's own dev default of 0, not the adopted 2 — \
+         reading it as satisfied is exactly the silent regression this file refuses"
     );
 }
 

@@ -561,7 +561,9 @@ strip = true
 # THREE ARMS MEASURED on this container, 2026-08-30, each a cold
 # `mise run test:cargo` over a cleared `target/debug`. The census counts
 # `target/debug/deps`' extension-less linked binaries — the population
-# `crates/batten/src/prune.rs:262-269` reads:
+# `crates/batten/src/prune.rs`'s `superseded_in` reads through `artifact_key`
+# (named rather than cited by line, because the line span this used to give had
+# already drifted onto an unrelated field):
 #
 #   arm                                  artifacts     bytes      mean   cold wall
 #   debug = 1 (the baseline)                   125   15.53 GB  124.3 MB       231s
@@ -600,8 +602,48 @@ strip = true
 # not re-proposed: rust-lld has been the default on this host triple since Rust
 # 1.90, this repository pins 1.97.1, and `readelf -p .comment` over a built
 # artifact reports `Linker: LLD 22.1.6`. The build already links with lld.
+#
+# SPLIT-DEBUGINFO MEASURED 2026-09-01 (CLOUD-1289) — the one arm CLOUD-1211
+# deferred with its acceptance clause reading "Outstanding". Paired A/B on this
+# container: three cold builds back to back in ONE process, so machine noise is
+# common-mode and divides out, with two identical baselines bracketing the
+# candidate rather than sitting on one side of it.
+#
+#   arm         cold wall   artifacts   linked bytes      mean
+#   base-1          223.4s         147      10.19 GB   69.3 MB
+#   unpacked        208.9s         147       4.99 GB   34.0 MB
+#   base-2          213.7s         147      10.19 GB   69.3 MB
+#
+# THE TIME COLUMN IS NOT A FINDING, and is recorded only so nobody re-runs it.
+# The two IDENTICAL baselines differ by 9.7s on their own — a null spread of
+# 0.957 — and the candidate's ratio against the baseline mean is 0.956, which is
+# inside it. That is the EXPECTED result rather than a disappointment: the prior
+# art CLOUD-1211 cites (14s->4s, 8.7s->3.0s, rust-lang/cargo#9112) is macOS
+# `dsymutil`, and `unpacked` is already cargo's default on macOS and not on
+# Linux, so the mechanism that paid there is not the one in play on this triple.
+#
+# THE BYTE COLUMN IS THE FINDING, and its null has ZERO width — the two
+# baselines are byte-identical at 10193048624, not merely close. 2.04x off the
+# linked binaries, adopted on that alone, which is what CLOUD-1289's acceptance
+# asks for: an arm that halves artifacts is worth adopting even where its time
+# delta sits inside the null, because bytes are the binding constraint here
+# (CLOUD-766).
+#
+# AND THE BYTES LEAVE THE DISK rather than moving to a sibling file, which is
+# the question a SPLIT format has to be asked and which the linked census alone
+# cannot answer: `target/debug/deps` 10.97 GB -> 5.87 GB and `target/debug`
+# 13.03 GB -> 7.76 GB, because the 5.20 GB that left the binaries is replaced by
+# 111.8 MB of `.dwo`. Those `.dwo` files are a class `prune.rs`'s closed
+# `RECLAIMED_KINDS` cannot see, so they accumulate per build hash where the
+# binary they came out of was reclaimable — CLOUD-1293, filed rather than fixed
+# here because the fix is in `prune.rs` and the trade is 5.20 GB against 111.8 MB.
+#
+# `debug = 1` is untouched, so this changes WHERE debuginfo is stored and never
+# whether it exists: every `batten` frame still reports its file and line, and
+# the middle arm above stays rejected.
 [profile.dev]
 debug = 1
+split-debuginfo = "unpacked"
 
 # The dependency closure carries no debuginfo and IS optimised. Workspace code
 # above keeps its line tables and stays unoptimised, so rebuilds of the code under
