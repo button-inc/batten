@@ -1269,10 +1269,14 @@ impl Outcome {
         if let Some((stood_at, now)) = self.lowered {
             // NAMES BOTH NUMBERS AND WHY, because the reader most likely to meet
             // this line is one whose lap was being refused by the old one.
-            line.push('\n');
-            line.push_str(&format!(
+            // Bound to a local first, like the two neighbours: `push_str` of a
+            // `format!` is `clippy::format_push_string`, and matching the shape
+            // beside it keeps one idiom in this function rather than two.
+            let lowered = format!(
                 "target-prune: the observed floor was lowered from {stood_at}MB to {now}MB — it was a CAPPED reading, which measures what this volume leaves over rather than what a lap costs, and the volume no longer leaves that much"
-            ));
+            );
+            line.push('\n');
+            line.push_str(&lowered);
         }
         if let Some(count) = self.tightened {
             // ITS OWN LINE, never folded into the one above (CLOUD-1249). The two

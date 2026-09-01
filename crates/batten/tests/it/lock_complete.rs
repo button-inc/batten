@@ -96,9 +96,12 @@ const RULE: &str = "lock-complete";
 fn tool_with(name: &str, platforms: &[&str]) -> String {
     let mut out = format!("[[tools.\"{name}\"]]\nversion = \"1.0.0\"\nbackend = \"aqua:x/t\"\n\n");
     for platform in platforms {
-        out.push_str(&format!(
+        // Bound to a local first: `push_str` of a `format!` is
+        // `clippy::format_push_string`, which the workspace denies.
+        let block = format!(
             "[tools.\"{name}\".\"platforms.{platform}\"]\nchecksum = \"sha256:abc\"\nurl = \"https://example.invalid/{platform}\"\n\n"
-        ));
+        );
+        out.push_str(&block);
     }
     out
 }

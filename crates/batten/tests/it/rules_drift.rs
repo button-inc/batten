@@ -812,8 +812,13 @@ fn the_subscripted_spelling_counts_as_naming_a_key() {
     // first run over the real tree would have been eight false findings, which is
     // a gate nobody keeps. Asserted over the boundary rather than in the module,
     // because it is the ENGINE handing the line over that makes it decidable.
+    // NAMED APART FROM `the_subscripted_pattern_table_is_not_read_as_a_rule_name`'s
+    // fixture, which was `rules-drift-subscripted` first. `scratch` keys the
+    // directory on the name, so two cases sharing one wrote each other's prose and
+    // whichever ran second judged the other's tree — green or red by scheduling
+    // order, which is the worst way for a suite to be wrong.
     let (code, said) = judge_prose_with(
-        "rules-drift-subscripted",
+        "rules-drift-subscripted-key",
         &format!(
             "A module iterates `input.tree[\"documents\"]`, `input.tree.lines`, \
              `input.call[\"command\"]` and `input.call.segments`.\n{CLAIM}"
