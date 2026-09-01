@@ -591,14 +591,38 @@ impl Drain {
         }
     }
 
-    /// Wait up to [`PIPE_DRAIN_TIMEOUT`] for EOF, then take what arrived.
+    /// Wait for EOF against what is LEFT of one shared [`PIPE_DRAIN_TIMEOUT`],
+    /// then take what arrived.
     ///
     /// Returns the bytes and whether the deadline was reached. A timeout is not
     /// an error: the child's exit code is still the caller's answer, and refusing
     /// to report it because bookkeeping ran long would turn a leaked grandchild
     /// into a failed build.
-    fn collect(self, stream: Stream, report: &mut dyn Write) -> Result<(Vec<u8>, capture::Spool)> {
-        self.collect_within(PIPE_DRAIN_TIMEOUT, stream, report)
+    ///
+    /// # Why the budget is shared (CLOUD-1288)
+    ///
+    /// [`PIPE_DRAIN_TIMEOUT`] reads as "a leaked grandchild costs at most ten
+    /// seconds", and `the_drain_deadline_is_long_enough_to_be_about_a_leak`
+    /// asserts that floor. It cost TWENTY: the two pipes were collected one after
+    /// the other, each with a fresh full deadline, so a grandchild holding both
+    /// open spent the constant twice.
+    ///
+    /// The tee threads were never the problem and are untouched — one per pipe,
+    /// started at spawn time, already concurrent, and `.claude/rules/rust.md`'s
+    /// concurrency table records that row as staying. What was serial is the
+    /// DEADLINE ACCOUNTING, and this is where it stops being: `started` is taken
+    /// once before the first stream, so the second gets whatever the first left.
+    fn collect_remaining(
+        self,
+        started: std::time::Instant,
+        stream: Stream,
+        report: &mut dyn Write,
+    ) -> Result<(Vec<u8>, capture::Spool)> {
+        self.collect_within(
+            PIPE_DRAIN_TIMEOUT.saturating_sub(started.elapsed()),
+            stream,
+            report,
+        )
     }
 
     /// [`Self::collect`] with the deadline supplied.
@@ -612,15 +636,33 @@ impl Drain {
         stream: Stream,
         report: &mut dyn Write,
     ) -> Result<(Vec<u8>, capture::Spool)> {
-        let timed_out = match self.outcome.recv_timeout(deadline) {
-            Ok(result) => {
-                result.with_context(|| format!("tee the wrapped command's {}", stream.as_str()))?;
-                false
-            }
+        // A NON-BLOCKING TAKE FIRST, AND IT IS NOT AN OPTIMISATION (CLOUD-1288).
+        // Once the budget is shared, `deadline` can legitimately be ZERO — the
+        // first stream spent it all — and `recv_timeout(Duration::ZERO)` is
+        // permitted to report `Timeout` without ever examining a value that is
+        // already sitting in the channel. A stderr whose tee finished cleanly
+        // seconds earlier would then be reported as "did not reach EOF", which is
+        // a FALSE pointer on a byte-stable channel (house-style §6), fired on
+        // exactly the runs this change exists to speed up.
+        //
+        // So the two questions are asked separately: "has this stream already
+        // finished" is `try_recv`, and only when the answer is no does the
+        // remaining budget get waited on. The bytes were always safe; this is the
+        // output half.
+        let finished = |result: Result<()>| -> Result<bool> {
+            result.with_context(|| format!("tee the wrapped command's {}", stream.as_str()))?;
+            Ok(false)
+        };
+        let timed_out = match self.outcome.try_recv() {
+            Ok(result) => finished(result)?,
             // Disconnected without a value means the tee thread died without
             // reporting — a panic. The bytes it did append are still real.
-            Err(mpsc::RecvTimeoutError::Disconnected) => false,
-            Err(mpsc::RecvTimeoutError::Timeout) => true,
+            Err(mpsc::TryRecvError::Disconnected) => false,
+            Err(mpsc::TryRecvError::Empty) => match self.outcome.recv_timeout(deadline) {
+                Ok(result) => finished(result)?,
+                Err(mpsc::RecvTimeoutError::Disconnected) => false,
+                Err(mpsc::RecvTimeoutError::Timeout) => true,
+            },
         };
         let bytes = match self.seen.lock() {
             Ok(held) => held.clone(),
@@ -1631,9 +1673,16 @@ fn run_one(
     // write end keeps the pipe open past the child's own death, and a bare
     // `join()` on that is a hang with no upper bound. The notices are BUFFERED
     // rather than written, so a bundle's diagnostics land in declaration order.
+    //
+    // ONE BUDGET ACROSS BOTH, taken here rather than per stream: `PIPE_DRAIN_TIMEOUT`
+    // and its floor assertion both describe what a leak costs in total, and two
+    // fresh deadlines made that twenty seconds (CLOUD-1288).
     let mut notices = Vec::new();
-    let (out_bytes, out_spool) = out_drain.collect(Stream::Stdout, &mut notices)?;
-    let (err_bytes, err_spool) = err_drain.collect(Stream::Stderr, &mut notices)?;
+    let drain_started = std::time::Instant::now();
+    let (out_bytes, out_spool) =
+        out_drain.collect_remaining(drain_started, Stream::Stdout, &mut notices)?;
+    let (err_bytes, err_spool) =
+        err_drain.collect_remaining(drain_started, Stream::Stderr, &mut notices)?;
 
     // Both streams are stored, including an empty one: zero bytes is the real
     // answer "the command said nothing", and it must be distinguishable from a run
@@ -2199,10 +2248,77 @@ mod tests {
         );
         let mut report = Vec::new();
         let (bytes, _spool) = drain
-            .collect(Stream::Stdout, &mut report)
+            .collect_within(PIPE_DRAIN_TIMEOUT, Stream::Stdout, &mut report)
             .expect("clean EOF");
         assert_eq!(bytes, b"hello");
         assert!(report.is_empty(), "the happy path emits nothing");
+    }
+
+    /// The zero-remaining case, and it is an OUTPUT property rather than a data
+    /// one (CLOUD-1288).
+    ///
+    /// Once the two drains share one budget, the second stream's deadline can
+    /// legitimately be `Duration::ZERO` — the first spent it all. A stderr whose
+    /// tee finished cleanly seconds earlier must still emit NOTHING: a "did not
+    /// reach EOF" pointer on a healthy stream is a false finding on a channel
+    /// house-style §6 requires to be byte-stable, and it would fire on exactly
+    /// the runs the shared budget exists to speed up.
+    ///
+    /// # What this case does and does not discriminate, measured rather than assumed
+    ///
+    /// CLOUD-1288 predicted this would fail against a naive `saturating_sub`,
+    /// on the premise that `recv_timeout(Duration::ZERO)` can report `Timeout`
+    /// without examining a value already in the channel. **That does not
+    /// reproduce on this toolchain**: 10,000 trials over a channel holding a
+    /// ready value returned it 10,000 times and reported `Timeout` zero times.
+    ///
+    /// So this case pins the property rather than separating the two spellings,
+    /// and that is worth saying plainly instead of claiming a discrimination it
+    /// does not have. The `try_recv` in `collect_within` stands anyway, because
+    /// "has this stream already finished" and "how long may I wait" are different
+    /// questions, and answering the first through the second leaves the notice
+    /// depending on an `mpsc` detail std does not promise.
+    #[test]
+    fn a_finished_stream_emits_no_notice_when_the_budget_is_gone() {
+        let drain = Drain::spawn(
+            &b"hello"[..],
+            std::io::sink(),
+            scratch_spool("zero-budget", capture::LiveStream::STDERR),
+        );
+        // The tee appends before it reports, so wait for the bytes and then for
+        // the outcome to follow them. Same poll idiom as the timeout case above,
+        // and for the same reason: without it this would assert "gave up before
+        // anything arrived", which is the opposite property.
+        while drain.seen.lock().map_or(true, |held| held.len() < 5) {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the interval of a poll whose exit condition is the `seen` buffer holding \
+                          the bytes the tee speaks; the case is about what happens AFTER a stream \
+                          finished, so it has to wait for it to finish (CLOUD-1177)"
+            )]
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the tee appends to `seen` and only then sends its outcome, so the poll above \
+                      can exit inside that window; this closes it. The subject is a stream that \
+                      has ALREADY finished, and racing its own completion would test the other \
+                      case (CLOUD-1288)"
+        )]
+        std::thread::sleep(Duration::from_millis(200));
+
+        let mut report = Vec::new();
+        let (bytes, _spool) = drain
+            .collect_within(Duration::ZERO, Stream::Stderr, &mut report)
+            .expect("a finished stream is not a failed command");
+        assert_eq!(bytes, b"hello", "the bytes are taken regardless");
+        assert!(
+            report.is_empty(),
+            "a stream that reached EOF must emit no notice even at a zero \
+             remaining budget — the notice says a process still holds the pipe \
+             open, and none does: {}",
+            String::from_utf8_lossy(&report)
+        );
     }
 
     #[test]

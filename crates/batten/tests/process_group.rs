@@ -809,5 +809,23 @@ fn a_surviving_grandchild_cannot_hang_exec() {
         took < Duration::from_mins(1),
         "exec must be bounded by the drain deadline, not by the grandchild: {took:?}"
     );
+    // ONE BUDGET, NOT TWO (CLOUD-1288). `sleep 300 &` inherits BOTH pipes, so
+    // this is already the both-leaked case — and the assertion above could not
+    // tell ten seconds from twenty, which is exactly what the defect cost: the
+    // two streams were collected with a fresh full `PIPE_DRAIN_TIMEOUT` each, so
+    // the constant that reads "at most ten seconds" shipped as twenty. Measured
+    // at 20.07s before the fix, the single slowest case in the suite by 2.5x.
+    //
+    // A NEW case was considered and rejected: it would have to leak both pipes
+    // to mean anything, which is another ten seconds of wall clock for coverage
+    // this fixture already has. Tightening the bound here is the same assertion
+    // for free. The generous slack is deliberate — the subject is 10 versus 20,
+    // and a bound tight enough to fire on a loaded container would be a flake
+    // asserting about scheduling rather than about the budget.
+    assert!(
+        took < Duration::from_secs(15),
+        "the two pipe drains share ONE deadline budget, so both being leaked costs \
+         one PIPE_DRAIN_TIMEOUT and not two: {took:?}"
+    );
     signal(u32::try_from(holder).expect("a positive pid"), "KILL");
 }
