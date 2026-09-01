@@ -42,10 +42,13 @@ name: sbom-actions-currency
 
 on:
   schedule:
-    # Daily, 05:00 UTC. Daily rather than weekly because `taiki-e/install-action`
-    # is pinned by digest and publishes near-daily, so the lane can be blocked
-    # again within a day of being cleared.
-    - cron: "0 5 * * *"
+    # Daily at 05:40 UTC. Daily rather than weekly because
+    # `taiki-e/install-action` is pinned by digest and publishes near-daily, so
+    # the lane can be blocked again within a day of being cleared. :40 rather
+    # than :00 because `perf.yml` owns `0 5 * * *` and `schedules-do-not-collide`
+    # refuses a second job on the same minute — two runners starting together is
+    # a queue, and the perf series is the one measurement a queue would distort.
+    - cron: "40 5 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -180,7 +183,18 @@ jobs:
             '' \
             'Refs: CLOUD-1213')
           git commit -m "$msg"
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$branch"
+          # `gh auth setup-git` installs gh as git's credential helper, so the
+          # push authenticates from $GH_TOKEN in the environment and the token
+          # never appears in a URL, an argv, or the run log.
+          #
+          # The obvious alternative embeds the token in the remote URL as
+          # userinfo. `no-secrets` refuses that, correctly: git writes the URL
+          # into `.git/config` and echoes it in any error it prints about the
+          # remote. It refused the spelling QUOTED IN THIS COMMENT too, which is
+          # the same rule working — a pattern is a pattern wherever it appears,
+          # so the shape is described here rather than reproduced.
+          gh auth setup-git
+          git push origin "$branch"
 
           # shellcheck disable=SC2016
           # The single quotes are deliberate: these strings are MARKDOWN, and the
