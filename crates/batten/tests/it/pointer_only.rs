@@ -481,6 +481,26 @@ struct Verb {
     disposition: Disposition,
 }
 
+/// The verbs whose honest answer over THIS corpus is could-not-look.
+///
+/// The sweep refuses exit 3 by default and the reason is sound: a verb that
+/// failed internally emitted nothing, so what it did not leak proves nothing.
+/// One class is different, and it is named here rather than waved through by a
+/// weaker assertion — for a mutation sweep the could-not-look report IS the
+/// emission, and it is exactly where a runner is tempted to quote the thing it
+/// could not read. The pointer-only assertions below still run over it
+/// unchanged; only the exit-code precondition is lifted.
+///
+/// `mutate sweep` is here because no lighter fixture can give it a verdict: a
+/// sweep needs a real gate, a real declaration and a real suite runner, and this
+/// corpus deliberately builds none of the three. `mutate census` is NOT here —
+/// it answers `names-no-subject` per name, which is a verdict.
+///
+/// A NAME BELONGS HERE ONLY WHEN NO LIGHTER FIXTURE COULD PRODUCE A VERDICT,
+/// never to wave through a verb failing for a reason of its own. Widening it is
+/// the vacuous pass this file exists to refuse.
+const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &["mutate sweep"];
+
 /// One entry per leaf verb of [`SURFACE`], asserted total by
 /// [`every_leaf_verb_is_classified`] in both directions.
 const CENSUS: &[Verb] = &[
@@ -1008,6 +1028,29 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The mutation sweep and its census (CLOUD-1267). Both report a GATE NAME, a
+    // mutation id and a case name — never a line of the mutated source, which is
+    // the one thing a mutation runner is uniquely placed to leak, and the reason
+    // the predecessor's own suite carried a case for it.
+    //
+    // In this corpus they answer over a fixture that declares no gate at all, so
+    // every name resolves to `no-such-gate` and the sweep never stages a tree.
+    // That is the honest outcome here and it is a pointer either way: a name the
+    // enforced set supplied, echoed back as unresolvable. What is being decided
+    // is that the could-not-look report is pointer-only too, which is where a
+    // runner is most tempted to quote what it could not read.
+    Verb {
+        path: "mutate census",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "mutate sweep",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The disk-floor reclaim (CLOUD-1030). Its report is a file COUNT, two
     // megabyte figures and the floor in force — never a path listing, which is
     // unbounded and which a caller wanting one can get from `du`. That was the
@@ -1324,12 +1367,14 @@ fn no_verb_emits_content_it_merely_read() {
 
         for argv in argvs {
             let run = run_in(&corpus, &argv, verb.stdin);
-            assert_ne!(
-                run.code,
-                Some(3),
-                "{argv:?} failed internally, so what it did not emit proves nothing: {}",
-                String::from_utf8_lossy(&run.stderr)
-            );
+            if !MAY_ANSWER_COULD_NOT_LOOK.contains(&verb.path) {
+                assert_ne!(
+                    run.code,
+                    Some(3),
+                    "{argv:?} failed internally, so what it did not emit proves nothing: {}",
+                    String::from_utf8_lossy(&run.stderr)
+                );
+            }
             let emitted = run.emitted();
 
             match verb.disposition {

@@ -334,6 +334,24 @@ impl Sweep {
             crate::ExitCode::Violation
         }
     }
+
+    /// How many findings are could-not-look rather than a verdict about
+    /// coverage.
+    ///
+    /// THE SUMMARY LINE MUST NOT ADD THE TWO TOGETHER, and it did: a set naming
+    /// gates a tree does not carry reported `124 of 0 declared mutation(s) …
+    /// were not caught`, which states a coverage verdict over a denominator of
+    /// zero — the exact conflation the variants above are separate to prevent,
+    /// re-introduced one layer up in the rendering. The exit code was right
+    /// throughout, which is what made it survive: nothing that reads the code
+    /// could see it.
+    #[must_use]
+    pub fn unlooked(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|f| f.verdict.could_not_look())
+            .count()
+    }
 }
 
 // ---------------------------------------------------------------------------

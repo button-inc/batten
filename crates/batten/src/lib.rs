@@ -3899,14 +3899,27 @@ fn run_mutate(
                 )?;
                 return Ok(code);
             }
-            writeln!(
-                err,
-                "::error:: mutate sweep: {} of {} declared mutation(s) across {} gate(s) were not \
-                 caught — a suite that passes on broken code is not coverage",
-                sweep.findings.len(),
-                sweep.declared,
-                sweep.gates
-            )?;
+            // THE TWO CLASSES ARE COUNTED APART. A could-not-look is not a
+            // suite that passed on broken code — it is a suite nothing could
+            // ask — and adding them produced `124 of 0 declared mutation(s) …
+            // were not caught`, a coverage verdict over a denominator of zero.
+            let unlooked = sweep.unlooked();
+            let uncaught = sweep.findings.len() - unlooked;
+            if uncaught > 0 {
+                writeln!(
+                    err,
+                    "::error:: mutate sweep: {} of {} declared mutation(s) across {} gate(s) were \
+                     not caught — a suite that passes on broken code is not coverage",
+                    uncaught, sweep.declared, sweep.gates
+                )?;
+            }
+            if unlooked > 0 {
+                writeln!(
+                    err,
+                    "::error:: mutate sweep: {unlooked} declared mutation(s) could not be looked \
+                     at — an unresolvable gate or suite is not a pass"
+                )?;
+            }
             Ok(code)
         }
     }
