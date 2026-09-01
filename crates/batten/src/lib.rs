@@ -249,6 +249,11 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Semver { command }) => run_semver(command, mode, out, err),
         Some(Command::Perf { command }) => run_perf(command, out, err),
         Some(Command::Mutate { command }) => run_mutate(command, out, err),
+        // The landing lease (CLOUD-1274). Every arm reaches the network, which
+        // is why nothing on the `check` or `hook` surface may reach this module —
+        // `policy/module-layering.rego` forbids both edges over the resolved use
+        // graph rather than by review.
+        Some(Command::Lease { command }) => run_lease(command, out, err),
         Some(Command::Wiring { command }) => run_wiring(&command, mode, err),
         // The refinement gate and the pull-time claim (CLOUD-1121). Both read
         // the payload the caller supplies — or, under `--issue`, the one the
@@ -3830,6 +3835,741 @@ fn run_perf(
 /// where it could not look, and the split is the acceptance rather than a
 /// nicety — a gate whose declared suite cannot be resolved or run must never be
 /// reported as "every mutation caught".
+/// The landing lease's nine arms (CLOUD-1274), ported off `mise-tasks/land-lock.sh`.
+///
+/// # The exit vocabulary is not uniform across these arms, and that is the design
+///
+/// `authorises` answers `0` run / `3` stop / `2` could not look, because `1`
+/// already means "held by someone else" — which there is a REASON to stop rather
+/// than the instruction, so a caller keying on `3` cannot mistake a refusal for an
+/// error. Every other arm keeps the ordinary pair, and `2` stays "could not look"
+/// throughout.
+///
+/// # Where the fail-open asymmetry lives
+///
+/// In `authorises` and nowhere else. A lease that cannot be read stops EVERY job
+/// in the fleet, where waving one matrix through costs one matrix; every other
+/// refusal here fails closed, because the thing it protects is `main` rather than
+/// a runner's budget.
+fn run_lease(
+    command: cli::LeaseCommand,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let root = Path::new(".");
+    let terms = match lease_terms(root) {
+        Ok(terms) => terms,
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+    match command {
+        // FAIL OPEN, and only here. Both `Err` arms below run rather than stop.
+        cli::LeaseCommand::Authorises { branch } => {
+            let observed = lease::observe(&terms, now).ok();
+            match lease::authorises(observed.as_ref(), &branch, now) {
+                lease::Authority::Run(why) => {
+                    writeln!(out, "lease: {why}")?;
+                    Ok(ExitCode::Success)
+                }
+                lease::Authority::Stop(why) => {
+                    writeln!(out, "lease: {why}")?;
+                    Ok(ExitCode::Violation)
+                }
+            }
+        }
+        cli::LeaseCommand::Status { json } => run_lease_status(&terms, json, now, out, err),
+        cli::LeaseCommand::Peek { field } => run_lease_peek(&terms, &field, now, out, err),
+        cli::LeaseCommand::Held => run_lease_held(root, &terms, now, out, err),
+        cli::LeaseCommand::Acquire { branch } => {
+            run_lease_acquire(root, &terms, &branch, now, out, err)
+        }
+        cli::LeaseCommand::Renew => run_lease_renew(root, &terms, now, err),
+        cli::LeaseCommand::Hold => run_lease_hold(root, &terms, out, err),
+        cli::LeaseCommand::Release => run_lease_release(root, &terms, now, out, err),
+        cli::LeaseCommand::Reserve { branch } => run_lease_reserve(&terms, &branch, now, out, err),
+    }
+}
+
+/// Resolve the lease's terms from this checkout.
+///
+/// **The remote must resolve to a URL rather than a name.** The transport speaks
+/// smart-HTTP over the vendored client, which has no notion of a git remote alias,
+/// and a name reaching it would be an unresolvable host rather than a clear
+/// refusal here.
+fn lease_terms(root: &Path) -> std::result::Result<lease::Terms, String> {
+    let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
+    let remotes =
+        git::remotes(root).map_err(|err| format!("cannot read this repository: {err}"))?;
+    let url = remotes
+        .iter()
+        .find(|(configured, _)| *configured == name)
+        .map(|(_, url)| url.clone())
+        .ok_or_else(|| format!("no remote named {name} is configured"))?;
+    let mut terms = lease::Terms {
+        remote: url,
+        ..lease::Terms::default()
+    };
+    // Overridable so a suite can drive the bounds without waiting out a real TTL.
+    // Each falls back to the shipped default rather than to zero: a TTL of zero
+    // is a lease that has already lapsed, which would report as a fleet with no
+    // lease at all rather than as a misconfiguration.
+    if let Some(ttl) = env_secs("LAND_LOCK_TTL") {
+        terms.ttl = ttl;
+    }
+    if let Some(beat) = env_secs("LAND_LOCK_HEARTBEAT") {
+        terms.beat = beat;
+    }
+    if let Ok(reference) = std::env::var("LAND_LOCK_BRANCH") {
+        terms.reference = format!("refs/heads/{reference}");
+    }
+    Ok(terms)
+}
+
+/// A positive whole number of seconds from the environment, or `None`.
+///
+/// **Zero and negative are `None`**, not values: every bound here is a duration,
+/// and a zero TTL or beat would turn a lease into a spin rather than into a
+/// tighter test.
+fn env_secs(name: &str) -> Option<i64> {
+    std::env::var(name)
+        .ok()?
+        .parse::<i64>()
+        .ok()
+        .filter(|seconds| *seconds > 0)
+}
+
+/// How many beats a holder may stop progressing before its lease is disbelieved.
+///
+/// Neither this nor the TTL bounds how long a landing may TAKE — both reset on
+/// every advance, so an arbitrarily long landing that keeps producing state
+/// changes never reaches either. They bound how long we keep believing a holder
+/// that has stopped producing evidence: the TTL notices one that stopped BEATING,
+/// this notices one that stopped LANDING.
+///
+/// 60 beats is 30 minutes against a measured floor of ~45 beats — the longest gap
+/// between consecutive check-run completions over the six most recently merged
+/// PRs when it was set. Deliberately generous: this exists to catch NEVER, not
+/// slow, and the cost of catching slow is a landing killed for being healthy.
+fn lease_stall_beats() -> i64 {
+    env_secs("LAND_LOCK_STALL_BEATS").unwrap_or(60)
+}
+
+/// `lease status`, which is prose for a human and `-J` for everything else.
+fn run_lease_status(
+    terms: &lease::Terms,
+    json: bool,
+    now: i64,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let observed = match lease::observe(terms, now) {
+        Ok(observed) => observed,
+        Err(reason) => {
+            // COULD NOT LOOK IS NOT UNHELD. Reporting it as an unheld lease is
+            // the misread that lets two sessions land at once, so this arm is an
+            // error where `authorises` runs.
+            writeln!(err, "::error:: lease: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let lease::Observed::Held { body, .. } = &observed else {
+        return lease_report(json, "unheld", &[], out);
+    };
+    // Checked BEFORE expiry, because a tombstone satisfies both: its expiry is the
+    // sentinel, so `now >= 0` is trivially true and the expired arm would render a
+    // wall-clock epoch as a duration — observed live, three times, in the
+    // predecessor.
+    if body.released() {
+        return lease_report(json, "released", &[("holder", body.holder.clone())], out);
+    }
+    if body.expired(now) {
+        return lease_report(
+            json,
+            "unheld",
+            &[
+                ("holder", body.holder.clone()),
+                ("free_for", (now - body.expires).to_string()),
+            ],
+            out,
+        );
+    }
+    let mut fields = vec![
+        ("holder", body.holder.clone()),
+        ("branch", body.branch.clone()),
+        ("left", (body.expires - now).to_string()),
+    ];
+    if !body.next.is_empty() {
+        fields.push(("next", body.next.clone()));
+    }
+    // HELD AND ADVANCING IS NOT HELD AND STALLED, and rendering them identically
+    // is how a wedged fleet looked healthy for as long as anyone cared to watch.
+    //
+    // Read from the TOKEN, never from the sighting file: the sighting file is the
+    // corroboration a steal acts on, so a reader touching it would move the
+    // instant a rival's steal becomes due — and would report nothing on a first
+    // call anyway. This is the holder's clock, which is exactly why no PREDICATE
+    // may use it; the worst a skewed reading does here is print a number a human
+    // squints at.
+    if let Some(advance) = body
+        .progress
+        .split('.')
+        .next()
+        .and_then(|first| first.parse::<i64>().ok())
+        .filter(|advance| *advance > 0)
+    {
+        let stalled = now - advance;
+        if stalled >= lease_stall_beats() * terms.beat {
+            fields.push(("stalled", stalled.to_string()));
+        }
+    }
+    lease_report(json, "held", &fields, out)
+}
+
+/// One status line, in either channel, from one set of fields.
+///
+/// Pointer-only in both: a holder id, a ref name and counts of seconds. No lease
+/// body reaches either rendering, which is where non-negotiable rule 4 is decided
+/// rather than at each call site.
+fn lease_report(
+    json: bool,
+    state: &str,
+    fields: &[(&str, String)],
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    if json {
+        let mut document = serde_json::Map::new();
+        document.insert(
+            String::from("state"),
+            serde_json::Value::String(state.to_owned()),
+        );
+        for (key, value) in fields {
+            document.insert((*key).to_owned(), serde_json::Value::String(value.clone()));
+        }
+        writeln!(
+            out,
+            "{}",
+            serde_json::to_string(&serde_json::Value::Object(document))?
+        )?;
+    } else {
+        use std::fmt::Write as _;
+        let mut rendered = String::new();
+        for (key, value) in fields {
+            let _ = write!(rendered, " {key}={value}");
+        }
+        writeln!(out, "lease: {state}{rendered}")?;
+    }
+    Ok(ExitCode::Success)
+}
+
+/// `lease peek`: one advisory field, on stdout, for a caller that means to act.
+///
+/// Silent and `0` when the lease is absent, released or expired. "No lease names a
+/// head" is a legitimate reading a waiter handles by staying on trunk, not an
+/// error it should report — and `2` stays reserved for could-not-look.
+fn run_lease_peek(
+    terms: &lease::Terms,
+    field: &str,
+    now: i64,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let observed = match lease::observe(terms, now) {
+        Ok(observed) => observed,
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let lease::Observed::Held { body, .. } = &observed else {
+        return Ok(ExitCode::Success);
+    };
+    if body.released() || body.expired(now) {
+        return Ok(ExitCode::Success);
+    }
+    match field {
+        "branch" => writeln!(out, "{}", body.branch)?,
+        "head" => writeln!(out, "{}", body.head)?,
+        "next" => writeln!(out, "{}", body.next)?,
+        // A CLOSED SET, and an unknown name is a usage error rather than an empty
+        // line: the whole value of this verb over the status prose is that a
+        // caller can act on the answer, and a silently empty one reads as an
+        // unset field.
+        other => {
+            writeln!(
+                err,
+                "::error:: lease: {other} is not an advisory field; expected branch, head or next"
+            )?;
+            return Ok(ExitCode::Usage);
+        }
+    }
+    Ok(ExitCode::Success)
+}
+
+/// `lease held`: the pre-comment fence, and the cheap stand-in for a fencing token.
+///
+/// **It demands MARGIN, not merely a lease that has not expired.** "Not expired"
+/// is a fact about the instant of the check, and the caller then goes on to do
+/// something — post a comment, wait for a bot — so a lease with one second left
+/// passes this and is gone before the action it authorised takes effect. That is
+/// the same time-of-check/time-of-use gap the fence exists to close, moved a few
+/// lines later.
+///
+/// One beat is the right margin because it is the interval at which the holder
+/// proves it is alive: with a beat left, either the heartbeat renews and the lease
+/// keeps rolling, or it does not and this check would have failed anyway.
+fn run_lease_held(
+    root: &Path,
+    terms: &lease::Terms,
+    now: i64,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let (local, holder) = match lease_identity(root) {
+        Ok(pair) => pair,
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let _ = local;
+    let observed = match lease::observe(terms, now) {
+        Ok(observed) => observed,
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let lease::Observed::Held { body, .. } = &observed else {
+        return Ok(ExitCode::Violation);
+    };
+    if body.holder != holder {
+        return Ok(ExitCode::Violation);
+    }
+    if body.expires - now < terms.beat {
+        writeln!(
+            out,
+            "lease: under {}s left — too little to act on",
+            terms.beat
+        )?;
+        return Ok(ExitCode::Violation);
+    }
+    Ok(ExitCode::Success)
+}
+
+/// This clone's bookkeeping directory and its holder id.
+fn lease_identity(root: &Path) -> std::result::Result<(lease::Local, String), String> {
+    let git_dir =
+        git::git_dir(root).map_err(|err| format!("cannot read this repository: {err}"))?;
+    let local = lease::Local::under(&git_dir);
+    let holder = local
+        .holder()
+        .map_err(|err| format!("cannot mint a holder id: {err}"))?;
+    Ok((local, holder))
+}
+
+/// `lease acquire`: one observation, one decision, one compare-and-swap.
+///
+/// **There is no wait loop here, and that is a deliberate narrowing of the
+/// predecessor.** The bash verb blocked with a jittered exponential backoff, which
+/// belongs to the LAP rather than to the lease: a caller that already laps —
+/// fetch, rebase, verify, wait — re-observes on its own schedule and does not need
+/// a second one nested inside it. What is conserved is the decision, which is the
+/// part a rival can get wrong; what is dropped is a sleep, which is the part the
+/// caller owns.
+fn run_lease_acquire(
+    root: &Path,
+    terms: &lease::Terms,
+    branch: &str,
+    now: i64,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let (local, holder) = match lease_identity(root) {
+        Ok(pair) => pair,
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let observed = match lease::observe(terms, now) {
+        Ok(observed) => observed,
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    // RECORDED ON EVERY OBSERVATION, not only once the lease looks interesting.
+    // The corroboration clock starts at the FIRST sighting of a value; starting it
+    // only after expiry meant it started once the backoff had already grown, and
+    // measured 19s from expiry to steal against a promise of one extra beat.
+    let (held_for, progress_for) = match &observed {
+        lease::Observed::Held { sha, body } => (
+            local.held_for("seen", sha, now),
+            if body.progress.is_empty() {
+                0
+            } else {
+                local.held_for("seen-progress", &body.progress, now)
+            },
+        ),
+        lease::Observed::Absent => (0, 0),
+    };
+    let head = git::head_commit(root).unwrap_or_default();
+    match lease::turn(
+        terms,
+        &observed,
+        &holder,
+        held_for,
+        progress_for,
+        lease_stall_beats(),
+        now,
+    ) {
+        lease::Turn::Mine => {
+            writeln!(out, "lease: already held by this clone")?;
+            Ok(ExitCode::Success)
+        }
+        lease::Turn::Wait => {
+            let lease::Observed::Held { body, .. } = &observed else {
+                // Unreachable: `Absent` is always a `Take`. Reported rather than
+                // unwrapped, because a `Wait` over an absent lease would mean the
+                // decision table had changed underneath this arm.
+                writeln!(
+                    err,
+                    "::error:: lease: no lease is held, yet the turn was not taken"
+                )?;
+                return Ok(ExitCode::Internal);
+            };
+            writeln!(out, "lease: held by {}", body.holder)?;
+            Ok(ExitCode::Violation)
+        }
+        lease::Turn::Take(why) => {
+            let body = lease::claim(terms, &holder, branch, &head, now);
+            match lease::cas(terms, &observed, &body, now) {
+                Ok(lease::Outcome::Applied) => {
+                    lease_receipt(root, branch, now + terms.ttl);
+                    writeln!(out, "lease: {why}")?;
+                    Ok(ExitCode::Success)
+                }
+                // LOST THE CAS: somebody claimed the same free state first. An
+                // ordinary outcome, and the caller's next lap re-reads and
+                // re-decides — no retry here, because an immediate one is the
+                // tight spin that turns a contended lease into a busy loop.
+                Ok(lease::Outcome::Rejected { .. }) => {
+                    writeln!(out, "lease: lost the race for it")?;
+                    Ok(ExitCode::Violation)
+                }
+                Err(reason) => {
+                    writeln!(err, "::error:: lease: {reason}")?;
+                    Ok(ExitCode::Internal)
+                }
+            }
+        }
+    }
+}
+
+/// `lease renew`: extend this clone's lease by one term.
+fn run_lease_renew(
+    root: &Path,
+    terms: &lease::Terms,
+    now: i64,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let (_, holder) = match lease_identity(root) {
+        Ok(pair) => pair,
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let observed = match lease::observe(terms, now) {
+        Ok(observed) => observed,
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let lease::Observed::Held { body, .. } = &observed else {
+        return Ok(ExitCode::Violation);
+    };
+    if body.holder != holder {
+        return Ok(ExitCode::Violation);
+    }
+    // `None`: this arm is a one-shot with no holder process to read progress
+    // from, so it carries the token it found rather than erasing it. A renew that
+    // cleared it would make the lease unstealable-forever to every rival.
+    let renewed = lease::renewal(terms, body, None, now);
+    match lease::cas(terms, &observed, &renewed, now) {
+        Ok(lease::Outcome::Applied) => {
+            lease_receipt(root, &body.branch, now + terms.ttl);
+            Ok(ExitCode::Success)
+        }
+        Ok(lease::Outcome::Rejected { .. }) => Ok(ExitCode::Violation),
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            Ok(ExitCode::Internal)
+        }
+    }
+}
+
+/// `lease hold`: renew every beat until the lease is lost or the hold ends.
+///
+/// **A FAILED PUSH IS NOT A LOST LEASE**, and treating it as one was a real
+/// fragility in the predecessor: a swap returns non-zero both when the lease
+/// genuinely changed hands AND when the push simply did not go through — a dropped
+/// connection, a proxy hiccup, a rate limit. Exiting on the second hands the lease
+/// away over a blip, and the whole reason the TTL is three beats wide is to survive
+/// exactly that. So two consecutive failures are tolerated and a third is not,
+/// because past that the remaining TTL is about to run out anyway and continuing
+/// to believe we hold it is the one thing this must never do.
+fn run_lease_hold(
+    root: &Path,
+    terms: &lease::Terms,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let (_, holder) = match lease_identity(root) {
+        Ok(pair) => pair,
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let mut misses = 0_u32;
+    loop {
+        // The interval is the lease's own `beat`, and the loop's exit condition is
+        // the lease ceasing to be this clone's — or `misses` reaching three, which
+        // is the point past which the remaining TTL runs out anyway. Not a timer:
+        // there is nothing here a wall clock is standing in for.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the heartbeat's interval is the lease's own `beat`; the loop exits when the lease stops being this clone's, or when `misses` reaches three"
+        )]
+        std::thread::sleep(std::time::Duration::from_secs(
+            u64::try_from(terms.beat).unwrap_or(30),
+        ));
+        let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+        let Ok(observed) = lease::observe(terms, now) else {
+            misses += 1;
+            if misses >= 3 {
+                writeln!(
+                    out,
+                    "lease: could not renew for {misses} beats; letting it lapse rather than \
+                     assuming it"
+                )?;
+                return Ok(ExitCode::Violation);
+            }
+            continue;
+        };
+        let lease::Observed::Held { body, .. } = &observed else {
+            writeln!(out, "lease: the lease is gone")?;
+            return Ok(ExitCode::Violation);
+        };
+        if body.holder != holder {
+            // UNAMBIGUOUS: somebody else's id is on it. No retry can undo that,
+            // and pretending otherwise is how two sessions both comment.
+            writeln!(out, "lease: lost to {}", body.holder)?;
+            return Ok(ExitCode::Violation);
+        }
+        let renewed = lease::renewal(terms, body, None, now);
+        if let Ok(lease::Outcome::Applied) = lease::cas(terms, &observed, &renewed, now) {
+            lease_receipt(root, &body.branch, now + terms.ttl);
+            misses = 0;
+        } else {
+            // A REJECTED SWAP AND A FAILED PUSH ARE ONE ARM HERE, deliberately.
+            // The lease being demonstrably somebody else's is decided above, from
+            // the holder id, where it is unambiguous; anything that reaches here
+            // is a swap that did not land, and a blip is what the three-beat TTL
+            // exists to survive.
+            misses += 1;
+            if misses >= 3 {
+                writeln!(
+                    out,
+                    "lease: could not renew for {misses} beats; letting it lapse rather than \
+                     assuming it"
+                )?;
+                return Ok(ExitCode::Violation);
+            }
+        }
+    }
+}
+
+/// `lease release`: a tombstone, never a delete.
+///
+/// Releasing a lease this clone does not hold is NOT an error: the trap that calls
+/// this fires on every exit path, including ones that never acquired, and exiting
+/// non-zero there would turn an orderly cleanup into a reported failure.
+fn run_lease_release(
+    root: &Path,
+    terms: &lease::Terms,
+    now: i64,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let (_, holder) = match lease_identity(root) {
+        Ok(pair) => pair,
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let observed = match lease::observe(terms, now) {
+        Ok(observed) => observed,
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let lease::Observed::Held { body, .. } = &observed else {
+        return Ok(ExitCode::Success);
+    };
+    if body.holder != holder {
+        return Ok(ExitCode::Success);
+    }
+    // Already handed over: re-tombstoning would mint a second release of the same
+    // lease and report an epoch-scale age for it. A release is idempotent in
+    // effect, so it must be idempotent in what it says too.
+    if body.released() {
+        writeln!(out, "lease: already released")?;
+        return Ok(ExitCode::Success);
+    }
+    let dead = lease::tombstone(body);
+    match lease::cas(terms, &observed, &dead, now) {
+        Ok(lease::Outcome::Applied) => {
+            // The receipt GOES rather than ageing out: a release is a declaration
+            // that this clone no longer holds it, and leaving one would let the
+            // offline reader honour a lease its holder had already handed on.
+            lease_receipt_clear(root, &body.branch);
+            writeln!(out, "lease: released")?;
+            Ok(ExitCode::Success)
+        }
+        Ok(lease::Outcome::Rejected { .. }) => {
+            writeln!(
+                out,
+                "lease: could not release; it expires in {}s",
+                body.expires - now
+            )?;
+            Ok(ExitCode::Success)
+        }
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            Ok(ExitCode::Internal)
+        }
+    }
+}
+
+/// `lease reserve`: take the one slot behind the current holder.
+fn run_lease_reserve(
+    terms: &lease::Terms,
+    branch: &str,
+    now: i64,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let observed = match lease::observe(terms, now) {
+        Ok(observed) => observed,
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let held = match &observed {
+        lease::Observed::Held { body, .. } if !body.released() && !body.expired(now) => body,
+        // Nothing to reserve behind. Not an error: a free lease means the caller
+        // should be ACQUIRING, and saying so is more useful than a refusal.
+        _ => {
+            writeln!(out, "lease: no lease is held; acquire rather than reserve")?;
+            return Ok(ExitCode::Violation);
+        }
+    };
+    // Reserving behind yourself would authorise your own branch twice and admit
+    // nobody, which is worse than doing nothing: it consumes the one slot.
+    if held.branch == branch {
+        writeln!(out, "lease: {branch} already holds it; nothing to reserve")?;
+        return Ok(ExitCode::Violation);
+    }
+    if !held.next.is_empty() {
+        // Idempotent for the branch that already holds the slot, so a waiter
+        // re-reserving each lap is a read rather than a churn of the ref.
+        if held.next == branch {
+            writeln!(out, "lease: {branch} is already the admitted successor")?;
+            return Ok(ExitCode::Success);
+        }
+        writeln!(
+            out,
+            "lease: {} is already the admitted successor, not {branch}",
+            held.next
+        )?;
+        return Ok(ExitCode::Violation);
+    }
+    let reserved = lease::reservation(held, branch);
+    match lease::cas(terms, &observed, &reserved, now) {
+        Ok(lease::Outcome::Applied) => {
+            writeln!(
+                out,
+                "lease: {branch} admitted as the successor behind {}",
+                held.branch
+            )?;
+            Ok(ExitCode::Success)
+        }
+        // The holder's heartbeat re-minted, or another waiter took the slot first.
+        // Either way an ordinary loss, and the caller's next lap re-decides.
+        Ok(lease::Outcome::Rejected { .. }) => {
+            writeln!(out, "lease: could not reserve; the lease moved")?;
+            Ok(ExitCode::Violation)
+        }
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            Ok(ExitCode::Internal)
+        }
+    }
+}
+
+/// The offline half a `PreToolUse` guard reads: the instant this clone's lease
+/// expires, refreshed by every renewal.
+///
+/// **Keyed by BRANCH, and slashes are flattened.** Every branch here carries one,
+/// and a raw name makes the receipt a path through a directory that does not
+/// exist — the write fails, no receipt is left, and the guard then refuses every
+/// ready while looking exactly like a mechanism that is working. The predecessor's
+/// suites missed it because a scratch repository's default branch is the one shape
+/// with no slash in it.
+///
+/// Never fatal, in either direction. The lease is taken the moment the swap
+/// returns; a clone that cannot write to its own `.git` has a problem, but it is
+/// not this one, and failing here would report a held lease as unheld.
+fn lease_receipt(root: &Path, branch: &str, expires: i64) {
+    if let Some(path) = lease_receipt_path(root, branch) {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(path, format!("{expires}\n"));
+    }
+}
+
+/// Remove the receipt a release invalidates. See [`lease_receipt`].
+fn lease_receipt_clear(root: &Path, branch: &str) {
+    if let Some(path) = lease_receipt_path(root, branch) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Where a branch's lease receipt lives, or `None` where there is no branch to
+/// key on — a detached HEAD has none, and inventing one would key a receipt to a
+/// name no later reader could reconstruct.
+fn lease_receipt_path(root: &Path, branch: &str) -> Option<std::path::PathBuf> {
+    if branch.is_empty() {
+        return None;
+    }
+    let git_dir = git::git_dir(root).ok()?;
+    Some(
+        git_dir
+            .join("batten-receipts")
+            .join(format!("lease.{}", branch.replace('/', "-"))),
+    )
+}
+
 fn run_mutate(
     command: cli::MutateCommand,
     out: &mut dyn Write,

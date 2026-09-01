@@ -1,0 +1,44 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-lease 1  batten 
+.SH NAME
+batten\-lease \- The landing lease: one branch spends a matrix at a time
+.SH SYNOPSIS
+\fBbatten lease\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+The landing lease: one branch spends a matrix at a time
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-lease\-authorises(1)
+May this branch spend a matrix right now?
+.TP
+batten\-lease\-status(1)
+Report who holds the lease, for how much longer, and who is admitted behind them
+.TP
+batten\-lease\-peek(1)
+Print one advisory field of the held lease, or nothing
+.TP
+batten\-lease\-held(1)
+Is this clone\*(Aqs lease still held, with a beat of margin to act on?
+.TP
+batten\-lease\-acquire(1)
+Take the lease, waiting out a live holder and reaping a dead one
+.TP
+batten\-lease\-renew(1)
+Extend this clone\*(Aqs lease by one term
+.TP
+batten\-lease\-hold(1)
+Renew this clone\*(Aqs lease every beat until it is lost or the hold ends
+.TP
+batten\-lease\-release(1)
+Hand the lease back, leaving a tombstone rather than deleting the ref
+.TP
+batten\-lease\-reserve(1)
+Take the one slot behind the current holder
+.TP
+batten\-lease\-help(1)
+Print this message or the help of the given subcommand(s)

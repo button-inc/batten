@@ -307,6 +307,16 @@ pub enum Command {
         /// The chosen sub-verb.
         command: MutateCommand,
     },
+    /// The landing lease (CLOUD-1274), ported off `mise-tasks/land-lock.sh`.
+    ///
+    /// Appended for the same reason `Mutate` is: this enum carries no `repr`, so
+    /// a variant placed beside its neighbours in the surface shifts every later
+    /// discriminant and the compatibility gate reads that as a break the crate
+    /// has to declare.
+    Lease {
+        /// The chosen sub-verb.
+        command: LeaseCommand,
+    },
 }
 
 /// Subcommands of `mutate`.
@@ -540,6 +550,50 @@ pub enum ProvisionCommand {
     Apply {
         /// Preview what would be applied, writing nothing.
         dry_run: bool,
+    },
+}
+
+/// Subcommands of `lease` (CLOUD-1274).
+///
+/// **Nine arms, and only three of them write.** The split is what the surface's
+/// effect column already records per row; it is repeated here as a type so a
+/// caller pattern-matching on this enum sees the same partition the allowlist is
+/// derived from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LeaseCommand {
+    /// May this branch spend a matrix right now? The one question a runner asks.
+    Authorises {
+        /// The branch asking.
+        branch: String,
+    },
+    /// Who holds it, for how long, and who is admitted behind them.
+    Status {
+        /// Emit the report as byte-stable JSON instead of a pointer line.
+        json: bool,
+    },
+    /// Print one advisory field of the held lease, or nothing.
+    Peek {
+        /// Which field: `branch`, `head` or `next`.
+        field: String,
+    },
+    /// Is this clone's lease still held, with a beat of margin to act on?
+    Held,
+    /// Take the lease, waiting out a live holder and reaping a dead one.
+    Acquire {
+        /// The branch the lease will authorise.
+        branch: String,
+    },
+    /// Extend this clone's lease by one term.
+    Renew,
+    /// Renew every beat until the lease is lost or the hold ends.
+    Hold,
+    /// Hand the lease back, leaving a tombstone.
+    Release,
+    /// Take the one slot behind the current holder.
+    Reserve {
+        /// The branch reserving.
+        branch: String,
     },
 }
 
@@ -1232,6 +1286,46 @@ fn worktree_of(matches: &ArgMatches) -> Option<WorktreeCommand> {
     }
 }
 
+/// `lease`'s nine arms (CLOUD-1274).
+///
+/// Every positional here is `required` on its surface row, so `clap` refuses an
+/// absent one before this runs and the defaults below are unreachable rather than
+/// a silent empty binding — which for `authorises` would be the difference between
+/// a verb that says it cannot answer and one that answers about the empty branch.
+fn lease_of(matches: &ArgMatches) -> Option<LeaseCommand> {
+    let branch_of = |matches: &ArgMatches| {
+        matches
+            .get_one::<String>("branch")
+            .cloned()
+            .unwrap_or_default()
+    };
+    match matches.subcommand()? {
+        ("authorises", matches) => Some(LeaseCommand::Authorises {
+            branch: branch_of(matches),
+        }),
+        ("status", matches) => Some(LeaseCommand::Status {
+            json: matches.get_flag("json"),
+        }),
+        ("peek", matches) => Some(LeaseCommand::Peek {
+            field: matches
+                .get_one::<String>("field")
+                .cloned()
+                .unwrap_or_default(),
+        }),
+        ("held", _) => Some(LeaseCommand::Held),
+        ("acquire", matches) => Some(LeaseCommand::Acquire {
+            branch: branch_of(matches),
+        }),
+        ("renew", _) => Some(LeaseCommand::Renew),
+        ("hold", _) => Some(LeaseCommand::Hold),
+        ("release", _) => Some(LeaseCommand::Release),
+        ("reserve", matches) => Some(LeaseCommand::Reserve {
+            branch: branch_of(matches),
+        }),
+        _ => None,
+    }
+}
+
 /// `override request`'s three binding fields (CLOUD-1051).
 ///
 /// The answers are NOT here: they arrive on stdin, for the reason `surface.rs`
@@ -1525,6 +1619,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "checks" => checks_of(matches).map(|command| Command::Checks { command }),
         "pr" => pr_of(matches).map(|command| Command::Pr { command }),
         "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
+        "lease" => lease_of(matches).map(|command| Command::Lease { command }),
         "override" => override_of(matches).map(|command| Command::Override { command }),
         "wiring" => wiring_of(matches).map(|command| Command::Wiring { command }),
         "generate" => generate_of(matches).map(|command| Command::Generate { command }),

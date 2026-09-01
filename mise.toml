@@ -552,7 +552,15 @@ shell = "bash -c"
 # there it fails `no_pending_snapshot_is_left_in_the_tree` inside this very task,
 # so accepting a changed snapshot could never succeed. Measured on the first
 # machine-surface change after this task landed.
-run = "find crates/batten/tests/snapshots -name '*.snap.new' -delete && INSTA_UPDATE=always cargo test --test snapshots"
+#
+# BOTH HALVES NAME `it`, and they did not: this read `tests/snapshots` and
+# `--test snapshots`, neither of which has existed since the suite moved under
+# `tests/it/`. `find` exits 1 on a directory that is not there, so `&&` stopped
+# the accept, so `mise run fix` could not complete AT ALL — the failure was not
+# a stale snapshot but the regeneration step itself, and every surface change
+# since has had to regenerate by hand or not at all. Found by the first surface
+# change that needed it after the move (CLOUD-1274's `lease` verb).
+run = "find crates/batten/tests/it/snapshots -name '*.snap.new' -delete && INSTA_UPDATE=always cargo test --test it snapshots"
 
 [tasks.fix]
 description = "Everything `fmt` does, plus clippy's autofixes and the derived artifacts — the one command that empties a messy tree"

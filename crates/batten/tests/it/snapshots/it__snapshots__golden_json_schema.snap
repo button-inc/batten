@@ -880,6 +880,117 @@ expression: stdout_of(&output)
       "subcommands": []
     },
     {
+      "path": "lease",
+      "about": "The landing lease: one branch spends a matrix at a time",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "lease acquire",
+          "about": "Take the lease, waiting out a live holder and reaping a dead one",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "branch",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The branch being asked about"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "lease authorises",
+          "about": "May this branch spend a matrix right now?",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "branch",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The branch being asked about"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "lease held",
+          "about": "Is this clone's lease still held, with a beat of margin to act on?",
+          "effect": "read",
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "lease hold",
+          "about": "Renew this clone's lease every beat until it is lost or the hold ends",
+          "effect": "write",
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "lease peek",
+          "about": "Print one advisory field of the held lease, or nothing",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "field",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "Which advisory field to print: branch, head or next"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "lease release",
+          "about": "Hand the lease back, leaving a tombstone rather than deleting the ref",
+          "effect": "write",
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "lease renew",
+          "about": "Extend this clone's lease by one term",
+          "effect": "write",
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "lease reserve",
+          "about": "Take the one slot behind the current holder",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "branch",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The branch being asked about"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "lease status",
+          "about": "Report who holds the lease, for how much longer, and who is admitted behind them",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "lint",
       "about": "Lint an artifact against a declared schema",
       "effect": "read",
@@ -1611,6 +1722,10 @@ expression: stdout_of(&output)
     "generate man",
     "generate markdown",
     "generate schema",
+    "lease authorises",
+    "lease held",
+    "lease peek",
+    "lease status",
     "lint",
     "lint brief",
     "mutate census",

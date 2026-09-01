@@ -106,6 +106,40 @@ impl Advertisement {
     }
 }
 
+/// The bearer token this repository's remote needs, or `None`.
+///
+/// **Resolved here and returned to nobody.** It is deliberately not a field of
+/// [`Terms`] or of any other value: a token in a struct is a token in that
+/// struct's `Debug`, and non-negotiable rule 4 makes every report here a pointer.
+/// Keeping it inside the two functions that build a request means there is no
+/// value a caller could print by accident.
+///
+/// `GH_TOKEN` first, matching the forge CLI's own precedence, so a session that
+/// set one for that tool does not have to set a second.
+fn credential() -> Option<String> {
+    ["GH_TOKEN", "GITHUB_TOKEN"]
+        .into_iter()
+        .find_map(|name| std::env::var(name).ok())
+        .filter(|token| !token.is_empty())
+}
+
+/// The request headers for one exchange, with the credential attached when there
+/// is one.
+///
+/// **An absent credential is not an error.** A public remote needs none, and a
+/// private one answers `401`, which every caller here already reports as
+/// could-not-look rather than as an unheld lease.
+fn headers(accept: &str, content_type: Option<&str>) -> Vec<(String, String)> {
+    let mut headers = vec![(String::from("Accept"), accept.to_owned())];
+    if let Some(content_type) = content_type {
+        headers.push((String::from("Content-Type"), content_type.to_owned()));
+    }
+    if let Some(token) = credential() {
+        headers.push((String::from("Authorization"), format!("Bearer {token}")));
+    }
+    headers
+}
+
 /// Ask the remote what it carries, over the service that will be used next.
 ///
 /// **Discovery is service-specific and that is not a formality**: a server may
@@ -126,7 +160,7 @@ pub fn advertise(remote: &str, service: Service) -> Result<Advertisement> {
     );
     let responses = fetch::spend(&[Call {
         url: &url,
-        headers: &[(String::from("Accept"), String::from("*/*"))],
+        headers: &headers("*/*", None),
         body: None,
     }])?;
     let response = responses
@@ -391,13 +425,10 @@ pub fn swap(remote: &str, update: &Update, pack: &[u8]) -> Result<Outcome> {
     let content_type = format!("application/x-{}-request", Service::ReceivePack.as_str());
     let responses = fetch::spend(&[Call {
         url: &url,
-        headers: &[
-            (String::from("Content-Type"), content_type),
-            (
-                String::from("Accept"),
-                format!("application/x-{}-result", Service::ReceivePack.as_str()),
-            ),
-        ],
+        headers: &headers(
+            &format!("application/x-{}-result", Service::ReceivePack.as_str()),
+            Some(&content_type),
+        ),
         body: Some(&body),
     }])?;
     let response = responses
@@ -675,16 +706,13 @@ pub fn fetch_object(remote: &str, id: &str) -> Result<Object> {
     body.extend_from_slice(&pktline("done\n")?);
     let responses = fetch::spend(&[Call {
         url: &url,
-        headers: &[
-            (
-                String::from("Content-Type"),
-                format!("application/x-{}-request", Service::UploadPack.as_str()),
-            ),
-            (
-                String::from("Accept"),
-                format!("application/x-{}-result", Service::UploadPack.as_str()),
-            ),
-        ],
+        headers: &headers(
+            &format!("application/x-{}-result", Service::UploadPack.as_str()),
+            Some(&format!(
+                "application/x-{}-request",
+                Service::UploadPack.as_str()
+            )),
+        ),
         body: Some(&body),
     }])?;
     let response = responses
@@ -1121,6 +1149,163 @@ fn nonce() -> String {
     )
 }
 
+/// The clone's own bookkeeping, under `$GIT_DIR`.
+///
+/// **Per CLONE, not per process**, and that is forced: `hold`, `held` and
+/// `release` run as separate processes from the `acquire` that won, so a
+/// per-process holder id would leave the holder unable to recognise its own lease.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Local {
+    /// `$GIT_DIR/batten-land-lock`.
+    pub dir: std::path::PathBuf,
+}
+
+impl Local {
+    /// The bookkeeping directory under a git dir.
+    #[must_use]
+    pub fn under(git_dir: &std::path::Path) -> Self {
+        Self {
+            dir: git_dir.join("batten-land-lock"),
+        }
+    }
+
+    /// This clone's holder id, minted once and reused by every later verb.
+    ///
+    /// # Errors
+    ///
+    /// A directory or file this clone cannot write. **Never defaulted**: a
+    /// holder id that fell back to a constant would let two clones that both
+    /// failed to write one recognise each other's leases as their own, which is
+    /// the two-holders bug arriving through the identity rather than the CAS.
+    pub fn holder(&self) -> Result<String> {
+        let path = self.dir.join("holder");
+        if let Ok(existing) = std::fs::read_to_string(&path) {
+            let existing = existing.trim();
+            if !existing.is_empty() {
+                return Ok(existing.to_owned());
+            }
+        }
+        let minted = format!(
+            "{}-{}-{}",
+            std::env::var("HOSTNAME").unwrap_or_else(|_| String::from("host")),
+            std::process::id(),
+            nonce()
+        );
+        std::fs::create_dir_all(&self.dir)?;
+        std::fs::write(&path, format!("{minted}\n"))?;
+        Ok(minted)
+    }
+
+    /// How long `token` has been what this clone sees under `name`, on OUR clock.
+    ///
+    /// **Expiry alone is not safe to steal on**, which is the whole reason this
+    /// exists. `expires` is an absolute instant minted on the HOLDER's clock and
+    /// compared against ours, and skew in one direction makes a live lease look
+    /// expired — stealing on that reading produces exactly the two holders the
+    /// design exists to prevent.
+    ///
+    /// A heartbeat mints a new nonce every beat, so a live holder CHANGES THE SHA
+    /// every beat. "This exact value has been sitting there longer than a beat" is
+    /// therefore evidence of the same thing expiry claims, derived entirely from
+    /// durations on ONE clock, and no skew can forge it. The cost is one extra
+    /// beat before a dead lease can be taken, which a waiter spends waiting anyway.
+    ///
+    /// **It RECORDS what it sees**, so a reader that only wants to render a number
+    /// must not call it: doing so would move the instant a rival's steal becomes
+    /// due, and would report `0` on a first call anyway.
+    ///
+    /// A first sighting is `0`, and a value this clone cannot record is `0` too —
+    /// a corroboration clock that cannot be kept has corroborated nothing.
+    #[must_use]
+    pub fn held_for(&self, name: &str, token: &str, now: i64) -> i64 {
+        let path = self.dir.join(name);
+        let seen = std::fs::read_to_string(&path).unwrap_or_default();
+        let mut fields = seen.split_whitespace();
+        let previous = fields.next().unwrap_or_default();
+        let since: Option<i64> = fields.next().and_then(|at| at.parse().ok());
+        match since {
+            Some(since) if previous == token => now.saturating_sub(since),
+            _ => {
+                let _ = std::fs::create_dir_all(&self.dir);
+                let _ = std::fs::write(&path, format!("{token} {now}\n"));
+                0
+            }
+        }
+    }
+}
+
+/// What a waiter may do about the lease it just read.
+///
+/// **Three ways in and one way out.** The ref does not exist yet, it was
+/// tombstoned by a release, or its holder stopped beating — all three are one
+/// compare-and-swap from the same expected value, which is why there is no
+/// separate create path to race.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Turn {
+    /// This clone already holds it, and it has not lapsed.
+    Mine,
+    /// Take it. The reason is a pointer for the report, never a lease body.
+    Take(String),
+    /// Somebody else holds it and the evidence to take it does not exist.
+    Wait,
+}
+
+/// Decide a [`Turn`] over one observation.
+///
+/// **`held_for` and `progress_for` are DURATIONS ON THIS CLOCK**, measured by
+/// [`Local::held_for`], and passing anything derived from the lease's own
+/// `expires` here would reintroduce the skew this design removes.
+///
+/// The two stealing arms fail in OPPOSITE directions and both are deliberate:
+///
+/// * An absent or released lease is a STATEMENT rather than a deduction, so it
+///   needs no corroboration and no clock at all.
+/// * An expired one is a deduction, so it needs the sha to have sat unchanged for
+///   a beat.
+/// * A lease that is still BEATING but has not progressed fails CLOSED — no
+///   token, no steal — which is every lease minted before the field existed and
+///   every holder that cannot see its own progress. Releasing a lease wrongly
+///   costs its holder one lap; stealing one wrongly puts two holders on the same
+///   trunk.
+#[must_use]
+pub fn turn(
+    terms: &Terms,
+    observed: &Observed,
+    holder: &str,
+    held_for: i64,
+    progress_for: i64,
+    stall_beats: i64,
+    now: i64,
+) -> Turn {
+    let Observed::Held { body, .. } = observed else {
+        return Turn::Take(String::from("no lease is held"));
+    };
+    if body.holder == holder && !body.expired(now) {
+        return Turn::Mine;
+    }
+    if body.released() {
+        return Turn::Take(format!("took the lease {} released", body.holder));
+    }
+    if body.expired(now) && held_for >= terms.beat {
+        return Turn::Take(format!(
+            "took the lease {}s after {} stopped holding it",
+            now.saturating_sub(body.expires),
+            body.holder
+        ));
+    }
+    let stall = stall_beats.saturating_mul(terms.beat);
+    if !body.progress.is_empty() && progress_for >= stall {
+        // A steal from a holder that never stopped beating reads as theft unless
+        // it says which evidence it acted on. Pointer-only: two counts.
+        return Turn::Take(format!(
+            "took the lease from {}, which was still beating but had not progressed in \
+             {progress_for}s (stall bound: {stall}s)",
+            body.holder
+        ));
+    }
+    Turn::Wait
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -1243,6 +1428,165 @@ mod tests {
         // and saying otherwise is the direction that loses a lease silently.
         let body = framed(&["ok refs/heads/batten-land-lock\n", ""]);
         assert!(parse_report(&body).is_err());
+    }
+
+    /// A directory nothing else in this process writes.
+    ///
+    /// Keyed on the thread as well as the pid, because the runner is parallel and
+    /// two cases sharing a sighting file would corroborate each other's tokens.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "batten-lease-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        dir
+    }
+
+    fn body(holder: &str, expires: i64, progress: &str) -> Observed {
+        Observed::Held {
+            sha: String::from("1111111111111111111111111111111111111111"),
+            body: Body {
+                holder: holder.to_owned(),
+                expires,
+                progress: progress.to_owned(),
+                ..Body::default()
+            },
+        }
+    }
+
+    #[test]
+    fn an_absent_lease_is_taken_without_corroboration() {
+        // A statement rather than a deduction, so no clock and no beat.
+        assert!(matches!(
+            turn(&Terms::default(), &Observed::Absent, "me", 0, 0, 60, 100),
+            Turn::Take(_)
+        ));
+    }
+
+    #[test]
+    fn a_released_lease_is_taken_without_corroboration() {
+        assert!(matches!(
+            turn(&Terms::default(), &body("them", 0, ""), "me", 0, 0, 60, 100),
+            Turn::Take(_)
+        ));
+    }
+
+    #[test]
+    fn an_expired_lease_is_not_taken_until_its_sha_has_sat_a_beat() {
+        // THE ONE EXTRA BEAT. Expiry is an instant on the HOLDER's clock; the
+        // sighting is a duration on ours, and no skew can forge it. Taking on
+        // expiry alone is what puts two holders on one trunk.
+        let terms = Terms::default();
+        assert_eq!(
+            turn(
+                &terms,
+                &body("them", 100, ""),
+                "me",
+                terms.beat - 1,
+                0,
+                60,
+                200
+            ),
+            Turn::Wait
+        );
+        assert!(matches!(
+            turn(&terms, &body("them", 100, ""), "me", terms.beat, 0, 60, 200),
+            Turn::Take(_)
+        ));
+    }
+
+    #[test]
+    fn a_beating_but_stalled_lease_is_stealable() {
+        // The wedge this arm exists to end: every other arm waits for the holder
+        // to stop beating, and a holder that beats forever without landing never
+        // does.
+        let terms = Terms::default();
+        assert!(matches!(
+            turn(
+                &terms,
+                &body("them", 100_000, "1.2"),
+                "me",
+                0,
+                60 * terms.beat,
+                60,
+                200
+            ),
+            Turn::Take(_)
+        ));
+    }
+
+    #[test]
+    fn a_lease_carrying_no_progress_token_is_never_stall_stealable() {
+        // IT FAILS CLOSED, unlike the holder's own bail, and that asymmetry is
+        // the design: this is every lease minted before the field existed and
+        // every holder that cannot see its own progress. Releasing a lease
+        // wrongly costs one lap; stealing one wrongly puts two holders on the
+        // same trunk.
+        let terms = Terms::default();
+        assert_eq!(
+            turn(
+                &terms,
+                &body("them", 100_000, ""),
+                "me",
+                0,
+                1_000_000,
+                60,
+                200
+            ),
+            Turn::Wait
+        );
+    }
+
+    #[test]
+    fn a_live_lease_of_this_clones_own_is_not_re_taken() {
+        assert_eq!(
+            turn(
+                &Terms::default(),
+                &body("me", 100_000, ""),
+                "me",
+                0,
+                0,
+                60,
+                200
+            ),
+            Turn::Mine
+        );
+    }
+
+    #[test]
+    fn this_clones_own_expired_lease_is_taken_rather_than_assumed() {
+        // `Mine` is a claim about a LIVE lease. A holder that was paused past its
+        // TTL must re-take rather than carry on believing it holds one.
+        let terms = Terms::default();
+        assert!(matches!(
+            turn(&terms, &body("me", 100, ""), "me", terms.beat, 0, 60, 200),
+            Turn::Take(_)
+        ));
+    }
+
+    #[test]
+    fn a_first_sighting_is_zero_and_the_second_measures_from_it() {
+        let local = Local::under(&scratch("sighting"));
+        assert_eq!(local.held_for("seen", "abc", 100), 0);
+        assert_eq!(local.held_for("seen", "abc", 130), 30);
+        // A CHANGED VALUE RESTARTS THE CLOCK, which is what makes this evidence
+        // about the lease sitting still rather than about how long we have been
+        // watching.
+        assert_eq!(local.held_for("seen", "def", 200), 0);
+    }
+
+    #[test]
+    fn a_holder_id_is_minted_once_and_reused() {
+        // `hold`, `held` and `release` are separate processes from the `acquire`
+        // that won, so a per-process id would leave the holder unable to
+        // recognise its own lease.
+        let local = Local::under(&scratch("holder"));
+        let first = local.holder().expect("mint");
+        assert_eq!(local.holder().expect("read"), first);
+        assert!(!first.is_empty());
     }
 
     #[test]
