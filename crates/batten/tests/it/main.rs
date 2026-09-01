@@ -96,6 +96,7 @@ mod enforce_journal;
 mod extension_surfaces;
 mod external_facts;
 mod extracted_facts;
+mod fact_record_keying;
 mod facts;
 mod fail_on_warning;
 mod filed_here;
