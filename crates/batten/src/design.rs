@@ -362,6 +362,7 @@ impl Problem {
             crate::identity::scope_fingerprint(&rule, &self.claim),
         );
         Finding {
+            owner: None,
             rule,
             severity: self.severity(),
             path: STREAM.to_owned(),

@@ -819,6 +819,103 @@ fn a_policy_rows_sink_counts_the_violations_its_module_reported() {
 }
 
 #[test]
+fn a_fingerprint_collision_cannot_move_a_finding_to_another_row() {
+    // THE ARM #721 DID NOT CARRY (CLOUD-1087), and the reason it is here now.
+    //
+    // `a_predicate_named_after_a_row_leaves_that_rows_sink_alone` above covers
+    // the collision review found FIRST — a predicate id equal to a `Rule::id` —
+    // which #721 fixed by re-keying `attributed` onto the scope fingerprint.
+    // Review then raised the SAME objection in a second shape: a `command` row
+    // builds `scope_fingerprint(&rule.id, glob)` and `policy_rule` builds
+    // `scope_fingerprint(id, &fingerprint_of(violation))`, so a command row
+    // whose id equals the predicate id and whose glob equals the verdict token
+    // mints the identical key.
+    //
+    // Two rounds converging on one shape is the finding: the owner was being
+    // INFERRED from a value that means "this finding's identity" rather than
+    // "this finding's row". Re-keying a third time would answer the instance.
+    // The owner is a field now, so there is no key and nothing to collide —
+    // which is why this case cannot be written as a lookup failure any more,
+    // only as the property that survives it.
+    let module = "package batten\n\
+        \n\
+        rules contains \"colliding-id\"\n\
+        \n\
+        violation contains {\n\
+        \t\"rule\": \"colliding-id\",\n\
+        \t\"verdict\": \"something to say\",\n\
+        }\n";
+    let dir = Fixture::new("sink-fingerprint-collision")
+        .config(
+            "version = 1\n\
+             \n\
+             [[rule]]\n\
+             id = \"colliding-id\"\n\
+             kind = \"forbid\"\n\
+             glob = \"**/*.rs\"\n\
+             pattern = \"blessed-by\"\n\
+             severity = \"warn\"\n\
+             scope = \"tree\"\n\
+             no_fix_reason = \"say who decided, not who blessed it\"\n\
+             \n\
+             [rule.produces]\n\
+             kind = \"baseline\"\n\
+             key = \"rule\"\n\
+             \n\
+             [[rule]]\n\
+             id = \"the-policy-row\"\n\
+             kind = \"policy\"\n\
+             scope = \"tree\"\n\
+             module = \"policy/says.rego\"\n\
+             severity = \"warn\"\n\
+             no_fix_reason = \"nothing to fix; this row exists to record a count\"\n\
+             \n\
+             [rule.produces]\n\
+             kind = \"baseline\"\n\
+             key = \"rule\"\n\
+             \n\
+             [[verdict]]\n\
+             id = \"something to say\"\n\
+             gloss = \"this tree has something to say\"\n\
+             class = \"What the fixture asserts, at the length explain answers with.\"\n\
+             \n\
+             [[verdict.route]]\n\
+             id = \"nothing to do\"\n\
+             kind = \"command\"\n\
+             target = \"batten check\"\n",
+        )
+        .file("src/lib.rs", "// blessed-by the architect\n")
+        .file("policy/says.rego", module)
+        .git()
+        .base_commit()
+        .build();
+
+    let output = run(&dir, &["enforce"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "both rows are warn severity: {}",
+        stdout(&output)
+    );
+
+    // EACH ROW COUNTS ITS OWN. The forbid row found one line; the policy row's
+    // module reported one violation. Neither may claim the other's, whatever
+    // their fingerprints do.
+    for row in ["colliding-id", "the-policy-row"] {
+        let written =
+            record(&dir, "baseline", row, "rule").unwrap_or_else(|| panic!("{row} recorded"));
+        let count = written
+            .split_whitespace()
+            .next_back()
+            .unwrap_or_else(|| panic!("a rendered record has three fields: {written:?}"));
+        assert_eq!(
+            count, "1",
+            "{row} counts its own finding and only its own: {written:?}"
+        );
+    }
+}
+
+#[test]
 fn a_predicate_named_after_a_row_leaves_that_rows_sink_alone() {
     // THE COLLISION ARM (CLOUD-1083, found on review of #721). `attributed` is
     // keyed by predicate id and `Rule::id` is a separate namespace — neither is

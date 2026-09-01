@@ -245,6 +245,7 @@ impl Report {
             identity::scope_fingerprint(&rule, &self.name),
         );
         Some(Finding {
+            owner: None,
             rule,
             severity: RuleSeverity::Deny,
             path: self.name.clone(),

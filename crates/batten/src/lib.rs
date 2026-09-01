@@ -9490,15 +9490,12 @@ fn run_dispositions(
     fail_on_warning: bool,
     rules: &[rules::Rule],
 ) -> Vec<decision::Outcome> {
-    let attributed = &scan.attributed;
     let mut dispositions = Vec::with_capacity(scan.not_evaluated.len() + 1);
-    dispositions.push(
-        if rules::any_blocking(findings, fail_on_warning, rules, attributed) {
-            decision::Outcome::Violation
-        } else {
-            decision::Outcome::Pass
-        },
-    );
+    dispositions.push(if rules::any_blocking(findings, fail_on_warning, rules) {
+        decision::Outcome::Violation
+    } else {
+        decision::Outcome::Pass
+    });
     for observation in scan.not_evaluated.values() {
         dispositions.push(match observation {
             findings::NotObserved::RuleErrored => decision::Outcome::Internal,

@@ -619,6 +619,7 @@ mod tests {
 
     fn finding(rule: &str, path: &str) -> Finding {
         Finding {
+            owner: None,
             rule: rule.to_owned(),
             severity: RuleSeverity::Deny,
             path: path.to_owned(),

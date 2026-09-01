@@ -220,6 +220,7 @@ impl Problem {
             crate::identity::scope_fingerprint(&rule, path),
         );
         Finding {
+            owner: None,
             rule,
             severity: RuleSeverity::Deny,
             path: path.to_owned(),

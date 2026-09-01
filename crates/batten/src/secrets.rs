@@ -1077,6 +1077,7 @@ pub fn scan(
             )?;
         }
         findings.push(Finding {
+            owner: None,
             rule: rule.id.clone(),
             severity: rule.severity(),
             path: hit.path,

@@ -293,6 +293,7 @@ pub fn judge(reading: &Reading, ceiling: Option<&Ceiling>) -> Vec<Finding> {
 /// it rather than a `Fix::Run` naming a command that would not help.
 fn finding(rule: &str, subject: String, line: Option<usize>, remedy: &str) -> Finding {
     Finding {
+        owner: None,
         rule: rule.to_owned(),
         severity: RuleSeverity::Deny,
         identity: StoredIdentity::new(

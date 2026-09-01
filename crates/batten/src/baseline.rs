@@ -523,6 +523,7 @@ impl Drifted {
             identity::scope_fingerprint(&rule, &scope),
         );
         Some(Finding {
+            owner: None,
             rule,
             severity: RuleSeverity::Deny,
             // The pointer is the entry, never a path in the tree: the finding
@@ -700,6 +701,7 @@ mod tests {
             identity::code_fingerprint(rule, path, span, identity::SpanNormalization::Collapsed)
                 .expect("mint a code identity");
         Finding {
+            owner: None,
             rule: rule.to_owned(),
             severity: RuleSeverity::Deny,
             path: path.to_owned(),

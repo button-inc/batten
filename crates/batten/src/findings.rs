@@ -1179,6 +1179,7 @@ mod tests {
 
     fn finding_for(severity: RuleSeverity) -> Finding {
         Finding {
+            owner: None,
             rule: "r".to_owned(),
             severity,
             path: "src/a.rs".to_owned(),

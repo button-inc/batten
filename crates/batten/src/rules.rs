@@ -5246,6 +5246,34 @@ fn validate_composition(rules: &[Rule], at: Option<Located<'_>>) -> anyhow::Resu
 pub struct Finding {
     /// The [`Rule::id`] that produced this finding.
     pub rule: String,
+    /// The ROW this finding belongs to, where that is not [`Finding::rule`]
+    /// (CLOUD-1087).
+    ///
+    /// `None` means "the rule id is the owner", which is true for every kind but
+    /// `policy` — a policy finding reports the PREDICATE's id (CLOUD-832), and a
+    /// module may carry many predicates under one row.
+    ///
+    /// # Why a field and not a lookup
+    ///
+    /// This replaces `Scan::attributed`, a side map keyed on the scope
+    /// fingerprint. Review of #721 raised the same objection twice in two
+    /// shapes — keyed on the predicate id, then keyed on the fingerprint — and
+    /// re-keying a third time answers the instance rather than the class. Both
+    /// rounds were saying that the owner was being INFERRED from a value that
+    /// means something else, when it can simply be RECORDED. A construction
+    /// where a `command` row's id equals a predicate id and its glob equals the
+    /// verdict token mints the same `scope_fingerprint`, so the map could hand
+    /// one row's findings to another; a field cannot collide, because nothing
+    /// is looked up.
+    ///
+    /// [`Finding::rule`] is deliberately untouched and keeps the predicate id:
+    /// reporting and [`crate::waiver::apply`] ask a different question and their
+    /// answer is already right.
+    ///
+    /// Engine-internal — it reaches no pointer and no record, so rule 4 needs no
+    /// new decision here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     /// The producing rule's [`Rule::severity`], for the exit-contract decision.
     pub severity: RuleSeverity,
     /// Where the violation is. A file-scoped kind reports the repo-relative
@@ -5328,14 +5356,13 @@ impl Decidability {
 /// `finding.rule` would therefore classify every policy finding as
 /// unresolvable, and this bound would silently switch off the whole kind.
 #[must_use]
-pub fn decidability_of(
-    finding: &Finding,
-    rules: &[Rule],
-    attributed: &BTreeMap<String, String>,
-) -> Decidability {
-    let owner = attributed
-        .get(&finding.identity.fingerprint.to_hex())
-        .map_or(finding.rule.as_str(), String::as_str);
+pub fn decidability_of(finding: &Finding, rules: &[Rule]) -> Decidability {
+    // THE FINDING SAYS WHO OWNS IT (CLOUD-1087). This used to consult
+    // `Scan::attributed`, keyed on the scope fingerprint — a value that means
+    // "this finding's identity", not "this finding's row", and one a `command`
+    // row can mint identically to a policy predicate's. Nothing is looked up
+    // now, so nothing can collide.
+    let owner = finding.owner.as_deref().unwrap_or(&finding.rule);
     rules
         .iter()
         .find(|rule| rule.id == owner)
@@ -5368,34 +5395,6 @@ pub struct Scan {
     /// baseline a later run would ratchet against having never been measured —
     /// CLOUD-81's fail-closed reading, one surface further on.
     pub requested: Vec<crate::sink::Requested>,
-    /// Which containing row a FINGERPRINT belongs to, for the findings whose
-    /// reported id is not their owner's (CLOUD-1083). Sparse: only `policy`
-    /// writes here, because only there do the two ids differ.
-    ///
-    /// **Keyed on the fingerprint rather than the predicate id**, which is not
-    /// a detail: a predicate id and a `Rule::id` are separate namespaces and
-    /// nothing checks one against the other, so a module may declare a predicate
-    /// whose id is also a row's. A map keyed by that id could not tell the two
-    /// apart. A fingerprint already names ONE finding, so the collision is
-    /// inexpressible here rather than something the lookup has to adjudicate.
-    ///
-    /// `Finding::rule` is deliberately the predicate a reader saw rather than the
-    /// row that registered it (CLOUD-832) — `waiver::apply` matches on it, so a
-    /// waiver names the gate rather than the bundle holding it. That is right and
-    /// stays. But [`requested_sinks`] has to answer a DIFFERENT question, "which
-    /// findings are this row's", and for one kind the two answers differ.
-    ///
-    /// **Without this the sink aggregation reads clean by construction.** A
-    /// tree-scoped `policy` row carrying `produces` recorded `count = 0` and the
-    /// sha256 of the empty string however many violations its module reported, so
-    /// a later run ratcheting against that record compared against nothing and
-    /// passed — CLOUD-845's vacuous pass arriving through the very mechanism
-    /// CLOUD-851 added to prevent it.
-    ///
-    /// A lookup that MISSES means "the finding's rule id is its owner", which is
-    /// true for every other kind — so the ordinary kinds cost nothing and this
-    /// map's size is the count of predicates a bundle actually attributed.
-    pub attributed: BTreeMap<String, String>,
     /// Which declared class a FINGERPRINT was refused under (CLOUD-1120), for the
     /// findings that have one. Sparse, and written only by `policy`, for
     /// [`Scan::attributed`]'s reason: only there does the fact exist.
@@ -6187,12 +6186,9 @@ fn evaluate_rules(
         let (files_before, bytes_before) = (files_read(), bytes_read());
         let outcome = {
             let Scan {
-                findings,
-                attributed,
-                classes,
-                ..
+                findings, classes, ..
             } = &mut *scan;
-            isolate(|| run_rule(rule, root, inputs, findings, attributed, classes))
+            isolate(|| run_rule(rule, root, inputs, findings, classes))
         };
         costs_lock().push(RuleCost {
             rule: rule.id.clone(),
@@ -6253,18 +6249,20 @@ fn requested_sinks(rules: &[Rule], scan: &Scan) -> Vec<crate::sink::Requested> {
             let sink = rule.produces.as_ref()?;
             let mut subject = String::new();
             let mut count = 0usize;
-            // THE CONTAINING ROW, NOT THE PREDICATE (CLOUD-1083). `f.rule` is
-            // the predicate a reader saw, and for every kind but `policy` the two
-            // are the same string — which is exactly why a filter on `f.rule`
-            // looked right and was silently empty for the one kind where they
-            // differ. A miss in `attributed` means the finding's own id is its
-            // owner, which is true for every kind that never needed the map.
-            for finding in scan.findings.iter().filter(|f| {
-                scan.attributed
-                    .get(&f.identity.fingerprint.to_hex())
-                    .map_or(f.rule.as_str(), String::as_str)
-                    == rule.id
-            }) {
+            // THE CONTAINING ROW, NOT THE PREDICATE (CLOUD-1083, by the field
+            // since CLOUD-1087). `f.rule` is the predicate a reader saw, and for
+            // every kind but `policy` the two are the same string — which is why
+            // a filter on `f.rule` looked right and was silently empty for the
+            // one kind where they differ.
+            //
+            // The finding now SAYS whose it is instead of being looked up in a
+            // map keyed on its fingerprint. `None` means the rule id is the
+            // owner, true for every kind that never needed the map.
+            for finding in scan
+                .findings
+                .iter()
+                .filter(|f| f.owner.as_deref().unwrap_or(&f.rule) == rule.id)
+            {
                 subject.push_str(&finding.identity.fingerprint.to_hex());
                 subject.push('\n');
                 count += 1;
@@ -6428,10 +6426,7 @@ fn run_rule(
     root: &Path,
     inputs: &RunInputs<'_>,
     findings: &mut Vec<Finding>,
-    // See [`Scan::attributed`]. Threaded for the one kind whose findings do not
-    // carry their own row's id.
-    attributed: &mut BTreeMap<String, String>,
-    // See [`Scan::classes`]. Threaded beside `attributed` because it is the same
+    // See [`Scan::classes`]. Threaded because it is the same
     // kind and the same one place the fact exists (CLOUD-1120).
     classes: &mut BTreeMap<String, String>,
 ) -> anyhow::Result<Option<NotObserved>> {
@@ -6456,7 +6451,7 @@ fn run_rule(
     // is what decides, and returning here would switch those off by a value
     // nobody aimed at them.
     if rule.kind == RuleKind::Policy {
-        return Ok(policy_rule(rule, inputs, findings, attributed, classes));
+        return Ok(policy_rule(rule, inputs, findings, classes));
     }
     let Some(glob) = rule.glob.as_deref() else {
         // Unreachable for a tree-scoped kind, whose census requires `glob`.
@@ -8102,9 +8097,6 @@ fn policy_rule(
     rule: &Rule,
     inputs: &RunInputs<'_>,
     findings: &mut Vec<Finding>,
-    // Written HERE rather than derived later because this is the only place that
-    // holds the predicate id and the containing row's id at once.
-    attributed: &mut BTreeMap<String, String>,
     // And the class, for the same reason: `Violation` carries the token, and by
     // the time a `Finding` exists it is gone (CLOUD-1120).
     classes: &mut BTreeMap<String, String>,
@@ -8261,20 +8253,12 @@ fn policy_rule(
             // and they move only when the finding does.
             identity::scope_fingerprint(id, &fingerprint_of(violation)),
         );
-        // BEFORE the push, and for every violation this row raises: the sink
-        // aggregation asks "which findings are this row's" and the answer has to
-        // exist by the time anything reads it (CLOUD-1083). An `Allow` predicate
-        // is skipped above and records nothing, which is right — it produced no
-        // finding to attribute.
-        //
-        // KEYED ON THE FINGERPRINT, NOT THE PREDICATE ID (found on review of
-        // #721). A predicate id and a `Rule::id` are separate namespaces and
-        // nothing checks one against the other, so a module may declare a
-        // predicate whose id is also a row's — and a map keyed by that id cannot
-        // then tell the two apart, which would hand one row's findings to the
-        // other. A fingerprint already names ONE finding, so the lookup is exact
-        // and the collision is inexpressible rather than refused.
-        attributed.insert(identity.fingerprint.to_hex(), rule.id.clone());
+        // THE OWNER IS ON THE FINDING NOW (CLOUD-1087), set at its construction
+        // below rather than recorded in a side map here. `Scan::attributed` was
+        // keyed on the scope fingerprint, and a `command` row whose id equals a
+        // predicate id and whose glob equals the verdict token mints the same
+        // one — so the map could hand this row's findings to that one. Nothing
+        // is looked up any more, so nothing can collide.
         // THE CLASS, beside the owner and for the same reason (CLOUD-1120): this
         // is the one place it exists. `Violation` carries the token the module
         // raised, `Finding` has nowhere to put it, and without it a spent
@@ -8282,6 +8266,11 @@ fn policy_rule(
         // articulated, bound and consumed while the gate went on refusing.
         classes.insert(identity.fingerprint.to_hex(), violation.verdict.clone());
         findings.push(Finding {
+            // THE ONE KIND WHOSE FINDING IS NOT ITS ROW'S (CLOUD-1087).
+            // `rule` above carries the PREDICATE id (CLOUD-832); the row that
+            // enabled the module is what a sink is asked about, and it is in hand
+            // right here rather than reconstructible from a fingerprint later.
+            owner: Some(rule.id.clone()),
             // THE PREDICATE'S ID, not the row's (CLOUD-832). `waiver::apply`
             // matches on this field, so a waiver names the gate a reader saw
             // rather than the bundle that happens to hold it.
@@ -8864,6 +8853,7 @@ fn ratchet_finding(
     findings: &mut Vec<Finding>,
 ) {
     findings.push(Finding {
+        owner: None,
         // The plain rule id, deliberately: `waiver::apply` matches on this
         // field, so decorating it would make a ratchet the one finding kind
         // no waiver could suppress — and the waiver is the designed hatch
@@ -9622,6 +9612,7 @@ fn push_case_finding(
         return;
     };
     findings.push(Finding {
+        owner: None,
         rule: rule.id.clone(),
         severity: rule.severity(),
         path: path.to_owned(),
@@ -9728,6 +9719,7 @@ fn unresolved_subject(
         return;
     };
     findings.push(Finding {
+        owner: None,
         rule: rule.id.clone(),
         severity: rule.severity(),
         path: path.to_owned(),
@@ -10221,6 +10213,7 @@ fn run_once(
         let scope_key = rule.glob.as_deref().unwrap_or(&rule.id);
         let default = identity::scope_fingerprint(&rule.id, scope_key);
         findings.push(Finding {
+            owner: None,
             rule: rule.id.clone(),
             severity: rule.severity(),
             identity: identity_of(rule, identity::FindingKind::Scope, default),
@@ -10260,14 +10253,9 @@ fn run_once(
 /// blocks an approximating rule" is a property of this function rather than a
 /// convention its callers keep.
 #[must_use]
-pub fn any_blocking(
-    findings: &[Finding],
-    fail_on_warning: bool,
-    rules: &[Rule],
-    attributed: &BTreeMap<String, String>,
-) -> bool {
+pub fn any_blocking(findings: &[Finding], fail_on_warning: bool, rules: &[Rule]) -> bool {
     findings.iter().any(|finding| {
-        decidability_of(finding, rules, attributed).may_block()
+        decidability_of(finding, rules).may_block()
             && severity::promote(
                 severity::row_for_rule(finding.severity).report,
                 fail_on_warning,
@@ -10418,6 +10406,7 @@ fn forbid_in_files(
                 // engine picks the same span.
                 let default = identity::code_fingerprint(&rule.id, rel_path, line, mode)?;
                 findings.push(Finding {
+                    owner: None,
                     rule: rule.id.clone(),
                     severity: rule.severity(),
                     path: rel_path.to_owned(),
@@ -10557,6 +10546,7 @@ fn document_in_file(
         identity::SpanNormalization::Verbatim,
     )?;
     findings.push(Finding {
+        owner: None,
         rule: rule.id.clone(),
         severity: rule.severity(),
         path: rel_path.to_owned(),
@@ -10582,6 +10572,7 @@ fn unreadable_document(rule: &Rule, rel_path: &str, node_path: &str) -> anyhow::
         identity::SpanNormalization::Verbatim,
     )?;
     Ok(Finding {
+        owner: None,
         rule: rule.id.clone(),
         severity: rule.severity(),
         path: rel_path.to_owned(),
@@ -14700,12 +14691,7 @@ mod tests {
 
         for promote in [false, true] {
             assert!(
-                any_blocking(
-                    &findings,
-                    promote,
-                    std::slice::from_ref(&deciding),
-                    &BTreeMap::new()
-                ),
+                any_blocking(&findings, promote, std::slice::from_ref(&deciding)),
                 "a deciding row blocks (fail_on_warning={promote})"
             );
             // …and the identical findings under an approximating row do not,
@@ -14713,7 +14699,7 @@ mod tests {
             // it promotes through `severity::promote`, so a bound applied
             // outside `any_blocking` would be reachable by one CLI argument.
             assert!(
-                !any_blocking(&findings, promote, approximating, &BTreeMap::new()),
+                !any_blocking(&findings, promote, approximating),
                 "an approximating row must not block (fail_on_warning={promote})"
             );
         }
@@ -14738,14 +14724,14 @@ mod tests {
         // mean to exercise rather than over the severity rank it does.
         let table = std::slice::from_ref(&rule);
         assert!(
-            !any_blocking(&findings, false, table, &BTreeMap::new()),
+            !any_blocking(&findings, false, table),
             "a warn finding must not block"
         );
         // …and the same finding, unchanged, blocks once the setting promotes it
         // (CLOUD-49). The finding itself is identical in both runs: promotion
         // acts on the exit decision, never on what was stored or reported.
         assert!(
-            any_blocking(&findings, true, table, &BTreeMap::new()),
+            any_blocking(&findings, true, table),
             "fail_on_warning must promote a warn finding"
         );
 
@@ -14754,11 +14740,11 @@ mod tests {
         let deny = run_static(deny_table, &dir).unwrap();
         for promote in [false, true] {
             assert!(
-                any_blocking(&deny, promote, deny_table, &BTreeMap::new()),
+                any_blocking(&deny, promote, deny_table),
                 "a deny finding must block either way"
             );
             assert!(
-                !any_blocking(&[], promote, deny_table, &BTreeMap::new()),
+                !any_blocking(&[], promote, deny_table),
                 "no findings, nothing blocks"
             );
         }
@@ -14770,7 +14756,7 @@ mod tests {
         // approximating disarmed three subsystems that never had a rule kind to
         // classify, which is what this arm now holds shut.
         assert!(
-            any_blocking(&deny, true, &[], &BTreeMap::new()),
+            any_blocking(&deny, true, &[]),
             "an engine-minted finding is not silenced by having no configured row"
         );
     }
