@@ -42,8 +42,12 @@
 # unresolvable base, kept: a gate that blocked landing because it failed to
 # compute a diff would be a worse defect than the matrix it is trying to save.
 #MUTANT-SUITE crates/batten/tests/prose_only.rs
-#MUTANT code-change-unread|s@^\tcount(code_changed) == 0$@\tfalse@|one_changed_line_of_code_admits_the_branch
-#MUTANT test-touch-unread|s@^\tnot touches_a_test$@\ttrue@|a_comment_change_plus_a_test_change_is_admitted
+# THE CASE IS A DENY-SIDE ONE, and the first spelling of these rows was not.
+# Both mutations STOP the rule firing, so a case asserting the branch is
+# ADMITTED stays green under them — measured, both survived. A mutation is
+# only evidence against the case its own direction can redden.
+#MUTANT code-change-unread|s@^\tcount(code_changed) == 0$@\tfalse@|a_branch_whose_whole_diff_is_comment_lines_is_refused
+#MUTANT changed-set-unread|s@^\tcount(changed) > 0$@\tfalse@|a_branch_whose_whole_diff_is_comment_lines_is_refused
 
 # METADATA
 # description: |

@@ -55,8 +55,11 @@
 # is not-applicable rather than could-not-look. `command-task-defined.rego` draws
 # the same line between the two absences for the same reason.
 #
-#MUTANT pin-disagreement-passes|s@have != want@false@|a_version_the_authority_pins_differently_is_refused
-#MUTANT unpinned-tool-passes|s@not is_string(pins[tool])@false@|a_tool_the_authority_does_not_carry_is_refused
+# THE PREDICATE IS `have != entry.want`, and this row named `have != want` — a
+# spelling the module has not carried for some time. It therefore matched only
+# its OWN declaration line, which is `self-mutating-row` rather than coverage.
+#MUTANT pin-disagreement-passes|s@have != entry.want@false@|a_version_the_authority_pins_differently_is_refused
+#MUTANT unpinned-tool-passes|s@not is_string(pins\[tool\])@false@|a_tool_the_authority_does_not_carry_is_refused
 #MUTANT unscoped-exec-passes|s@scoped_operands(args) == 0@false@|a_bare_exec_is_refused_even_though_it_names_no_version
 # NO `#MUTANT` ROW FOR THE COULD-NOT-LOOK CLAUSE, and that is a measurement
 # rather than an oversight. `input.tree.missing` is never populated on the tree

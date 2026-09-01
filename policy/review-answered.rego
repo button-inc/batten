@@ -85,7 +85,11 @@ rules contains "review-absent"
 # two hook calls over the compiled binary. `mutant` resolves a gate's suite by
 # `tests/<gate>.bats`, so there is nothing for it to reach.
 #MUTANT-SUITE crates/batten/tests/review_answered.rs
-#MUTANT ready-unread|s@^\treadying$@\tfalse@|a_ready_with_no_record_at_all_is_refused_and_the_remedy_names_the_read
+# THE CASE IS ONE THIS MODULE DECIDES, and the first spelling named one it does
+# not. A ready with NO record at all is refused by the typed `receipt` rows in
+# `batten.toml`, not here — both bodies below need a record to reach their
+# count — so killing `readying` left that case green. Measured: it survived.
+#MUTANT ready-unread|s@^\treadying$@\tfalse@|the_measured_shape_a_head_carrying_unresolved_threads_is_refused_naming_the_count
 violation contains {
 	"rule": "review-unanswered",
 	"verdict": "V-REVIEW-UNANSWERED",
@@ -168,7 +172,7 @@ readying if {
 
 # ---------------------------------------------------------------------------
 # The predicate's own tests (CLOUD-835). LOAD-TIME tier only: what proves this
-# gate decides is `tests/review-answered.bats`, which drives the compiled binary
+# gate decides is `crates/batten/tests/review_answered.rs`, which drives the binary
 # over a real envelope AND a really-recorded fact, because a `with input as` case
 # fabricates the very shape the engine may be unable to produce (CLOUD-845).
 # ---------------------------------------------------------------------------

@@ -57,14 +57,20 @@
 #MUTANT shell-added-unchecked|s@delta.added@[]@|an_added_shell_rule_is_refused
 #MUTANT shell-edited-unchecked|s@delta.edited@[]@|a_shell_rule_edited_in_place_is_refused
 #MUTANT shell-deletion-unmapped|s@count(arms_for(path)) == 1@true@|a_deletion_with_no_mapping_is_refused
-#MUTANT shell-mapping-not-unique|s@count(arms_for(path)) == 1@count(arms_for(path)) > 0@|a_deletion_carrying_two_arms_is_refused
+# THE AMBIGUOUS ARM IS `> 1`, and this row mutated `== 1` — the guard the OTHER
+# arms carry. So the case it names was decided by an arm the mutation never
+# touched, and it SURVIVED. Measured on the first sweep that could reach it.
+#MUTANT shell-mapping-not-unique|s@count(arms_for(path)) > 1@false@|a_deletion_carrying_two_arms_is_refused
 #MUTANT shell-successor-unproven|s@has_binary_test(path)@true@|a_mapping_naming_no_compiled_binary_test_is_refused
 # A ROW IS EXACTLY THREE FIELDS, so this one cannot spell its conjunct out: the
 # predicate it disables contains a `|` — a Rego comprehension bar — and a script
 # carrying one is refused before it is split. Anchored on the `|`-free prefix
 # instead and closed by turning the remainder into a Rego comment, so the line
 # reads `true` and the conjunct is gone.
-#MUTANT shell-subject-alive-unchecked|s@^\t\t\tnot word in @\t\t\ttrue #@|a_carried_row_naming_a_live_subject_is_refused
+# `false`, NOT `true`: the case is a deny-side one, so the mutation has to stop
+# the arm firing. `true` made every named word read as alive, which fires the
+# refusal MORE and leaves that case green — measured, it survived.
+#MUTANT shell-subject-alive-unchecked|s@^\t\tnot word in @\t\tfalse #@|a_carried_row_naming_a_live_subject_is_refused
 # CLOUD-1121's arm. Dropping the exact-substitution test turns the repointing
 # clause into a licence to rewrite any line that happens to accompany a deletion,
 # which is what the three anti-vacuity cases above exist to catch.
@@ -75,8 +81,17 @@
 # withdrawn here, so the field has to name a case that exists, and both do.
 #MUTANT port-subject-unnamed-unchecked|s@count(ported_subjects(path)) == 0@false@|a_port_naming_no_subject_is_refused
 #MUTANT port-subject-governed-unchecked|s@governed_when_deleted(subject)@false@|a_port_naming_a_live_governed_subject_is_refused
-#MUTANT repointing-not-exact|s@replace(was, gone, succ) == line@contains(was, gone)@|a_repointing_that_also_changes_the_rest_of_the_line_is_refused
-#MUTANT list-drop-not-exact|s@line == concat("", [before, after])@startswith(line, before)@|dropping_the_name_while_also_changing_the_line_is_refused
+# THE CASE EXERCISES THE INVOCATION CLAUSE, NOT THE PATH ONE. Its caller binds
+# `$(dirname "$0")/old-gate.sh` to a variable and repoints at `mise run
+# old-gate`, which is CLOUD-1219's decomposition — so a mutation of
+# `repoints_at_the_declared_successor`'s exactness never reached it and
+# SURVIVED. The exactness this case decides is the prefix/suffix pair.
+#MUTANT repointing-not-exact|s@^\tendswith(was, after)$@\ttrue@|a_repointing_that_also_changes_the_rest_of_the_line_is_refused
+# THE BRACKETS ARE ESCAPED, and the spelling without them was inert for this
+# row's whole life: `[before, after]` is a sed BRACKET EXPRESSION matching one
+# character, so the pattern could never match the line it names. Nothing caught
+# it because nothing could reach a module to run it (CLOUD-1267).
+#MUTANT list-drop-not-exact|s@line == concat("", \[before, after\])@startswith(line, before)@|dropping_the_name_while_also_changing_the_line_is_refused
 #
 #MUTANT-SUITE crates/batten/tests/shell_retirement.rs
 

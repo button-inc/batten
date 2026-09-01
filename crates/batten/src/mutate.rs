@@ -528,7 +528,7 @@ impl Staged {
     pub fn new(root: &Path, dir: PathBuf) -> Result<Self> {
         let tracked = crate::git::tracked_paths(root)
             .context("mutate: could not list the tracked tree to stage it")?;
-        prune(&dir, &dir, &tracked)?;
+        reconcile(&dir, &tracked)?;
         for path in &tracked {
             let from = root.join(path);
             // A tracked path can be absent from the working tree (deleted but
@@ -667,43 +667,39 @@ impl Staged {
     }
 }
 
-/// Remove anything in the staged tree the tracked set no longer names.
+/// The manifest of what a previous run staged, inside the staged tree.
+const MANIFEST: &str = ".mutate-staged";
+
+/// Remove the paths a PREVIOUS run staged that the tracked set no longer names,
+/// and record what this one stages.
 ///
 /// The staged tree PERSISTS between runs so an unchanged source keeps its
-/// timestamp (see the copy above), and a persisted tree that only ever grew
-/// would judge a gate against a file this checkout deleted. `.git` is the staged
-/// repository's own and `tests/` may hold a borrowed runner, so both are left
-/// alone — a directory entry that is not a file is never a staged source.
-fn prune(dir: &Path, root: &Path, tracked: &std::collections::BTreeSet<String>) -> Result<()> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Ok(());
-    };
-    for entry in entries.filter_map(std::result::Result::ok) {
-        let path = entry.path();
-        let name = entry.file_name();
-        if name == ".git" {
+/// timestamp — which is what makes a compiled tier affordable — and a persisted
+/// tree that only ever grew would judge a gate against a file this checkout
+/// deleted.
+///
+/// **A MANIFEST RATHER THAN A WALK, and that is a measured defect rather than a
+/// preference.** The first version walked the staged tree and removed every file
+/// the tracked set did not name. A suite run inside that tree writes its own
+/// artefacts there — a `cargo` build directory reached **1.1 GB** on the first
+/// live sweep — so the walk then spent its time recursing through, and deleting,
+/// a build nothing asked it to judge. The manifest touches exactly the paths a
+/// run put there and never looks at anything else.
+fn reconcile(dir: &Path, tracked: &std::collections::BTreeSet<String>) -> Result<()> {
+    let previous = std::fs::read_to_string(dir.join(MANIFEST)).unwrap_or_default();
+    for path in previous.lines() {
+        if path.is_empty() || tracked.contains(path) {
             continue;
         }
-        // `symlink_metadata`, so a borrowed runner is a symlink rather than the
-        // directory it points at and is never walked into.
-        let Ok(meta) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if meta.is_symlink() {
-            continue;
-        }
-        if meta.is_dir() {
-            prune(&path, root, tracked)?;
-            continue;
-        }
-        let Ok(relative) = path.strip_prefix(root) else {
-            continue;
-        };
-        if !tracked.contains(&relative.to_string_lossy().into_owned()) {
-            std::fs::remove_file(&path)
-                .with_context(|| format!("mutate: could not clear {}", relative.display()))?;
+        let stale = dir.join(path);
+        if stale.is_file() {
+            std::fs::remove_file(&stale)
+                .with_context(|| format!("mutate: could not clear {path}"))?;
         }
     }
+    let manifest: Vec<&str> = tracked.iter().map(String::as_str).collect();
+    std::fs::write(dir.join(MANIFEST), manifest.join("\n"))
+        .context("mutate: could not record what was staged")?;
     Ok(())
 }
 
