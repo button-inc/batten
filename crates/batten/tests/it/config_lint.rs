@@ -66,6 +66,53 @@
 // withdrawn: "the refusal points at grooming, not at a flag to set" the shell composed that refusal text and no longer exists; the verb emits a pointer plus a verdict token, and the remedy prose it used to print is `config weakens unnamed`'s registry row rather than a string in a gate
 // withdrawn: "the rationale claims no caller that grep cannot find" the case gated the deleted program's own header against the workflow tree, and a header that no longer exists cannot make a claim to reconcile
 //!
+//! # The retirement ledger for `mise-tasks/ci-drift.sh` (CLOUD-843, CLOUD-54)
+//!
+//! The second program to retire onto this same verb, and for the same reason: its
+//! last line was `config lint --host-rules -`, so the ADJUDICATION was already
+//! here. What the shell owned was a credentialed fetch — `gh repo view` plus
+//! `gh api repos/<repo>/rules/branches/<branch>` — which the engine may not
+//! perform at all (house-style §5, `evaluator-io-check`).
+//!
+//! So the fetch moved OUT rather than in, which is CLOUD-1277's own formulation
+//! for this family: *"the polling stays outside; only the decision moves in."* It
+//! is a step in `.github/workflows/ci-drift.yml` now, where the job token already
+//! is, and a `gh api` that fails reds the job before the gate runs.
+//!
+//! **CLOUD-1277 asked for a channel this did not need.** That row proposes a
+//! producer-written document under `$GIT_DIR` declared by `[[rule.external]]`,
+//! because `input.tree.forge` is a `name -> token` map and cannot carry a nested
+//! ruleset. Both halves are true and neither applies: that shape is what a
+//! tree-scoped MODULE would need, and the successor here is a VERB reading an
+//! argument. `--host-rules` has taken a path since it shipped.
+//!
+//! Two deleted paths, two file arms. The successor is engine source that widens
+//! no command surface — `config lint --host-rules` already shipped — so both are
+//! `kind:mechanism`.
+//!
+// carried: mise-tasks/ci-drift.sh crates/batten/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
+// carried: tests/ci-drift.bats crates/batten/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
+//!
+//! ## CARRIED — the decision half, which this file already covered
+//!
+// carried: "THE DEFECT: a fetch that could not look is exit 1, never a green verdict" crates/batten/tests/it/config_lint.rs
+// carried: "the decision's verdict passes through, so drift fails the gate" crates/batten/tests/it/config_lint.rs
+// carried: "the decision is the offline one, over stdin — the gate spawns no second fetch" crates/batten/tests/it/config_lint.rs
+//!
+//! ## CHANGED — one case, because the payload arrives by a different route
+//!
+// changed: "the fetched bytes reach the decision on stdin, unaltered" crates/batten/tests/it/config_lint.rs the bytes now arrive as a declared PATH rather than on stdin; `--host-rules` has always taken both, and the path arm is what lets the fetch live in the workflow instead of in a program that must pipe
+//!
+//! ## WITHDRAWN — two cases whose subject the retirement deletes
+//!
+//! Both were about the shell's own plumbing rather than about the decision. A
+//! failed fetch no longer has a program to hand nothing to — the workflow step
+//! fails and the gate never runs — and the branch is an argument the workflow
+//! supplies rather than a variable a program defaults.
+//!
+// withdrawn: "a failed fetch hands nothing to the decision" the program that did the fetching and the piping is deleted; the workflow step fails first, so there is no in-between state left to assert
+// withdrawn: "the branch is the one CI_DRIFT_BRANCH names, and main is the default" the default moved into the workflow's own expansion, which is ungoverned and not this tier's subject
+//!
 //! ## SUBSUMED — the four wiring cases, which `ci-local-parity` already owns
 //!
 //! They assert that `verify` and CI arm the same task, that CI arms it with the
@@ -943,6 +990,51 @@ fn a_check_the_config_claims_and_the_host_does_not_require_is_drift_too() {
     let output = lint_against(&dir, "rules-required-checks");
     assert_eq!(output.status.code(), Some(2));
     assert!(stdout(&output).contains("-ghost"));
+}
+
+#[test]
+fn a_host_ruleset_that_cannot_be_read_is_could_not_look_never_agreement() {
+    // `ci-drift.sh`'s ONE `#MUTANT` row, re-homed rather than assumed
+    // (CLOUD-843). Its predicate was `could-not-look-is-a-pass`, over the
+    // program's `exit 1` on a failed fetch, and its own header said why: "a drift
+    // check that could not look has not found agreement, and reporting green
+    // there is the false-green shape this engine exists to catch."
+    //
+    // WRITTEN BECAUSE THE LEDGER ARM ABOVE WAS FALSE WITHOUT IT. That arm records
+    // the case as `carried:` to this file, and this file had no case over an
+    // unreadable payload — only over rulesets it could read. That is CLOUD-908's
+    // exact class, `retires_with` conserving files rather than logic, and it was
+    // caught by re-reading the arm rather than by any gate: nothing checks that a
+    // named successor actually covers what it claims.
+    let dir = repo_with_config("ci-unreadable-rules", &ci_config(""));
+    let output = lint(&dir, &["--host-rules", "/nonexistent-ruleset.json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a payload that cannot be read is a usage error, never agreement"
+    );
+    assert!(
+        !stdout(&output).contains("0 smell"),
+        "could-not-look reported as a clean comparison: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_payload_that_is_not_a_ruleset_is_could_not_look_too() {
+    // The sibling arm, and the one that discriminates: an unreadable path and a
+    // readable file that is not a rules-API response are different failures with
+    // the same obligation. Without this, the case above passes over a verb that
+    // refuses only on `open()` and would happily compare against `{}`.
+    let dir = repo_with_config("ci-not-a-ruleset", &ci_config(""));
+    let payload = dir.join("not-a-ruleset.json");
+    std::fs::write(&payload, "{}").expect("write payload");
+    let output = lint(&dir, &["--host-rules", payload.to_str().unwrap()]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a payload that is not a rules-API array is a usage error"
+    );
 }
 
 #[test]

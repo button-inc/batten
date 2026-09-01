@@ -475,7 +475,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,attestation-check,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,bot-issue,branch-age-check,cap-drift,ci-drift,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-race-check,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-matcher-check,hook-pin-check,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pinned-toolchain,pipefail-grep-check,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reclaim-census,release-assets-check,release-due,release-tag-shape,release-tracking-check,released,remedy-authorship,report-only-check,review-answered,run-shape,run-shape-guard,rust-paths-check,sbom,sbom-check,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared"
+MUTANT_GATES = "alive,attestation-check,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,bot-issue,branch-age-check,cap-drift,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-race-check,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-matcher-check,hook-pin-check,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pinned-toolchain,pipefail-grep-check,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reclaim-census,release-assets-check,release-due,release-tag-shape,release-tracking-check,released,remedy-authorship,report-only-check,review-answered,run-shape,run-shape-guard,rust-paths-check,sbom,sbom-check,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1094,6 +1094,31 @@ description = "Gate: a branch whose whole diff is comment lines buys a CI matrix
 # `--rule` naming no declared row is a usage error rather than a clean run, so a
 # renamed row breaks this loudly instead of silently passing.
 run = "cargo run --quiet -p batten -- check --rule prose-only"
+
+[tasks."ci-drift"]
+description = "Gate: the committed [ci] table still matches the host ruleset (CLOUD-54)"
+# CLOUD-54's gate, ported off `mise-tasks/ci-drift.sh` under CLOUD-843.
+#
+# THE ADJUDICATION WAS ALREADY THE VERB'S. The program's last line was
+# `config lint --host-rules -`, so the comparison has lived in `crates/batten/src/ci.rs`
+# all along. What the shell still owned was a credentialed FETCH, which the engine
+# may not do — house-style §5, and `evaluator-io-check` is the standing gate on it.
+#
+# SO THE FETCH MOVED OUT RATHER THAN IN, which is CLOUD-1277's own words for this
+# family: "the polling stays outside; only the decision moves in". It now happens
+# in `.github/workflows/ci-drift.yml`, one step earlier, where the job token
+# already is — and a `gh api` that fails there reds the job before this runs, so
+# could-not-look never reaches the gate as a green.
+#
+# `--host-rules` TAKES A PATH, and always has. The channel CLOUD-1277 sketches —
+# a producer-written document under `$GIT_DIR` declared by `[[rule.external]]` —
+# is what a tree-scoped MODULE would need; this is a verb reading an argument, so
+# it needs none of it.
+#
+# `:?` RATHER THAN A DEFAULT: an unset payload path is the caller's mistake, and
+# defaulting it would make the gate read a file nobody fetched, which is the
+# could-not-look-as-clean shape the deleted program's own `#MUTANT` row named.
+run = 'cargo run --quiet -p batten -- config lint --host-rules "${CI_DRIFT_RULES:?the host ruleset payload path; the workflow fetches it one step earlier}"'
 
 [tasks."hooks-wiring-check"]
 description = "Gate: batten is registered exactly once on every hook surface (doctor hooks), and every other registration names the issue retiring it (harness-wiring)"
