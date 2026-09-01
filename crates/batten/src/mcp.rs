@@ -1256,7 +1256,7 @@ fn post_all(
         .map(|body| crate::fetch::Call {
             url: &wiring.endpoint,
             headers: &headers,
-            payload: crate::fetch::Payload::Create(body),
+            body: Some(body),
         })
         .collect();
     crate::fetch::spend(&calls)
