@@ -1067,14 +1067,18 @@ mod carried_claim_tests {
 
     fn write(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
         let dest = dir.join("claim.branch");
-        std::fs::write(&dest, body).expect("write the fixture receipt");
+        let Ok(()) = std::fs::write(&dest, body) else {
+            panic!("write the fixture receipt")
+        };
         dest
     }
 
     fn scratch(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("batten-carried-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create the fixture root");
+        let Ok(()) = std::fs::create_dir_all(&dir) else {
+            panic!("create the fixture root")
+        };
         dir
     }
 
