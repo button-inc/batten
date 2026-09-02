@@ -17,6 +17,63 @@
 // carried: tests/run-shape-guard.bats policy/run-shape.rego crates/batten/tests/it/run_shape.rs
 // carried: tests/run-shape-guard-quoting.bats policy/run-shape.rego crates/batten/tests/it/run_shape.rs
 
+// ─── THE CASES INSIDE THOSE SUITES (CLOUD-908) ───────────────────────────────
+//
+// The rows above conserve the FILES; these conserve the 42 CASES inside them,
+// which is the distinction CLOUD-908 exists to make — a retirement that names the
+// file and drops its cases is the silent coverage loss that row measured.
+//
+// Routed by FAMILY rather than by file: three of the guard's four families are
+// this module's, and `cargo-substitutes-for-a-task` is `task-substitution`'s, so
+// those cases name that surface and its own tier instead. A row naming this file
+// for all 42 would claim coverage that is not here.
+// carried: "THE MEASURED SHAPE: a sleep in the middle of a compound is denied" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a leading sleep is denied too" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a SHORT sleep is the same shape spending less" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "the denial names the remedy: background the wait, act on the exit" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a wrapper does not hide it" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a BACKGROUND sleep is allowed — it is the recommended wait" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "THE MEASURED SHAPE: a backgrounded sleep-then-read is a timer, not a wait" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a bare backgrounded sleep waits for nothing and reports nothing" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "the timer denial names both affordances: the exit notification and alive" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a backgrounded WHILE loop is a wait and stays allowed" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a backgrounded wait on state nothing notifies you about stays allowed" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a backgrounded long-running command with no sleep is untouched" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a foreground call with no sleep is still none of this rule's business" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a backgrounded sleep described in prose is prose" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a sleep written INSIDE a quoted span or a heredoc is not a call" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a bare command with no sleep and no verdict is still none of this guard's business" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "THE MEASURED SHAPE: the heredoc binds to a later element, so git gets nothing" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a bare -F - with no redirect anywhere is denied" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "the denial names -F <path>, which is the form that cannot rebind" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// NO ARM FOR "every form that CAN obtain a message stays allowed": `tests/run-shape.bats`
+// retired a case of the same name earlier and its `changed:` row below already
+// accounts for it. The ledger keys on the case NAME and admits exactly one arm per
+// name, so a second would be refused — and the surviving row is the better of the
+// two anyway, because it records that the claim CHANGED rather than merely moved.
+// carried: "a heredoc that genuinely binds to this element is a message source" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a file or a here-string redirected into it is a message source too" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a git commit written INSIDE a quoted span or a heredoc is not a call" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "THE MEASURED SHAPE: a weaker clippy through the sanctioned escape is refused" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
+// carried: "the task itself is allowed — this rule is about substitution, not about cargo" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
+// carried: "a subcommand no task wraps is a genuine one-off and is untouched" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
+// carried: "a BARE cargo is no-bare-cargo's, so the two never report one command" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
+// carried: "an EQUAL argv is not weaker, so spelling a task's own line out is allowed" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
+// carried: "a narrower argv IS weaker, and the task it is weaker than is named" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
+// carried: "a DIFFERENT program argv is a different command, not a weaker one" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
+// carried: "the SAME program argv, missing a flag, is a substitution" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
+// carried: "post-dash-dash LINT flags count as strictness, which is the whole measurement" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
+// carried: "THE MAPPING IS DERIVED: retitle the task's cargo line and the verdict follows" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
+// carried: "a description naming a command is prose, never a declaration" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
+// carried: "the refusal names its bypass, since one that cannot be reached is not a remedy" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
+// carried: "the bypass actually clears it" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
+// carried: "a multi-line commit message quoting the shapes is not the shapes" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a single-line quoted mention is still not the shape" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a heredoc body naming the shapes is documentation" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a here-string does not open a skip that swallows the rest" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a real shape after a closed heredoc is still caught" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: "a real shape after a closed quoted span is still caught" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+
 //!
 //! # Where this came from, and why it is Rust
 //!
