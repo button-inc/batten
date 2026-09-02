@@ -91,6 +91,11 @@ declared_modules := {
 	# CLOUD-1050 and it worked a fourth: the module was written, its tests were
 	# green, and this rule is what said nobody had placed it.
 	"patch", "symbols", "semver",
+	# `review` arrived with CLOUD-472 and this rule named it an eighth time —
+	# module written, both test tiers green, and nobody had placed it. It is
+	# `symbols`' class exactly: an acquisition module resolving a `Cost::Effect`
+	# fact by spawning, whose caller is the engine that decides WHEN to acquire.
+	"review",
 	# `recorder` arrived with CLOUD-1051 and it worked a fourth time: the module
 	# landed undeclared and this rule named it, before any reviewer did. It is a
 	# writer rather than a decider — it accumulates what a gate already said — so
@@ -372,6 +377,14 @@ forbidden[from] contains to if {
 		# `Cost::Effect` boundary a convention rather than a direction — and the
 		# whole point of the class is that a projection cannot reach the spawn.
 		"symbols": {"rules", "hook"},
+		# `review -> rules` / `review -> hook` is `symbols`' row a second family
+		# over, and the reason carries unchanged: `rules::review_fact` is the caller
+		# that decides when to dispatch, and a back-edge would let the module that
+		# SPAWNS an agent reach the engine that decides whether to. That is the
+		# `Cost::Effect` boundary as a direction rather than a convention — and it
+		# matters more here than for `symbols`, because this spawn costs an agent
+		# round trip rather than a clippy run.
+		"review": {"rules", "hook"},
 		# `pinned -> rules` / `pinned -> hook` is `symbols`' row again, one fact
 		# family over, and for the identical reason: `pinned.rs` resolves a
 		# `Cost::Effect` fact and `lib.rs` is the caller that decides when — at
