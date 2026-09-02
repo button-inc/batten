@@ -3552,6 +3552,25 @@ base = "temp"
 path = "mcp-config-${CLAUDE_CODE_REMOTE_SESSION_ID}.json"
 node = "mcpServers"
 
+# THE NAME A REMEDY MAY CITE (CLOUD-1264). This launcher keys its server map by
+# whatever id the toolbox minted for the registration episode, so the key is
+# unwritable in advance: measured 2026-09-02, the same connector at the same
+# address was keyed `Linear` in one container and
+# `4db58e41-cd4e-4818-8922-46cf616593f4` in another, and `mcp call Linear` exited
+# 3 in the second with "no declared source resolves this server".
+#
+# That is CLOUD-178's rotation reaching DISPATCH, where the `__`-delimited
+# segment match that absorbs it for a `tool` selector has no analogue — the key
+# is the whole name. Without this row the `no-raw-issue-read` remedy below would
+# name a command that cannot run, which is the class CLOUD-1050 refuses.
+#
+# THE ADDRESS IS WHAT DOES NOT MOVE, which is why the selector is over the
+# endpoint. It is a substring rather than a whole URL because the launcher wraps
+# the upstream address in its own proxy URL with the real one in a query
+# parameter, and the wrapper carries a per-session id.
+[mcp.source.endpoint_contains]
+Linear = "mcp.linear.app"
+
 [mcp.source.credential]
 header = "Authorization"
 scheme = "Bearer"
@@ -3588,6 +3607,73 @@ fields = [
   "updatedAt",
   "gitBranchName",
 ]
+
+# CLOSING THE RAW READ PATH, as the gate `connector-not-granted` structurally
+# cannot be (CLOUD-1264). That row asserts what this repository's own committed
+# `.claude/settings.json` grants, and its module says in as many words that
+# REGISTRATION happens in the launcher, outside every gate here. So a session
+# whose harness registers the connector anyway keeps the raw tool on the model's
+# surface, and the reduction beside it decides nothing — the two routes return
+# the same payload and the cheaper-looking one wins every time.
+#
+# IT WON. Measured on the grooming session that dispatched this work: raw
+# `get_issue` 12.2 MB over 755 calls and raw `save_issue` 7.1 MB over 517 —
+# **85% of all tool output**, up from the 73% CLOUD-1260 was filed on, and 4 MB
+# of it AFTER the reduction landed. "The agent should call `batten` instead" is
+# a convention, which non-negotiable rule 2 calls feedforward only.
+#
+# THE PRECONDITION, AND IT IS WHY THIS ROW DID NOT LAND WITH CLOUD-1260. Every
+# board write in this repository owes a recent `issue-read` receipt, and until
+# this PR the verb minted none — so this deny would have refused the only route
+# that mints one and bricked `an-update-owes-a-recent-read`,
+# `a-todo-promotion-owes-a-ready-verdict` and `claim`'s `refined-this-session`
+# in the same move. Measured here before the fix: the raw tool minted the
+# receipt, the verb did not, and `claim check` refused `no-read-receipt` over a
+# row it had just read. The dispatch boundary mints now, which is what makes
+# refusing the raw route safe rather than merely desirable.
+#
+# FIRST-READ IS NOT EXEMPT, and the exemption is the one a reader reaches for.
+# `mcp call` stores the response WHOLE, and every gate that needs a body reads
+# the store by key — `ready lint --issue`, `claim check --issue`, the board
+# rows. So the model never needs the raw payload for a first read either; what
+# it needs is a dozen declared fields, which is what the `[[mcp.result]]`
+# projection above hands back. Measured 2026-09-02 through the verb: 20,580
+# bytes stored, 609 emitted.
+#
+# `tool` MATCHES THE SUFFIX, so every registration episode is covered —
+# `mcp__Linear__get_issue`, `mcp__<uuid>__get_issue` and
+# `mcp__claude_ai_Linear__get_issue` are one connector behind three prefixes the
+# host minted (CLOUD-178). `selects_tool` matches the whole name or the whole
+# final `__`-delimited segment, so `get_issue_status` is not reached.
+#
+# `list_issues` IS DELIBERATELY NOT HERE. It is already projected on every
+# measured call, and a `shape` row cannot express "without `fields`" — a row
+# that refused it outright would deny the search `filing-needs-a-search`
+# requires, which is how a guard gets switched off within a day (CLOUD-199).
+#
+# NOR IS `save_issue`, and that absence is recorded rather than pending. The
+# write reduction CLOUD-1122 landed is unreachable from a remote session today:
+# the wiring file declares 62 tools for this connector, 61 `always_allow` and
+# exactly one `always_ask` — `save_issue` — so the harness's approval layer
+# refuses a call the verb dispatches as a plain MCP client with no UI to satisfy
+# it. Denying the raw write while the reduced write cannot complete would leave
+# no route at all. Recorded on CLOUD-1122 and CLOUD-1261; the deny lands when a
+# write succeeds through the verb.
+[[rule]]
+id = "no-raw-issue-read"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+tool = "get_issue"
+reason = """
+Read the row through the reduction: `batten mcp call Linear get_issue \
+'{"id":"<KEY>"}'`, adding `"includeRelations":true` only where you need \
+relations. It stores the response whole — so `ready lint --issue`, `claim \
+check --issue` and the board gates keep reading the entire body from the \
+capture store by key — and hands back the declared projection instead of the \
+payload. Measured 2026-09-02: 20,580 bytes stored, 609 emitted. The raw tool \
+was 85% of one session's whole tool output, and a first read is not an \
+exception: the store is what a gate reads, and it is filled either way."""
 
 [budget.instructions]
 files = ["AGENTS.md"]

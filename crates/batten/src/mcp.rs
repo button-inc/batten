@@ -164,6 +164,25 @@ pub struct Source {
     /// spelling. An empty string is the document itself.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub node: String,
+    /// Server names this source resolves by ENDPOINT rather than by map key.
+    ///
+    /// Keyed by the name a caller types, valued by a substring the entry's
+    /// endpoint must carry.
+    ///
+    /// **A launcher that mints its server key per registration episode leaves
+    /// that key unwritable in advance** (CLOUD-1264). CLOUD-178 measured one
+    /// connector exposed as three different tool prefixes across episodes;
+    /// [`crate::rules::selects_tool_name`] absorbs that for a RULE, by matching a
+    /// `__`-delimited segment. Dispatch has no such analogue — the key IS the
+    /// name — so a row naming one episode's key resolves nothing in the next, and
+    /// a remedy citing it is a command that cannot run. Measured 2026-09-02: the
+    /// same connector was keyed `Linear` in one container and by a UUID in
+    /// another, at the same address.
+    ///
+    /// The ADDRESS is what does not move, which is why the selector is over the
+    /// endpoint and not over anything else the entry carries.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub endpoint_contains: std::collections::BTreeMap<String, String>,
     /// The credential this source's servers authenticate with, if they need one.
     ///
     /// **Absent is the default and it is byte-identical to no credential at all**
@@ -545,6 +564,7 @@ pub fn validate(config: &McpConfig) -> Result<()> {
                 source.id
             )));
         }
+        validate_endpoint_selectors(source)?;
         validate_credential(source)?;
         seen.push(&source.id);
     }
@@ -791,6 +811,25 @@ pub enum Unresolved {
         /// a path and never a byte of the value.
         why: String,
     },
+    /// A source's `endpoint_contains` selector matched MORE THAN ONE entry.
+    ///
+    /// **A refusal rather than first-wins**, and it is a fifth answer for the
+    /// reason the four above are four: which server a call reaches would
+    /// otherwise depend on the order a launcher happened to write its map, which
+    /// is not a fact any configuration authored. Silently dispatching to one of
+    /// them is the "wrong answer wearing a right one's shape" this loop already
+    /// refuses for a file it cannot parse.
+    ///
+    /// Carries a COUNT and the two names a config author wrote — never the keys
+    /// that matched, which are this host's per-session state.
+    Ambiguous {
+        /// Which source row, by id.
+        source: String,
+        /// The name the caller asked for.
+        server: String,
+        /// How many entries answered to it.
+        matched: usize,
+    },
     /// A source's `path` expanded to something it may not read.
     ///
     /// Either the placeholder is malformed, or a variable's VALUE carried an
@@ -827,6 +866,15 @@ impl Unresolved {
                  same answer as a server nobody configured"
             ),
             Unresolved::CredentialUnusable { why, .. } => why.clone(),
+            Unresolved::Ambiguous {
+                source,
+                server,
+                matched,
+            } => format!(
+                "source {source}'s endpoint selector for {server} matched {matched} entries — \
+                 which one a call reaches would depend on the order the wiring file lists them. \
+                 Narrow the substring"
+            ),
             Unresolved::PathUnusable { source } => format!(
                 "source {source}'s `path` will not expand to a path beneath its base — a \
                  placeholder is malformed, or a variable's value carries an upward step"
@@ -844,6 +892,84 @@ const ENDPOINT_KEYS: &[&str] = &["url", "endpoint", "httpUrl"];
 
 /// The key a wiring entry carries its headers under.
 const HEADER_KEY: &str = "headers";
+
+/// One entry's address, in the first spelling [`ENDPOINT_KEYS`] recognises.
+///
+/// **Extracted so the selector and the dispatcher share ONE authority on which
+/// key is an endpoint** (CLOUD-1264). Two readings of that could disagree, and
+/// then a name would select an entry the dispatcher then declined to dial.
+fn endpoint_of(entry: &Node) -> Option<String> {
+    ENDPOINT_KEYS
+        .iter()
+        .find_map(|key| match entry.at(key) {
+            Look::Is(node) => node.scalar(),
+            Look::IsNot | Look::CouldNotLook => None,
+        })
+        .filter(|endpoint| !endpoint.is_empty())
+}
+
+/// What an `endpoint_contains` selector found in one server map.
+enum Matched<'a> {
+    /// Nothing answered — indistinguishable from an absent key, deliberately.
+    None,
+    /// Exactly one entry, which is the only case that may dispatch.
+    One(&'a Node),
+    /// Several, which is a refusal rather than a choice.
+    Many(usize),
+}
+
+/// Select the one entry whose endpoint carries `needle`.
+fn by_endpoint<'a>(map: &'a Node, needle: &str) -> Matched<'a> {
+    let Node::Map(entries) = map else {
+        return Matched::None;
+    };
+    let mut found: Option<&Node> = None;
+    let mut count = 0usize;
+    for entry in entries.values() {
+        if endpoint_of(entry).is_some_and(|endpoint| endpoint.contains(needle)) {
+            count += 1;
+            if found.is_none() {
+                found = Some(entry);
+            }
+        }
+    }
+    match (count, found) {
+        (0, _) | (_, None) => Matched::None,
+        (1, Some(entry)) => Matched::One(entry),
+        _ => Matched::Many(count),
+    }
+}
+
+/// Refuse an `endpoint_contains` map that cannot mean one thing.
+///
+/// Split out of [`validate`] rather than inlined: the two refusals below are one
+/// question about one key, and the enclosing loop already carries five others.
+fn validate_endpoint_selectors(source: &Source) -> Result<()> {
+    for (name, needle) in &source.endpoint_contains {
+        if name.trim().is_empty() {
+            return Err(UsageError::raise(format!(
+                "mcp: source {:?} declares an `endpoint_contains` entry with a blank name; it \
+                 is what a caller types, and an empty one names nothing while reading as \
+                 coverage",
+                source.id
+            )));
+        }
+        // AN EMPTY NEEDLE IS THE ONE THAT MUST BE REFUSED AT LOAD. `contains`
+        // is true of every string for an empty pattern, so the selector would
+        // match the entire server map and turn the row into first-wins over
+        // everything — the precise failure `Ambiguous` exists to prevent,
+        // tripped on every call rather than reported once here.
+        if needle.trim().is_empty() {
+            return Err(UsageError::raise(format!(
+                "mcp: source {:?} maps {name:?} to an empty endpoint substring; every address \
+                 contains it, so the name would select whichever server the wiring file \
+                 happens to list first",
+                source.id
+            )));
+        }
+    }
+    Ok(())
+}
 
 /// Resolve one server's wiring out of the declared sources.
 ///
@@ -918,17 +1044,33 @@ pub fn wiring(
         let Look::Is(map) = document.at(&source.node) else {
             continue;
         };
-        let Look::Is(entry) = map.at(server) else {
-            continue;
+        // THE EXACT KEY FIRST, AND UNCHANGED. Every table that resolves today
+        // resolves through this arm and reaches the same entry it always did; the
+        // selector below is consulted only where a key lookup found nothing, so
+        // adding a row cannot re-point an existing name.
+        let entry = match map.at(server) {
+            Look::Is(entry) => entry,
+            Look::IsNot | Look::CouldNotLook => match source.endpoint_contains.get(server) {
+                None => continue,
+                Some(needle) => match by_endpoint(map, needle) {
+                    // NOTHING ANSWERED IS A SKIP, NOT A REFUSAL, and it has to be:
+                    // the source list is the multi-harness precedence order, so
+                    // refusing here would make one host's absent wiring the reason
+                    // another host's row is never consulted. It ends at
+                    // `NotFound`, exactly as an exact-key miss does.
+                    Matched::None => continue,
+                    Matched::One(entry) => entry,
+                    Matched::Many(matched) => {
+                        return Err(Unresolved::Ambiguous {
+                            source: source.id.clone(),
+                            server: server.to_owned(),
+                            matched,
+                        });
+                    }
+                },
+            },
         };
-        let Some(endpoint) = ENDPOINT_KEYS
-            .iter()
-            .find_map(|key| match entry.at(key) {
-                Look::Is(node) => node.scalar(),
-                Look::IsNot | Look::CouldNotLook => None,
-            })
-            .filter(|endpoint| !endpoint.is_empty())
-        else {
+        let Some(endpoint) = endpoint_of(entry) else {
             continue;
         };
         return Ok(Wiring {
@@ -1366,6 +1508,7 @@ mod tests {
 
     fn source_with(credential: Option<Credential>) -> Source {
         Source {
+            endpoint_contains: std::collections::BTreeMap::new(),
             id: "s".to_owned(),
             root: None,
             base: None,
@@ -1802,6 +1945,7 @@ mod tests {
     fn a_root_that_is_not_a_name_and_a_path_that_escapes_are_both_refused_at_load() {
         let mut config = McpConfig::default();
         config.sources.push(Source {
+            endpoint_contains: std::collections::BTreeMap::new(),
             id: "s".to_owned(),
             root: Some("  ".to_owned()),
             base: None,
@@ -1859,6 +2003,7 @@ mod tests {
 
         let mut declared = McpConfig::default();
         declared.sources.push(Source {
+            endpoint_contains: std::collections::BTreeMap::new(),
             id: "nowhere".to_owned(),
             root: Some("BATTEN_MCP_ROOT_THAT_IS_NOT_SET".to_owned()),
             base: None,

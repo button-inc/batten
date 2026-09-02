@@ -8669,7 +8669,7 @@ fn recover_spilled(result: &serde_json::Value) -> Option<serde_json::Value> {
 /// Write every receipt these rows mint from one already-unframed result.
 ///
 /// **ONE minting authority, reached from two boundaries** (CLOUD-1264). The
-/// PostToolUse hook and `batten mcp call` both file a tool result, and before
+/// `PostToolUse` hook and `batten mcp call` both file a tool result, and before
 /// this only the first minted — so closing the raw read path would have bricked
 /// every gate that reads an `issue-read` receipt. A second copy of this loop
 /// would be a second authority, free to disagree with the first about

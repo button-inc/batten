@@ -2871,6 +2871,14 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
         rule: "no-scheduled-trigger",
         site: CensusSite::Checkout,
     },
+    // CLOUD-1264. The raw tracker read, under the readable server spelling — the
+    // UUID and bare-name spellings, and every negative control, are
+    // `raw_tracker_read.rs`'s.
+    ShapeCase {
+        call: CensusCall::Verb("mcp__Linear__get_issue"),
+        rule: "no-raw-issue-read",
+        site: CensusSite::Checkout,
+    },
     // CLOUD-312 row 6. Four named artifacts against a ceiling of three, over the
     // tracked set the `Manifest` fixture supplies.
     ShapeCase {

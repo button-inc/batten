@@ -3513,6 +3513,13 @@
             }
           ]
         },
+        "endpoint_contains": {
+          "description": "Server names this source resolves by ENDPOINT rather than by map key.\n\nKeyed by the name a caller types, valued by a substring the entry's\nendpoint must carry.\n\n**A launcher that mints its server key per registration episode leaves\nthat key unwritable in advance** (CLOUD-1264). CLOUD-178 measured one\nconnector exposed as three different tool prefixes across episodes;\n[`crate::rules::selects_tool_name`] absorbs that for a RULE, by matching a\n`__`-delimited segment. Dispatch has no such analogue — the key IS the\nname — so a row naming one episode's key resolves nothing in the next, and\na remedy citing it is a command that cannot run. Measured 2026-09-02: the\nsame connector was keyed `Linear` in one container and by a UUID in\nanother, at the same address.\n\nThe ADDRESS is what does not move, which is why the selector is over the\nendpoint and not over anything else the entry carries.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "id": {
           "description": "The key this source is named by in a report.\n\nThe id and never the resolved path: a resolved path is a machine's home\ndirectory, and non-negotiable rule 4 keeps one out of every finding.",
           "type": "string"

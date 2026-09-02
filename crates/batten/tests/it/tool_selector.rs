@@ -152,6 +152,29 @@ fn a_bare_suffix_does_not_select_a_tool_nobody_named() {
     assert_allowed(&repo, "NotebookEdit");
 }
 
+/// THE BARE NAME, which is what carries the mint on the dispatch boundary
+/// (CLOUD-1264).
+///
+/// `batten mcp call` hands `mint_receipts` the bare METHOD (`get_issue`) where
+/// `batten hook` hands it the host's `raw_tool` (`mcp__Linear__get_issue`). Both
+/// have to select a row spelling the segment, or a receipt exists on one path
+/// and not the other from the same rows — which is the state that made closing
+/// the raw read path unsafe.
+///
+/// The pair is the point. Nothing else in this suite pins the `raw_tool ==
+/// selector` arm for a name with no `__` in it, and the second assertion pins
+/// the documented consequence: a row spelling the FULL name reaches the hook
+/// path only, so a later widening of the suffix arm cannot land silently.
+#[test]
+fn a_bare_name_selects_a_row_spelling_the_segment() {
+    let repo = repo_denying("tool-selector-bare-name", "get_issue");
+    assert_denied(&repo, "get_issue");
+    assert_denied(&repo, "mcp__Linear__get_issue");
+
+    let full = repo_denying("tool-selector-full-name", "mcp__Linear__get_issue");
+    assert_allowed(&full, "get_issue");
+}
+
 /// A repository declaring no tool-keyed row allows every structured call.
 ///
 /// The cheap-when-irrelevant arm (§4). Without it every assertion above could

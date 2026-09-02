@@ -220,6 +220,46 @@ The tracker's GitHub integration performs the state transitions from the issue
 identifier appearing in a branch name, PR title, or commit message — with no
 write call from the session.
 
+**READS GO THROUGH THE VERB, AND THE RAW TOOL IS REFUSED (CLOUD-1264).**
+`batten mcp call Linear get_issue '{"id":"<KEY>"}'` — add `"includeRelations":
+true` only where you need relations. `no-raw-issue-read` denies
+`mcp__*__get_issue` under every registration episode, so this is not a
+preference. The reason it is safe to refuse a first read: the verb stores the
+response WHOLE, and every gate that needs a body reads the capture store by key
+(`ready lint --issue`, `claim check --issue`, the board rows), so the model never
+needs the payload it used to pay for. Measured 2026-09-02 through the verb:
+20,580 bytes stored, 609 emitted; the raw tool was 85% of one grooming session's
+entire tool output.
+
+**The receipt mints on that path now, and did not before.** Until CLOUD-1264 the
+verb stored a response and minted nothing, so a read through it left
+`an-update-owes-a-recent-read` and `refined-this-session` refusing a row that had
+just been read — measured here, `claim check` answering `no-read-receipt`
+seconds after a successful dispatch. `mint_receipts` is the one authority both
+boundaries reach, so the `issue-read` receipt is now byte-identical in shape
+whichever route filed it. If you ever see `no-read-receipt` after a `mcp call`
+that exited 0, that is a regression in the shared minting path, not a reason to
+re-read raw.
+
+**`Linear` is a declared name, not the wiring file's key.** The launcher keys its
+server map per registration episode — measured the same connector as `Linear` in
+one container and `4db58e41-…` in another — so `[mcp.source.endpoint_contains]`
+resolves the name by address instead. An exact key still wins; the selector is
+consulted only on a miss, and two entries answering to one name is a refusal
+(exit 3), never a silent first-wins.
+
+**WRITES ARE NOT CLOSED, and that is recorded rather than pending.** The write
+reduction CLOUD-1122 landed is unreachable from a remote session: the wiring file
+declares 62 tools for this connector, 61 `always_allow` and exactly one
+`always_ask` — `save_issue` — and `batten mcp call` dispatches as a plain MCP
+client with no approval UI to satisfy. Measured 2026-09-02, a same-value no-op
+write: JSON-RPC `-32003`, exit 3, twice. `api.anthropic.com` sits in the agent
+proxy's `noProxy`, so that refusal is the harness's approval layer server-side
+and not the proxy. So raw `save_issue` stays open deliberately — denying it while
+the reduced write cannot complete would leave no route at all. The deny lands
+when a write succeeds through the verb; until then a board write is still a raw
+`save_issue`, and it still echoes the whole body back.
+
 **But it is publish-side only, and an earlier version of this entry got that
 wrong.** It claimed a commit carrying `Refs: CLOUD-178` moved that issue Todo ->
 In Progress. Re-measured 2026-08-08 (CLOUD-230): a commit carrying `Refs:
