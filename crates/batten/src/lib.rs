@@ -1321,6 +1321,8 @@ fn run_mcp(
             method,
             source: &wiring.source,
             result: &result,
+            mints: &resolved.mints,
+            patterns: &resolved.patterns,
         },
         out,
         err,
@@ -1343,6 +1345,13 @@ struct McpAnswer<'a> {
     source: &'a str,
     /// The JSON-RPC result, still framed.
     result: &'a serde_json::Value,
+    /// The receipts this repository mints from a tool result.
+    ///
+    /// Borrowed rather than resolved here: this boundary already loaded the
+    /// config, and a second load would be a second answer to what the rows are.
+    mints: &'a [crate::mint::Declared],
+    /// The named-regex table, for a body's `{authority:…}` piece.
+    patterns: &'a [crate::pattern::NamedPattern],
 }
 
 /// Store the response, record the call, and print a pointer plus the reduction.
@@ -1363,6 +1372,8 @@ fn file_and_report(
         method,
         source,
         result,
+        mints,
+        patterns,
     } = *answer;
     // THE UNFRAMED PAYLOAD IS WHAT THE STORE HOLDS, and that is a fidelity
     // requirement rather than a preference. `capture::find` resolves a stored
@@ -1416,6 +1427,36 @@ fn file_and_report(
             "batten: mcp call: the call log was not written: {failure}"
         );
     });
+
+    // THE RECEIPT, FROM THE SAME ROWS THE HOOK PATH READS (CLOUD-1264). Closing
+    // the raw read path is only safe if the reduced one mints what the raw one
+    // minted: `an-update-owes-a-recent-read` and `claim`'s `refined-this-session`
+    // both read an `issue-read` receipt, so a deny over the raw tool with nothing
+    // minting here would refuse every board write in the repository.
+    //
+    // BEFORE THE REDUCTION, and that is the ordering decision. `mcp::reduce`
+    // narrows the answer to a row's declared `fields`, so a receipt minted from
+    // the reduction would resolve its `key_from` and `requires` through a
+    // projection nobody declared for it — one `[[mcp.result]]` row would silently
+    // decide whether an unrelated `[[mint]]` row fires. `payload.value` is the
+    // unframed whole, which is exactly what the hook path passes.
+    //
+    // BEFORE THE EMITS, which use `?`. Minting after them would let a closed
+    // stdout turn a completed dispatch into a run that wrote no receipt, and the
+    // gate would then deny over a call that succeeded.
+    //
+    // AFTER THE CAPTURE AND THE CALL LOG, mirroring `record_post_tool`: the
+    // record of the exchange is written first and the derived receipt second, so
+    // a mint can never be the reason a capture is missing.
+    mint_receipts(
+        mints,
+        method,
+        &payload.value,
+        repo,
+        ready::Grammar::from_compiled(&crate::pattern::compiled(patterns))
+            .ok()
+            .as_ref(),
+    );
 
     // THE TRANSPARENCY DEFAULT (CLOUD-418's mirror). A method no row declares is
     // returned WHOLE, and so is one whose row could not reach its payload: a
@@ -8625,6 +8666,97 @@ fn recover_spilled(result: &serde_json::Value) -> Option<serde_json::Value> {
     facts::payload_in(&serde_json::from_str(&bytes).ok()?)
 }
 
+/// Write every receipt these rows mint from one already-unframed result.
+///
+/// **ONE minting authority, reached from two boundaries** (CLOUD-1264). The
+/// PostToolUse hook and `batten mcp call` both file a tool result, and before
+/// this only the first minted — so closing the raw read path would have bricked
+/// every gate that reads an `issue-read` receipt. A second copy of this loop
+/// would be a second authority, free to disagree with the first about
+/// `requires`, keying or mode.
+///
+/// **The clock is read HERE rather than by either caller.** `{now}` is the
+/// boundary's own instant, and a parameter would let two callers stamp a
+/// receipt differently from the same rows.
+///
+/// **`tool` is the name the BOUNDARY saw**, and the two boundaries spell it
+/// differently: the hook passes the host's `raw_tool` (`mcp__Linear__get_issue`)
+/// and dispatch passes the bare method (`get_issue`).
+/// [`rules::selects_tool_name`] matches a whole name or a whole final
+/// `__`-delimited segment, so a row spelling the segment — the spelling
+/// CLOUD-178 already prescribes, because a connector's prefix rotates between
+/// registration episodes — mints on both. The consequence stated rather than
+/// papered over: a row spelling the FULL name matches the hook path only.
+/// Dispatch must not synthesise one, because the server it would name is a
+/// config key no host ever emitted.
+///
+/// `result` is already unframed, and each boundary unwraps with its own
+/// authority — [`mcp::payload`] for JSON-RPC content blocks, [`facts::payload_in`]
+/// for the harness envelope. Every failure is silent, as the mint boundary has
+/// always been: the gate that reads the receipt simply denies again.
+fn mint_receipts(
+    declared: &[crate::mint::Declared],
+    tool: &str,
+    result: &serde_json::Value,
+    root: &Path,
+    grammar: Option<&ready::Grammar>,
+) {
+    let Ok(git_dir) = git::git_dir(root) else {
+        return;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since_epoch| since_epoch.as_secs());
+    let resolve = |reference: &str| git::resolve_ref(root, reference).ok().flatten();
+    for mint in declared {
+        if !rules::selects_tool_name(&mint.tool, tool) {
+            continue;
+        }
+        // The branch is resolved only for a row that asked, which is the same
+        // economy `receipt::verdicts` states one channel over: a caller must not
+        // pay a git invocation for a question it never asks.
+        let filename = match mint.key {
+            crate::mint::MintKey::Named => {
+                let Some(subject) = crate::mint::subject(mint, result) else {
+                    continue;
+                };
+                format!("{}.{subject}", mint.name)
+            }
+            crate::mint::MintKey::Branch => {
+                let Ok(Some(branch)) = git::current_branch(root) else {
+                    continue;
+                };
+                format!("{}.{}", mint.name, branch.replace('/', "-"))
+            }
+        };
+        // `root` is the ANCHOR the block above resolved, never the cwd — a
+        // `{authority:…}` piece reads the workspace version from it, and reading
+        // that from wherever the agent happens to be standing is the same defect
+        // this function's own header records for every other git question here.
+        let Some(record) = crate::mint::render(mint, result, now, &resolve, grammar, root) else {
+            continue;
+        };
+        let path = git_dir.join("batten-receipts").join(filename);
+        if let Some(parent) = path.parent()
+            && std::fs::create_dir_all(parent).is_err()
+        {
+            continue;
+        }
+        let written = match mint.mode {
+            crate::mint::MintMode::Replace => std::fs::write(&path, &record),
+            crate::mint::MintMode::Append => {
+                use std::io::Write as _;
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .and_then(|mut file| file.write_all(record.as_bytes()))
+            }
+        };
+        let _ = written;
+    }
+}
+
 fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     // Before the config load, the cheap question first: a post-tool event for a
     // tool no row names — which is nearly all of them, now that batten is
@@ -8657,66 +8789,17 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     // be standing. `capture_response` states the same rule one function over and
     // is why the capture store kept working while this wrote nothing.
     let root = hook_authority_root();
-    let Ok(git_dir) = git::git_dir(root) else {
-        return;
-    };
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since_epoch| since_epoch.as_secs());
-    let resolve = |reference: &str| git::resolve_ref(root, reference).ok().flatten();
     // `write_records`' economy and its three-valued read: a consumer whose
     // `[[pattern]]` table cannot build a grammar has no verdict, so an
     // `{authority:…}` piece records `-` rather than a template failing whole.
     let grammar = ready::Grammar::from_compiled(&policy.compiled_patterns()).ok();
-    for mint in declared {
-        if !rules::selects_tool_name(&mint.tool, &envelope.raw_tool) {
-            continue;
-        }
-        // The branch is resolved only for a row that asked, which is the same
-        // economy `receipt::verdicts` states one channel over: a caller must not
-        // pay a git invocation for a question it never asks.
-        let filename = match mint.key {
-            crate::mint::MintKey::Named => {
-                let Some(subject) = crate::mint::subject(mint, &result) else {
-                    continue;
-                };
-                format!("{}.{subject}", mint.name)
-            }
-            crate::mint::MintKey::Branch => {
-                let Ok(Some(branch)) = git::current_branch(root) else {
-                    continue;
-                };
-                format!("{}.{}", mint.name, branch.replace('/', "-"))
-            }
-        };
-        // `root` is the ANCHOR the block above resolved, never the cwd — a
-        // `{authority:…}` piece reads the workspace version from it, and reading
-        // that from wherever the agent happens to be standing is the same defect
-        // this function's own header records for every other git question here.
-        let Some(record) =
-            crate::mint::render(mint, &result, now, &resolve, grammar.as_ref(), root)
-        else {
-            continue;
-        };
-        let path = git_dir.join("batten-receipts").join(filename);
-        if let Some(parent) = path.parent()
-            && std::fs::create_dir_all(parent).is_err()
-        {
-            continue;
-        }
-        let written = match mint.mode {
-            crate::mint::MintMode::Replace => std::fs::write(&path, &record),
-            crate::mint::MintMode::Append => {
-                use std::io::Write as _;
-                std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path)
-                    .and_then(|mut file| file.write_all(record.as_bytes()))
-            }
-        };
-        let _ = written;
-    }
+    mint_receipts(
+        declared,
+        &envelope.raw_tool,
+        &result,
+        root,
+        grammar.as_ref(),
+    );
 }
 
 /// Persist this post-tool response as a local capture (CLOUD-919).

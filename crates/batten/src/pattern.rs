@@ -52,7 +52,7 @@
 //! `input`: `input` is the subject under adjudication and changes per call,
 //! while this is configuration, fixed for the life of the load.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -81,6 +81,31 @@ pub struct NamedPattern {
     /// already takes. Parsed rather than COMPILED, for the measured reason
     /// [`validate`] states.
     pub regex: String,
+}
+
+/// The declared table as compiled matchers, keyed by id.
+///
+/// **The one compiler**, and it is `pub(crate)` so that a boundary holding
+/// resolved rows rather than a [`crate::hook::Policy`] can reach it
+/// (CLOUD-1264). `Policy::compiled_patterns` delegates here. A second site
+/// compiling this table would be free to drop a different pattern, and an
+/// `{authority:…}` piece would then render a verdict on one path and `-` on the
+/// other from the same rows.
+///
+/// A pattern that will not compile is DROPPED rather than raised, which is
+/// [`validate`]'s corollary: it has already refused a malformed expression at
+/// load, so reaching this with one is impossible for a config that loaded, and
+/// a panic here would make a boundary the reason work stops.
+#[must_use]
+pub(crate) fn compiled(patterns: &[NamedPattern]) -> BTreeMap<String, regex::Regex> {
+    patterns
+        .iter()
+        .filter_map(|pattern| {
+            regex::Regex::new(&pattern.regex)
+                .ok()
+                .map(|compiled| (pattern.id.clone(), compiled))
+        })
+        .collect()
 }
 
 /// Refuse a malformed pattern table, at load.

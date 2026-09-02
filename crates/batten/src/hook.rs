@@ -3189,14 +3189,7 @@ impl Policy {
     /// becoming the reason work stops.
     #[must_use]
     pub fn compiled_patterns(&self) -> std::collections::BTreeMap<String, regex::Regex> {
-        self.patterns
-            .iter()
-            .filter_map(|pattern| {
-                regex::Regex::new(&pattern.regex)
-                    .ok()
-                    .map(|compiled| (pattern.id.clone(), compiled))
-            })
-            .collect()
+        crate::pattern::compiled(&self.patterns)
     }
 
     /// The programs a `[[recorder]]` may run, by id.
