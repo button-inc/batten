@@ -449,6 +449,16 @@ scope = "mediated_call"
 module = "policy/leased-push.rego"
 severity = "deny"
 
+# CLOUD-1340. The mediated half of a variable whose declared half `ci-suite-lane`
+# already gates over the workflow files; the two read different surfaces and do
+# not overlap.
+[[rule]]
+id = "hook-skip-local"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/hook-skip-local.rego"
+severity = "deny"
+
 [[rule]]
 id = "gh-run-watch"
 kind = "shape"
@@ -1889,6 +1899,23 @@ regex = '^(mise run )?$'
 [[pattern]]
 id = "shell-script-directory-marker"
 regex = '\$\{?BASH_SOURCE|\$0'
+
+# An environment assignment switching `hk` steps off, as one token (CLOUD-1340).
+#
+# ANCHORED AT THE LEFT EDGE, which is what makes it a name rather than a
+# substring: `regex.match` is a SEARCH, so an unanchored row would match any
+# token merely CONTAINING the variable — a quoted sentence in an `echo`, or
+# another variable ending in the same letters. The right edge is deliberately
+# open, because the VALUE is the author's and this row decides only that an
+# assignment was written; which values are exempt is the module's clause, where a
+# reader can see the reasoning beside the exemption.
+#
+# ONE CONCEPT, ONE SPELLING: `ci-suite-lane` reads the same variable out of a
+# workflow document by key rather than by text, so it needs no pattern and there
+# is no second regex for this name anywhere.
+[[pattern]]
+id = "hook-step-skip-assignment"
+regex = '^HK_SKIP_STEPS='
 
 # The name of a shell variable, for reading the left-hand side of an assignment
 # without a submatch. A capture would need a format string, and a format string
@@ -8758,6 +8785,44 @@ target = "git push --force-with-lease=<ref>:<sha> — name the commit you expect
 id = "path admit first"
 kind = "override"
 precondition = "the history being replaced is this clone's own and no other clone has fetched it, so there is no expected value to name that a reader could check"
+
+# CLOUD-1340, and it is a class for `branch write unsafe`'s reason exactly: a
+# consumer `[[rule]]` row carries no token an admission could bind, so a `shape`
+# row would leave `bypass_env` as the only way through, which is the password
+# shape CLOUD-1051 retired.
+#
+# THE ROW IS FILED FROM THE SESSION THAT NEEDED IT. `hooks-wiring-check` refused,
+# the refusal was read as environmental and unfixable, `HK_SKIP_STEPS` went onto
+# three commits, and the false justification went into two commit messages. One
+# `batten wiring reclaim -y` cleared the condition. The variable is `hk`'s and
+# batten never saw it, so the gate that was switched off had no way to say so.
+[[verdict]]
+id = "hook skip unseen"
+gloss = "a gate is switched off for this call by an environment assignment nothing recorded"
+class = """
+`HK_SKIP_STEPS` names steps for `hk` to skip, and batten does not read it — so \
+until this class existed a switched-off gate and a satisfied one were \
+byte-identical from here. The asymmetry is what makes it a defect rather than a \
+missing feature: `ci-suite-lane` already governs the one declared use, over the \
+workflow files, so the deliberate carve was gated and the ad-hoc one was free. \
+NO OVERRIDE ROUTE, on `shell edit refused`'s precedent rather than by oversight. \
+The one case that cannot be satisfied at the commit — a step reading a generated \
+file a LATER commit in the same rebase sequence writes — is already served by \
+`--no-verify` plus the articulation block `commit check` requires, which is gated \
+and leaves a record a reviewer reads. Two mechanisms for one object is what this \
+declines: `--no-verify` is that route, and this class has none. Fix what the step \
+names instead.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "read the step's own refusal and fix what it names — `batten wiring reclaim -y` is the one for `hooks-wiring-check`"
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/hook-skip-local.rego"
 
 # CLOUD-1311. The punt sweep had a question and no exit code.
 #

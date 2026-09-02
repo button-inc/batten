@@ -119,6 +119,7 @@ mod history_facts;
 mod hk_fix_selection;
 mod hook_cost;
 mod hook_profile;
+mod hook_skip_local;
 mod hook_worktree_root;
 mod identity_churn;
 mod identity_precedence;

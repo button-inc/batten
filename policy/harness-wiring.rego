@@ -354,6 +354,35 @@ enforced(pattern) if {
 enforced(pattern) if {
 	not contains(pattern, "/")
 	merged_read > 0
+
+	# READ IS NOT THE SAME AS CARRIED, and `merged_read` alone cannot tell them
+	# apart (CLOUD-1340). It counts surfaces that RESOLVED; a host that writes a
+	# wiring file with no `hooks` key at all resolves one and carries nothing, so
+	# every merged row became enforced against a set with nothing in it to match
+	# and the whole table went stale at once.
+	#
+	# Measured 2026-09-02 in this container after a restart:
+	# `~/.claude/launcher-settings.json` present and hookless, the other three
+	# merged ids absent, `merged_read` = 1, `merged_commands` = {} -- and
+	# `harness-wiring` reported 2, one per row of `policy/harness-declared.json`,
+	# while `stop-hook-git-check.sh` (which those rows license) was demonstrably
+	# still running, from a surface outside the declared four.
+	#
+	# That is could-not-look rendered as a spent licence, which is the exact
+	# collapse the comment above this predicate says the `merged_read` guard exists
+	# to prevent -- so this carries that argument one step further rather than
+	# introducing a new one. A surface set carrying NO commands cannot distinguish
+	# "this row's subject was retired" from "nothing was looked at", and only the
+	# first is a finding. The remedy the bare refusal appears to name is worse than
+	# the defect: dropping the two rows turns a correct licence into a future
+	# `hook wire duplicate` the moment a host wires those scripts again.
+	#
+	# IT DOES NOT WEAKEN THE STALE DIRECTION, which is the test of the change. As
+	# soon as any merged surface carries a single command every merged row is
+	# enforced again, and a row matching nothing still fires --
+	# `test_a_merged_row_matching_nothing_is_stale` is unmoved. What stops firing is
+	# only the case where there was nothing to match against at all.
+	count(merged_commands) > 0
 }
 
 matches_something(pattern) if {
@@ -642,14 +671,43 @@ test_a_merged_row_is_unenforced_where_no_merged_surface_was_read if {
 	not "hook declare stale" in vs
 }
 
-# NO MERGED ROW IS DECLARED ANY MORE, so a read merged surface spends nothing and
-# the committed row is judged on its own surface. The `enforced` merged arm stays
-# in the module for the next merged row rather than being deleted with these two:
-# removing it would be coverage loss dressed as cleanup, and it is unreachable
-# rather than wrong.
+# A read merged surface spends nothing on its own: the fixture's table declares no
+# merged row, so the committed row is judged on its own surface and nothing else is.
+#
+# THIS COMMENT SAID "NO MERGED ROW IS DECLARED ANY MORE" AND THAT WAS FALSE
+# (CLOUD-1340). `policy/harness-declared.json` declares two, and both are
+# basenames, which is what makes them merged rows -- so the `enforced` merged arm
+# was described here as unreachable while being the arm every live row went
+# through. That is why the too-coarse `merged_read` guard sat unexamined: a reader
+# checking whether the arm mattered was told it did not.
 test_a_read_merged_surface_alone_spends_no_declaration if {
 	vs := verdicts with input as launcher({mediates})
 	not "hook declare stale" in vs
+}
+
+# THE GUARD CLOUD-1340 ADDED. A merged surface that RESOLVED but carries no
+# command at all is could-not-look, not a spent licence.
+#
+# Measured in this container: `~/.claude/launcher-settings.json` present and
+# hookless, the other three merged ids absent, so `merged_read` was 1 while
+# `merged_commands` was empty -- and both live rows fired at once, while the
+# `stop-hook-git-check.sh` they license was still running from a surface outside
+# the declared four.
+test_a_merged_surface_carrying_no_commands_spends_nothing if {
+	vs := verdicts with input as launcher_with({}, {"stop-hook-git-check.sh": "CLOUD-1"})
+	not "hook declare stale" in vs
+}
+
+# AND THE DIRECTION IT MUST NOT WEAKEN, which is the actual test of the change:
+# once any merged surface carries a command, every merged row is enforced again and
+# one matching nothing still fires. Without this case the guard above is satisfied
+# by a module that never reports a stale merged row at all.
+test_a_merged_row_matching_nothing_is_stale if {
+	some v in violation with input as launcher_with(
+		{mediates},
+		{"stop-hook-git-check.sh": "CLOUD-1"},
+	)
+	v.verdict == "hook declare stale"
 }
 
 # ANTI-VACUITY over BOTH classes at once, which the committed-only case cannot
