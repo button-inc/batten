@@ -424,25 +424,57 @@ abandon the other unread.",
         name: "pinned-toolchain",
         version: 1,
         scope: RuleScope::MediatedCall,
-        modules: &[(
-            "<preset:pinned-toolchain>/pinned-program-via-the-pin.rego",
-            include_str!("policy/presets/pinned-toolchain/pinned-program-via-the-pin.rego"),
-        )],
-        verdicts: &[VendoredVerdict {
-            id: "pin reach loose",
-            gloss: "a program the project's pin provides was reached around the pin",
-            class: "The pinned toolchain is what makes one machine's run mean anything about \
+        modules: &[
+            (
+                "<preset:pinned-toolchain>/pinned-program-via-the-pin.rego",
+                include_str!("policy/presets/pinned-toolchain/pinned-program-via-the-pin.rego"),
+            ),
+            (
+                "<preset:pinned-toolchain>/pinned-program-probed-bare.rego",
+                include_str!("policy/presets/pinned-toolchain/pinned-program-probed-bare.rego"),
+            ),
+        ],
+        verdicts: &[
+            VendoredVerdict {
+                id: "pin reach loose",
+                gloss: "a program the project's pin provides was reached around the pin",
+                class: "The pinned toolchain is what makes one machine's run mean anything about \
 another's, and it supplies an ENVIRONMENT as well as a binary. A program reached around \
 it runs a different version, or the same version without the variables the project sets \
 — and the failure that produces looks like the failure being investigated rather than \
 like a wrong invocation. Measured on one consumer: sixty runs of a test suite died on an \
 unset variable instead of on the assertion, and the report that followed was published \
 as three claims about the tree, all false.",
-            routes: &[run(
-                "task run first",
-                "run the declared task, or invoke the program through the pin",
-            )],
-        }],
+                routes: &[run(
+                    "task run first",
+                    "run the declared task, or invoke the program through the pin",
+                )],
+            },
+            // THE PROBE HALF, AND A SEPARATE CLASS ON PURPOSE (CLOUD-1256).
+            //
+            // Not `pin reach loose`: nothing was bypassed. A pin was rendered
+            // INVISIBLE — the probe ran, answered correctly about the bare PATH,
+            // and the caller read the empty answer as "this tool is not installed
+            // here". A class a reader looks up has to name what happened, and
+            // "reached around the pin" describes a different event.
+            VendoredVerdict {
+                id: "pin probe bare",
+                gloss: "a presence probe asked the bare PATH about a program the pin provides",
+                class: "A probe like `command -v` reports what the CURRENT PATH resolves, which is a \
+correct answer to a question the caller did not mean to ask. Nothing a pin provides is on the bare \
+PATH — nor should it be — so for a pinned tool the answer is empty, and empty does not read as \
+\"not on this PATH\", it reads as \"not installed here\". Measured on one consumer: a session probed \
+for a forge client, got nothing, and routed three operations onto the documented last-resort path, \
+where one of them failed outright on a credential that could not perform it. The pinned route then \
+succeeded first try. The probe is not wrong, it is under-scoped, which is why this is advice rather \
+than a refusal — a deny here would refuse a correct shell habit.",
+                routes: &[run(
+                    "probe run first",
+                    "ask the pin instead — its own `which` answers about the toolchain the project \
+declares, and a probe inside the pin's environment is already correct",
+                )],
+            },
+        ],
         patterns: &[],
     },
     Manifest {

@@ -306,3 +306,82 @@ fn a_checkout_with_no_record_reports_nothing() {
         "a project whose pin could not be read is not one to refuse: {said}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The probe half, end to end (CLOUD-1256).
+// ---------------------------------------------------------------------------
+
+/// A bare presence probe for a pinned program is reported, through the ENGINE.
+///
+/// The module's own suite pins the predicate against a fabricated document; this
+/// is the tier that proves the engine builds what the predicate reads — that
+/// `input.call.segments` carries the probe's words and `input.facts` carries the
+/// pin. Neither is visible to a `with input as` case, which fabricates the shape
+/// it wants.
+#[test]
+fn a_bare_probe_for_a_pinned_program_is_reported() {
+    let repo = repo("pinned-probe-bare");
+    provided(&repo, &["gh"]);
+    let said = advice(&repo, "which gh");
+    // THE CLASS, not merely the program name. Asserting `gh` alone would pass on
+    // any advice mentioning it — including the sibling rule's — so the positive
+    // case would stop discriminating the moment the two rules disagreed, which is
+    // exactly what the disjointness case below exists to police.
+    assert!(
+        said.contains("pin probe bare"),
+        "the probe class should be raised: {said}"
+    );
+    assert!(said.contains("gh"), "and the probed program named: {said}");
+}
+
+/// THE CASE WHOSE ABSENCE MADE THE FIRST DRAFT NET-NEGATIVE. Inside the pin's
+/// composed environment the probe is correct and idiomatic, and this repository
+/// has four live in-task sites that are every one of them right — so a rule
+/// firing here would score four false positives and zero true positives in its
+/// own consumer.
+#[test]
+fn a_probe_through_the_pin_is_not_reported() {
+    let repo = repo("pinned-probe-mediated");
+    provided(&repo, &["gh"]);
+    let said = advice(&repo, "mise exec -- bash -c 'which gh'");
+    assert!(
+        !said.contains("pin probe bare"),
+        "a probe inside the pin is the correct spelling: {said}"
+    );
+}
+
+/// THE ANTI-VACUITY MIRROR at the engine tier: probing a program the pin does not
+/// provide is ordinary, and a rule flagging every probe would be a ban on the
+/// shell.
+#[test]
+fn a_probe_for_an_unpinned_program_is_not_reported() {
+    let repo = repo("pinned-probe-unpinned");
+    provided(&repo, &["gh"]);
+    let said = advice(&repo, "which curl");
+    assert!(
+        !said.contains("pin probe bare"),
+        "an unpinned program is a genuine one-off: {said}"
+    );
+}
+
+/// The two rules stay DISJOINT, and `command` is the SIBLING's — measured, not
+/// assumed.
+///
+/// The boundary looks THROUGH `command`, so `command -v gh` resolves an effective
+/// program of `gh` and `pinned-program-via-the-pin` already speaks for it. Firing
+/// here too would put one call under two classes with two different remedies.
+///
+/// This case is why the rule covers `which`/`type` and not `command` at all:
+/// CLOUD-1256 proposed `command -v` as the motivating verb, and the engine had
+/// moved past that premise. Caught only because the positive case asserts the
+/// CLASS rather than merely that the program was named.
+#[test]
+fn command_is_left_to_the_sibling_rule() {
+    let repo = repo("pinned-probe-disjoint");
+    provided(&repo, &["gh"]);
+    let said = advice(&repo, "command -v gh");
+    assert!(
+        !said.contains("pin probe bare"),
+        "an invocation belongs to the sibling rule alone: {said}"
+    );
+}
