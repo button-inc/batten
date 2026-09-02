@@ -10521,7 +10521,34 @@ fn spawn_resolving_on<T>(
     // Could-not-look falls straight through to the ladder below. A pin that
     // cannot be read is not evidence the program is unpinned, and refusing on it
     // would make every spawn depend on a memoised file.
-    if matches!(pinned, crate::facts::Look::Is(programs) if programs.contains(program)) {
+    // AND IT FIRES ONLY WHERE `PATH` HAS NO ANSWER, which is the bound the first
+    // version lacked and which cost a whole landing lap to find.
+    //
+    // The motivating case is a program `PATH` cannot resolve at all: a tool the
+    // pin installs into a directory the ambient `PATH` never carries. Where
+    // `PATH` DOES resolve the name, that resolution is by construction not the
+    // pin's own — this fact is the DIFFERENCE between the composed and the
+    // ambient `PATH`, so the pin's directories are the ones `PATH` does not have
+    // — which makes a hit here a directory the caller deliberately put in front.
+    //
+    // MEASURED, and by the worst instrument available: `pr_watch`'s fixture
+    // stubs the forge's client at the head of `PATH` and hands the binary that
+    // `PATH`. The client is pinned, so an unbounded rung 0 reached past the stub
+    // to the real program, which then polled a network this container fences —
+    // four tests that never terminated, a `verify` that could not finish inside
+    // the window `main` stays still for, and two landing laps lost to what looked
+    // like contention. A gate cannot be stubbed if the boundary refuses to be
+    // told what to run.
+    //
+    // Nothing the rung was built for is given up. A pinned program `PATH` cannot
+    // see still reaches the mediator here; a pinned program `PATH` CAN see is
+    // found by the next rung, which is either the pin's own shim or the override
+    // the caller composed — and both are the answer that caller asked for.
+    if matches!(pinned, crate::facts::Look::Is(programs) if programs.contains(program))
+        && path
+            .and_then(|path| lookup_on(program, path, extensions))
+            .is_none()
+    {
         let (mediator, prefix) = crate::pinned::mediated(program);
         let prefix: Vec<&str> = prefix.iter().map(String::as_str).collect();
         if let Ok(ok) = spawn(mediator, &prefix) {
@@ -15765,6 +15792,67 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             Some(("hk".to_owned(), vec![])),
             "could-not-look falls through to the ladder rather than assuming the pin"
         );
+    }
+
+    /// A pinned program `PATH` CAN see is left to `PATH`, so the boundary can be
+    /// told what to run.
+    ///
+    /// **The bound rung 0 shipped without, and it cost a landing lap to find.**
+    /// The fact is the DIFFERENCE between the composed and the ambient `PATH`, so
+    /// the pin's own directories are the ones `PATH` does not carry — which makes
+    /// a hit here a directory somebody deliberately put in front. Reaching past it
+    /// is how a stubbed program becomes unstubabble: `pr_watch`'s fixture puts the
+    /// forge's client at the head of `PATH` and hands the binary that `PATH`, and
+    /// an unbounded rung 0 ran the real client against a fenced network instead —
+    /// four tests that never terminated and a `verify` that could not finish.
+    ///
+    /// The sibling above is the other half and they share a program name on
+    /// purpose: same fact, same pinned name, and only the `PATH` differs.
+    #[test]
+    fn a_pinned_program_that_path_resolves_is_left_to_path() {
+        let dir = std::env::temp_dir().join(format!("batten-rung0-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the stub directory is created");
+        let stub = dir.join("hk");
+        std::fs::write(&stub, "#!/bin/sh\nexit 0\n").expect("the stub is written");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+                .expect("the stub is executable");
+        }
+
+        let pinned = crate::facts::Look::Is(
+            ["hk".to_owned()]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+        );
+        let log = std::cell::RefCell::new(Vec::new());
+        let _out = spawn_resolving_on(
+            Some(dir.as_os_str()),
+            None,
+            "hk",
+            &[".EXE".to_owned()],
+            &pinned,
+            |program: &str, _extra: &[&str]| {
+                log.borrow_mut().push(program.to_owned());
+                Err::<&'static str, _>(std::io::Error::from(std::io::ErrorKind::NotFound))
+            },
+        );
+        let attempts = log.into_inner();
+
+        assert_eq!(
+            attempts.first().map(String::as_str),
+            Some("hk"),
+            "a name PATH resolves is spawned as written, never rewritten to the mediator: {attempts:?}"
+        );
+        assert!(
+            !attempts
+                .iter()
+                .any(|program| program == crate::pinned::MEDIATOR),
+            "and the mediator is not reached at all on this path: {attempts:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// An unparseable `key_shape` is a LOAD error, never a per-call discard.
