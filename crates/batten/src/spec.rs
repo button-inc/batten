@@ -451,6 +451,15 @@ mod tests {
                 // spawn nothing: the sub-verb compares each harness's wiring
                 // against a derivation computed in-process.
                 "doctor hooks".to_owned(),
+                // WHICH engine the registrations reach, where the row above
+                // answers whether they reach one at all (CLOUD-1349). Read for a
+                // stricter reason than its sibling: it resolves a program name
+                // and then deliberately does NOT run it, comparing the file's
+                // bytes against the artifact this tree builds. Spawning what a
+                // wiring file names would put config-supplied code behind a row
+                // on this very allowlist, which is CLOUD-170's invariant and the
+                // reason `on_path` stats rather than executes.
+                "doctor mediator".to_owned(),
                 // `read`, and structurally, for the sub-verb above's reason: it
                 // opens the session's own task store through a link the engine
                 // parked and counts what is not `completed`. It spawns nothing,
@@ -685,6 +694,7 @@ mod tests {
             "design audit".to_owned(),
             "doctor".to_owned(),
             "doctor hooks".to_owned(),
+            "doctor mediator".to_owned(),
             "doctor session".to_owned(),
             "enforce".to_owned(),
             "exec".to_owned(),
