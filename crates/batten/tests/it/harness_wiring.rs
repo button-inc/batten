@@ -417,6 +417,31 @@ fn a_correctly_wired_tree_is_clean() {
 }
 
 #[test]
+fn a_mediator_only_tree_with_an_empty_table_is_clean() {
+    // THIS REPOSITORY'S OWN STATE after CLOUD-1163's unit 9, and the case the
+    // whole campaign is pointed at: nothing registered but the mediator, and an
+    // exemption table with nothing in it.
+    //
+    // Asserted rather than assumed, because "no findings" over an empty table is
+    // also what a module that decides nothing produces — the dead-gate reading
+    // that `.claude/rules/policy-modules.md` opens with. Every other case here
+    // supplies a row, so without this one the empty table is never exercised at
+    // all, and `DECLARED_NONE` would be a constant naming a state nothing reaches.
+    let (repo, outside) = fixture_with(
+        "mediator-only",
+        &wiring(&[MEDIATOR], &[MEDIATOR]),
+        Some(&clean_merged()),
+        DECLARED_NONE,
+    );
+    let output = check(&repo, Some(&outside));
+    assert!(
+        output.status.success(),
+        "a mediator-only tree with no declaration reported: {}",
+        findings(&output)
+    );
+}
+
+#[test]
 fn a_committed_sibling_the_table_does_not_declare_is_refused() {
     // THE POSITIVE the whole consumer half exists for: the engine counts this
     // command and structurally will not name it, so nothing but a consumer's own
