@@ -2347,6 +2347,30 @@ pub const SURFACE: &[CommandDecl] = &[
     // `read`, and structurally: it reads committed wiring files and compares them
     // against a derivation computed in-process. Nothing is spawned, and §2's own
     // row already classifies the verb this way.
+    // WHICH engine the registrations reach, where `doctor hooks` answers whether
+    // they reach one at all (CLOUD-1349). It reported `5 harness(es), 0 unwired`
+    // over a binary 16 versions behind the tree it was adjudicating.
+    //
+    // A SUB-VERB BECAUSE THE SUBJECT IS THE WORLD, NOT THE CHECKOUT. This landed
+    // once as a fourth check inside `diagnose()` and `verify` refused it: bare
+    // `doctor` is asserted green over this repository by a compiled-binary case,
+    // and an install that has not caught up with a rebuild made that case a
+    // function of install recency. `.claude/rules/toolchain.md` states the rule
+    // from `lock-check`'s post-mortem — a property of the commit belongs in the
+    // gate, a property of the world belongs to its own caller — and §2's
+    // `doctor <SUB>` is the shape that was already specified for it.
+    //
+    // `read`, and structurally: it reads two files and hashes them. Nothing is
+    // spawned, which is what keeps it off the wrong side of CLOUD-170 while
+    // sitting on the `filter(effect == read)` allowlist.
+    CommandDecl {
+        path: "doctor mediator",
+        id: "doctor.mediator",
+        about: "Diagnose whether the engine the registrations reach was built from this tree",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
     CommandDecl {
         path: "doctor hooks",
         id: "doctor.hooks",
