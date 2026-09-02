@@ -463,18 +463,19 @@ pub fn perf_dir(repo: &Path) -> PathBuf {
 /// build **unreusable by construction** rather than merely unreused: [`out_dir`]
 /// `remove_dir_all`s the whole `pair/` directory at the start of every run, so
 /// anything a CI cache had restored there was deleted microseconds before the
-/// base build ran. The bytes WERE in the cache — `Swatinem/rust-cache` carries
-/// the entire `target/` directory, `target/perf/**` included, and the post-job
-/// cleaner walked `target/perf/pair/base-tree/…` on both measured runs. So the
-/// key alone would not have been enough; moving out of the wipe is the other
-/// half.
+/// base build ran. The bytes WERE in the cache on both measured runs — the
+/// consumer's cargo cache carries the whole target directory, this module's
+/// subtree included, and its post-job cleaner walked the pair tree. So the key
+/// alone would not have been enough; moving out of the wipe is the other half.
 ///
 /// **The SHA is in the path, and that IS the refusal.** A directory built from
 /// another base does not answer to this name, so a stale arm cannot be measured
 /// as this one — the discriminator is structural rather than a check somebody has
-/// to remember to write. `.github/workflows/ci.yml`'s `perf` job keys its
-/// `actions/cache` entry on the same SHA plus the toolchain and lockfile hash, so
-/// the two authorities over "which base" are one string computed one way.
+/// to remember to write. A consumer's CI carries the directory between runs under
+/// a cache key naming the same SHA, so the two authorities over "which base" are
+/// one string computed one way — and the merge base it keys on is
+/// [`base_commit`]'s, never a forge's notion of a base branch tip, which is a
+/// different commit and would key a directory this function never writes.
 ///
 /// The separate target directory itself is unchanged and still carries the
 /// reason `measure` gives for it — sharing the main one would have the two builds
