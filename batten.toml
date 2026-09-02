@@ -4796,32 +4796,6 @@ key = "CLOUD-1188"
 node = "project"
 reduce = "present"
 
-# A third-party validator's verdict for a file it read (CLOUD-1171, the
-# adjudication half of `pkl-check`, `renovate-config-validator` and
-# `hook-profile-check`).
-#
-# THE RUN STAYS OUTSIDE and that is §9's prior-art disposition, not a workaround:
-# the validator is a command on PATH and stays one. `check` is `read` and
-# structurally cannot spawn, so what moves in here is the ADJUDICATION — which is
-# the half that had no successor, because a module asking what a validator found
-# read undefined and decided nothing.
-#
-# THE KEY IS A TRIPLE and each component refuses a different lie. The TOOL,
-# because one validator's record is not another's. Its PINNED VERSION, because an
-# answer at one version is not an answer at the next — CLOUD-646's shape, closed
-# by putting the pin in the KEY rather than in a field a module must remember to
-# compare. The INPUT DIGEST, so a verdict goes stale by construction the moment
-# the file changes: the key moves, and the old record is not found rather than
-# found and wrong.
-#
-# `hk.pkl` is this repository's own fact, which is why the row lives here and not
-# in `crates/batten` (non-negotiable rule 1). The engine composes a key and reads
-# a file; which file and which tool are the consumer's.
-#
-# SILENT UNTIL A PRODUCER WRITES. No record under this key means nothing has
-# validated these bytes at this version — absent from the map, not a verdict — so
-# this row is inert on a checkout nobody has recorded against, which is every
-# checkout today.
 # CLOUD-472's consumer, and the row that makes `Fact::Review` a gate rather than
 # a store.
 #
@@ -4878,6 +4852,41 @@ runner = "batten-review-runner"
 version = "0"
 subject = "tracker-body"
 
+# A third-party validator's verdict for a file it read (CLOUD-1171, the
+# adjudication half of `pkl-check`, `renovate-config-validator` and
+# `hook-profile-check`).
+#
+# THE RUN STAYS OUTSIDE and that is §9's prior-art disposition, not a workaround:
+# the validator is a command on PATH and stays one. `check` is `read` and
+# structurally cannot spawn, so what moves in here is the ADJUDICATION — which is
+# the half that had no successor, because a module asking what a validator found
+# read undefined and decided nothing.
+#
+# THE KEY IS A TRIPLE and each component refuses a different lie. The TOOL,
+# because one validator's record is not another's. Its PINNED VERSION, because an
+# answer at one version is not an answer at the next — CLOUD-646's shape, closed
+# by putting the pin in the KEY rather than in a field a module must remember to
+# compare. The INPUT DIGEST, so a verdict goes stale by construction the moment
+# the file changes: the key moves, and the old record is not found rather than
+# found and wrong.
+#
+# `hk.pkl` is this repository's own fact, which is why the row lives here and not
+# in `crates/batten` (non-negotiable rule 1). The engine composes a key and reads
+# a file; which file and which tool are the consumer's.
+#
+# THE PRODUCER IS `mise run record-verdicts` (CLOUD-1265), and naming it here is
+# the point rather than a courtesy: this block said the opposite — "SILENT UNTIL
+# A PRODUCER WRITES … inert on a checkout nobody has recorded against, which is
+# every checkout today" — for as long as the producer existed, and that sentence
+# read as a live gap and bought a duplicate writer for it (7aade8f8, reverted).
+# `[tasks.verify]` calls the task BEFORE the gates, so the record is present by
+# the time this row is adjudicated on any tree `verify` has touched.
+#
+# ABSENT IS STILL NOT A REFUSAL, and that is the module's decision rather than
+# this comment's. No record under this key means nothing has validated these
+# bytes at this version — absent from the map, not a verdict — which is what a
+# checkout gets if the producer was skipped or died. The row that wants a verdict
+# to be REQUIRED is `forge-verdict-required`'s shape and is not this one.
 [[rule]]
 id = "validator-verdict-clean"
 kind = "policy"
