@@ -127,10 +127,23 @@ rules contains "spawn-adapters"
 #              module's pure half and spawn nothing — the split `pr_watch` and
 #              `checks_green` make across two modules, made inside one here
 #              because the lane's facts and its matcher share a config table
+#   lease      the landing lease (CLOUD-1274, CLOUD-393). One spawn, `kill -TERM`
+#              against a wedged holder, and it is here for `symbols`' and
+#              `prune`' argument rather than `perf`'s: the pid comes off the lease
+#              record and whether that process is still there is a property of the
+#              MACHINE, which no walk of the tree answers. It is a spawn only
+#              because the workspace forbids `unsafe`, so `kill(2)` is unreachable
+#              and `signal-hook` is the receiving half with no sending half.
+#
+#              PLACED HERE RATHER THAN `lib`, which is where it was written and
+#              which this rule refused. Placing the CLI dispatch would admit every
+#              future spawn in the crate's largest file at once — the table would
+#              stop naming boundaries and start naming files
 adapters := {
 	"exec", "provision", "secrets", "symbols",
 	"judge", "handler", "action", "rules", "semver",
 	"pinned", "perf", "prune", "pr_watch", "mutate", "bot",
+	"lease",
 }
 
 module_of(path) := name if {

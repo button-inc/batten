@@ -4744,8 +4744,73 @@ fn run_lease(
     let root = Path::new(".");
     let terms = match lease_terms(root) {
         Ok(terms) => terms,
+        // A CLONE WITH NO REMOTE IS AN ANSWER FOR THE READ ARMS, and the type
+        // above says why. The five arms that reach `swap` still refuse below,
+        // because acquiring a lease that has nowhere to live is not something a
+        // missing remote makes safe — the split is by EFFECT, exactly as the
+        // read-only allowlist draws it.
+        //
+        // `status` reports it as its own state — never `unheld`, which would say
+        // the lease is free, and never `unknown`, which would say nobody could
+        // see — with nothing on stderr, because nothing failed.
+        //
+        // `authorises` answering `Run` here is the arm's whole contract rather
+        // than a convenience: it fails OPEN on everything it cannot read, and
+        // stopping the fleet because a clone has no remote is exactly the cost
+        // that arm exists never to pay. Reaching it required this branch, because
+        // the terms resolve BEFORE the arm does.
+        Err(TermsMissing::NoRemote) => match command {
+            cli::LeaseCommand::Status { json } => {
+                return lease_report(json, "unconfigured", &[], out);
+            }
+            cli::LeaseCommand::Authorises { .. } => {
+                writeln!(
+                    out,
+                    "lease: no remote is configured, so no lease governs this clone"
+                )?;
+                return Ok(ExitCode::Success);
+            }
+            cli::LeaseCommand::Check => {
+                writeln!(
+                    out,
+                    "lease: unconfigured - no remote, so there is no lease to judge"
+                )?;
+                return Ok(ExitCode::Success);
+            }
+            // `peek` is silent when no lease names a field, and a clone with no
+            // lease at all is the same reading.
+            cli::LeaseCommand::Peek { .. } => return Ok(ExitCode::Success),
+            // `held` asks whether THIS clone holds it. It does not.
+            cli::LeaseCommand::Held => return Ok(ExitCode::Violation),
+            cli::LeaseCommand::Acquire { .. }
+            | cli::LeaseCommand::Renew
+            | cli::LeaseCommand::Hold
+            | cli::LeaseCommand::Release
+            | cli::LeaseCommand::Reserve { .. } => {
+                let name =
+                    std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
+                writeln!(err, "::error:: lease: no remote named {name} is configured")?;
+                return Ok(ExitCode::Internal);
+            }
+        },
         Err(reason) => {
-            writeln!(err, "::error:: lease: {reason}")?;
+            let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
+            writeln!(err, "::error:: lease: {}", reason.say(&name))?;
+            // THE DATA CHANNEL STILL EMITS, and this is the arm where it is
+            // easiest to forget: the terms fail BEFORE any arm runs, so a
+            // reader that asked for JSON got a decode error rather than an
+            // answer. Nine arms have no channel and must not have a document
+            // invented for them, which is why this asks rather than emitting
+            // unconditionally.
+            //
+            // `surface.rs`'s `data_channel` is the authority on WHICH arms
+            // declare one, never this match — and
+            // `every_data_channel_verb_emits_one_pure_json_document` is the
+            // sensor that keeps the two together: a second arm gaining `-J`
+            // turns it red and points here.
+            if let cli::LeaseCommand::Status { json: true } = command {
+                lease_report(true, "unknown", &[], out)?;
+            }
             return Ok(ExitCode::Internal);
         }
     };
@@ -4785,15 +4850,45 @@ fn run_lease(
 /// smart-HTTP over the vendored client, which has no notion of a git remote alias,
 /// and a name reaching it would be an unresolvable host rather than a clear
 /// refusal here.
-fn lease_terms(root: &Path) -> std::result::Result<lease::Terms, String> {
+/// Why a clone has no lease terms, and the two are not the same answer.
+///
+/// **A clone with no remote is a FACT about the clone, not a failure to look.**
+/// The could-not-look guard exists so an unreadable lease is never reported as a
+/// free one; a repository with no remote has no lease ref to misread, so folding
+/// it into that guard made `lease status` an error in every clone that has not
+/// been pushed anywhere — including the census fixture, where every other
+/// data-channel verb answers cleanly.
+///
+/// The distinction is only ever RELAXED for the reporting arms. The write arms
+/// refuse either way, because acquiring a lease that has nowhere to live is not
+/// something a missing remote makes safe.
+enum TermsMissing {
+    /// No remote is configured, so this clone cannot participate in a lease.
+    NoRemote,
+    /// A remote exists and something about reading it failed. This is the
+    /// could-not-look the guard is for.
+    Unreadable(String),
+}
+
+impl TermsMissing {
+    /// The diagnostic, for the arms that report one.
+    fn say(&self, name: &str) -> String {
+        match self {
+            TermsMissing::NoRemote => format!("no remote named {name} is configured"),
+            TermsMissing::Unreadable(reason) => reason.clone(),
+        }
+    }
+}
+
+fn lease_terms(root: &Path) -> std::result::Result<lease::Terms, TermsMissing> {
     let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
-    let remotes =
-        git::remotes(root).map_err(|err| format!("cannot read this repository: {err}"))?;
+    let remotes = git::remotes(root)
+        .map_err(|err| TermsMissing::Unreadable(format!("cannot read this repository: {err}")))?;
     let url = remotes
         .iter()
         .find(|(configured, _)| *configured == name)
         .map(|(_, url)| url.clone())
-        .ok_or_else(|| format!("no remote named {name} is configured"))?;
+        .ok_or(TermsMissing::NoRemote)?;
     let mut terms = lease::Terms {
         remote: url,
         ..lease::Terms::default()
@@ -4895,6 +4990,15 @@ fn run_lease_status(
             // the misread that lets two sessions land at once, so this arm is an
             // error where `authorises` runs.
             writeln!(err, "::error:: lease: {reason}")?;
+            // AND THE DOCUMENT IS EMITTED ANYWAY, which is not a softening of the
+            // line above: `unknown` is a state a reader must be able to
+            // distinguish from `unheld`, and a data channel that goes SILENT on
+            // this path is unparseable rather than empty — the reader gets a
+            // decode error where it asked a question. The exit code carries the
+            // verdict; the document carries the answer. `reason` stays on stderr
+            // and out of the document, because it is a diagnostic string and the
+            // document's fields are tokens.
+            lease_report(json, "unknown", &[], out)?;
             return Ok(ExitCode::Internal);
         }
     };
@@ -5335,7 +5439,7 @@ fn run_lease_hold(
             if let Some(pid) = served
                 && lease::holder_alive(pid, &marker)
             {
-                lease_stop(pid);
+                lease::stop(pid);
             }
             return Ok(ExitCode::Violation);
         }
@@ -5429,22 +5533,6 @@ fn lease_bail_reason(git_dir: &Path, why: &str) {
             ),
         );
     }
-}
-
-/// Ask the stalled land to stop.
-///
-/// `SIGTERM`, so the land's own trap runs and its cleanup happens — a `SIGKILL`
-/// here would leave behind exactly the orphaned state the liveness probe above
-/// exists to clean up after.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays: there is no in-process way to signal another process, and the alternative — leaving a wedged land running — is the fleet-wide stall this whole path exists to end"
-)]
-fn lease_stop(pid: u32) {
-    let _ = std::process::Command::new("kill")
-        .arg("-TERM")
-        .arg(pid.to_string())
-        .status();
 }
 
 /// `lease release`: a tombstone, never a delete.

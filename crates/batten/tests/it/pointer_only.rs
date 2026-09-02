@@ -516,11 +516,103 @@ struct Verb {
 /// A NAME BELONGS HERE ONLY WHEN NO LIGHTER FIXTURE COULD PRODUCE A VERDICT,
 /// never to wave through a verb failing for a reason of its own. Widening it is
 /// the vacuous pass this file exists to refuse.
-const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &["mutate sweep"];
+/// THE FIVE LEASE WRITE ARMS JOIN IT, and the reason is the corpus rather than
+/// the verbs. Each reaches `lease::swap`, the compare-and-swap against a remote
+/// ref, and this corpus is a repository with no remote configured — so their
+/// honest answer here is could-not-look and no lighter fixture changes that
+/// without standing up a git server.
+///
+/// The five READ arms are deliberately NOT here: a clone with no remote is an
+/// answer for them, not a failure, so they exit `0` (or `2` for `held`, which
+/// asks whether this clone holds a lease and is being told that it does not).
+/// That asymmetry is the same effect split the read-only allowlist draws, and
+/// keeping it visible here is what stops the whole verb being waved through.
+const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
+    "mutate sweep",
+    "lease acquire",
+    "lease hold",
+    "lease release",
+    "lease renew",
+    "lease reserve",
+];
 
 /// One entry per leaf verb of [`SURFACE`], asserted total by
 /// [`every_leaf_verb_is_classified`] in both directions.
 const CENSUS: &[Verb] = &[
+    // THE LANDING LEASE, ten arms (CLOUD-1274, CLOUD-393). Every one is
+    // pointer-only by construction and the construction is the lease BODY: it is
+    // a fixed set of tokens — a holder id, an expiry, a branch, two shas, a
+    // progress counter and a nonce — with nowhere for prose to travel, and
+    // `lease_report` renders a state token plus named fields rather than a
+    // message. The one string that could carry anything is the transport's own
+    // failure, and that goes to stderr as a diagnostic.
+    //
+    // THE CREDENTIAL IS THE REASON THIS MATTERS MORE HERE THAN ELSEWHERE. These
+    // arms read `GH_TOKEN`/`GITHUB_TOKEN` to authenticate the push, and
+    // `lease::credential` deliberately returns it to nobody — it is not a field
+    // of `Terms` or of any other value, because a token in a struct is a token in
+    // that struct's `Debug`. This census is what keeps that true from the
+    // outside.
+    Verb {
+        path: "lease status",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "lease check",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "lease authorises",
+        args: &["--branch", "work"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "lease peek",
+        args: &["--field", "next"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "lease held",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "lease acquire",
+        args: &["--branch", "work"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "lease renew",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "lease hold",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "lease release",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "lease reserve",
+        args: &["--branch", "work"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "check",
         args: &[],

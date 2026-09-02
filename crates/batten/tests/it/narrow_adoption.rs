@@ -119,7 +119,25 @@ fn the_network_callers_are_the_declared_ones_and_nothing_else() {
     callers.sort();
     assert_eq!(
         callers,
-        vec!["mcp.rs".to_owned(), "provision.rs".to_owned()],
+        // `lease.rs` is the third and it is the one that had to be argued rather
+        // than noticed (CLOUD-1274). It speaks git's smart-HTTP protocol —
+        // `GET /info/refs`, `POST /git-receive-pack`, `POST /git-upload-pack` —
+        // over this adapter, because every OTHER way to reach a git remote from
+        // this crate is refused by a gate that cannot be edited: gix's own
+        // transports resolve `reqwest` plus two `FRAMEWORK_CRATES` names, and
+        // every `git2` configuration that can reach HTTPS resolves `openssl-sys`,
+        // which `macos-link-check` rule 2 refuses BY NAME. `Cargo.toml`'s
+        // `gix-packetline` block is the measurement behind that sentence.
+        //
+        // So the adapter stays the one door and the list stays closed. What
+        // keeps `lease.rs` off the gate paths is not this row but
+        // `policy/module-layering.rego`, where `hook -> lease` and
+        // `check -> lease` are forbidden over the resolved use graph.
+        vec![
+            "lease.rs".to_owned(),
+            "mcp.rs".to_owned(),
+            "provision.rs".to_owned(),
+        ],
         "exactly these modules may call the network adapter"
     );
 }

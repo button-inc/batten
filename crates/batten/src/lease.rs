@@ -1284,7 +1284,7 @@ pub fn observe(terms: &Terms) -> Result<Observed> {
 /// Compare-and-swap the lease to `body`, from whatever `observed` said.
 ///
 /// The expected value is what makes this safe to call from a heartbeat: a lease
-/// that changed hands underneath is rejected rather than clobbered. [`Absent`]
+/// that changed hands underneath is rejected rather than overwritten. [`Absent`]
 /// swaps from [`ZERO`], which is how the very first claim is made without a
 /// separate create path — so two sessions racing the same free state CAS from the
 /// same expected value and exactly one wins.
@@ -1990,6 +1990,37 @@ fn upload_pack_request(want: &str, haves: &[String]) -> Result<Vec<u8>> {
     }
     body.extend_from_slice(&pktline("done\n")?);
     Ok(body)
+}
+
+/// Ask a stalled holder to stop.
+///
+/// `SIGTERM`, so the holder's own trap runs and its cleanup happens — a `SIGKILL`
+/// here would leave behind exactly the orphaned state the liveness probe exists
+/// to clean up after.
+///
+/// # Why it lives here rather than in the dispatch module
+///
+/// It was written in `lib.rs`, and `spawn-adapters` refused it: a spawn belongs
+/// in a module the adapter table has PLACED, and the CLI dispatch is not one —
+/// placing it would admit every future spawn in the crate's largest file. So the
+/// call moved to the module that owns the fact, which is the same argument
+/// `symbols`, `pinned` and `prune` already carry on that table: the holder's pid
+/// comes off the lease record, and whether that process is still there is a
+/// property of the machine rather than of the tree.
+///
+/// **Spawning `kill(1)` rather than calling `kill(2)`**, because the workspace
+/// forbids `unsafe` outright and there is no safe in-process route to signal a
+/// process this one did not start. `signal-hook` is the receiving half and has no
+/// sending half to reach for.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: there is no in-process way to signal another process without `unsafe`, which the workspace forbids, and the alternative — leaving a wedged holder running — is the fleet-wide stall this path exists to end"
+)]
+pub fn stop(pid: u32) {
+    let _ = std::process::Command::new("kill")
+        .arg("-TERM")
+        .arg(pid.to_string())
+        .status();
 }
 
 #[cfg(test)]

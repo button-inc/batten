@@ -466,6 +466,23 @@ mod tests {
                 "generate man".to_owned(),
                 "generate markdown".to_owned(),
                 "generate schema".to_owned(),
+                // FIVE OF THE TEN LEASE ARMS, and the noun is NOT among them
+                // (CLOUD-1274). `lease acquire|renew|hold|release|reserve` each
+                // reach `swap`, which is a compare-and-swap against a REMOTE ref
+                // — the only remote write in this crate — so the noun stays
+                // unclassified for `capture`'s reason two rows up: a consumer
+                // treating an entry as a prefix must not be handed the writes.
+                //
+                // `check` is a separate row from `status` rather than a flag on
+                // it, and this list is why: the allowlist is
+                // `filter(effect == read)` with no second list, so a refusing
+                // flag on a reporting row would drop the reporting invocation
+                // every consumer already uses.
+                "lease authorises".to_owned(),
+                "lease check".to_owned(),
+                "lease held".to_owned(),
+                "lease peek".to_owned(),
+                "lease status".to_owned(),
                 // The `lint` noun is on the list with its kind, for the same
                 // reason as `policy` below: `lint <kind>` reads text the caller
                 // names and answers about its shape, so the whole subtree is
@@ -664,6 +681,29 @@ mod tests {
             // §2 already reserved this row (`init [-n] … (write)`); CLOUD-206
             // landed the verb behind it, so the document needed no edit.
             "init".to_owned(),
+            // THE LANDING LEASE, ten arms and a noun (CLOUD-1274, CLOUD-393).
+            // The noun is UNCLASSIFIED rather than read, because half the
+            // subtree writes: `acquire|renew|hold|release|reserve` each reach
+            // the compare-and-swap against the remote ref, which is the only
+            // remote write this crate performs. Classifying the noun `read`
+            // would hand a consumer treating an entry as a prefix exactly those
+            // five (CLOUD-121's reading, and `capture`'s precedent).
+            //
+            // `check` is its own row rather than a flag on `status` because the
+            // read-only allowlist is `filter(effect == read)` with no second
+            // list, so a refusing flag on a reporting row would drop the
+            // reporting invocation every consumer already uses.
+            "lease".to_owned(),
+            "lease acquire".to_owned(),
+            "lease authorises".to_owned(),
+            "lease check".to_owned(),
+            "lease held".to_owned(),
+            "lease hold".to_owned(),
+            "lease peek".to_owned(),
+            "lease release".to_owned(),
+            "lease renew".to_owned(),
+            "lease reserve".to_owned(),
+            "lease status".to_owned(),
             // A top-level verb-with-kind, not a `brief` noun: what varies
             // across `lint <kind>` is the artifact, and `config lint` stays
             // where it is because it lints the one committed authority
@@ -815,6 +855,10 @@ mod tests {
     }
 
     #[test]
+    // The ledger is 100+ rows with a comment each, which is the point of it —
+    // every row is a decision somebody wrote down. Splitting it to satisfy a line
+    // count would put the rows somewhere the assertion does not read them.
+    #[allow(clippy::too_many_lines)]
     fn the_emitted_surface_is_exactly_the_committed_row_set() {
         // CLOUD-244's in-tree half. §2 and the emitted spec disagreed on four
         // rows for want of anything comparing them, and the comparison itself
