@@ -163,10 +163,11 @@ jobs:
         # `id` and the guard together.
         id: rust-cache
         with:
-          # Both spellings must match `ci.yml`'s job exactly or this writes an
-          # entry that job cannot read.
-          key: ci
-          shared-key: ci
+          # Must match `ci.yml`'s job exactly or this writes an entry that job
+          # cannot read. One spelling now, not two: `key` is an if/else
+          # fallback rust-cache ignores whenever `shared-key` is set, so the
+          # pair could drift while looking deliberate.
+          shared-key: ci-${{ hashFiles('Cargo.toml') }}
       # Compile only when there is nothing to restore. The evidence and the
       # failure directions are recorded on the Windows job below; the same
       # reasoning applies unchanged, and the same property refuses an unguarded
@@ -196,11 +197,11 @@ jobs:
         # warm. `ci-local-parity` property 17 holds the pair together.
         id: rust-cache
         with:
-          # Both spellings must match `rust.yml`'s `windows` job exactly or this
-          # writes an entry that job cannot read, which is the current failure
-          # with extra steps.
-          key: windows
-          shared-key: windows
+          # Must match `rust.yml`'s `windows` job exactly or this writes an
+          # entry that job cannot read. One spelling now, not two — and that
+          # job carried `key` where this one carried both, an asymmetry that
+          # happened to match and could not be explained from the source.
+          shared-key: windows-${{ hashFiles('Cargo.toml') }}
       # COMPILE ONLY WHEN THERE IS NOTHING TO RESTORE, and the evidence for this
       # is that every warm cycle after the first was pure waste (CLOUD-840).
       #

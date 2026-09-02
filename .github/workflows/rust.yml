@@ -127,6 +127,9 @@ jobs:
           # tool it touches. See the ci job for why these lists are narrow.
           install_args: rust
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # The profile is part of the key — see `ci.yml`'s `ci` job.
+          shared-key: cross-${{ hashFiles('Cargo.toml') }}
       - run: mise run cross-check
         env:
           # Only the triple cross-check type-checks. doctor's default pair would
@@ -210,7 +213,8 @@ jobs:
         with:
           # A per-target key: a leg's artifacts are target-specific and would
           # otherwise thrash a shared entry if the second leg is restored.
-          key: ${{ matrix.target }}
+          # The profile is part of the key too — see `ci.yml`'s `ci` job.
+          shared-key: ${{ matrix.target }}-${{ hashFiles('Cargo.toml') }}
       - run: mise run darwin-link ${{ matrix.target }}
         env:
           # Exactly the target being linked; doctor's default would also fetch
@@ -288,7 +292,8 @@ jobs:
       # carries its own.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: semver
+          # The profile is part of the key — see `ci.yml`'s `ci` job.
+          shared-key: semver-${{ hashFiles('Cargo.toml') }}
       - run: mise run semver
 
   # THE OS MATRIX, and the only job here that EXECUTES rather than type-checks
@@ -435,33 +440,43 @@ jobs:
           install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          # A distinct key: this job's target dir is built by a different host
-          # toolchain than every other job's, so sharing an entry would thrash
-          # it — the same reason semver and perf carry their own.
-          key: windows
-          # AND A SHARED KEY, which is what lets a job in ANOTHER workflow fill
-          # this entry (CLOUD-840). rust-cache composes
-          # `v0-rust-{key}-{shared-key or job id}-{os}-{arch}-{hashes}`, read off
-          # two live entries rather than from the docs — so without this the job
-          # ID is part of the key and a warm job under any other name computes a
-          # different one and the two never meet.
+          # A DISTINCT KEY, because this job's target dir is built by a different
+          # host toolchain than every other job's, so sharing an entry would
+          # thrash it — the same reason semver and perf carry their own. And a
+          # SHARED one, which is what lets a job in ANOTHER workflow fill this
+          # entry (CLOUD-840): without it the job ID is part of the key, and a
+          # warm job under any other name computes a different one.
           #
-          # IT REPLACES THE JOB COMPONENT RATHER THAN FILLING IT, and the first
-          # warm run is what proved it. This comment previously claimed the
-          # composed string stayed byte-identical because the value matches
-          # `key`; the two live entries say otherwise —
-          # `v0-rust-windows-windows-Windows_NT-x64-…` before,
-          # `v0-rust-windows-Windows_NT-x64-…` after. One component, not two.
-          # So adding this DID orphan every prior entry. Harmless, because those
-          # were per-PR and unreadable across pull requests anyway, and the
-          # migration is a single cold build on each side — but the claim was
-          # wrong and a comment that states a measured fact has to state the one
-          # that was measured.
+          # `key` IS GONE, AND ITS ABSENCE IS THE POINT. This block carried both
+          # `key: windows` and `shared-key: windows`, and the pair read as
+          # deliberate. It was inert: rust-cache v2.9.2 `src/config.ts` takes
+          # `shared-key` in an if/else and never reads `key` when it is set —
+          #
+          #   if (sharedKey) { key += `-${sharedKey}`; }
+          #   else { const inputKey = core.getInput("key"); … }
+          #
+          # which is exactly what the two live entries recorded here already
+          # showed: `v0-rust-windows-windows-Windows_NT-x64-…` before the shared
+          # key was added (key + job id), `v0-rust-windows-Windows_NT-x64-…`
+          # after (shared key alone). One component, not two. The composition
+          # this comment used to give, `{key}-{shared-key or job id}`, was the
+          # inference drawn from those strings and it was wrong; the strings
+          # themselves were right.
+          #
+          # THE PROFILE IS PART OF THE KEY (2026-09-01). `[profile.*]` lives in
+          # the root `Cargo.toml`, which rust-cache does NOT consider — it reads
+          # `Cargo.lock` and `crates/batten/Cargo.toml` only. So `f54a9c05`
+          # changed the dev profile, left the key untouched, and every restore
+          # since has reported `full match: true` while handing back artifacts
+          # built under the old profile: this job went from 1 `Compiling` line to
+          # 288, and `ci` from 0 to 121. The warm jobs could not repair it
+          # either, since they compile only on `cache-hit != 'true'` and the key
+          # still hit.
           #
           # The warm side is `cache-warm-windows` in `release-plz.yml`. Both
-          # spellings must agree; that they are two places is the cost of the
-          # only trigger this repository is allowed to hang a warm job on.
-          shared-key: windows
+          # must agree; that they are two places is the cost of the only trigger
+          # this repository is allowed to hang a warm job on.
+          shared-key: windows-${{ hashFiles('Cargo.toml') }}
       # A JOB THAT DECLARES A TOOL MUST BE ABLE TO REACH IT, asserted before the
       # suite rather than discovered inside it. `ci-tools-check` holds these
       # names against `mise.toml`, which is a different question: it cannot know
