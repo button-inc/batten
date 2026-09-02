@@ -3477,6 +3477,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // allowlist for any consumer that treats an entry as a prefix (CLOUD-90).
     CommandDecl {
         path: "lease",
+        id: "lease",
         about: "The landing lease: one branch spends a matrix at a time",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -3498,6 +3499,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // refusal as an error, which is why the workflow moves in the same change.
     CommandDecl {
         path: "lease authorises",
+        id: "lease.authorises",
         about: "May this branch spend a matrix right now?",
         data_channel: false,
         effect: Effect::Read,
@@ -3515,6 +3517,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // to be in flight over a condition that PR did not cause and cannot fix.
     CommandDecl {
         path: "lease check",
+        id: "lease.check",
         about: "Gate: the lease is free or a live, well-formed hold — never a wedge and never garbage",
         data_channel: false,
         effect: Effect::Read,
@@ -3525,6 +3528,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // the next edit to the wording would be a silent breakage.
     CommandDecl {
         path: "lease status",
+        id: "lease.status",
         about: "Report who holds the lease, for how much longer, and who is admitted behind them",
         data_channel: true,
         effect: Effect::Read,
@@ -3537,6 +3541,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // not an error it should report.
     CommandDecl {
         path: "lease peek",
+        id: "lease.peek",
         about: "Print one advisory field of the held lease, or nothing",
         data_channel: false,
         effect: Effect::Read,
@@ -3551,6 +3556,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // is the interval at which the holder proves it is alive.
     CommandDecl {
         path: "lease held",
+        id: "lease.held",
         about: "Is this clone's lease still held, with a beat of margin to act on?",
         data_channel: false,
         effect: Effect::Read,
@@ -3559,6 +3565,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // `write`: a compare-and-swap over a remote ref.
     CommandDecl {
         path: "lease acquire",
+        id: "lease.acquire",
         about: "Take the lease, waiting out a live holder and reaping a dead one",
         data_channel: false,
         effect: Effect::Write,
@@ -3567,6 +3574,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // `write`. One-shot, as against `hold`'s loop.
     CommandDecl {
         path: "lease renew",
+        id: "lease.renew",
         about: "Extend this clone's lease by one term",
         data_channel: false,
         effect: Effect::Write,
@@ -3576,6 +3584,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // and kills from the same trap that releases.
     CommandDecl {
         path: "lease hold",
+        id: "lease.hold",
         about: "Renew this clone's lease every beat until it is lost or the hold ends",
         data_channel: false,
         effect: Effect::Write,
@@ -3588,6 +3597,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // fires on every exit path, including ones that never acquired.
     CommandDecl {
         path: "lease release",
+        id: "lease.release",
         about: "Hand the lease back, leaving a tombstone rather than deleting the ref",
         data_channel: false,
         effect: Effect::Write,
@@ -3598,6 +3608,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // would otherwise be cold.
     CommandDecl {
         path: "lease reserve",
+        id: "lease.reserve",
         about: "Take the one slot behind the current holder",
         data_channel: false,
         effect: Effect::Write,
