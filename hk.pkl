@@ -469,11 +469,25 @@ local gate = new Mapping<String, Step> {
   // vendor review rather than by anyone here who could notice. Globbed on the two
   // inputs that can move it — the lockfile it must agree with, and the workflows
   // whose pinned actions the scan catalogs (CLOUD-262).
+  // CLOUD-1318 retired `sbom-check` onto `policy/sbom-inventory.rego`. This step
+  // is now the PRODUCER only — it records the counts the module adjudicates, and
+  // `batten-check` is what decides over them. The profile and the globs are
+  // unchanged, which is the point: the scan's cost stays exactly where it was and
+  // what came off the corpus is the bats suite, not the gate.
+  //
+  // THE STEP NAME SURVIVES THE MIGRATION, which is the campaign's own convention
+  // and not a cosmetic choice — `claim-check`, `perf-pair`, `mutant`,
+  // `target-prune` and `config-lint` all kept theirs for this reason. Here the
+  // binding reader is `tests/hk-selection.bats:129`, which names the slow tier's
+  // steps literally and asserts each is skipped at `!slow` and included under
+  // `check`. That suite is governed, so `shell edit refused` declares one route
+  // and no override: renaming this step would need an edit to a frozen file in
+  // order to land a retirement. Measured — the rename reddened both cases.
   ["sbom-check"] {
     // `slow` tier: two whole-tree `syft scan dir:.` passes.
     profiles = List("slow")
     glob = List("Cargo.lock", ".github/workflows/*")
-    check = "mise run sbom-check"
+    check = "mise run record-sbom"
   }
   // The install path resolves a release asset BY NAME from a machine that has
   // never seen this repository, so a rename in `dist` that forgets one of its

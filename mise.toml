@@ -475,7 +475,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,attestation-check,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-race-check,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-matcher-check,hook-pin-check,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,perf-compare,perf-gate,pinned-toolchain,pipefail-grep-check,plan-complete,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reclaim-census,release-assets-check,release-due,release-tag-shape,release-tracking-check,released,remedy-authorship,report-only-check,review-answered,run-shape,rust-paths-check,sbom,sbom-check,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared"
+MUTANT_GATES = "alive,attestation-check,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-race-check,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-matcher-check,hook-pin-check,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,perf-compare,perf-gate,pinned-toolchain,pipefail-grep-check,plan-complete,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reclaim-census,release-assets-check,release-due,release-tag-shape,release-tracking-check,released,remedy-authorship,report-only-check,review-answered,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1426,6 +1426,166 @@ description = "Gate: run every registered policy module's and enabled preset's o
 run = '''
 set -eu
 cargo run --quiet -p batten -- policy test
+'''
+
+[tasks.record-sbom]
+description = "Effect: derive the SBOM twice OUTSIDE the engine and record the counts where `batten check` reads them (CLOUD-1318)"
+# The producer half of `sbom-check`'s retirement. `policy/sbom-inventory.rego`
+# decides; this runs the scan that surface structurally cannot.
+#
+# A SEPARATE TASK FROM `record-verdicts`, and the reason is cost rather than
+# taste. That task is wired into three hk steps on their own globs and runs on
+# every one; this is two whole-tree `syft scan dir:.` passes, which is why the
+# retired gate declared `profiles = List("slow")` and globbed on `Cargo.lock` plus
+# the workflows. Folding these in would put both scans on every hk invocation that
+# validates a config file. `hk.pkl` keeps the profile and the globs and points
+# here instead.
+#
+# AN INLINE TASK RATHER THAN A `mise-tasks/` PROGRAM, and it is forced:
+# `governed_at_head` selects any `mise-tasks/` path carrying a shebang or a
+# `#MISE description=`, so a new program there is `shell add refused` — refused at
+# `deny`, in the same change that is retiring one.
+#
+# IT RE-RUNS `sbom.sh` RATHER THAN RESTATING ITS FLAGS — one definition of the
+# invocation, so this cannot certify bytes a release would not publish. Both runs
+# go to scratch directories: a producer that rewrote the tree it measures could
+# not measure it twice, and would launder drift into a clean second run.
+#
+# WHAT IT DOES NOT DECIDE. Every line here is a COUNT. Whether a count is a
+# finding — and which of the four verdict classes it belongs to — is
+# `policy/sbom-inventory.rego`'s. The two counts readable from committed text are
+# deliberately NOT recorded: `Cargo.lock`'s sourced entries and the action pins
+# against the licence table are `line_sources` the module reads itself, so this
+# producer cannot get them wrong on its behalf.
+#
+# `bash -c` DECLARED RATHER THAN ASSUMED, and it is not decoration: the body uses
+# herestrings (`<<<`) to feed `sed` and `jq`, which are a bashism — measured, the
+# first run of this task under the default shell died at `sh: Syntax error:
+# redirection unexpected` before reaching a single count. Declaring the shell
+# drops `-e` (`.claude/rules/toolchain.md`), which is why `set -eu` is the first
+# line: every failure here must stop the body rather than record a partial scan.
+shell = "bash -c"
+run = '''
+set -eu
+
+cd "${SBOM_ROOT:-$(git rev-parse --show-toplevel)}"
+
+SBOM="$PWD/mise-tasks/sbom.sh"
+if [ ! -x "$SBOM" ]; then
+	echo "::error:: record-sbom: cannot execute $SBOM, so the inventory is unverified" >&2
+	exit 1
+fi
+
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+
+if ! first=$(SBOM_OUT_DIR="$scratch/one" "$SBOM"); then
+	echo "::error:: record-sbom: could not derive the SBOM, so its contents are unverified" >&2
+	exit 1
+fi
+if ! second=$(SBOM_OUT_DIR="$scratch/two" "$SBOM"); then
+	echo "::error:: record-sbom: could not derive the SBOM a second time, so its stability is unverified" >&2
+	exit 1
+fi
+
+# The asset paths come from `sbom`'s own KEY=VALUE output, so the names stay owned
+# by the one script that decides them.
+path_of() { sed -n "s/^$1=//p" <<<"$2"; }
+
+spdx_one=$(path_of spdx "$first")
+cdx_one=$(path_of cdx "$first")
+spdx_two=$(path_of spdx "$second")
+cdx_two=$(path_of cdx "$second")
+
+for path in "$spdx_one" "$cdx_one" "$spdx_two" "$cdx_two"; do
+	if [ -z "$path" ] || [ ! -f "$path" ]; then
+		echo "::error:: record-sbom: sbom did not report a readable document path, so there is nothing to record" >&2
+		exit 1
+	fi
+done
+
+# The four leaves two scans of one tree legitimately differ in: SPDX stamps a
+# fresh document namespace and creation time, CycloneDX a fresh serial number and
+# timestamp. Deleting an absent key is a no-op in jq, so one expression serves
+# both formats without asking which it is holding.
+normalize() { jq -S 'del(.documentNamespace, .creationInfo.created, .serialNumber, .metadata.timestamp)' "$1"; }
+
+stable() { # $1 = first run's document, $2 = the second run's
+	if normalize "$1" >"$scratch/a" && normalize "$2" >"$scratch/b" && cmp -s "$scratch/a" "$scratch/b"; then
+		echo yes
+	else
+		echo no
+	fi
+}
+
+# Each format renders purls differently, so both are counted: a regression in one
+# renderer is invisible if only the other is ever read.
+spdx_cargo=$(jq '[.packages[]? | .externalRefs[]?
+	| select(.referenceType == "purl")
+	| .referenceLocator
+	| select(startswith("pkg:cargo/"))] | length' "$spdx_one")
+cdx_cargo=$(jq '[.components[]? | (.purl // "")
+	| select(startswith("pkg:cargo/"))] | length' "$cdx_one")
+
+if ! meta=$(cargo metadata --format-version 1 --offline 2>/dev/null); then
+	echo "::error:: record-sbom: could not read cargo metadata, so originator agreement is unverified" >&2
+	exit 1
+fi
+authored=$(jq -c '[.packages[] | select((.authors // []) | length > 0)
+	| {key: "\(.name)@\(.version)", value: true}] | from_entries' <<<"$meta")
+
+# THE SUBJECT IS EXEMPT from the component counts, for the reason `sbom.sh`
+# records at length: the document root and the workspace member are two roles, not
+# two entries for one thing, and since syft stopped emitting a workspace purl they
+# are indistinguishable by triple. Resolved from the document's own DESCRIBES
+# edge, so a rename upstream does not turn this into a demand to corrupt the file.
+counts=$(jq -r --argjson authored "$authored" '
+  ([.relationships[]? | select(.relationshipType == "DESCRIBES") | .relatedSpdxElement] | first) as $subject
+  | [.packages[]? | select(.SPDXID != $subject)] as $components
+  | [$components[]
+     | select(([.externalRefs[]? | select(.referenceType == "purl") | .referenceLocator] | first // "")
+              | startswith("pkg:github/") | not)] as $cargo
+  | [$components[]
+     | select(([.externalRefs[]? | select(.referenceType == "purl") | .referenceLocator] | first // "")
+              | startswith("pkg:github/"))] as $gh
+  | {
+      subject: (if $subject == null then 0 else 1 end),
+      entries: ($components | length),
+      distinct: ($components
+                 | map([(.name // ""), (.versionInfo // ""),
+                        ([.externalRefs[]? | select(.referenceType == "purl") | .referenceLocator] | first // "")])
+                 | unique | length),
+      pathlike: ($components | map(select((.name // "") | startswith("./"))) | length),
+      unversioned: ($components | map(select((.versionInfo // "") == "UNKNOWN")) | length),
+      nosupplier: ($cargo | map(select((.supplier // "NOASSERTION") == "NOASSERTION")) | length),
+      subjectunset: ([.packages[]? | select(.SPDXID == $subject)
+                      | select((.supplier // "NOASSERTION") == "NOASSERTION")] | length),
+      disagrees: ($cargo | map(
+          "\(.name // "")@\(.versionInfo // "")" as $key
+          | ((.originator // "NOASSERTION") != "NOASSERTION") as $set
+          | select($set != (($authored[$key] // false)))) | length),
+      copyunset: ($cargo | map(select(((.copyrightText // "NOASSERTION") == "NOASSERTION")
+                                  or ((.copyrightText // "") == ""))) | length),
+      nolicense: ($cargo | map(select(((.licenseConcluded // "NOASSERTION") == "NOASSERTION")
+                                      or ((.licenseConcluded // "") == ""))) | length),
+      slashed: ($cargo | map(select(((.licenseConcluded // "") | test("/")))) | length),
+      actionunset: ($gh | map(select(((.licenseConcluded // "NOASSERTION") == "NOASSERTION")
+                                     or ((.copyrightText // "NOASSERTION") == "NOASSERTION"))) | length)
+    }
+  | "subject \(.subject)\nentries \(.entries)\ndistinct \(.distinct)\npathlike \(.pathlike)\nunversioned \(.unversioned)\nnosupplier \(.nosupplier)\nsubject-unset \(.subjectunset)\noriginator-disagrees \(.disagrees)\ncopyright-unset \(.copyunset)\nlicense-unset \(.nolicense)\nlicense-slashed \(.slashed)\naction-unset \(.actionunset)"
+' "$spdx_one")
+
+# A REDUCTION, NEVER THE DOCUMENT. Only integers and two yes/no tokens reach the
+# record: the SBOM carries author names, email addresses and copyright holders,
+# and `tools.rs` names a tool's report as the likeliest place in this family for
+# personal data to appear.
+{
+	printf 'spdx-cargo %s\n' "$spdx_cargo"
+	printf 'cdx-cargo %s\n' "$cdx_cargo"
+	printf 'spdx-stable %s\n' "$(stable "$spdx_one" "$spdx_two")"
+	printf 'cdx-stable %s\n' "$(stable "$cdx_one" "$cdx_two")"
+	printf '%s\n' "$counts"
+} | cargo run --quiet -p batten -- record tool sbom
 '''
 
 [tasks.record-verdicts]

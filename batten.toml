@@ -1263,6 +1263,22 @@ regex = '^[a-z0-9]+:.+@.+$'
 id = "clause-label"
 regex = '^[[:space:]]*([*-][[:space:]]*)?\*\*[^*]*\((§|clause )[0-9]+\)|^#{2,6}[[:space:]]+[^#]*\((§|clause )[0-9]+\)|^[[:space:]]*[*-][[:space:]]+[^*#]{1,80}\((§|clause )[0-9]+\)\.'
 
+# A SHA-pinned action reference on a workflow's `uses:` line (CLOUD-1318).
+#
+# A MATCH TEST, NEVER A CAPTURE, and that is forced rather than chosen: this build
+# carries `regex.match` and nothing returning submatches, which is why
+# `shell-retirement.rego` reaches for "`indexof` plus a NAME TEST rather than a
+# capture" at its own site. `policy/sbom-inventory.rego` therefore never extracts
+# the reference — it asks whether some declared table key appears in the line,
+# which is the same question from the other end.
+#
+# The 40-hex bound is the whole discriminator: an unpinned `uses:` naming a tag, a
+# branch or a local `./` path is NOT a pin and must not be demanded of the table,
+# or the clause is satisfiable by matching every line in every workflow.
+[[pattern]]
+id = "sbom-action-pin"
+regex = 'uses:[[:space:]]+[^[:space:]]+@[0-9a-f]{40}'
+
 [[pattern]]
 id = "clause-one"
 regex = '\((§|clause )1\)'
@@ -5128,6 +5144,51 @@ tool = "hk"
 version = "1.56.1"
 input = "hk.pkl"
 
+# The published inventory, judged against the tree it claims to describe
+# (CLOUD-262, ported off `mise-tasks/sbom-check.sh` under CLOUD-1318).
+#
+# THE SCAN STAYS OUTSIDE, which is `validator-verdict-clean`'s disposition and the
+# same one house style §5 forces: `check` is `read` and cannot spawn, so `syft`
+# stays a command on PATH and `mise-tasks/sbom.sh` stays the producer that derives
+# the documents. `[tasks.record-sbom]` runs it twice and records the counts; this
+# row adjudicates them. `sbom.sh` deliberately survives — it decides nothing, so it
+# is a producer rather than a gate, and its own disposition is CLOUD-1159's.
+#
+# `line_sources` CARRIES TWO OF THE PREDICATES OUTRIGHT, and that is what keeps the
+# producer's trusted surface narrow rather than total. The expected cargo count is
+# `Cargo.lock`'s own `source = ` lines and the action mapping is every SHA-pinned
+# `uses:` against `sbom-actions.tsv`'s key column — both properties of committed
+# text, so the module reads them here and the producer cannot get them wrong on its
+# behalf. Only the counts that require opening a DERIVED document travel through
+# the record.
+#
+# SILENT UNTIL A PRODUCER WRITES. No record under this key means nothing has
+# scanned these bytes at this pin — absent from the map, not a verdict — so the row
+# is inert on a checkout whose globs never fired. Present-and-EMPTY is a finding,
+# because every count below would otherwise pass over an absent key.
+[[rule]]
+id = "sbom-inventory"
+kind = "policy"
+scope = "tree"
+module = "policy/sbom-inventory.rego"
+line_sources = ["Cargo.lock", "mise-tasks/sbom-actions.tsv", ".github/workflows/*.yml"]
+severity = "deny"
+
+# KEYED ON THE LOCKFILE, which is the input whose change must invalidate a verdict.
+# The document is a function of the tree, and `Cargo.lock` is the part of it this
+# gate's central invariant is stated against — so a dependency landing moves the
+# digest, the key moves with it, and the previous scan's counts stop answering
+# rather than answering about a tree that no longer exists.
+#
+# Keep `version` equal to the `aqua:anchore/syft` pin in `mise.toml`; they are two
+# spellings of one decision, and CLOUD-664 is what happens when a syft bump changes
+# what the document contains.
+[[rule.tools]]
+id = "sbom"
+tool = "syft"
+version = "1.51.1"
+input = "Cargo.lock"
+
 # What has shipped, from a tag GLOB rather than a named ref (CLOUD-1200, the
 # successor shape for the `released` family).
 #
@@ -7570,6 +7631,54 @@ class = "The economy half rather than the coverage half: the tier is still corre
 id = "source read first"
 kind = "document"
 target = ".claude/hooks/git-hook.sh"
+
+[[verdict]]
+id = "tool read broken"
+gloss = "the recorded SBOM scan cannot be judged, so the inventory is unverified"
+class = """
+Four states reach this class and none of them is a drifted document: a catalog that found nothing, two scans of one tree that disagree once the volatile fields are removed, a document carrying no DESCRIBES edge to measure its components against, and a producer that recorded no counts at all. What they share is that the SCAN is at fault rather than the tree, so the remedy is never to edit an SBOM field: re-run `mise run record-sbom` and read what `mise-tasks/sbom.sh` actually produced. An empty catalog is the one that most looks like success -- two empty documents agree with each other and with every count -- which is why it refuses here instead of passing every equality trivially.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/sbom-inventory.rego"
+
+[[verdict]]
+id = "manifest count wrong"
+gloss = "the document and the tree it claims to describe do not agree"
+class = """
+The cargo count is stated against `Cargo.lock`'s own `source = ` entries rather than a number anyone wrote down, because the issue that specified this recorded 156 cargo and 175 total and the total had moved by 2 a day later. So a disagreement means a cataloger missed something, or emitted a component per REFERENCE SITE rather than per thing depended on -- 340 entries for 290 distinct things, measured. Fix the normalisation in `mise-tasks/sbom.sh` and re-record; never adjust the expected count to match what the scan happened to produce, which is the one repair that makes the gate decide nothing.
+"""
+
+[[verdict.route]]
+id = "source read first"
+kind = "document"
+target = "mise-tasks/sbom.sh"
+
+[[verdict]]
+id = "manifest state missing"
+gloss = "a field the tree states is NOASSERTION in the published document"
+class = """
+Supplier, originator, copyright and licence each have a source in this tree -- the lockfile's resolution, `cargo metadata`'s authors, the bytes `Cargo.lock` pins by checksum, and the manifests `cargo-deny` already reads. A `NOASSERTION` in any of them is data the tree states and the document dropped, and `NONE` is conformant where `NOASSERTION` is not, so only the third state refuses. The remedy is to enrich the field in `mise-tasks/sbom.sh` and re-record. Findings here are counts and never values on purpose: an author name, an email address and a copyright holder are all personal data, and echoing one would publish it into every CI log that reads this gate.
+"""
+
+[[verdict.route]]
+id = "source read first"
+kind = "document"
+target = "mise-tasks/sbom.sh"
+
+[[verdict]]
+id = "pin table missing"
+gloss = "a SHA-pinned action in a workflow has no row in the licence table"
+class = """
+A pinned action's licence is immutable, which is what makes a committed table defensible at all -- but only while the table still describes the pins the workflows carry. This fires on the one event that breaks that: a pin moving. The row is matched on repository AND commit together, so a bump that changes the sha stops matching and the gate refuses rather than letting the document degrade quietly. Add the new commit's row to `mise-tasks/sbom-actions.tsv`. Renovate cannot write that table, which is why an action bump opens red and holds the queue slot (CLOUD-1213) -- that is the cost of the table, and it is paid deliberately.
+"""
+
+[[verdict.route]]
+id = "source read first"
+kind = "document"
+target = "mise-tasks/sbom-actions.tsv"
 
 [[verdict]]
 id = "tool judge dirty"
