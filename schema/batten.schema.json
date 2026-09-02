@@ -2356,6 +2356,13 @@
       "description": "The `[ready]` table: the refinement gate's consumer-set thresholds.\n\n# Why a value and not a `[[pattern]]` row (CLOUD-472)\n\nThe first draft of the prose-dialect ratchet spelled its threshold as a\nregex over the exempt key range. That is wrong twice. The pattern registry\nexists so that one CONCEPT has one spelling — arithmetic is not a concept,\nand a range encoded in alternation is unreadable and unmovable. And it makes\nthe decision turn on key TEXT, which the tracker is known to rewrite: this\nconsumer already declares `ready-issue-mention-markup` because a bare key\ncomes back wrapped in `<issue …>` markup, so matching key text is matching\nthe one thing the round trip mangles.",
       "type": "object",
       "properties": {
+        "pressure_test_required_from": {
+          "description": "The instant from which a row owes a dispatched PRESSURE TEST (CLOUD-472).\n\nA sibling of the field above rather than a reuse of it, and the\nseparation is the point: these two ratchets convert different things and\na consumer must be able to move one without moving the other. Folding\nthem into one instant would mean the day you demand a structured claims\nobject is also the day you demand an agent dispatch, and a repository\nthat wants the first and cannot yet afford the second would have no way\nto say so.\n\nRead exactly as its sibling is — fixed-width ISO-8601 UTC compared\nlexically, absent is could-not-look, and moving it LATER is the only\ndirection that tightens.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "prose_dialect_required_from": {
           "description": "From which creation instant a Ready block must carry the fenced claims\nobject rather than prose. An ISO-8601 UTC stamp, compared verbatim\nagainst the tracker's own `createdAt`.\n\n**A RATCHET: moving it later is the only direction that tightens.**\nAbsent is could-not-look and exempts everything, so a consumer that has\nnot opted in is never refused for a question it did not ask.\n\n**An instant rather than a key ordinal, and that is a portability\ndecision.** An ordinal reaches no consumer literal — the trailing digits,\nno separator assumed — so it passes `no-tracker-key-in-core`. It still\nrequires keys that are numeric AND monotonic with creation order, which\nthree popular trackers give and a slug- or UUID-keyed one does not, and it\nwould fail SILENTLY there rather than loudly. Every tracker stamps a\ncreation time, so this assumes nothing about how a consumer spells a key.",
           "type": [
@@ -2591,8 +2598,11 @@
           "type": "string"
         },
         "path": {
-          "description": "The repository-relative path whose bytes the review was taken over.\n\nIts digest is the second component of the key, so a review goes stale by\nconstruction the moment the subject changes — the anti-staleness half, and\nthe one a `reviewed: true` marker could never provide.",
-          "type": "string"
+          "description": "The repository-relative path whose bytes the review was taken over.\n\nIts digest is the second component of the key, so a review goes stale by\nconstruction the moment the subject changes — the anti-staleness half, and\nthe one a `reviewed: true` marker could never provide.\n\n**OPTIONAL, because not every subject is a file.** A `tracker-body`\nreview is taken over the description the TRACKER returned, which reaches\nthe engine through the refinement payload and has an issue key rather\nthan a repository path. Demanding a path there would force a row to name\na file it does not read, which is a declaration that means nothing and\nwould be compared to nothing. A `document` review without one is skipped\nrather than guessed at.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "prompt": {
           "description": "Which VENDORED prompt to dispatch, by id.\n\nVendored rather than a path, and that is the safety property: the text is\ncompiled into the binary, so its digest is a constant of the build and a\nconsumer cannot satisfy the gate by pointing it at an easier prompt.",
@@ -2617,8 +2627,7 @@
         "prompt",
         "runner",
         "version",
-        "subject",
-        "path"
+        "subject"
       ]
     },
     "Rewrite": {

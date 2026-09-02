@@ -2798,13 +2798,32 @@ fn render_findings(findings: &[checks_green::Finding]) -> String {
 /// module exists to avoid.
 fn board_grammar(overrides: &Overrides) -> Result<ready::Grammar> {
     let config = resolve::resolve(Path::new("."), overrides)?;
-    Ok(
-        ready::Grammar::resolve(&config.patterns)?.with_prose_threshold(
+    Ok(ready::Grammar::resolve(&config.patterns)?
+        .with_prose_threshold(
             config
                 .ready
-                .and_then(|ready| ready.prose_dialect_required_from),
-        ),
-    )
+                .as_ref()
+                .and_then(|ready| ready.prose_dialect_required_from.clone()),
+        )
+        .with_pressure_test_threshold(
+            config
+                .ready
+                .as_ref()
+                .and_then(|ready| ready.pressure_test_required_from.clone()),
+        )
+        // THE SUBJECT KIND IS FILTERED HERE, where the config is in hand.
+        // A `document` review is the tree surface's — `batten check` reads
+        // it off the disk — and a `tracker-body` one has no path to read, so
+        // only the second kind can be answered from a refinement payload.
+        .with_pressure_test_reviews(
+            config
+                .rules
+                .iter()
+                .flat_map(|rule| rule.review.iter())
+                .filter(|row| row.subject == "tracker-body")
+                .cloned()
+                .collect(),
+        ))
 }
 
 fn run_claim(

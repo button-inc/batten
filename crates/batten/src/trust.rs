@@ -1683,6 +1683,57 @@ fn mint_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     found
 }
 
+/// The `[ready]` cutovers, compared as one class.
+///
+/// **BOTH CUTOVERS, ONE COMPARISON.** `[ready]` carries two independent ratchets
+/// (CLOUD-472 added the second), and they are the same class of weakening: an
+/// instant moved LATER, or dropped entirely, exempts rows that were owed
+/// something. A per-field block would be this one copied, and the copy is what
+/// goes stale when a third cutover lands — so the FIELD is data here and the
+/// comparison is written once.
+///
+/// Split out of [`entry_weakenings`] rather than inlined because the second
+/// cutover took that function past its declared line budget, which is the budget
+/// working: a function accumulating one self-contained block per config key is
+/// exactly what it exists to interrupt.
+fn cutover_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    type Cutover = (&'static str, fn(&Config) -> Option<String>);
+    const CUTOVERS: &[Cutover] = &[
+        ("ready.prose_dialect_required_from", |config| {
+            config
+                .ready
+                .as_ref()
+                .and_then(|ready| ready.prose_dialect_required_from.clone())
+        }),
+        ("ready.pressure_test_required_from", |config| {
+            config
+                .ready
+                .as_ref()
+                .and_then(|ready| ready.pressure_test_required_from.clone())
+        }),
+    ];
+
+    let mut found = Vec::new();
+    for (field, cutover) in CUTOVERS {
+        let Some(was) = cutover(base) else {
+            continue;
+        };
+        let now = cutover(working);
+        // Absent renders as the same could-not-look token every other
+        // three-valued read in this tree uses, so a reader of the finding sees
+        // WHICH move was made rather than an empty string.
+        if now.as_ref().is_none_or(|now| now > &was) {
+            found.push(Weakening::new(
+                WeakeningKind::ReadyCutoverRelaxed,
+                *field,
+                was,
+                now.unwrap_or_else(|| "-".to_owned()),
+            ));
+        }
+    }
+    found
+}
+
 fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     let mut found = Vec::new();
 
@@ -1703,29 +1754,7 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     // reads as could-not-look and exempts every row. Compared as strings because
     // both sides are fixed-width ISO-8601 UTC, which is the same reading
     // `policy/filed-here.rego` takes of a tracker stamp.
-    {
-        let cutover = |config: &Config| {
-            config
-                .ready
-                .as_ref()
-                .and_then(|ready| ready.prose_dialect_required_from.clone())
-        };
-        if let Some(was) = cutover(base) {
-            let now = cutover(working);
-            // Absent renders as the same could-not-look token every other
-            // three-valued read in this tree uses, so a reader of the finding
-            // sees WHICH move was made rather than an empty string.
-            let relaxed = now.as_ref().is_none_or(|now| now > &was);
-            if relaxed {
-                found.push(Weakening::new(
-                    WeakeningKind::ReadyCutoverRelaxed,
-                    "ready.prose_dialect_required_from",
-                    was,
-                    now.unwrap_or_else(|| "-".to_owned()),
-                ));
-            }
-        }
-    }
+    found.extend(cutover_weakenings(base, working));
 
     // The mutating-verb table: a removed row un-gates a tool call at the
     // `PreToolUse` boundary, which is the most consequential of these.

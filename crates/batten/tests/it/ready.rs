@@ -318,6 +318,160 @@ fn dated_payload(created_at: Option<&str>, description: &str) -> String {
 // 2026-09-01 the object was used by nothing at all.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// THE PRESSURE-TEST CUTOVER (CLOUD-472), the SECOND ratchet on `[ready]`.
+//
+// Its own fixture rather than `with_tasks`, because the two cutovers are
+// deliberately independent: a case that moved both at once could not tell which
+// one refused, which is the whole reason they are separate fields.
+//
+// The runner is a STUB, on `judge_kind.rs`'s doctrine — the engine's contract
+// with a dispatched program is what it writes and what it exits, so a stub
+// exercises the whole of it, and it makes the no-runner arm reachable by simply
+// not writing one.
+// ---------------------------------------------------------------------------
+
+/// A fixture declaring the pressure-test cutover and one `tracker-body` review.
+///
+/// `runner` is absolute so the row does not depend on `PATH`, and `with_runner`
+/// false leaves the program absent — which is the could-not-look arm rather than
+/// a refusal, and the case that keeps this gate from being a verdict about the
+/// operator's machine.
+fn with_pressure_test(name: &str, runner_exits: Option<i32>) -> PathBuf {
+    // BUILT FIRST, CONFIGURED SECOND. The row's `runner` must be an absolute
+    // path — a relative program is resolved against the PARENT's working
+    // directory rather than the child's, which is a footgun that would make this
+    // fixture pass or fail depending on where the suite was invoked from — and
+    // the path is not known until the fixture exists.
+    // A PLACEHOLDER CONFIG FIRST, because `base_commit` commits the tree and a
+    // fixture with no files has nothing to commit. The real config is written
+    // below, once the runner's absolute path exists to put in it.
+    let dir = Fixture::new(name)
+        .config("version = 1\n")
+        .git()
+        .base_commit()
+        .build();
+    let runner = dir.join("runner.sh");
+    common::write(
+        &dir,
+        "batten.toml",
+        &format!(
+            "version = 1\n\n[ready]\npressure_test_required_from = \"2026-06-01T00:00:00.000Z\"\n\n\
+             [[rule]]\nid = \"review-dispatched\"\nkind = \"policy\"\nscope = \"tree\"\n\
+             module = \"policy/review-dispatched.rego\"\nseverity = \"deny\"\n\n\
+             [[rule.review]]\nid = \"ready-pressure-test-body\"\nprompt = \"ready-pressure-test\"\n\
+             runner = \"{}\"\nversion = \"0\"\nsubject = \"tracker-body\"\n\n{}",
+            runner.display(),
+            declared_patterns()
+        ),
+    );
+    if let Some(code) = runner_exits {
+        std::fs::write(&runner, format!("#!/bin/sh\ncat >/dev/null\nexit {code}\n"))
+            .expect("write the stub");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755))
+                .expect("make it executable");
+        }
+    }
+    dir
+}
+
+/// PAST THE CUTOVER WITH NO RECORD IS REFUSED — the gate's whole point, and the
+/// question no other clause here can ask. Every sibling reads the block and
+/// infers quality from its SHAPE; this asks whether a named prompt ran over
+/// these exact bytes, which better-shaped prose cannot satisfy because the prose
+/// is the input to the hash.
+#[test]
+fn a_row_past_the_pressure_test_cutover_owes_a_dispatch() {
+    let dir = with_pressure_test("ready-pressure-past-cutover", Some(0));
+    // The stub exits 0 having printed nothing, which is a review that RAN and
+    // pointed at nothing — so the first lint records and the row is clean.
+    let output = lint(&dir, &dated_payload(Some(AFTER_CUTOVER), &block("")));
+    assert!(
+        !stderr(&output).contains("pressure-test-undispatched"),
+        "the stub ran and recorded, so nothing is undispatched: {}",
+        stderr(&output)
+    );
+}
+
+/// THE REFUSAL FIRES, and this case is what gives every other one here meaning.
+///
+/// The four cases around it assert an ABSENCE — that the class does not appear —
+/// and a suite of those passes trivially if the finding can never fire at all,
+/// which is the shape a dead gate and a clean tree share. Here the runner is
+/// present and was asked, and it exited non-zero: the review was owed, it was
+/// dispatched, and it did not answer. That is the branch's problem rather than
+/// the environment's, and the one state this gate exists to refuse.
+#[test]
+fn a_runner_that_answers_nothing_usable_is_refused() {
+    let dir = with_pressure_test("ready-pressure-red-runner", Some(1));
+    let output = lint(&dir, &dated_payload(Some(AFTER_CUTOVER), &block("")));
+    assert!(
+        stderr(&output).contains("pressure-test-undispatched"),
+        "a dispatched review that gave nothing usable must refuse: {}",
+        stderr(&output)
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+}
+
+/// BEFORE THE CUTOVER IS UNJUDGED. Without this the flip refuses the standing
+/// Todo queue at once and takes the ready frontier dark — CLOUD-858's measured
+/// shape, and the reason this is a ratchet rather than a switch.
+#[test]
+fn a_row_created_before_the_pressure_test_cutover_is_not_judged() {
+    let dir = with_pressure_test("ready-pressure-before-cutover", None);
+    let output = lint(&dir, &dated_payload(Some(BEFORE_CUTOVER), &block("")));
+    assert!(
+        !stderr(&output).contains("pressure-test-undispatched"),
+        "a row predating the cutover owes nothing: {}",
+        stderr(&output)
+    );
+}
+
+/// A PAYLOAD WITH NO CREATION INSTANT CANNOT BE PLACED against a cutover, so it
+/// is could-not-look. Reading absent as "past the cutover" would turn a verdict
+/// about the payload into a verdict about the row.
+#[test]
+fn a_payload_with_no_creation_instant_is_not_judged() {
+    let dir = with_pressure_test("ready-pressure-undated", None);
+    let output = lint(&dir, &dated_payload(None, &block("")));
+    assert!(
+        !stderr(&output).contains("pressure-test-undispatched"),
+        "an unplaceable row owes nothing: {}",
+        stderr(&output)
+    );
+}
+
+/// NO RUNNER IS COULD-NOT-LOOK, NEVER A REFUSAL. A machine with no reviewer
+/// installed cannot be asked whether it reviewed, and refusing there would fail
+/// every fresh clone and every CI runner that has not installed the agent — a
+/// verdict about the operator wearing a verdict about the row.
+#[test]
+fn a_row_past_the_cutover_with_no_runner_is_not_judged() {
+    let dir = with_pressure_test("ready-pressure-no-runner", None);
+    let output = lint(&dir, &dated_payload(Some(AFTER_CUTOVER), &block("")));
+    assert!(
+        !stderr(&output).contains("pressure-test-undispatched"),
+        "an environment with no reviewer is unjudgeable, not guilty: {}",
+        stderr(&output)
+    );
+}
+
+/// A CONSUMER THAT DECLARED NO CUTOVER HAS NOT ASKED FOR THIS, so the standing
+/// fixture — which declares only the prose cutover — must never see the class.
+#[test]
+fn a_consumer_declaring_no_pressure_test_cutover_is_untouched() {
+    let dir = with_tasks("ready-pressure-undeclared");
+    let output = lint(&dir, &dated_payload(Some(AFTER_CUTOVER), &block("")));
+    assert!(
+        !stderr(&output).contains("pressure-test-undispatched"),
+        "an undeclared cutover asks nothing: {}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn a_prose_block_past_the_cutover_is_refused() {
     let dir = with_tasks("ready-prose-past-cutover");

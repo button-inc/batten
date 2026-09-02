@@ -243,7 +243,14 @@ pub fn resolve(
         let Some((_, prompt_digest)) = prompt(&row.prompt) else {
             continue;
         };
-        let Ok(bytes) = std::fs::read(root.join(&row.path)) else {
+        // A DOCUMENT REVIEW WITHOUT A PATH IS SKIPPED, never guessed at. The
+        // column is optional because a `tracker-body` review has an issue key
+        // instead, and `for_body` is that subject's entry point — reaching for a
+        // default here would take a review over bytes nobody declared.
+        let Some(subject_path) = row.path.as_deref() else {
+            continue;
+        };
+        let Ok(bytes) = std::fs::read(root.join(subject_path)) else {
             // COULD NOT READ THE SUBJECT is could-not-look, and it must not
             // dispatch: a review keyed to bytes nobody could read would be a
             // record about a subject that does not exist.
@@ -330,7 +337,13 @@ fn dispatch(
     // refuses the whole invocation — correct for a span, and fatal for a tracker
     // body, which legitimately has an issue key instead of a path. A pointer has
     // no such problem.
-    let pointer = format!("{} {}\n", row.path, subject_digest);
+    // THE POINTER NAMES THE SUBJECT, whatever kind it is: a repository path for
+    // a `document` review, and the row's own id for a `tracker-body` one, where
+    // the id IS the issue key the agent must look up. `row.id` is the fallback
+    // rather than a placeholder — a review with no path has a name, and a name is
+    // what a pointer is for.
+    let subject_name = row.path.as_deref().unwrap_or(&row.id);
+    let pointer = format!("{subject_name} {subject_digest}\n");
     // THROUGH `exec::piped`, WHICH IS THE PLACED CHILD-PROCESS ADAPTER, rather
     // than a `Command::new` of this module's own.
     //
@@ -400,4 +413,43 @@ fn pointers_in(stdout: &str) -> Option<String> {
     } else {
         format!("{}\n", lines.join("\n"))
     })
+}
+
+/// Whether a vendored prompt has run over a BODY the caller holds, dispatching
+/// on a miss.
+///
+/// # Why this exists beside [`resolve`] rather than inside it
+///
+/// [`resolve`] answers for the whole declared set at `check` time, over subjects
+/// it can read off the disk. A refinement body is neither: it arrives on the
+/// `ready lint` payload, from the TRACKER, and there is nothing in the tree to
+/// read. Folding it into `resolve` would mean handing the tree surface a byte
+/// string from a caller — a second way for a subject to enter the engine, and the
+/// one a caller could forge.
+///
+/// **The forgery control is the caller's, and it is the one already earned.**
+/// `ready lint`'s payload is what the recorder's `verdict` authority column
+/// reads, so the body here is what the tracker returned rather than a payload
+/// somebody assembled — the distinction measured when `ready-lint` over a
+/// self-assembled payload came back green three times against text in a local
+/// file, once under an id no row carried.
+#[must_use]
+pub fn for_body(root: &Path, row: &crate::facts::ReviewQuery, body: &str) -> Look<Vec<Finding>> {
+    let Some((_, prompt_digest)) = prompt(&row.prompt) else {
+        return Look::CouldNotLook;
+    };
+    let Ok(git_dir) = crate::git::git_dir(root) else {
+        return Look::CouldNotLook;
+    };
+    let subject = digest(body.as_bytes());
+    let path = record_path(&git_dir, &row.id, &prompt_digest, &subject);
+    // SPAWN ON MISS, READ ON HIT, and NoRunner stays could-not-look — the same
+    // three answers the tree surface gives, because a machine with no reviewer
+    // installed cannot be asked whether it reviewed.
+    if matches!(read(&path), Look::IsNot)
+        && dispatch(root, row, &path, &subject) == Dispatch::NoRunner
+    {
+        return Look::CouldNotLook;
+    }
+    read(&path)
 }
