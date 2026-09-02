@@ -836,7 +836,7 @@ fn the_subscripted_spelling_counts_as_naming_a_key() {
 fn the_two_anchors_this_gate_keys_on_are_still_one_line_in_the_committed_files() {
     // THE ANTI-DEAD-GATE ASSERTION, and it exists because both new predicates are
     // LINE-ORIENTED over prose a formatter owns. `prettier` reflows Markdown, so a
-    // future edit that pushes `` `admitted_addition` (4 arms) `` or the schema
+    // future edit that pushes `` `admitted_addition` (5 arms) `` or the schema
     // authority sentence across a line break leaves the pattern matching nothing —
     // and a dead gate and a clean tree are byte-identical on the decision surface,
     // which is the class this whole file opens with, arriving through the gate's
@@ -851,7 +851,7 @@ fn the_two_anchors_this_gate_keys_on_are_still_one_line_in_the_committed_files()
     assert!(
         toolchain
             .lines()
-            .any(|line| line.contains("`admitted_addition` (4 arms)")),
+            .any(|line| line.contains("`admitted_addition` (5 arms)")),
         "the arm-count claim must survive on one line or `restated-arm-count` \
          silently stops judging it"
     );

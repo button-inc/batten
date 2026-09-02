@@ -2229,7 +2229,7 @@ test_a_declaration_losing_an_unrelated_variable_is_refused if {
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:mise+run+old-gate"],
 		},
 	}}
-	v.verdict == "V-SHELL-RULE-EDITED"
+	v.verdict == "shell edit refused"
 }
 
 # ANTI-VACUITY: the invocation must be one the LEDGER declares. Without this the
