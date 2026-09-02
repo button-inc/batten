@@ -667,7 +667,7 @@ spent by then."""
 [[fact]]
 name = "review-answered"
 returns = "json-array"
-command = "gh api graphql -F id=$(gh pr view --json id --jq .id) -f query='query($id:ID!){node(id:$id){... on PullRequest{author{login} reviews(first:100){pageInfo{hasNextPage} nodes{author{login}}} reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved}}}}}' --jq '.data.node as $p | [($p.reviewThreads.nodes[] | select(.isResolved == false) | .id), (if ([$p.reviews.nodes[] | select(.author.login != $p.author.login)] | length) == 0 then $p.author.login else empty end), (if $p.reviewThreads.pageInfo.hasNextPage then true else empty end), (if $p.reviews.pageInfo.hasNextPage then true else empty end)]'"
+command = "gh api graphql -F id=$(gh pr view --json id --jq .id) -f query='query($id:ID!){node(id:$id){... on PullRequest{author{login} reviews(first:100){pageInfo{hasNextPage} nodes{author{login}}} reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved}} comments(last:100){nodes{author{login} body}}}}}' --jq '.data.node as $p | [($p.reviewThreads.nodes[] | select(.isResolved == false) | .id), (if (([$p.reviews.nodes[] | select(.author.login != $p.author.login)] | length) == 0) and (([$p.comments.nodes[] | select(.author.login != $p.author.login) | select(.body | test(\"auto-generated comment: summarize by\")) | select(.body | test(\"rate limited by\") | not)] | length) == 0) then $p.author.login else empty end), (if $p.reviewThreads.pageInfo.hasNextPage then true else empty end), (if $p.reviews.pageInfo.hasNextPage then true else empty end)]'"
 
 # The DID-YOU-LOOK half. A `receipt` row is also what makes the fact reach Rego
 # at all: `required_checks_for` reads the receipt rows, and `agent_records`
