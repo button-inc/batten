@@ -24,6 +24,22 @@
 //! stream that is not pointers — unreachable, since you cannot ask a real agent to
 //! misbehave on demand.
 
+// UNIX-ONLY, AND THE WINDOWS FAILURE WOULD BE A FALSE GREEN RATHER THAN A
+// COULD-NOT-RUN. Every case below drives a `#!/bin/sh` stub through
+// `exec::piped`, and only unix makes it executable — the `set_permissions` call
+// in `stub` is already `#[cfg(unix)]`. On Windows the spawn fails, the dispatch
+// leaves no record, and absence is exactly what this gate refuses: the refusal
+// cases would pass FOR THE WRONG REASON while
+// `a_dispatched_review_reaches_the_predicate_and_is_clean` failed.
+//
+// That asymmetry is the reason to gate the module rather than the one clean case.
+// A suite whose negative arms pass because the subject never ran is the vacuous
+// pass this whole family exists to refuse, and it would read as coverage.
+//
+// `bot_lane.rs`, `session_provisioning.rs` and `connector_allow_door.rs` gate
+// their whole suites on this rung for the same reason. A `.cmd` twin of the stub
+// would be a second authority over what the runner answers.
+#![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;

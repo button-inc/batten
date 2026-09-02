@@ -337,6 +337,14 @@ fn dated_payload(created_at: Option<&str>, description: &str) -> String {
 /// false leaves the program absent — which is the could-not-look arm rather than
 /// a refusal, and the case that keeps this gate from being a verdict about the
 /// operator's machine.
+// UNIX-ONLY, AND ONLY THESE FIVE. The rest of this suite reads a Ready block and
+// needs no subprocess; these drive a `#!/bin/sh` stub whose `set_permissions`
+// call below is already `#[cfg(unix)]`. On Windows the spawn fails, the dispatch
+// leaves no record, and absence is what this gate refuses — so the refusal cases
+// would pass FOR THE WRONG REASON while the clean one failed. `bot_lane.rs` and
+// `review_dispatched.rs` gate whole modules on this rung; here the module has
+// other work, so the gate is per case.
+#[cfg(unix)]
 fn with_pressure_test(name: &str, runner_exits: Option<i32>) -> PathBuf {
     // BUILT FIRST, CONFIGURED SECOND. The row's `runner` must be an absolute
     // path — a relative program is resolved against the PARENT's working
@@ -351,6 +359,17 @@ fn with_pressure_test(name: &str, runner_exits: Option<i32>) -> PathBuf {
         .git()
         .base_commit()
         .build();
+    // A TOML LITERAL STRING FOR THE PATH, and it is a Windows fix rather than a
+    // style choice. A basic `"..."` string processes escapes, so an absolute path
+    // on Windows — `D:\a\batten\...` — reads `\a` and `\b` as escape sequences
+    // and the config fails to parse. Measured: this suite was green on every unix
+    // runner and `ready::a_runner_that_answers_nothing_usable_is_refused` failed
+    // the windows job with `missing escaped value, expected b, e, f, n, r, \, ",
+    // x, u, U`.
+    //
+    // A literal rather than hand-escaping the backslashes: an escaper written here
+    // would be a second authority over TOML's own string grammar, and it would be
+    // one this suite exercises on exactly one platform.
     let runner = dir.join("runner.sh");
     common::write(
         &dir,
@@ -360,7 +379,7 @@ fn with_pressure_test(name: &str, runner_exits: Option<i32>) -> PathBuf {
              [[rule]]\nid = \"review-dispatched\"\nkind = \"policy\"\nscope = \"tree\"\n\
              module = \"policy/review-dispatched.rego\"\nseverity = \"deny\"\n\n\
              [[rule.review]]\nid = \"ready-pressure-test-body\"\nprompt = \"ready-pressure-test\"\n\
-             runner = \"{}\"\nversion = \"0\"\nsubject = \"tracker-body\"\n\n{}",
+             runner = '{}'\nversion = \"0\"\nsubject = \"tracker-body\"\n\n{}",
             runner.display(),
             declared_patterns()
         ),
@@ -383,6 +402,7 @@ fn with_pressure_test(name: &str, runner_exits: Option<i32>) -> PathBuf {
 /// infers quality from its SHAPE; this asks whether a named prompt ran over
 /// these exact bytes, which better-shaped prose cannot satisfy because the prose
 /// is the input to the hash.
+#[cfg(unix)]
 #[test]
 fn a_row_past_the_pressure_test_cutover_owes_a_dispatch() {
     let dir = with_pressure_test("ready-pressure-past-cutover", Some(0));
@@ -404,6 +424,7 @@ fn a_row_past_the_pressure_test_cutover_owes_a_dispatch() {
 /// present and was asked, and it exited non-zero: the review was owed, it was
 /// dispatched, and it did not answer. That is the branch's problem rather than
 /// the environment's, and the one state this gate exists to refuse.
+#[cfg(unix)]
 #[test]
 fn a_runner_that_answers_nothing_usable_is_refused() {
     let dir = with_pressure_test("ready-pressure-red-runner", Some(1));
@@ -419,6 +440,7 @@ fn a_runner_that_answers_nothing_usable_is_refused() {
 /// BEFORE THE CUTOVER IS UNJUDGED. Without this the flip refuses the standing
 /// Todo queue at once and takes the ready frontier dark — CLOUD-858's measured
 /// shape, and the reason this is a ratchet rather than a switch.
+#[cfg(unix)]
 #[test]
 fn a_row_created_before_the_pressure_test_cutover_is_not_judged() {
     let dir = with_pressure_test("ready-pressure-before-cutover", None);
@@ -433,6 +455,7 @@ fn a_row_created_before_the_pressure_test_cutover_is_not_judged() {
 /// A PAYLOAD WITH NO CREATION INSTANT CANNOT BE PLACED against a cutover, so it
 /// is could-not-look. Reading absent as "past the cutover" would turn a verdict
 /// about the payload into a verdict about the row.
+#[cfg(unix)]
 #[test]
 fn a_payload_with_no_creation_instant_is_not_judged() {
     let dir = with_pressure_test("ready-pressure-undated", None);
@@ -448,6 +471,7 @@ fn a_payload_with_no_creation_instant_is_not_judged() {
 /// installed cannot be asked whether it reviewed, and refusing there would fail
 /// every fresh clone and every CI runner that has not installed the agent — a
 /// verdict about the operator wearing a verdict about the row.
+#[cfg(unix)]
 #[test]
 fn a_row_past_the_cutover_with_no_runner_is_not_judged() {
     let dir = with_pressure_test("ready-pressure-no-runner", None);
