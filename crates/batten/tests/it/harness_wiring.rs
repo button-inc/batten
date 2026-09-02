@@ -554,9 +554,20 @@ fn the_engine_reads_a_closed_owner_off_a_minted_receipt() {
         findings(&output)
     );
     // A COUNT, never the key: the table's directions point at nothing openable.
+    //
+    // TWO, from ONE reading, and that is a property worth pinning rather than an
+    // off-by-one to paper over: `spent` is keyed by the ROW, and both merged rows
+    // name this same owner. A single receipt therefore closes both, which is what
+    // an owner-shaped licence looks like when it expires — a `1` here would mean
+    // the predicate had stopped at the first row it matched.
     assert!(
-        findings(&output).contains("1 harness-wiring"),
+        findings(&output).contains("2 harness-wiring"),
         "wrong finding: {}",
+        findings(&output)
+    );
+    assert!(
+        !findings(&output).contains(".claude/settings.json harness-wiring"),
+        "a spent declaration reported as a sibling: {}",
         findings(&output)
     );
 }
