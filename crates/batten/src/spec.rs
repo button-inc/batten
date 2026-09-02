@@ -605,6 +605,10 @@ mod tests {
     /// one explains why that row is spelled the way it is — a reader who has to
     /// look somewhere else for that has the same problem the extraction was
     /// meant to solve.
+    // A ledger with a comment per row, which is the point of it — every row is a
+    // decision somebody wrote down. Splitting it to satisfy a line count would
+    // put the rows somewhere the assertion does not read them.
+    #[allow(clippy::too_many_lines)]
     fn committed_rows() -> Vec<String> {
         vec![
             "attribution".to_owned(),

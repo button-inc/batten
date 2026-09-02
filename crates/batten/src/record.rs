@@ -250,11 +250,34 @@ pub fn run_closes(overrides: &Overrides) -> Result<ExitCode> {
             "record closes: a detached HEAD has no branch to key the body on".to_owned(),
         ));
     };
+    // PARTITIONED BY THE CLAIM, exactly as the reader partitions (CLOUD-1300),
+    // and `pr-closes` is the record that defect was MEASURED on: after #810
+    // merged and its branch was reset onto the new trunk, this file still named
+    // that PR's keys and `filed-over-own-diff`'s exemption was evaluated against
+    // them. A writer that skipped the partition while the reader applied it
+    // would be the same staleness with an extra step — the reader would look
+    // under the partitioned name, find nothing, and refuse where it used to
+    // wrongly exempt.
+    let claim = claim_of(&git_dir, &branch);
     store(
-        &crate::recorder::record_path(&git_dir, "pr-closes", &branch),
+        &crate::recorder::record_path(&git_dir, "pr-closes", &branch, claim.as_deref()),
         &body,
     )?;
     Ok(ExitCode::Success)
+}
+
+/// This branch's claim token, for keying a verb-written record.
+///
+/// **The same resolution the reader makes** (`rules::recorder_records`), and a
+/// free function rather than an inline call at each site because two writers
+/// spelling one partition differently is the drift the partition exists to
+/// close.
+///
+/// `None` is could-not-look — no receipt, or one naming no key — and the caller
+/// keeps the unpartitioned path for it, so a branch with no claim writes exactly
+/// where it always did.
+fn claim_of(git_dir: &Path, branch: &str) -> Option<String> {
+    crate::claim::claimed_token(&git_dir.join("batten-receipts"), branch)
 }
 
 /// The record names this crate's own VERBS write, as opposed to the ones a
@@ -336,8 +359,9 @@ pub fn run_plan() -> Result<ExitCode> {
             "record plan: a detached HEAD has no branch to key the plan on".to_owned(),
         ));
     };
+    let claim = claim_of(&git_dir, &branch);
     store(
-        &crate::recorder::record_path(&git_dir, "plan", &branch),
+        &crate::recorder::record_path(&git_dir, "plan", &branch, claim.as_deref()),
         &raw,
     )?;
     Ok(ExitCode::Success)

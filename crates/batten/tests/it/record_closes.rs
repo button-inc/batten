@@ -69,7 +69,7 @@ fn record(root: &Path, body: &str) -> std::process::Output {
 /// Read the record back through the engine's own path derivation.
 fn recorded(root: &Path) -> Option<String> {
     let git_dir = common::git_in(root, &["rev-parse", "--absolute-git-dir"]);
-    let path = batten::recorder::record_path(Path::new(git_dir.trim()), "pr-closes", "work");
+    let path = batten::recorder::record_path(Path::new(git_dir.trim()), "pr-closes", "work", None);
     std::fs::read_to_string(path).ok()
 }
 

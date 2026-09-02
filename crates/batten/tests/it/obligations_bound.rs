@@ -51,7 +51,8 @@ fn repo(name: &str, record: &[&str], case: Option<(&str, &str)>) -> PathBuf {
 
 fn write_record(root: &Path, lines: &[&str]) {
     let git_dir = common::git_in(root, &["rev-parse", "--absolute-git-dir"]);
-    let path = batten::recorder::record_path(Path::new(git_dir.trim()), "board-writes", "work");
+    let path =
+        batten::recorder::record_path(Path::new(git_dir.trim()), "board-writes", "work", None);
     fs::create_dir_all(path.parent().unwrap()).expect("receipts dir");
     fs::write(path, format!("{}\n", lines.join("\n"))).expect("write the record");
 }

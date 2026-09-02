@@ -76,7 +76,22 @@ fn claimed_repo(name: &str, changed: &[&str], plan: Option<&[&str]>, claimed: bo
 /// silently pointing the reader and the writer at different files.
 fn write_record(root: &Path, record: &str, lines: &[&str]) {
     let git_dir = common::git_in(root, &["rev-parse", "--absolute-git-dir"]);
-    let path = batten::recorder::record_path(Path::new(git_dir.trim()), record, "work");
+    let git_dir = Path::new(git_dir.trim());
+    // PARTITIONED EXACTLY AS THE READER PARTITIONS (CLOUD-1300), and the comment
+    // above is what caught this: writing the unpartitioned name while
+    // `recorder_records` resolved the claim pointed the two at different files,
+    // and the `plan-unrecorded` arm went red because the reader found nothing
+    // where the writer had put something.
+    //
+    // The `claim` receipt itself is never partitioned, and cannot be: it is the
+    // file the partition is DERIVED from, so keying it by its own token would be
+    // circular.
+    let claim = if record == "claim" {
+        None
+    } else {
+        batten::claim::claimed_token(&git_dir.join("batten-receipts"), "work")
+    };
+    let path = batten::recorder::record_path(git_dir, record, "work", claim.as_deref());
     fs::create_dir_all(path.parent().unwrap()).expect("receipts dir");
     let body = if lines.is_empty() {
         String::new()

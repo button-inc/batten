@@ -6587,7 +6587,22 @@ fn recorder_records(
         if found.contains_key(name) {
             continue;
         }
-        let path = crate::recorder::record_path(git_dir, name, branch, claim.as_deref());
+        // THE CLAIM RECEIPT IS NEVER PARTITIONED BY ITS OWN TOKEN, and it cannot
+        // be: `claimed_token` DERIVES the partition from that very file, so
+        // keying it by the answer it produces is circular — the reader looks for
+        // `claim.<branch>.<token>`, finds nothing, and the record vanishes.
+        //
+        // Measured rather than reasoned: `plan-complete`'s anti-vacuity arm went
+        // red when this was missed. That module asks whether the branch pulled a
+        // row before it asks whether the row was planned, so an unreadable claim
+        // record does not merely lose one key — it stops the predicate deciding
+        // at all, which is a gate switched off rather than a finding moved.
+        let partition = if name == "claim" {
+            None
+        } else {
+            claim.as_deref()
+        };
+        let path = crate::recorder::record_path(git_dir, name, branch, partition);
         // ABSENT STAYS ABSENT, and that is the three-valued read this whole
         // surface rests on: an unreadable store leaves the key out of the map so
         // a module sees *does not hold*, where an empty file is a key whose value
