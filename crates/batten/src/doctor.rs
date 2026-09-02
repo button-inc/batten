@@ -242,6 +242,33 @@ const HOOK_HANDLERS: &str = "hook-handlers";
 /// wiring file would put config-supplied code behind a row any consumer's agent
 /// may call — CLOUD-170's actual invariant, and the reason [`on_path`] stats
 /// rather than runs. Hashing a file reaches none of it.
+///
+/// # What this does NOT catch, measured rather than reasoned
+///
+/// **It compares the INSTALL against the BUILD, not the build against the
+/// SOURCE.** When `target/release/batten` is itself behind the tree, both sides
+/// of the comparison are equally stale, they agree, and this reports
+/// [`Mediator::Current`].
+///
+/// Measured 2026-09-02, one command apart and while this very row was in flight:
+/// `land` rebased onto a `main` that had added a `[[rule.review]]` key, the
+/// engine refused the tree's own `batten.toml` with `unknown field`, and
+/// `batten doctor mediator` answered `mediator ok`. Both binaries were the same
+/// pre-rebase build. That is the fourth staleness occurrence in one container
+/// that day and the first this check missed.
+///
+/// **Stated here rather than left for a reader to discover**, because a check
+/// that silently answers a narrower question than its name suggests is the very
+/// shape this file is against: a dead gate and a clean tree are byte-identical on
+/// the decision surface. What is bought is the ORIGINAL measured failure — an
+/// image-baked or hand-installed binary against a tree that builds a different
+/// one — which is the case that ran unnoticed for six hours.
+///
+/// Closing the remainder needs a predicate over *build freshness* that is still a
+/// read: comparing a binary's mtime against its sources is the obvious candidate
+/// and is not obviously sound, since a rebase touches files cargo would not
+/// rebuild from, so it trades this false negative for a false positive. That is a
+/// separate predicate with its own design, not a tightening of this one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case", tag = "state")]
 pub enum Mediator {
