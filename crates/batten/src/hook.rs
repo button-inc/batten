@@ -1547,18 +1547,46 @@ impl Harness {
                 // here — degrading to *allow* would turn "ask a human" into "go
                 // ahead".
                 ask: AskReach::unreachable(Declaration::No),
-                // `Yes` on the host and reachable on nothing, which is the one
-                // shape `ADVISORY_GAPS` exists for. Gemini's documented "Golden
-                // Rule" treats unparseable stdout as a `systemMessage` — a
-                // non-blocking message to the model, so the host demonstrably
-                // HAS the channel. Batten cannot reach it: the only door is
-                // writing bytes this host's own `stdout_must_stay_clean` row
-                // forbids, and no documented in-band field carries one.
-                // Declaring `Unknown` here would be the easier answer and the
-                // false one — the evidence answers, and what it answers is that
-                // the gap is Batten's rather than the host's. CLOUD-44's
-                // per-host emitter shim is what would close it.
-                advisory: AdvisoryReach::unreachable(Declaration::Yes),
+                // REACHABLE SINCE CLOUD-1362, AND THE ROW ABOVE IT IS WHY IT
+                // ALWAYS WAS. This read `AdvisoryReach::unreachable(Yes)` with
+                // the reason "the only door is writing bytes this host's own
+                // `stdout_must_stay_clean` row forbids". That conflated two
+                // different things and stalled CLOUD-1152 for days.
+                //
+                // `stdout_must_stay_clean` is about STRAY output: unparseable
+                // stdout ON EXIT 0 defaults to Allow and is read as a
+                // `systemMessage`. The hazard it guards is a DECISION document
+                // corrupted into an accidental allow. An advisory is not a
+                // decision — it wants allow-plus-a-message, which is precisely
+                // what the Golden Rule delivers. The door is the mechanism, not
+                // the obstacle.
+                //
+                // The collision that would have made it an obstacle is closed by
+                // construction: `emit_channel` returns early when the decision is
+                // `Deny` or `Ask` (CLOUD-1175), so an advisory and a verdict never
+                // share one invocation's stdout. On the path where advice is
+                // emitted at all, the decision is already `Allow` — so the bytes
+                // this host reads as "allow, and tell the model" say exactly what
+                // the engine decided.
+                //
+                // Corroborated rather than argued: `admit_mediated` already
+                // writes a bare prose line to stdout on the admitted-call path,
+                // so this door has been open on a live allow path with no defect
+                // reported, for the same reason.
+                //
+                // All four spellings, and the per-event probe discipline
+                // `ADVISORY_GAPS` applies to Claude Code does NOT transfer here —
+                // reading that rejection without its scope is the error
+                // `.claude/rules/scanning.md` records. There the question is
+                // whether a documented FIELD is honoured at a given event, which
+                // is genuinely per-event. Here it is how the host parses a hook's
+                // stdout, which is a property of the host's reader and not of the
+                // moment. If it is ever measured otherwise the cost is silence,
+                // the sanctioned direction.
+                advisory: AdvisoryReach {
+                    delivered_on: &["BeforeTool", "AfterTool", "AfterAgent", "BeforeAgent"],
+                    declared: Declaration::Yes,
+                },
                 // `Unknown` rather than the `Yes` its advisory row carries. That
                 // row is `Yes` because the host demonstrably HAS the channel and
                 // Batten cannot reach it; here the evidence does not establish the
@@ -7967,17 +7995,20 @@ pub fn encode_advice(
     }
     match harness {
         Harness::ClaudeCode => encode_claude_advice(event, context).map(Some),
+        // THE GOLDEN RULE IS THE WIRE SHAPE (CLOUD-1362). Gemini documents that
+        // unparseable stdout on exit 0 defaults to Allow and is surfaced as a
+        // `systemMessage`, so the advisory body is the TEXT — deliberately not
+        // JSON, because a document that parsed would be read as a decision and
+        // this must never be one. The capability row above carries the argument
+        // for why writing here is safe rather than a violation of that host's
+        // `stdout_must_stay_clean`.
+        Harness::GeminiCli => Ok(Some(context.to_owned())),
         // No reachable surface, and stated rather than wildcarded so a row that
         // ever gains a `delivered_on` entry has to come back here and answer for
         // its wire shape. Cursor documents a verdict body and no advisory one;
-        // Copilot's output object is unconfirmed; Gemini's only advisory channel
-        // is the stdout its own `stdout_must_stay_clean` row forbids; Codex is
-        // unsurveyed; the neutral adapter has an exit status and nothing else.
-        Harness::Cursor
-        | Harness::CopilotCli
-        | Harness::GeminiCli
-        | Harness::CodexCli
-        | Harness::ExitCode => Ok(None),
+        // Copilot's output object is unconfirmed; Codex is unsurveyed; the
+        // neutral adapter has an exit status and nothing else.
+        Harness::Cursor | Harness::CopilotCli | Harness::CodexCli | Harness::ExitCode => Ok(None),
     }
 }
 
@@ -8051,25 +8082,16 @@ pub fn encode_preapproval(
 /// describes a gap — so probing a surface fails until its row is removed.
 ///
 /// `pub` because being readable IS the mechanism.
-pub const ADVISORY_GAPS: &[(Harness, &str)] = &[
-    (
-        Harness::ClaudeCode,
-        "`PostToolUse` and `UserPromptSubmit` are documented to accept \
+pub const ADVISORY_GAPS: &[(Harness, &str)] = &[(
+    Harness::ClaudeCode,
+    "`PostToolUse` and `UserPromptSubmit` are documented to accept \
          `additionalContext` and are NOT in `delivered_on`, because nothing here \
          has probed them. Listing an unprobed surface costs a notice that \
          vanishes silently; leaving it out costs only silence. `PreToolUse` was \
          a third entry here until CLOUD-1131 probed it and it delivered — so a \
          row leaving this table is what closing a gap looks like, and the \
          absence of a probe is never itself a finding about the host.",
-    ),
-    (
-        Harness::GeminiCli,
-        "the documented \"Golden Rule\" treats unparseable stdout as a \
-         `systemMessage`, which is an advisory channel whose only door is the \
-         stdout this host's `stdout_must_stay_clean` row forbids. CLOUD-44's \
-         per-host emitter shim is what would reach it.",
-    ),
-];
+)];
 
 /// Surfaces where a pre-approval is honoured and Batten does not spend one,
 /// **stated**.
@@ -12396,6 +12418,44 @@ deny contains "refused by themodule" if {
     ///
     /// Fails by: making `advisory_reachable` a per-host bool, or listing a
     /// surface in `delivered_on` that nobody has run an advisory on.
+    /// The advisory channel reaches more than one host, and Gemini's body is
+    /// TEXT rather than a document (CLOUD-1362).
+    ///
+    /// The count is asserted because CLOUD-1152's acceptance is a count: a
+    /// relocation of doctrine onto this channel that left it at one host would
+    /// have moved prose rather than fixed reach.
+    ///
+    /// **The `is_err` arm is the load-bearing one.** Gemini reads unparseable
+    /// stdout as an allow plus a `systemMessage`, so a body that PARSED as JSON
+    /// would be read as a decision — turning an advisory into a verdict on the
+    /// one host where that inversion is expressible. This asserts the emitted
+    /// bytes cannot be taken for a document.
+    ///
+    /// Fails by: emitting JSON for Gemini, emptying its `delivered_on`, or
+    /// reverting the row to `unreachable`.
+    #[test]
+    fn the_advisory_channel_reaches_a_second_host_and_never_as_a_document() {
+        let reaching: Vec<Harness> = Harness::ALL
+            .iter()
+            .copied()
+            .filter(|h| !h.capabilities().advisory.delivered_on.is_empty())
+            .collect();
+        assert_eq!(
+            reaching,
+            vec![Harness::ClaudeCode, Harness::GeminiCli],
+            "the advisory channel's reach is a stated count, not an impression"
+        );
+
+        let body = encode_advice(Harness::GeminiCli, "BeforeTool", "drift: 1 changed")
+            .expect("serializes")
+            .expect("Gemini delivers an advisory on BeforeTool");
+        assert_eq!(body, "drift: 1 changed", "the body is the text, verbatim");
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&body).is_err(),
+            "a Gemini advisory that parsed as JSON would be read as a DECISION: {body}"
+        );
+    }
+
     #[test]
     fn an_advisory_is_silent_on_a_surface_that_would_not_deliver_it() {
         let claude = Harness::ClaudeCode;
@@ -12518,10 +12578,23 @@ deny contains "refused by themodule" if {
 
     #[test]
     fn an_advisory_on_a_host_with_no_channel_is_silence_rather_than_a_deny() {
+        // THE EXCLUSION IS DERIVED FROM THE TABLE, NEVER A HOST NAME
+        // (CLOUD-1362). This read `if *harness == Harness::ClaudeCode`, so it
+        // pinned "every host but that one is silent" — a claim that went false
+        // the moment a second host gained a channel, and it went red for
+        // exactly that reason rather than because anything here broke. A name
+        // has to be added per host forever; asking `delivered_on` asks the
+        // question the test is actually about.
+        //
+        // `exercised` is the guard against the other failure: if every host
+        // ever declares a channel this loop covers nothing and passes, which is
+        // a green test asserting an empty set.
+        let mut exercised = 0_usize;
         for harness in Harness::ALL {
-            if *harness == Harness::ClaudeCode {
+            if !harness.capabilities().advisory.delivered_on.is_empty() {
                 continue;
             }
+            exercised += 1;
             // A wiring-less harness is a CONTRACT rather than a host, so it has
             // no spellings of its own — the normalized tokens are what a caller
             // composing the envelope by hand sends. Iterating only `wiring()`
@@ -12541,6 +12614,11 @@ deny contains "refused by themodule" if {
                 );
             }
         }
+        assert!(
+            exercised > 0,
+            "every host now declares an advisory channel, so this case asserts \
+             nothing — replace it rather than letting it pass empty"
+        );
     }
 
     /// Every host that declares the channel reaches some of it, or the gap is

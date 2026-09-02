@@ -88,9 +88,24 @@ fn the_detail_states_why_the_hooks_predicate_cannot_be_satisfied() {
     // The three measured facts, each of which someone otherwise re-derives. The
     // first is the one that makes the clash irreducible rather than a setting
     // nobody has tuned.
+    // "Deleting the FILE" rather than the "Deleting it" this pinned until
+    // CLOUD-1356, and the change of one word is the reason the case moved.
+    //
+    // The finding is unchanged and still measured: a delete does not survive the
+    // launcher's re-provision. What the old wording left open is WHAT does not
+    // survive — and that ambiguity was load-bearing in the wrong direction. From
+    // "it" a reader inferred that the REGISTRATION was equally beyond reach, and
+    // wrote that the only remedy is an owner action outside this repository. It
+    // is not: `batten wiring reclaim` removes the registration without touching
+    // the file, and a `session-start` handler runs it every session (CLOUD-1079,
+    // measured 2 -> 0 on this container).
+    //
+    // So the assertion was pinning the sentence rather than the finding, which
+    // is CLOUD-1152's own diagnosis of this file's class: a core-crate test over
+    // one vendor folder's prose owns the wording, not the rule.
     for phrase in [
         "unsatisfiable here",
-        "Deleting it does not survive",
+        "Deleting the FILE does not survive",
         "unknown_key",
         "rejected on noise",
     ] {
