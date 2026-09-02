@@ -594,19 +594,9 @@ pub fn receipt_name(branch: &str) -> String {
 /// `-` never matches, because [`mint`] writes it for a base that did not resolve
 /// and two unresolvable bases are not evidence of the same branch.
 fn carried_ids(receipt: &Path, base: Option<&str>) -> Vec<String> {
-    let Some(base) = base else {
+    let Some(existing) = receipt_on_the_same_base(receipt, base) else {
         return Vec::new();
     };
-    let Ok(existing) = std::fs::read_to_string(receipt) else {
-        return Vec::new();
-    };
-    let same_base = existing
-        .lines()
-        .filter_map(|line| line.strip_prefix("base "))
-        .any(|recorded| recorded == base && recorded != "-");
-    if !same_base {
-        return Vec::new();
-    }
     existing
         .lines()
         .next()
@@ -614,6 +604,60 @@ fn carried_ids(receipt: &Path, base: Option<&str>) -> Vec<String> {
         .split_whitespace()
         .map(str::to_owned)
         .collect()
+}
+
+/// The `weakens` lines a same-base receipt holds for rows this invocation does
+/// not re-groom.
+///
+/// **Carrying the ids alone is not enough, and this is the half that makes the
+/// union useful rather than merely wider.** `config lint`'s groomed reader looks
+/// for `weakens <id> <smell> <key>` in this file (CLOUD-841), and the loop that
+/// writes those lines walks the issues of THIS invocation — so a second `claim
+/// check` carried row one's id forward and dropped row one's groomed clause, and
+/// the refusal it then produces names a smell whose admission is in the tracker
+/// where nothing reads it.
+///
+/// A row named in `issues` is deliberately NOT carried: the payload in hand is
+/// the authority for it, so a clause groomed off the row since the first claim
+/// disappears rather than surviving in a file nobody re-reads. Only the rows this
+/// invocation says nothing about keep what the last one recorded.
+fn carried_weakenings(receipt: &Path, base: Option<&str>, regroomed: &[&str]) -> Vec<String> {
+    let Some(existing) = receipt_on_the_same_base(receipt, base) else {
+        return Vec::new();
+    };
+    existing
+        .lines()
+        .filter(|line| line.starts_with("weakens "))
+        .filter(|line| {
+            line.split_whitespace()
+                .nth(1)
+                .is_some_and(|id| !regroomed.contains(&id))
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The receipt's bytes, but only when it describes this same branch on this same
+/// base — the one condition both carries are guarded by.
+///
+/// `None` for every reason that is not "the same branch, still on the same base":
+/// no receipt, an unreadable one, one with no `base` line, or one whose base is
+/// not the base being claimed against now. **Could-not-look drops the record
+/// rather than carrying it**, which is the safe direction here — a lost claim
+/// costs one re-run of `claim check`, while a carried-over stale one is the
+/// defect CLOUD-516 measured, where a receipt sat on a restarted branch through
+/// four unrelated stories reporting nothing.
+///
+/// `-` never matches, because [`mint`] writes it for a base that did not resolve
+/// and two unresolvable bases are not evidence of the same branch.
+fn receipt_on_the_same_base(receipt: &Path, base: Option<&str>) -> Option<String> {
+    let base = base?;
+    let existing = std::fs::read_to_string(receipt).ok()?;
+    existing
+        .lines()
+        .filter_map(|line| line.strip_prefix("base "))
+        .any(|recorded| recorded == base && recorded != "-")
+        .then_some(existing)
 }
 
 /// Write the claim receipt.
@@ -705,6 +749,10 @@ pub fn mint(
     // "could not look", which falls back to the trailer. That is decided by the
     // file's existence rather than by this loop writing zero lines, so nothing
     // here needs a placeholder.
+    let regroomed: Vec<&str> = issues.iter().map(|issue| issue.id.as_str()).collect();
+    for line in carried_weakenings(&dest, base, &regroomed) {
+        writeln!(body, "{line}")?;
+    }
     for issue in issues {
         for pair in issue
             .description
@@ -927,6 +975,83 @@ mod tests {
             "CLOUD-1 CLOUD-2",
             "the branch speaks for both rows:\n{body}"
         );
+    }
+
+    /// Mint one row that groomed a weakening, so the `weakens` line the union
+    /// has to preserve is actually written.
+    fn mint_groomed(receipts: &Path, id: &str, base: Option<&str>, clause: &str) -> String {
+        let mut row = issue(id, "Todo");
+        row.description = Some(clause.to_owned());
+        let dest = mint(
+            receipts,
+            "user/branch",
+            &[row],
+            &Verdict::default(),
+            &Request::default(),
+            base,
+            "2026-09-01T00:00:00Z",
+        )
+        .unwrap();
+        std::fs::read_to_string(dest).unwrap()
+    }
+
+    /// CARRYING THE ID WITHOUT ITS CLAUSE IS THE HALF THAT LOOKS DONE AND IS NOT
+    /// (CLOUD-1231's third acceptance clause). `config lint`'s groomed reader
+    /// resolves `weakens <id> <smell> <key>` out of this file, and the loop that
+    /// writes those lines walks THIS invocation's issues — so a union over ids
+    /// alone leaves row one claimed and its admission gone, and the refusal that
+    /// follows names a smell whose groom is in the tracker where no gate reads it.
+    #[test]
+    fn a_carried_row_keeps_the_weakening_it_groomed() {
+        let receipts = scratch("carried-weakens");
+        mint_groomed(
+            &receipts,
+            "CLOUD-1",
+            Some("abc123"),
+            "**Weakens:** `rule-predicate-changed` at `rule[x].checks`",
+        );
+        let body = mint_one(&receipts, "CLOUD-2", Some("abc123"));
+        assert!(
+            body.contains("weakens CLOUD-1 rule-predicate-changed rule[x].checks"),
+            "row one's admission survives row two's claim:\n{body}"
+        );
+    }
+
+    /// THE PAYLOAD IN HAND IS THE AUTHORITY FOR THE ROW IT DESCRIBES, which is
+    /// what keeps the carry from becoming a ratchet nobody can lower: re-claiming
+    /// a row whose clause has since been groomed OFF must drop it, not resurrect
+    /// the copy this file happens to hold.
+    #[test]
+    fn a_regroomed_row_takes_the_payloads_answer_rather_than_the_files() {
+        let receipts = scratch("regroomed");
+        mint_groomed(
+            &receipts,
+            "CLOUD-1",
+            Some("abc123"),
+            "**Weakens:** `rule-predicate-changed` at `rule[x].checks`",
+        );
+        let body = mint_one(&receipts, "CLOUD-1", Some("abc123"));
+        assert!(
+            !body.contains("weakens "),
+            "the clause is gone from the row, so it is gone from the receipt:\n{body}"
+        );
+    }
+
+    /// The carry is guarded by the SAME base as the ids, so CLOUD-516's restart
+    /// forgets an admission exactly as it forgets a claim. Without this the two
+    /// halves could disagree, and the direction that over-claims is the one that
+    /// matters: a stale admission silently passes `config lint`.
+    #[test]
+    fn a_restarted_branch_carries_no_earlier_weakening_either() {
+        let receipts = scratch("restarted-weakens");
+        mint_groomed(
+            &receipts,
+            "CLOUD-1",
+            Some("abc123"),
+            "**Weakens:** `rule-predicate-changed` at `rule[x].checks`",
+        );
+        let body = mint_one(&receipts, "CLOUD-2", Some("def456"));
+        assert!(!body.contains("weakens "), "{body}");
     }
 
     /// ANTI-VACUITY: the union must not turn a re-claim into a duplicate, or the
