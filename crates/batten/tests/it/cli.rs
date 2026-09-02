@@ -11664,11 +11664,26 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
     )
     .expect("write fixture instruction");
 
-    // `enforce`, not `check`: the committed ruleset carries a spawning kind that
-    // the read-effect verb refuses outright. Every sibling test over the
-    // committed bytes takes the same verb for the same reason.
+    // `check --rule`, not `enforce`. The unnarrowed read-effect verb does refuse
+    // this config outright — it carries a spawning kind — but `--rule` selects
+    // the row BEFORE that refusal is reached, and `no-denied-identity-prescribed`
+    // is not one of the three `kind = "command"` rows. `mise.toml` already relies
+    // on this against these same committed bytes: `check --rule prose-only`,
+    // `--rule filed-here`, `--rule memory-graph`.
+    //
+    // This comment used to say `enforce`, "and every sibling test over the
+    // committed bytes takes the same verb for the same reason". True of an
+    // unnarrowed `check` and over-general as written: it sent the whole family
+    // through the 103-rule ruleset to assert one row. Measured on Windows CI,
+    // this case alone was 305s of a 1482s suite.
+    //
+    // The narrowing is not a weakening. Both arms survive, the clean one
+    // included, and the asserted stdout is now the output of the rule under test
+    // rather than of all 103 happening to produce that line.
     let output = batten()
-        .arg("enforce")
+        .arg("check")
+        .arg("--rule")
+        .arg("no-denied-identity-prescribed")
         .current_dir(&dirty)
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
@@ -11704,7 +11719,9 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
     .expect("write fixture instruction");
 
     let output = batten()
-        .arg("enforce")
+        .arg("check")
+        .arg("--rule")
+        .arg("no-denied-identity-prescribed")
         .current_dir(&clean)
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
