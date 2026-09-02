@@ -2131,6 +2131,62 @@ description = "Session start: put the not-signing posture into force, quietly �
 # `step`-wrapped this call, so that line was never a session's to read.
 run = "mise run signing-posture --repair >/tmp/session-start-signing.log 2>&1 || { echo '::error:: session-start: signing-posture failed — see /tmp/session-start-signing.log' >&2; tail -5 /tmp/session-start-signing.log >&2; exit 1; }"
 
+[tasks."session:wiring"]
+description = "Session start: reclaim the hook surface from launcher-provisioned siblings — the third repair of the class `session:identity` and `session:signing` already close (CLOUD-1079)"
+# THE THIRD ROW OF A FAMILY, NOT A NEW MECHANISM, and saying so is the whole
+# correction. `session:signing` exists because "the launcher writes
+# `commit.gpgsign true` --global every session, and local beats global only if
+# something writes local" — a session-start handler beating a per-session
+# launcher rewrite. `session:identity` is the same shape. This is that argument
+# applied to the launcher's HOOK REGISTRATIONS, which six rows recorded as
+# unreachable from here.
+#
+# WHAT IT REPAIRS. `~/.claude/launcher-settings.json` registers
+# `session-start-git-identity.sh` on `SessionStart` and `stop-hook-git-check.sh`
+# on `Stop`. The second instructs the exact commit identity `[attribution]
+# identity_deny` refuses, so its remedy produces a commit `commit-attribution`
+# denies (CLOUD-605, non-negotiable rule 8) — two policies, one of which has to
+# not run.
+#
+# THE CLAIM THAT KEPT THIS UNBUILT WAS FALSE, and it is retracted rather than
+# quietly dropped (CLOUD-1356). CLOUD-605 concluded "the only place it can
+# actually be turned off is the environment configuration that generates
+# `launcher-settings.json` — outside this repository, an owner action", and five
+# more rows inherited it by quotation. What CLOUD-605 measured is that a ONE-OFF
+# repair loses to a rewrite that runs every session. True, and it does not
+# generalise: a repair that also runs every session does not lose, which is the
+# whole reason the two siblings above exist.
+#
+# REGISTRATIONS, NEVER FILES, and the distinction is load-bearing rather than
+# stylistic. `session-start-git-identity.sh` also sets `core.hooksPath` for the
+# whole container, so deleting the file has a blast radius this repository has no
+# business taking. `batten wiring reclaim` removes the registration and leaves
+# the file, which is why it is the instrument and a blind `rm` is not.
+#
+# WHY THE DEFECT WAS INVISIBLE. Measured 2026-09-02: the installed binary was
+# 0.0.121, built Aug 28, against a source tree at 0.0.137. `wiring reclaim` was
+# absent from it, so an agent checking reachability concluded the repair did not
+# exist; and CLOUD-1314's `test_the_retired_launcher_hooks_are_refused_if_they_return`
+# was not in it either, so `batten doctor hooks -J` answered `siblings: 0,
+# ok: true` while `merged: 2` showed it looking straight at both registrations.
+# On 0.0.137 the same host answers `merged_siblings: 2, ok: false`. The green was
+# the stale binary's, not the host's. CLOUD-1326 owns that class.
+#
+# AFTER `session-batten` FOR EXACTLY THAT REASON: the repair is a verb of the
+# binary that step installs, so a stale or absent one turns this into a no-op
+# that reports success — the same silent-absence failure the step above exists to
+# stop. Its failure is loud for the same reason every sibling's is.
+#
+# WHAT THIS DOES NOT CLAIM. Measured the same day, both scripts carry mtime
+# 16:59 — REWRITTEN MID-SESSION, not only at session start, which is stronger
+# than CLOUD-1079 recorded. So this closes the session-start window and does not
+# hold against a mid-session re-provision. The residue is real and is recorded
+# rather than handed to an owner; what would close it is the provisioning seam
+# `deps-install` above already describes, which the container's setup script
+# calls before any session begins — upstream of both the rewrite and the harness
+# snapshot.
+run = "batten wiring reclaim >/tmp/session-start-wiring.log 2>&1 || { echo '::error:: session-start: wiring reclaim failed — see /tmp/session-start-wiring.log' >&2; tail -5 /tmp/session-start-wiring.log >&2; exit 1; }"
+
 [tasks."session:census"]
 description = "Session start: record this boot and read back what was running when the container we replaced went down (CLOUD-451)"
 # RECORD BEFORE READ, and the order is load-bearing: recording this boot after
