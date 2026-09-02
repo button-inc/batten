@@ -439,6 +439,14 @@ fn plan_entries() -> String {
     format!("{} pending\n", canary("entry"))
 }
 
+/// A pull request body read on stdin by `record closes`. The body is the largest
+/// payload any verb in this census is handed and the one most likely to be echoed
+/// by accident — a refusal quoting the line it could not parse would put a whole
+/// paragraph of someone's prose into a diagnostic.
+fn pr_body() -> String {
+    format!("Closes CLOUD-1\n\n{}\n", canary("body"))
+}
+
 /// A ledger row read on stdin by `defects add -n`. The caller wrote it, so its
 /// bytes are a declaration.
 fn incoming_record() -> String {
@@ -477,6 +485,7 @@ enum Stdin {
     ToolVerdict,
     ForgeVerdict,
     PlanEntries,
+    PrBody,
 }
 
 struct Verb {
@@ -1256,6 +1265,15 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::PlanEntries,
         disposition: Disposition::PointerOnly,
     },
+    // The body is prose somebody wrote and the record is a COUNT and a key list,
+    // so nothing this verb emits may carry a word of it — which is the same rule
+    // `record plan` follows over a smaller payload.
+    Verb {
+        path: "record closes",
+        args: &[],
+        stdin: Stdin::PrBody,
+        disposition: Disposition::PointerOnly,
+    },
 ];
 
 /// Every path of [`SURFACE`] that RUNS — the object this census must be total
@@ -1328,6 +1346,7 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
         Stdin::ToolVerdict => tool_verdict(),
         Stdin::ForgeVerdict => forge_verdict(),
         Stdin::PlanEntries => plan_entries(),
+        Stdin::PrBody => pr_body(),
     };
     // A BROKEN PIPE HERE IS THE CHILD BEING FAST, NOT A FAILURE. This corpus runs
     // every verb, and a verb that reads no stdin may exit before the write lands —

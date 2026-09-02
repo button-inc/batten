@@ -1345,6 +1345,20 @@ regex = '(?i)(deferred?|deferring|defers) (it |that |this )?to|owned by|belongs 
 id = "ready-issue-key"
 regex = 'CLOUD-[0-9]+'
 
+# THE FORGE'S CLOSING VERBS, ANCHORED AT THE END, so the row decides the text
+# IMMEDIATELY before a key rather than anywhere earlier in the body. Without the
+# anchor a single `Closes` in a paragraph would make every key after it read as
+# closed, which is the naming-versus-claiming conflation CLOUD-674 measured on
+# `claimed-keys` — a body citing a row as evidence is not moving it.
+#
+# The vocabulary is GitHub's rather than this repository's, which is why it is a
+# `[[pattern]]` row and not a literal in the crate: the core stays repo-agnostic,
+# and a consumer whose forge spells the set differently declares its own row
+# rather than patching the engine.
+[[pattern]]
+id = "ready-closing-verb"
+regex = '(?i)(^|[^0-9A-Za-z-])(clos(e|es|ed)|fix(|es|ed)|resolv(e|es|ed))[[:space:]]*:?[[:space:]]*#?$'
+
 # THE PROSE-DIALECT THRESHOLD (CLOUD-472) IS `[ready]`, NOT A `[[pattern]]` ROW.
 # It was drafted as one — a regex over the exempt key range — and that is the
 # wrong surface twice over: this registry gives one CONCEPT one spelling, and

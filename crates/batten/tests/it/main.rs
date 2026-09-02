@@ -159,6 +159,7 @@ mod provision;
 mod ratchet;
 mod ready;
 mod reclaim_report_once;
+mod record_closes;
 mod redirect_resolves;
 mod reference_coverage;
 mod refusal_ceiling;
