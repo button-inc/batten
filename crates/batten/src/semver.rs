@@ -118,6 +118,44 @@ impl Compared {
         found
     }
 
+    /// The SUBJECTS behind those ids: what changed, and where.
+    ///
+    /// A lint id alone names a CLASS and not an instance, so the refusal that
+    /// carries only ids says a break exists and not what broke. Measured on this
+    /// branch: `function_parameter_count_changed` was the whole refusal, and
+    /// finding `recorder::record_path` meant running the delegated tool by hand —
+    /// with the answer already sitting in `report`, unread.
+    ///
+    /// Still a pointer and never the payload (non-negotiable rule 4): the item's
+    /// path, its line, and the tool's own one-line summary of the delta. No
+    /// rustdoc, no signature, no source.
+    ///
+    /// **The path is relativised against `root`, and that is byte-stability rather
+    /// than tidiness** (house-style §6): the tool prints an absolute path, so
+    /// emitting it unchanged would make this gate's output differ between a
+    /// developer's clone and a runner's.
+    #[must_use]
+    pub fn subjects(&self, root: &Path) -> Vec<String> {
+        let prefix = format!("{}/", root.display());
+        let mut found: Vec<String> = self
+            .report
+            .lines()
+            .map(str::trim)
+            // The tool writes one indented line per failing item under a
+            // `Failed in:` header, each ending `, in <path>:<line>`. Keying on
+            // that tail rather than on the header means a format change drops
+            // subjects rather than silently pairing them with the wrong lint.
+            .filter_map(|line| line.rsplit_once(", in "))
+            .map(|(what, whence)| {
+                let whence = whence.strip_prefix(&prefix).unwrap_or(whence);
+                format!("{whence}  {what}")
+            })
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        found
+    }
+
     /// Whether the run graded nothing.
     #[must_use]
     pub fn graded_nothing(&self) -> bool {
@@ -520,6 +558,45 @@ mod tests {
                 String::from("struct_pub_field_missing")
             ]
         );
+    }
+
+    #[test]
+    fn a_subject_is_a_relative_pointer_and_never_the_source() {
+        // The tool's own shape, absolute path and all — which is exactly what
+        // must NOT reach the output, since it differs per clone.
+        let compared = report(
+            "--- failure function_parameter_count_changed: pub fn parameter count changed ---\n\
+             \n\
+             Failed in:\n  \
+             batten::recorder::record_path now takes 4 parameters instead of 3, in \
+             /home/user/batten/crates/batten/src/recorder.rs:1035\n",
+        );
+        assert_eq!(
+            compared.subjects(Path::new("/home/user/batten")),
+            vec![String::from(
+                "crates/batten/src/recorder.rs:1035  batten::recorder::record_path now takes 4 parameters instead of 3"
+            )]
+        );
+    }
+
+    #[test]
+    fn a_subject_outside_the_root_keeps_the_path_the_tool_gave() {
+        // Shown able to fail the other way: stripping unconditionally would
+        // mangle a path the prefix does not match, and a mangled pointer is
+        // worse than a long one.
+        let compared = report("Failed in:\n  batten::x::y changed, in /elsewhere/src/y.rs:7\n");
+        assert_eq!(
+            compared.subjects(Path::new("/home/user/batten")),
+            vec![String::from("/elsewhere/src/y.rs:7  batten::x::y changed")]
+        );
+    }
+
+    #[test]
+    fn a_report_with_no_failed_in_block_yields_no_subjects() {
+        // The empty answer is a real one: a lint can fail with no per-item
+        // block, and a reader must not be handed a fabricated pointer.
+        let compared = report("--- failure enum_variant_added: pub enum variant added ---\n");
+        assert!(compared.subjects(Path::new("/home/user/batten")).is_empty());
     }
 
     #[test]

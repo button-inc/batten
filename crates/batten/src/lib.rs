@@ -5803,14 +5803,23 @@ fn run_semver_check(
             out,
             "semver: breaking change DECLARED by {sha} — {lints} (baseline {baseline}, route {route})"
         )?,
-        semver::Verdict::Undeclared => output::message(
-            mode,
-            Verbosity::Normal,
-            err,
-            &format!(
-                "semver: this branch breaks the {package} API but no commit declares it. Failing lint(s): {lints}. Mark the break in Conventional Commits — a `!` before the colon, or a `BREAKING CHANGE:` footer — or keep the change {release_type}-compatible."
-            ),
-        )?,
+        semver::Verdict::Undeclared => {
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!(
+                    "semver: this branch breaks the {package} API but no commit declares it. Failing lint(s): {lints}. Mark the break in Conventional Commits — a `!` before the colon, or a `BREAKING CHANGE:` footer — or keep the change {release_type}-compatible."
+                ),
+            )?;
+            // THE SUBJECTS, one per line, because the line above names a CLASS
+            // and the author has to find the INSTANCE. Without these the remedy
+            // is "run the delegated tool yourself and read its report", over a
+            // report this process already holds.
+            for subject in compared.subjects(root) {
+                output::message(mode, Verbosity::Normal, err, &format!("  {subject}"))?;
+            }
+        }
         semver::Verdict::CouldNotLook => output::message(
             mode,
             Verbosity::Normal,
