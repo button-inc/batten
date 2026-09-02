@@ -5389,13 +5389,13 @@ keep = 2
 mb = 7938
 worst_mb = 7938
 multiplier = 1
-measured = "2026-09-01"
+measured = "2026-09-02"
 
 [prune.cold]
 mb = 18984
 worst_mb = 18984
 multiplier = 1
-measured = "2026-09-01"
+measured = "2026-09-02"
 
 # THE BASIS EACH FLOOR WAS MEASURED AGAINST (CLOUD-1158), because `measured` is a
 # pointer to a basis and not the basis itself.
@@ -5468,14 +5468,32 @@ measured = "2026-09-01"
 # exactly this basis move. Refreshing the count without claiming a floor
 # measurement I did not take is the honest half of the remedy.
 
+# THE 2026-09-02 MOVE, AND IT IS THE 2026-09-01 MOVE AGAIN, DELIBERATELY.
+# A bundle connecting the refusal ABI added two compiled-binary tiers —
+# `config_fault_class.rs` and `preset_manifest.rs` — and the live count reached
+# 164, twelve past the basis and outside the tolerance. That is this gate working:
+# the floor it was defending was taken against a smaller tree.
+#
+# `count` moves to the live 164 with `measured`, as the block above instructs, and
+# THE FLOORS AGAIN DELIBERATELY DO NOT MOVE. The reasoning is unchanged and is
+# worth restating rather than assumed: both are far above what the grouped-target
+# tree needs — the lap that tripped this reported 10733MB free against a 7938MB
+# warm floor, so free space was never the problem — and a floor too high only
+# refuses laps while one too low fails silently inside a test run. Moving them
+# down needs the independent measurement this block names (a build from an empty
+# `target` for cold, a minimal post-prune tree for warm), which is CLOUD-1158's
+# and was not taken here. Refreshing the count without claiming a floor
+# measurement I did not take is the honest half of the remedy, exactly as the
+# entry above says.
+
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 152
+count = 164
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 152
+count = 164
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
