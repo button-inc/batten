@@ -54,6 +54,183 @@ fn doctor(dir: &Path, extra: &[&str]) -> Output {
         .expect("run batten doctor")
 }
 
+// --- doctor mediator: WHICH engine the registrations reach (CLOUD-1349) -------
+
+/// A checkout that builds a mediator, with `batten` on `PATH` resolving to
+/// `planted`.
+///
+/// The whole fixture is two files plus a `PATH` reaching one of them: the
+/// comparison is over CONTENT, so a case only has to control what those files
+/// hold. Nothing is executed, so neither needs to be a real program — which is
+/// also what keeps these cases fast and portable.
+fn mediator_fixture(name: &str, planted: &[u8], built: &[u8]) -> PathBuf {
+    let dir = scratch(name, true, Some("version = 1\n"));
+    // The manifest is what says "this tree builds a mediator". Its contents are
+    // never parsed — only its existence decides the question is askable — so the
+    // marker is deliberately minimal.
+    fs::create_dir_all(dir.join("crates/batten")).unwrap();
+    fs::write(dir.join("crates/batten/Cargo.toml"), "# marker\n").unwrap();
+    fs::create_dir_all(dir.join("target/release")).unwrap();
+    fs::write(dir.join("target/release/batten"), built).unwrap();
+    let bin = dir.join("planted-bin");
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(bin.join("batten"), planted).unwrap();
+    dir
+}
+
+fn mediator(dir: &Path, bin: Option<&Path>, extra: &[&str]) -> Output {
+    let mut command = batten();
+    command.arg("doctor").arg("mediator");
+    command.args(extra);
+    if let Some(bin) = bin {
+        command.env("PATH", bin);
+    }
+    command
+        .current_dir(dir)
+        .env_remove("BATTEN_STRICTNESS")
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .env_remove("BATTEN_CONFIG_FROM")
+        .output()
+        .expect("run batten doctor mediator")
+}
+
+#[test]
+fn a_mediator_that_is_not_this_trees_build_is_refused() {
+    // The measured failure reduced to its decidable core: the binary answering
+    // calls is not the one this source produces. No version appears in the
+    // fixture at all, because the version is exactly what could NOT tell these
+    // two apart in the field — both sides read 0.0.137 while one of them refused
+    // the tree's own config.
+    let dir = mediator_fixture("mediator-stale", b"an older build", b"this tree's build");
+    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "mediator failed mediator-stale\n");
+}
+
+#[test]
+fn a_mediator_built_from_this_tree_passes() {
+    // THE ANTI-VACUITY MIRROR, and it is what makes the case above mean
+    // anything: a check that refused unconditionally would satisfy that one
+    // exactly as well. Same fixture shape, same PATH, identical bytes.
+    let dir = mediator_fixture("mediator-current", b"same bytes", b"same bytes");
+    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output), "mediator ok\n");
+}
+
+#[test]
+fn equal_length_binaries_that_differ_are_still_refused() {
+    // The length compare is a short-circuit, never the predicate. Two builds of
+    // the same source at the same length is the ordinary case for a change to a
+    // constant, so a check that stopped at the length would pass over precisely
+    // the drift hardest to notice by eye.
+    let dir = mediator_fixture("mediator-same-length", b"aaaaaaaaaa", b"bbbbbbbbbb");
+    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "mediator failed mediator-stale\n");
+}
+
+#[test]
+fn a_tree_that_builds_no_mediator_abstains_rather_than_refusing() {
+    // A consumer checkout never builds one, so "was this built from this tree"
+    // has no referent there. Abstaining is the honest answer; refusing would
+    // redden every consumer over a question that does not apply to them — and it
+    // is reported as `not-applicable` rather than as a bare ok, so abstention is
+    // legible rather than indistinguishable from a real comparison.
+    let dir = scratch("mediator-not-applicable", true, Some("version = 1\n"));
+    let output = mediator(&dir, None, &[]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output), "mediator ok not-applicable\n");
+}
+
+#[test]
+fn a_tree_that_builds_one_but_has_not_is_could_not_look_never_clean() {
+    // The distinction the two named variants exist to keep: this tree SHOULD
+    // have an artifact to compare and does not, which is a different claim from
+    // a consumer checkout that never had one. Reading it as clean is the exact
+    // shape — an unanswerable question passing — this verb is against.
+    let dir = scratch("mediator-unbuilt", true, Some("version = 1\n"));
+    fs::create_dir_all(dir.join("crates/batten")).unwrap();
+    fs::write(dir.join("crates/batten/Cargo.toml"), "# marker\n").unwrap();
+    let bin = dir.join("planted-bin");
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(bin.join("batten"), b"whatever").unwrap();
+    let output = mediator(&dir, Some(&bin), &[]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "mediator failed mediator-unbuilt\n");
+}
+
+#[test]
+fn a_tree_that_builds_one_with_no_mediator_on_path_is_could_not_look() {
+    // Distinct from unbuilt for the same reason `NotAcquired` keeps `Absent` and
+    // `Unparsed` apart: nothing to compare AGAINST and nothing to compare WITH
+    // have different remedies, so one reason id for both sends the reader to the
+    // wrong place.
+    let dir = mediator_fixture("mediator-unresolvable", b"planted", b"built");
+    let empty = dir.join("empty-bin");
+    fs::create_dir_all(&empty).unwrap();
+    let output = mediator(&dir, Some(&empty), &[]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "mediator failed mediator-unresolvable\n");
+}
+
+#[test]
+fn the_verdict_carries_no_path_and_no_digest() {
+    // §6 and rule 4 over this verb specifically: it is about two absolute paths
+    // and two hashes, which is the shape most likely to leak one into output.
+    // A digest is stable per content but varies per machine, so emitting one
+    // would defeat byte-stability while telling the reader nothing actionable.
+    let dir = mediator_fixture("mediator-no-path", b"older", b"newer");
+    let text = stdout(&mediator(&dir, Some(&dir.join("planted-bin")), &[]));
+    assert!(!text.contains('/'), "the verdict carried a path: {text}");
+    assert!(
+        !text
+            .chars()
+            .any(|c| c.is_ascii_hexdigit() && !c.is_ascii_alphabetic()),
+        "the verdict carried a digest: {text}"
+    );
+}
+
+#[test]
+fn the_data_channel_emits_a_document_even_when_current() {
+    // A data channel emits unconditionally: JSON that is sometimes absent is
+    // unparseable. Asserted on the passing arm because that is the one a caller
+    // is tempted to make silent.
+    let dir = mediator_fixture("mediator-json", b"same", b"same");
+    let output = mediator(&dir, Some(&dir.join("planted-bin")), &["--json"]);
+    assert_eq!(output.status.code(), Some(0));
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("the verdict is JSON");
+    assert_eq!(report["state"], "current");
+}
+
+#[test]
+fn the_sub_verb_never_renders_a_policy_verdict() {
+    // A sub-verb inherits the promise the parent makes: a mediating harness
+    // reads `2` as a deny, and "your install is out of date" is not "policy says
+    // no". Every failing arm above asserts 1; this pins that 2 is unreachable.
+    let dir = mediator_fixture("mediator-never-two", b"older", b"newer");
+    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+    assert_ne!(output.status.code(), Some(2));
+}
+
+#[test]
+fn the_bare_report_is_unchanged_by_this_sub_verb() {
+    // THE REGRESSION THIS VERB EXISTS AS A SUB-VERB TO AVOID. An earlier revision
+    // put the comparison in `diagnose()`'s check list, and `this_repository_is_healthy`
+    // went red whenever a rebuild had outpaced the install — a world-property
+    // deciding a commit gate (`.claude/rules/toolchain.md`, from `lock-check`).
+    // Bare `doctor` must not mention the mediator at all.
+    let dir = mediator_fixture("mediator-bare-unchanged", b"older", b"newer");
+    let output = doctor(&dir, &[]);
+    let text = stdout(&output);
+    assert!(
+        !text.contains("mediator"),
+        "the bare report grew it: {text}"
+    );
+    assert_eq!(output.status.code(), Some(0));
+}
+
 // --- the diagnosis -----------------------------------------------------------
 
 #[test]
