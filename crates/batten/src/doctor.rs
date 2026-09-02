@@ -663,9 +663,21 @@ const SIBLING_REGISTERED: &str = "hook-wiring-sibling-registered";
 /// The same, on a surface the host MERGES rather than the committed one.
 ///
 /// Its own id because the remedy differs and the committed one's does not reach
-/// it: a merged surface is under `$HOME`, so editing the repository cannot
+/// it: a merged surface is under `$HOME`, so editing the REPOSITORY cannot
 /// remove the registration — the same reason [`MERGED_REGISTRATION`] is separate
 /// from [`EVENT_REGISTERED_N_TIMES`].
+///
+/// **That is a statement about editing tracked files, not about this
+/// repository's reach, and it was read as the latter** (CLOUD-1339).
+/// `batten wiring reclaim` removes a merged registration, and
+/// `crates/batten/tests/it/wiring_reclaim.rs` drives it against a real `$HOME` —
+/// so the remedy exists and ships here. Measured 2026-09-02, a session read this
+/// comment beside the refusal, concluded the condition was unfixable from the
+/// repository, switched the gate off for three commits and wrote that conclusion
+/// into two commit messages. The verb is a REPAIR rather than a fix — a launcher
+/// that registers at session start registers again next session — but a repair
+/// is not nothing, and it is what the `hook wire duplicate` verdict now routes
+/// to first.
 const MERGED_SIBLING: &str = "hook-wiring-merged-sibling";
 /// The wiring file is there and is not readable as the JSON object it must be.
 ///

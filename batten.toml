@@ -8029,8 +8029,21 @@ target = ".claude/rules/commits.md"
 id = "hook wire duplicate"
 gloss = "a registration on a merged surface outside this repository does not reach the mediator"
 class = """
-`PreToolUse` is ONE entry — the engine — and CLOUD-312 measured the alternative: six task-runner launches per Bash call, 1.247s serial to do milliseconds of policy, ~93% of it startup. A second decider registered beside the mediator re-introduces that cost and, worse, splits the verdict across two authorities that can disagree about one call. The wiring this judges is the launcher's own merged settings, which live outside this repository — CLOUD-1167's fact is what makes the question expressible at all, and the row that declares the file is the whole bound on what the module may read.
+`PreToolUse` is ONE entry — the engine — and CLOUD-312 measured the alternative: six task-runner launches per Bash call, 1.247s serial to do milliseconds of policy, ~93% of it startup. A second decider registered beside the mediator re-introduces that cost and, worse, splits the verdict across two authorities that can disagree about one call. The wiring this judges is the launcher's own merged settings, which live outside this repository — and `batten wiring reclaim` removes the registration from them, so this IS repairable from here. It is a REPAIR AND NOT A FIX: a launcher that writes those registrations at session start writes them again next session, so the same refusal recurs and the same command answers it each time. CLOUD-1167's fact is what makes the question expressible at all, and the row that declares the file is the whole bound on what the module may read.
 """
+
+# THE COMMAND FIRST, because a reader who follows only the first route must reach
+# the thing that clears the refusal (CLOUD-1339). Both routes were `document`
+# before and neither document names the verb — measured 2026-09-02, that cost one
+# session three commits with `hooks-wiring-check` switched off, a false claim
+# about this repository's capabilities written into two commit messages on
+# main-bound history, and a three-option menu put to a human that one command
+# already answered. The predicate was right every time; only the remedy was
+# missing, which is the shape CLOUD-122's contract exists to refuse.
+[[verdict.route]]
+id = "verb run first"
+kind = "command"
+target = "batten wiring reclaim"
 
 [[verdict.route]]
 id = "prose read first"
