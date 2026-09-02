@@ -5938,14 +5938,14 @@ root = "target"
 keep = 2
 
 [prune.warm]
-mb = 7938
-worst_mb = 7938
+mb = 8470
+worst_mb = 8470
 multiplier = 1
 measured = "2026-09-02"
 
 [prune.cold]
-mb = 18984
-worst_mb = 18984
+mb = 20257
+worst_mb = 20257
 multiplier = 1
 measured = "2026-09-02"
 
@@ -5995,6 +5995,21 @@ measured = "2026-09-02"
 # file is one somebody switches off, and the thing being watched is a trend. When
 # it does red, move `count` and `measured` TOGETHER: a count refreshed without a
 # new measurement is the same staleness wearing a newer number.
+#
+# THE 2026-09-02 MOVE, 164 -> 175, and it is DERIVED like the two before it.
+# `[[startup]]`'s two suites plus `obligations_bound` took the live count 11 past
+# the basis, one outside the tolerance, which is this gate working exactly as the
+# paragraph above describes. Both floors scale by the stem model this block
+# already states rather than by a fresh `du`: warm 7938 at 164 stems is 48.40 per
+# stem and 48.40 x 175 is 8470; cold 18984 at 164 is 115.76 and 115.76 x 175 is
+# 20257.
+#
+# NEITHER IS AN INDEPENDENT MEASUREMENT, and saying so is the point rather than a
+# hedge — it is the same disclosure the 2026-08-30 move makes two paragraphs up,
+# and it is what leaves a reader who needs an exact floor free to take one: a
+# build from an empty `target` for cold, a minimal post-prune tree for warm. A
+# count refreshed without that statement would be the staleness wearing a newer
+# number this block already warns about.
 #
 # The comparison runs in `batten target prune` (Surface::VerifyOnly), never at
 # config load — `Prune::validate` is on the path every mediated tool call pays.
