@@ -298,7 +298,15 @@ only_drops_a_retired_reference(path) if {
 	# the dropped remainder naming a path this delta deleted, is exactly that edit
 	# and nothing else: it can only ever shorten, never introduce a byte the base
 	# did not already carry at that position.
-	added := {line | some line in input.tree.lines[path]; not line in {l | some l in base}}
+	#
+	# `base_set` IS BOUND ONCE, not rebuilt per head line (CLOUD-1321). The set
+	# comprehension used to sit inside the `added` comprehension's own body, where
+	# Rego rebuilds it for every candidate — O(head × base) for one edited path.
+	# It is a different term from the deletion-linear one this row's harness
+	# measures (that harness carries no edited governed file in any arm, by the
+	# row's own protocol), so it is fixed here rather than claimed as the fix.
+	base_set := {l | some l in base}
+	added := {line | some line in input.tree.lines[path]; not line in base_set}
 	count({line |
 		some line in added
 		admitted_addition(path, line, removed)
@@ -1225,22 +1233,69 @@ withdrawal_reason(path) := words if {
 	}
 }
 
-# Every ledger row naming `path`, as `<marker> <path> <successor>...`. A row is
-# matched on the path being the FIRST field after the marker, so a successor path
-# that happens to equal another retired file's name does not claim its mapping.
-arms_for(path) := rows if {
-	rows := {row |
-		some file, lines in input.tree.lines
-		startswith(file, "crates/batten/tests/")
-		some line in lines
-		some marker in arm_markers
-		trimmed := trim_space(line)
-		startswith(trimmed, marker)
-		fields := split(trim_space(substring(trimmed, count(marker), -1)), " ")
-		fields[0] == path
-		row := trimmed
-	}
+# Every ledger row, INDEXED BY the path it names — one pass over the corpus for
+# the whole evaluation, rather than one pass per deleted path (CLOUD-1321).
+#
+# THE COST THIS REMOVES, MEASURED. `arms_for` was a FUNCTION whose body was this
+# comprehension, and regorus memoizes RULES but not function calls
+# (`interpreter.rs:3583`), so the scan below ran once per call. Eleven `violation`
+# bodies reach it under `some path in delta.deleted`, and four more reach it
+# transitively — `repoints_at_the_declared_successor` and
+# `repoints_at_the_declared_invocation` from inside an `added × removed ×
+# deleted` triple loop. Against the corpus `batten.toml`'s `line_sources`
+# declares (~152k lines × 5 markers, with a `trim_space`/`substring`/`split` per
+# candidate) that is **~15 s per deleted governed path**: 0.43 s at zero
+# deletions, 29.6 s at two, 56.7 s at four, 96.2 s at six.
+#
+# A RULE RATHER THAN A FUNCTION IS THE WHOLE FIX. `arm_rows` is memoized, so the
+# corpus is walked once per `data.batten` query — and `policy::deny` issues
+# exactly one of those per bundle, by design. The lookup below is then O(1) and
+# the term is flat in the deletion count.
+#
+# A row is still matched on the path being the FIRST field after the marker, so a
+# successor path that happens to equal another retired file's name does not claim
+# its mapping — the binding is `path := fields[0]` where the predecessor tested
+# `fields[0] == path`, which is the same statement read forwards.
+# A COMPREHENSION IN A COMPLETE RULE, never a partial rule, and the difference is
+# not style. `arm_rows[path] contains row if { … }` was the first spelling and it
+# is UNDEFINED when no body succeeds — an empty corpus does not give it `{}`, it
+# gives it nothing — so `arms_for` went undefined for every path and
+# `count(arms_for(path)) == 0` stopped holding, silently deleting `shell retire
+# missing`. `test_deleted_without_a_mapping_is_refused` caught it, which is the
+# case the comment on `arms_for` names for exactly this reason. A comprehension
+# always succeeds, so these two rules are total by construction.
+arm_pairs := {[path, row] |
+	some file, lines in input.tree.lines
+	startswith(file, "crates/batten/tests/")
+	some line in lines
+	some marker in arm_markers
+	trimmed := trim_space(line)
+	startswith(trimmed, marker)
+	fields := split(trim_space(substring(trimmed, count(marker), -1)), " ")
+	path := fields[0]
+	row := trimmed
 }
+
+# The pairs regrouped as `path -> rows`. Quadratic in the LEDGER (~113 rows in
+# this tree, so ~13k steps), which is why it is affordable where a re-scan of the
+# corpus is not: the corpus is three orders of magnitude larger and was walked
+# once per deleted path.
+arm_rows := {path: rows |
+	some [path, _] in arm_pairs
+	rows := {r | some [p, r] in arm_pairs; p == path}
+}
+
+# Every ledger row naming `path`, as `<marker> <path> <successor>...`.
+#
+# TOTAL, AND THAT IS LOAD-BEARING RATHER THAN TIDY. The predecessor's body was a
+# lone comprehension, which always succeeds, so an unmapped path evaluated to the
+# empty set. `arm_rows` has no key for such a path at all, and a bare
+# `arm_rows[path]` would be UNDEFINED there — which Rego reads as *does not hold*,
+# so `count(arms_for(path)) == 0` below would stop holding and `shell retire
+# missing`, this module's central refusal, would silently delete itself. The
+# default is what conserves it; `test_deleted_without_a_mapping_is_refused` pins
+# it.
+arms_for(path) := object.get(arm_rows, path, set())
 
 # The successors named on `path`'s one arm, as the fields after the retired path.
 successors_for(path) := names if {
