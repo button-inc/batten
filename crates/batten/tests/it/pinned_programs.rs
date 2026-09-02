@@ -168,6 +168,82 @@ fn a_checkout_with_no_record_is_could_not_look() {
 }
 
 // ---------------------------------------------------------------------------
+// Absent is not stale, and the two have different repairs (CLOUD-1371).
+// ---------------------------------------------------------------------------
+
+/// The three readings a caller can get, kept apart.
+///
+/// **The measured defect is that two of them were one.** `record_is_stale`
+/// requires the file to EXIST, so a record that stopped existing mid-session
+/// answered `false` — read by the repair as "nothing to fix" and by `doctor` as
+/// "ok" — while every pinned program read as absent for the rest of the session.
+/// Measured in this repository's own container: the record was gone,
+/// `pin-record` said ok, and `command-programs` blamed a tool the pin provides.
+#[test]
+fn an_absent_record_is_not_stale_and_says_so_separately() {
+    let repo = repo("pinned-absent-vs-stale");
+
+    assert!(
+        !pinned::record_exists(&repo),
+        "a fresh fixture has no record"
+    );
+    assert!(
+        !pinned::record_is_stale(&repo),
+        "and absence is not staleness — there is nothing on disk to have gone bad"
+    );
+
+    provided(&repo, &["bats"]);
+    assert!(
+        pinned::record_exists(&repo),
+        "a written record exists for both predicates to answer about"
+    );
+    assert!(
+        !pinned::record_is_stale(&repo),
+        "and a record that still answers is not stale"
+    );
+
+    // THE ANTI-VACUITY MIRROR. Without it, both assertions above are satisfied by
+    // a `record_is_stale` that is simply always false — which is exactly the bug.
+    std::fs::write(repo.join("mise.toml"), "[tools]\njq = \"1.8\"\n")
+        .expect("the fixture manifest is writable");
+    assert!(
+        pinned::record_exists(&repo),
+        "the record is still on disk after the manifest moves"
+    );
+    assert!(
+        pinned::record_is_stale(&repo),
+        "and NOW it is stale: present, and no longer an answer about this tree"
+    );
+}
+
+/// The EAGER door still declines an absent record, and that bound is the reason
+/// the suite is not slow (CLOUD-1371).
+///
+/// **This is the property whose loss was measured, not a style preference.**
+/// `repaired` is called before every spawn of every program of every rule, so a
+/// version that re-asked the pin on absence paid two runner spawns per fixture
+/// root — a suite creates hundreds — and concurrent `git commit`s inside those
+/// fixtures began failing at ~50x their isolated duration. Recovery from an
+/// absent record is [`pinned::re_resolved`]'s, reached only after a spawn has
+/// already failed, where rarity is what bounds the cost.
+///
+/// Asserted over a fixture that HAS no pin, which is every fixture: the call
+/// must come back could-not-look without asking anything.
+#[test]
+fn the_eager_repair_declines_an_absent_record_so_a_fixture_pays_no_spawn() {
+    let repo = repo("pinned-eager-declines");
+    assert!(
+        !pinned::record_exists(&repo),
+        "the fixture starts with no record, which is the case under test"
+    );
+    assert!(
+        pinned::repaired(&repo).could_not_look(),
+        "the eager door declines rather than asking the pin — the bound that \
+         keeps this out of every spawn's path"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The practice, end to end.
 // ---------------------------------------------------------------------------
 

@@ -364,6 +364,18 @@ fn on_path(program: &str) -> bool {
     crate::rules::on_path_verbatim(program).is_some()
 }
 
+/// Whether the pin's record is absent altogether (CLOUD-1371).
+///
+/// **A third reading, and it is deliberately not folded into
+/// [`crate::pinned::record_is_stale`]** — that predicate answers *a record is
+/// there and has stopped answering*, and widening it to include absence would
+/// change what every one of its callers decides, including the repair whose
+/// narrowness is what bounds its cost. Asked here as its own question, over the
+/// same file, with no spawn: `doctor` is a `read` verb and may not ask the pin.
+fn record_is_absent(root: &Path) -> bool {
+    !crate::pinned::record_exists(root)
+}
+
 /// Whether the project's pin provides this program (CLOUD-1324).
 ///
 /// **The probe must agree with the spawn**, which is [`on_path`]'s own rule and
@@ -462,6 +474,7 @@ pub fn diagnose(dir: &Path) -> Report {
         .filter(|program| !on_path(program) && !provided_by_pin(dir, program))
         .map(str::to_owned)
         .collect();
+    let unreachable_names = unreachable.clone();
     checks.push(if unreachable.is_empty() {
         Check::passed(COMMAND_PROGRAMS)
     } else {
@@ -478,11 +491,32 @@ pub fn diagnose(dir: &Path) -> Report {
     // Not fatal to the run — `spawn_resolving` re-asks the pin and re-records
     // when the reading cannot answer — but a record that stopped validating is a
     // real thing to see, and `doctor` is a read verb, so saying so is all it may
-    // do. Silence where no record exists: a project with no pin has nothing to
-    // repair, which is why this asks whether one is THERE and does not answer,
-    // rather than asking whether an answer came back.
+    // do.
+    //
+    // AND AN ABSENT RECORD IS REPORTED WHEN, AND ONLY WHEN, SOMETHING NEEDED IT
+    // (CLOUD-1371). This arm read `record_is_stale` alone, which requires the
+    // record to EXIST, so an absent one passed. Measured in this container: the
+    // record was gone, `pin-record` said **ok**, and `command-programs` blamed a
+    // tool the pin provides — two checks split apart precisely so a reader is
+    // sent to the right repair, disagreeing, with the one that spoke naming the
+    // wrong fault.
+    //
+    // Silence where no record exists AND nothing is unreachable, which keeps the
+    // original reading intact for the tree it was written for: a project with no
+    // pin has no record and nothing to repair, and must not be told it has a
+    // fault. Tying the report to `unreachable` is what distinguishes the two
+    // without asking the pin — a spawn `doctor` may not make, being a `read`
+    // verb — because an absent record only COSTS anything when a declared
+    // program cannot be resolved without it.
+    //
+    // The reasons stay distinct rather than collapsing into one token: a record
+    // that stopped validating is repaired by re-resolving it, and one that never
+    // existed in a session that needs it means the session-start resolution did
+    // not happen or was undone. Same channel, different first move.
     checks.push(if crate::pinned::record_is_stale(dir) {
         Check::failed(PIN_RECORD, "pin-record-stale")
+    } else if record_is_absent(dir) && !unreachable_names.is_empty() {
+        Check::failed_naming(PIN_RECORD, "pin-record-absent", unreachable_names)
     } else {
         Check::passed(PIN_RECORD)
     });

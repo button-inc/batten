@@ -10548,18 +10548,66 @@ pub(crate) fn spawn_resolving<T>(
     // Bounded to ONCE PER ROOT PER PROCESS by `pinned::repaired`, and that bound
     // is not an optimisation — see its own doc for what an unbounded repair costs.
     let read = root.map_or(crate::facts::Look::CouldNotLook, crate::pinned::cached);
+    // Kept as a bool rather than by cloning the set: the retry below asks only
+    // whether the CHEAP reading could answer, and a clone here would copy every
+    // pinned program's name on the ordinary path to serve one branch that rarely
+    // runs.
+    let unread = matches!(read, crate::facts::Look::CouldNotLook);
     let pinned = match (&read, root) {
         (crate::facts::Look::CouldNotLook, Some(root)) => crate::pinned::repaired(root),
         _ => read,
     };
-    spawn_resolving_on(
-        std::env::var_os("PATH").as_deref(),
+    let path = std::env::var_os("PATH");
+    let extensions = executable_extensions();
+    let mut spawn = spawn;
+    let first = spawn_resolving_on(
+        path.as_deref(),
         root,
         program,
-        &executable_extensions(),
+        &extensions,
         &pinned,
-        spawn,
-    )
+        &mut spawn,
+    );
+
+    // AND ONE LAST ASK, ONLY ONCE THE LADDER HAS ALREADY FAILED (CLOUD-1371).
+    //
+    // The eager repair above fires only where a record EXISTS and stopped
+    // answering, which leaves the case that cost a whole session: a record that
+    // STOPS EXISTING mid-session. Nothing re-created it, `cached` answered
+    // could-not-look forever, and every pinned program read as absent until the
+    // next session start — measured in this container, where `no-conflict-markers`
+    // could not launch the tool it declares while `doctor` reported the record
+    // healthy.
+    //
+    // LAZY IS WHAT MAKES IT AFFORDABLE, and it is the whole reason the ask is
+    // here rather than folded into the eager arm. An unbounded eager repair pays
+    // two runner spawns for every program of every rule — measured as fixture
+    // `git commit`s at ~50x under a parallel suite. Asked here it costs nothing
+    // on every path that resolves, and a root only reaches it by failing a spawn
+    // outright, which is the exception rather than the rule.
+    //
+    // THE RECOVERY-RUNG DISTINCTION IS PRESERVED, which is the constraint the
+    // foot of the ladder refuses to give up: the retry happens only when the
+    // REFRESHED answer says the pin provides THIS program. A program nothing
+    // provides still comes back as could-not-spawn rather than as ran-and-failed,
+    // so `action` can still tell not-installed from a real failure.
+    if first.as_ref().err().map(std::io::Error::kind) == Some(std::io::ErrorKind::NotFound)
+        && unread
+        && let Some(root) = root
+    {
+        let afresh = crate::pinned::re_resolved(root);
+        if matches!(&afresh, crate::facts::Look::Is(programs) if programs.contains(program)) {
+            return spawn_resolving_on(
+                path.as_deref(),
+                root.into(),
+                program,
+                &extensions,
+                &afresh,
+                spawn,
+            );
+        }
+    }
+    first
 }
 
 /// [`spawn_resolving`] over a supplied `PATH` and extension list.

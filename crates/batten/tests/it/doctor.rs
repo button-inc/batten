@@ -387,6 +387,69 @@ fn a_command_rule_naming_a_missing_program_is_reported() {
     );
 }
 
+/// THE TWO CHECKS AGREE, OR THE READER IS SENT TO THE WRONG REPAIR (CLOUD-1371).
+///
+/// `pin-record` and `command-programs` were split apart precisely so "this
+/// program is missing" and "I cannot tell whether it is" have different remedies.
+/// Measured in this repository's own container, they disagreed: the pin record
+/// was gone, `pin-record` reported **ok**, and `command-programs` named a tool the
+/// pin provides — sending the reader to install something already installed.
+///
+/// The same fixture as the case above, so the only thing that changes between the
+/// two assertions is which check is being read.
+#[test]
+fn an_absent_pin_record_is_reported_when_a_program_needs_it() {
+    let dir = scratch(
+        "doctor-absent-pin-record",
+        true,
+        Some(
+            "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"command\"\nglob = \"**/*.rs\"\n             check = \"definitely-not-a-real-program-xyz\"\nseverity = \"deny\"\n",
+        ),
+    );
+    let output = doctor(&dir, &[]);
+    let seen = stdout(&output);
+    assert!(
+        seen.contains("pin-record failed pin-record-absent"),
+        "an absent record that something needed is a fault, not silence: {seen}"
+    );
+    assert!(
+        seen.contains("command-programs failed program-not-on-path"),
+        "and the sibling still names the program, so the two agree: {seen}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "still the config-or-usage class, never the policy verdict"
+    );
+}
+
+/// AND SILENCE IS PRESERVED FOR THE TREE THE ORIGINAL READING WAS WRITTEN FOR.
+///
+/// **The anti-vacuity mirror, and the case that stops this becoming noise.** A
+/// project with no pin has no record and nothing to repair; reporting a fault
+/// there would redden every fixture and every unpinned consumer. What makes the
+/// case above a finding is not the absence — it is that a declared program could
+/// not be resolved without it.
+#[test]
+fn an_absent_pin_record_is_silent_when_nothing_needed_it() {
+    // `sh` is on PATH anywhere this suite can run, so nothing is unreachable and
+    // the absent record costs this tree nothing.
+    let dir = scratch(
+        "doctor-absent-pin-record-unneeded",
+        true,
+        Some(
+            "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"command\"\nglob = \"**/*.rs\"\n             check = \"sh -c true\"\nseverity = \"deny\"\n",
+        ),
+    );
+    let output = doctor(&dir, &[]);
+    let seen = stdout(&output);
+    assert!(
+        seen.contains("pin-record ok"),
+        "no pin, nothing unreachable, nothing to repair: {seen}"
+    );
+    assert_eq!(output.status.code(), Some(0), "{seen}");
+}
+
 #[test]
 fn a_command_rule_naming_a_present_program_passes() {
     // `sh` is on PATH anywhere this suite can run.

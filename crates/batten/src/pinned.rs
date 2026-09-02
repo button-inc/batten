@@ -272,8 +272,37 @@ pub fn cached(root: &Path) -> PinnedFacts {
 /// reports as `false` for the same reason the fact allows on could-not-look.
 #[must_use]
 pub fn record_is_stale(root: &Path) -> bool {
+    record_exists(root) && matches!(cached(root), Look::CouldNotLook)
+}
+
+// THE OBLIGATION IS BOUND HERE, AND THE SWEEP CANNOT YET APPLY IT (CLOUD-1371).
+//
+// `obligations-bound` asks that a §7 obligation name a tracked file carrying its
+// slug as a `#MUTANT` row, and this is that file: `record_is_stale` above is what
+// CLOUD-1371 changed, so mutating it is what a case must catch.
+//
+// **What it does NOT yet buy is the sweep, and saying so is the point.**
+// `mutate`'s `Gate::name` resolves sources from "a task name, a module stem, or a
+// preset name" — there is no arm for a Rust source, so `mutate census` counts 112
+// gates with or without this row and `mutate sweep` never applies it. Declaring it
+// silently would be the coverage theatre `#MUTANT-OWNER` exists to refuse, so the
+// gap is named instead: CLOUD-1369 owes the runner arm, and states the same
+// finding in its own title — every "shown able to fail" over `crates/**` is a
+// model verdict until it lands. Until then, the
+// binding is checked by `obligations-bound` and the named case is proven by
+// `verify` rather than by a survivor.
+//MUTANT-SUITE crates/batten/tests/it/pinned_programs.rs
+//MUTANT absent-record-unrepaired|s@^    record_exists(root) && matches!(cached(root), Look::CouldNotLook)$@    false@|an_absent_record_is_not_stale_and_says_so_separately
+
+/// Whether a record is on disk at all, whatever it says (CLOUD-1371).
+///
+/// The half of [`record_is_stale`] that is about EXISTENCE, named so a caller
+/// asking the other question — *is this tree missing a record it needs* — reads
+/// the same file through the same helper rather than spelling the path a second
+/// time. Never spawns and never parses: presence is all it claims.
+#[must_use]
+pub fn record_exists(root: &Path) -> bool {
     record_path(root).is_some_and(|path| path.is_file())
-        && matches!(cached(root), Look::CouldNotLook)
 }
 
 /// Ask the pin, record the answer, and return it. Spawns.
@@ -295,7 +324,24 @@ pub fn refresh(root: &Path) -> PinnedFacts {
     resolved
 }
 
-/// [`refresh`], at most once per root per process (CLOUD-1324).
+/// [`refresh`] whatever the record's state, at most once per root per process
+/// (CLOUD-1371).
+///
+/// **The sibling below is the EAGER entry point and this is the LAZY one**, and
+/// the difference is entirely in what the caller has already established. Asking
+/// the pin costs two runner spawns, so who may ask, and when, is the whole design:
+/// [`repaired`] is safe to call before a spawn because it first establishes there
+/// is a stale record to fix, and this one is safe only AFTER a spawn has failed,
+/// because by then the cost is bounded by how rarely that happens.
+///
+/// Both share the one memo, so a root that asks either way asks once.
+#[must_use]
+pub fn re_resolved(root: &Path) -> PinnedFacts {
+    memoised(root, refresh)
+}
+
+/// [`refresh`], at most once per root per process, and only where a record
+/// EXISTS and has stopped answering (CLOUD-1324).
 ///
 /// **The bound is not an optimisation.** `refresh` spawns the runner twice, and
 /// `record` may be unable to write the answer down — no git directory, a
@@ -315,6 +361,47 @@ pub fn refresh(root: &Path) -> PinnedFacts {
 /// and a repair that kills the run is worse than one that declines.
 #[must_use]
 pub fn repaired(root: &Path) -> PinnedFacts {
+    // NO RECORD IS NOT A STALE ONE, and this narrowing is what keeps the EAGER
+    // repair from being a spawn storm. `cached` answers could-not-look for two
+    // very different trees: one whose record stopped validating, and one that
+    // simply has none — a fresh clone, and EVERY FIXTURE REPOSITORY. Re-asking
+    // the pin in the second case buys nothing HERE, because this is called
+    // before a spawn is attempted and so pays on every program of every rule.
+    //
+    // Measured: without it, a full test binary paid two runner spawns per fixture
+    // root — the per-root memo bounds a repeat, not the first ask, and a suite
+    // creates hundreds of roots. Concurrent `git commit`s inside those fixtures
+    // began failing under the load, at ~50x their isolated duration.
+    //
+    // **AND AN ABSENT RECORD IS STILL A FAULT — it is simply not THIS entry
+    // point's to repair** (CLOUD-1371). The premise this narrowing rested on was
+    // written here as "`refresh_pinned` writes the first record at session start",
+    // which holds for a record never written and fails for one that STOPS
+    // EXISTING mid-session: nothing re-created it, so every pinned program read
+    // as absent for the rest of the session. That case is [`re_resolved`]'s, off
+    // a spawn that has already failed, where the cost is bounded by rarity
+    // instead of by this guard.
+    if !record_is_stale(root) {
+        return Look::CouldNotLook;
+    }
+    re_resolved(root)
+}
+
+/// [`refresh`] behind the shared per-root memo.
+///
+/// **Keyed by root rather than a bare once-cell**, which is the part a first
+/// draft got wrong: one process judges many trees — every fixture in the suite,
+/// and any tool driving several checkouts — so a single cached answer would hand
+/// the second tree the first tree's toolchain. The map is small and lives for the
+/// process, matching how long the answer is good for.
+///
+/// A poisoned lock answers could-not-look rather than panicking: this is a repair,
+/// and a repair that kills the run is worse than one that declines.
+///
+/// ONE MEMO FOR BOTH ENTRY POINTS, so a root that asks eagerly and then lazily —
+/// or the reverse — still asks the pin once. Two memos would make the bound
+/// depend on which door the caller came through.
+fn memoised(root: &Path, ask: impl FnOnce(&Path) -> PinnedFacts) -> PinnedFacts {
     static MEMO: std::sync::OnceLock<
         std::sync::Mutex<std::collections::BTreeMap<PathBuf, PinnedFacts>>,
     > = std::sync::OnceLock::new();
@@ -324,22 +411,7 @@ pub fn repaired(root: &Path) -> PinnedFacts {
     {
         return answer.clone();
     }
-    // NO RECORD IS NOT A STALE ONE, and this narrowing is what keeps the repair
-    // from being a spawn storm. `cached` answers could-not-look for two very
-    // different trees: one whose record stopped validating, and one that simply
-    // has none — a fresh clone, and EVERY FIXTURE REPOSITORY. Re-asking the pin
-    // in the second case buys nothing: there is no stale answer to replace, and
-    // `refresh_pinned` writes the first record at session start, which is where
-    // an `Effect` is admissible.
-    //
-    // Measured: without it, a full test binary paid two runner spawns per fixture
-    // root — the per-root memo bounds a repeat, not the first ask, and a suite
-    // creates hundreds of roots. Concurrent `git commit`s inside those fixtures
-    // began failing under the load, at ~50x their isolated duration.
-    if !record_is_stale(root) {
-        return Look::CouldNotLook;
-    }
-    let resolved = refresh(root);
+    let resolved = ask(root);
     // A RECORD THAT CANNOT BE REWRITTEN AND CANNOT ANSWER IS GARBAGE, and the
     // repair clears it rather than leaving `doctor` to report it forever.
     //
