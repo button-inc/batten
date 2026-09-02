@@ -2026,3 +2026,41 @@ fn removing_an_inline_body_never_violates_either_row() {
 // withdrawn: "an install.sh that refuses is not reported as ready" the wrapper propagated install.sh's exit status; with nothing between the caller and install.sh there is no propagation to assert
 // withdrawn: "THE REFUSAL: with no checkout, a script the manifest disagrees with is not run" install.sh deliberately does NOT verify its own bytes — a one-liner cannot, and its trust is TLS plus the release digest it checks on the BINARY
 // withdrawn: "with no checkout and no install.sh asset, the gate that should have caught it is named" the wrapper's fetch fallback is gone; `release-assets-check` still demands the asset, which is that obligation's real home
+
+// --- the ledger for a WITHDRAWAL: `hook-latency-drift` (CLOUD-1270) ---
+//
+// Beside the block above for the same reason it is here at all: a withdrawal has
+// no successor to sit with. CLOUD-1270's decided disposition 3 moves the
+// measurement into `.github/workflows/hook-latency-drift.yml` as an inline step —
+// ungoverned, no task, no verb, no record — so there is no policy surface and no
+// compiled-binary tier to name, which is exactly what makes this a withdrawal
+// rather than a port.
+//
+// WHAT THE SUITE ACTUALLY PINNED, stated plainly because the arms below are all
+// withdrawals and a reader is entitled to know what that costs. Every case drove
+// a `sleep`-based `hk` stub and asserted the ARITHMETIC over it: median of N
+// samples, a `BUDGET + SLACK` ceiling, a `BUDGET / LOOSE_FACTOR` floor, and the
+// three verdicts those produce. That arithmetic survives verbatim in the step's
+// own body, and the four numbers it reads are now `env:` entries beside it rather
+// than shell defaults — but nothing re-asserts them, because a workflow step is
+// not drivable from `crates/batten/tests/**` and inventing a fixture that re-ran
+// the same shell in a test would be a second implementation of the thing under
+// test rather than coverage of it.
+//
+// SO THE COVERAGE LOSS IS REAL AND IS THE PRICE THE ROW PRICED: 24.3s of a corpus
+// against six cases over a reporter that decides nothing and gates no commit. The
+// one property worth more than the arithmetic — `hk` absent must fail rather than
+// pass — is preserved by construction instead of by assertion, because the step
+// runs under `set -euo pipefail` and exits 1 on that branch, where the retired
+// program exited 2 into a task runner that discarded it on a schedule.
+//
+// The two file arms name each other as the path this same delta retires, which is
+// what `withdrawn_subjects` demands and what stops a row excusing its own deletion.
+// withdrawn: mise-tasks/hook-latency-drift.sh tests/hook-latency-drift.bats the successor is an inline step of the scheduled workflow, not a mechanism — nothing enters `crates/batten` and no `policy/*.rego` decides it, so there is no surface to name; CLOUD-1270 disposition 3
+// withdrawn: tests/hook-latency-drift.bats mise-tasks/hook-latency-drift.sh the subject died in this same delta and the successor is a workflow step no test target can drive, so the cases have nowhere to go rather than somewhere unnamed; CLOUD-1270 disposition 3
+// withdrawn: "a tier inside its budget passes" the in-budget arm is the step's own final `echo` on the path where neither comparison fires; there is no runner-independent way to assert a wall clock from a test target
+// withdrawn: "a tier over budget plus slack is drift-tight" the `median > BUDGET + SLACK` comparison moves verbatim into the step, with the tokens `drift-tight` and the two numbers still in the message; nothing re-asserts it because the step is not drivable from a test
+// withdrawn: "slack absorbs a small overshoot rather than crying wolf" this pinned that SLACK is added to the ceiling rather than ignored — the same single `ceiling=$((BUDGET_SECONDS + SLACK_SECONDS))` line, now data in the step's `env:` block
+// withdrawn: "a tier far under budget is drift-loose, not a silent pass" the ratchet direction, preserved as the `elif` on `median < BUDGET / LOOSE_FACTOR`; it is the arm most likely to rot unnoticed and that is stated here rather than hidden
+// withdrawn: "a red gate is still timed, because cost is not correctness" preserved as the `|| true` on the `hk check` line, which is now load-bearing without a case behind it
+// withdrawn: "no hk on PATH is could-not-look, never a verdict" the one property that must not collapse into a pass; preserved structurally — `command -v hk` failing exits 1 under `set -e` — rather than by assertion

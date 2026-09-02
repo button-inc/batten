@@ -56,4 +56,112 @@ jobs:
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
       - name: Report a fast tier that no longer matches its budget
         shell: bash
-        run: mise run hook-latency-drift
+        env:
+          # The budget, in seconds, written once as data — the placement
+          # `perf-assert`'s BUDGETS table uses. It is a ceiling DERIVED from
+          # measurement (CLOUD-509), not a target chosen in advance.
+          #
+          # SLACK is what keeps this from firing on noise: a shared runner's wall
+          # clock moves several seconds run to run, and a report that cries wolf
+          # is a report nobody reads. LOOSE_FACTOR is the other end — the tier has
+          # to be dramatically under budget before re-deriving is worth a commit.
+          #
+          # Measured 2026-08-13 on a session container: 8s, 7s, 8s over three runs
+          # of `hk check --all --profile '!slow'`, against 275s for the same gate
+          # with the tier enabled. 15s is that median with room for a slower
+          # runner, and deliberately not so tight that the LOOSE_FACTOR floor
+          # (15/3 = 5s) sits above the measured 7s, which would make the report
+          # fire on its own baseline.
+          BUDGET_SECONDS: "15"
+          SLACK_SECONDS: "10"
+          LOOSE_FACTOR: "3"
+          RUNS: "3"
+          PROFILE: "slow"
+        # CLOUD-1270, disposition 3: `mise-tasks/hook-latency-drift.sh` and its
+        # suite are retired and the measurement lives here, inline. The step is
+        # the whole successor — no task, no verb, no record — because the subject
+        # is a wall clock rather than a property of any commit, and
+        # `.claude/rules/toolchain.md`'s split puts a property of the world on a
+        # clock. Nothing entered the core, so CLOUD-1176 is not reopened.
+        #
+        # WHY IT MEASURES `check --profile '!slow'` RATHER THAN A REAL COMMIT:
+        # `hk run pre-commit` stashes the worktree and applies fixers, so timing
+        # it would mutate the tree and measure the stash as much as the steps. The
+        # `check` hook runs the same step mapping with the same profile,
+        # read-only, which is the honest proxy for what a commit pays.
+        #
+        # NOTHING HERE WRITES TO THE TREE. Re-baselining the budget is a
+        # deliberate commit, prompted by this report — a bot silently rewriting
+        # the number it is supposed to defend is exactly the failure a
+        # hand-authored budget prevents.
+        #
+        # BOTH DIRECTIONS, on purpose. A budget that only complained about
+        # slowness would let every number rot upward: the tier gets faster, nobody
+        # re-derives the budget, and the ceiling stops bounding anything.
+        #
+        # `hk` ABSENT IS COULD-NOT-LOOK AND FAILS THE STEP. It must never collapse
+        # into a pass — the one property the retired program's `:70` got right and
+        # the one a successor could most easily lose.
+        run: |
+          set -euo pipefail
+
+          if ! command -v hk >/dev/null 2>&1; then
+            echo "::error:: hook-latency-drift: hk is not on PATH, so the tier cannot be timed. unmeasurable" >&2
+            exit 1
+          fi
+
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "$scratch"' EXIT
+
+          # Deliberately NOT hyperfine: `perf` uses it for a millisecond-scale
+          # binary where 100 runs are cheap and the tail is the point, while this
+          # is a multi-second whole-gate run where 3 samples is already minutes of
+          # runner time. The median of a few runs is the honest instrument at this
+          # scale, and pretending to a p95 over 3 samples would be a number with
+          # no meaning behind it.
+          samples=""
+          for _ in $(seq 1 "$RUNS"); do
+            start=$SECONDS
+            # The status is deliberately ignored: a RED gate still takes time, and
+            # this reports cost rather than correctness. A gate that cannot run at
+            # all is caught by the emptiness check below instead.
+            hk check --all --profile "!$PROFILE" >"$scratch/run.log" 2>&1 || true
+            samples+="$((SECONDS - start))"$'\n'
+          done
+
+          count=$(grep -c '[0-9]' <<<"$samples" || true)
+          if [[ "$count" -lt "$RUNS" ]]; then
+            echo "::error:: hook-latency-drift: only $count of $RUNS runs produced a timing, so there is no measurement to judge. unmeasurable" >&2
+            exit 1
+          fi
+
+          # Median of the sorted samples. Integer arithmetic throughout: the
+          # budget is in whole seconds and a fractional median would imply a
+          # precision the instrument does not have.
+          sorted=$(sort -n <<<"$samples" | grep '[0-9]')
+          median=$(sed -n "$(((RUNS + 1) / 2))p" <<<"$sorted")
+          if [[ -z "$median" ]]; then
+            echo "::error:: hook-latency-drift: the samples did not yield a median. unmeasurable" >&2
+            exit 1
+          fi
+
+          ceiling=$((BUDGET_SECONDS + SLACK_SECONDS))
+          floor=$((BUDGET_SECONDS / LOOSE_FACTOR))
+
+          # Pointer-only per non-negotiable rule 4: the measurement and the rule
+          # id, never a step's output.
+          drift=""
+          if [[ "$median" -gt "$ceiling" ]]; then
+            echo "::error:: hook-latency-drift: the fast tier measured ${median}s against a ${BUDGET_SECONDS}s budget (+${SLACK_SECONDS}s slack). Either a step has grown, or one has joined the fast tier that belongs in the $PROFILE one. drift-tight" >&2
+            drift=1
+          elif [[ "$median" -lt "$floor" ]]; then
+            echo "::error:: hook-latency-drift: the fast tier measured ${median}s against a ${BUDGET_SECONDS}s budget — under a ${LOOSE_FACTOR}x margin, so the budget has stopped bounding anything. Re-derive it in a deliberate commit. drift-loose" >&2
+            drift=1
+          fi
+
+          if [[ -n "$drift" ]]; then
+            echo "::error:: hook-latency-drift: the budget no longer matches the measurement. This is a report, not a gate — nothing is broken and no branch is at fault; the number needs re-deriving in a commit of its own." >&2
+            exit 1
+          fi
+
+          echo "hook-latency-drift: fast tier ${median}s over $RUNS run(s), within the ${BUDGET_SECONDS}s budget"
