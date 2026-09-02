@@ -2968,6 +2968,31 @@ pub struct ToolQuery {
     /// Unreadable, or outside the tree, is [`Look::CouldNotLook`]: the id is
     /// absent from the map, never present with an empty verdict.
     pub input: String,
+    /// The program that PRODUCES the verdict, so the engine can take it rather
+    /// than wait for somebody to remember (CLOUD-1265).
+    ///
+    /// **Without this the family is a reader with no writer.** `batten record
+    /// tool` mints these records and nothing calls it, so the key resolves to
+    /// nothing on every real checkout and the deny rows over it refuse nothing —
+    /// measured, and the reason this column exists. It is the identical defect to
+    /// a store with no reader, which is what [`ReviewQuery`] was built to avoid
+    /// one fact over.
+    ///
+    /// Optional: a row that declares none keeps the producer-writes-outside
+    /// behaviour exactly, so a consumer already minting records by hand is
+    /// untouched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+    /// The exact flags, so a reader can tell which question was asked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// A subcommand answering whether the validator can run here at all.
+    ///
+    /// [`ReviewQuery::probe`]'s column and its reason: a tool that is not
+    /// installed is a fact about the MACHINE, and refusing a branch for it is a
+    /// verdict about the operator. Absent keeps today's behaviour.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub probe: Vec<String>,
 }
 
 impl ToolQuery {

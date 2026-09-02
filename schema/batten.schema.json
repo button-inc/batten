@@ -3623,6 +3623,13 @@
       "description": "One `[[rule.tools]]` row: a third-party tool's verdict the engine reads back\nfrom a keyed record (CLOUD-1171).\n\n**Every field is a component of the KEY, and each refuses a different lie.**\nA record is found only under the exact triple, so a validator pinned\nelsewhere, or one whose answer predates a change to what it read, is not a\nrecord about this repository's current state — it lives under a different\nname and simply does not answer. That negative half is the family's safety\nproperty, in the same place [`Rooted`]'s is: the declaration.\n\nThe engine knows nothing about which tools exist or what any of them checks.\nIt composes a key and reads a file, which is where non-negotiable rule 1 is\npaid — the tool's name, its pin and its subject are the consumer's facts, in\nthe consumer's `batten.toml`.",
       "type": "object",
       "properties": {
+        "args": {
+          "description": "The exact flags, so a reader can tell which question was asked.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "id": {
           "description": "The key this verdict is projected under in `input.tree[\"tool-verdict\"]`.\n\nThe declared id rather than the composed key, because a composed key\ncarries a digest that changes every time the input does — a module\nwritten against one would have to be edited whenever the file it judges\nis edited.",
           "type": "string"
@@ -3630,6 +3637,20 @@
         "input": {
           "description": "The repository-relative path whose bytes the verdict was taken over.\n\nIts digest is the third component of the key, so a verdict goes stale by\nconstruction the moment the file changes — the anti-staleness half, and\nthe one a `status: clean` marker alone could never provide.\n\nUnreadable, or outside the tree, is [`Look::CouldNotLook`]: the id is\nabsent from the map, never present with an empty verdict.",
           "type": "string"
+        },
+        "probe": {
+          "description": "A subcommand answering whether the validator can run here at all.\n\n[`ReviewQuery::probe`]'s column and its reason: a tool that is not\ninstalled is a fact about the MACHINE, and refusing a branch for it is a\nverdict about the operator. Absent keeps today's behaviour.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "run": {
+          "description": "The program that PRODUCES the verdict, so the engine can take it rather\nthan wait for somebody to remember (CLOUD-1265).\n\n**Without this the family is a reader with no writer.** `batten record\ntool` mints these records and nothing calls it, so the key resolves to\nnothing on every real checkout and the deny rows over it refuse nothing —\nmeasured, and the reason this column exists. It is the identical defect to\na store with no reader, which is what [`ReviewQuery`] was built to avoid\none fact over.\n\nOptional: a row that declares none keeps the producer-writes-outside\nbehaviour exactly, so a consumer already minting records by hand is\nuntouched.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "tool": {
           "description": "The tool's name, as the producer wrote it into the record's key.",

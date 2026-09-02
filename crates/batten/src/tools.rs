@@ -124,7 +124,20 @@ pub fn verdicts(
             continue;
         };
         let key = record_key(row, &digest(&bytes));
-        let Ok(text) = std::fs::read_to_string(record_path(git_dir, &key)) else {
+        let path = record_path(git_dir, &key);
+        // RUN IT ON A MISS, so the record is minted by the run that reads it
+        // rather than by a call somebody has to remember (CLOUD-1265).
+        //
+        // This family had a reader and no writer: `batten record tool` mints
+        // these and nothing calls it, so the key resolved to nothing on every
+        // real checkout and the deny rows over it refused nothing. That is the
+        // same dead gate as a store nobody reads, and the fix is the same shape —
+        // the engine takes the verdict itself, keyed exactly as before so a
+        // differently-pinned tool or changed input still does not answer.
+        if !path.is_file() {
+            produce(root, row, &path);
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
             // ABSENT, not empty. This is the arm the whole family turns on: a
             // record under a DIFFERENT key — another version, another revision of
             // the input — is not read here, it is not seen at all.
@@ -133,6 +146,63 @@ pub fn verdicts(
         found.insert(row.id.clone(), crate::forge::parse(&text));
     }
     found
+}
+
+/// Run a declared validator and store what it concluded.
+///
+/// # Exit status is the verdict, and stdout is not read at all
+///
+/// A validator's business is whether the input is acceptable, and that is its
+/// exit code. Parsing its stdout would make this a second authority over a format
+/// every tool spells differently — and `review.rs` has the measurement for what
+/// that costs: demanding one shape from a third-party program turns every tool
+/// that speaks its own into a failure, and refuses the subject for somebody
+/// else's output.
+///
+/// So: zero writes an EMPTY record, which is "it ran and objected to nothing";
+/// non-zero writes ONE pointer naming the input, which is "it ran and objected".
+/// Both are records, because both are verdicts. Every other outcome — no runner,
+/// a probe that says not-ready, a spawn that fails — leaves NO record, so the id
+/// is absent from the map and the module reads could-not-look rather than clean.
+fn produce(root: &Path, row: &ToolQuery, path: &Path) {
+    let Some(program) = row.run.as_deref() else {
+        return;
+    };
+    if !row.probe.is_empty() {
+        let ready = crate::exec::piped(root, Path::new(program), &row.probe, "")
+            .is_some_and(|(code, _)| code == 0);
+        if !ready {
+            return;
+        }
+    }
+    let Some((code, _)) = crate::exec::piped(root, Path::new(program), &row.args, "") else {
+        return;
+    };
+    // THE RESERVED `status` LINE, which is this family's own vocabulary rather
+    // than anything the tool said. `validator-verdict-clean` defines it: `clean`
+    // is the sentinel, and any other value — or any other key — counts as a
+    // finding. So the exit code maps into a record shape the readers already
+    // understand, and no reader has to learn a per-tool dialect.
+    //
+    // A POSITIVE ASSERTION rather than an empty file. Both read as clean to the
+    // consumer, but an empty file is indistinguishable from a write that created
+    // it and then failed, and this family's whole discipline is that could-not-
+    // look and clean must never share a spelling.
+    //
+    // Pointer-only either way (rule 4): two closed tokens, and never a byte of
+    // what the validator printed — which is the one thing a validator's output
+    // reliably contains.
+    let body = if code == 0 {
+        "status clean\n".to_owned()
+    } else {
+        "status error\n".to_owned()
+    };
+    if let Some(parent) = path.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        return;
+    }
+    let _ = std::fs::write(path, body);
 }
 
 #[cfg(test)]
@@ -146,6 +216,12 @@ mod tests {
             tool: String::from("validator"),
             version: String::from(version),
             input: String::from(input),
+            // The existing cases pin the KEYING, which is what this family turns
+            // on and what a producer does not change: a record from another
+            // version or over other bytes still lives under a different name.
+            run: None,
+            args: Vec::new(),
+            probe: Vec::new(),
         }
     }
 
