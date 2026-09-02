@@ -558,8 +558,23 @@ fn a_tree_with_no_wiring_surface_is_not_stale() {
     // In the compiled tier rather than only in the module's own `test_` rules,
     // because that is what makes the mutation on the guard land somewhere a
     // declared `#MUTANT-SUITE` case can turn red (CLOUD-1267).
+    // A DECLARED ROW IS WHAT MAKES THE GUARD LOAD-BEARING, and its absence is why
+    // `stale-unguarded` SURVIVED. `declared` stopped being a Rego constant when
+    // CLOUD-1163 made it `policy/harness-declared.json`, and this fixture never
+    // wrote that document — so the table was undefined, `stale` had nothing to
+    // iterate, and the mutation on `committed_read > 0` changed no answer. The
+    // case asserted a clean tree and would have asserted one over a module that
+    // had stopped guarding.
+    //
+    // The row deliberately matches nothing wired: that is the state `stale`
+    // refuses, so the guard is the ONLY thing keeping this tree clean.
     let repo = scratch("harness-wiring-no-surface");
     write(&repo, "batten.toml", &config());
+    write(
+        &repo,
+        "policy/harness-declared.json",
+        "{\n  \"matches-nothing.sh\": \"CLOUD-1\"\n}\n",
+    );
     let module = std::fs::read_to_string(at_root("policy/harness-wiring.rego")).unwrap();
     write(&repo, "harness-wiring.rego", &module);
     git_in(&repo, &["init", "-q", "-b", "main", "."]);

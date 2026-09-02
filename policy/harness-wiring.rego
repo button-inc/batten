@@ -743,4 +743,10 @@ test_no_reading_at_all_is_not_spent if {
 #MUTANT stray-unread|s@^\tnot contains(command, mediator)$@\tfalse@|a_committed_sibling_the_table_does_not_declare_is_refused
 #MUTANT stale-unguarded|s@^\tcommitted_read > 0$@\ttrue@|a_tree_with_no_wiring_surface_is_not_stale
 #MUTANT stale-never|s@^\tnot matches_something(pattern)$@\tfalse@|a_committed_row_matching_nothing_is_stale
-#MUTANT spent-never|s@^\tregex.match(expression, status)$@\tfalse@|a_row_whose_owner_has_closed_is_spent
+# NAMES THE COMPILED CASE, NOT THE LOAD-TIME ONE. `a_row_whose_owner_has_closed_is_spent`
+# is a `test_` rule in this file; `mutate` resolves the DECLARED `#MUTANT-SUITE`
+# path (CLOUD-1267), so naming it reported `names-no-case` and the mutation was
+# never applied to anything. The compiled equivalent already existed under
+# another name — it mints a real `done` receipt and asks the shipped `check` —
+# which is the tier that can actually see this predicate die.
+#MUTANT spent-never|s@^\tregex.match(expression, status)$@\tfalse@|the_engine_reads_a_closed_owner_off_a_minted_receipt
