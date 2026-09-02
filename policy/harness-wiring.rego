@@ -70,15 +70,29 @@ mediator := "batten"
 # that shipped already-green over it would be a gate nothing can fail -- with the
 # current registration recorded rather than tolerated silently.
 #
-# Two rules keep the table from becoming a permanent exemption, and both are
-# predicates below rather than prose: a row naming no issue is itself a refusal
-# (`unowned`), and a row matching nothing wired is a refusal too (`stale`), so a
+# THREE rules keep the table from becoming a permanent exemption, and all three
+# are predicates below rather than prose: a row naming no issue is itself a
+# refusal (`unowned`), a row matching nothing wired is a refusal too (`stale`),
+# and a row whose issue has CLOSED is a refusal as well (`spent`) -- so a
 # retirement that lands must delete its row rather than leave a licence behind
 # for the next command with a similar path.
+#
+# THE THIRD ONE WAS MISSING AND ALL THREE ROWS WERE IN THE STATE IT REFUSES.
+# Measured 2026-09-02: `run-shape-guard.sh` named CLOUD-821 (Done 2026-08-28) and
+# both merged rows named CLOUD-605 (Done 2026-08-23). `hooks-wiring-check` used to
+# hold that direction from a `get_issue` payload a caller piped in; a tree-scoped
+# module has no stdin, so CLOUD-1160 retired the predicate with no successor and
+# nothing has watched it since. CLOUD-1310's `input.tree.minted` is the successor.
+#
+# The re-pointed owners are each the issue that owns the REMOVAL rather than the
+# one that recorded something about it -- the distinction the CLOUD-605 rows got
+# wrong. That issue closed by recording a PRECEDENCE (non-negotiable rule 8), which
+# stops the hook's remedy from being followed and cannot remove a program living
+# outside this repository.
 declared := {
-	"mise-tasks/run-shape-guard.sh": "CLOUD-821",
-	"stop-hook-git-check.sh": "CLOUD-605",
-	"session-start-git-identity.sh": "CLOUD-605",
+	"mise-tasks/run-shape-guard.sh": "CLOUD-1108",
+	"stop-hook-git-check.sh": "CLOUD-1314",
+	"session-start-git-identity.sh": "CLOUD-1314",
 }
 
 # The committed hook surfaces, one per harness in `Harness::ALL` that has one.
@@ -297,6 +311,43 @@ matches_something(pattern) if {
 	contains(command, pattern)
 }
 
+# THE THIRD DIRECTION (CLOUD-1310): a row whose owning issue has CLOSED.
+#
+# `stale` catches a licence whose SUBJECT is gone. This catches one whose OWNER is
+# gone, which is the same permanent exemption arriving by the route `stale` cannot
+# see: the command is still wired, so the row matches something, and the issue that
+# was going to retire it has shipped. All three rows of this table were in exactly
+# that state when this predicate was written, which is why it is here rather than
+# in a follow-up.
+#
+# `input.tree.minted` is a field of a receipt the MEDIATED boundary already wrote
+# when somebody read the issue -- the engine fetches nothing and this module cannot
+# make it. That is the whole reason this is decidable on the tree surface at all.
+violation contains {
+	"rule": "harness-wiring",
+	"verdict": "hook declare spent",
+	"subjects": [{"count": count(spent)}],
+} if {
+	count(spent) > 0
+}
+
+# ABSENT IS COULD-NOT-LOOK, AND HERE IT IS THE ORDINARY STATE. The receipt store
+# is under the git directory, is never committed, and is empty on every CI runner
+# and every fresh clone -- so a key nobody has read simply does not appear, the
+# body does not hold, and the row is not called spent. Reading that absence as
+# "the owner is open" would be the false green this fact family exists to refuse,
+# and reading it as spent would redden every runner for a state nobody can fix.
+#
+# Binding the expression FIRST is `unowned`'s could-not-look arm for the same
+# reason: an undefined pattern must abstain rather than match nothing, which would
+# call every row's owner open.
+spent contains pattern if {
+	some pattern, key in declared
+	expression := data.batten.patterns["closed-issue-status"]
+	status := input.tree.minted["issue-status"][key]
+	regex.match(expression, status)
+}
+
 # The could-not-look clause `.claude/rules/policy-modules.md` requires, and it is
 # writable now that `input.tree.missing` carries a CAUSE (CLOUD-1309). Until this
 # change the channel was an array of names, so a module could see THAT a declared
@@ -495,7 +546,52 @@ test_an_undeclared_name_in_the_channel_is_not_this_modules_business if {
 	not "hook wire unread" in vs
 }
 
+# --- the owner's status (CLOUD-1310) -------------------------------------------
+#
+# THE THREE CASES MUST STAY A SET. The closed case alone passes over a module that
+# fires on any status; the open case alone passes over one that fires on none; and
+# without the unread case a module that treats a missing reading as closed looks
+# correct here while reddening every CI runner.
+
+# One receipt reading, as the engine projects it: id -> subject -> token.
+read(status) := {"tree": {"minted": {"issue-status": {"CLOUD-1314": status}}}}
+
+test_a_row_whose_owner_has_closed_is_spent if {
+	some v in violation with input as read("done")
+	v.verdict == "hook declare spent"
+}
+
+# `canceled` and `duplicate` close a row's owner as surely as `done` does: an
+# exemption waiting on work that was abandoned or folded into another issue is
+# waiting on nothing.
+test_an_abandoned_or_folded_owner_closes_the_row_too if {
+	some v in violation with input as read("canceled")
+	v.verdict == "hook declare spent"
+	some w in violation with input as read("duplicate")
+	w.verdict == "hook declare spent"
+}
+
+test_a_row_whose_owner_is_open_is_not_spent if {
+	vs := verdicts with input as read("in-progress")
+	not "hook declare spent" in vs
+}
+
+# COULD-NOT-LOOK, and it is the ORDINARY state: the receipt store is per-checkout
+# and empty on every runner and every fresh clone. A module reading that absence
+# as closed would redden everywhere for a state nobody can fix.
+test_a_row_nobody_has_read_the_owner_of_is_not_spent if {
+	vs := verdicts with input as {"tree": {"minted": {"issue-status": {}}}}
+	not "hook declare spent" in vs
+}
+
+# And the whole fact absent, which is what a run declaring no mint produces.
+test_no_reading_at_all_is_not_spent if {
+	vs := verdicts with input as {"tree": {"documents": {}}}
+	not "hook declare spent" in vs
+}
+
 #MUTANT-SUITE crates/batten/tests/it/harness_wiring.rs
 #MUTANT stray-unread|s@^\tnot contains(command, mediator)$@\tfalse@|a_committed_sibling_the_table_does_not_declare_is_refused
 #MUTANT stale-unguarded|s@^\tcommitted_read > 0$@\ttrue@|a_tree_with_no_wiring_surface_is_not_stale
 #MUTANT stale-never|s@^\tnot matches_something(pattern)$@\tfalse@|a_committed_row_matching_nothing_is_stale
+#MUTANT spent-never|s@^\tregex.match(expression, status)$@\tfalse@|a_row_whose_owner_has_closed_is_spent

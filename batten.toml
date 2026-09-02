@@ -1328,6 +1328,17 @@ regex = '(?i)(deferred?|deferring|defers) (it |that |this )?to|owned by|belongs 
 id = "ready-issue-key"
 regex = 'CLOUD-[0-9]+'
 
+# THE CLOSED STATUSES, as the tracker's `{slug:status}` renders them: lowercased
+# with non-alphanumeric runs folded to `-`. A row here rather than a literal in
+# the module for `ready-issue-key`'s reason one layer over -- a tracker's closed
+# vocabulary is a consumer fact, and the next gate that has to recognise a closed
+# issue reads this row instead of spelling its own set. `duplicate` is closed too:
+# an exemption whose owner was merged into another issue is as spent as one whose
+# owner shipped.
+[[pattern]]
+id = "closed-issue-status"
+regex = '^(done|canceled|duplicate)$'
+
 # The tracker serialises a mention as `<issue …>KEY</issue>`, so the markup is
 # stripped and the stored and rendered forms become one case. A pattern written
 # against the rendered form never matches the stored one, and an exemption tested
@@ -4822,6 +4833,27 @@ id = "harness-gemini-settings"
 root = "HOME"
 path = ".gemini/settings.json"
 
+# THE OWNER'S STATUS, off a receipt the mediated boundary already wrote
+# (CLOUD-1310). `declared` names the issue that owns each row's retirement, and a
+# row whose owner has CLOSED is the permanent exemption the table exists to
+# refuse -- measured on this branch, where all three rows named issues that had
+# shipped. `hooks-wiring-check` used to decide that from a `get_issue` payload a
+# caller piped in; a tree-scoped module has no stdin, so CLOUD-1160 retired the
+# predicate with no successor and this row is the successor.
+#
+# The indices are `[[mint]] issue-read`'s body read positionally:
+# `{id} {updatedAt} {now} {digest:description} {slug:status} {authority:ready}`,
+# so `{now}` is 2 and `{slug:status}` is 4. Seven days because the board moves in
+# days and a reading older than a working week is not evidence about now -- and
+# ABSENT is could-not-look, which on a CI runner is every row, so the predicate
+# refuses narrowly and abstains widely.
+[[rule.minted]]
+id = "issue-status"
+mint = "issue-read"
+field = 4
+recency = 2
+max_age_days = 7
+
 # CLOUD-1247, and the SIBLING of the row above rather than a duplicate of it.
 # `harness-wiring` reads the MERGED settings under `$HOME` and decides which
 # mediator the launcher runs; this reads the COMMITTED file in the tree and
@@ -6734,6 +6766,10 @@ word = "same"
 gloss = "identical where it should differ"
 
 [[vocabulary.condition]]
+word = "spent"
+gloss = "the thing it was waiting on has already happened"
+
+[[vocabulary.condition]]
 word = "stale"
 gloss = "answers for a state that has moved"
 
@@ -7156,6 +7192,18 @@ id = "hook declare stale"
 gloss = "a declared hook sibling matches nothing wired, so it is a licence with no subject"
 class = """
 The table only ever grows unless a retirement deletes its own row, and a row left behind is a licence the next command with a similar path inherits silently. Delete the row: its subject is gone. A row naming a MERGED surface is unenforced where no merged surface was read, so this is never raised on a runner that has no launcher file — an absent surface is could-not-look, not a clean one.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/harness-wiring.rego"
+
+[[verdict]]
+id = "hook declare spent"
+gloss = "a declared hook sibling names an issue that has closed, so its licence outlived its owner"
+class = """
+Every row in the table is a registration this repository refuses and has not yet retired, and the issue it names is what will retire it. When that issue CLOSES and the command is still wired, the licence has outlived the work it was waiting on -- which is the permanent exemption the table's other two directions exist to prevent, arriving by the one route they cannot see. Re-point the row at the issue that actually owns the removal, or retire the command and delete the row. A row nobody has read the owner of is NOT raised: the receipt store is per-checkout and empty on any runner, so absence here is could-not-look and never agreement.
 """
 
 [[verdict.route]]

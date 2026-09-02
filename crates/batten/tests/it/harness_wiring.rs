@@ -168,6 +168,10 @@ const VERDICTS: &str = r#"
 id = "ready-issue-key"
 regex = '[A-Z]+-[0-9]+'
 
+[[pattern]]
+id = "closed-issue-status"
+regex = '^(done|canceled|duplicate)$'
+
 [[verdict]]
 id = "hook wire duplicate"
 gloss = "a registration on a merged surface outside this repository does not reach the mediator"
@@ -217,6 +221,16 @@ class = "A fixture copy of the committed row; the id is what the module raises."
 id = "module read first"
 kind = "document"
 target = "harness-wiring.rego"
+
+[[verdict]]
+id = "hook declare spent"
+gloss = "a declared hook sibling names an issue that has closed, so its licence outlived its owner"
+class = "A fixture copy of the committed row; the id is what the module raises."
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "harness-wiring.rego"
 "#;
 
 /// The fixture config: one rule over both surface classes.
@@ -243,6 +257,13 @@ severity = "deny"
 id = "harness-launcher-settings"
 root = "BATTEN_FIXTURE_WIRING_ROOT"
 path = ".claude/launcher-settings.json"
+
+[[rule.minted]]
+id = "issue-status"
+mint = "issue-read"
+field = 4
+recency = 2
+max_age_days = 7
 {VERDICTS}"#
     )
 }
@@ -488,6 +509,104 @@ fn a_tree_with_no_wiring_surface_is_not_stale() {
     assert!(
         output.status.success(),
         "a tree with no wiring surface reported: {}",
+        findings(&output)
+    );
+}
+
+/// Write one `issue-read` receipt into the fixture's own receipt store.
+///
+/// The store is under the GIT DIRECTORY, never in the tree, which is what makes
+/// this fact per-checkout and empty on any runner. The body is `[[mint]]
+/// issue-read`'s: `{id} {updatedAt} {now} {digest} {status} {ready}`, so field 4
+/// is the status and field 2 is when the reading was taken.
+fn receipt(repo: &Path, key: &str, status: &str, taken: u64) {
+    let store = repo.join(".git/batten-receipts");
+    std::fs::create_dir_all(&store).expect("receipt store");
+    std::fs::write(
+        store.join(format!("issue-read.{key}")),
+        format!("{key} 2026-01-01 {taken} abcd1234 {status} ready\n"),
+    )
+    .expect("write receipt");
+}
+
+/// Seconds since the epoch, for a receipt written "just now".
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
+#[test]
+fn the_engine_reads_a_closed_owner_off_a_minted_receipt() {
+    // CLOUD-1310'S WHOLE POINT, and it is only decidable over the compiled binary:
+    // a `with input as` case fabricates `input.tree.minted` and so passes over an
+    // engine that never builds it. This writes a real receipt into a real store and
+    // asks the shipped `check` to find it.
+    //
+    // The tree is otherwise CLEAN — every declared row matches something wired —
+    // so the only thing that can redden this run is the owner's status.
+    let (repo, outside) = fixture("owner-closed", &clean_committed(), Some(&clean_merged()));
+    receipt(&repo, "CLOUD-1314", "done", now());
+    let output = check(&repo, Some(&outside));
+    assert!(
+        !output.status.success(),
+        "a row whose owner has closed was allowed: {}",
+        findings(&output)
+    );
+    // A COUNT, never the key: the table's directions point at nothing openable.
+    assert!(
+        findings(&output).contains("1 harness-wiring"),
+        "wrong finding: {}",
+        findings(&output)
+    );
+}
+
+#[test]
+fn an_open_owner_is_not_spent() {
+    // The other direction, and without it the case above passes over a module that
+    // fires on any reading at all.
+    let (repo, outside) = fixture("owner-open", &clean_committed(), Some(&clean_merged()));
+    receipt(&repo, "CLOUD-1314", "in-progress", now());
+    let output = check(&repo, Some(&outside));
+    assert!(
+        output.status.success(),
+        "an open owner was reported spent: {}",
+        findings(&output)
+    );
+}
+
+#[test]
+fn a_reading_older_than_the_declared_bound_does_not_answer() {
+    // THE AGE BOUND, over the compiled binary, which is the one thing the module's
+    // own tier cannot reach: it fabricates the projection, so it cannot show that
+    // the ENGINE dropped a stale reading before the module ever saw it.
+    //
+    // This is why the fact is not a `captured` reduction. That store is keyed by
+    // content and carries no clock, so a mutable field answers from whichever read
+    // sorts first by digest — here, a status read eight days ago would still say
+    // `done` forever.
+    let (repo, outside) = fixture("owner-stale", &clean_committed(), Some(&clean_merged()));
+    receipt(&repo, "CLOUD-1314", "done", now() - 8 * 86_400);
+    let output = check(&repo, Some(&outside));
+    assert!(
+        output.status.success(),
+        "a reading past the declared bound still answered: {}",
+        findings(&output)
+    );
+}
+
+#[test]
+fn no_receipt_store_at_all_is_not_spent() {
+    // COULD-NOT-LOOK, and it is the ORDINARY state: the store is per-checkout, so
+    // every CI runner and every fresh clone has none. A module reading that absence
+    // as a closed owner would redden everywhere for a state nobody can fix — and an
+    // engine returning an empty MAP rather than nothing would make that the module's
+    // problem to guard rather than the fact's.
+    let (repo, outside) = fixture("owner-unread", &clean_committed(), Some(&clean_merged()));
+    let output = check(&repo, Some(&outside));
+    assert!(
+        output.status.success(),
+        "a tree whose receipt store does not exist reported: {}",
         findings(&output)
     );
 }
