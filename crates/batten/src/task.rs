@@ -54,9 +54,9 @@ use crate::Result;
 /// The directory the registry lives in, under the git dir.
 ///
 /// The `batten-<noun>` convention `batten-receipts/` and `batten-land-lock/`
-/// already use. Byte-identical to what the writer this reads after produces —
-/// which is a constraint rather than a coincidence while that writer is still a
-/// separate program (CLOUD-1283).
+/// already use. The layout is this module's own now, both ends: the writer
+/// retired here too, so "byte-identical to what the writer produces" stopped
+/// being a constraint across a boundary and became one authority.
 const STATE_DIR: &str = "batten-tasks";
 
 /// One registered task, as the writer left it.
@@ -534,9 +534,233 @@ pub fn report(
     }
 }
 
+// -- One task per clone (CLOUD-428) ------------------------------------------
+//
+// **HERE RATHER THAN IN A MODULE OF ITS OWN, and the reason is this module's
+// own subject.** The retiring `mise-tasks/singleton.sh` read the task registry
+// by hand — `sed -n 's/^phase: //p' "$git_dir/batten-tasks/$1" | head -n 1` — to
+// name what the holder was doing. That is a second authority over a layout this
+// module owns, in the same shape `.claude/rules/policy-modules.md` records for
+// parsers, and it is the whole reason the two could not stay apart: the registry
+// gained an owner one commit ago and this was its remaining hand-rolled reader.
+// It also shares `pid_exists`, so a liveness rule spelled twice becomes one.
+//
+// **THE LOCK IS A DIRECTORY, never `flock(1)`** — carried unchanged from the
+// shell (CLOUD-286): `flock` ships with util-linux and does not exist on macOS,
+// where the refusal guarding it fired before any other gate. `create_dir` is an
+// atomic create-or-fail everywhere that matters.
+//
+// **THE CALLER'S TRAP OWNS THE RELEASE.** This performs the acquire on the
+// CALLER's behalf and writes the CALLER's pid; the process that ran it exits
+// immediately and holds nothing, exactly as the shell did.
+
+/// Where one clone's singleton locks live.
+const SINGLETON_DIR: &str = "batten-singleton";
+
+/// What an acquire attempt found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Claim {
+    /// The lock is this caller's now.
+    Taken,
+    /// It was abandoned by a pid that is gone, and is this caller's now.
+    Reclaimed(String),
+    /// Somebody live holds it. The phase is the registry's word about what they
+    /// are doing, and is absent whenever the registry cannot say — a holder that
+    /// died before registering has no entry, which is the COMMON case and never
+    /// turns a refusal into a pass.
+    Held {
+        holder: String,
+        phase: Option<String>,
+    },
+    /// The state directory could not be created or read. Could-not-look, never
+    /// "free": treating it as free is how two lands start.
+    CouldNotLook(PathBuf),
+}
+
+/// The directory one task's lock is.
+fn singleton_lock(git_dir: &Path, task: &str) -> PathBuf {
+    git_dir.join(SINGLETON_DIR).join(task)
+}
+
+/// Drop a task's lock, whether or not it was ever taken.
+///
+/// Idempotent because it runs from an exit trap that also fires on paths where
+/// the acquire never happened, and a trap that can fail masks the real exit
+/// code.
+pub fn singleton_release(git_dir: &Path, task: &str) {
+    let _ = std::fs::remove_dir_all(singleton_lock(git_dir, task));
+}
+
+/// Take a task's lock for `pid`, or report who holds it.
+///
+/// `recheck` is the pause between the two sightings a reclaim requires. It is an
+/// argument rather than a constant so a test can drive the second case with a
+/// wide margin instead of racing the default; nothing in production sets it.
+#[must_use]
+pub fn singleton_acquire(
+    git_dir: &Path,
+    task: &str,
+    pid: &str,
+    recheck: std::time::Duration,
+) -> Claim {
+    let lock = singleton_lock(git_dir, task);
+    let dir = git_dir.join(SINGLETON_DIR);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return Claim::CouldNotLook(dir);
+    }
+    if take(&lock, pid) {
+        return Claim::Taken;
+    }
+
+    // An EMPTY pid file is a holder caught between its create and its write, not
+    // a corpse: absence of evidence is "held", never "free".
+    let Some(holder) = holder_of(&lock) else {
+        return Claim::Held {
+            holder: "unknown".to_owned(),
+            phase: None,
+        };
+    };
+
+    // There is deliberately NO early live-holder fast path. It read as a safety
+    // property and was not one: with it deleted a live holder still falls
+    // through to the refusal below, so no test could tell the two apart and it
+    // survived its own mutant. One refusal path is worth more than the pause.
+    //
+    // First sighting of a dead pid. Look again before reclaiming, so a holder
+    // that exited cleanly between the read and the check — its own trap already
+    // removing the directory — is never mistaken for one that died holding, and
+    // a NEW holder that took the lock in between is never robbed of it.
+    // An INVENTORY ROW, and it is neither of the two shapes CLOUD-1177 separates.
+    // It is not a poll — nothing is re-attempted on a schedule — and it is not a
+    // timer standing in for an exit condition, because there is no condition to
+    // wait for: the two sightings must be separated by elapsed time or they are
+    // one sighting. The bound is `--recheck-ms`, a single pause the caller
+    // declares, and the interval IS the safety margin rather than a guess at how
+    // long something takes.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the bound is `--recheck-ms`: a single declared pause separating the two sightings a reclaim requires, not a poll and not a timer standing in for an exit condition"
+    )]
+    std::thread::sleep(recheck);
+    if may_reclaim(&holder, holder_of(&lock).as_deref())
+        && std::fs::remove_dir_all(&lock).is_ok()
+        && take(&lock, pid)
+    {
+        return Claim::Reclaimed(holder);
+    }
+
+    // The lock changed under us, or a live holder took it: whoever holds it now
+    // is real. Re-read rather than reporting the corpse seen a moment ago.
+    let holder = holder_of(&lock).unwrap_or_else(|| "unknown".to_owned());
+    let phase = read_field(git_dir, &holder, "phase").filter(|phase| !phase.is_empty());
+    Claim::Held { holder, phase }
+}
+
+/// May the lock be taken from the pid seen at the FIRST sighting?
+///
+/// Extracted rather than inlined, and that is `rust.md`'s premise rule rather
+/// than taste: the failing condition is "the lock changed hands between the two
+/// sightings", and driving it through the verb means racing a live child against
+/// a sleep — a timer standing in for an exit condition, which is exactly what
+/// CLOUD-1177 refuses. As a function of the two readings it is total and
+/// testable, and the four combinations are four assertions with no clock in
+/// them.
+///
+/// Both conjuncts are load-bearing and in this order. A DIFFERENT second reading
+/// means a new holder took the lock while the first's own trap was removing it,
+/// and reclaiming then robs a live process. A reading that is gone entirely is
+/// the same answer: there is nothing to reclaim, and the caller's next `take`
+/// decides it honestly.
+fn may_reclaim(first: &str, second: Option<&str>) -> bool {
+    second == Some(first) && !pid_exists(first)
+}
+
+/// Create the lock and stamp it with `pid`, reporting whether this call won it.
+fn take(lock: &Path, pid: &str) -> bool {
+    if std::fs::create_dir(lock).is_err() {
+        return false;
+    }
+    // A write that fails leaves an EMPTY pid file, which the reader above treats
+    // as held — the safe direction, and the one the shell also took.
+    let _ = std::fs::write(lock.join("pid"), format!("{pid}\n"));
+    true
+}
+
+/// Who the lock says holds it, or `None` where it says nothing readable.
+fn holder_of(lock: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(lock.join("pid")).ok()?;
+    let holder = raw.trim().to_owned();
+    (!holder.is_empty()).then_some(holder)
+}
+
+/// Report a claim on the one exit table.
+///
+/// A live holder is `Violation`: it is a verdict about this clone, and the
+/// refusal is the product. The retiring shell spelled it `1` and spelled
+/// could-not-look `2`; the wrapper translates both back for callers written
+/// against those codes.
+///
+/// # Errors
+///
+/// Propagates a write failure on either channel.
+pub fn report_claim(
+    claim: &Claim,
+    task: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<crate::ExitCode> {
+    match claim {
+        Claim::Taken => Ok(crate::ExitCode::Success),
+        Claim::Reclaimed(dead) => {
+            writeln!(out, "singleton: reclaimed {task} from dead pid {dead}")?;
+            Ok(crate::ExitCode::Success)
+        }
+        Claim::Held { holder, phase } => {
+            let doing = phase
+                .as_ref()
+                .map_or_else(String::new, |p| format!(" ({p})"));
+            writeln!(
+                err,
+                "::error:: singleton: {task} is already running in this clone as pid {holder}{doing}. \
+                 Stopping a background task does not reap its tree — check `mise run alive`, and kill \
+                 that process rather than starting a second one."
+            )?;
+            Ok(crate::ExitCode::Violation)
+        }
+        Claim::CouldNotLook(path) => {
+            writeln!(
+                err,
+                "::error:: singleton: cannot create {} — that is not 'nothing holds it'",
+                path.display()
+            )?;
+            Ok(crate::ExitCode::Internal)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // TWO SIGHTINGS, all four combinations, with no clock and no second process.
+    // The retiring suite raced a real child against a sleep to reach the middle
+    // two; over the decision itself they are ordinary assertions.
+    #[test]
+    fn a_reclaim_needs_two_sightings_of_one_dead_pid() {
+        let dead = "4194304";
+        let live = std::process::id().to_string();
+
+        // The only reclaimable reading: the same pid twice, and it is gone.
+        assert!(may_reclaim(dead, Some(dead)));
+        // The lock changed hands to a NEW holder while the first's trap was
+        // removing it. Reclaiming here robs whoever holds it now.
+        assert!(!may_reclaim(dead, Some(&live)));
+        assert!(!may_reclaim(dead, Some("31337")));
+        // It is gone entirely: nothing to reclaim, and the next `take` decides.
+        assert!(!may_reclaim(dead, None));
+        // Two sightings of a LIVE pid is a held lock, which is the common case.
+        assert!(!may_reclaim(&live, Some(&live)));
+    }
 
     #[test]
     fn a_half_written_entry_is_not_renderable() {

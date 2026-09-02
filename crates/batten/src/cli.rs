@@ -386,6 +386,38 @@ pub enum Command {
         /// The chosen sub-verb.
         command: TaskCommand,
     },
+    /// One task per clone (CLOUD-428), ported off `mise-tasks/singleton.sh`.
+    ///
+    /// Appended for the same reason `Checks` is.
+    Singleton {
+        /// The chosen sub-verb.
+        command: SingletonCommand,
+    },
+}
+
+/// Subcommands of `singleton`.
+///
+/// Two verbs and no `hold`: this process cannot hold anything, because it exits
+/// immediately. It acts on the CALLER's behalf and the caller's exit trap owns
+/// the release, exactly as `land-lock`'s verbs act for the `land` that invoked
+/// them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SingletonCommand {
+    /// Take a task's lock for a pid, or report who holds it.
+    Acquire {
+        /// The task's name, which is what the lock is keyed by.
+        task: String,
+        /// The process the lock is being taken FOR — the caller, never this one.
+        pid: String,
+        /// Milliseconds between the two sightings a reclaim requires.
+        recheck_ms: Option<String>,
+    },
+    /// Drop a task's lock, whether or not it was ever taken.
+    Release {
+        /// The task's name.
+        task: String,
+    },
 }
 
 /// Subcommands of `land`.
@@ -1822,6 +1854,24 @@ fn task_of(matches: &ArgMatches) -> Option<TaskCommand> {
     }
 }
 
+fn singleton_of(matches: &ArgMatches) -> Option<SingletonCommand> {
+    // Both positionals are required by the surface, so clap has already refused
+    // an argv without them; `None` is unreachable and maps to a refusal rather
+    // than to a default. A defaulted pid would stamp the lock with a process
+    // nobody named, and the refusal it later produces would point at nothing.
+    match matches.subcommand()? {
+        ("acquire", matches) => Some(SingletonCommand::Acquire {
+            task: matches.get_one::<String>("task").cloned()?,
+            pid: matches.get_one::<String>("pid").cloned()?,
+            recheck_ms: matches.get_one::<String>("recheck_ms").cloned(),
+        }),
+        ("release", matches) => Some(SingletonCommand::Release {
+            task: matches.get_one::<String>("task").cloned()?,
+        }),
+        _ => None,
+    }
+}
+
 fn pr_of(matches: &ArgMatches) -> Option<PrCommand> {
     match matches.subcommand()? {
         ("watch", matches) => Some(PrCommand::Watch {
@@ -2024,6 +2074,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "checks" => checks_of(matches).map(|command| Command::Checks { command }),
         "pr" => pr_of(matches).map(|command| Command::Pr { command }),
         "task" => task_of(matches).map(|command| Command::Task { command }),
+        "singleton" => singleton_of(matches).map(|command| Command::Singleton { command }),
         "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
         "lease" => lease_of(matches).map(|command| Command::Lease { command }),
         "land" => land_of(matches).map(|command| Command::Land { command }),

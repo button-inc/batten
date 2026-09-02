@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-singleton-acquire 1  batten 
+.SH NAME
+batten\-singleton\-acquire \- Take a task\*(Aqs lock for a pid, or refuse naming the process that holds it
+.SH SYNOPSIS
+\fBbatten singleton acquire\fR [\fB\-\-recheck\-ms\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fItask\fR> <\fIpid\fR> 
+.SH DESCRIPTION
+Take a task\*(Aqs lock for a pid, or refuse naming the process that holds it
+.SH OPTIONS
+.TP
+\fB\-\-recheck\-ms\fR
+Milliseconds between the two sightings a reclaim requires
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fItask\fR>
+The task\*(Aqs name, which is what the lock is keyed by
+.TP
+<\fIpid\fR>
+The process the record is keyed by

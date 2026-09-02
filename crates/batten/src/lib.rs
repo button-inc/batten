@@ -136,8 +136,8 @@ use anyhow::Result;
 pub use cli::{
     AttributionCommand, ChecksCommand, ClaimCommand, Cli, Command, CommitCommand, ConfigCommand,
     DefectsCommand, DesignCommand, GenerateCommand, LintCommand, OverrideCommand, PolicyCommand,
-    PrCommand, ProvisionCommand, ReadyCommand, ReceiptCommand, SemverCommand, SpecFormat,
-    StateCommand, TaskCommand, WiringCommand, WorktreeCommand,
+    PrCommand, ProvisionCommand, ReadyCommand, ReceiptCommand, SemverCommand, SingletonCommand,
+    SpecFormat, StateCommand, TaskCommand, WiringCommand, WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -308,6 +308,10 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // The task registry (CLOUD-425). No config chain: the store is the git
         // dir's, and no key could layer over "what is running right now".
         Some(Command::Task { command }) => run_task(command, out, err),
+        // One task per clone (CLOUD-428), on the same store and for the same
+        // reason: the lock is the git dir's, and no config key could layer over
+        // "is a second one of these already running here".
+        Some(Command::Singleton { command }) => run_singleton(command, out, err),
         // The ledger is a committed file the consumer declares; the §8 config
         // chain supplies its path and taxonomy and nothing else layers.
         Some(Command::Defects { command }) => match command {
@@ -2432,6 +2436,47 @@ fn run_task(command: TaskCommand, out: &mut dyn Write, err: &mut dyn Write) -> R
                 },
             );
             task::report(&reading, out, err)
+        }
+    }
+}
+
+/// One task per clone (CLOUD-428), ported off `mise-tasks/singleton.sh`.
+fn run_singleton(
+    command: SingletonCommand,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    // Could-not-look, and never "nothing holds it": reading an unresolvable git
+    // dir as free is how a second `land` starts, which is the defect CLOUD-428
+    // exists to stop.
+    let Ok(git_dir) = crate::git::git_dir(std::path::Path::new(".")) else {
+        writeln!(
+            err,
+            "::error:: singleton: not a git repository, so there is nowhere to hold a lock"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    match command {
+        SingletonCommand::Release { task } => {
+            task::singleton_release(&git_dir, &task);
+            Ok(ExitCode::Success)
+        }
+        SingletonCommand::Acquire {
+            task,
+            pid,
+            recheck_ms,
+        } => {
+            // A malformed interval is a statement about the invocation, never a
+            // silent fall back to the default: the pause is the reclaim's whole
+            // safety margin, so guessing it would decide a lock silently.
+            let recheck = std::time::Duration::from_millis(match recheck_ms {
+                Some(raw) => raw.trim().parse::<u64>().map_err(|_| {
+                    UsageError::raise("--recheck-ms takes a whole number of milliseconds")
+                })?,
+                None => 100,
+            });
+            let claim = task::singleton_acquire(&git_dir, &task, &pid, recheck);
+            task::report_claim(&claim, &task, out, err)
         }
     }
 }

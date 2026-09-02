@@ -1605,6 +1605,23 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // One task per clone (CLOUD-428). The refusal names a pid and, where the
+    // registry knows it, the holder's phase — and NOTHING else of the record it
+    // read to find that. Both rows are `PointerOnly` for the reader's reason one
+    // entry up: the registry exists so nobody has to read a log, and a refusal
+    // quoting one would reintroduce that through the front door.
+    Verb {
+        path: "singleton acquire",
+        args: &["land", "4194304"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "singleton release",
+        args: &["land"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
 ];
 
 /// Every path of [`SURFACE`] that RUNS — the object this census must be total

@@ -2768,6 +2768,137 @@ esac
     ;;
 esac
 ;;
+(singleton)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__singleton_commands" \
+"*::: :->singleton" \
+&& ret=0
+
+    case $state in
+    (singleton)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-singleton-command-$line[1]:"
+        case $line[1] in
+            (acquire)
+_arguments "${_arguments_options[@]}" : \
+'--recheck-ms=[Milliseconds between the two sightings a reclaim requires]: :_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':task -- The task'\''s name, which is what the lock is keyed by:_default' \
+':pid -- The process the record is keyed by:_default' \
+&& ret=0
+;;
+(release)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':task -- The task'\''s name, which is what the lock is keyed by:_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__singleton__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-singleton-help-command-$line[1]:"
+        case $line[1] in
+            (acquire)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(release)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (claim)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -5647,6 +5778,30 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(singleton)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__singleton_commands" \
+"*::: :->singleton" \
+&& ret=0
+
+    case $state in
+    (singleton)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-singleton-command-$line[1]:"
+        case $line[1] in
+            (acquire)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(release)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (claim)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__claim_commands" \
@@ -6096,6 +6251,7 @@ _batten_commands() {
 'checks:Whether a commit'\''s check runs answer the question a landing depends on' \
 'pr:The pull request a landing drives, and the answers it waits on' \
 'task:What long-running tasks are doing, recorded where it can be read without a log' \
+'singleton:Whether a second copy of a task may start in this clone' \
 'claim:Whether the issue you are about to pull is actually unclaimed' \
 'semver:Whether this branch'\''s API delta is compatible with the bump it claims' \
 'attribution:What produced commits may carry about the tooling that made them' \
@@ -6663,6 +6819,7 @@ _batten__subcmd__help_commands() {
 'checks:Whether a commit'\''s check runs answer the question a landing depends on' \
 'pr:The pull request a landing drives, and the answers it waits on' \
 'task:What long-running tasks are doing, recorded where it can be read without a log' \
+'singleton:Whether a second copy of a task may start in this clone' \
 'claim:Whether the issue you are about to pull is actually unclaimed' \
 'semver:Whether this branch'\''s API delta is compatible with the bump it claims' \
 'attribution:What produced commits may carry about the tooling that made them' \
@@ -7294,6 +7451,24 @@ _batten__subcmd__help__subcmd__semver_commands() {
 _batten__subcmd__help__subcmd__semver__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten help semver check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__singleton_commands] )) ||
+_batten__subcmd__help__subcmd__singleton_commands() {
+    local commands; commands=(
+'acquire:Take a task'\''s lock for a pid, or refuse naming the process that holds it' \
+'release:Drop a task'\''s lock, which its exit trap does and a kill cannot' \
+    )
+    _describe -t commands 'batten help singleton commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__singleton__subcmd__acquire_commands] )) ||
+_batten__subcmd__help__subcmd__singleton__subcmd__acquire_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help singleton acquire commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__singleton__subcmd__release_commands] )) ||
+_batten__subcmd__help__subcmd__singleton__subcmd__release_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help singleton release commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__spec_commands] )) ||
 _batten__subcmd__help__subcmd__spec_commands() {
@@ -8259,6 +8434,49 @@ _batten__subcmd__semver__subcmd__help__subcmd__check_commands() {
 _batten__subcmd__semver__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten semver help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__singleton_commands] )) ||
+_batten__subcmd__singleton_commands() {
+    local commands; commands=(
+'acquire:Take a task'\''s lock for a pid, or refuse naming the process that holds it' \
+'release:Drop a task'\''s lock, which its exit trap does and a kill cannot' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten singleton commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__singleton__subcmd__acquire_commands] )) ||
+_batten__subcmd__singleton__subcmd__acquire_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten singleton acquire commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__singleton__subcmd__help_commands] )) ||
+_batten__subcmd__singleton__subcmd__help_commands() {
+    local commands; commands=(
+'acquire:Take a task'\''s lock for a pid, or refuse naming the process that holds it' \
+'release:Drop a task'\''s lock, which its exit trap does and a kill cannot' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten singleton help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__singleton__subcmd__help__subcmd__acquire_commands] )) ||
+_batten__subcmd__singleton__subcmd__help__subcmd__acquire_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten singleton help acquire commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__singleton__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__singleton__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten singleton help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__singleton__subcmd__help__subcmd__release_commands] )) ||
+_batten__subcmd__singleton__subcmd__help__subcmd__release_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten singleton help release commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__singleton__subcmd__release_commands] )) ||
+_batten__subcmd__singleton__subcmd__release_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten singleton release commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__spec_commands] )) ||
 _batten__subcmd__spec_commands() {

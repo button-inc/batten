@@ -3063,6 +3063,29 @@ description = "Record what a long-running task is doing, so its liveness and pha
 # calling it last is what gives the appended arguments a call to land in.
 run = "translate() { batten task \"$@\" || case $? in 2) exit 1 ;; 3) exit 2 ;; *) exit $? ;; esac; }; translate"
 
+[tasks.singleton]
+description = "Refuse to start a task that is already running in this clone, naming the process that holds it"
+# CLOUD-428, ported off `mise-tasks/singleton.sh` under CLOUD-843 and retired
+# onto the `singleton` noun.
+#
+# THE TASK NAME SURVIVES THE MIGRATION, and here that is the whole of the
+# retirement's reach: `land.sh` calls `mise run singleton acquire|release` by
+# NAME, never by path, so keeping the name means `land.sh` and `tests/land.bats`
+# are not touched at all.
+#
+# THE EXIT CODES ARE TRANSLATED HERE, exactly as `task-registry`'s are and for
+# the same reason. The retiring shell used `1` for "already running" and `2` for
+# could-not-look; the one contract gives `2` to a verdict and `3` to
+# could-not-look. `land.sh` branches on the non-zero, so the old spelling is a
+# consumer's compatibility with its own history and belongs in the consumer's
+# wrapper rather than as a per-verb exception in the table.
+#
+# The body is a named function called bare, for the reason `task-registry`'s
+# comment records: mise appends a task's arguments to the end of the `run`
+# string, so a body ending in `esac` puts them after it and every call is a
+# syntax error.
+run = "translate() { batten singleton \"$@\" || case $? in 2) exit 1 ;; 3) exit 2 ;; *) exit $? ;; esac; }; translate"
+
 [tasks.alive]
 description = "What batten tasks are running right now, and what phase each is in — one call, no log reading"
 # CLOUD-425's reader half, ported off `mise-tasks/alive.sh` under CLOUD-843.

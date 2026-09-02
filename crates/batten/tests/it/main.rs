@@ -198,6 +198,7 @@ mod session_provisioning;
 mod shell_retirement;
 mod shell_retirement_cost;
 mod shell_write_advisory;
+mod singleton;
 mod sinks;
 mod skill_contract;
 mod sleep_ban;

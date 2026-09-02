@@ -2162,6 +2162,58 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "singleton",
+      "about": "Whether a second copy of a task may start in this clone",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "singleton acquire",
+          "about": "Take a task's lock for a pid, or refuse naming the process that holds it",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "pid",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The process the record is keyed by"
+            },
+            {
+              "name": "recheck_ms",
+              "short": null,
+              "long": "recheck-ms",
+              "takes_value": true,
+              "help": "Milliseconds between the two sightings a reclaim requires"
+            },
+            {
+              "name": "task",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The task's name, which is what the lock is keyed by"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "singleton release",
+          "about": "Drop a task's lock, which its exit trap does and a kill cannot",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "task",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The task's name, which is what the lock is keyed by"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "spec",
       "id": "spec",
       "about": "Print the tool's own command spec",

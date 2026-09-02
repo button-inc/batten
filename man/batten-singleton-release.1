@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-singleton-release 1  batten 
+.SH NAME
+batten\-singleton\-release \- Drop a task\*(Aqs lock, which its exit trap does and a kill cannot
+.SH SYNOPSIS
+\fBbatten singleton release\fR [\fB\-h\fR|\fB\-\-help\fR] <\fItask\fR> 
+.SH DESCRIPTION
+Drop a task\*(Aqs lock, which its exit trap does and a kill cannot
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fItask\fR>
+The task\*(Aqs name, which is what the lock is keyed by

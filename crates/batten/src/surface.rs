@@ -1017,6 +1017,38 @@ const TASK_VALUE: FlagDecl = FlagDecl::positional(
 /// Which field of a record to print.
 const TASK_FIELD: FlagDecl = FlagDecl::positional("field", "The record field to print");
 
+/// The task a singleton lock is keyed by.
+///
+/// Its own constant rather than [`TASK_NAME`]: there the name is a FIELD of a
+/// record keyed by pid, here it IS the key, and a reader who conflates the two
+/// expects one lock per process rather than one per task.
+const SINGLETON_TASK: FlagDecl = FlagDecl::positional(
+    "task",
+    "The task's name, which is what the lock is keyed by",
+);
+
+/// `--recheck-ms <n>` on `singleton acquire`: the pause between the two
+/// sightings a reclaim requires.
+///
+/// A flag rather than an environment variable, and present at all only so a test
+/// can drive the reclaim case with a wide margin instead of racing the default.
+/// Nothing in production sets it. Malformed is `Usage` rather than a fall back to
+/// the default: this pause is the reclaim's whole safety margin against robbing a
+/// live holder, so guessing it would decide a lock silently.
+const SINGLETON_RECHECK: FlagDecl = FlagDecl {
+    id: "recheck_ms",
+    long: Some("recheck-ms"),
+    short: None,
+    help: "Milliseconds between the two sightings a reclaim requires",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--program-root <dir>` on `task alive`: where the CONSUMER keeps its programs.
 ///
 /// Non-negotiable rule 1, as a flag. Corroborating that a live pid is still the
@@ -3220,6 +3252,36 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         effect: Effect::Write,
         flags: &[TASK_PROGRAM_ROOT, HOOK_INSTANT],
+    },
+    // The `singleton` noun (CLOUD-428), ported off `mise-tasks/singleton.sh`
+    // under CLOUD-843. It lands BESIDE `task` rather than inside it because the
+    // lock and the registry answer different questions — "may a second one of
+    // these start" versus "what is running" — while sharing one owner in
+    // `task.rs`, which is what removed the hand-rolled registry reader the shell
+    // carried.
+    CommandDecl {
+        path: "singleton",
+        about: "Whether a second copy of a task may start in this clone",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // Both `write`, and `acquire`'s classification is the load-bearing one: it
+    // READS to decide and WRITES the lock it hands out, so a row claiming `read`
+    // would put a writing verb on the derived read-only allowlist.
+    CommandDecl {
+        path: "singleton acquire",
+        about: "Take a task's lock for a pid, or refuse naming the process that holds it",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[SINGLETON_TASK, TASK_PID, SINGLETON_RECHECK],
+    },
+    CommandDecl {
+        path: "singleton release",
+        about: "Drop a task's lock, which its exit trap does and a kill cannot",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[SINGLETON_TASK],
     },
     // The `claim` noun (CLOUD-1121), ported off `mise-tasks/claim-check.sh` on the
     // same terms.
