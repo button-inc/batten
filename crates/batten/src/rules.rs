@@ -8163,7 +8163,50 @@ fn symbols_fact(rules: &[Rule], root: &Path) -> crate::facts::Look<crate::symbol
         // "resolved, found nothing".
         return crate::facts::Look::IsNot;
     }
-    crate::symbols::resolve(root)
+    crate::symbols::resolve(root, &symbols_launcher(root))
+}
+
+/// How to reach the analyser [`crate::symbols`] spawns, resolved through the
+/// toolchain pin (CLOUD-1324).
+///
+/// **Here rather than in `symbols` because of the direction**
+/// `policy/module-layering.rego` holds: `symbols -> rules` is a forbidden
+/// back-edge, and that module's own doc says acquisition is the CALLER's. This is
+/// the caller, and [`spawn_resolving`] is the one authority over what a program
+/// name resolves to — a second one in the adapter could disagree with it about
+/// the same argv.
+///
+/// Public so the fact's own suite reaches the analyser the engine would, rather
+/// than whichever build happens to be first on the test runner's `PATH`. That is
+/// not a convenience: a suite resolving it differently would assert the census
+/// against a tool the engine never runs.
+///
+/// **MEMBERSHIP IS THE WRONG QUESTION FOR THIS ONE PROGRAM, and that is the
+/// measurement rather than a special case.** [`spawn_resolving`]'s rung 0 asks
+/// whether the pin PROVIDES a program, resolved as a `PATH` difference — which is
+/// right for a tool the pin installs and blind to a tool the pin merely GOVERNS.
+/// The analyser is the second kind here: it sits in a directory both the ambient
+/// and the composed `PATH` carry, so the difference cannot see it, while the
+/// pin's environment is what selects which toolchain it compiles with. Measured
+/// in this container: the bare spawn found a build that refuses the crate's own
+/// `rust-version` and exited non-zero, so the census was could-not-look and
+/// `spawn-adapters` refused a tree with nothing wrong in it — while the same
+/// invocation through the mediator resolved 329 diagnostics.
+///
+/// So a READABLE pin is the condition, not membership in it. Could-not-look falls
+/// through to the bare program, which is what a project with no pin has anyway.
+#[must_use]
+pub fn symbols_launcher(root: &Path) -> crate::symbols::Launcher {
+    let read = crate::pinned::cached(root);
+    let pinned = match read {
+        crate::facts::Look::CouldNotLook => crate::pinned::repaired(root),
+        other => other,
+    };
+    if matches!(pinned, crate::facts::Look::Is(_)) {
+        let (mediator, prefix) = crate::pinned::mediated(crate::symbols::ANALYSER);
+        return crate::symbols::Launcher::new(mediator, &prefix);
+    }
+    crate::symbols::Launcher::new(crate::symbols::ANALYSER, &[])
 }
 
 /// The [`crate::facts::Fact::Symbols`] projection, split out of
@@ -10478,10 +10521,12 @@ fn spawn_resolving_on<T>(
     // Could-not-look falls straight through to the ladder below. A pin that
     // cannot be read is not evidence the program is unpinned, and refusing on it
     // would make every spawn depend on a memoised file.
-    if matches!(pinned, crate::facts::Look::Is(programs) if programs.contains(program))
-        && let Ok(ok) = spawn(crate::pinned::MEDIATOR, &["exec", "--", program])
-    {
-        return Ok(ok);
+    if matches!(pinned, crate::facts::Look::Is(programs) if programs.contains(program)) {
+        let (mediator, prefix) = crate::pinned::mediated(program);
+        let prefix: Vec<&str> = prefix.iter().map(String::as_str).collect();
+        if let Ok(ok) = spawn(mediator, &prefix) {
+            return Ok(ok);
+        }
     }
 
     let first = match spawn(program, &[]) {

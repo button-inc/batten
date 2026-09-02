@@ -12,6 +12,38 @@ use std::path::{Path, PathBuf};
 use batten::facts::Look;
 use batten::symbols;
 
+/// The analyser the ENGINE would reach, not whichever build is first on the test
+/// runner's `PATH` (CLOUD-1324). A suite resolving it differently would assert
+/// this census against a tool `batten check` never runs — and measured here, the
+/// two are not the same: this container carries an older build ahead of the
+/// pinned one, and it refuses the crate's own `rust-version`.
+fn launcher(root: &Path) -> symbols::Launcher {
+    batten::rules::symbols_launcher(root)
+}
+
+/// THE ARGV A PINNED LAUNCHER PRODUCES, composed rather than assumed
+/// (CLOUD-1324).
+///
+/// Extracted and tested directly for `.claude/rules/rust.md`'s reason: the
+/// failing condition is which build of the analyser a spawn reaches, and a test
+/// cannot rearrange this process's `PATH` without `unsafe`. What CAN be created
+/// is the composition, and it is where the defect would live — a dropped prefix
+/// makes the mediated shape byte-identical to the bare one, which is exactly the
+/// bug being fixed.
+#[test]
+fn a_launchers_prefix_precedes_the_analysers_own_flags() {
+    let bare = symbols::Launcher::new("cargo", &[]);
+    assert_eq!(bare.argv(&["clippy", "--version"]), ["clippy", "--version"]);
+
+    let prefix = ["exec", "--", "cargo"].map(str::to_owned);
+    let mediated = symbols::Launcher::new("runner", &prefix);
+    assert_eq!(
+        mediated.argv(&["clippy", "--version"]),
+        ["exec", "--", "cargo", "clippy", "--version"],
+        "the runner's own arguments come first, or it is handed the analyser's"
+    );
+}
+
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -43,7 +75,7 @@ fn repo() -> PathBuf {
 #[test]
 fn the_resolved_set_excludes_what_only_name_resolution_can_exclude() {
     let root = repo();
-    let Look::Is(resolved) = symbols::resolve(&root) else {
+    let Look::Is(resolved) = symbols::resolve(&root, &launcher(&root)) else {
         panic!("the analyser did not resolve; this suite needs a working `cargo clippy`");
     };
 
@@ -120,8 +152,10 @@ fn byte_scan(root: &Path) -> std::collections::BTreeSet<&'static str> {
 #[test]
 fn two_runs_agree_and_the_analyser_that_produced_them_is_named() {
     let root = repo();
-    let (Look::Is(first), Look::Is(second)) = (symbols::resolve(&root), symbols::resolve(&root))
-    else {
+    let (Look::Is(first), Look::Is(second)) = (
+        symbols::resolve(&root, &launcher(&root)),
+        symbols::resolve(&root, &launcher(&root)),
+    ) else {
         panic!("the analyser did not resolve twice");
     };
 
@@ -156,7 +190,7 @@ fn two_runs_agree_and_the_analyser_that_produced_them_is_named() {
 #[test]
 fn no_site_carries_a_byte_of_what_the_analyser_read() {
     let root = repo();
-    let Look::Is(resolved) = symbols::resolve(&root) else {
+    let Look::Is(resolved) = symbols::resolve(&root, &launcher(&root)) else {
         panic!("the analyser did not resolve");
     };
     for site in &resolved.sites {

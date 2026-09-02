@@ -109,6 +109,65 @@ pub const ANALYSER_FLAGS: &[&str] = &[
 /// remedy rather than at a bare "not found".
 const PROVISION_HINT: &str = "mise install";
 
+/// How to reach the analyser: the program to spawn, and the arguments that must
+/// precede its own.
+///
+/// **Resolved by the CALLER, which is the direction this module is placed in**
+/// (CLOUD-1324). A toolchain pin is what decides whether [`ANALYSER`] means the
+/// binary a bare `PATH` lookup finds or a pinned build reached through a runner,
+/// and the engine already owns that ladder — one authority over an argv, which
+/// `.claude/rules/policy-modules.md` states for its own surface and which holds
+/// here for the same reason. Reaching back for it would be the `symbols -> rules`
+/// back-edge `policy/module-layering.rego` forbids by name, so the launcher
+/// arrives already resolved and this module only spawns it.
+///
+/// MEASURED, and it is why the field exists at all: this container carried a
+/// version manager's build of the analyser AND an older one earlier on `PATH`
+/// than it. The bare spawn found the older one, which refused the crate's own
+/// `rust-version` and exited non-zero, so the census was `CouldNotLook` and
+/// `spawn-adapters` correctly refused a tree with nothing wrong in it. A gate
+/// that cannot look reports the same way whatever the cause, which is the whole
+/// value of the class and also why the cause took a while to find.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Launcher {
+    /// The program to spawn.
+    pub program: String,
+    /// Arguments placed before the analyser's own flags.
+    pub prefix: Vec<String>,
+}
+
+impl Launcher {
+    /// A launcher over a program and the arguments that precede the analyser's
+    /// own.
+    ///
+    /// A constructor rather than public fields on a `#[non_exhaustive]` struct,
+    /// so the fact's own suite can compose the two shapes the container actually
+    /// produces — a bare program, and one reached through a runner.
+    #[must_use]
+    pub fn new(program: &str, prefix: &[String]) -> Self {
+        Self {
+            program: program.to_owned(),
+            prefix: prefix.to_vec(),
+        }
+    }
+
+    /// The analyser's flags with this launcher's prefix in front.
+    ///
+    /// Extracted rather than inlined at the two spawn sites for
+    /// `.claude/rules/rust.md`'s reason: the failing condition is an ARGV
+    /// composition, which a test can create, rather than a container whose
+    /// `PATH` a test cannot rearrange without `unsafe`.
+    #[must_use]
+    pub fn argv(&self, args: &[&str]) -> Vec<String> {
+        self.prefix
+            .iter()
+            .cloned()
+            .chain(args.iter().map(|arg| (*arg).to_owned()))
+            .collect()
+    }
+}
+
 /// One resolved call site: a pointer, and nothing the analyser said about it.
 ///
 /// The lint NAME is kept because it is what distinguishes one census from
@@ -161,13 +220,13 @@ pub struct Resolved {
 /// Its own spawn rather than a field parsed out of the diagnostic stream,
 /// because the stream carries no version at all — and inferring one from the
 /// diagnostics would be exactly the unrecorded dependency this guards against.
-fn version(root: &Path) -> Look<String> {
+fn version(root: &Path, launcher: &Launcher) -> Look<String> {
     #[expect(
         clippy::disallowed_types,
         reason = "stays: this fact IS Cost::Effect — resolving it runs a program, which is the classification, not an accident of it. The version is provenance and a fact without it is not canonical (CLOUD-760)"
     )]
-    let spawned = std::process::Command::new(ANALYSER)
-        .args(["clippy", "--version"])
+    let spawned = std::process::Command::new(&launcher.program)
+        .args(launcher.argv(&["clippy", "--version"]))
         .current_dir(root)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -207,8 +266,8 @@ fn version(root: &Path) -> Look<String> {
 /// failed, and reporting zero sites from it would be the silent false green the
 /// whole discipline exists to prevent.
 #[must_use]
-pub fn resolve(root: &Path) -> Look<Resolved> {
-    let Look::Is(version) = version(root) else {
+pub fn resolve(root: &Path, launcher: &Launcher) -> Look<Resolved> {
+    let Look::Is(version) = version(root, launcher) else {
         return Look::CouldNotLook;
     };
 
@@ -216,8 +275,8 @@ pub fn resolve(root: &Path) -> Look<Resolved> {
         clippy::disallowed_types,
         reason = "stays: this fact IS Cost::Effect — resolving it runs the delegated analyser, which is the classification. Adopting clippy rather than computing name resolution is CLOUD-756's decision"
     )]
-    let spawned = std::process::Command::new(ANALYSER)
-        .args(ANALYSER_FLAGS)
+    let spawned = std::process::Command::new(&launcher.program)
+        .args(launcher.argv(ANALYSER_FLAGS))
         .current_dir(root)
         // Both streams captured, NEITHER forwarded: stdout is the fact and
         // stderr can carry a path the analyser failed to read. Echoing a child's

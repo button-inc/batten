@@ -115,6 +115,23 @@ const RECORD: &str = "pinned-programs";
 /// single variant — a second spelling of "which pin" is a second thing to drift.
 pub(crate) const MEDIATOR: &str = "mise";
 
+/// The argv that reaches `program` through the pin: the mediator, and the
+/// arguments that must precede the program's own.
+///
+/// **One spelling, because two callers now compose it** (CLOUD-1324): the
+/// engine's spawn ladder, and the analyser acquisition that must run under the
+/// pin's environment rather than merely at its `PATH`. A second composition is a
+/// second authority over an argv, which is the class
+/// `.claude/rules/policy-modules.md` records for the mediated surface and which
+/// holds here for the same reason.
+#[must_use]
+pub fn mediated(program: &str) -> (&'static str, Vec<String>) {
+    (
+        MEDIATOR,
+        vec!["exec".to_owned(), "--".to_owned(), program.to_owned()],
+    )
+}
+
 /// The record, as one writer writes it and one reader reads it.
 ///
 /// A struct rather than a hand-rolled line format for the reason CLOUD-1093
