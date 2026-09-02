@@ -69,6 +69,24 @@ fn assert_preset_denies(command: &str) {
     );
 }
 
+/// The PRESET did not fire. Weaker than [`assert_allowed`] and used only where a
+/// consumer row legitimately refuses the same command.
+///
+/// The header above states this file's rule for the deny side — assert the
+/// preset's attribution, never a bare exit code, "so an exit 2 alone would let
+/// some other row's verdict stand in for the preset's". The allow side has the
+/// mirror defect and it went unnoticed until it bit: exit 0 conflates "the preset
+/// did not fire" with "nothing fired", so the assertion breaks the moment this
+/// consumer declares its own row over the same command, while the property the
+/// case is named for is untouched.
+fn assert_preset_allows(command: &str) {
+    let (_, cause) = adjudicate(command);
+    assert!(
+        !cause.contains("no-force-push"),
+        "the preset must not refuse: {command}\n{cause}"
+    );
+}
+
 fn assert_allowed(command: &str) {
     let (code, cause) = adjudicate(command);
     assert_eq!(code, Some(0), "must allow: {command}\n{cause}");
@@ -103,8 +121,22 @@ fn force_with_lease_survives_segmentation() {
     // is the whole difference between "I know what I am replacing" and "replace
     // whatever is there" — a preset banning both would push its consumers toward
     // the bypass rather than toward the safer flag.
-    assert_allowed("git push --force-with-lease origin main");
-    assert_allowed("cd /tmp && git push --force-with-lease origin main");
+    //
+    // ASSERTED AS "THE PRESET DOES NOT FIRE" rather than as a clean exit, because
+    // this consumer now declares `no-hand-leased-push` over the same command and
+    // the two statements are different. The preset's distinction is what this case
+    // is named for and it is unchanged; whether THIS repository additionally
+    // refuses the leased spelling is a consumer decision the preset has no view on.
+    //
+    // The consumer's reason, recorded here so the divergence is not read as an
+    // accident: a bare `--force-with-lease` compares against the remote-tracking
+    // ref this clone holds, so `git fetch` followed by a leased push compares
+    // EQUAL and overwrites the sibling commit the fetch just brought in. That is
+    // measured (2026-09-02, two sessions on one branch), and it is a fact about a
+    // fleet of agents in separate containers rather than about trunk-based
+    // development, which is why it is a consumer row and the preset stays as it is.
+    assert_preset_allows("git push --force-with-lease origin main");
+    assert_preset_allows("cd /tmp && git push --force-with-lease origin main");
 }
 
 #[test]

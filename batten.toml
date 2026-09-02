@@ -386,6 +386,62 @@ exits non-zero unless all are green — with no timeout to reintroduce the \
 VM-reap gap. Background it. (`gh pr view`/`list`/`create`, `gh pr ready`, `gh \
 api`, `gh run view` are NOT blocked.)"""
 
+# TWO CLONES CAN WRITE ONE BRANCH AND NOTHING REFUSED IT, measured 2026-09-02 on
+# `claude/cloud-1295-retire-bot-issue`: a sibling session pushed onto this
+# session's branch mid-work, and git's own non-fast-forward rejection was the only
+# thing in the stack that noticed — after the work was written, verified and
+# committed.
+#
+# THIS ROW IS ONLY THE SPELLING THE PRESET DELIBERATELY EXCLUDES. The vendored
+# `trunk-based/no-force-push` already denies `--force` and `-f` on any `git push`,
+# per segment, so restating those here would be a second rule over one object.
+# What it excludes, in its own words, is `--force-with-lease`: "the sanctioned
+# form — it refuses when the remote moved, which is the whole difference between
+# 'I know what I am replacing' and 'replace whatever is there'."
+#
+# THAT ARGUMENT IS RIGHT ABOUT ONE CASE AND WRONG ABOUT THE ONE AN AGENT
+# PERFORMS, which is why this is an addition rather than an edit to the preset.
+# A bare `--force-with-lease` compares against the REMOTE-TRACKING REF THIS CLONE
+# HOLDS. If the sibling's push arrived after your last fetch, that ref is stale,
+# the comparison differs, and the push is refused — the preset's case, and it
+# works. But the sequence an agent actually runs is `git fetch` and then push:
+# the fetch moves the remote-tracking ref onto the sibling's commit, the lease
+# then compares EQUAL, the push succeeds, and the commit is destroyed by the flag
+# that was chosen for being careful.
+#
+# WHAT THIS DOES NOT CLOSE, stated so the gap is not read as covered. It cannot
+# tell you a sibling holds the branch — only that you are about to overwrite
+# whatever is there. Detection needs a per-branch ownership ref taken by the same
+# server-side CAS `land-lock` already uses, which needs receive-pack over the
+# vendored client (CLOUD-1274) and is not landable here. Destruction closes here;
+# detection stays on the filed row.
+#
+# CONSUMER-SIDE RATHER THAN A PRESET EDIT, and that is the module-or-preset test
+# rather than a dodge: the preset states a practice true of trunk-based
+# development anywhere, while this states that THIS repository is worked by a
+# fleet of agents in separate containers that cannot see each other. The second
+# is a consumer fact, so it is a consumer row.
+#
+# `land-lock`'s own CAS is untouched, and structurally so: it pushes from inside a
+# task subprocess, which is not a mediated call, so no `mediated_call` row can
+# reach it. The lease keeps its `--force-with-lease`; this refuses an agent typing
+# one by hand.
+[[rule]]
+id = "no-hand-leased-push"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "git push"
+contains = "--force-with-lease"
+reason = """
+`--force-with-lease` compares against the remote-tracking ref THIS clone holds, \
+so `git fetch` followed by a leased push compares equal and overwrites the \
+sibling commit the fetch just brought in. A sibling session writing the same \
+branch is invisible from here — every ownership fact Batten records lives under \
+$GIT_DIR and dies with the container. Fetch and REBASE onto what is there. \
+(`--force` and `-f` are the `trunk-based` preset's; this is the spelling it \
+deliberately leaves out.)"""
+
 [[rule]]
 id = "gh-run-watch"
 kind = "shape"

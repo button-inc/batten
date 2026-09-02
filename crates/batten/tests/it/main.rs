@@ -104,6 +104,7 @@ mod facts;
 mod fail_on_warning;
 mod filed_here;
 mod fixture_repos;
+mod forced_push;
 mod forge_facts;
 mod fuzz_corpus;
 mod gh_guard;
