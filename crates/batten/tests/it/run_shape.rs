@@ -1,5 +1,23 @@
 //! `policy/run-shape.rego` decides over the compiled binary (CLOUD-843 track 2).
 //!
+//! ─── CLOUD-1163 UNIT 9'S RETIREMENT LEDGER ──────────────────────────────────
+//!
+//! Three governed paths died with that unit, and each names a POLICY SURFACE and
+//! a COMPILED-BINARY TEST because either alone is satisfiable by a port that does
+//! nothing: a row naming only a module has no evidence it works, and one naming
+//! only a test has nothing under test.
+//!
+//! The guard carried FOUR families and all four had already landed, which is what
+//! made it deletable whole rather than piecemeal — `shell-retirement`'s one
+//! admitted disposition, and the reason no line of it needed editing to qualify.
+//! Three of the four are this module's; the fourth is `task-substitution`'s, so it
+//! names that surface and its own tier.
+
+// carried: mise-tasks/run-shape-guard.sh policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: tests/run-shape-guard.bats policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+// carried: tests/run-shape-guard-quoting.bats policy/run-shape.rego crates/batten/tests/it/run_shape.rs
+
+//!
 //! # Where this came from, and why it is Rust
 //!
 //! This file is the successor to `tests/run-shape.bats`, retired under

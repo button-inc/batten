@@ -49,7 +49,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{at_root, run_with_stdin, scratch, stderr, stdout, write};
+use common::{run_with_stdin, scratch, stderr, stdout, write};
 
 /// A fixture repository carrying exactly one `[[hook.handler]]` row.
 ///
