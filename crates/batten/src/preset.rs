@@ -287,6 +287,10 @@ the pipeline.",
                 "<preset:landing-loop>/lease-authorises-the-branch.rego",
                 include_str!("policy/presets/landing-loop/lease-authorises-the-branch.rego"),
             ),
+            (
+                "<preset:landing-loop>/rebase-conflict-stops-the-lap.rego",
+                include_str!("policy/presets/landing-loop/rebase-conflict-stops-the-lap.rego"),
+            ),
         ],
         verdicts: &[
             VendoredVerdict {
@@ -358,6 +362,30 @@ lands. Close the branch, or rebase onto the target and see what is genuinely lef
                     admit(
                         "patch admit first",
                         "the change is being deliberately re-applied after the target reverted it, so identical content is the intent rather than a duplicate",
+                    ),
+                ],
+            },
+            VendoredVerdict {
+                id: "replay halt conflict",
+                gloss: "the lap's replay conflicted, so the head it would push was never completed",
+                class: "Landing is a loop and one step of it needs a person: a replay that \
+conflicts is two authors having changed the same lines, and choosing between them is a \
+judgement no gate makes. What is refused is not the conflict — conflicts are the mechanism \
+working, and frequent laps are what keep each one to a single resolvable increment — but a \
+lap CONTINUING past one, which pushes, spends a matrix or fast-forwards a head whose replay \
+never finished. A merge strategy makes that outcome reachable and reports success while \
+doing it, which is why the wrong move here is the one reached for to make the loop always \
+succeed. Resolve the conflict, then lap again.",
+                routes: &[
+                    read("record read first", "the replay outcome this lap recorded"),
+                    // The one legitimate continuation, and it is narrow on purpose.
+                    // A conflict a LATER lap replayed cleanly is already resolved and
+                    // the module reads the last line for exactly that reason — so
+                    // this admits only the case where the resolution happened outside
+                    // the loop's own record, never "the conflict was inconvenient".
+                    admit(
+                        "replay admit first",
+                        "the conflict was resolved outside this lap's record, so the head being pushed is a completed replay rather than a half-applied one",
                     ),
                 ],
             },

@@ -863,3 +863,76 @@ fn the_landing_loop_preset_refuses_a_lease_held_elsewhere_and_fails_open() {
         "no recorder declared is could-not-look, and it allows"
     );
 }
+
+/// (CLOUD-1335) `rebase-conflict-stops-the-lap` refuses a lap that conflicted and
+/// is silent on one that replayed.
+///
+/// **This is the case both of the module's declared mutations must redden, and
+/// they reach it from opposite sides.** `conflict-unread` makes the predicate
+/// never fire, which only the deny half catches; `clean-lap-unpriced` makes it
+/// fire on everything, which only the anti-vacuity half catches. A module that
+/// refuses nothing and a module that refuses everything are both non-gates
+/// (CLOUD-418), and no single mutation reaches both — so the halves are one case
+/// rather than two, because a mutation is scored against a named case.
+#[test]
+fn the_landing_loop_preset_stops_a_conflicted_lap_and_is_green_by_turns() {
+    let bundle = loaded("landing-replay", tree_preset_row("landing", "landing-loop"));
+
+    // ONE RECORD NAME, AND DELIBERATELY NOT A PLAUSIBLE ONE — the record's name is
+    // the CONSUMER's, so a fixture naming something this repository declares would
+    // let a module that reads it by name pass here (non-negotiable rule 1).
+    let recorded = |line: &str| format!(r#"{{"tree":{{"records":{{"x":["{line}"]}}}}}}"#);
+
+    let stopped = decided(&bundle, &recorded("rebase conflicted abc1234 shared.txt"));
+    assert_eq!(stopped.len(), 1, "a lap whose replay conflicted");
+    assert_eq!(
+        bundle.attribute(&stopped[0]),
+        "rebase-conflict-stops-the-lap",
+        "a preset finding names its own predicate id"
+    );
+
+    // THE ANTI-VACUITY MIRROR, and the half `clean-lap-unpriced` is aimed at.
+    assert!(
+        decided(&bundle, &recorded("rebase replayed abc1234 -")).is_empty(),
+        "a clean replay laps on, or this refuses everything"
+    );
+    assert!(
+        decided(&bundle, &recorded("rebase current abc1234 -")).is_empty(),
+        "an already-current branch replayed nothing, so nothing conflicted"
+    );
+
+    // COULD-NOT-LOOK ALLOWS, and is distinguishable from both verdicts. A lap that
+    // stopped every branch whose replay outcome it could not read would be worse
+    // than one that ran: the loop's whole economy is that a refusal costs a lap
+    // and a false refusal costs a person.
+    assert!(
+        decided(&bundle, &recorded("rebase - - -")).is_empty(),
+        "an unresolved replay outcome allows"
+    );
+
+    // THE HISTORY, which is what holds the last-line reading. A conflict resolved
+    // on the next lap is resolved; a module reading the whole list refuses the
+    // branch forever, which is the defect its sibling had first.
+    assert!(
+        decided(
+            &bundle,
+            r#"{"tree":{"records":{"x":["rebase conflicted abc1234 shared.txt","rebase replayed def5678 -"]}}}"#
+        )
+        .is_empty(),
+        "a conflict a later lap resolved does not outlive its resolution"
+    );
+
+    // Another recorder's line is not a replay outcome — the store holds every
+    // recorder's lines, so selecting on position alone reads foreign columns.
+    assert!(
+        decided(&bundle, &recorded("lease conflicted abc1234 shared.txt")).is_empty(),
+        "another recorder's line is not read as a replay outcome"
+    );
+
+    // Could-not-look over the whole store, and without the module's `is_object`
+    // guard this FAULTS rather than missing — taking the bundle down.
+    assert!(
+        decided(&bundle, r#"{"tree":{"records":null}}"#).is_empty(),
+        "no recorder declared is could-not-look, and it allows"
+    );
+}
