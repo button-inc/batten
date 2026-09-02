@@ -6357,7 +6357,8 @@ measured = "2026-09-02"
 # the gate is what the number is compared against — a basis refreshed from a
 # second reading of the tree would red again on the next lap while looking correct
 # in review. Which file the two readers disagree about is unresolved and is not
-# this bundle's; it is a pointer for whoever takes CLOUD-1158's floor re-derivation.#
+# this bundle's; it is a pointer for whoever takes CLOUD-1158's floor re-derivation.
+#
 # THE DISAGREEING READER IS THE GLOB IMPLEMENTATION, NOT A MISSING FILE, and the
 # entry above leaves it open. Measured 2026-09-02 over one tree:
 # `git ls-files 'crates/batten/tests/**/*.rs'` and the gate's own walk differ by
@@ -6379,6 +6380,23 @@ measured = "2026-09-02"
 # that tripped it. `target prune`'s stale-basis exit is not its below-floor exit,
 # and the caller collapses them — so an operator who reads the caller rather than
 # the callee deletes files and gets nowhere.
+#
+# CLOUD-1321 LANDS ON TOP OF THIS BASIS AND DELIBERATELY BUYS NO MOVE, which is
+# worth a line because the branch drafted one twice and both times it was a
+# duplicate. Its two compiled-binary tiers — `perf_assert.rs` (the
+# `mise-tasks/perf-assert.sh` retirement) and `shell_retirement_cost.rs` (the
+# deletion-linear term's gate) — put the gate's own reading two past the 175
+# basis, well inside a tolerance of 10, so the gate is silent and there is
+# nothing to refresh.
+#
+# THE FIRST DRAFT OF THIS ENTRY MOVED THE COUNT TO 175 AGAINST A BASIS OF 164, and
+# `main` reached the same number first while the branch was open; rebasing turned
+# two records of one move into a conflict, twice. Keeping `main`'s and reducing
+# this branch's to the observation above is the honest resolution — a second entry
+# re-stating a move somebody else made is a ledger row with no reader. The draft
+# also read the tree with `git ls-files`, which the entry above now explains is
+# not a worse measurement of the same set but a measurement of a DIFFERENT one;
+# the sentence is stated in the gate's reading instead.
 
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
