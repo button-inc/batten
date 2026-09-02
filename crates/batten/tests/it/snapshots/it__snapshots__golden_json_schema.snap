@@ -869,6 +869,13 @@ expression: stdout_of(&output)
           "takes_value": false,
           "positional": false,
           "help": "Emit byte-stable JSON instead of pointer lines"
+        },
+        {
+          "name": "rule",
+          "short": null,
+          "long": "rule",
+          "takes_value": true,
+          "help": "Run only the declared rule with this id"
         }
       ],
       "subcommands": []
