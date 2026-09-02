@@ -8477,6 +8477,25 @@ kind = "document"
 target = "mise.toml"
 
 [[verdict]]
+id = "program reach blocked"
+gloss = "a command row names a binary the runner provides, which is never on bare PATH"
+class = """
+A `command` row's first token is spawned through a bare PATH lookup, and nothing a \
+toolchain manager provides is on bare PATH -- nor should it be, since the runner is \
+what the environment guarantees and everything else is reachable THROUGH it. So the \
+row does not fail loudly: it cannot launch at all, and the rule decides nothing while \
+the config reads as if it does. Spell the invocation through the runner, as the \
+sibling rows do. Measured: `no-conflict-markers` named `hk` directly and had been \
+unable to run for as long as the drift existed, while `doctor` reported only that \
+SOME declared program was off PATH.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
 id = "task name undefined"
 gloss = "a command row names a task this tree does not define"
 class = """

@@ -136,6 +136,56 @@ violation contains {
 	not defined[row.task]
 }
 
+# ─── THE PROVIDED-BINARY DIRECTION (CLOUD-1324) ──────────────────────────────
+#
+# A `command` row's first token is spawned through a BARE PATH LOOKUP, and nothing
+# a toolchain manager provides is on bare PATH -- nor should it be. So a row
+# naming a provided binary directly does not fail to launch loudly; it cannot
+# launch at all, and the rule it belongs to decides nothing while the config reads
+# as if it does.
+#
+# Measured 2026-09-02: `no-conflict-markers` spelled `check = "hk util
+# check-merge-conflict …"` and `batten doctor` reported
+# `command-programs failed program-not-on-path`. Eleven of the twelve `command`
+# rows already routed through the runner; that one did not, and the merge-conflict
+# gate had been unable to run for as long as the drift had existed.
+#
+# THE RUNNER IS THE ONE PROGRAM A ROW MAY NAME DIRECTLY, because it is what the
+# environment puts on PATH -- everything else it provides is reachable THROUGH it.
+# That is the whole predicate, and it is why this reads a declared runner rather
+# than a list of tool names: a roster of provided binaries would be a second
+# authority over `mise.toml`, going stale the moment a tool is added.
+provided_binary contains {"id": row.id, "program": program} if {
+	some row in input.tree.documents["batten.toml"].rule
+	some column in ["check", "fix"]
+	program := first_word(row[column])
+	program != runner
+	provides(program)
+}
+
+first_word(command) := word if {
+	words := [w | some w in split(command, " "); w != ""]
+	word := words[0]
+}
+
+# The one program the environment guarantees on PATH.
+runner := "mise"
+
+# Whether the runner provides this program, read from its own manifest rather
+# than from a list here. `[tools]` is the runner's declaration of what it
+# installs, so a tool added there is covered without editing this module.
+provides(program) if input.tree.documents["mise.toml"].tools[program]
+
+violation contains {
+	"rule": "command-task-defined",
+	"verdict": "program reach blocked",
+	# The row first, then the program: the fix is on the row.
+	"subjects": [{"artifact": row.id}, {"artifact": row.program}],
+} if {
+	uses_this_runner
+	some row in provided_binary
+}
+
 # COULD NOT LOOK, NEVER A SILENT PASS. Both documents are declared, so either
 # being absent from `documents` means the walk never read it and no row can be
 # judged — which must not be spelled the same way as a config whose every task
@@ -242,16 +292,68 @@ test_a_repair_naming_an_undefined_task_is_refused if {
 # A PROGRAM ON PATH IS NOT THIS RULE'S BUSINESS — the shape that never had the
 # defect. Reporting it would refuse the one `command` row spelling that works
 # everywhere.
-test_a_program_on_path_is_left_alone if {
+# A program the runner does NOT provide is none of this rule's business: it may be
+# a system binary, and deciding that would need a roster of what a host ships.
+#
+# The example was `hk` and that was exactly backwards (CLOUD-1324) — `hk` is
+# runner-provided and is the one program this repository measured as unreachable.
+# A case asserting it is "on path and left alone" encoded the belief the new
+# direction exists to refuse, and it passed only because its fixture declared no
+# `[tools]` at all.
+test_a_program_the_runner_does_not_provide_is_left_alone if {
 	found := violation with input as {"tree": {
 		"documents": {
-			"batten.toml": {"rule": [{"id": "r", "check": "hk util check-merge-conflict"}]},
-			"mise.toml": {"tasks": {}},
+			"batten.toml": {"rule": [{"id": "r", "check": "git rev-parse HEAD"}]},
+			"mise.toml": {"tasks": {}, "tools": {"hk": "1.56.1"}},
 		},
 		"tracked": ["mise-tasks/land.sh"],
 		"missing": {},
 	}}
 	count(found) == 0
+}
+
+# THE MEASURED SHAPE. A row naming a runner-provided binary directly cannot spawn:
+# nothing the runner provides is on bare PATH, and `command_rule` looks the first
+# token up there.
+test_a_row_naming_a_provided_binary_is_refused if {
+	some v in violation with input as {"tree": {
+		"documents": {
+			"batten.toml": {"rule": [{"id": "r", "check": "hk util check-merge-conflict"}]},
+			"mise.toml": {"tasks": {}, "tools": {"hk": "1.56.1"}},
+		},
+		"tracked": [],
+		"missing": {},
+	}}
+	v.verdict == "program reach blocked"
+}
+
+# THE ANTI-VACUITY MIRROR, and without it the case above is satisfied by a rule
+# that refuses every command row: the same binary through the runner is the
+# correct spelling and must stay clean.
+test_the_same_binary_through_the_runner_is_clean if {
+	found := violation with input as {"tree": {
+		"documents": {
+			"batten.toml": {"rule": [{"id": "r", "check": "mise exec -- hk util check-merge-conflict"}]},
+			"mise.toml": {"tasks": {}, "tools": {"hk": "1.56.1"}},
+		},
+		"tracked": [],
+		"missing": {},
+	}}
+	count(found) == 0
+}
+
+# A `fix` column is spawned the same way and inherits the same failure, so it is
+# judged too — the reason the task direction reads both columns.
+test_a_repair_naming_a_provided_binary_is_refused_too if {
+	some v in violation with input as {"tree": {
+		"documents": {
+			"batten.toml": {"rule": [{"id": "r", "fix": "hk fix"}]},
+			"mise.toml": {"tasks": {}, "tools": {"hk": "1.56.1"}},
+		},
+		"tracked": [],
+		"missing": {},
+	}}
+	v.verdict == "program reach blocked"
 }
 
 # Flags between `run` and the task must not be read as the task.
