@@ -8463,6 +8463,45 @@ fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope) -> Option<Strin
     // reading a dangling path on every fresh container — the CLOUD-990 condition,
     // reintroduced by the retirement that was supposed to preserve it.
     refresh_transcript_link(root, envelope);
+    // MINTED BEFORE ANY RULE CAN RETURN (CLOUD-1372). The position is the fix,
+    // not a tidy-up.
+    //
+    // This call used to live inside the unlanded rule, four early-returns down
+    // the ladder. So a branch carrying any finding-sink or filed-here pointer
+    // returned first and the completion verdict was never MINTED — not decided
+    // "landed", not recorded "could not look", simply absent. Measured on the
+    // session that found this: 20 findings in the store, ten of them
+    // `filed-over-own-diff` (which returns at the old rule 3), and zero
+    // `completion.unlanded` rows across a session that stopped on an unlanded
+    // branch repeatedly.
+    //
+    // MINTING AND REPORTING ARE DIFFERENT QUESTIONS and must not share a
+    // suppression. What the ladder decides is which ONE thing to say, because
+    // two nudges is how a channel stops being read. What the store holds is what
+    // was observed, and a reader — `land`, a later turn, a human — is entitled to
+    // that whether or not this turn chose to speak about it.
+    if std::env::var_os(UNLANDED_BYPASS).is_none() {
+        record_state(overrides);
+    }
+    // RULE 1 — a completion signal with no patch-id-equivalent commit on the
+    // landing target. FIRST, and the order is a claim about consequence.
+    //
+    // It was rule 4, behind two prose-shaped readings. That ranking was by
+    // MEASURED PRECISION, which is the right axis for choosing between rules that
+    // are equally about the turn's conduct — but this one is not about conduct.
+    // The others say the turn was untidy; this one says the work does not exist
+    // anywhere but here, and a container reclaim ends it. A style nit outranking
+    // that is the inversion CLOUD-1372 records, and it is the ladder's own
+    // "at most one nudge" budget that made the ordering load-bearing rather than
+    // cosmetic.
+    if std::env::var_os(UNLANDED_BYPASS).is_none()
+        && let Some(pointer) = unlanded_pointer()
+    {
+        return Some(format!(
+            "{pointer}\nThis turn declared a stopping point and the work is not on the landing \
+             target. Land it, or say what blocks it."
+        ));
+    }
     // RULE 2 — a finding stated in prose with nothing durable written. It reads
     // the transcript, so it reaches prose the module above cannot see: the final
     // text block is under half a turn's assistant prose.
@@ -8488,20 +8527,11 @@ fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope) -> Option<Strin
              now while the file is open, or make sure the PR body closes it when you land."
         ));
     }
-    // RULE 4 — a completion signal with no patch-id-equivalent commit on the
-    // landing target. `state record` mints that verdict and this reads what it
-    // wrote; both ride `unlanded-check`'s own hatch rather than one of their own,
-    // because a caller who switched the rule off must not still pay a tree walk
-    // and a store write per turn for an answer nobody reads.
-    if std::env::var_os(UNLANDED_BYPASS).is_none() {
-        record_state(overrides);
-        if let Some(pointer) = unlanded_pointer() {
-            return Some(format!(
-                "{pointer}\nThis turn declared a stopping point and the work is not on the \
-                 landing target. Land it, or say what blocks it."
-            ));
-        }
-    }
+    // RULE 4 was the completion reading and is now RULE 1, at the top of this
+    // function (CLOUD-1372). Its hatch is unchanged and still shared with the
+    // recorder that feeds it: a caller who switched the rule off must not still
+    // pay a tree walk and a store write per turn for an answer nobody reads.
+    //
     // RULE 5 — every row this branch spun off, enumerated for re-evaluation.
     // Rule 3 asks a narrow measured question and answers it once per row; this
     // asks the broad one no predicate scores (non-negotiable rule 3): here is the

@@ -511,6 +511,28 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   entered the changed-file set. The PR body reaches the predicate as a RECORD
   rather than on stdin, because `check` is declared `read` and has no stdin
   channel: the boundary captures what `gh pr view --jq .body` returned.
+- **GREEN AND PUSHED IS NOT A STOPPING POINT, AND NOTHING RELIABLE TELLS YOU SO**
+  (CLOUD-1372). Done is `main`, by fast-forward, CI-confirmed — the Definition of
+  Ready & Done owns it. A draft PR with a green local suite is In Progress, and
+  `land` is the step that has not run.
+
+  **The trap is a harness hook's checklist standing in for the repository's.**
+  This container's launcher hook says _"There are uncommitted changes … commit and
+  push these changes"_, and satisfying it feels like finishing, because it is the
+  loudest completion-shaped signal in the session and it arrives at exactly the
+  moment a turn is ending. It is a hook about **reclaim survival**, which is a
+  different question from **done**. Measured 2026-09-02: an agent took a branch
+  green, pushed, reported "committed and pushed", and stopped — repeatedly, with
+  the owner as the only detector.
+
+  **Do not rely on the engine to catch this.** `completion.unlanded` is the gate
+  for it and it is **not firing on this host** — its marker (`StopReason::EndTurn`
+  with no tool call after it) is absent from a stream whose turns end on tool
+  calls, and `Outcome::NotSignaled` writes nothing, so the silence is
+  byte-identical to a landed branch. CLOUD-1372 carries the measurement and the
+  fix. Until it lands, **the check is yours**: `git status -sb` showing `ahead`,
+  or a PR still in draft, means the work is not done.
+
 - `unlanded-check` is the end-of-turn half nobody had (CLOUD-97), and it decides
   NOTHING: `completion.unlanded` — a completion marker in the session transcript
   with no patch-id-equivalent commit on the landing target — is the engine's
@@ -538,8 +560,19 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   spawning kind with `RuleScope::Tree` alone), so they are `stop_nudges` in
   `lib.rs`, keeping the order the shell ranked them in — by MEASURED precision,
   `stop-posture` at 3/3 leading `finding-sink` at 1/1, with the three unmeasured
-  below. `finding-sink-check.sh` and `unlanded-check.sh` are spawned unchanged,
-  with the same stdin the bash gave them, which is what bounds the cascade. The
+  below. `finding-sink-check.sh` is spawned unchanged, with the same stdin the
+  bash gave it, which is what bounds the cascade.
+
+  **Two corrections, both measured 2026-09-02 (CLOUD-1372).** This clause named
+  `unlanded-check.sh` as a second spawned sibling; that program **does not
+  exist** — it retired into the engine, and `unlanded_pointer` reads the store
+  directly. And the ranking above is no longer by precision alone: **the
+  completion reading is now FIRST**, ahead of `stop-posture`'s prose nit, because
+  precision is the right axis only between rules about the same kind of thing.
+  The others say the turn was untidy; that one says the work exists nowhere but
+  this container. Its minting also moved **out** of the ladder — `record_state`
+  now runs before any rule can return, since a branch carrying a `filed-here`
+  pointer used to return first and the verdict was never minted at all. The
   recursion bound is the payload's `stop_hook_active`, never a state file; the
   channel is `additionalContext`, never exit 2, because CLOUD-97 and CLOUD-219
   each ruled a deny out independently and `Event::carries_a_verdict` is now the
@@ -549,6 +582,7 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   so the five rules decided only WHICH nudge fired and never WHETHER one did, and
   a constant has zero mutual information with the thing it is meant to detect. An
   empty answer is an answer, and silence is what keeps the channel credible.
+
 - **`claim-guard` is retired** (CLOUD-444); the pull-time half of the pair the
   key rule finishes (CLOUD-272) is now the `claim-needs-receipt` row in
   `batten.toml` — a `receipt` rule with `trigger = "write"` and `key = "branch"`.
