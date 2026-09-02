@@ -105,13 +105,22 @@ mediator := "batten"
 # §2 refuses merging two units because that "would manufacture the glue this
 # partition exists to avoid" -- so this row points at that unit rather than being
 # discharged here.
-# THE TWO MERGED ROWS ARE GONE BECAUSE THEIR SUBJECTS ARE (CLOUD-1314). Both
-# launcher hooks were removed from `~/.claude/launcher-settings.json` and both
-# programs deleted, so the rows would now match nothing and `stale` would refuse
-# them -- which is that direction working, and the reason a retirement deletes its
-# own row rather than leaving a licence behind. Nothing on a merged surface is
-# declared any more: a command there that is not the mediator is a stray, and
-# `hook wire duplicate` refuses their return, which is CLOUD-1314's acceptance.
+# THE TWO MERGED ROWS ARE BACK, BECAUSE THEIR SUBJECTS NEVER LEFT (CLOUD-1079).
+# CLOUD-1314 removed them on the premise that both launcher hooks were gone from
+# `~/.claude/launcher-settings.json` and both programs deleted, so the rows would
+# match nothing and `stale` would refuse them.
+#
+# The premise does not survive a session boundary, and `batten.toml` says so at its
+# own site: these two are "launcher-provisioned and rewritten at every session
+# start, so no commit here can clear them". Measured 2026-09-02 — both files
+# present with mtime 04:22, three hours AFTER the commit that deleted their rows at
+# 01:18, and the launcher registering both again.
+#
+# What the deletion bought was therefore not a closed exemption but `harness-wiring`
+# red in every session, on a condition no commit in this repository can reach. The
+# rows name CLOUD-1079, which is the row `batten.toml` already identifies as owning
+# the environment half; `spent` and `stale` still watch them, so they leave when the
+# launcher stops writing them and not before.
 # THE TABLE IS A DOCUMENT, NOT A CONSTANT, and that is what keeps its three
 # directions testable once it is EMPTY -- which is the campaign's goal state and is
 # where this repository now is.
@@ -554,10 +563,9 @@ test_a_declaration_matching_something_is_not_stale if {
 
 # --- the merged half -----------------------------------------------------------
 
-# The two commands CLOUD-1314 removed. Kept as a fixture rather than deleted with
-# their rows, because "these exact programs are refused if they come back" is the
-# acceptance clause that row names, and it needs the names to assert it.
-retired_hooks := {
+# The two launcher-provisioned commands, and they are a fixture because they are
+# STILL HERE rather than as a memorial to their removal.
+launcher_hooks := {
 	"~/.claude/stop-hook-git-check.sh",
 	"~/.claude/session-start-git-identity.sh",
 }
@@ -567,12 +575,37 @@ test_a_merged_registration_the_table_does_not_declare_is_refused if {
 	v.verdict == "hook wire duplicate"
 }
 
-# CLOUD-1314'S ACCEPTANCE. The rows are gone because the subjects are, so these two
-# are no longer excused by anything -- re-provisioning either is refused like any
-# other second decider. Without this case the deletion would be indistinguishable
-# from having quietly stopped watching them.
-test_the_retired_launcher_hooks_are_refused_if_they_return if {
-	vs := verdicts with input as launcher(retired_hooks)
+# CLOUD-1314'S ACCEPTANCE IS WITHDRAWN, ON A MEASUREMENT RATHER THAN AN ARGUMENT.
+# It read: the rows are gone because the subjects are, so re-provisioning either is
+# refused like any other second decider — and its case asserted exactly that.
+#
+# The subjects are not gone. `~/.claude/launcher-settings.json` registers both and
+# the launcher REWRITES them at every session start, which `batten.toml` states at
+# its own site: "launcher-provisioned and rewritten at every session start, so no
+# commit here can clear them". Measured 2026-09-02: both files present, mtime
+# 04:22, three hours AFTER the commit that deleted their rows at 01:18.
+#
+# So the case was asserting a property of the world that the world does not have,
+# and what it bought was `harness-wiring` red in every session — the pre-commit gate
+# refusing every commit, on a condition no commit can reach. The rows are back,
+# keyed to CLOUD-1079, which is the row `batten.toml` already names as owning the
+# environment half. They leave when the launcher stops writing them, not before.
+test_the_launcher_hooks_are_declared_rather_than_refused if {
+	vs := verdicts with input as launcher_with(launcher_hooks, {
+		"stop-hook-git-check.sh": "CLOUD-1079",
+		"session-start-git-identity.sh": "CLOUD-1079",
+	})
+	not "hook wire duplicate" in vs
+}
+
+# THE OTHER DIRECTION, and without it the case above is satisfied by a module that
+# stopped refusing anything on a merged surface — which is what withdrawing an
+# acceptance clause has to be held to.
+test_an_undeclared_hook_beside_the_declared_pair_is_still_refused if {
+	vs := verdicts with input as launcher_with(
+		{"~/.claude/stop-hook-git-check.sh", "~/.claude/other-hook.sh"},
+		{"stop-hook-git-check.sh": "CLOUD-1079"},
+	)
 	"hook wire duplicate" in vs
 }
 
