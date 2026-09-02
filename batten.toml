@@ -1411,6 +1411,17 @@ regex = '(?i)(^|[^0-9A-Za-z-])(clos(e|es|ed)|fix(|es|ed)|resolv(e|es|ed))[[:spac
 # wrapped in `<issue …>` markup, so matching key text matches the one thing the
 # round trip is known to mangle. The threshold is a number, in `[ready]` below.
 
+# THE CLOSED STATUSES, as the tracker's `{slug:status}` renders them: lowercased
+# with non-alphanumeric runs folded to `-`. A row here rather than a literal in
+# the module for `ready-issue-key`'s reason one layer over -- a tracker's closed
+# vocabulary is a consumer fact, and the next gate that has to recognise a closed
+# issue reads this row instead of spelling its own set. `duplicate` is closed too:
+# an exemption whose owner was merged into another issue is as spent as one whose
+# owner shipped.
+[[pattern]]
+id = "closed-issue-status"
+regex = '^(done|canceled|duplicate)$'
+
 # The tracker serialises a mention as `<issue …>KEY</issue>`, so the markup is
 # stripped and the stored and rendered forms become one case. A pattern written
 # against the rendered form never matches the stored one, and an exemption tested
