@@ -135,6 +135,7 @@ const CANDIDATES: &[&str] = &[
     "source",
     "spawn",
     "spelling",
+    "spent",
     "stale",
     "state",
     "step",
