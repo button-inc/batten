@@ -10401,9 +10401,11 @@ pub(crate) fn spawn_resolving<T>(
     // THE REPAIR IS HERE RATHER THAN AT THE FOOT OF THE LADDER (CLOUD-1324). The
     // record is memoised and keyed to the pin's configuration as it stands, so a
     // manifest edited mid-session invalidates it and every pinned program reads
-    // as missing until the next session start — measured: `mise.toml` changed at
-    // 03:56, a record written the previous day stopped validating, and
-    // `no-conflict-markers` could not launch `hk`.
+    // as missing until the next session start — measured: one of the pin's own
+    // configuration files changed, a record written the previous day stopped
+    // validating, and a `command` rule could not launch the tool it declared.
+    // The files and the tool go unnamed deliberately: they are a consumer's, and
+    // this crate may not carry one (non-negotiable rule 1).
     //
     // A STALE MEMO IS THE ENGINE'S OWN BOOKKEEPING, NOT A FACT ABOUT THE TREE,
     // and it must not decide whether a gate can run. So could-not-look re-asks
@@ -15688,7 +15690,10 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
                 |program: &str, extra: &[&str]| {
                     log.borrow_mut().push((
                         program.to_owned(),
-                        extra.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
+                        extra
+                            .iter()
+                            .map(|arg| (*arg).to_owned())
+                            .collect::<Vec<_>>(),
                     ));
                     Err::<&'static str, _>(std::io::Error::from(std::io::ErrorKind::NotFound))
                 },
@@ -15697,7 +15702,9 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         };
 
         let provided = crate::facts::Look::Is(
-            ["hk".to_owned()].into_iter().collect::<std::collections::BTreeSet<_>>(),
+            ["hk".to_owned()]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
         );
         assert_eq!(
             attempts(&provided).first().cloned(),
@@ -15709,9 +15716,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         );
 
         assert_eq!(
-            attempts(&crate::facts::Look::CouldNotLook)
-                .first()
-                .cloned(),
+            attempts(&crate::facts::Look::CouldNotLook).first().cloned(),
             Some(("hk".to_owned(), vec![])),
             "could-not-look falls through to the ladder rather than assuming the pin"
         );

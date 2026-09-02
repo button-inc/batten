@@ -50,14 +50,8 @@ fn startup(dir: &Path, args: &[&str]) -> Output {
 
 /// A row spelling `check` and optionally `repair`, as TOML.
 fn row(id: &str, check: &str, repair: Option<&str>) -> String {
-    let mut out = format!(
-        "[[startup]]\nid = \"{id}\"\ngloss = \"a fixture row\"\ncheck = {check}\n"
-    );
-    if let Some(repair) = repair {
-        out.push_str(&format!("repair = {repair}\n"));
-    }
-    out.push('\n');
-    out
+    let repair = repair.map_or_else(String::new, |argv| format!("repair = {argv}\n"));
+    format!("[[startup]]\nid = \"{id}\"\ngloss = \"a fixture row\"\ncheck = {check}\n{repair}\n")
 }
 
 #[test]

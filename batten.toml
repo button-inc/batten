@@ -10044,10 +10044,21 @@ target = "mise run rules-drift"
 # reports them; `batten startup --repair` runs them by hand, which is what the
 # committed setup script does before an agent ever attaches.
 
+# PRESENCE IS THE WRONG QUESTION, MEASURED. This row first checked `mise run
+# deps` -- `command -v batten && batten --version` -- and passed in a container
+# whose installed engine could not parse this repository's own authority:
+# `[advisory]` was an unknown field to it, so every gate that shelled out to
+# `batten` failed on the config before it decided anything, while the row read
+# green and `--version` printed the right number. A binary too old to read the
+# file is exactly as useless as an absent one, and harder to see.
+#
+# So the check is the whole load: `config show` exits 0 only if the committed
+# authority resolves under the binary PATH actually finds. It names no field and
+# no version, which is what keeps it true as the config grows.
 [[startup]]
-id = "engine-on-path"
-gloss = "the engine every hook registration invokes by bare name resolves on PATH"
-check = ["mise", "run", "deps"]
+id = "engine-reads-the-authority"
+gloss = "the engine that hook registrations invoke by bare name can read this repository's committed config"
+check = ["batten", "config", "show"]
 repair = ["mise", "run", "deps-install"]
 
 [[startup]]

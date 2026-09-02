@@ -79,6 +79,14 @@ rules contains "spawn-adapters"
 #   handler    the harness handler boundary
 #   action     an action row RUNS a command; that is the kind's definition
 #   rules      the engine that runs a `command` row's `check` and `fix`
+#   startup    a `[[startup]]` row's `check` and `repair` ARE commands the
+#              operator declared (CLOUD-1324), which is `action`'s argument one
+#              noun over. Placed rather than folded into `rules` because the two
+#              own different subjects: a `command` row decides about the TREE,
+#              a `[[startup]]` row about the CONTAINER, and the module that owns
+#              a subject owns its could-not-look — a check that cannot be
+#              spawned is reported as could-not-look here rather than as a
+#              finding, and `rules` has no such answer to give
 #   semver     the pinned cargo-semver-checks adapter (CLOUD-1050), which also
 #              builds its own baseline when the registry cannot resolve one
 #   pinned     the toolchain-pin adapter (CLOUD-1028): it asks the pin what it
@@ -144,6 +152,7 @@ adapters := {
 	"judge", "handler", "action", "rules", "semver",
 	"pinned", "perf", "prune", "pr_watch", "mutate", "bot",
 	"lease",
+	"startup",
 }
 
 module_of(path) := name if {

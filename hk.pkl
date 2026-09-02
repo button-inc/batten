@@ -456,6 +456,7 @@ local gate = new Mapping<String, Step> {
         "crates/batten/src/refusal.rs",
         "crates/batten/src/rules.rs",
         "crates/batten/src/severity.rs",
+        "crates/batten/src/startup.rs",
         "crates/batten/src/transcript.rs",
         "crates/batten/src/verbs.rs",
         "crates/batten/src/verdict.rs",

@@ -236,7 +236,7 @@ this **container** is what the repository declared, off `[[startup]]` rows in
 
 ```console
 $ batten startup
-engine-on-path ok
+engine-reads-the-authority ok
 hook-surfaces-are-battens failed not-provisioned
 startup: 2 row(s), 1 failed
 ```
@@ -247,7 +247,7 @@ fixed nothing is reported rather than believed:
 
 ```console
 $ batten startup --repair
-engine-on-path ok
+engine-reads-the-authority ok
 hook-surfaces-are-battens ok repaired
 startup: 2 row(s), 0 failed
 ```

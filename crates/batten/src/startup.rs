@@ -204,8 +204,8 @@ impl Outcome {
 /// rather than by convention: there is no path by which a check's output can
 /// reach a report.
 fn ran_clean(root: &Path, argv: &[String]) -> Option<bool> {
-    let (program, args) = argv.split_first()?;
-    let rest: Vec<&str> = args.iter().map(String::as_str).collect();
+    let (program, operands) = argv.split_first()?;
+    let rest: Vec<&str> = operands.iter().map(String::as_str).collect();
     let status = crate::rules::spawn_resolving(Some(root), program, |program, extra| {
         #[expect(
             clippy::disallowed_types,
@@ -403,7 +403,10 @@ mod tests {
         )];
         let out = repair(&dir, &rows);
         assert_eq!(out[0].line(), "gone failed check-unrunnable");
-        assert!(!marker.exists(), "could-not-look is not a licence to mutate");
+        assert!(
+            !marker.exists(),
+            "could-not-look is not a licence to mutate"
+        );
     }
 
     /// THE PROPERTY THAT MAKES THIS A RULE RATHER THAN A SCRIPT: the check is

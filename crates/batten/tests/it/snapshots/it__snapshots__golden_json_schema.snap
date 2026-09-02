@@ -2046,6 +2046,32 @@ expression: stdout_of(&output)
       "subcommands": []
     },
     {
+      "path": "startup",
+      "id": "startup",
+      "about": "Report whether this container matches what the repository declares",
+      "effect": "unclassified",
+      "data_channel": true,
+      "flags": [
+        {
+          "name": "json",
+          "short": "J",
+          "long": "json",
+          "takes_value": false,
+          "positional": false,
+          "help": "Emit byte-stable JSON instead of pointer lines"
+        },
+        {
+          "name": "repair",
+          "short": null,
+          "long": "repair",
+          "takes_value": false,
+          "positional": false,
+          "help": "Run each failing row's declared repair, then re-decide its check"
+        }
+      ],
+      "subcommands": []
+    },
+    {
       "path": "state",
       "id": "state",
       "about": "The out-of-tree findings store: which store belongs to this checkout",
@@ -2186,6 +2212,14 @@ expression: stdout_of(&output)
           "effect": "destructive",
           "data_channel": false,
           "flags": [
+            {
+              "name": "check",
+              "short": null,
+              "long": "check",
+              "takes_value": false,
+              "positional": false,
+              "help": "Exit non-zero if a repair is owed, and remove nothing"
+            },
             {
               "name": "dry_run",
               "short": "n",

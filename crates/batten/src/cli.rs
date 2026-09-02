@@ -192,13 +192,6 @@ pub enum Command {
         /// The chosen sub-verb.
         command: DefectsCommand,
     },
-    /// Whether this container matches what the repository declares.
-    Startup {
-        /// Run each failing row's declared repair, then re-decide its check.
-        repair: bool,
-        /// Whether the data channel was asked for.
-        json: bool,
-    },
     /// Pinned tools this repository provisions.
     Provision {
         /// The chosen sub-verb.
@@ -342,6 +335,20 @@ pub enum Command {
     Lease {
         /// The chosen sub-verb.
         command: LeaseCommand,
+    },
+    /// Whether this container matches what the repository declares (CLOUD-1324).
+    ///
+    /// Appended for the reason `Lease` above states, which every new variant
+    /// here answers to: this enum carries no `repr`, so a variant placed beside
+    /// its neighbours in the surface would shift every later discriminant and
+    /// `mise run semver` would read that as a break the crate has to declare. It
+    /// was written beside `Provision` first, which is where a reader looks for
+    /// it, and `semver` said so.
+    Startup {
+        /// Run each failing row's declared repair, then re-decide its check.
+        repair: bool,
+        /// Whether the data channel was asked for.
+        json: bool,
     },
 }
 

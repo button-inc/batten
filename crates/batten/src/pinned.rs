@@ -245,15 +245,18 @@ pub fn cached(root: &Path) -> PinnedFacts {
 /// could-not-look to both, which is right for a fact and useless for a diagnosis.
 ///
 /// So the question is asked as a file read over the two things a reader can act
-/// on: a record is THERE, and it does not answer. Measured — `mise.toml` changed
-/// at 03:56 and a record written the previous day stopped validating, leaving
-/// `doctor` able to say only that some declared program was missing.
+/// on: a record is THERE, and it does not answer. Measured — one of the pin's own
+/// configuration files was edited mid-session and a record written the previous
+/// day stopped validating, leaving `doctor` able to say only that some declared
+/// program was missing. Which files those are is [`configs`]'s answer and never a
+/// name here (non-negotiable rule 1).
 ///
 /// A record that cannot be located at all is not stale: it is absent, which this
 /// reports as `false` for the same reason the fact allows on could-not-look.
 #[must_use]
 pub fn record_is_stale(root: &Path) -> bool {
-    record_path(root).is_some_and(|path| path.is_file()) && matches!(cached(root), Look::CouldNotLook)
+    record_path(root).is_some_and(|path| path.is_file())
+        && matches!(cached(root), Look::CouldNotLook)
 }
 
 /// Ask the pin, record the answer, and return it. Spawns.
@@ -295,15 +298,52 @@ pub fn refresh(root: &Path) -> PinnedFacts {
 /// and a repair that kills the run is worse than one that declines.
 #[must_use]
 pub fn repaired(root: &Path) -> PinnedFacts {
-    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeMap<PathBuf, PinnedFacts>>> =
-        std::sync::OnceLock::new();
+    static MEMO: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<PathBuf, PinnedFacts>>,
+    > = std::sync::OnceLock::new();
     let memo = MEMO.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
     if let Ok(seen) = memo.lock()
         && let Some(answer) = seen.get(root)
     {
         return answer.clone();
     }
+    // NO RECORD IS NOT A STALE ONE, and this narrowing is what keeps the repair
+    // from being a spawn storm. `cached` answers could-not-look for two very
+    // different trees: one whose record stopped validating, and one that simply
+    // has none — a fresh clone, and EVERY FIXTURE REPOSITORY. Re-asking the pin
+    // in the second case buys nothing: there is no stale answer to replace, and
+    // `refresh_pinned` writes the first record at session start, which is where
+    // an `Effect` is admissible.
+    //
+    // Measured: without it, a full test binary paid two runner spawns per fixture
+    // root — the per-root memo bounds a repeat, not the first ask, and a suite
+    // creates hundreds of roots. Concurrent `git commit`s inside those fixtures
+    // began failing under the load, at ~50x their isolated duration.
+    if !record_is_stale(root) {
+        return Look::CouldNotLook;
+    }
     let resolved = refresh(root);
+    // A RECORD THAT CANNOT BE REWRITTEN AND CANNOT ANSWER IS GARBAGE, and the
+    // repair clears it rather than leaving `doctor` to report it forever.
+    //
+    // Measured: a container whose ambient `PATH` already carries the pin's shim
+    // directory. `resolve` answers could-not-look there BY DESIGN — a program you
+    // would have reached anyway is not one the pin supplies — so `refresh` writes
+    // nothing, and a record written before that directory was on `PATH` stays on
+    // disk keyed to a state that will never recur. `record_is_stale` then reports
+    // a fault with no remedy, over a container where every declared program is in
+    // fact reachable.
+    //
+    // Removing it is the honest repair and it costs nothing: the record is
+    // engine bookkeeping under `$GIT_DIR`, keyed so a non-matching one is never
+    // read, and the next resolvable state writes a fresh one.
+    if matches!(resolved, Look::CouldNotLook)
+        && let Some(path) = record_path(root)
+    {
+        // Discarded for `record`'s reason: a file that could not be removed is
+        // not a failure to answer. The reading stays could-not-look either way.
+        let _removed = std::fs::remove_file(path);
+    }
     if let Ok(mut seen) = memo.lock() {
         seen.insert(root.to_owned(), resolved.clone());
     }

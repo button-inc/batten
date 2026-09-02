@@ -290,6 +290,23 @@ declared_modules := {
 	# that decides nothing. It reaches no decider: what a filed row MEANS is the
 	# refinement gate's, and this module never mints a `Finding`.
 	"carry", "bot",
+	# `startup` arrived with CLOUD-1324 and this rule named it, which is the
+	# coverage half working again: the module was written, its two tiers were
+	# green, and this is what said nobody had placed it.
+	#
+	# It is a LEAF that ACQUIRES, which is `pinned`'s and `bot::forge`'s class:
+	# a `[[startup]]` row's `check` and `repair` are operator-declared programs,
+	# so it reaches `rules` for the process ladder every spawning site in this
+	# crate shares -- and reaching that one ladder rather than growing its own is
+	# what lets a row name a program the project's pin provides.
+	#
+	# It reaches no decider and no store. What a row's outcome MEANS is the
+	# reader's, off the `id` and the `gloss` in their own committed config; this
+	# module mints no `Finding` and writes nothing. And it must not be reachable
+	# FROM the mediated boundary: a row's check spawns, which is `Cost::Effect`,
+	# and the fact model bars that from a call being adjudicated -- `lib` is the
+	# caller that runs these at session start, which is not such a call.
+	"startup",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

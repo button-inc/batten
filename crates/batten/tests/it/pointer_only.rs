@@ -1141,6 +1141,22 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The container's declared preconditions (CLOUD-1324). Pointer-only by
+    // construction rather than by care: a row renders as its own `id` and a
+    // verdict token, and the command it ran is spawned with both streams
+    // discarded, so there is no path by which a check's output could reach the
+    // report. What a row MEANS is its `gloss` in the reader's own committed
+    // config, which is where the prose lives instead.
+    //
+    // Driven BARE, without `--repair`, for `wiring reclaim -n`'s reason one noun
+    // over: this corpus is a fixture tree, and a verb allowed to repair it would
+    // be measuring bytes it had just rewritten.
+    Verb {
+        path: "startup",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "provision status",
         args: &[],

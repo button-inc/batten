@@ -59,7 +59,7 @@ fn fixture(name: &str, program: &str) -> std::path::PathBuf {
              id = \"a-gate\"\n\
              kind = \"command\"\n\
              glob = \"**\"\n\
-             check = \"{program} --version\"\n\
+             check = '{program} --version'\n\
              severity = \"deny\"\n\
              scope = \"tree\"\n\
              no_fix_reason = \"a fixture repairs nothing\"\n"
@@ -146,10 +146,7 @@ fn a_declared_program_nothing_can_reach_is_reported_at_session_start() {
         text.contains("container-health"),
         "the advisory names itself so a reader can tell the producers apart: {text}"
     );
-    assert!(
-        text.contains(CHECK),
-        "the failing check is named: {text}"
-    );
+    assert!(text.contains(CHECK), "the failing check is named: {text}");
     assert!(
         text.contains("batten-no-such-program-exists-here"),
         "the SUBJECT is the program, not a count — a reader cannot fix `something is missing`: {text}"

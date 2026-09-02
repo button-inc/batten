@@ -427,11 +427,7 @@ fn run_startup(
         for outcome in &outcomes {
             writeln!(out, "{}", outcome.line())?;
         }
-        writeln!(
-            out,
-            "startup: {} row(s), {failed} failed",
-            outcomes.len()
-        )?;
+        writeln!(out, "startup: {} row(s), {failed} failed", outcomes.len())?;
     }
     // `Usage`, never `Violation` — `doctor`'s reasoning, inherited: a mediating
     // harness reads `2` as a policy denial, and "this container is not what the
@@ -7346,10 +7342,7 @@ fn report_container_health(
          not fix. `batten startup --repair` runs them again by hand.\n\n\
          Reported at session start only, and only when something is wrong.\n",
     );
-    advice.push(advisory::Advice::new(
-        severity::AdvisoryTier::Warning,
-        out,
-    ));
+    advice.push(advisory::Advice::new(severity::AdvisoryTier::Warning, out));
 }
 
 /// Drop the at-load wiring record at the one moment it stops being true

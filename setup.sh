@@ -20,12 +20,15 @@
 set -uo pipefail
 
 # The agent proxy re-terminates TLS; make curl trust its CA explicitly.
-[ -n "${SSL_CERT_FILE:-}" ] && [ -f "${SSL_CERT_FILE}" ] && export CURL_CA_BUNDLE="${SSL_CERT_FILE}"
+[[ -n "${SSL_CERT_FILE:-}" ]] && [[ -f "${SSL_CERT_FILE}" ]] && export CURL_CA_BUNDLE="${SSL_CERT_FILE}"
 
 # 1. mise itself -> ~/.local/bin/mise (pin with MISE_VERSION=... to lock it).
 export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$PATH"
 command -v mise >/dev/null 2>&1 || curl -fsSL https://mise.run | sh
-command -v mise >/dev/null 2>&1 || { echo "setup: mise install failed" >&2; exit 0; }
+command -v mise >/dev/null 2>&1 || {
+	echo "setup: mise install failed" >&2
+	exit 0
+}
 
 # ---------------------------------------------------------------------------
 # 2. GitHub reachability behind the agent proxy — a PATH WRAPPER, not an env file.
@@ -61,12 +64,18 @@ mkdir -p "$MISE_LIBEXEC"
 # If ~/.local/bin/mise is the real ELF binary (freshly installed, or replaced by a
 # mise self-update / re-run of mise.run), move it under libexec. head -c4 on an ELF
 # begins with 0x7F,'E','L','F'; -a lets grep read the binary as text.
-if [ -f "$MISE_BIN" ] && head -c4 "$MISE_BIN" 2>/dev/null | grep -qa ELF; then
-  mv -f "$MISE_BIN" "$MISE_REAL"
+#
+# READ THEN MATCH, never piped. `head … | grep -q` under `pipefail` reports the
+# PIPELINE's failure when grep exits early on a match and head takes SIGPIPE — so
+# a MATCH reads as false and the relocation silently never happens, which is the
+# one branch this block exists for. `pipefail-grep-check` names the class.
+mise_magic="$(head -c4 "$MISE_BIN" 2>/dev/null || true)"
+if [[ -f "$MISE_BIN" ]] && grep -qa ELF <<<"$mise_magic"; then
+	mv -f "$MISE_BIN" "$MISE_REAL"
 fi
 
 # (Re)write the wrapper every run so fixes to it always take effect.
-cat > "$MISE_BIN" <<'WRAP'
+cat >"$MISE_BIN" <<'WRAP'
 #!/usr/bin/env bash
 # mise wrapper: guarantee GitHub reachability behind the agent proxy for EVERY
 # mise call, independent of shell init. See setup.sh for the full rationale.
@@ -77,7 +86,7 @@ for _v in NO_PROXY no_proxy; do
     *) export "$_v=api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com${_cur:+,$_cur}" ;;
   esac
 done
-if [ -n "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ] && [ -z "${MISE_GITHUB_TOKEN:-}" ]; then
+if [[ -n "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]] && [[ -z "${MISE_GITHUB_TOKEN:-}" ]]; then
   export MISE_GITHUB_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN"
 fi
 exec "$HOME/.local/libexec/mise" "$@"
@@ -86,15 +95,15 @@ chmod +x "$MISE_BIN"
 
 # If the real binary somehow is not in place (fresh box where mise.run wrote the
 # wrapper's path, or a wiped libexec), reinstall it and relocate once more.
-if [ ! -x "$MISE_REAL" ]; then
-  curl -fsSL https://mise.run | MISE_INSTALL_PATH="$MISE_REAL" sh \
-    || echo "setup: could not provision the real mise binary" >&2
+if [[ ! -x "$MISE_REAL" ]]; then
+	curl -fsSL https://mise.run | MISE_INSTALL_PATH="$MISE_REAL" sh ||
+		echo "setup: could not provision the real mise binary" >&2
 fi
 
 # 3. Interactive shells still get full activation ([env] blocks, task env). The
 #    wrapper already covers the proxy/PAT, so .bashrc need only add PATH + activate.
 if ! grep -q 'mise activate bash' "$HOME/.bashrc" 2>/dev/null; then
-  cat >> "$HOME/.bashrc" <<'EOF'
+	cat >>"$HOME/.bashrc" <<'EOF'
 
 # mise — shims first so non-interactive shells and git hooks resolve pinned tools.
 # GitHub-proxy reachability + PAT are handled by the ~/.local/bin/mise wrapper.
@@ -112,12 +121,12 @@ fi
 cd "${CLAUDE_PROJECT_DIR:-$PWD}" || exit 0
 mise trust --all >/dev/null 2>&1
 mise install --yes || echo "setup: root 'mise install' incomplete — see output above" >&2
-git ls-files -- '*mise.toml' '.tool-versions' 2>/dev/null \
-  | xargs -r -n1 dirname | sort -u | grep -v '^\.$' \
-  | while read -r d; do
-      ( cd "$d" && mise install --yes ) \
-        || echo "setup: 'mise install' incomplete in $d" >&2
-    done
+git ls-files -- '*mise.toml' '.tool-versions' 2>/dev/null |
+	xargs -r -n1 dirname | sort -u | grep -v '^\.$' |
+	while read -r d; do
+		(cd "$d" && mise install --yes) ||
+			echo "setup: 'mise install' incomplete in $d" >&2
+	done
 
 # 5. Create the shims. Without this the shims directory is EMPTY, every tool
 #    resolves to the image's unpinned copy, and `mise ls --current` still looks green.
@@ -138,8 +147,8 @@ mise run deps-install || echo "setup: 'deps-install' incomplete — see output a
 #    advisory channel at every session start, where an agent will actually read
 #    it. A setup script that exited non-zero would take the container down over a
 #    precondition the session could still fix.
-mise exec -- batten startup --repair \
-  || echo "setup: some declared preconditions are unmet — see the lines above" >&2
+mise exec -- batten startup --repair ||
+	echo "setup: some declared preconditions are unmet — see the lines above" >&2
 
 # 8. Report, so a failure is visible in the setup log and not at first use.
 mise ls --current || true

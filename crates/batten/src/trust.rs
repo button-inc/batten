@@ -785,22 +785,6 @@ pub enum WeakeningKind {
     /// configs can settle. Narrowing this to "handlers that would have denied"
     /// would be a gate estimating rather than deciding (non-negotiable rule 3).
     HandlerRemoved,
-    /// A `[[startup]]` row the base ref carried and the working tree does not
-    /// (CLOUD-1324).
-    ///
-    /// A row is a precondition the base ref asserted about the container, so
-    /// deleting one removes a bar — the same reading `HandlerRemoved` takes, and
-    /// for the same reason: whether the check would have failed is a runtime
-    /// fact about a declared program, not something two parsed configs can
-    /// settle, so narrowing this to "rows that would have failed" would be a
-    /// gate estimating rather than deciding (non-negotiable rule 3).
-    ///
-    /// The REMOVED direction only. A row ADDED is a precondition gained, and its
-    /// repair is a command — but that is exactly why `[[startup]]` is not
-    /// layered at all: `resolve` reads it from the committed authority alone, so
-    /// there is no local file that could add one. This comparison is between two
-    /// committed refs, where an added row is a tightening like any other.
-    StartupRowRemoved,
     /// `[trust] offline_fallback` went on, so an unreachable base ref may now be
     /// answered from a pinned config instead of refusing (CLOUD-720).
     ///
@@ -821,6 +805,28 @@ pub enum WeakeningKind {
     /// every variant after it and `cargo semver-checks` refuses the gratuitous
     /// break. Appending costs one jump for a reader and shifts nothing.
     ProtectedReaderAdded,
+    /// A `[[startup]]` row the base ref carried and the working tree does not
+    /// (CLOUD-1324).
+    ///
+    /// A row is a precondition the base ref asserted about the container, so
+    /// deleting one removes a bar — the same reading `HandlerRemoved` takes, and
+    /// for the same reason: whether the check would have failed is a runtime
+    /// fact about a declared program, not something two parsed configs can
+    /// settle, so narrowing this to "rows that would have failed" would be a
+    /// gate estimating rather than deciding (non-negotiable rule 3).
+    ///
+    /// APPENDED rather than placed beside `HandlerRemoved`, which is where a
+    /// reader looks for it: this enum carries no `repr`, so a variant among its
+    /// neighbours shifts every later discriminant and `mise run semver` reads
+    /// that as a break the crate has to declare. Written there first, and
+    /// `semver` said so.
+    ///
+    /// The REMOVED direction only. A row ADDED is a precondition gained, and its
+    /// repair is a command — but that is exactly why `[[startup]]` is not
+    /// layered at all: `resolve` reads it from the committed authority alone, so
+    /// there is no local file that could add one. This comparison is between two
+    /// committed refs, where an added row is a tightening like any other.
+    StartupRowRemoved,
 }
 
 impl WeakeningKind {
@@ -3205,9 +3211,7 @@ mod tests {
         // case asserting only that "something is reported" would pass over a
         // comparison wired backwards, and this one would then refuse every
         // repository that ADDS a precondition.
-        let row = config(
-            "[[startup]]\nid = \"probe\"\ngloss = \"a probe\"\ncheck = [\"true\"]\n",
-        );
+        let row = config("[[startup]]\nid = \"probe\"\ngloss = \"a probe\"\ncheck = [\"true\"]\n");
         assert_eq!(
             only(&row, &config("")),
             Weakening::new(
@@ -3223,9 +3227,8 @@ mod tests {
         // is stricter or looser is a runtime fact about two declared programs,
         // and a gate answering it from two parsed configs would be estimating
         // rather than deciding (non-negotiable rule 3).
-        let edited = config(
-            "[[startup]]\nid = \"probe\"\ngloss = \"a probe\"\ncheck = [\"false\"]\n",
-        );
+        let edited =
+            config("[[startup]]\nid = \"probe\"\ngloss = \"a probe\"\ncheck = [\"false\"]\n");
         assert!(
             weakenings(&row, &edited).is_empty(),
             "an edited check is not a comparison two parsed configs can settle"
