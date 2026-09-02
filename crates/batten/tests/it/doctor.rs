@@ -664,3 +664,101 @@ fn this_repository_is_healthy() {
         stdout(&output)
     );
 }
+
+// --- the declared evidence capability (CLOUD-1035) ---------------------------
+
+/// A repository whose configured transcript holds `body`.
+fn with_transcript(name: &str, body: Option<&str>) -> PathBuf {
+    let dir = scratch(
+        name,
+        true,
+        Some("version = 1\n\n[transcript]\npath = \"session.jsonl\"\n"),
+    );
+    if let Some(body) = body {
+        common::write(&dir, "session.jsonl", body);
+    }
+    dir
+}
+
+/// An undecodable transcript is named, and the run is still not a policy verdict.
+///
+/// **The exit code is the row that stops this becoming a deny channel.** An
+/// unreadable transcript is an environment fact, and a `2` here would be read by
+/// a mediating harness as a refusal. CLOUD-1035's acceptance says "exits 0"; the
+/// landed contract is that a failing check exits `1` like every other one, and
+/// what actually matters — never `Violation` — is asserted directly rather than
+/// inferred from a number.
+#[test]
+fn an_undecodable_transcript_is_named_and_never_a_policy_verdict() {
+    let dir = with_transcript(
+        "doctor-transcript-torn",
+        Some("{\"type\":\"user\"}\nnot json at all\n"),
+    );
+    let output = doctor(&dir, &[]);
+    assert!(
+        stdout(&output).contains("transcript failed transcript-unreadable"),
+        "got: {}",
+        stdout(&output)
+    );
+    assert_ne!(
+        output.status.code(),
+        Some(2),
+        "a diagnostic must never render a policy verdict"
+    );
+    // POINTER-ONLY: the capability carries a `<label>:<line>`, and none of it
+    // reaches the report. Asserted over the line number rather than the path,
+    // because the path is the one part a reader could reconstruct anyway.
+    assert!(
+        !stdout(&output).contains("session.jsonl:"),
+        "the reason id must not republish the pointer: {}",
+        stdout(&output)
+    );
+}
+
+/// A configured-but-absent transcript is `ok`, on the committed config's own
+/// terms — `batten.toml` states absent is ordinary and changes no verdict.
+#[test]
+fn a_configured_but_absent_transcript_is_ok() {
+    let dir = with_transcript("doctor-transcript-absent", None);
+    let output = doctor(&dir, &[]);
+    assert!(
+        stdout(&output).contains("transcript ok"),
+        "got: {}",
+        stdout(&output)
+    );
+}
+
+/// THE ANTI-VACUITY TWIN. Without it, the failing case above is satisfied by a
+/// check that reports `transcript-unreadable` over every transcript there is.
+#[test]
+fn a_present_and_readable_transcript_is_ok() {
+    let dir = with_transcript(
+        "doctor-transcript-present",
+        Some("{\"type\":\"user\",\"message\":{\"role\":\"user\"}}\n"),
+    );
+    let output = doctor(&dir, &[]);
+    assert!(
+        stdout(&output).contains("transcript ok"),
+        "got: {}",
+        stdout(&output)
+    );
+}
+
+/// A repository that never named a transcript emits NO row, which is the arm
+/// that keeps the check a diagnosis rather than a fixed line everyone carries.
+/// `a_healthy_repository_exits_zero`'s golden is the other half of this: it
+/// declares no transcript and still lists exactly six checks.
+#[test]
+fn an_unconfigured_transcript_emits_no_check_at_all() {
+    let dir = scratch(
+        "doctor-transcript-unconfigured",
+        true,
+        Some("version = 1\n"),
+    );
+    let output = doctor(&dir, &[]);
+    assert!(
+        !stdout(&output).contains("transcript"),
+        "an undeclared capability is not a missing one: {}",
+        stdout(&output)
+    );
+}

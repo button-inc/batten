@@ -188,6 +188,11 @@ const COMMAND_PROGRAMS: &str = "command-programs";
 /// faults with different repairs, and reporting either as the other sends a
 /// reader to the wrong one.
 const PIN_RECORD: &str = "pin-record";
+/// The declared evidence capability is readable, or says why not (CLOUD-1035).
+///
+/// Emitted only where a transcript is DECLARED, which is what keeps the row a
+/// diagnosis rather than a fixed line every repository carries.
+const TRANSCRIPT: &str = "transcript";
 /// Every declared `[[hook.handler]]` names a live retirement and resolves to a
 /// program that exists (CLOUD-984).
 ///
@@ -364,6 +369,41 @@ fn on_path(program: &str) -> bool {
     crate::rules::on_path_verbatim(program).is_some()
 }
 
+/// The check the declared transcript earns, or `None` where none is declared
+/// (CLOUD-1035).
+///
+/// **`None` is the UNCONFIGURED arm and it is a decision, not a fallthrough.** A
+/// repository that never named a transcript is not missing one, so it gets no row
+/// rather than a passing row: a diagnostic that says `ok` about a feature nobody
+/// uses is how a reader learns to skim the list, which is the opposite of what
+/// this verb is for. Every other reading is a row, including the two that pass.
+///
+/// The reason ids are `Capability`'s own labels rather than new spellings, so a
+/// reader who has seen one in a `-J` document sees the same token here.
+fn transcript_reason(root: &Path) -> Option<Check> {
+    let configured = resolve::resolve(root, &crate::Overrides::default())
+        .ok()?
+        .transcript?
+        .path?;
+    Some(
+        match crate::transcript::resolve(root, Some(configured.as_str())) {
+            // Never reached — an unconfigured transcript left above via `?` — and
+            // matched rather than caught by a wildcard so a fifth variant is a
+            // compile error here instead of a silent pass.
+            crate::transcript::Capability::Unconfigured => Check::passed(TRANSCRIPT),
+            // ABSENT IS ORDINARY AND HONEST, on the committed config's own terms.
+            crate::transcript::Capability::Absent => Check::passed(TRANSCRIPT),
+            // POINTER-ONLY: the capability carries a `<label>:<line>` and this
+            // takes none of it. The reason id says WHAT is wrong; the line is the
+            // rule-4 payload a diagnostic must not republish.
+            crate::transcript::Capability::Unreadable(_) => {
+                Check::failed(TRANSCRIPT, "transcript-unreadable")
+            }
+            crate::transcript::Capability::Present(_) => Check::passed(TRANSCRIPT),
+        },
+    )
+}
+
 /// Whether the pin's record is absent altogether (CLOUD-1371).
 ///
 /// **A third reading, and it is deliberately not folded into
@@ -520,6 +560,37 @@ pub fn diagnose(dir: &Path) -> Report {
     } else {
         Check::passed(PIN_RECORD)
     });
+
+    // THE DECLARED EVIDENCE CAPABILITY, REPORTED WHERE SOMEBODY IS ALREADY
+    // LOOKING (CLOUD-1035).
+    //
+    // A transcript that exists and cannot be read answers `doctor`'s own question
+    // — "can Batten do its job in this repository?" — with a no: `transcript.rs`
+    // fails closed, so every rule keyed on it does not run and the gates that
+    // record receipts refuse. Measured 2026-08-24: a torn line went unreported
+    // until `mise run fix` failed on it three hours in, was misdiagnosed twice,
+    // and wedged the lifecycle for three consecutive runs. CLOUD-261 named this
+    // exact shape and is Done; this is that, one capability over.
+    //
+    // A REPORTER, NEVER A SECOND OPINION. `transcript::Capability` is already the
+    // total type and this maps it — a second reading here is precisely the
+    // disagreement CLOUD-819 spent a row reconciling between `lib.rs` and
+    // `receipt.rs`.
+    //
+    // UNCONFIGURED EMITS NO CHECK AT ALL, which is the arm that keeps this from
+    // being noise: a repository that never named a transcript is not missing one,
+    // and a row saying `ok` about a feature nobody uses trains a reader to skim
+    // the list. ABSENT IS `ok` on the committed config's own terms — `batten.toml`
+    // states an absent transcript is ordinary and changes no verdict.
+    //
+    // AND IT IS EXPLICITLY NOT A REPAIR (the row's load-bearing half). `doctor` is
+    // pinned `read` by the derived allowlist, and a sanctioned repair over the
+    // evidence substrate is a laundering surface: an agent blocked by its own
+    // record runs it, the record changes, the gate goes green, and after the fact
+    // repair and concealment are indistinguishable. Visibility, not recovery.
+    if let Some(reason) = transcript_reason(dir) {
+        checks.push(reason);
+    }
 
     // The handler table, off the same resolved config. `today` is read once
     // here — the boundary — and passed down, so the predicate itself stays a
