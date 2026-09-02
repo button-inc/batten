@@ -309,6 +309,7 @@ pub struct Grammar {
     relatedto_tail: Regex,
     defer_verb: Regex,
     key: Regex,
+    closing_verb: Regex,
     mention_markup: Regex,
 }
 
@@ -344,6 +345,7 @@ pub const REQUIRED_PATTERNS: &[&str] = &[
     "ready-relatedto-tail",
     "ready-defer-verb",
     "ready-issue-key",
+    "ready-closing-verb",
     "ready-issue-mention-markup",
 ];
 
@@ -443,6 +445,7 @@ impl Grammar {
             defer_verb: find("ready-defer-verb")?,
             prose_dialect_required_from: None,
             key: find("ready-issue-key")?,
+            closing_verb: find("ready-closing-verb")?,
             mention_markup: find("ready-issue-mention-markup")?,
         })
     }
@@ -646,6 +649,33 @@ impl Grammar {
             .key
             .find_iter(text)
             .filter(|m| opens_a_key(text, m.start()) && closes_a_key(text, m.end()))
+            .map(|m| m.as_str())
+            .collect();
+        let mut keys: Vec<IssueKey> = found.into_iter().map(|k| IssueKey(k.to_owned())).collect();
+        keys.sort_by_key(IssueKey::number);
+        keys
+    }
+
+    /// The keys a span names in CLOSING form — the ones a merge will move.
+    ///
+    /// **Naming a key and closing one are different facts, and conflating them is
+    /// the defect this narrows** (CLOUD-674): a body citing a row as evidence is
+    /// not claiming it, and `claimed-keys` already learned that distinction the
+    /// expensive way. So this is [`Self::keys_in`] filtered by what precedes each
+    /// match rather than a second search — the same one definition of a key, asked
+    /// a narrower question.
+    ///
+    /// The verb set is the forge's rather than this repository's, and it lives in
+    /// the pattern registry for the reason every other token does: one concept,
+    /// one spelling. Anchored at the END, so it decides the text immediately
+    /// before the key and nothing further back.
+    #[must_use]
+    pub fn keys_closed_in(&self, text: &str) -> Vec<IssueKey> {
+        let found: BTreeSet<&str> = self
+            .key
+            .find_iter(text)
+            .filter(|m| opens_a_key(text, m.start()) && closes_a_key(text, m.end()))
+            .filter(|m| self.closing_verb.is_match(&text[..m.start()]))
             .map(|m| m.as_str())
             .collect();
         let mut keys: Vec<IssueKey> = found.into_iter().map(|k| IssueKey(k.to_owned())).collect();

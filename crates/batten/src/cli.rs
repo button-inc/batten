@@ -877,6 +877,14 @@ pub enum RecordCommand {
     /// branch is the key and the engine reads it, so a caller cannot record
     /// against a branch it is not on.
     Plan,
+    /// Record which rows this branch's pull request body closes, read on stdin.
+    ///
+    /// The same record a `[[recorder]]` row mints from an observed `gh pr view`
+    /// envelope, written by a verb for [`RecordCommand::Plan`]'s reason: the
+    /// envelope route depends on the agent happening to make that call through a
+    /// mediated tool on a harness whose spelling is surveyed, and its failure
+    /// produces NOTHING — so the exemption it feeds silently cannot fire.
+    Closes,
 }
 
 /// Subcommands of `receipt`.
@@ -1563,6 +1571,7 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
         // No positional to read: the branch is the key and the engine resolves
         // it, so this arm takes the sub-verb and nothing else.
         ("plan", _) => Some(RecordCommand::Plan),
+        ("closes", _) => Some(RecordCommand::Closes),
         _ => None,
     }
 }

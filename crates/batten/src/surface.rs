@@ -3220,7 +3220,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // CLOUD-472. A VERB rather than a `[[recorder]]` on the harness's own todo
     // tool, and the direction is the point: a hook mediates a call to somebody
     // else's tool and is per-harness by nature, so an unsurveyed host, a tool a
-    // setting disabled, and a compliant agent all record nothing and the gate
+    // setting disabled, and an agent that did as it was told all record nothing and the gate
     // reads clean. Telling the engine fails closed everywhere instead.
     //
     // No positional: the branch is the key and the engine resolves it, so a
@@ -3229,6 +3229,25 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "record plan",
         about: "Record this branch's plan, read as `<id> <status>` lines on stdin",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
+    // The same argument one layer over, and here the envelope route is not merely
+    // per-harness — it is unreliable in the ordinary case. `filed-over-own-diff`
+    // exempts a row the PR CLOSES, and reads that from a `pr-closes` record the
+    // `pr-body-closes` recorder mints from an observed `gh pr view --jq .body`
+    // envelope. `land` fetches exactly that body and pipes it to
+    // `filed-here-check`, whose task body is `batten check`, which is declared
+    // `read` and has no stdin channel — so on the landing path the body is
+    // fetched, handed over, and dropped, and the exemption depends on an agent
+    // having separately made the same call as a mediated tool. Measured on this
+    // branch: three rows it closes, refused, with no record in the store at all.
+    //
+    // No positional, for `record plan`'s reason: the branch is the key.
+    CommandDecl {
+        path: "record closes",
+        about: "Record which rows this branch's pull request body closes, read on stdin",
         data_channel: false,
         effect: Effect::Write,
         flags: &[],

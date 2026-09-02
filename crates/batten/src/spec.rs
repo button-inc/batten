@@ -656,6 +656,7 @@ mod tests {
             // CLOUD-1190 inverts those when the imperative grammar lands, and
             // a third row spelled the old way would be a third row to invert.
             "record".to_owned(),
+            "record closes".to_owned(),
             "record forge".to_owned(),
             // The plan a branch declared, so `plan-complete` decides over a
             // record rather than over a transcript it cannot re-read.

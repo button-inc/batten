@@ -1494,6 +1494,13 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
+          "path": "record closes",
+          "about": "Record which rows this branch's pull request body closes, read on stdin",
+          "effect": "write",
+          "flags": [],
+          "subcommands": []
+        },
+        {
           "path": "record forge",
           "about": "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin",
           "effect": "write",

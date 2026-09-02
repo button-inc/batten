@@ -200,7 +200,61 @@ pub fn run(command: crate::cli::RecordCommand, overrides: &Overrides) -> Result<
         crate::cli::RecordCommand::Tool { id } => run_tool(&id, overrides),
         crate::cli::RecordCommand::Forge { reference } => run_forge(&reference, overrides),
         crate::cli::RecordCommand::Plan => run_plan(),
+        crate::cli::RecordCommand::Closes => run_closes(overrides),
     }
+}
+
+/// Record which rows this branch's pull request body closes.
+///
+/// # Errors
+///
+/// A [`UsageError`] when the body is empty — an unread body is could-not-look and
+/// must not be recorded as "closes nothing" — when the pattern registry declares
+/// no key grammar, or when there is no branch to key on. An internal error when
+/// the store cannot be written.
+pub fn run_closes(overrides: &Overrides) -> Result<ExitCode> {
+    let body = verdict_lines()?;
+    if body.trim().is_empty() {
+        return Err(UsageError::raise(
+            "record closes: the body is empty, and an unread body is not a body that closes nothing"
+                .to_owned(),
+        ));
+    }
+
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let grammar = crate::ready::Grammar::resolve(&config.patterns)?;
+    let keys: Vec<String> = grammar
+        .keys_closed_in(&body)
+        .into_iter()
+        .map(|key| key.to_string())
+        .collect();
+
+    // ZERO IS A COUNT, and rendering it that way is the whole three-valued read
+    // this record exists to preserve: `closes 0` says the body was READ and closes
+    // nothing, where an absent record says nobody looked. The reader distinguishes
+    // them, so the producer must not collapse them.
+    let body = if keys.is_empty() {
+        "closes 0\n".to_owned()
+    } else {
+        format!("closes {}:{}\n", keys.len(), keys.join(","))
+    };
+
+    let root = Path::new(".");
+    let git_dir = git::git_dir(root).map_err(|_| {
+        UsageError::raise(
+            "record closes: not a git repository, so there is nothing to key on".to_owned(),
+        )
+    })?;
+    let Ok(Some(branch)) = git::current_branch(root) else {
+        return Err(UsageError::raise(
+            "record closes: a detached HEAD has no branch to key the body on".to_owned(),
+        ));
+    };
+    store(
+        &crate::recorder::record_path(&git_dir, "pr-closes", &branch),
+        &body,
+    )?;
+    Ok(ExitCode::Success)
 }
 
 /// The record names this crate's own VERBS write, as opposed to the ones a
@@ -213,7 +267,7 @@ pub fn run(command: crate::cli::RecordCommand, overrides: &Overrides) -> Result<
 /// Gemini CLI, `todowrite` on `OpenCode`, `update_plan` on Codex. Recording from
 /// those envelopes needs a spelling per host, and its failure mode is the one
 /// this whole module exists to name — an unsurveyed harness, a tool a setting
-/// switched off, and a compliant agent all produce NOTHING, so the gate reads
+/// switched off, and an agent that did as it was told all produce NOTHING, so the gate reads
 /// clean. `OpenCode` makes that concrete: `todowrite` is denied to subagents at
 /// session creation regardless of configuration.
 ///
