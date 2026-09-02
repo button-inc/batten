@@ -12215,7 +12215,6 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
         (Harness::ExitCode, "Write"),
     ];
 
-    #[test]
     /// A new adapter must either name a fetched plan spelling or say who owes
     /// the survey. CLOUD-472's column exists to keep those apart, so a row that
     /// declares neither is the one thing it cannot express.
