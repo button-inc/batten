@@ -300,26 +300,36 @@ fn the_keyed_base_directory_survives_the_per_run_wipe() {
 /// on the other would have balanced out.
 #[test]
 fn every_path_perf_assert_budgets_is_paired() {
-    let budgets = std::fs::read_to_string(common::at_root("mise-tasks/perf-assert.sh"))
+    // THE TABLE MOVED WITH THE GATE (CLOUD-1321). `mise-tasks/perf-assert.sh` is
+    // retired onto `policy/perf-assert.rego`, so the budgets are a Rego object
+    // rather than a single-quoted shell block. The OBLIGATION is unchanged and is
+    // why this case survives the retirement rather than dying with the program:
+    // every path the gate budgets must be a path the pair actually measures, or
+    // the budget is enforced over a number nothing produces.
+    let budgets = std::fs::read_to_string(common::at_root("policy/perf-assert.rego"))
         .expect("the budget table is where the gate says it is");
-    // READ THE BLOCK, NOT THE LINES, and both edges are the retired case's own
-    // measured lesson arriving intact. The first entry shares its line with the
-    // assignment (`BUDGETS='noop 100`) and the last carries the closing quote
-    // (`wired 100'`), so a line-oriented read silently loses one at each end —
-    // which is exactly what happened here on the first run of this port.
+    // READ THE BLOCK, NOT THE LINES, which is the retired case's own measured
+    // lesson and still applies for a different reason: `budgets := {` shares its
+    // line with the opening brace and the last entry is followed by `}` on its
+    // own line, so anchoring on the braces is what keeps an entry from being lost
+    // at either edge.
     let block = budgets
-        .split_once("BUDGETS='")
-        .and_then(|(_, rest)| rest.split_once('\''))
+        .split_once("budgets := {")
+        .and_then(|(_, rest)| rest.split_once('}'))
         .map(|(block, _)| block)
-        .expect("the budget table is a single-quoted block");
+        .expect("the budget table is a braced object");
     let budgeted: Vec<String> = block
         .lines()
         .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            let name = fields.next()?;
-            let budget = fields.next()?;
-            (fields.next().is_none()
+            // `"noop": 100,` — the name is the quoted key and the value is the
+            // ceiling. A line carrying anything else (a comment, a blank) yields
+            // nothing rather than a bogus path.
+            let (name, budget) = line.trim().split_once(':')?;
+            let name = name.trim().strip_prefix('"')?.strip_suffix('"')?;
+            let budget = budget.trim().trim_end_matches(',');
+            (!name.is_empty()
                 && name.chars().all(|c| c.is_ascii_lowercase())
+                && !budget.is_empty()
                 && budget.chars().all(|c| c.is_ascii_digit()))
             .then(|| name.to_owned())
         })
