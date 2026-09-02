@@ -4816,6 +4816,33 @@ line_sources = ["crates/batten/tests/**/*.rs", "policy/*.rego", "tests/**/*.bats
 module = "policy/obligations-bound.rego"
 severity = "deny"
 
+# CLOUD-1355. The sweep's `names-no-case` verdict, asked where a contributor
+# sees it.
+#
+# `line_sources` is `obligations-bound`'s set plus the preset tree, and it has to
+# carry BOTH SIDES: the declaring files and the suites they name. A set holding
+# only the declarations would make every suite a could-not-look and the rule
+# would decide nothing -- the exact shape `.claude/rules/policy-modules.md` warns
+# a dead gate takes.
+#
+# NO `delta_sources` AND NO `base`: the subject is the tree's whole declaration
+# set rather than what this branch touched, because a declaration goes stale when
+# somebody renames a case in the SUITE, which is a different file from the one
+# carrying the promise.
+[[rule]]
+id = "mutation-declared-case"
+kind = "policy"
+scope = "tree"
+line_sources = [
+  "crates/batten/tests/**/*.rs",
+  "crates/batten/src/policy/presets/**/*.rego",
+  "policy/*.rego",
+  "tests/**/*.bats",
+  "mise-tasks/**",
+]
+module = "policy/mutation-declared-case.rego"
+severity = "deny"
+
 [[rule]]
 id = "plan-complete"
 kind = "policy"
@@ -8557,6 +8584,33 @@ target = "groom the row: an obligation you are not keeping should not be declare
 id = "path admit first"
 kind = "override"
 precondition = "the obligation is discharged by a successor this change declares in the `[rule.conserves]` ledger, so the case moved rather than never existing"
+
+# CLOUD-1355. The half of the mutation discipline that was only ever nightly.
+[[verdict]]
+id = "marker name undefined"
+gloss = "a declared marker names a case its declared suite does not carry"
+class = """
+`mise run mutant` already reports this as `names-no-case`, and that sweep runs \
+only on a schedule -- not in `verify`, not in the `hk` gate, not on any pull \
+request. So a declaration could name a case that never existed and every check a \
+contributor runs stayed green. Measured 2026-09-02: the nightly had been red \
+since its first recorded run, and one of the two rows named the LOAD-TIME tier's \
+`test_` rule where its own `#MUTANT-SUITE` resolves the COMPILED one -- a \
+mutation declared, never applied, and counted by nobody. The sweep is nightly \
+because it stages a tree and runs a suite per mutation; asking whether the case \
+EXISTS costs neither, which is why it can be asked every time. A mutation nobody \
+runs and a mutation nobody declares are the same coverage.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "correct the case name in the `#MUTANT` row, or write the case the row names"
+
+[[verdict.route]]
+id = "task run other"
+kind = "command"
+target = "mise run mutant"
 
 [[verdict]]
 id = "plan declare held"

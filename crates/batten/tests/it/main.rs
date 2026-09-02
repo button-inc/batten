@@ -135,6 +135,7 @@ mod memories;
 mod memory_injection;
 mod mise_pin_agreement;
 mod mutate;
+mod mutation_declared_case;
 mod narrow_adoption;
 mod obligations_bound;
 mod perf_compare;
