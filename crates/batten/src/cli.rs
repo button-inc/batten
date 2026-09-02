@@ -353,6 +353,39 @@ pub enum Command {
         /// Whether the data channel was asked for.
         json: bool,
     },
+    /// The landing lap (CLOUD-1335, CLOUD-1338), beside `mise-tasks/land.sh`
+    /// rather than replacing it.
+    ///
+    /// Appended for the reason `Lease` records: this enum carries no `repr`, so a
+    /// variant placed beside its neighbours shifts every later discriminant and
+    /// the compatibility gate reads that as a break the crate has to declare.
+    ///
+    /// AFTER `Startup` RATHER THAN BEFORE IT, and that ordering was decided by a
+    /// rebase rather than chosen: both variants were written as the last one, and
+    /// `Startup` is the one already on the landing target. Placing `Land` ahead of
+    /// it would shift a discriminant that has already shipped, which is the exact
+    /// break the paragraph above exists to avoid.
+    Land {
+        /// The chosen sub-verb.
+        command: LandCommand,
+    },
+}
+
+/// Subcommands of `land`.
+///
+/// THE LAP IS fetch → replay → verify → push → wait → fast-forward, and four of
+/// those are here. The fast-forward comment stays in the consumer's lander until
+/// it lands beside these, so this is a parallel capability rather than a
+/// cut-over. A bare verb with no sub-command would have to be widened into this
+/// shape later, which is a surface break for a change that adds a capability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LandCommand {
+    /// Advance the base and replay this branch onto it, recording the outcome.
+    Replay {
+        /// The remote reference to replay onto, e.g. `refs/heads/main`.
+        reference: String,
+    },
 }
 
 /// Subcommands of `mutate`.
@@ -1462,6 +1495,24 @@ fn lease_of(matches: &ArgMatches) -> Option<LeaseCommand> {
     }
 }
 
+/// `land`'s one sub-verb, read the way [`lease_of`] reads its own.
+///
+/// The positional is `required` on its surface row, so `clap` refuses an absent
+/// one before this runs and the default below is unreachable — which matters
+/// here for the reason it matters there: an empty reference would be replayed
+/// against, rather than reported as unanswerable.
+fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
+    match matches.subcommand()? {
+        ("replay", matches) => Some(LandCommand::Replay {
+            reference: matches
+                .get_one::<String>("reference")
+                .cloned()
+                .unwrap_or_default(),
+        }),
+        _ => None,
+    }
+}
+
 /// `override request`'s three binding fields (CLOUD-1051).
 ///
 /// The answers are NOT here: they arrive on stdin, for the reason `surface.rs`
@@ -1802,6 +1853,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "pr" => pr_of(matches).map(|command| Command::Pr { command }),
         "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
         "lease" => lease_of(matches).map(|command| Command::Lease { command }),
+        "land" => land_of(matches).map(|command| Command::Land { command }),
         "override" => override_of(matches).map(|command| Command::Override { command }),
         "wiring" => wiring_of(matches).map(|command| Command::Wiring { command }),
         "generate" => generate_of(matches).map(|command| Command::Generate { command }),

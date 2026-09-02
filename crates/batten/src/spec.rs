@@ -700,6 +700,18 @@ mod tests {
             // §2 already reserved this row (`init [-n] … (write)`); CLOUD-206
             // landed the verb behind it, so the document needed no edit.
             "init".to_owned(),
+            // THE LANDING LAP, one arm and a noun (CLOUD-1335). The noun is
+            // UNCLASSIFIED for the lease subtree's reason one row down: the arm
+            // WRITES — the odb, a remote-tracking ref, the worktree and a record
+            // — and a write-bearing subtree under a `read` noun is exactly what a
+            // consumer treating an entry as a prefix would pick up (CLOUD-90).
+            //
+            // `replay` is the lap's git half and nothing else. Verify, push, the
+            // raced wait and the fast-forward stay in the consumer's lander until
+            // they land beside it, so this is a parallel capability rather than a
+            // cut-over — the shape `lease` took beside `land-lock`.
+            "land".to_owned(),
+            "land replay".to_owned(),
             // THE LANDING LEASE, ten arms and a noun (CLOUD-1274, CLOUD-393).
             // The noun is UNCLASSIFIED rather than read, because half the
             // subtree writes: `acquire|renew|hold|release|reserve` each reach

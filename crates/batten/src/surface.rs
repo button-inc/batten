@@ -1023,6 +1023,16 @@ const OVERRIDE_VERDICT: FlagDecl = FlagDecl {
 /// behalf of a checkout this process is not in.
 const LEASE_BRANCH: FlagDecl = FlagDecl::positional("branch", "The branch being asked about");
 
+/// `<reference>`: the remote reference `land replay` replays onto.
+///
+/// **Positional and REQUIRED, for [`LEASE_BRANCH`]'s reason and one more.**
+/// Defaulting to the remote's own default branch would make the verb guess which
+/// trunk this consumer lands on, and a wrong guess replays the branch onto the
+/// wrong base and mints a head nobody asked for — a write, not a report. The
+/// caller knows; the engine does not.
+const LAND_REFERENCE: FlagDecl =
+    FlagDecl::positional("reference", "The remote reference to replay onto");
+
 /// `<field>`: which advisory field `lease peek` prints.
 ///
 /// A closed set, because the whole value of `peek` over reading the status prose
@@ -3839,6 +3849,32 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         effect: Effect::Write,
         flags: &[LEASE_BRANCH],
+    },
+    // CLOUD-1335. THE LANDING LAP, and the noun is `unclassified` for the reason
+    // the lease subtree carries: it writes. A write-bearing subtree under a `read`
+    // noun leaks onto the derived allowlist for any consumer that treats an entry
+    // as a prefix (CLOUD-90), and this one writes the odb, a tracking ref, the
+    // worktree and a record.
+    CommandDecl {
+        path: "land",
+        id: "land",
+        about: "The landing lap: replay this branch onto a base that moved",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `write`, and it is the widest write in the tree: the odb, a remote-tracking
+    // ref, the WORKTREE, and the lap record. It is not `destructive` — a replay
+    // that cannot complete refuses and moves nothing, so there is no half-applied
+    // state for a `--dry-run` to protect against, and declaring one would offer a
+    // rehearsal this verb cannot perform.
+    CommandDecl {
+        path: "land replay",
+        id: "land.replay",
+        about: "Advance the base and replay this branch onto it, recording the outcome",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[LAND_REFERENCE],
     },
 ];
 

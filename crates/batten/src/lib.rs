@@ -266,6 +266,11 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // `policy/module-layering.rego` forbids both edges over the resolved use
         // graph rather than by review.
         Some(Command::Lease { command }) => run_lease(command, out, err),
+        // The landing lap (CLOUD-1335). It reaches the network through `lease`
+        // and the worktree through `gitwrite`, so the same two edges are
+        // forbidden — transitively, which the layering table states rather than
+        // leaves to follow.
+        Some(Command::Land { command }) => run_land(command, out, err),
         Some(Command::Wiring { command }) => run_wiring(&command, mode, err),
         // The refinement gate and the pull-time claim (CLOUD-1121). Both read
         // the payload the caller supplies — or, under `--issue`, the one the
@@ -5133,6 +5138,83 @@ impl TermsMissing {
         match self {
             TermsMissing::NoRemote => format!("no remote named {name} is configured"),
             TermsMissing::Unreadable(reason) => reason.clone(),
+        }
+    }
+}
+
+/// `batten land` (CLOUD-1335).
+///
+/// # The exit codes, which are the one table and not a lap's own dialect
+///
+/// A conflicted replay is `2`. That is the policy verdict everywhere
+/// (non-negotiable rule 5) and it is what a conflict is: the lap may not
+/// continue, decided by `rebase-conflict-stops-the-lap` over the record this
+/// writes rather than by an arm here. A clone this cannot resolve a remote or a
+/// branch for is `3` — could-not-look, never a false `2`, because a lap that
+/// could not be attempted has not judged the branch.
+///
+/// A clean replay and an already-current branch are both `0`, and they are told
+/// apart on stdout rather than by a code: `Current` means no sha was minted, so a
+/// `verify` receipt keyed to the old head is still good and the caller may skip
+/// work — a distinction worth a sentence and not worth a third success code.
+///
+/// # Pointer-only (rule 4)
+///
+/// A sha, a count, a path. The conflicted arm names the first path and how many
+/// there were, never a hunk and never a conflict marker — which is the whole of
+/// what a conflict consists of and exactly what a report must not carry.
+fn run_land(
+    command: cli::LandCommand,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let cli::LandCommand::Replay { reference } = command;
+    let root = Path::new(".");
+    let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
+    let Ok(remotes) = git::remotes(root) else {
+        writeln!(err, "::error:: land: cannot read this repository's remotes")?;
+        return Ok(ExitCode::Internal);
+    };
+    let Some((_, url)) = remotes.iter().find(|(configured, _)| *configured == name) else {
+        writeln!(
+            err,
+            "::error:: land: no remote named {name}, so there is no base to replay onto"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    // A DETACHED HEAD HAS NO BRANCH TO REPLAY, and that is a statement about the
+    // clone rather than about the work — `3`, like every other could-not-look.
+    let Ok(Some(branch)) = git::current_branch(root) else {
+        writeln!(
+            err,
+            "::error:: land: a detached HEAD has no branch to replay"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+
+    match land::replay(root, url, &reference, &branch)? {
+        land::Replay::Conflicted { commit, paths } => {
+            writeln!(
+                out,
+                "land: replay of {branch} onto {reference} conflicted at {commit} in {} path(s); first is {}",
+                paths.len(),
+                paths.first().map_or("-", String::as_str)
+            )?;
+            Ok(ExitCode::Violation)
+        }
+        land::Replay::Current => {
+            writeln!(
+                out,
+                "land: {branch} already descends from {reference}; nothing replayed"
+            )?;
+            Ok(ExitCode::Success)
+        }
+        land::Replay::Replayed { head, commits } => {
+            writeln!(
+                out,
+                "land: replayed {commits} commit(s) of {branch} onto {reference}; head is {head}"
+            )?;
+            Ok(ExitCode::Success)
         }
     }
 }

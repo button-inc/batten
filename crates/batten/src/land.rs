@@ -169,6 +169,15 @@ fn tracking_ref(reference: &str) -> String {
 
 /// Append this lap's outcome to the branch's record.
 ///
+/// PUBLIC BECAUSE THE SECOND TIER HAS TO DRIVE IT. `replay` needs a real remote,
+/// so a compiled-binary case cannot reach this writer through it — and a case
+/// that fabricated the store instead would assert the very shape the engine may
+/// be unable to produce, which is the failure `.claude/rules/policy-modules.md`
+/// records for exactly this pair. `crates/batten/tests/it/land.rs` writes through
+/// here and reads back through `batten check`, so the writer and the vendored
+/// module meet over the engine rather than over a fixture somebody typed.
+///
+
 /// APPEND, NEVER REPLACE, because the store is a HISTORY and the predicate over
 /// it reads the last line: a lap that conflicted and a later lap that resolved
 /// the conflict are two facts, and a store keeping only the newer one cannot say
@@ -179,7 +188,10 @@ fn tracking_ref(reference: &str) -> String {
 /// so the write is skipped rather than failing the replay. The replay itself
 /// happened either way, and turning "nowhere to write this down" into "the lap
 /// failed" would report a verdict about the clone as a verdict about the branch.
-fn record(root: &Path, branch: &str, outcome: &Replay) -> Result<()> {
+/// # Errors
+///
+/// A store directory or file that will not open or append.
+pub fn record(root: &Path, branch: &str, outcome: &Replay) -> Result<()> {
     let Ok(git_dir) = crate::git::git_dir(root) else {
         return Ok(());
     };

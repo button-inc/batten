@@ -1075,6 +1075,34 @@ expression: stdout_of(&output)
       "subcommands": []
     },
     {
+      "path": "land",
+      "id": "land",
+      "about": "The landing lap: replay this branch onto a base that moved",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "land replay",
+          "id": "land.replay",
+          "about": "Advance the base and replay this branch onto it, recording the outcome",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "reference",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The remote reference to replay onto"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "lease",
       "id": "lease",
       "about": "The landing lease: one branch spends a matrix at a time",
