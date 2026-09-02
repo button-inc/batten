@@ -392,55 +392,42 @@ api`, `gh run view` are NOT blocked.)"""
 # thing in the stack that noticed — after the work was written, verified and
 # committed.
 #
-# THIS ROW IS ONLY THE SPELLING THE PRESET DELIBERATELY EXCLUDES. The vendored
-# `trunk-based/no-force-push` already denies `--force` and `-f` on any `git push`,
-# per segment, so restating those here would be a second rule over one object.
-# What it excludes, in its own words, is `--force-with-lease`: "the sanctioned
-# form — it refuses when the remote moved, which is the whole difference between
-# 'I know what I am replacing' and 'replace whatever is there'."
+# THE PREDICATE IS BARE-VERSUS-EXPLICIT, NOT THE FLAG, and `land-lock.sh` already
+# states why in its own words: "The expected value is passed EXPLICITLY
+# (`<ref>:<sha>`) and must stay that way. Bare `--force-with-lease` compares
+# against this clone's remote-tracking ref — what the last fetch happened to see —
+# which for a ref other sessions are actively rewriting is precisely the stale
+# value this must not trust. The two forms look interchangeable and are not."
 #
-# THAT ARGUMENT IS RIGHT ABOUT ONE CASE AND WRONG ABOUT THE ONE AN AGENT
-# PERFORMS, which is why this is an addition rather than an edit to the preset.
-# A bare `--force-with-lease` compares against the REMOTE-TRACKING REF THIS CLONE
-# HOLDS. If the sibling's push arrived after your last fetch, that ref is stale,
-# the comparison differs, and the push is refused — the preset's case, and it
-# works. But the sequence an agent actually runs is `git fetch` and then push:
-# the fetch moves the remote-tracking ref onto the sibling's commit, the lease
-# then compares EQUAL, the push succeeds, and the commit is destroyed by the flag
-# that was chosen for being careful.
+# So a bare lease is what this refuses. `git fetch` moves the remote-tracking ref
+# onto the sibling's commit, the bare lease then compares EQUAL, and the push
+# destroys what the fetch just brought in — the flag chosen for being careful.
+# The explicit `=<ref>:<sha>` form is allowed because naming the sha IS the
+# assertion: you cannot name a value you never saw, and a stale one is refused by
+# git rather than by policy.
 #
-# WHAT THIS DOES NOT CLOSE, stated so the gap is not read as covered. It cannot
-# tell you a sibling holds the branch — only that you are about to overwrite
-# whatever is there. Detection needs a per-branch ownership ref taken by the same
-# server-side CAS `land-lock` already uses, which needs receive-pack over the
-# vendored client (CLOUD-1274) and is not landable here. Destruction closes here;
-# detection stays on the filed row.
+# A MODULE RATHER THAN A `shape` ROW, for two reasons that arrive together. A
+# `shape` row's `contains` is a substring, so it cannot tell `--force-with-lease`
+# from `--force-with-lease=…` — the whole distinction. And `refusal.rs` is
+# explicit that a refusal composed from a consumer `[[rule]]` row carries no
+# declared class, "deliberately not a Batten class… no token an admission could
+# bind" — so such a row can never be admitted, and the only way through would be
+# a `bypass_env`, which is the password shape CLOUD-1051 retired on the stated
+# ground that *the point of the admission mechanism is that the bare variable
+# stops working*. A module raises a declared class, and a class can declare a
+# route.
 #
-# CONSUMER-SIDE RATHER THAN A PRESET EDIT, and that is the module-or-preset test
-# rather than a dodge: the preset states a practice true of trunk-based
-# development anywhere, while this states that THIS repository is worked by a
-# fleet of agents in separate containers that cannot see each other. The second
-# is a consumer fact, so it is a consumer row.
-#
-# `land-lock`'s own CAS is untouched, and structurally so: it pushes from inside a
-# task subprocess, which is not a mediated call, so no `mediated_call` row can
-# reach it. The lease keeps its `--force-with-lease`; this refuses an agent typing
-# one by hand.
+# `trunk-based/no-force-push` keeps `--force` and `-f`; this adds only the
+# spelling that preset deliberately leaves out. `land-lock`'s own CAS is
+# untouched and structurally so: it pushes from inside a task subprocess, which
+# is not a mediated call, so no `mediated_call` row can reach it — and it passes
+# the explicit form anyway, which this allows.
 [[rule]]
-id = "no-hand-leased-push"
-kind = "shape"
+id = "leased-push"
+kind = "policy"
 scope = "mediated_call"
+module = "policy/leased-push.rego"
 severity = "deny"
-pattern = "git push"
-contains = "--force-with-lease"
-reason = """
-`--force-with-lease` compares against the remote-tracking ref THIS clone holds, \
-so `git fetch` followed by a leased push compares equal and overwrites the \
-sibling commit the fetch just brought in. A sibling session writing the same \
-branch is invisible from here — every ownership fact Batten records lives under \
-$GIT_DIR and dies with the container. Fetch and REBASE onto what is there. \
-(`--force` and `-f` are the `trunk-based` preset's; this is the spelling it \
-deliberately leaves out.)"""
 
 [[rule]]
 id = "gh-run-watch"
@@ -7825,6 +7812,45 @@ target = "file it from a clean tree, when it is no longer your diff"
 id = "path admit first"
 kind = "override"
 precondition = "the row DOCUMENTS the change being landed, so naming its files is the point rather than a deferral"
+
+# CLOUD-1274's destruction half, as a class rather than a `reason` string.
+#
+# A CLASS BECAUSE A CONSUMER `[[rule]]` ROW CANNOT BE ADMITTED. `refusal.rs` says
+# it outright: a refusal composed from a consumer row carries no declared class,
+# "deliberately not a Batten class", and "a consumer-composed refusal carries no
+# declared class, so there is no token an admission could bind". So a `shape` row
+# here would leave `bypass_env` as the only way through — the password shape
+# CLOUD-1051 retired, on the ground `hook.rs` restates: *the point of the
+# admission mechanism is that the bare variable stops working*. A module raises a
+# declared class, `admit_mediated` binds (rule, class, subject), and the route
+# below is one an author can actually take.
+[[verdict]]
+id = "branch write unsafe"
+gloss = "a push that overwrites the remote without having said what it expects to find"
+class = """
+A bare `--force-with-lease` compares against this clone's remote-tracking ref, so \
+`git fetch` followed by a leased push compares EQUAL and overwrites the sibling \
+commit the fetch just brought in. Every ownership fact this engine records lives \
+under `$GIT_DIR` and dies with the container, so a session writing the same \
+branch is invisible from here — which is why the assertion has to be in the \
+command rather than in a lookup. The explicit `=<ref>:<sha>` form is not this \
+class: naming the sha IS the assertion, and a stale one is refused by git.
+"""
+
+[[verdict.route]]
+id = "patch run first"
+kind = "command"
+target = "git fetch, then rebase onto what is there"
+
+[[verdict.route]]
+id = "task run other"
+kind = "command"
+target = "git push --force-with-lease=<ref>:<sha> — name the commit you expect to replace"
+
+[[verdict.route]]
+id = "path admit first"
+kind = "override"
+precondition = "the history being replaced is this clone's own and no other clone has fetched it, so there is no expected value to name that a reader could check"
 
 # CLOUD-1311. The punt sweep had a question and no exit code.
 #

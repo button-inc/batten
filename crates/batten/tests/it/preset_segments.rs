@@ -123,8 +123,8 @@ fn force_with_lease_survives_segmentation() {
     // the bypass rather than toward the safer flag.
     //
     // ASSERTED AS "THE PRESET DOES NOT FIRE" rather than as a clean exit, because
-    // this consumer now declares `no-hand-leased-push` over the same command and
-    // the two statements are different. The preset's distinction is what this case
+    // this consumer now declares `leased-push` over the BARE spelling and the two
+    // statements are different. The preset's distinction is what this case
     // is named for and it is unchanged; whether THIS repository additionally
     // refuses the leased spelling is a consumer decision the preset has no view on.
     //

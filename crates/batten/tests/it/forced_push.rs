@@ -64,7 +64,7 @@ fn denied_by_this_row(command: &str) {
         "the committed policy must refuse: {command}\n{out}"
     );
     assert!(
-        out.contains("no-hand-leased-push"),
+        out.contains("leased-push"),
         "the refusal for `{command}` must come from this row\n{out}"
     );
 }
@@ -87,9 +87,8 @@ fn allowed(command: &str) {
 }
 
 #[test]
-fn a_leased_push_is_refused_however_it_is_spelled() {
+fn a_bare_leased_push_is_refused() {
     denied_by_this_row("git push --force-with-lease origin main");
-    denied_by_this_row("git push --force-with-lease=refs/heads/main:abc123 origin main");
     denied_by_this_row("git push origin claude/some-branch --force-with-lease");
 }
 
@@ -111,7 +110,7 @@ fn a_leased_push_behind_a_compound_command_is_still_reached() {
 #[test]
 fn the_preset_still_owns_the_bare_forced_spellings() {
     // Asserted as SOMEBODY refusing rather than as this row's work. If this ever
-    // starts coming from `no-hand-leased-push`, the narrowing has been undone and
+    // starts coming from `leased-push`, the narrowing has been undone and
     // there are two rules over one object again.
     denied("git push --force origin main");
     denied("git push -f origin main");
@@ -126,6 +125,27 @@ fn an_ordinary_push_is_untouched() {
     allowed("git push -u origin claude/some-branch");
     allowed("git push origin main");
     allowed("git fetch origin main");
+}
+
+/// THE EXPLICIT EXPECTED VALUE IS THE WHOLE DISTINCTION, and this is the case
+/// that would have gone green over a guard that banned the flag outright.
+///
+/// `land-lock.sh` states it about its own CAS: "The expected value is passed
+/// EXPLICITLY (`<ref>:<sha>`) and must stay that way… The two forms look
+/// interchangeable and are not." Naming the sha IS the assertion — you cannot
+/// name a value you never observed — and a stale one is refused by git rather
+/// than by policy.
+///
+/// Measured within an hour of writing the first version, which banned the
+/// spelling: correcting a missing `Refs:` trailer on three of this branch's own
+/// commits needed exactly this form, over history no other clone had fetched.
+/// A guard that refused it had no route out at all — a consumer `[[rule]]` row
+/// raises no class, so nothing could admit it, and the only remaining way
+/// through was the password shape CLOUD-1051 retired.
+#[test]
+fn the_explicit_expected_value_is_allowed() {
+    allowed("git push --force-with-lease=refs/heads/main:abc123 origin main");
+    allowed("git fetch origin && git push --force-with-lease=refs/heads/x:deadbeef origin x");
 }
 
 #[test]

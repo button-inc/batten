@@ -2833,14 +2833,6 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
         site: CensusSite::Checkout,
     },
     ShapeCase {
-        // The spelling `trunk-based/no-force-push` deliberately excludes: a fetch
-        // moves the remote-tracking ref onto the sibling's commit, so the lease
-        // then compares EQUAL and the push destroys what the fetch brought in.
-        call: CensusCall::Command("git push --force-with-lease origin main"),
-        rule: "no-hand-leased-push",
-        site: CensusSite::Checkout,
-    },
-    ShapeCase {
         call: CensusCall::Command("cargo test -p batten"),
         rule: "no-bare-cargo",
         site: CensusSite::Checkout,
