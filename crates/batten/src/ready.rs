@@ -293,6 +293,16 @@ pub struct Grammar {
     /// lexical order IS chronological order. Moving it later is the only
     /// direction that tightens, which makes it a ratchet rather than a switch.
     prose_dialect_required_from: Option<String>,
+    /// The instant from which a row owes a dispatched pressure test
+    /// (CLOUD-472), read exactly as the field above is.
+    pressure_test_required_from: Option<String>,
+    /// The reviews a refinement block owes, as the consumer declared them.
+    ///
+    /// Carried here rather than re-read from config because `lint` is a pure
+    /// function of (grammar, payload, root) and must stay one: a second config
+    /// load inside it would be a second authority over which reviews are owed,
+    /// and the two could disagree for a caller that resolved with overrides.
+    pressure_test_reviews: Vec<crate::facts::ReviewQuery>,
     bump_label: Regex,
     commit_type: Regex,
     bump_token: Regex,
@@ -404,6 +414,29 @@ impl Grammar {
         self
     }
 
+    /// The cutover from which a row owes a dispatched pressure test.
+    ///
+    /// Absent on [`Self::from_compiled`]'s path for `with_prose_threshold`'s
+    /// reason: the recorder resolves a grammar to answer an `{authority:…}`
+    /// column and holds no consumer config, so it gets could-not-look rather
+    /// than a threshold guessed from somewhere else.
+    #[must_use]
+    pub fn with_pressure_test_threshold(mut self, from: Option<String>) -> Self {
+        self.pressure_test_required_from = from;
+        self
+    }
+
+    /// The declared reviews whose subject is a refinement body.
+    ///
+    /// Filtered by the CALLER rather than here: which subject kinds exist is
+    /// `review`'s vocabulary, and a grammar that knew the token would be a
+    /// second place to change when a kind is added.
+    #[must_use]
+    pub fn with_pressure_test_reviews(mut self, rows: Vec<crate::facts::ReviewQuery>) -> Self {
+        self.pressure_test_reviews = rows;
+        self
+    }
+
     /// A row the consumer's table does not declare.
     ///
     /// **Could-not-look, and it says so** — a clause whose anchor has no
@@ -444,6 +477,8 @@ impl Grammar {
             relatedto_tail: find("ready-relatedto-tail")?,
             defer_verb: find("ready-defer-verb")?,
             prose_dialect_required_from: None,
+            pressure_test_required_from: None,
+            pressure_test_reviews: Vec::new(),
             key: find("ready-issue-key")?,
             closing_verb: find("ready-closing-verb")?,
             mention_markup: find("ready-issue-mention-markup")?,
@@ -943,6 +978,49 @@ pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report>
             line: ready_start,
             rule: "claims-object-absent".to_owned(),
         });
+    }
+
+    // THE PRESSURE TEST, CONFIRMED RATHER THAN JUDGED (CLOUD-472).
+    //
+    // Every other clause here reads the block and infers quality from its SHAPE,
+    // which is what an author optimises against once the gate exists — the
+    // measured failure that opened this row, where every clause was present and
+    // none had been pressure-tested. This asks a different question that shape
+    // cannot answer: has a PARTICULAR vendored prompt run over these exact bytes?
+    // It is a comparison of two digests, so no model verdict reaches the exit
+    // code (rule 3), and it cannot be satisfied by better prose because the prose
+    // is the input to the hash.
+    //
+    // THE BODY IS THE TRACKER'S, which is the forgery control that makes this
+    // worth anything: `payload.description` is what the tracker RETURNED, the
+    // same source the recorder's `verdict` authority column reads. A digest over
+    // a self-assembled payload would certify whatever the caller typed —
+    // measured green three times against text in a local file, once under an id
+    // no row carried.
+    //
+    // COULD-NOT-LOOK PASSES, THREE WAYS OVER, and each is a different absence:
+    // no declared cutover (the consumer has not asked for this), a payload with
+    // no creation instant (unplaceable against one), and no runner installed (an
+    // environment that cannot be asked). `review::for_body` returns
+    // `CouldNotLook` for the third, so the only refusal left is a review that
+    // was asked for and did not answer.
+    if let Some(from) = grammar.pressure_test_required_from.as_deref()
+        && payload
+            .created_at
+            .as_deref()
+            .is_some_and(|created| created >= from)
+    {
+        for row in &grammar.pressure_test_reviews {
+            if matches!(
+                crate::review::for_body(root, row, &payload.description),
+                crate::facts::Look::IsNot
+            ) {
+                report.findings.push(Finding {
+                    line: ready_start,
+                    rule: format!("pressure-test-undispatched ({})", row.id),
+                });
+            }
+        }
     }
 
     if !structured {

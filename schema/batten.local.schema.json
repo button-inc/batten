@@ -598,8 +598,11 @@
           "type": "string"
         },
         "path": {
-          "description": "The repository-relative path whose bytes the review was taken over.\n\nIts digest is the second component of the key, so a review goes stale by\nconstruction the moment the subject changes — the anti-staleness half, and\nthe one a `reviewed: true` marker could never provide.",
-          "type": "string"
+          "description": "The repository-relative path whose bytes the review was taken over.\n\nIts digest is the second component of the key, so a review goes stale by\nconstruction the moment the subject changes — the anti-staleness half, and\nthe one a `reviewed: true` marker could never provide.\n\n**OPTIONAL, because not every subject is a file.** A `tracker-body`\nreview is taken over the description the TRACKER returned, which reaches\nthe engine through the refinement payload and has an issue key rather\nthan a repository path. Demanding a path there would force a row to name\na file it does not read, which is a declaration that means nothing and\nwould be compared to nothing. A `document` review without one is skipped\nrather than guessed at.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "prompt": {
           "description": "Which VENDORED prompt to dispatch, by id.\n\nVendored rather than a path, and that is the safety property: the text is\ncompiled into the binary, so its digest is a constant of the build and a\nconsumer cannot satisfy the gate by pointing it at an easier prompt.",
@@ -624,8 +627,7 @@
         "prompt",
         "runner",
         "version",
-        "subject",
-        "path"
+        "subject"
       ]
     },
     "Rewrite": {

@@ -3032,7 +3032,16 @@ pub struct ReviewQuery {
     /// Its digest is the second component of the key, so a review goes stale by
     /// construction the moment the subject changes — the anti-staleness half, and
     /// the one a `reviewed: true` marker could never provide.
-    pub path: String,
+    ///
+    /// **OPTIONAL, because not every subject is a file.** A `tracker-body`
+    /// review is taken over the description the TRACKER returned, which reaches
+    /// the engine through the refinement payload and has an issue key rather
+    /// than a repository path. Demanding a path there would force a row to name
+    /// a file it does not read, which is a declaration that means nothing and
+    /// would be compared to nothing. A `document` review without one is skipped
+    /// rather than guessed at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 /// What joins a [`ToolQuery`]'s components into one record name.

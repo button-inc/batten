@@ -4857,6 +4857,27 @@ version = "0"
 subject = "document"
 path = "AGENTS.md"
 
+# THE GROOMING SUBJECT, and the reason it carries no `path` (CLOUD-472).
+#
+# A refinement block lives on the TRACKER, so there is nothing in the tree to
+# digest: the subject is the description the tracker RETURNED, which reaches the
+# engine on `ready lint`'s payload. That is the same forgery control the
+# recorder's `verdict` authority column earned — a digest over a payload the
+# caller assembled would certify whatever the caller typed, measured green three
+# times against text in a local file, once under an id no row carried.
+#
+# THIS ROW IS READ BY `ready lint`, NOT BY `batten check`. The tree surface skips
+# a review with no path rather than guessing one, and `lib.rs` filters this kind
+# out for the grammar. Two subjects, one declaration, and neither gate can answer
+# for the other: `review-dispatched` refuses at landing, `ready lint` refuses at
+# the ready queue, and only the second can see a body that never touches disk.
+[[rule.review]]
+id = "ready-pressure-test-body"
+prompt = "ready-pressure-test"
+runner = "batten-review-runner"
+version = "0"
+subject = "tracker-body"
+
 [[rule]]
 id = "validator-verdict-clean"
 kind = "policy"

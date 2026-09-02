@@ -564,6 +564,21 @@ pub struct Ready {
     /// creation time, so this assumes nothing about how a consumer spells a key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prose_dialect_required_from: Option<String>,
+    /// The instant from which a row owes a dispatched PRESSURE TEST (CLOUD-472).
+    ///
+    /// A sibling of the field above rather than a reuse of it, and the
+    /// separation is the point: these two ratchets convert different things and
+    /// a consumer must be able to move one without moving the other. Folding
+    /// them into one instant would mean the day you demand a structured claims
+    /// object is also the day you demand an agent dispatch, and a repository
+    /// that wants the first and cannot yet afford the second would have no way
+    /// to say so.
+    ///
+    /// Read exactly as its sibling is — fixed-width ISO-8601 UTC compared
+    /// lexically, absent is could-not-look, and moving it LATER is the only
+    /// direction that tightens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pressure_test_required_from: Option<String>,
 }
 
 /// The `[trust]` table: what `--config-from` may do when the ref is unreachable.
