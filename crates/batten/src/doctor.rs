@@ -923,11 +923,27 @@ fn reaches_engine(entry: &str, harness: hook::Harness) -> bool {
     }
     // (a) The derived argv appears as a contiguous run immediately after a token
     // whose file stem is the binary's name.
-    let derived = ["hook", "--harness", harness.as_str()];
+    //
+    // DERIVED FROM THE `SURFACE` ROW, NOT SPELLED HERE (CLOUD-1191). This read
+    // `["hook", "--harness", harness.as_str()]` — a literal independent of the
+    // declaration — so it answered "does the wiring name THIS STRING" where the
+    // question is "does the wiring name the declared mediation path". Those
+    // differ exactly when it matters: against a settings file naming a command
+    // the surface no longer declares, the literal version returns `true` and
+    // reports stale wiring as healthy. The one diagnostic built for that failure
+    // was blind to it.
+    //
+    // No mediation row means no declared path for a registration to reach, so
+    // nothing reaches the engine. That is `false` — loud — rather than a literal
+    // fallback, which would be the spelling this change removes.
+    let Some(mut derived) = crate::surface::mediation_argv() else {
+        return false;
+    };
+    derived.push(harness.as_str().to_owned());
     tokens.iter().enumerate().any(|(at, token)| {
         Path::new(token)
             .file_stem()
-            .is_some_and(|stem| stem == "batten")
+            .is_some_and(|stem| stem == crate::surface::BINARY)
             && tokens.len() >= at + 1 + derived.len()
             && tokens[at + 1..=at + derived.len()] == derived
     })
@@ -1160,6 +1176,40 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// `reaches_engine` answers about the DECLARED mediation path, not a
+    /// literal — so wiring naming a command the surface no longer declares is
+    /// drift rather than health (CLOUD-1191).
+    ///
+    /// **The second assertion is the whole row.** Before the derivation, the
+    /// check matched the literal `"hook"`, so a settings file naming a renamed
+    /// or removed verb still returned `true`: the one diagnostic built for this
+    /// failure reported it healthy, while the invocation itself became an
+    /// unknown subcommand — clap error, exit `1`, which every host reads as
+    /// allow. Fail-open, reported green.
+    ///
+    /// Fails by: reverting `reaches_engine` to a literal argv.
+    #[test]
+    fn wiring_naming_an_undeclared_path_does_not_reach_the_engine() {
+        let harness = hook::Harness::ClaudeCode;
+        let live = hook::wiring_command(harness);
+        assert!(
+            reaches_engine(&live, harness),
+            "the command this build emits must reach the engine: {live}"
+        );
+
+        // The same shape with a verb the surface does not declare. This is what a
+        // half-done rename leaves in a committed wiring file.
+        let stale = format!(
+            "{} adjudicate --harness {}",
+            crate::surface::BINARY,
+            harness.as_str()
+        );
+        assert!(
+            !reaches_engine(&stale, harness),
+            "wiring naming an undeclared verb must read as drift, not health: {stale}"
+        );
     }
 
     #[test]

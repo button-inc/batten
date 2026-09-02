@@ -1164,8 +1164,25 @@ const CLAUDE_SPELLINGS: &[(Event, &str)] = &[
 /// the one module allowed to. The search was an install concern. What the
 /// paragraph above still says is unchanged, and it is what keeps the emitter able
 /// to serve a consumer that does need one.
+///
+/// **The argv is DERIVED from the `SURFACE` row, never spelled here**
+/// (CLOUD-1191). This was `format!("batten hook --harness {}", …)`, one of three
+/// independent spellings; renaming the row left this one behind, and the
+/// resulting unknown subcommand is a clap error — exit `1` — which every host
+/// reads as allow. The disagreement would not have broken loudly, it would have
+/// turned enforcement off everywhere while `doctor` reported green.
+///
+/// A surface declaring no mediation row yields the binary and the harness with
+/// no verb between them — a command that matches nothing, so every registration
+/// reports as drift. That is the LOUD direction, and it is why there is no
+/// literal fallback here: emitting `"hook"` when the declaration is gone would
+/// be the fourth spelling this removes, and it would report healthy.
 pub(crate) fn wiring_command(harness: Harness) -> String {
-    format!("batten hook --harness {}", harness.as_str())
+    let argv = crate::surface::mediation_argv().unwrap_or_default();
+    let mut parts = vec![crate::surface::BINARY.to_owned()];
+    parts.extend(argv);
+    parts.push(harness.as_str().to_owned());
+    parts.join(" ")
 }
 
 /// Render one harness's registrations as the JSON its host reads.

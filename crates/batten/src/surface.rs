@@ -1872,6 +1872,70 @@ const ROOT_FLAGS: &[FlagDecl] = &[
     },
 ];
 
+/// The binary's own name, as a wiring entry spells it.
+///
+/// Here rather than beside each consumer for [`mediation`]'s reason: the
+/// generator emits it and the diagnostic matches a token's file stem against it,
+/// and those two agreeing is what makes a registration reach the engine.
+pub const BINARY: &str = "batten";
+
+/// The stable id of the row that adjudicates a mediated tool call.
+///
+/// **The anchor is the id and never the path**, which is [`CommandDecl::id`]'s
+/// whole contract: the path is "the one thing about a row that is expected to
+/// change", so a derivation keyed on it re-breaks on exactly the rename it
+/// exists to survive.
+pub const MEDIATION_ID: &str = "hook";
+
+/// The mediation row, resolved from [`SURFACE`] by [`MEDIATION_ID`].
+///
+/// **One authority for how the mediator is invoked** (CLOUD-1191). Before this,
+/// the argv was spelled independently in three places with nothing linking them
+/// — the row here, the generator in [`crate::hook::wiring_command`], and the
+/// diagnostic in `doctor`'s `reaches_engine` — plus five committed wiring files
+/// carrying it as data.
+///
+/// # Why a disagreement between them is worse than ordinary drift
+///
+/// It is a **silent fail-open**. An unknown subcommand is a clap error, which is
+/// [`crate::exit::ExitCode::Usage`] (`1`), and `exit.rs` states the consequence
+/// as a design property: every host reads anything but `0`/`2` as "the hook
+/// itself failed, let the call through". So three literals that disagree do not
+/// break loudly — they turn enforcement off across every harness while `doctor`
+/// reports green. Renaming the row was measured safe on paper and would have
+/// done exactly that.
+///
+/// Returns `None` only if the row is absent, which
+/// [`tests::the_mediation_row_resolves`] refuses. Callers treat `None` as "no
+/// declared mediation path" and fail loud rather than falling back to a literal
+/// — a fallback would reintroduce the fourth spelling this exists to remove.
+#[must_use]
+pub fn mediation() -> Option<&'static CommandDecl> {
+    SURFACE.iter().find(|row| row.id == MEDIATION_ID)
+}
+
+/// The mediation row's argv as the wiring spells it: the path, then each
+/// required flag as `--long`.
+///
+/// Derived rather than formatted, so a change to the row's `path` or to its
+/// required flags moves the emitted wiring and the diagnostic's expectation in
+/// the same build.
+/// The value each required flag takes is the CALLER's — the harness — so this
+/// stops at the flag and the caller appends it. That keeps the one thing that
+/// varies per registration out of a function whose whole job is the part that
+/// does not.
+#[must_use]
+pub fn mediation_argv() -> Option<Vec<String>> {
+    let row = mediation()?;
+    let mut argv = vec![row.path.to_owned()];
+    for flag in row.flags.iter().filter(|flag| flag.required) {
+        if let Some(long) = flag.long {
+            argv.push(format!("--{long}"));
+        }
+    }
+    Some(argv)
+}
+
 /// The command tree: every subcommand, with its summary, effect, and flags.
 ///
 /// Order is declaration order and does not matter — [`command`] groups rows by
@@ -4031,6 +4095,50 @@ mod tests {
         seen.sort_unstable();
         seen.dedup();
         assert_eq!(seen.len(), total, "a command path is declared twice");
+    }
+
+    /// The mediation row resolves, which is what lets every consumer treat a
+    /// `None` from [`mediation`] as "the surface declares none" rather than as a
+    /// bug it has to guard.
+    ///
+    /// Fails by: renaming or deleting the row's `id`. That is the one edit
+    /// [`MEDIATION_ID`] does not survive, and it must be loud — the id is the
+    /// stable anchor precisely so the `path` can move without touching it.
+    #[test]
+    fn the_mediation_row_resolves() {
+        let row = mediation().expect("the surface declares a mediation row");
+        assert_eq!(row.id, MEDIATION_ID);
+        assert!(
+            row.flags.iter().any(|flag| flag.required),
+            "the mediation row must carry a required flag, or `mediation_argv` \
+             emits a bare path and every registration reads as drift"
+        );
+    }
+
+    /// The emitted argv follows the row's `path`, not a literal.
+    ///
+    /// **This is the case that would have caught the defect.** With three
+    /// independent spellings, renaming the row left the generator and the
+    /// diagnostic behind, and the resulting unknown subcommand exits `1` — which
+    /// every host reads as allow. Fails by: reverting either consumer to a
+    /// `"hook"` literal.
+    #[test]
+    fn the_emitted_argv_is_the_rows_path_and_its_required_flags() {
+        let row = mediation().expect("declared");
+        let argv = mediation_argv().expect("declared");
+        assert_eq!(
+            argv.first().map(String::as_str),
+            Some(row.path),
+            "the argv must open with the row's path"
+        );
+        for flag in row.flags.iter().filter(|flag| flag.required) {
+            if let Some(long) = flag.long {
+                assert!(
+                    argv.iter().any(|word| word == &format!("--{long}")),
+                    "a required flag the row declares is missing from the argv: {long}"
+                );
+            }
+        }
     }
 
     #[test]
