@@ -15,15 +15,6 @@
             "command": "batten hook --harness claude-code"
           }
         ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/run-shape-guard.sh"
-          }
-        ]
       }
     ],
     "PostToolUse": [
@@ -115,14 +106,14 @@
   "autoMode": {
     "environment": [
       "$defaults",
-      "This checkout is button-inc/batten, whose product IS `batten` — a repo-agnostic completion gate. The binary is built from crates/batten in this working directory and installed to ~/.local/bin/batten twice over: the released build by `mise run deps-install` at container provisioning, then this checkout's own by the `session-batten` handler `batten.toml` declares. It is not a third-party download and will not appear on any known-tool list. Every workflow here runs through it, directly or as a subprocess of a `mise run` task."
+      "This checkout is button-inc/batten, whose product IS `batten` \u2014 a repo-agnostic completion gate. The binary is built from crates/batten in this working directory and installed to ~/.local/bin/batten twice over: the released build by `mise run deps-install` at container provisioning, then this checkout's own by the `session-batten` handler `batten.toml` declares. It is not a third-party download and will not appear on any known-tool list. Every workflow here runs through it, directly or as a subprocess of a `mise run` task."
     ],
     "allow": [
       "$defaults",
-      "Allow every `batten` subcommand. It is this repository's own binary, built from the checkout in the working directory, and is the project's primary tool — refusing it blocks essentially all work here. Its checking verbs are declared read-only: they read repository state, git refs and a record store under $GIT_DIR, and emit pointers (a count, a path:line, a boolean), never file contents. Exit codes are a fixed contract: 0 clean, 1 usage/config error, 2 policy denial, 3 internal failure.",
-      "Allow `git` — including `commit`, `push`, `fetch`, `rebase` and `push --force-with-lease` on a branch other than `main`. This repository lands by fast-forward, so a branch is rebased and force-pushed as ordinary routine rather than as recovery: `mise run land` rebases every lap, and each lap mints new SHAs that must reach the remote. Committing is local and reversible, and the pre-commit gate runs the whole hk check set before a commit is created, so a refused gate stops the commit rather than the commit escaping the gate. What must NOT be inferred from this grant: nothing here authorises a force-push to `main`, a history rewrite on a branch someone else holds, or a tag deletion. `main` is protected at the forge and advances only by fast-forward to a SHA whose required checks already concluded green.",
-      "Allow the Serena MCP tools — `read_memory`, `write_memory`, `edit_memory`, `rename_memory`, `list_memories`, and the symbol and search verbs — whatever server prefix the host exposes them under. Serena is this repository's declared instrument for two jobs the generic tools do worse: navigating code by symbol, and reading and writing `.serena/memories/**`, which `batten.toml` marks protected precisely so that writes go through these tools rather than by hand. Refusing them leaves the memory graph editable only by the route the repository's own gate denies.",
-      "Allow every `mise` command, including `mise run <task>`. mise is this repository's task runner and toolchain manager — AGENTS.md requires every tool, environment variable and command to go through it so that CI, the git hooks and a developer shell run byte-identical commands. Refusing it blocks essentially all work here, exactly as refusing `batten` would: the lint, format, test, verify and landing paths are all `mise run` tasks, and `mise.toml` plus `mise-tasks/` are committed to this repository and reviewed like any other code."
+      "Allow every `batten` subcommand. It is this repository's own binary, built from the checkout in the working directory, and is the project's primary tool \u2014 refusing it blocks essentially all work here. Its checking verbs are declared read-only: they read repository state, git refs and a record store under $GIT_DIR, and emit pointers (a count, a path:line, a boolean), never file contents. Exit codes are a fixed contract: 0 clean, 1 usage/config error, 2 policy denial, 3 internal failure.",
+      "Allow `git` \u2014 including `commit`, `push`, `fetch`, `rebase` and `push --force-with-lease` on a branch other than `main`. This repository lands by fast-forward, so a branch is rebased and force-pushed as ordinary routine rather than as recovery: `mise run land` rebases every lap, and each lap mints new SHAs that must reach the remote. Committing is local and reversible, and the pre-commit gate runs the whole hk check set before a commit is created, so a refused gate stops the commit rather than the commit escaping the gate. What must NOT be inferred from this grant: nothing here authorises a force-push to `main`, a history rewrite on a branch someone else holds, or a tag deletion. `main` is protected at the forge and advances only by fast-forward to a SHA whose required checks already concluded green.",
+      "Allow the Serena MCP tools \u2014 `read_memory`, `write_memory`, `edit_memory`, `rename_memory`, `list_memories`, and the symbol and search verbs \u2014 whatever server prefix the host exposes them under. Serena is this repository's declared instrument for two jobs the generic tools do worse: navigating code by symbol, and reading and writing `.serena/memories/**`, which `batten.toml` marks protected precisely so that writes go through these tools rather than by hand. Refusing them leaves the memory graph editable only by the route the repository's own gate denies.",
+      "Allow every `mise` command, including `mise run <task>`. mise is this repository's task runner and toolchain manager \u2014 AGENTS.md requires every tool, environment variable and command to go through it so that CI, the git hooks and a developer shell run byte-identical commands. Refusing it blocks essentially all work here, exactly as refusing `batten` would: the lint, format, test, verify and landing paths are all `mise run` tasks, and `mise.toml` plus `mise-tasks/` are committed to this repository and reviewed like any other code."
     ]
   }
 }

@@ -249,7 +249,7 @@ fn config() -> String {
 id = "harness-wiring"
 kind = "policy"
 scope = "tree"
-documents = [".claude/settings.json"]
+documents = [".claude/settings.json", "policy/harness-declared.json"]
 module = "harness-wiring.rego"
 severity = "deny"
 
@@ -296,7 +296,19 @@ const MEDIATOR: &str = "batten hook --harness claude-code";
 /// The one committed sibling the module's table declares, spelled as the host
 /// spells it — with the variable prefix, so the substring match is exercised
 /// rather than assumed.
-const DECLARED_SIBLING: &str = "$CLAUDE_PROJECT_DIR/mise-tasks/run-shape-guard.sh";
+const DECLARED_SIBLING: &str = "$CLAUDE_PROJECT_DIR/mise-tasks/some-guard.sh";
+
+/// The exemption table as the document declares it, matching `DECLARED_SIBLING`.
+///
+/// The case's OWN row rather than whichever the repository happens to carry.
+/// Reading the table from a document is what keeps its three directions writable
+/// now that the real one is EMPTY: as a module constant they became unreachable
+/// the moment CLOUD-1163's unit 9 removed the last row, and deleting those cases
+/// to fit would have been CLOUD-908's loss on the gate CLOUD-1310 just added.
+const DECLARED_ONE: &str = r#"{"mise-tasks/some-guard.sh": "CLOUD-1"}"#;
+
+/// The EMPTY table — this repository's own state after unit 9.
+const DECLARED_NONE: &str = "{}";
 
 /// The two launcher hooks CLOUD-1314 removed, spelled as the launcher wrote them
 /// — with a directory, so the basename reduction is still exercised.
@@ -316,8 +328,23 @@ const RETIRED_MERGED: [&str; 2] = [
 /// One of each per case: these run in parallel and `git init` races on a shared
 /// directory.
 fn fixture(name: &str, committed: &str, merged: Option<&str>) -> (PathBuf, PathBuf) {
+    fixture_with(name, committed, merged, DECLARED_ONE)
+}
+
+/// The same, with the exemption table a case wants.
+///
+/// `fixture` defaults to one declared row because most cases wire
+/// `DECLARED_SIBLING` and are about what the table excuses. The empty table is
+/// spelled at the sites that mean it rather than defaulted into every other.
+fn fixture_with(
+    name: &str,
+    committed: &str,
+    merged: Option<&str>,
+    declared: &str,
+) -> (PathBuf, PathBuf) {
     let repo = scratch(&format!("harness-wiring-{name}"));
     write(&repo, "batten.toml", &config());
+    write(&repo, "policy/harness-declared.json", declared);
 
     // THE REAL MODULES, read off the tree rather than restated. A fixture copy
     // would drift from the thing that ships, which is the whole failure this
@@ -553,7 +580,7 @@ fn the_engine_reads_a_closed_owner_off_a_minted_receipt() {
     // The tree is otherwise CLEAN — every declared row matches something wired —
     // so the only thing that can redden this run is the owner's status.
     let (repo, outside) = fixture("owner-closed", &clean_committed(), Some(&clean_merged()));
-    receipt(&repo, "CLOUD-1163", "done", now());
+    receipt(&repo, "CLOUD-1", "done", now());
     let output = check(&repo, Some(&outside));
     assert!(
         !output.status.success(),
@@ -562,9 +589,13 @@ fn the_engine_reads_a_closed_owner_off_a_minted_receipt() {
     );
     // A COUNT, never the key: the table's directions point at nothing openable.
     //
-    // ONE, because the table now carries one row. It was TWO until CLOUD-1314's two
-    // merged rows were deleted with their subjects, and that number moving with the
-    // table is the coupling working rather than a fixture drifting.
+    // ONE, because the fixture's table carries one row naming this owner.
+    //
+    // It read TWO against the real table when both merged rows named CLOUD-1314,
+    // then ONE when they were deleted with their subjects. That it moved twice is
+    // exactly why the table is a document now: a case asserting over whichever
+    // rows the repository happens to carry is a case that breaks whenever the
+    // repository changes, for reasons that are not about the predicate.
     assert!(
         findings(&output).contains("1 harness-wiring"),
         "wrong finding: {}",
@@ -582,7 +613,7 @@ fn an_open_owner_is_not_spent() {
     // The other direction, and without it the case above passes over a module that
     // fires on any reading at all.
     let (repo, outside) = fixture("owner-open", &clean_committed(), Some(&clean_merged()));
-    receipt(&repo, "CLOUD-1163", "in-progress", now());
+    receipt(&repo, "CLOUD-1", "in-progress", now());
     let output = check(&repo, Some(&outside));
     assert!(
         output.status.success(),
@@ -602,7 +633,7 @@ fn a_reading_older_than_the_declared_bound_does_not_answer() {
     // sorts first by digest — here, a status read eight days ago would still say
     // `done` forever.
     let (repo, outside) = fixture("owner-stale", &clean_committed(), Some(&clean_merged()));
-    receipt(&repo, "CLOUD-1163", "done", now() - 8 * 86_400);
+    receipt(&repo, "CLOUD-1", "done", now() - 8 * 86_400);
     let output = check(&repo, Some(&outside));
     assert!(
         output.status.success(),

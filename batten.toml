@@ -4795,6 +4795,7 @@ documents = [
   ".github/hooks/batten.json",
   ".gemini/settings.json",
   ".codex/hooks.json",
+  "policy/harness-declared.json",
 ]
 module = "policy/harness-wiring.rego"
 severity = "deny"
@@ -5826,6 +5827,29 @@ wiring = [".claude/settings.json"]
 # name the creditor and the date. `doctor` reports an unowned or overdue row;
 # nothing switches the handler off, because a dispatched program that silently
 # stopped running is the fail-open this surface exists to close.
+# THE COUNT REACHED ZERO, SO THE FLAG IS DECLARED (CLOUD-893).
+#
+# The note above said this was "ONE committed retirement away", and named the
+# three registrations holding it shut. All three are gone in this same change:
+# `mise-tasks/run-shape-guard.sh` retired (CLOUD-1163's unit 9, its four families
+# already carried by `policy/run-shape.rego` and `policy/task-substitution.rego`),
+# and both launcher-provisioned hooks removed with their `declared` rows
+# (CLOUD-1314). Measured after: `batten doctor hooks -J` reports `siblings: 0` and
+# `merged_siblings: 0` for claude-code.
+#
+# Declared BECAUSE the count is zero, never to make it look zero -- the note above
+# is explicit that this consumer "declares it when that count reaches zero rather
+# than by editing bash to qualify", and no bash was edited to qualify here; three
+# programs were deleted and their coverage carried.
+#
+# Raise-only, so this can only ADD refusals: from here a non-batten registration
+# on any committed surface is a finding rather than a count somebody has to read.
+# That is what stops the ten-registration state this repository once reported green
+# over from recurring quietly, and it is the successor to the `declared` table's
+# whole reason for existing.
+[hook]
+exclusive = true
+
 [[hook.handler]]
 id = "mcp-attach-check"
 on = "user-prompt-submit"

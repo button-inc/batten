@@ -112,7 +112,25 @@ mediator := "batten"
 # own row rather than leaving a licence behind. Nothing on a merged surface is
 # declared any more: a command there that is not the mediator is a stray, and
 # `hook wire duplicate` refuses their return, which is CLOUD-1314's acceptance.
-declared := {"mise-tasks/run-shape-guard.sh": "CLOUD-1163"}
+# THE TABLE IS A DOCUMENT, NOT A CONSTANT, and that is what keeps its three
+# directions testable once it is EMPTY -- which is the campaign's goal state and is
+# where this repository now is.
+#
+# Measured 2026-09-02 while retiring `run-shape-guard.sh`, the table's last row: as
+# a Rego constant, an empty `declared` made `unowned`, `stale` and `spent`
+# unreachable, and `policy test` reported three cases red with no way to write them
+# -- a module constant cannot be supplied by `with input as`. Deleting those cases
+# to make the retirement fit would have been CLOUD-908's exact failure: coverage
+# loss dressed as cleanup, on the gate CLOUD-1310 had just added.
+#
+# Reading it as a declared document costs no engine change and gives the fixtures a
+# way in. It is also the better shape independently: an exemption table is data a
+# gate reads, not part of the gate.
+#
+# ABSENT IS COULD-NOT-LOOK. A tree carrying no such file declares no exemption,
+# which is what an empty object means too -- the difference between them is `unread`
+# below, and neither is "everything is excused".
+declared := input.tree.documents["policy/harness-declared.json"]
 
 # The committed hook surfaces, one per harness in `Harness::ALL` that has one.
 #
@@ -398,6 +416,13 @@ judged(name) if {
 	name in committed
 }
 
+# The exemption table itself. A file that EXISTS and will not parse leaves the
+# module with no table at all, which reads as "nothing is declared" and would
+# silently excuse nothing while looking clean.
+judged(name) if {
+	name == "policy/harness-declared.json"
+}
+
 judged(name) if {
 	name in merged_ids
 }
@@ -410,32 +435,66 @@ judged(name) if {
 # which is why `crates/batten/tests/it/harness_wiring.rs` exists over the compiled
 # binary. CLOUD-1307 is that class landed and live in this module's own sibling.
 
-wired(pre_tool, stop) := {"tree": {"documents": {".claude/settings.json": {"hooks": {
+# The exemption table a case declares, as the engine projects the document.
+#
+# EVERY fixture supplies one, because reading it from a document is what makes the
+# table's own three directions writable at all once the real table is empty.
+table(rows) := {"tree": {"documents": {"policy/harness-declared.json": rows}}}
+
+wired_only(pre_tool, stop) := {"tree": {"documents": {".claude/settings.json": {"hooks": {
 	"PreToolUse": [{"hooks": [{"command": command} | some command in pre_tool]}],
 	"Stop": [{"hooks": [{"command": command} | some command in stop]}],
 }}}}}
 
+# A committed surface with an EMPTY table, which is this repository's real state.
+wired(pre_tool, stop) := object.union(wired_only(pre_tool, stop), table({}))
+
+# The same, with the rows a case needs declared.
+wired_with(pre_tool, stop, rows) := object.union(wired_only(pre_tool, stop), table(rows))
+
 # A merged surface carrying the commands given, under the launcher's id.
-launcher(commands) := {"tree": {"external": {"harness-launcher-settings": {"hooks": {"Stop": [{"hooks": [
+launcher_only(commands) := {"tree": {"external": {"harness-launcher-settings": {"hooks": {"Stop": [{"hooks": [
 {"command": command} |
 	some command in commands
 ]}]}}}}}
+
+launcher(commands) := object.union(launcher_only(commands), table({}))
+
+launcher_with(commands, rows) := object.union(launcher_only(commands), table(rows))
 
 # Both surface classes at once, which is the only shape that can exercise the
 # STALE union: the table declares one committed row and two merged ones, and each
 # is judged only where its own surface class was read.
 whole(pre_tool, stop, merged) := object.union(wired(pre_tool, stop), launcher(merged))
 
+whole_with(pre_tool, stop, merged, rows) := object.union(
+	object.union(wired_only(pre_tool, stop), launcher_only(merged)),
+	table(rows),
+)
+
 verdicts := {v.verdict | some v in violation}
 
 mediates := "batten hook --harness claude-code"
 
-guard := "$CLAUDE_PROJECT_DIR/mise-tasks/run-shape-guard.sh"
+# A sibling command a case DECLARES. It was this repository's own registration
+# until CLOUD-1163's unit 9 retired it; it survives here as a fixture because the
+# predicate is about declared-ness rather than about that program.
+guard := "$CLAUDE_PROJECT_DIR/mise-tasks/some-guard.sh"
+
+guard_row := "mise-tasks/some-guard.sh"
 
 # ANTI-VACUITY. A correctly wired tree produces no finding at all -- without this
 # every case below would pass just as well over a module that refuses everything.
 test_a_correctly_wired_tree_is_clean if {
-	count(violation) == 0 with input as wired({mediates, guard}, {mediates})
+	count(violation) == 0 with input as wired_with({mediates, guard}, {mediates}, {guard_row: "CLOUD-1"})
+}
+
+# THE REPOSITORY'S OWN STATE, and the case CLOUD-1163's unit 9 makes reachable: an
+# empty table over a mediator-only surface. Every direction abstains, which is what
+# the campaign is FOR -- and it is asserted rather than assumed, because "no
+# findings" over an empty table is also what a module that decides nothing produces.
+test_a_mediator_only_tree_with_no_declaration_is_clean if {
+	count(violation) == 0 with input as wired({mediates}, {mediates})
 }
 
 test_an_undeclared_sibling_is_refused if {
@@ -457,7 +516,11 @@ test_a_stop_sibling_is_refused_too if {
 }
 
 test_a_pinned_wrapper_around_the_mediator_is_not_a_second_decider if {
-	count(violation) == 0 with input as wired({"mise exec -- batten hook", guard}, {mediates})
+	count(violation) == 0 with input as wired_with(
+		{"mise exec -- batten hook", guard},
+		{mediates},
+		{guard_row: "CLOUD-1"},
+	)
 }
 
 # The pointer is the FILE, never the command: the command carries this consumer's
@@ -472,7 +535,7 @@ test_the_finding_points_at_the_file_and_not_the_command if {
 }
 
 test_a_declaration_matching_nothing_is_stale if {
-	some v in violation with input as wired({mediates}, {mediates})
+	some v in violation with input as wired_with({mediates}, {mediates}, {guard_row: "CLOUD-1"})
 	v.verdict == "hook declare stale"
 }
 
@@ -550,7 +613,12 @@ test_a_read_merged_surface_alone_spends_no_declaration if {
 # ANTI-VACUITY over BOTH classes at once, which the committed-only case cannot
 # reach: every declared row matches on the surface that owns it, so nothing fires.
 test_both_surfaces_wired_correctly_is_clean if {
-	count(violation) == 0 with input as whole({mediates, guard}, {mediates}, {mediates})
+	count(violation) == 0 with input as whole_with(
+		{mediates, guard},
+		{mediates},
+		{mediates},
+		{guard_row: "CLOUD-1"},
+	)
 }
 
 # --- could-not-look, per cause -------------------------------------------------
@@ -593,7 +661,16 @@ test_an_undeclared_name_in_the_channel_is_not_this_modules_business if {
 # two subjects were removed with their hooks, and the case went red on the same
 # commit -- which is the coupling working: a `spent` case naming a key no row
 # declares is testing nothing.
-read(status) := {"tree": {"minted": {"issue-status": {"CLOUD-1163": status}}}}
+# A declared row plus one receipt reading about its owner.
+#
+# The row is the case's own now rather than whichever the repository happens to
+# carry, which is what stopped this pair going red every time the real table
+# changed -- measured twice on this branch, once when CLOUD-1314's rows were
+# deleted and once when the table emptied entirely.
+read(status) := object.union(
+	table({"some-command.sh": "CLOUD-1"}),
+	{"tree": {"minted": {"issue-status": {"CLOUD-1": status}}}},
+)
 
 test_a_row_whose_owner_has_closed_is_spent if {
 	some v in violation with input as read("done")

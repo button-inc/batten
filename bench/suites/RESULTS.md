@@ -6,8 +6,8 @@ runner measured it; the suite runs `--no-parallelize-within-files`, so a
 file's number is its own serial cost and is what an author adding a case
 to it pays.
 
-- suites: 121
-- serial total: 505.5s
+- suites: 119
+- serial total: 493.2s
 
 | seconds | share | suite |
 | ---: | ---: | --- |
@@ -18,7 +18,6 @@ to it pays.
 | 18.7 | 3.7% | `tests/sbom-check.bats` |
 | 18.2 | 3.6% | `tests/graph-check.bats` |
 | 12.3 | 2.4% | `tests/board-diff-overlap.bats` |
-| 11.9 | 2.3% | `tests/run-shape-guard.bats` |
 | 7.9 | 1.6% | `tests/token-bench.bats` |
 | 7.7 | 1.5% | `tests/ready-lint.bats` |
 | 7.4 | 1.5% | `tests/target-race.bats` |
@@ -100,7 +99,6 @@ to it pays.
 | 0.4 | 0.1% | `tests/digest-major-agreement.bats` |
 | 0.4 | 0.1% | `tests/connector-allow-guard.bats` |
 | 0.4 | 0.1% | `tests/msrv-pin-agreement.bats` |
-| 0.4 | 0.1% | `tests/run-shape-guard-quoting.bats` |
 | 0.4 | 0.1% | `tests/board-payloads.bats` |
 | 0.4 | 0.1% | `tests/land-lock-check.bats` |
 | 0.4 | 0.1% | `tests/abandon-matrix.bats` |

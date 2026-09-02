@@ -53,19 +53,19 @@ use common::{at_root, run_with_stdin, scratch, stderr, stdout, write};
 
 /// A fixture repository carrying exactly one `[[hook.handler]]` row.
 ///
-/// The guard and its `payload-field` helper are COPIED from this tree rather
-/// than written here, so `mise run mutant` reaches this tier: under `mutant`
-/// that tree is the mutated one, and a fixture with its own inlined copy would
-/// be green over every mutation.
+/// A BENIGN HANDLER, written here rather than copied from the tree.
+///
+/// It copied `run-shape-guard.sh` and `payload-field.sh` so `mise run mutant`
+/// would reach this tier through them. CLOUD-1163's unit 9 retired both, and the
+/// reason went with them: what this suite tests is the DOOR — attribution,
+/// matcher filtering, payload passthrough, the impersonation detector, the bypass
+/// — and the handler behind it was only ever the payload. Every case that needs a
+/// particular behaviour writes its own stub, which is what the cases below already
+/// did.
 fn fixture(name: &str) -> PathBuf {
     let dir = scratch(name);
     std::fs::create_dir_all(dir.join("mise-tasks")).expect("the fixture's task dir");
-    for task in ["run-shape-guard.sh", "payload-field.sh"] {
-        let from = at_root("mise-tasks").join(task);
-        let to = dir.join("mise-tasks").join(task);
-        std::fs::copy(&from, &to).expect("the guard is copied from this tree");
-        make_executable(&to);
-    }
+    stub_guard(&dir, "exit 0");
     // The guard resolves `mise.toml` beside itself for the cargo family. An
     // empty one keeps that arm defined and silent; the cargo family's own corpus
     // stays in the direct suite, where a fixture `mise.toml` is what it tests.
@@ -182,35 +182,7 @@ fn stub_guard(dir: &Path, body: &str) {
     make_executable(&dir.join("mise-tasks/run-shape-guard.sh"));
 }
 
-#[test]
-fn the_committed_guard_writes_a_host_document_so_its_verdict_is_dropped() {
-    // THE MEASURED DEFECT, asserted rather than described. The committed guard
-    // denies by printing `hookSpecificOutput` on stdout and exiting 0; behind the
-    // door `impersonates_host` reads that shape BEFORE the exit code, so the
-    // outcome is `Broke(ImpersonatedHost)` — and every `Broke` variant ALLOWS.
-    //
-    // It is the same class `connector-allow-guard` was measured in on 2026-08-26,
-    // and the same reason it is asserted rather than fixed: the repair is an edit
-    // to a governed shell file, which `shell-retirement` admits only for a file
-    // being retired, and this one cannot retire while its cargo family has no
-    // surface (CLOUD-856).
-    //
-    // So the guard stays natively registered rather than dispatched, and this
-    // case is the record of why. It FLIPS the day the guard is repaired.
-    let dir = fixture("door-no-host-document");
-    let answer = door(&dir, "cd /tmp; sleep 90; git log --oneline -1");
-    // Both streams, for `unbroken`'s reason: the stream is `emit_advisory`'s
-    // reachability fallback, not a statement about who the report is for.
-    let reported = format!("{}{}", answer.out, answer.err);
-    assert!(
-        reported.contains("hook.handler run-shape-guard: wrote a host decision document"),
-        "the committed guard still impersonates the host; if this now fails, the \
-         guard was repaired and the stubbed cases below should be restored to \
-         driving it: {reported}"
-    );
-    // And what it tried to write did not become a verdict.
-    assert!(answer.allowed(), "{}", answer.out);
-}
+// withdrawn: "the committed guard writes a host document so its verdict is dropped" the subject is `mise-tasks/run-shape-guard.sh`, retired by CLOUD-1163 unit 9, and the DOOR property it demonstrated is asserted by the positive control `the_impersonation_detector_is_live_behind_this_row`, which writes the host document itself rather than borrowing a program that happened to write one
 
 #[test]
 fn a_handler_deny_reaches_the_host_with_its_reason_attributed() {
