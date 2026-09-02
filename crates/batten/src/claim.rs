@@ -101,6 +101,27 @@ pub struct Issue {
     pub live_pr: Option<String>,
     /// The body, when the caller supplied one.
     pub description: Option<String>,
+    /// When the tracker says the row was created, for the prose-dialect cutover.
+    ///
+    /// **Read here rather than dropped, because the premise for dropping it was
+    /// false** (CLOUD-472). This field carried `None` at the call site with a
+    /// comment saying "this gate reads a `claim check` payload rather than a full
+    /// `get_issue` one, so it has no creation instant" — but a `claim check`
+    /// payload IS a `get_issue` payload: the refusal's own remedy says to pipe
+    /// one, and every route it names hands over what the tracker returned.
+    /// Measured 2026-09-02 over the ten payloads this branch claimed with: all
+    /// ten carry `createdAt`.
+    ///
+    /// The cost of the gap was a hole at the worst moment. `ready lint` refuses a
+    /// post-cutover prose block and `claim check` accepted one, so the ratchet was
+    /// open exactly where work STARTS — and `graph-check` enforces `Todo =>
+    /// ready-lint exits 0`, so the two gates disagreed about the same row.
+    ///
+    /// Still could-not-look when absent, which is the posture the wrong comment
+    /// was reaching for: a caller who hands over a payload without the field gets
+    /// the row judged exactly as before, and a claim is never refused for a field
+    /// nobody fetched.
+    pub created_at: Option<String>,
 }
 
 impl Issue {
@@ -140,6 +161,10 @@ impl Issue {
             live_pr: live_pull_request(value),
             description: value
                 .get("description")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+            created_at: value
+                .get("createdAt")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned),
         })
@@ -484,12 +509,19 @@ fn is_ready(
         relations_present: false,
         blocked_by: Vec::new(),
         all_relations: Vec::new(),
-        // Same split, same direction (CLOUD-472). This gate reads a `claim check`
-        // payload rather than a full `get_issue` one, so it has no creation
-        // instant to place against the prose-dialect cutover — could-not-look,
-        // and the row is judged on the clauses this gate CAN see. A claim is
-        // never refused for a field the caller did not fetch.
-        created_at: None,
+        // THE CUTOVER APPLIES HERE TOO (CLOUD-472). This read `None` with a
+        // comment claiming a `claim check` payload is not a full `get_issue` one
+        // and so carries no creation instant. It is one: the refusal's own remedy
+        // says to pipe a `get_issue` payload, and all ten this branch claimed with
+        // carry `createdAt`. The gap left the ratchet open exactly where work
+        // STARTS, with `ready lint` refusing a post-cutover prose block and this
+        // gate accepting it — while `graph-check` enforces `Todo => ready-lint
+        // exits 0`, so two gates disagreed about one row.
+        //
+        // Absent stays could-not-look, which is what the wrong comment was
+        // reaching for: a caller whose payload omits the field gets the row judged
+        // exactly as before.
+        created_at: issue.created_at.clone(),
     };
     let report = crate::ready::lint(grammar, &payload, root)?;
     Ok(report.findings.is_empty())
@@ -934,7 +966,40 @@ mod tests {
             assigned: false,
             live_pr: None,
             description: None,
+            created_at: None,
         }
+    }
+
+    /// A payload as `Issue::parse` reads one, so the field under test comes
+    /// through the real parser rather than being set by hand.
+    fn parsed(id: &str, created_at: Option<&str>) -> Issue {
+        let mut value = serde_json::json!({"id": id, "status": "Todo"});
+        if let Some(stamp) = created_at {
+            value["createdAt"] = serde_json::Value::String(stamp.to_owned());
+        }
+        Issue::parse(&value).expect("the entry contract is id and status")
+    }
+
+    /// THE CUTOVER REACHES THE CLAIM PATH (CLOUD-472). `is_ready` passed `None`
+    /// here with a comment claiming a `claim check` payload is not a full
+    /// `get_issue` one — it is, and all ten payloads this branch claimed with
+    /// carry the field. The gap left `ready lint` refusing a post-cutover prose
+    /// block while this gate accepted it, at the moment work starts.
+    #[test]
+    fn the_creation_instant_survives_the_parse() {
+        assert_eq!(
+            parsed("CLOUD-1", Some("2026-09-02T10:00:00.000Z")).created_at,
+            Some("2026-09-02T10:00:00.000Z".to_owned())
+        );
+    }
+
+    /// COULD-NOT-LOOK, and it is the arm that keeps the fix from over-refusing:
+    /// a payload without the field leaves the row judged exactly as before, so a
+    /// claim is never refused for something nobody fetched. Without this case the
+    /// parse could default to a stamp and every prose row would refuse.
+    #[test]
+    fn a_payload_with_no_creation_instant_carries_none() {
+        assert_eq!(parsed("CLOUD-1", None).created_at, None);
     }
 
     fn scratch(name: &str) -> PathBuf {

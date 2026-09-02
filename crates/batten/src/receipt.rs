@@ -1911,6 +1911,7 @@ mod tests {
             assigned: false,
             live_pr: None,
             description: None,
+            created_at: None,
         }];
         let minted = crate::claim::mint(
             &receipts,
@@ -2217,6 +2218,7 @@ mod tests {
             assigned: false,
             live_pr: None,
             description: None,
+            created_at: None,
         }];
         let minted = crate::claim::mint(
             &receipts,
