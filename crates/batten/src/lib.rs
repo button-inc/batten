@@ -188,7 +188,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             mode,
             &overrides,
             rules::run_all_over,
-            RunRequest::spawning(flags.json, flags.rule.as_deref()),
+            RunRequest::spawning(flags.json, &flags.rule),
         ),
         Some(Command::Config { command }) => run_config(&command, &overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),
@@ -8668,7 +8668,8 @@ fn filed_here_pointers(
     suppression: Suppression,
 ) -> Option<String> {
     let config = resolve::resolve(root, overrides).ok()?;
-    let (selected, _checks) = select_rules(&config.rules, Some(FILED_HERE_ROW)).ok()?;
+    let only = [FILED_HERE_ROW.to_owned()];
+    let (selected, _checks) = select_rules(&config.rules, &only).ok()?;
     let vocabulary = policy::Vocabulary {
         patterns: &config.patterns,
         verdicts: &config.verdicts,
@@ -11007,7 +11008,7 @@ fn run_check(
         mode,
         overrides,
         rules::run_static_over,
-        RunRequest::read_only(flags.json, flags.rule.as_deref(), requested),
+        RunRequest::read_only(flags.json, &flags.rule, requested),
     )
 }
 
@@ -11068,7 +11069,7 @@ struct RunRequest<'a> {
     json: bool,
     /// Run only the declared row with this id (CLOUD-1051), or every applicable
     /// row.
-    only: Option<&'a str>,
+    only: &'a [String],
     /// Which files the run selects rules against (CLOUD-519), as ASKED FOR — the
     /// git read that resolves it needs the repository root, which is anchored
     /// inside `run_rules`.
@@ -11081,7 +11082,7 @@ struct RunRequest<'a> {
 
 impl<'a> RunRequest<'a> {
     /// `check`'s request: the read-only surface, optionally narrowed.
-    const fn read_only(json: bool, only: Option<&'a str>, scope: CheckScope<'a>) -> RunRequest<'a> {
+    const fn read_only(json: bool, only: &'a [String], scope: CheckScope<'a>) -> RunRequest<'a> {
         RunRequest {
             surface: Surface::ReadOnly,
             json,
@@ -11114,7 +11115,7 @@ impl<'a> RunRequest<'a> {
     /// and `--since` are `check`'s, and no caller asks to spawn over a narrowed
     /// file set. Narrowing WHICH ROWS run and narrowing WHICH FILES they select
     /// against are orthogonal, and only the first has a caller here.
-    const fn spawning(json: bool, only: Option<&'a str>) -> RunRequest<'a> {
+    const fn spawning(json: bool, only: &'a [String]) -> RunRequest<'a> {
         RunRequest {
             surface: Surface::Spawning,
             json,
@@ -11147,25 +11148,42 @@ impl<'a> RunRequest<'a> {
 ///
 /// # Errors
 ///
-/// Returns a [`error::UsageError`] when `only` names no declared row.
+/// Returns a [`error::UsageError`] when any entry of `only` names no declared row.
+///
+/// **The refusal is PER ID rather than over the set** (CLOUD-1358), and that is
+/// the whole reason the repeatable form is safe. Asking "did the selection match
+/// anything" would let a typo ride along with a valid sibling: `--rule
+/// no-consumer-account-literal --rule no-consumer-acount-path` selects one row,
+/// runs, and passes, having silently stopped enforcing the row the caller
+/// misspelled. That is the vacuous pass this function exists to refuse, arriving
+/// through the door the arity opened, so every named id must match on its own.
 fn select_rules(
     declared: &[rules::Rule],
-    only: Option<&str>,
+    only: &[String],
 ) -> Result<(Vec<rules::Rule>, policy::ModuleChecks)> {
-    let Some(id) = only else {
+    if only.is_empty() {
         return Ok((declared.to_vec(), policy::ModuleChecks::Run));
-    };
-    let selected: Vec<rules::Rule> = declared
+    }
+    let unmatched: Vec<&str> = only
         .iter()
-        .filter(|rule| rule.id == id)
-        .cloned()
+        .map(String::as_str)
+        .filter(|id| !declared.iter().any(|rule| rule.id == *id))
         .collect();
-    if selected.is_empty() {
+    if let Some(first) = unmatched.first() {
         return Err(error::UsageError::raise(format!(
-            "no `[[rule]]` row is declared with id `{id}`; this authority declares {} row(s)",
+            "no `[[rule]]` row is declared with id `{first}`; this authority declares {} row(s)",
             declared.len()
         )));
     }
+    // Declaration order, never the order the flags were written: findings sort by
+    // the `(path, line, rule)` pointer tuple downstream, and a selection that
+    // reordered the table would make a caller's argv order visible in bytes §6
+    // holds stable.
+    let selected: Vec<rules::Rule> = declared
+        .iter()
+        .filter(|rule| only.contains(&rule.id))
+        .cloned()
+        .collect();
     Ok((selected, policy::ModuleChecks::RunOverSelection))
 }
 
@@ -11357,7 +11375,7 @@ fn run_rules(
     // asking about one declared row is not asking about the budget or the
     // ledger, and running them would make a narrowed read fail for a reason it
     // did not ask about.
-    if only.is_none() {
+    if only.is_empty() {
         findings.extend(engine_side_findings(&root, &config)?);
     }
 

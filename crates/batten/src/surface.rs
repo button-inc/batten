@@ -862,14 +862,14 @@ const CHECK_RULE: FlagDecl = FlagDecl {
     id: "rule",
     long: Some("rule"),
     short: None,
-    help: "Run only the declared rule with this id",
+    help: "Run only the declared rules with these ids (repeatable)",
     env: EnvDecl::None,
     global: false,
     positional: false,
     required: false,
     hidden: false,
     rung: Rung::None,
-    value: ValueDecl::Str,
+    value: ValueDecl::StrMany,
 };
 
 /// `--rule <id>` on `enforce`: the same narrowing, on the verb that spawns.
@@ -903,14 +903,14 @@ const ENFORCE_RULE: FlagDecl = FlagDecl {
     id: "rule",
     long: Some("rule"),
     short: None,
-    help: "Run only the declared rule with this id",
+    help: "Run only the declared rules with these ids (repeatable)",
     env: EnvDecl::None,
     global: false,
     positional: false,
     required: false,
     hidden: false,
     rung: Rung::None,
-    value: ValueDecl::Str,
+    value: ValueDecl::StrMany,
 };
 
 /// `--staged` on `check`: judge the index rather than the whole tree (CLOUD-519).

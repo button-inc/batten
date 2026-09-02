@@ -59,12 +59,14 @@ pub struct Cli {
 pub struct CheckFlags {
     /// Emit findings as byte-stable JSON instead of pointer lines.
     pub json: bool,
-    /// Run only the declared row with this id (CLOUD-1051).
+    /// Run only the declared rows with these ids (CLOUD-1051, repeatable since
+    /// CLOUD-1358).
     ///
-    /// `None` is every applicable row, which is what `check` has always meant. A
-    /// `Some` naming no declared row is a usage error rather than a clean run
-    /// over nothing — see `surface::CHECK_RULE`.
-    pub rule: Option<String>,
+    /// EMPTY is every applicable row, which is what `check` has always meant. An
+    /// id naming no declared row is a usage error rather than a clean run over
+    /// nothing, and that refusal is PER ID — see `select_rules`, where a typo
+    /// riding along with a valid sibling is the case the arity opened.
+    pub rule: Vec<String>,
     /// `--staged`: judge only what the git index holds differently from `HEAD`
     /// (CLOUD-519).
     pub staged: bool,
@@ -96,8 +98,9 @@ pub struct EnforceFlags {
     ///
     /// The narrowing `check` has carried since CLOUD-1051, extended to the
     /// spawning verb for the one caller `check` cannot serve: a case whose
-    /// SUBJECT is a `kind = "command"` row. See `surface::ENFORCE_RULE`.
-    pub rule: Option<String>,
+    /// SUBJECT is a `kind = "command"` row, and repeatable since CLOUD-1358.
+    /// See `surface::ENFORCE_RULE`.
+    pub rule: Vec<String>,
 }
 
 /// The top-level subcommands.
@@ -1726,13 +1729,22 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
     match name {
         "check" => Some(Command::Check(CheckFlags {
             json: flag(matches, "json"),
-            rule: matches.get_one::<String>("rule").cloned(),
+            // `get_many`, not `get_one`: the flag is an `Append` action, so
+            // `get_one` would keep only the LAST `--rule` and silently narrow a
+            // selection the caller widened — `ValueDecl::StrMany`'s own hazard.
+            rule: matches
+                .get_many::<String>("rule")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
             staged: flag(matches, "staged"),
             since: matches.get_one::<String>("since").cloned(),
         })),
         "enforce" => Some(Command::Enforce(EnforceFlags {
             json: flag(matches, "json"),
-            rule: matches.get_one::<String>("rule").cloned(),
+            rule: matches
+                .get_many::<String>("rule")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
         })),
         "config" => config_of(matches).map(|command| Command::Config { command }),
         "lint" => lint_of(matches).map(|command| Command::Lint { command }),
