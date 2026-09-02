@@ -344,6 +344,70 @@
           "description": "Fact::Records (CLOUD-1051). RECORD name -> the lines accumulated in it on this branch, in write order. Keyed by the record rather than by the recorder row because several rows may write one record. Each line is the recorder's own whitespace-free columns; the projection adds nothing and reads nothing out of them. A record ABSENT from this map could not be read; the collapse into an empty list is what this keeps open.",
           "type": "object"
         },
+        "review": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "properties": {
+              "findings": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "clause": {
+                      "type": "string"
+                    },
+                    "line": {
+                      "type": "integer"
+                    },
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "provenance": {
+                "additionalProperties": false,
+                "properties": {
+                  "invocation": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "tool": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "subject": {
+                "additionalProperties": false,
+                "properties": {
+                  "digest": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "type": "object"
+          },
+          "description": "Fact::Review (CLOUD-472). Declared id -> the record that a VENDORED agent prompt was dispatched over that id's subject. The second Cost::Effect fact. KEYED BY (prompt digest, subject digest): the prompt is compiled into this binary so its digest is a constant of the build, and the subject's digest is the bytes reviewed -- so editing the ticket body or pushing a commit leaves the record under a different name where it does not answer. A declared id ABSENT from this map was never dispatched, and that absence is the only thing a gate may refuse on; an id PRESENT with an empty `findings` array ran and pointed at nothing. `null` is could-not-look. WHAT THE AGENT CONCLUDED IS NEVER HERE AS PROSE -- `findings` carries pointers, because a gate deciding on an agent's judgement would be a model verdict wearing an exit code, which non-negotiable rule 3 forbids.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "staged": {
           "additionalProperties": true,
           "description": "Fact::Staged (CLOUD-1203). Declared path -> its STAGED content, parsed by the path's format -- `git show :<path>`, which `tracked` explicitly is NOT: that fact walks the WORKING TREE. A path with no staged entry, one whose bytes are not UTF-8, and one whose format this build cannot parse are each ABSENT from this map rather than present with an empty node, and `missing` names the path with the cause. NULL when no row declared a staged read, so a module can tell `nobody asked` from `nothing is staged`.",

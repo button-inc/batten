@@ -85,6 +85,7 @@ pub mod redirect;
 pub mod refusal;
 pub mod render;
 pub mod resolve;
+pub mod review;
 pub mod rules;
 pub mod secrets;
 pub mod selfwrite;
@@ -3927,6 +3928,7 @@ fn suite_input(
         // so every member here is empty for one reason: this call builds the
         // SHAPE, and the case chooses the values.
         &rules::Resolved {
+            review: &crate::facts::Look::IsNot,
             produced: &std::collections::BTreeMap::new(),
             records: &std::collections::BTreeMap::new(),
             git: &git::GitFacts::default(),

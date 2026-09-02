@@ -37,7 +37,8 @@ use batten::facts::{
     AGENT_SOURCED, BASE_DELTA, BYPASS, CAPTURED, COMMIT_META, Class, Cost, DOCUMENT, EXTERNAL,
     EXTRACTED, FORGE, Fact, GIT_HEAD, GIT_HISTORY, GIT_RANGE, GIT_REF, GIT_REMOTE, GIT_STATUS,
     INVOCATIONS, KEYS, LANDING, LINES, Look, MINTED, PINNED, PRODUCED, PROSPECTIVE, RECEIPTS,
-    RECORDS, STAGED, STATE, STOP, SYMBOLS, Surface, TASKS, TOOL_VERDICT, TRACKED, USES, WAIVED,
+    RECORDS, REVIEW, STAGED, STATE, STOP, SYMBOLS, Surface, TASKS, TOOL_VERDICT, TRACKED, USES,
+    WAIVED,
 };
 
 #[test]
@@ -141,6 +142,7 @@ fn every_fact_returns_its_stated_const() {
             Fact::Invocations => INVOCATIONS,
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
+            Fact::Review => REVIEW,
             Fact::BaseDelta => BASE_DELTA,
             Fact::Records => RECORDS,
             Fact::Pinned => PINNED,
