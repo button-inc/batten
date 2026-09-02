@@ -58,9 +58,14 @@ own local reason and none pointing at the others; two of them argued partly on
 client. This section is the one authority — the five sites cite it now instead of
 each re-deriving it, and that consolidation is the deliverable.
 
-Concurrency here is **OS threads**. There is no async runtime in the crate today:
-`tokio` appears nowhere in `Cargo.lock`, and there is no `async fn` and no
-`.await`. `tests/ambient_authority.rs` is the gate on that rather than this
+Concurrency here is **OS threads**, and that is a statement about the crate's own
+work rather than about the whole closure. **The sentence that used to follow it —
+"`tokio` appears nowhere in `Cargo.lock`, and there is no `async fn` and no
+`.await`" — went false when CLOUD-745 vendored hyper, and is corrected rather than
+quietly dropped**: `tokio` is a declared dependency, `fetch.rs` is `async`
+throughout, and the runtime it builds is bounded by the row below rather than by
+its absence. `tests/ambient_authority.rs` is the gate on which clients may be in
+the closure at all, and `clippy.toml` on the runtime's shape; neither is this
 paragraph.
 
 | Row                                    | Today                          | Verdict                                                      |

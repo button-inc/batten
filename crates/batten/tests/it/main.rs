@@ -160,6 +160,7 @@ mod prospective_facts;
 mod provision;
 mod ratchet;
 mod ready;
+mod rebase;
 mod reclaim_report_once;
 mod record_closes;
 mod redirect_resolves;

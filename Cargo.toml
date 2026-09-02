@@ -248,10 +248,43 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # zlib-rs now — its own `max-performance` is a bare alias for
 # `max-performance-safe` — so there is no C backend to select away from and no
 # `links` key to trip `macos-link-check` rule 1.
+#
+# `merge` is the rebase half (CLOUD-1274's successor campaign), and it is what
+# makes `batten` able to replay a branch onto a moved base without spawning
+# `git`. IT ACTIVATES `gix-diff/blob`, which the `gix-diff` line below spent four
+# paragraphs declining, so that decision is amended in place there rather than
+# left standing as a claim this line falsifies.
+#
+# `worktree-mutation` and `parallel` were BOTH tried and BOTH withdrawn, recorded
+# here so the next author does not re-run the experiment. `worktree-mutation`
+# buys `gix-worktree-state::checkout`, whose `Find` bound is `Send + Clone`
+# unconditionally while this crate's `OwnShared` resolves to `Rc`; `parallel` is
+# the feature that would make it `Arc`, and enabling it did not move the bound in
+# this build. `gitwrite::update_worktree` writes the changed paths itself
+# instead, through the filter pipeline `merge` already brings, so neither feature
+# is carried for a call that cannot be made.
+#
+# Measured on this container against the feature set without it: **11 activated
+# packages added** — `gix-merge`, `gix-imara-diff`, `gix-worktree`,
+# `gix-attributes`, `gix-ignore`, `gix-pathspec`,
+# `gix-submodule`, `gix-filter`, `dashmap`, `hashbrown`, `io-close`. No
+# `FRAMEWORK_CRATES` name, no `AMBIENT_CRATES` name, and no new `links` crate;
+# `macos-link-check` and `deny` both pass. `gix-command` was ALREADY activated
+# here before this change, through `gix-transport` ← `gix-protocol`, so the
+# spawn-capable crate is not new and `no_second_git_invoker_exists` claims
+# exactly what it proves: that THIS crate's source names no `git` to spawn.
+#
+# What IS new is `gix-filter`, and it is worth naming because it can run a
+# repository-configured clean/smudge driver. That is correct for the surface it
+# is bought for — writing a rebased tree into a worktree, where honouring the
+# repository's filters is what git itself does — and it is not on any gate's
+# path: the patch identity still reads blobs from the odb and diffs them with
+# `imara-diff` taken directly, exactly as the block below describes.
 gix = { version = "0.87", default-features = false, features = [
   "revision",
   "sha1",
   "sha256",
+  "merge",
 ] }
 # The TREE half of the in-process patch identity (CLOUD-739): which paths a
 # commit changed, and the blob ids on each side. Already resolved here at this
@@ -259,31 +292,46 @@ gix = { version = "0.87", default-features = false, features = [
 # directly adds nothing to the closure — it makes reachable what was already
 # linked.
 #
-# `default-features = false` is the whole point: the default enables `blob`,
-# whose nine `dep:` entries are the external-diff-driver and worktree-materialising
-# machinery described below. `pub mod tree` is ungated, which is why the tree half
-# costs nothing and the blob half is bought separately and narrowly.
+# `default-features = false` USED TO BE THE WHOLE POINT, and it no longer decides
+# anything, which is stated rather than quietly dropped. Cargo unions features
+# across every activation, so `gix/merge` above pulls `gix/blob-diff` and with it
+# `gix-diff/blob` — the nine `dep:` entries this line spent its life declining.
+# Setting `default-features = false` here still says what this crate ASKS for and
+# is still the honest spelling, but it is no longer what keeps `blob` off: nothing
+# does, since the rebase surface needs it.
+#
+# `pub mod tree` is ungated, so the tree half still costs nothing; what changed is
+# that the blob half is no longer bought separately, because it is no longer
+# avoidable.
 gix-diff = { version = "0.67", default-features = false }
 # The diff algorithm behind the in-process patch identity (CLOUD-739). Hunks in,
 # nothing else: it takes two byte slices and returns the edit script. No
 # filesystem, no process, no threads, no global state.
 #
-# TAKEN DIRECTLY RATHER THAN THROUGH `gix/blob-diff`, and that is the whole
-# decision. `gix-diff`'s `blob` feature is monolithic — nine `dep:` entries, no
-# sub-features — and eight of them exist to reproduce git's full diff pipeline:
-# `gix-command` runs external diff drivers (`diff.<driver>.command`),
-# `gix-filter` runs clean/smudge filters, and `gix-worktree`/`gix-tempfile`/
-# `gix-fs` materialise blobs to disk so those external programs can read them.
-# Enabling it links the machinery whose purpose is to shell out and to touch the
-# worktree, which is the surface `git.rs` is removing. `gix/blob-diff` is worse
-# again: it is an umbrella that also drags `attributes`, and with it
-# `gix-pathspec`, `gix-submodule` and `gix-ignore`.
+# TAKEN DIRECTLY RATHER THAN THROUGH `gix/blob-diff`, and that decision now
+# survives on ONE of its two original reasons rather than both — recorded that
+# way because a reason that has died is worse than no reason at all.
 #
-# The narrower choice is also the CORRECT one, not merely the cheaper one. The
-# implementation being replaced pins 20 `git config` keys for the sole purpose of
-# stopping the host's configuration changing the answer; a diff layer that
-# honours `diff.<driver>.command` would hand that back. An identity a repository
-# can reconfigure is not an identity.
+# The DEPENDENCY-COST half is gone. It read: `gix-diff`'s `blob` feature is
+# monolithic — nine `dep:` entries, no sub-features — and eight of them exist to
+# reproduce git's full diff pipeline (`gix-command` runs external diff drivers,
+# `gix-filter` runs clean/smudge filters, `gix-worktree`/`gix-tempfile`/`gix-fs`
+# materialise blobs to disk so those external programs can read them), so
+# enabling it links the machinery whose purpose is to shell out and to touch the
+# worktree. Every one of those crates is activated in this closure today, because
+# `gix/merge` above needs the rebase to honour the repository's filters. Nothing
+# is saved by declining it here any more.
+#
+# The CORRECTNESS half stands, and it is why this dependency is still named
+# directly: what a gate reads must not be reconfigurable by the repository it
+# reads. The implementation being replaced pins 20 `git config` keys for the sole
+# purpose of stopping the host's configuration changing the answer; a diff layer
+# that honours `diff.<driver>.command` would hand that back. An identity a
+# repository can reconfigure is not an identity — and that is true whether or not
+# the driver machinery happens to be linked, which is exactly why this half
+# outlives the other. The rebase is the opposite case and takes the opposite
+# answer: a worktree write SHOULD honour the repository's filters, because git's
+# own does.
 #
 # Blob CONTENTS reach it through gix's object database — the access CLOUD-738
 # landed — so this adds no filesystem path of its own.

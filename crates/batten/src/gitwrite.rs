@@ -1,4 +1,5 @@
-//! Writes to a local git repository: loose objects, and refs.
+//! Writes to a local git repository: loose objects, refs, and the replay of a
+//! branch onto a base that moved.
 //!
 //! # Why this is not `git.rs`
 //!
@@ -29,6 +30,24 @@
 //! `check -> gitwrite` for the reason it forbids the same edges into `lease`: a
 //! gate declared `read` must not reach a write, and the read-only allowlist is
 //! DERIVED from that declaration rather than reviewed.
+//!
+//! # The rebase, and the one thing it must never do
+//!
+//! `mem:workflow/landing-loop` states the loop's only human stop: *"the only stop
+//! is a rebase that conflicts."* `gix-merge` offers auto-resolution — a
+//! `ResolveWith` strategy that picks a side and reports success — and taking it
+//! would delete that stop, which is the whole reason the loop is safe to leave
+//! running. So [`rebase`] asks
+//! [`TreatAsUnresolved::forced_resolution`](gix::merge::tree::TreatAsUnresolved::forced_resolution),
+//! the STRICTEST reading available: an entry a strategy resolved still counts as
+//! unresolved. A conflict is then a returned [`Rebase::Conflicted`] rather than
+//! an `Err`, because it is an answer about the branch and its caller must report
+//! it with a pointer, not swallow it as an internal failure.
+//!
+//! **Nothing moves on a conflict.** The ref is written and the worktree touched
+//! only after every commit in the range has replayed, so a refusal leaves the
+//! clone exactly as it was — no detached HEAD, no `rebase --abort` to remember,
+//! no half-replayed state for the next lap to discover.
 
 use std::path::Path;
 
@@ -121,4 +140,437 @@ pub fn set_ref(dir: &Path, reference: &str, id: &str) -> Result<()> {
     })
     .map_err(|err| anyhow::anyhow!("gitwrite: {reference} will not move: {err}"))?;
     Ok(())
+}
+
+/// A commit's tree, as a detached id.
+///
+/// A free function rather than a closure because both halves of the replay ask
+/// it and a closure would have to be threaded through or written twice.
+fn tree_of(repo: &gix::Repository, id: gix::ObjectId) -> Result<gix::ObjectId> {
+    let commit = repo
+        .find_commit(id)
+        .map_err(|err| anyhow::anyhow!("gitwrite: {id} will not read: {err}"))?;
+    Ok(commit
+        .tree_id()
+        .map_err(|err| anyhow::anyhow!("gitwrite: {id} has no tree: {err}"))?
+        .detach())
+}
+
+/// What a replay of a branch onto a moved base did.
+///
+/// Three answers rather than two, because "already there" is not a degenerate
+/// success: a lap whose base did not move must not mint new SHAs, since every
+/// receipt in the loop is keyed to the commit it validated and a gratuitous
+/// rewrite throws all of them away.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Rebase {
+    /// The branch already descends from the base. Nothing was replayed, no ref
+    /// moved, and no file was touched.
+    Current,
+    /// Every commit replayed. The branch now points at `head`.
+    Replayed {
+        /// The new tip.
+        head: String,
+        /// How many commits were replayed onto the new base.
+        commits: usize,
+    },
+    /// A commit would not replay. **Nothing was moved** — see this module's
+    /// header for why that is the design rather than an implementation detail.
+    Conflicted {
+        /// The ORIGINAL commit that would not replay, as a full sha.
+        commit: String,
+        /// The paths it conflicts at — pointers, per non-negotiable rule 4,
+        /// never a byte of either side's content.
+        paths: Vec<String>,
+    },
+}
+
+/// Replay `branch` onto `onto`, and update the worktree to match.
+///
+/// The commits in `onto..branch` are replayed oldest first, each as a three-way
+/// merge of the running result against that commit's own tree with its first
+/// parent's tree as the base — which is what `git rebase` does, spelled out.
+///
+/// **A merge commit in the range is refused rather than flattened.** `git rebase`
+/// without `--rebase-merges` silently drops one, and a landing branch that grew
+/// one is a branch whose author did something this loop does not model; guessing
+/// is the wrong direction when the whole point of the range is that its patches
+/// reach `main` unchanged.
+///
+/// **A replayed commit loses its signature, exactly as `git rebase` without `-S`
+/// does.** A rebase mints new bytes, so a carried-over `gpgsig` would be a
+/// signature over a commit that no longer exists — worse than none, because it
+/// looks like provenance. The header is dropped; re-signing is the caller's, and
+/// there is no caller that wants a signature over a commit it is about to rewrite
+/// again on the next lap.
+///
+/// # Errors
+///
+/// A repository that will not open, a ref or rev that will not resolve, a merge
+/// the engine cannot compute, or a worktree write that fails. A CONFLICT is not
+/// an error — it is [`Rebase::Conflicted`].
+pub fn rebase(dir: &Path, branch: &str, onto: &str) -> Result<Rebase> {
+    let repo = crate::git::open_for_write(dir)?;
+    let resolve = |rev: &str| {
+        repo.rev_parse_single(rev)
+            .map_err(|err| anyhow::anyhow!("gitwrite: {rev} will not resolve: {err}"))
+            .map(gix::Id::detach)
+    };
+    let base = resolve(onto)?;
+    let tip = resolve(branch)?;
+
+    // "Does this branch already sit on the base" is an ancestry question, and it
+    // is asked HERE rather than added to `git.rs` as an `is_ancestor`. CLOUD-36's
+    // refusal stands and is about a different question: whether a LANDED branch
+    // is on `main`, which ancestry answers wrongly because landing rebases. What
+    // is asked here is whether there is anything to replay, and for that ancestry
+    // is exactly the predicate — the base is an ancestor of the tip iff the tip
+    // already carries it.
+    if repo
+        .merge_base(base, tip)
+        .is_ok_and(|found| found.detach() == base)
+    {
+        return Ok(Rebase::Current);
+    }
+
+    let walk = repo
+        .rev_walk([tip])
+        .with_hidden([base])
+        .all()
+        .map_err(|err| anyhow::anyhow!("gitwrite: {onto}..{branch} will not walk: {err}"))?;
+    let mut range = Vec::new();
+    for step in walk {
+        let info =
+            step.map_err(|err| anyhow::anyhow!("gitwrite: {onto}..{branch} will not walk: {err}"))?;
+        if info.parent_ids().count() > 1 {
+            return Err(anyhow::anyhow!(
+                "gitwrite: {} is a merge, and this replay does not model one",
+                info.id()
+            ));
+        }
+        range.push(info.id().detach());
+    }
+    // The walk is newest first and a replay is oldest first.
+    range.reverse();
+
+    let options = repo
+        .tree_merge_options()
+        .map_err(|err| anyhow::anyhow!("gitwrite: no merge options: {err}"))?;
+    let committer = repo
+        .committer()
+        .ok_or_else(|| anyhow::anyhow!("gitwrite: this repository has no configured committer"))?
+        .map_err(|err| anyhow::anyhow!("gitwrite: the configured committer will not parse: {err}"))?
+        .to_owned()
+        .map_err(|err| {
+            anyhow::anyhow!("gitwrite: the configured committer will not parse: {err}")
+        })?;
+
+    let empty = gix::ObjectId::empty_tree(repo.object_hash());
+    let mut cursor = base;
+    for original in &range {
+        match replay(&repo, cursor, *original, &options, &committer, empty)? {
+            Step::Landed(id) => cursor = id,
+            Step::Conflicted(paths) => {
+                return Ok(Rebase::Conflicted {
+                    commit: original.to_hex().to_string(),
+                    paths,
+                });
+            }
+        }
+    }
+
+    let now = cursor.to_hex().to_string();
+    set_ref(dir, branch, &now)?;
+    update_worktree(&repo, tip, cursor)?;
+    Ok(Rebase::Replayed {
+        head: now,
+        commits: range.len(),
+    })
+}
+
+/// What replaying ONE commit produced.
+enum Step {
+    /// The rewritten commit's id.
+    Landed(gix::ObjectId),
+    /// The paths it conflicts at.
+    Conflicted(Vec<String>),
+}
+
+/// Replay one commit onto `cursor`, three-way merging its own change in.
+///
+/// Split out of [`rebase`] because the loop and the merge fail for entirely
+/// different reasons, and because a lap's whole decision — take the conflict or
+/// resolve it — lives in six lines here rather than buried in a walk.
+fn replay(
+    repo: &gix::Repository,
+    cursor: gix::ObjectId,
+    original: gix::ObjectId,
+    options: &gix::merge::tree::Options,
+    committer: &gix::actor::Signature,
+    empty: gix::ObjectId,
+) -> Result<Step> {
+    let commit = repo
+        .find_commit(original)
+        .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not read: {err}"))?;
+    let theirs = commit
+        .tree_id()
+        .map_err(|err| anyhow::anyhow!("gitwrite: {original} has no tree: {err}"))?
+        .detach();
+    // A root commit has no parent, so its base is the empty tree — which is the
+    // same statement as "everything it introduces is an addition".
+    let ancestor = match commit.parent_ids().next() {
+        Some(parent) => tree_of(repo, parent.detach())?,
+        None => empty,
+    };
+    let ours = tree_of(repo, cursor)?;
+
+    let mut outcome = repo
+        .merge_trees(
+            ancestor,
+            ours,
+            theirs,
+            gix::merge::blob::builtin_driver::text::Labels::default(),
+            options.clone(),
+        )
+        .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not merge: {err}"))?;
+    // THE STRICTEST READING, and the module header says why: a lenient one would
+    // let a resolution strategy quietly pick a side, which deletes the loop's
+    // only human stop.
+    let strict = gix::merge::tree::TreatAsUnresolved::forced_resolution();
+    if outcome.has_unresolved_conflicts(strict) {
+        let mut paths: Vec<String> = outcome
+            .conflicts
+            .iter()
+            .filter(|conflict| conflict.is_unresolved(strict))
+            .map(|conflict| conflict.ours.location().to_string())
+            .collect();
+        paths.sort_unstable();
+        paths.dedup();
+        return Ok(Step::Conflicted(paths));
+    }
+
+    let tree = outcome
+        .tree
+        .write()
+        .map_err(|err| anyhow::anyhow!("gitwrite: {original}'s merged tree: {err}"))?
+        .detach();
+    let mut replayed = commit
+        .decode()
+        .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not decode: {err}"))?
+        .into_owned()
+        .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not decode: {err}"))?;
+    replayed.tree = tree;
+    replayed.parents = std::iter::once(cursor).collect();
+    replayed.committer.clone_from(committer);
+    replayed
+        .extra_headers
+        .retain(|(name, _)| name.as_slice() != b"gpgsig");
+    Ok(Step::Landed(
+        repo.write_object(&replayed)
+            .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not rewrite: {err}"))?
+            .detach(),
+    ))
+}
+
+/// Bring the worktree from the tree of `was` to the tree of `now`.
+///
+/// **Only the paths that differ are touched**, and that is a requirement rather
+/// than an optimisation: the loop runs `verify` after every rebase, so
+/// re-materialising every tracked file would reset every mtime and make each lap
+/// a cold build.
+///
+/// # Why this writes the files itself rather than calling gix's checkout
+///
+/// `gix-worktree-state::checkout` does all of this and more, and it is NOT
+/// reachable here: its `Find` bound is `Send + Clone` unconditionally, and this
+/// crate's `gix` resolves `OwnShared` to `Rc`, so `repo.objects` is not `Send`.
+/// Reaching it means enabling `gix/parallel` — measured, and it did not move the
+/// bound; a fuller audit of why belongs with the row that wants a full checkout,
+/// which this is not. What a lap needs is a handful of changed paths, and that is
+/// small enough to write directly and large enough to be worth not paying a
+/// feature for.
+///
+/// **The filter pipeline is still gix's**, so a repository configuring a
+/// clean/smudge driver gets the same bytes git would write. A DELAYED external
+/// filter is refused rather than approximated — a long-running driver that
+/// promises its answer later has no place in a step the loop blocks on.
+///
+/// # The index, and the trap in writing one
+///
+/// An index built from a tree carries ZERO stat data, and git compares size
+/// before it compares content — so writing that index straight out would make
+/// every tracked file read as modified. Each entry therefore gets a stat: the one
+/// the existing index already held, for a path this replay did not touch, and a
+/// fresh `stat(2)` for one it wrote.
+fn update_worktree(repo: &gix::Repository, was: gix::ObjectId, now: gix::ObjectId) -> Result<()> {
+    let Some(workdir) = repo.workdir().map(std::path::Path::to_path_buf) else {
+        // A bare repository has nothing to update, and that is a fact about the
+        // clone rather than a failure of the replay.
+        return Ok(());
+    };
+    let (before, after) = (tree_of(repo, was)?, tree_of(repo, now)?);
+    let read = |id: gix::ObjectId| -> Result<gix::Tree<'_>> {
+        repo.find_tree(id)
+            .map_err(|err| anyhow::anyhow!("gitwrite: tree {id} will not read: {err}"))
+    };
+    let (before, after) = (read(before)?, read(after)?);
+
+    let changes = repo
+        .diff_tree_to_tree(Some(&before), Some(&after), None)
+        .map_err(|err| anyhow::anyhow!("gitwrite: the worktree delta will not compute: {err}"))?;
+    let mut touched: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
+    let mut gone: Vec<Vec<u8>> = Vec::new();
+    for change in &changes {
+        let path = change.location().to_vec();
+        if matches!(
+            change,
+            gix::object::tree::diff::ChangeDetached::Deletion { .. }
+        ) {
+            gone.push(path);
+        } else {
+            touched.insert(path);
+        }
+    }
+    if touched.is_empty() && gone.is_empty() {
+        return Ok(());
+    }
+
+    // The stats the CURRENT index already holds, so an untouched path keeps the
+    // reading git took when it was last written.
+    let mut held: std::collections::BTreeMap<Vec<u8>, gix::index::entry::Stat> =
+        std::collections::BTreeMap::new();
+    if let Ok(current) = repo.index() {
+        for entry in current.entries() {
+            held.insert(entry.path(&current).to_vec(), entry.stat);
+        }
+    }
+
+    let mut index = repo
+        .index_from_tree(&after.id())
+        .map_err(|err| anyhow::anyhow!("gitwrite: no index for {now}: {err}"))?;
+    let (mut pipeline, _) = repo
+        .filter_pipeline(None)
+        .map_err(|err| anyhow::anyhow!("gitwrite: no filter pipeline: {err}"))?;
+    {
+        let state = &mut *index;
+        let mut plan: Vec<(usize, Vec<u8>, gix::ObjectId, gix::index::entry::Mode)> = Vec::new();
+        for (position, entry) in state.entries().iter().enumerate() {
+            plan.push((position, entry.path(state).to_vec(), entry.id, entry.mode));
+        }
+        for (position, path, id, mode) in plan {
+            if touched.contains(&path) {
+                let stat = materialise(repo, &mut pipeline, &workdir, &path, id, mode)?;
+                state.entries_mut()[position].stat = stat;
+            } else if let Some(stat) = held.get(&path) {
+                state.entries_mut()[position].stat = *stat;
+            }
+        }
+    }
+    index
+        .write(gix::index::write::Options::default())
+        .map_err(|err| anyhow::anyhow!("gitwrite: the index will not write: {err}"))?;
+
+    // Writing ADDS and OVERWRITES; nothing above removes. So a path the new tree
+    // does not carry has to be unlinked here, or a rebase that deletes a file
+    // leaves it on disk and the next `verify` compiles a file that is not in the
+    // commit.
+    for path in &gone {
+        let Ok(relative) = std::str::from_utf8(path) else {
+            continue;
+        };
+        let target = workdir.join(relative);
+        match std::fs::remove_file(&target) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(anyhow::anyhow!(
+                    "gitwrite: {relative} will not delete: {err}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Put one path's new content on disk, and report the stat it landed with.
+///
+/// Modes are handled explicitly rather than by a general routine, because each
+/// one fails differently: a regular file is the common case, an executable
+/// differs only in a permission bit, a symlink is a different syscall entirely,
+/// and a gitlink names a submodule this replay does not enter.
+fn materialise(
+    repo: &gix::Repository,
+    pipeline: &mut gix::filter::Pipeline<'_>,
+    workdir: &Path,
+    path: &[u8],
+    id: gix::ObjectId,
+    mode: gix::index::entry::Mode,
+) -> Result<gix::index::entry::Stat> {
+    let relative = std::str::from_utf8(path)
+        .map_err(|_| anyhow::anyhow!("gitwrite: a path in the tree is not UTF-8"))?;
+    let target = workdir.join(relative);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| anyhow::anyhow!("gitwrite: {relative}'s directory: {err}"))?;
+    }
+    let blob = repo
+        .find_object(id)
+        .map_err(|err| anyhow::anyhow!("gitwrite: {relative}'s content: {err}"))?;
+
+    if mode.is_submodule() {
+        // A gitlink is a directory this replay never descends into; git itself
+        // leaves a submodule's checkout alone on a rebase of the superproject.
+        std::fs::create_dir_all(&target)
+            .map_err(|err| anyhow::anyhow!("gitwrite: {relative}: {err}"))?;
+    } else if mode == gix::index::entry::Mode::SYMLINK {
+        let destination = std::str::from_utf8(&blob.data).map_err(|_| {
+            anyhow::anyhow!("gitwrite: {relative} is a symlink to a non-UTF-8 path")
+        })?;
+        // REPLACE, never write through: an existing symlink is followed by a
+        // write, which would put the new content in whatever it points at.
+        match std::fs::remove_file(&target) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(anyhow::anyhow!("gitwrite: {relative}: {err}")),
+        }
+        std::os::unix::fs::symlink(destination, &target)
+            .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not link: {err}"))?;
+    } else {
+        let mut converted = pipeline
+            .convert_to_worktree(
+                &blob.data,
+                relative.into(),
+                gix::filter::plumbing::pipeline::convert::to_worktree::Options::default(),
+            )
+            .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not filter: {err}"))?;
+        // Same reason as the symlink arm, one step earlier: truncating through an
+        // existing link writes the target.
+        match std::fs::remove_file(&target) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(anyhow::anyhow!("gitwrite: {relative}: {err}")),
+        }
+        let mut file = std::fs::File::create(&target)
+            .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not open: {err}"))?;
+        let source = converted.as_read().ok_or_else(|| {
+            anyhow::anyhow!(
+                "gitwrite: {relative} is behind a delayed filter, which is not supported"
+            )
+        })?;
+        std::io::copy(source, &mut file)
+            .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not write: {err}"))?;
+        drop(file);
+        if mode == gix::index::entry::Mode::FILE_EXECUTABLE {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
+                .map_err(|err| anyhow::anyhow!("gitwrite: {relative}'s mode: {err}"))?;
+        }
+    }
+
+    let landed = gix::index::fs::Metadata::from_path_no_follow(&target)
+        .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not stat: {err}"))?;
+    // A clock that will not answer is not a reason to refuse the write that
+    // already happened: a zero stat costs git a content comparison and nothing
+    // else, where an error here would abandon a half-updated worktree.
+    Ok(gix::index::entry::Stat::from_fs(&landed).unwrap_or_default())
 }

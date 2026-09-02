@@ -1,0 +1,296 @@
+//! Replaying a branch onto a moved base, over the real engine (CLOUD-1274's
+//! successor campaign, stage D3).
+//!
+//! # The case that has to exist, and why the clean one alone proves nothing
+//!
+//! `mem:workflow/landing-loop` gives the landing loop exactly one human stop:
+//! *"the only stop is a rebase that conflicts."* `gix-merge` will happily resolve
+//! a conflict with a strategy and report success, so a suite that exercises only
+//! the clean replay passes **over an auto-resolving implementation** — which is
+//! the one behaviour the design forbids. [`a_conflicting_replay_refuses`] is
+//! therefore the load-bearing case here and the clean one is its control.
+//!
+//! # No `git` binary anywhere in this file
+//!
+//! The fixtures are built with `gix` and with `gitwrite`'s own writes, so what
+//! these cases drive is the engine rather than a shell-out that happens to agree
+//! with it. That is not tidiness: `git.rs`'s `no_second_git_invoker_exists` is
+//! the property this whole campaign exists to keep, and a suite that reaches for
+//! `git` to build its own fixtures is asserting nothing about a `git`-free
+//! engine.
+
+#![cfg(unix)]
+
+use crate::common;
+
+use std::path::{Path, PathBuf};
+
+use batten::gitwrite::{self, Rebase};
+
+use common::scratch;
+
+/// A commit's ingredients: the files its tree carries, flat.
+type Files<'a> = &'a [(&'a str, &'a str)];
+
+/// Initialise a repository with a worktree and a configured committer.
+fn init(name: &str) -> (PathBuf, gix::Repository) {
+    let dir = scratch(name);
+    let repo = gix::init(&dir).expect("init");
+    // A commit needs an identity, and the ambient one is not this test's to
+    // depend on — a container with no `user.email` would otherwise fail here for
+    // a reason that has nothing to do with the replay.
+    let mut config = std::fs::read_to_string(dir.join(".git/config")).expect("read config");
+    config.push_str("[user]\n\tname = Fixture\n\temail = fixture@example.invalid\n");
+    std::fs::write(dir.join(".git/config"), config).expect("write config");
+    let repo = gix::open(repo.path()).expect("reopen");
+    (dir, repo)
+}
+
+/// Write a flat tree and a commit on top of `parents`, returning the commit id.
+fn commit(repo: &gix::Repository, parents: &[gix::ObjectId], files: Files<'_>) -> gix::ObjectId {
+    let mut entries: Vec<gix::objs::tree::Entry> = files
+        .iter()
+        .map(|(name, body)| gix::objs::tree::Entry {
+            mode: gix::objs::tree::EntryKind::Blob.into(),
+            filename: (*name).into(),
+            oid: repo.write_blob(body.as_bytes()).expect("blob").detach(),
+        })
+        .collect();
+    // Git's tree format REQUIRES sorted entries, and an unsorted one still hashes
+    // and still writes — so the fixture would be subtly invalid rather than
+    // rejected.
+    entries.sort_by(|left, right| left.filename.cmp(&right.filename));
+    let tree = repo
+        .write_object(&gix::objs::Tree { entries })
+        .expect("tree")
+        .detach();
+    let who = gix::actor::Signature {
+        name: "Fixture".into(),
+        email: "fixture@example.invalid".into(),
+        // A FIXED instant, so two fixture commits built in the same second are
+        // still distinguishable only by their content — which is what makes an
+        // assertion about a minted sha an assertion about the replay.
+        time: gix::date::Time::new(1_700_000_000, 0),
+    };
+    repo.write_object(&gix::objs::Commit {
+        tree,
+        parents: parents.iter().copied().collect(),
+        author: who.clone(),
+        committer: who,
+        encoding: None,
+        message: "fixture\n".into(),
+        extra_headers: Vec::new(),
+    })
+    .expect("commit")
+    .detach()
+}
+
+/// Put `files` on disk, so the fixture looks like a checked-out clone.
+fn materialise(dir: &Path, files: Files<'_>) {
+    for (name, body) in files {
+        std::fs::write(dir.join(name), body).expect("write worktree file");
+    }
+}
+
+fn point(dir: &Path, reference: &str, id: gix::ObjectId) {
+    gitwrite::set_ref(dir, reference, &id.to_hex().to_string()).expect("set ref");
+}
+
+/// A branch replayed onto a base that moved underneath it lands every commit,
+/// and the result carries BOTH sides' files.
+#[test]
+fn a_clean_replay_lands_every_commit() {
+    let (dir, repo) = init("rebase-clean");
+    let root: Files<'_> = &[("shared.txt", "base\n")];
+    let base = commit(&repo, &[], root);
+
+    let trunk: Files<'_> = &[("shared.txt", "base\n"), ("from-main.txt", "trunk\n")];
+    let moved = commit(&repo, &[base], trunk);
+
+    let side: Files<'_> = &[("shared.txt", "base\n"), ("from-branch.txt", "work\n")];
+    let tip = commit(&repo, &[base], side);
+
+    point(&dir, "refs/heads/main", moved);
+    point(&dir, "refs/heads/work", tip);
+    materialise(&dir, side);
+
+    let outcome = gitwrite::rebase(&dir, "refs/heads/work", "refs/heads/main").expect("rebase");
+    let Rebase::Replayed { head, commits } = outcome else {
+        panic!("expected a clean replay, got {outcome:?}");
+    };
+    assert_eq!(commits, 1, "one commit was in the range");
+    assert_ne!(
+        head,
+        tip.to_hex().to_string(),
+        "a replay mints a new sha, or it did not replay"
+    );
+
+    // The REF moved, not just the return value: a function that reports a head it
+    // did not write is the failure this asserts against.
+    let landed = repo
+        .rev_parse_single("refs/heads/work")
+        .expect("resolve work")
+        .detach();
+    assert_eq!(landed.to_hex().to_string(), head);
+
+    // The new commit descends from the moved base and carries both sides.
+    let replayed = repo.find_commit(landed).expect("find replayed");
+    assert_eq!(
+        replayed
+            .parent_ids()
+            .map(gix::Id::detach)
+            .collect::<Vec<_>>(),
+        vec![moved],
+        "the replayed commit sits on the moved base"
+    );
+    let names = tree_names(&repo, landed);
+    assert!(
+        names.contains(&"from-main.txt".to_owned())
+            && names.contains(&"from-branch.txt".to_owned()),
+        "the merged tree carries both sides, got {names:?}"
+    );
+
+    // And the WORKTREE carries the path the base introduced, which is the half a
+    // tree-only assertion never reaches.
+    assert!(
+        dir.join("from-main.txt").is_file(),
+        "the worktree was not updated"
+    );
+}
+
+/// **The case the design exists for.** Two sides edit one path, and the replay
+/// REFUSES rather than resolving. Nothing moves.
+#[test]
+fn a_conflicting_replay_refuses() {
+    let (dir, repo) = init("rebase-conflict");
+    let root: Files<'_> = &[("shared.txt", "base\n")];
+    let base = commit(&repo, &[], root);
+
+    let trunk: Files<'_> = &[("shared.txt", "the trunk's line\n")];
+    let moved = commit(&repo, &[base], trunk);
+
+    let side: Files<'_> = &[("shared.txt", "the branch's line\n")];
+    let tip = commit(&repo, &[base], side);
+
+    point(&dir, "refs/heads/main", moved);
+    point(&dir, "refs/heads/work", tip);
+    materialise(&dir, side);
+
+    let outcome = gitwrite::rebase(&dir, "refs/heads/work", "refs/heads/main").expect("rebase");
+    let Rebase::Conflicted { commit, paths } = outcome else {
+        panic!("a conflicting replay must refuse, got {outcome:?}");
+    };
+    assert_eq!(
+        commit,
+        tip.to_hex().to_string(),
+        "the refusal names the ORIGINAL commit that would not replay"
+    );
+    assert_eq!(
+        paths,
+        vec!["shared.txt".to_owned()],
+        "the refusal points at the path, and carries no content"
+    );
+
+    // NOTHING MOVED. A refusal that left a half-rebased branch would be worse
+    // than one that resolved, because the next lap would start from it.
+    let still = repo
+        .rev_parse_single("refs/heads/work")
+        .expect("resolve work")
+        .detach();
+    assert_eq!(still, tip, "the branch is untouched after a refusal");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("shared.txt")).expect("read worktree"),
+        "the branch's line\n",
+        "the worktree is untouched after a refusal, and carries no conflict markers"
+    );
+}
+
+/// A branch that already descends from the base mints nothing.
+///
+/// The receipts the landing loop runs on are keyed to the commit they validated,
+/// so a replay that rewrote an already-current branch would throw away a `verify`
+/// that is still good — the lap would cost a CI run to prove what it had proven.
+#[test]
+fn an_already_current_branch_is_left_alone() {
+    let (dir, repo) = init("rebase-current");
+    let root: Files<'_> = &[("shared.txt", "base\n")];
+    let base = commit(&repo, &[], root);
+    let side: Files<'_> = &[("shared.txt", "base\n"), ("work.txt", "work\n")];
+    let tip = commit(&repo, &[base], side);
+
+    point(&dir, "refs/heads/main", base);
+    point(&dir, "refs/heads/work", tip);
+    materialise(&dir, side);
+
+    let outcome = gitwrite::rebase(&dir, "refs/heads/work", "refs/heads/main").expect("rebase");
+    assert_eq!(outcome, Rebase::Current);
+    let still = repo
+        .rev_parse_single("refs/heads/work")
+        .expect("resolve work")
+        .detach();
+    assert_eq!(still, tip, "an already-current branch keeps its sha");
+}
+
+/// A replay drops a file, and the worktree stops carrying it.
+///
+/// A checkout ADDS and OVERWRITES; nothing in it removes, so this is the one
+/// worktree effect that has to be written by hand and is therefore the one that
+/// can be silently missing. Left undone, the next `verify` compiles a file that
+/// is not in the commit.
+#[test]
+fn a_path_the_base_deleted_leaves_the_worktree() {
+    let (dir, repo) = init("rebase-delete");
+    let root: Files<'_> = &[("kept.txt", "kept\n"), ("doomed.txt", "doomed\n")];
+    let base = commit(&repo, &[], root);
+
+    // The trunk deletes `doomed.txt`.
+    let trunk: Files<'_> = &[("kept.txt", "kept\n")];
+    let moved = commit(&repo, &[base], trunk);
+
+    // The branch touches something else entirely.
+    let side: Files<'_> = &[
+        ("kept.txt", "kept\n"),
+        ("doomed.txt", "doomed\n"),
+        ("work.txt", "work\n"),
+    ];
+    let tip = commit(&repo, &[base], side);
+
+    point(&dir, "refs/heads/main", moved);
+    point(&dir, "refs/heads/work", tip);
+    materialise(&dir, side);
+
+    let outcome = gitwrite::rebase(&dir, "refs/heads/work", "refs/heads/main").expect("rebase");
+    assert!(
+        matches!(outcome, Rebase::Replayed { .. }),
+        "a delete on one side and an add on the other is not a conflict, got {outcome:?}"
+    );
+    assert!(
+        !dir.join("doomed.txt").exists(),
+        "the deleted path is still on disk"
+    );
+    assert!(
+        dir.join("work.txt").is_file(),
+        "the branch's own file survived"
+    );
+    let landed = repo
+        .rev_parse_single("refs/heads/work")
+        .expect("resolve work")
+        .detach();
+    assert!(
+        !tree_names(&repo, landed).contains(&"doomed.txt".to_owned()),
+        "the replayed tree still carries the deleted path"
+    );
+}
+
+/// The filenames in a commit's tree.
+fn tree_names(repo: &gix::Repository, id: gix::ObjectId) -> Vec<String> {
+    let tree = repo
+        .find_commit(id)
+        .expect("find commit")
+        .tree()
+        .expect("tree");
+    tree.iter()
+        .filter_map(Result::ok)
+        .map(|entry| entry.filename().to_string())
+        .collect()
+}
