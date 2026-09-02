@@ -1,52 +1,55 @@
-# ONE PR PER BRANCH IS AGENTS.md's RULE, AND NOTHING ELSE MAY SAY OTHERWISE.
+# METADATA
+# description: |
+#   ONE PR PER BRANCH IS AGENTS.md's RULE, AND NOTHING ELSE MAY SAY OTHERWISE.
 #
-# AGENTS.md carries the workflow contract's branch clause -- one commit one issue,
-# one branch many rows, and a single pull request over all of them. This module
-# refuses a SECOND statement of that decision anywhere else in the tree, in the
-# direction that contradicts it: prose claiming a unit lands through a pull
-# request of its own.
+#   AGENTS.md carries the workflow contract's branch clause -- one commit one issue,
+#   one branch many rows, and a single pull request over all of them. This module
+#   refuses a SECOND statement of that decision anywhere else in the tree, in the
+#   direction that contradicts it: prose claiming a unit lands through a pull
+#   request of its own.
 #
-# WHY A GATE AND NOT A CONVENTION. Measured 2026-09-02, on this branch, by the
-# agent that wrote this file. A row's comment in `policy/harness-wiring.rego`
-# quoted ONE tracker issue's own §1 -- that issue's units each land separately --
-# as a sentence of ordinary normative prose, with no marker separating a quoted
-# local decision from the file's own binding claims. A planning turn read that
-# line, adopted it as repository convention, and produced a plan partitioned into
-# eight pull requests. The contradicted rule had been loaded in the same turn.
+#   WHY A GATE AND NOT A CONVENTION. Measured 2026-09-02, on this branch, by the
+#   agent that wrote this file. A row's comment in `policy/harness-wiring.rego`
+#   quoted ONE tracker issue's own §1 -- that issue's units each land separately --
+#   as a sentence of ordinary normative prose, with no marker separating a quoted
+#   local decision from the file's own binding claims. A planning turn read that
+#   line, adopted it as repository convention, and produced a plan partitioned into
+#   eight pull requests. The contradicted rule had been loaded in the same turn.
 #
-# THE PROSE WAS THE WHOLE SURFACE, which is what makes a text predicate the right
-# instrument here rather than an approximation of one: a scan of the tree found
-# the phrase family exactly once outside AGENTS.md. Removing that line and
-# refusing its return is the complete fix for the measured instance.
+#   THE PROSE WAS THE WHOLE SURFACE, which is what makes a text predicate the right
+#   instrument here rather than an approximation of one: a scan of the tree found
+#   the phrase family exactly once outside AGENTS.md. Removing that line and
+#   refusing its return is the complete fix for the measured instance.
 #
-# THIS FILE MAY NOT SPELL THE PHRASE IT MATCHES. The pattern lives in the
-# `[[pattern]]` registry and is read from `data.batten.patterns`, so a comment
-# quoting it here would trip the module over its own explanation and the only
-# repairs are an exemption or a deleted rule -- both worse than the duplication
-# the registry exists to stop. `mise.toml`'s inline-body ratchet records the same
-# constraint for its own case, in those words. Name the shape, never the string.
+#   THIS FILE MAY NOT SPELL THE PHRASE IT MATCHES. The pattern lives in the
+#   `[[pattern]]` registry and is read from `data.batten.patterns`, so a comment
+#   quoting it here would trip the module over its own explanation and the only
+#   repairs are an exemption or a deleted rule -- both worse than the duplication
+#   the registry exists to stop. `mise.toml`'s inline-body ratchet records the same
+#   constraint for its own case, in those words. Name the shape, never the string.
 #
-# THE PATTERN DISCRIMINATES AND THAT WAS MEASURED TOO. Four tracked files say a
-# change landed in a pull request of its own, meaning the ordinary thing --
-# release-plz bumping a version, a guard refusing the branch that added it -- and
-# every one of them is legitimate. A predicate keyed on the possessive alone
-# refuses all four. So the registry row names the PARTITION claim: a unit landing
-# that way, or a per-unit rate. The four survive; the one that produced this
-# module does not.
+#   THE PATTERN DISCRIMINATES AND THAT WAS MEASURED TOO. Four tracked files say a
+#   change landed in a pull request of its own, meaning the ordinary thing --
+#   release-plz bumping a version, a guard refusing the branch that added it -- and
+#   every one of them is legitimate. A predicate keyed on the possessive alone
+#   refuses all four. So the registry row names the PARTITION claim: a unit landing
+#   that way, or a per-unit rate. The four survive; the one that produced this
+#   module does not.
 #
-# WHAT THIS DOES NOT REACH, stated rather than left to be found. It catches a
-# restatement of THIS decision in THIS phrase family, and nothing else. It is not
-# a general "prose that contradicts a binding rule" detector, and no text
-# predicate is: `.claude/rules/scanning.md` records what claiming the ambitious
-# guarantee costs when only the modest one is held. The general half is
-# `a-spawn-carries-the-workflow-contract`, which binds the prompt of a planning
-# spawn rather than the prose it may read.
+#   WHAT THIS DOES NOT REACH, stated rather than left to be found. It catches a
+#   restatement of THIS decision in THIS phrase family, and nothing else. It is not
+#   a general "prose that contradicts a binding rule" detector, and no text
+#   predicate is: `.claude/rules/scanning.md` records what claiming the ambitious
+#   guarantee costs when only the modest one is held. The general half is
+#   `a-spawn-carries-the-workflow-contract`, which binds the prompt of a planning
+#   spawn rather than the prose it may read.
 #
-# AGENTS.md IS NOT GLOBBED, so this module carries no exemption at all. The rule's
-# `line_sources` name where binding prose is written in this repository; the file
-# that OWNS the decision is not among them, and a file no glob names is unread
-# rather than clean. That is a bound rather than a hole, and it is the reason the
-# `[[rule]]` row's globs are the declaration a reviewer checks.
+#   AGENTS.md IS NOT GLOBBED, so this module carries no exemption at all. The rule's
+#   `line_sources` name where binding prose is written in this repository; the file
+#   that OWNS the decision is not among them, and a file no glob names is unread
+#   rather than clean. That is a bound rather than a hole, and it is the reason the
+#   `[[rule]]` row's globs are the declaration a reviewer checks.
+#
 #
 #   THIS BLOCK IS YAML AND MUST STAY THE LAST COMMENT BLOCK BEFORE `package`.
 # schemas:
