@@ -175,15 +175,20 @@ same change retires. Retiring a program requires editing whatever declares and
 calls it, and without that arm the campaign could not complete a retirement it
 had itself mandated.
 
-**One admission, and `admitted_addition` (4 arms) on its addition side**, and the
+**One admission, and `admitted_addition` (5 arms) on its addition side**, and the
 count is stated because saying "adding nothing" was wrong the moment the second
-landed — and saying "three" was wrong the moment the fourth did, which is
-CLOUD-1150 §2's own gate catching its own file. A removed line
+landed, saying "three" was wrong the moment the fourth did, and saying "four" was
+wrong the moment the fifth did — which is CLOUD-1150 §2's own gate catching its
+own file, three times now. A removed line
 must name a retired path; an added line must be a **truncation** of a removed one
 (CLOUD-1051), a **path repointing** at a successor the ledger declares
 (CLOUD-1121), an **invocation repointing** at a command it declares
-(CLOUD-1219), or a **retired name dropped from a list** (CLOUD-1224, the shape
-that reaches a caller naming its callee as a bare word rather than as a path).
+(CLOUD-1219), a **retired name dropped from a list** (CLOUD-1224, the shape
+that reaches a caller naming its callee as a bare word rather than as a path), or
+a **bare variable name dropped from a declaration** (CLOUD-843, the shape a
+repointing FORCES: once `"$reg"` is spent as `batten task`, bash still declares
+`reg` in its `local` line and `shellcheck` refuses that as SC2034, so the
+retirement had no landable spelling in either direction until this arm existed).
 The third exists because the first two substitute a PATH, which is
 nonsense for a shell caller of a program that retired onto a verb — and since
 CLOUD-1149 the match reaches how bash actually spells a sibling
