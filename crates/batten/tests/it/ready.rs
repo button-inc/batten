@@ -1969,60 +1969,78 @@ fn run_piped(mut command: std::process::Command, input: &str) -> Output {
     child.wait_with_output().expect("collect batten's output")
 }
 
-/// A clause label that lost its emphasis is REPORTED, not silently dropped.
+/// A clause label that lost its emphasis is STILL A CLAUSE (CLOUD-1330).
 ///
-/// CLOUD-1082's step two. The tracker's normaliser first absorbs the trailing
-/// space into the bold and then, on a later save, strips the emphasis outright —
-/// measured on CLOUD-1221, where one `patch` appending a repair note left six of
-/// nine labels plain.
+/// The tracker's normaliser first absorbs the trailing space into the bold and
+/// then, on any later save, strips the emphasis outright — measured on
+/// CLOUD-1221, where one `patch` appending a repair note left six of nine labels
+/// plain. CLOUD-1082's `clause-label-not-anchored` reported that and asked for a
+/// re-bold, which the next save undid: a treadmill. So a block whose EVERY label
+/// is plain lints clean, and the §6 it carries is judged rather than skipped —
+/// the disagreeing bump below is what proves the clause was read.
 #[test]
-fn a_clause_label_that_lost_its_emphasis_is_reported() {
-    let dir = repo("unanchored-clause", "0.0.1");
+fn a_block_whose_every_label_is_plain_is_judged_on_every_clause() {
+    let dir = repo("plain-labels", "0.0.1");
+    // No bolded label anywhere: [`block`]'s §1 is replaced wholesale.
     let body = payload(
-        &block("* Test obligation (§7). Over the compiled binary."),
+        "**Why**\nSomething needs doing.\n\n\
+         **Refinement — Ready (a summary)**\n\n\
+         * Source of truth (§1). One authoritative artifact.\n\
+         * Test obligation (§7). Over the compiled binary.\n\
+         * Commit / bump (§6). `feat` → **patch** until 0.1.0.\n",
         &[],
     );
     let output = lint(&dir, &body);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("clause-label-not-anchored"),
-        "a plain clause label is a clause the gate could not anchor: {stderr}"
+        !stderr.contains("ready-block-without-clauses") && !stderr.contains("not-anchored"),
+        "plain labels are clauses, not a block with none: {stderr}"
     );
-}
-
-/// AND THE PARTIAL CASE IS THE ONE THAT WAS SILENT, which is why the rule exists
-/// at all rather than the clause floor covering it.
-///
-/// `ready-block-without-clauses` fires only at ZERO clauses, so the bolded §1 in
-/// [`block`] is enough to make the block "have clauses" and pass. Measured before
-/// this rule: every label plain was exit 2, one bolded and the rest plain was
-/// exit 0.
-#[test]
-fn one_surviving_label_no_longer_hides_the_others() {
-    let dir = repo("unanchored-partial", "0.0.1");
-    let body = payload(
-        &block("* Test obligation (§7). Over the compiled binary."),
-        &[],
-    );
-    let output = lint(&dir, &body);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.contains("ready-block-without-clauses"),
-        "the block does have a clause, so the floor is not what catches this: {stderr}"
-    );
-    assert_ne!(
+    assert_eq!(
         code(&output),
         0,
-        "a block that lost a label used to pass clean: {stderr}"
+        "a wholly plain block lints clean: {stderr}"
+    );
+
+    // THE CLAUSE IS READ, NOT MERELY TOLERATED: the same block with a bump that
+    // disagrees with its declared type is refused on §6, which a skipped clause
+    // could not be.
+    let disagreeing = payload(
+        "**Why**\nSomething needs doing.\n\n\
+         **Refinement — Ready (a summary)**\n\n\
+         * Source of truth (§1). One authoritative artifact.\n\
+         * Commit / bump (§6). `feat` → **no bump**.\n",
+        &[],
+    );
+    let output = lint(&dir, &disagreeing);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("bump-disagrees-with-type"),
+        "a plain §6 is judged, so a disagreeing bump is refused: {stderr}"
     );
 }
 
-/// THE ANTI-VACUITY HALF. Without it the rule above is satisfied by one that
-/// fires on every bullet, and the anchor would be looser than `clause-label`
-/// rather than stricter — CLOUD-290's class readmitted through the back door.
+/// THE ANTI-VACUITY HALF, in both directions. A block carrying NO clause still
+/// hits the floor — so the plain arm is not "every bullet is a clause" — and a
+/// bolded label beside prose that cites two clauses is still one clause and no
+/// finding, which is what keeps the arm no looser than the anchor it joined.
 #[test]
-fn a_properly_emphasised_block_and_ordinary_prose_stay_silent() {
-    let dir = repo("unanchored-negative", "0.0.1");
+fn a_clause_free_block_still_hits_the_floor_and_prose_is_still_not_a_label() {
+    let dir = repo("plain-labels-negative", "0.0.1");
+    let none = payload(
+        "**Why**\nSomething needs doing.\n\n\
+         **Refinement — Ready (a summary)**\n\n\
+         * The rationale is spelled out in §1 below, and see (§7) for the tier.\n\
+         * A bullet that mentions clause 6 in passing and moves on.\n",
+        &[],
+    );
+    let output = lint(&dir, &none);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ready-block-without-clauses"),
+        "prose citing a clause is not a label, so this block has none: {stderr}"
+    );
+
     let body = payload(
         &block(
             "* **Test obligation (§7).** Over the compiled binary.\n             * The rationale is spelled out in §1 below, and see (§7) for the tier.",
@@ -2031,9 +2049,5 @@ fn a_properly_emphasised_block_and_ordinary_prose_stay_silent() {
     );
     let output = lint(&dir, &body);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.contains("clause-label-not-anchored"),
-        "a bolded label is anchored, and prose citing a clause is not a label: {stderr}"
-    );
     assert_eq!(code(&output), 0, "nothing here is a violation: {stderr}");
 }

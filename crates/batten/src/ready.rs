@@ -263,7 +263,6 @@ pub struct Grammar {
     parent_opener: Regex,
     legacy_opener: Regex,
     clause_label: Regex,
-    unanchored_clause: Regex,
     open_questions: Regex,
     legacy_clause_notation: Regex,
     /// From which creation instant a Ready block must carry the claims object
@@ -326,7 +325,6 @@ pub const REQUIRED_PATTERNS: &[&str] = &[
     // Ready block has exactly one definition of where a clause begins. One
     // concept, one row, however many readers.
     "clause-label",
-    "ready-unanchored-clause",
     "ready-open-questions",
     "ready-legacy-clause-notation",
     "ready-bump-label",
@@ -425,7 +423,6 @@ impl Grammar {
             parent_opener: find("ready-parent-opener")?,
             legacy_opener: find("ready-legacy-opener")?,
             clause_label: find("clause-label")?,
-            unanchored_clause: find("ready-unanchored-clause")?,
             open_questions: find("ready-open-questions")?,
             legacy_clause_notation: find("ready-legacy-clause-notation")?,
             bump_label: find("ready-bump-label")?,
@@ -845,29 +842,13 @@ pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report>
         });
     }
 
-    // A LABEL WHOSE EMPHASIS IS GONE IS A CLAUSE THIS GATE COULD NOT ANCHOR, and
-    // saying so is the whole of this arm (CLOUD-1082).
-    //
-    // The floor above fires only at ZERO clauses, so a block that lost SOME of
-    // its labels still has clauses and passes — while the ones it lost have
-    // vanished from every reader, including the `[[recorder]]`'s `sec1` column
-    // and therefore `filed-here`'s `cites_only` exemption. Measured: every label
-    // plain is `ready-block-without-clauses`; one label bolded and the rest
-    // plain is a clean pass. Partial loss is exactly what the tracker's
-    // normaliser produces, because it only degrades what it already touched.
-    //
-    // REPORTED, NEVER ACCEPTED. Reading the plain label AS a clause would be the
-    // looser anchor CLOUD-290 was filed about. This says the line looks like a
-    // clause and could not be read as one, which costs the author one re-bold
-    // and costs the grammar nothing.
-    for (offset, line) in block_lines.iter().enumerate() {
-        if grammar.unanchored_clause.is_match(line) {
-            report.findings.push(Finding {
-                line: ready_start + offset,
-                rule: "clause-label-not-anchored".to_owned(),
-            });
-        }
-    }
+    // A LABEL WHOSE EMPHASIS IS GONE IS STILL A CLAUSE (CLOUD-1330). The
+    // `clause-label` row reads the plain bullet closing `(§N).` as one, so the
+    // tracker's normaliser — which strips the emphasis on every later save — no
+    // longer costs the author a re-bold per save. The arm that stood here
+    // (`clause-label-not-anchored`, CLOUD-1082) reported the stripped label
+    // instead of reading it, and was a treadmill by construction; the row's own
+    // comment in `batten.toml` carries the measurement and the anchor's bound.
 
     if grammar.open_questions.is_match(&block) {
         report.findings.push(Finding {

@@ -1208,10 +1208,11 @@ regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’
 # names the source of truth by construction, so intersecting the two is what tells
 # them apart.
 #
-# The grammar is `ready-lint`'s own CLAUSE_LABEL: a bolded label or a heading
-# carrying the tag. Declared here rather than inline because an inline regex is
-# refused at load, and because a Ready block has exactly one definition of where a
-# clause begins.
+# The grammar is `ready-lint`'s own CLAUSE_LABEL: a bolded label, a heading
+# carrying the tag, or a plain bullet closing `(§N).` (the row's own comment says
+# why). Declared here rather than inline because an inline regex is refused at
+# load, and because a Ready block has exactly one definition of where a clause
+# begins.
 # CLOUD-316's reference triple, as `mise exec` spells one: a backend, a tool and a
 # version. The bash this replaces carried the identical expression inside a `jq`
 # `test(...)`, and the registry is what keeps one concept to one spelling
@@ -1229,39 +1230,38 @@ regex = 'mise run [a-z][a-z0-9:_-]*'
 id = "mise-tool-reference"
 regex = '^[a-z0-9]+:.+@.+$'
 
+# A CLAUSE IS ANCHORED BY ITS BULLET, ITS LABEL AND ITS CLOSING `(§N).` -- WITH OR
+# WITHOUT EMPHASIS (CLOUD-1330). Three arms: the bolded label, a heading carrying
+# the tag, and the plain bullet.
+#
+# The plain arm exists because the tracker's normaliser degrades a bolded label in
+# two steps. Step one absorbs the space into the bold -- `**Source of truth (§1). **`
+# -- and the first arm still matches that, because `[^*]*` spans the space. Step
+# two, reached by ANY later `save_issue` that touches the body at all, strips the
+# emphasis outright; measured on CLOUD-1221, one `patch` appending a repair note
+# left six of nine labels plain. Step two is the tracker's steady state, so a gate
+# that demanded the emphasis back -- CLOUD-1082's `clause-label-not-anchored`,
+# which REPORTED the plain label rather than reading it -- was a treadmill: one
+# re-bold per save, and the very next save stripped it again. Measured 2026-09-02
+# on one lint pass: six stripped labels across two rows, every one at the shape the
+# normaliser produces (a label immediately followed by a code span), each repaired
+# by hand and each due to recur. The plain arm reads what the tracker stores.
+#
+# WHY THE PLAIN ARM IS NOT A LOOSER ANCHOR. It requires a list bullet, at most 80
+# characters carrying neither `*` nor `#`, the tag, and an IMMEDIATELY following
+# `.`. Prose citing a clause reads "see §1" or "(§1) below" and closes neither;
+# `crates/batten/tests/it/ready.rs` pins that a bulleted sentence citing two
+# clauses is not read as a label. (An earlier comment here attributed the
+# looser-anchor worry to CLOUD-290; that row was the §6 type-PREFIX bug, and its
+# lesson -- anchor on the whole token, never a prefix -- is what the `).` does.)
+#
+# Every reader of this row gains the plain arm at once: `ready lint`'s clause floor
+# and every clause it judges, and the `[[recorder]]`'s `sec1` section, which is
+# what makes a stripped §1 visible to `filed-here`'s `cites_only` exemption rather
+# than silently absent -- the loss the retired rule could only announce.
 [[pattern]]
 id = "clause-label"
-regex = '^[[:space:]]*([*-][[:space:]]*)?\*\*[^*]*\((§|clause )[0-9]+\)|^#{2,6}[[:space:]]+[^#]*\((§|clause )[0-9]+\)'
-
-# THE SAME LABEL WITH ITS EMPHASIS GONE, which is a clause the gate COULD NOT
-# ANCHOR rather than a clause that is absent (CLOUD-1082).
-#
-# The tracker's normaliser degrades a label in two steps. Step one absorbs the
-# space into the bold -- `**Source of truth (§1). **` -- and `clause-label` above
-# still matches that, because `[^*]*` spans the space. Step two, reached by any
-# later `save_issue` that touches the body at all, strips the emphasis outright.
-# Measured on CLOUD-1221: one `patch` appending a repair note left six of nine
-# labels plain, and the three that survived were the ones step one had not
-# already touched.
-#
-# WHY A SECOND ROW RATHER THAN A LOOSER `clause-label`. Accepting an unemphasised
-# label AS a clause would readmit CLOUD-290's class -- a token that legitimately
-# appears in prose, loud exactly when the author is being precise. The anchor
-# stays strict and the gate says what it could not read, which is the
-# could-not-look distinction it already draws everywhere else.
-#
-# WHY THE LOSS IS OTHERWISE SILENT, which is what makes this worth a row at all.
-# `ready-block-without-clauses` fires only at ZERO clauses, so a body that lost
-# SOME labels still has clauses and passes. Measured: every label plain is
-# exit 2; one label bolded and the rest plain is exit 0. Partial is exactly what
-# the normaliser produces.
-#
-# ANCHORED ON `).` FOR THE SAME REASON. A clause label closes `(§N).`; prose
-# citing a clause reads "see §1" or "(§1) below" and does not. `[^*#]` keeps it
-# off the bolded form and off headings, so the two rows cannot both match a line.
-[[pattern]]
-id = "ready-unanchored-clause"
-regex = '^[[:space:]]*[*-][[:space:]]+[^*#]{1,80}\((§|clause )[0-9]+\)\.'
+regex = '^[[:space:]]*([*-][[:space:]]*)?\*\*[^*]*\((§|clause )[0-9]+\)|^#{2,6}[[:space:]]+[^#]*\((§|clause )[0-9]+\)|^[[:space:]]*[*-][[:space:]]+[^*#]{1,80}\((§|clause )[0-9]+\)\.'
 
 [[pattern]]
 id = "clause-one"
