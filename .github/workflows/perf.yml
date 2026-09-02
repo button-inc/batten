@@ -14,13 +14,18 @@ name: perf
 #     minutes are metered; `ci-local-parity` exists to keep the landing path to
 #     things a local `mise run verify` already proved.
 #
-# WHAT DEFENDS THE NUMBER PER-COMMIT, then, is `tests/perf-assert.bats`: the
-# gate is a pure function of records on stdin, so its decision runs in the hk
-# gate on every commit in milliseconds, with no build and no hyperfine. This
-# workflow supplies the one thing that suite cannot — a real measurement of the
-# real binary — and applies the same gate to it. The split is the repo's
-# standing agents-fetch/gates-decide pattern, and the `coverage.yml` /
-# `lock-currency.yml` precedent for "a property of the world runs on a clock".
+# WHAT DEFENDS THE NUMBER PER-COMMIT, then, is `policy/perf-assert.rego`'s README
+# half (CLOUD-1321): the published budget column and the enforced table are held
+# in agreement on every `batten check`, with no build, no hyperfine and no record
+# — so the number this workflow measures cannot be quietly re-published as
+# something else between runs. `crates/batten/tests/it/perf_assert.rs` is the tier
+# over that, and it carries the case that reads the committed README.
+#
+# This workflow supplies the one thing that half cannot — a real measurement of
+# the real binary — and files it where the module's other half reads it. The
+# split is the repo's standing agents-fetch/gates-decide pattern, and the
+# `coverage.yml` / `lock-currency.yml` precedent for "a property of the world runs
+# on a clock".
 #
 # Not a push-to-main trigger either, for the reason stated in every other
 # scheduled workflow here: `main` only ever advances by fast-forward to a commit
@@ -107,8 +112,17 @@ jobs:
       # locally, and no less wrong in a workflow.
       - name: Measure
         run: mise run perf >"$RUNNER_TEMP/perf.txt"
+      # Two steps where there was one, because the measurement and the verdict
+      # are now on opposite sides of the engine boundary (CLOUD-1321). The
+      # producer reduces the records to a p95 per path and files them under a key
+      # naming hyperfine, its pin and the digest of the binary measured; the gate
+      # is a `batten check` over the row that reads them back. A record taken over
+      # bytes that have since changed lives under a different key and does not
+      # answer, which is the staleness the redirect below could never state.
+      - name: Record the measurement
+        run: mise run record-perf <"$RUNNER_TEMP/perf.txt"
       - name: Assert the budget
-        run: mise run perf-assert <"$RUNNER_TEMP/perf.txt"
+        run: mise run perf-assert
       # THE SEED FOR EVERY PULL REQUEST'S BASE ARM, WRITTEN HERE BECAUSE ONLY
       # `main` CAN WRITE IT (CLOUD-1342). A cache entry written from a pull
       # request is scoped to `refs/pull/N/merge` and no other pull request can

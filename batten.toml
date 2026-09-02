@@ -1898,6 +1898,17 @@ regex = '\$\{?BASH_SOURCE|\$0'
 id = "shell-identifier"
 regex = '^[A-Za-z_][A-Za-z0-9_]*$'
 
+# A published budget cell's VALUE, so the number can be taken as the cell's one
+# numeric token rather than by stripping every non-digit out of it. README writes
+# a gated path's budget as `≤ <n> ms` and an ungated one's as `—`, and the
+# difference has to survive: stripping non-digits turns `—` into the empty
+# string, which reads as a row publishing nothing rather than as a row publishing
+# "not gated". A shape, not a threshold — the numbers themselves are `budgets` in
+# `policy/perf-assert.rego`, which is where a value belongs.
+[[pattern]]
+id = "published-budget-value"
+regex = '^[0-9]+$'
+
 # A retirement arm's INVOCATION field (CLOUD-1219). A ledger row declares its
 # successors as PATHS, which is the wrong shape for a caller of a program that
 # retired onto a verb: substituting one yields
@@ -5434,6 +5445,44 @@ input = "Cargo.lock"
 #
 # NULL ON A SHALLOW CLONE, which is this container's own state: the family
 # refuses to half-answer a history it cannot see, and the module guards for it.
+# The latency budget (CLOUD-207), ported off `mise-tasks/perf-assert.sh` under
+# CLOUD-1321. The program and `tests/perf-assert.bats` fall in the same commit.
+#
+# TWO HALVES WITH TWO REACHES, and that is the port working rather than a
+# compromise. The README-agreement half reads only tracked lines, so it decides on
+# EVERY run — which is what `tests/perf-assert.bats` used to buy per-commit, now
+# bought by the gate itself rather than by a suite over it. The measurement half
+# reads a record keyed to (tool, version, input digest), so it decides only where
+# such a record resolves: inside `.github/workflows/perf.yml`, which is the only
+# place `perf-assert` ever ran.
+#
+# `input = "target/release/batten"` IS THE SUBJECT HYPERFINE MEASURED, and the
+# keying is the safety property: rebuild the binary and the record lives under a
+# different name, so it is ABSENT rather than stale and this row abstains instead
+# of answering from a measurement of other bytes. `Cargo.lock` would be cheaper to
+# digest and would be wrong — a source change keeping the lockfile would let a
+# stale record answer as current, which is the one failure the key exists to
+# prevent. The cost is a read and a hash of the release binary wherever one is
+# present; where it is absent — CI's debug-only jobs, a fresh clone — the row
+# could not look and costs nothing.
+#
+# The version tracks `mise.toml`'s `aqua:sharkdp/hyperfine` pin. A differently
+# pinned producer writes under a different key and does not answer here, which is
+# the same property stated from the tool's side.
+[[rule]]
+id = "perf-assert"
+kind = "policy"
+scope = "tree"
+lines = ["README.md"]
+module = "policy/perf-assert.rego"
+severity = "deny"
+
+[[rule.tools]]
+id = "perf-p95"
+tool = "hyperfine"
+version = "1.20.0"
+input = "target/release/batten"
+
 [[rule]]
 id = "release-tag-shape"
 kind = "policy"
@@ -8104,6 +8153,59 @@ A pinned action's licence is immutable, which is what makes a committed table de
 id = "source read first"
 kind = "document"
 target = "mise-tasks/sbom-actions.tsv"
+
+[[verdict]]
+id = "path measure late"
+gloss = "a measured invocation path is over the latency budget this repository publishes"
+class = """
+An absolute ceiling rather than a ratchet: 100ms is the Command Line Interface Guidelines' floor for a response that reads as instant, and the ceiling sitting ~20-30x over the measured value IS the tolerance band a shared runner's p95 needs. So this is not noise -- a path here is genuinely slower than the contract batten publishes for itself. Fix what got slower, or move the budget in `policy/perf-assert.rego` AND in README's Performance table together, which the `perf budget unpublished` class refuses to let you do by halves. Whether this commit is slower than the trunk is a different question with a different answer shape and is `perf-gate`'s.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/perf-assert.rego"
+
+[[verdict]]
+id = "path measure partial"
+gloss = "the perf record carries no measurement for a path this repository budgets"
+class = """
+A run that measured five of six paths and reported green over the five is the partial-coverage false green this repository keeps re-meeting, so a budgeted path missing from a PRESENT record is a finding rather than a smaller pass. Absence of the whole record is a different state and is silent: a record whose key does not resolve -- a differently-pinned hyperfine, or a binary rebuilt since the measurement -- is not found at all. So this fires only when a producer ran, recorded, and judged less than the budget table claims.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/perf-assert.rego"
+
+[[verdict]]
+id = "prose state wrong"
+gloss = "the budget this gate enforces and the one README publishes disagree"
+class = """
+Publishing a number in one file and enforcing it in another is two authorities for one number, and the one that drifts is always the published one because it has no mechanism. Non-negotiable rule 2 is the general form: a rule ships with its mechanism. The remedy is to move both together -- `budgets` in the module and the Performance table's budget column -- never to silence one side. A path the module budgets whose published cell carries no number is this class too, since an ungated cell beside a gated predicate is the same disagreement written the other way round.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/perf-assert.rego"
+
+[[verdict.route]]
+id = "source read first"
+kind = "document"
+target = "README.md"
+
+[[verdict]]
+id = "source read missing"
+gloss = "README could not be read, so the published budget cannot be held to the enforced one"
+class = """
+Could-not-look, never a verdict about the tree. The predecessor exited 2 here for the `lock-complete` and `timeout-check` doctrine -- the gate could not read what it was asked to judge -- and that is distinct from a violation on purpose: a gate reporting green over input it failed to parse is the failure that gets a gate switched off. Restore the file or fix the row's `line_sources`; nothing about the measurement is being claimed.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/perf-assert.rego"
 
 [[verdict]]
 id = "tool judge dirty"

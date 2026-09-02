@@ -1751,6 +1751,59 @@ jq -r --slurpfile full "$full" '
 ' <"$fast" | record hk-plan
 '''
 
+# The perf producer and the perf gate (CLOUD-207, ported off
+# `mise-tasks/perf-assert.sh` under CLOUD-1321).
+#
+# THE SPLIT IS THE SAME ONE `record-verdicts` HAS, and for the same forced reason:
+# house style §5 makes `check` `read` and structurally incapable of spawning, so
+# hyperfine stays a command on PATH and only the ADJUDICATION moved inside the
+# engine. This task is the seam that split makes necessary.
+#
+# AN INLINE TASK RATHER THAN A `mise-tasks/` PROGRAM, and it is forced:
+# `governed_at_head` selects any `mise-tasks/` path carrying a shebang or a
+# `#MISE description=`, so a new program there is `shell add refused` — refused at
+# `deny`, in the same change that is retiring one of them.
+#
+# A REDUCTION, NEVER THE REPORT (non-negotiable rule 4). One number per path
+# reaches the record; hyperfine's own output stays on the terminal.
+[tasks.record-perf]
+description = "Effect: reduce `perf` records to a p95 per path and record them where `batten check` reads them (reads `perf` records on stdin)"
+run = '''
+records=$(mktemp)
+trap 'rm -f "$records"' EXIT
+if ! awk '/^path=/ {
+	id = ""; p95 = ""
+	for (i = 1; i <= NF; i++) {
+		split($i, kv, "=")
+		if (kv[1] == "path") id = kv[2]
+		if (kv[1] == "p95") p95 = kv[2]
+	}
+	if (id != "" && p95 != "") print id " " p95
+}' >"$records"; then
+	echo "::error:: record-perf: the records on stdin could not be reduced, so nothing is recorded." >&2
+	exit 1
+fi
+# AN EMPTY REDUCTION FAILS HERE RATHER THAN RECORDING SILENCE. An empty record is
+# a PRESENT record carrying no path, which the module reads as "this run judged
+# less than it claims" — a true finding, but one whose cause is this task and
+# whose pointer would send a reader to the module instead.
+if [ ! -s "$records" ]; then
+	echo "::error:: record-perf: stdin carried no path record — did \`mise run perf\` complete?" >&2
+	exit 2
+fi
+cargo run --quiet -p batten -- record tool perf-p95 <"$records"
+'''
+
+# The gate the producer above feeds, and the same wrapper shape `lock-complete`
+# takes: the task name and the rule id are one object, so the workflow step, this
+# task and `batten.toml`'s row cannot drift apart.
+#
+# `--rule` SELECTS ONE ROW. A bare `batten check` under a name that promises the
+# latency gate would report every other tree rule through it.
+[tasks.perf-assert]
+description = "Gate: every measured invocation path is inside its latency budget, and README publishes the budget this gate enforces"
+run = "cargo run --quiet -p batten -- check --rule perf-assert"
+
 # `[tasks.msrv]` IS RETIRED (CLOUD-593), replaced by
 # `mise-tasks/msrv-pin-agreement.sh`.
 #

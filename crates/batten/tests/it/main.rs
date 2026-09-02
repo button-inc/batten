@@ -139,6 +139,7 @@ mod mutate;
 mod mutation_declared_case;
 mod narrow_adoption;
 mod obligations_bound;
+mod perf_assert;
 mod perf_compare;
 mod perf_pair;
 mod pinned_programs;
