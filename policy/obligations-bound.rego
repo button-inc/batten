@@ -48,10 +48,23 @@
 # refused. So the set is the LATEST line per issue id, compared as fixed-width
 # ISO-8601 — the same reading `filed-here.rego` takes, and for the same reason:
 # a tracker's own ordering is not a fact any tree surface carries.
+#
+# AND THE OBLIGATION IS OWED AT LANDING, WHICH IS WHAT THE SET IS NARROWED TO
+# (CLOUD-1336). `ready.rs` states the split in its own words — "SHAPE HERE,
+# RESOLUTION AT `verify`… at refinement time the case does not exist yet" — and
+# the verify it means is the one belonging to the branch that LANDS the row, not
+# to whichever branch happened to file it. Judging every recorded row instead put
+# two gates in contradiction: `filed-unrefined` prices a filed row a complete
+# Ready block, `REQUIRED_CLAIMS` makes `tests` mandatory in it, and this gate then
+# demanded that key resolve to a tracked file carrying a `#MUTANT` row — which
+# cannot exist for work nobody has built. Measured on CLOUD-1336, filed and
+# groomed in one session and unlandable either way: refined, this refused;
+# un-refined, `filed-unrefined` did.
 #MUTANT-SUITE crates/batten/tests/it/obligations_bound.rs
 #MUTANT unbound-file-unread|s@^\tnot obligation_row.file in input.tree.tracked$@\tfalse@|an_obligation_naming_no_tracked_file_is_refused
 #MUTANT undeclared-slug-unread|s@^\tnot declares_slug(obligation_row)$@\tfalse@|an_obligation_whose_slug_no_row_declares_is_refused
 #MUTANT superseded-line-judged|s@^\trow\.stamp == latest\[row\.id\]$@\ttrue@|a_superseded_obligation_is_not_judged
+#MUTANT unlanded-row-judged|s@^\tobligation_row\.id in closes$@\ttrue@|an_obligation_from_a_row_the_pr_does_not_close_is_not_judged
 
 # METADATA
 # description: |
@@ -71,6 +84,24 @@ rules contains "obligation-unbound"
 # is silent — which is a different claim from a branch that recorded rows
 # declaring no obligations.
 lines := input.tree.records["board-writes"]
+
+# The rows this branch's pull request says it closes — the ones it is LANDING.
+#
+# COULD-NOT-LOOK JUDGES NOTHING HERE, and that direction is chosen rather than
+# conceded. This module is already silent wherever the board record is absent —
+# the store lives under `$GIT_DIR`, is never committed, and dies with the
+# container, so a CI runner reaches none of it — and a reading that cannot tell
+# whether a row is landing has no promise in front of it to keep. Refusing there
+# would refuse every row a branch ever mentioned, with a remedy that belongs to
+# whoever eventually builds it. The `filed-unrefined` half of the pair is what
+# keeps a filed row from being free, and it fires on the tracker's own verdict
+# rather than on anything here.
+closes contains key if {
+	some raw in input.tree.records["pr-closes"]
+	columns := split(raw, " ")
+	columns[0] == "closes"
+	some key in split(substring(columns[1], indexof(columns[1], ":") + 1, -1), ",")
+}
 
 column(columns, at) := value if {
 	value := columns[at]
@@ -141,6 +172,7 @@ violation contains {
 	"subjects": [{"path": obligation_row.file}, {"artifact": obligation_row.id}],
 } if {
 	some obligation_row in obligation
+	obligation_row.id in closes
 	not obligation_row.file in input.tree.tracked
 }
 
@@ -156,6 +188,7 @@ violation contains {
 	"subjects": [{"path": obligation_row.file}, {"artifact": obligation_row.id}],
 } if {
 	some obligation_row in obligation
+	obligation_row.id in closes
 	obligation_row.file in input.tree.tracked
 	not declares_slug(obligation_row)
 }
@@ -165,7 +198,10 @@ violation contains {
 # recorded row would satisfy the denies while deciding nothing.
 
 board(record, tracked, lines_by_file) := {"tree": {
-	"records": {"board-writes": record},
+	"records": {
+		"board-writes": record,
+		"pr-closes": ["closes 2:CLOUD-1,CLOUD-2"],
+	},
 	"tracked": tracked,
 	"lines": lines_by_file,
 }}
@@ -261,6 +297,29 @@ test_supersession_is_per_issue_id if {
 
 test_an_absent_record_is_silent if {
 	count(violation) == 0 with input as {"tree": {"records": {}, "tracked": [], "lines": {}}}
+}
+
+# A ROW THIS BRANCH IS NOT LANDING IS A FORWARD REFERENCE. The promise is owed by
+# whoever builds the work, at the verify that lands it.
+test_an_obligation_from_a_row_the_pr_does_not_close_is_not_judged if {
+	count(violation) == 0 with input as {"tree": {
+		"records": {
+			"board-writes": [bound],
+			"pr-closes": ["closes 1:CLOUD-9"],
+		},
+		"tracked": [],
+		"lines": {},
+	}}
+}
+
+# AND AN UNREAD `pr-closes` RECORD JUDGES NOTHING, for the same reason rather
+# than a weaker one: nothing here can tell whether the row is landing.
+test_an_absent_closes_record_judges_nothing if {
+	count(violation) == 0 with input as {"tree": {
+		"records": {"board-writes": [bound]},
+		"tracked": [],
+		"lines": {},
+	}}
 }
 
 test_a_comment_line_declares_no_obligations if {

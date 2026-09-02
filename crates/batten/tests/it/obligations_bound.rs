@@ -28,6 +28,19 @@ use batten::rules::{self, Rule, RuleKind, RuleScope};
 /// A fixture repository carrying a board record and, optionally, the case file
 /// an obligation names.
 fn repo(name: &str, record: &[&str], case: Option<(&str, &str)>) -> PathBuf {
+    repo_closing(name, record, case, &["closes 1:CLOUD-1"])
+}
+
+/// The same fixture, with the branch's closing set spelled out. An obligation is
+/// owed at LANDING, so every case above is written against a pull request that
+/// says it closes the recorded row — and the cases that vary this are what show
+/// the narrowing is real rather than an always-true conjunct.
+fn repo_closing(
+    name: &str,
+    record: &[&str],
+    case: Option<(&str, &str)>,
+    closes: &[&str],
+) -> PathBuf {
     let root = common::scratch(name);
     common::git_in(&root, &["init", "--quiet", "--initial-branch", "work"]);
     common::git_in(&root, &["config", "user.email", "t@example.com"]);
@@ -45,14 +58,16 @@ fn repo(name: &str, record: &[&str], case: Option<(&str, &str)>) -> PathBuf {
     }
 
     install_module(&root);
-    write_record(&root, record);
+    write_record(&root, "board-writes", record);
+    if !closes.is_empty() {
+        write_record(&root, "pr-closes", closes);
+    }
     root
 }
 
-fn write_record(root: &Path, lines: &[&str]) {
+fn write_record(root: &Path, name: &str, lines: &[&str]) {
     let git_dir = common::git_in(root, &["rev-parse", "--absolute-git-dir"]);
-    let path =
-        batten::recorder::record_path(Path::new(git_dir.trim()), "board-writes", "work", None);
+    let path = batten::recorder::record_path(Path::new(git_dir.trim()), name, "work", None);
     fs::create_dir_all(path.parent().unwrap()).expect("receipts dir");
     fs::write(path, format!("{}\n", lines.join("\n"))).expect("write the record");
 }
@@ -82,11 +97,25 @@ fn row() -> Rule {
     .expect("the loader accepts the committed row's shape")
 }
 
+/// Two recorders, because the module reads two records: the board writes it
+/// judges, and the closing set that says which of those rows this branch is
+/// LANDING. Declaring only the first is not a smaller fixture but a different
+/// one — the engine projects a record under `input.tree.records` only for a
+/// recorder the config declares, so the closing set would resolve to nothing and
+/// every refusal case would pass for the wrong reason. Measured here, in exactly
+/// that shape, before this second row existed.
 fn recorders() -> Vec<batten::recorder::Declared> {
-    vec![batten::recorder::Declared {
-        name: "board-writes".to_owned(),
-        record: "board-writes".to_owned(),
-        tool: "save_issue".to_owned(),
+    vec![
+        declared("board-writes", "save_issue", "issue"),
+        declared("pr-closes", "pull_request_read", "closes"),
+    ]
+}
+
+fn declared(name: &str, tool: &str, kind: &str) -> batten::recorder::Declared {
+    batten::recorder::Declared {
+        name: name.to_owned(),
+        record: name.to_owned(),
+        tool: tool.to_owned(),
         key: batten::recorder::RecordKey::Branch,
         requires: Vec::new(),
         refused_when_input: Vec::new(),
@@ -94,13 +123,13 @@ fn recorders() -> Vec<batten::recorder::Declared> {
         requires_recorded: None,
         columns: vec![batten::recorder::Column {
             name: "kind".to_owned(),
-            value: batten::recorder::Value::Literal("issue".to_owned()),
+            value: batten::recorder::Value::Literal(kind.to_owned()),
             minus: None,
             without: None,
             counted_with: None,
             zero_is_a_count: false,
         }],
-    }]
+    }
 }
 
 fn verdicts(root: &Path) -> Vec<String> {
@@ -249,6 +278,41 @@ fn a_later_ready_line_supersedes_an_earlier_unready_one() {
         None,
     );
     assert_eq!(verdicts(&root), vec![UNBOUND.to_owned()]);
+}
+
+/// THE OBLIGATION IS OWED AT LANDING. A row this branch recorded but is not
+/// closing is a forward reference: `ready.rs` requires `tests` in every claims
+/// object and says in as many words that "at refinement time the case does not
+/// exist yet", so demanding it resolve on the branch that merely FILED the row
+/// makes a refined row unlandable. Measured on CLOUD-1336 (2026-09-02).
+#[test]
+fn an_obligation_from_a_row_the_pr_does_not_close_is_not_judged() {
+    let root = repo_closing(
+        "obligations-not-closing",
+        &[&line("1,crates/batten/tests/it/missing.rs:slug-one")],
+        None,
+        &["closes 1:CLOUD-9"],
+    );
+    assert!(
+        verdicts(&root).is_empty(),
+        "the branch is not landing CLOUD-1: {:?}",
+        verdicts(&root)
+    );
+}
+
+/// AND AN ABSENT `pr-closes` RECORD JUDGES NOTHING. The same reading, reached the
+/// other way: no pull request yet, or a key reader that could not run, is
+/// could-not-look about whether the row is landing — and this module is already
+/// silent wherever the board record itself is absent, so nothing is given up.
+#[test]
+fn an_absent_closes_record_judges_nothing() {
+    let root = repo_closing(
+        "obligations-no-closes-record",
+        &[&line("1,crates/batten/tests/it/missing.rs:slug-one")],
+        None,
+        &[],
+    );
+    assert!(verdicts(&root).is_empty(), "{:?}", verdicts(&root));
 }
 
 /// ANTI-VACUITY over the whole file: the row this suite exercises is the one the
