@@ -5872,6 +5872,15 @@ measured = "2026-09-02"
 # CLOUD-1158's, which CLOUD-1210's own §2 names as out of scope while predicting
 # exactly this basis move. Refreshing the count without claiming a floor
 # measurement I did not take is the honest half of the remedy.
+#
+# THE 2026-09-02 MOVE IS THE SAME SHAPE AND THE SAME HALF: live 164, floors
+# unmoved, and no independent measurement claimed. Worth one line because the
+# block above predicted a drift and this is what the drift now MEANS. Since the
+# grouping, a tracked test file is no longer a proxy for a linked stem — 164 files
+# still link 2 targets — so this basis has become a trend counter over a quantity
+# that no longer drives the bytes the floors budget. It is still worth watching
+# and it no longer implies a floor is wrong; the row that re-derives the floors
+# from an independent measurement is the one that would close it.
 
 # THE 2026-09-02 MOVE, AND IT IS THE 2026-09-01 MOVE AGAIN, DELIBERATELY.
 # A bundle connecting the refusal ABI added two compiled-binary tiers —
