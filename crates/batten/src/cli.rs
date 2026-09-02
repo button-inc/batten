@@ -386,6 +386,12 @@ pub enum LandCommand {
         /// The remote reference to replay onto, e.g. `refs/heads/main`.
         reference: String,
     },
+    /// Ask whether this head is green and whether its base still holds, and act
+    /// on whichever answers first.
+    Wait {
+        /// The remote reference whose movement makes this head stale.
+        reference: String,
+    },
 }
 
 /// Subcommands of `mutate`.
@@ -1504,6 +1510,12 @@ fn lease_of(matches: &ArgMatches) -> Option<LeaseCommand> {
 fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
     match matches.subcommand()? {
         ("replay", matches) => Some(LandCommand::Replay {
+            reference: matches
+                .get_one::<String>("reference")
+                .cloned()
+                .unwrap_or_default(),
+        }),
+        ("wait", matches) => Some(LandCommand::Wait {
             reference: matches
                 .get_one::<String>("reference")
                 .cloned()

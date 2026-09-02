@@ -301,6 +301,18 @@ impl Poll {
         self.signature
     }
 
+    /// The validator to send with the next request, where the server issued one.
+    ///
+    /// Exposed for a caller driving ONE poll at a time rather than [`watch`]'s
+    /// loop — `land`'s lap alternates this question with a second one, so it
+    /// carries the poll state across iterations itself. Without this the
+    /// conditional half is unreachable outside the module and every poll would
+    /// be unconditional, which is what makes the 1s interval affordable at all.
+    #[must_use]
+    pub fn etag(&self) -> Option<&str> {
+        self.etag.as_deref()
+    }
+
     /// Say `line` unless it is what was said last.
     ///
     /// Silence is how a poll that will never resolve looks exactly like one
@@ -453,7 +465,18 @@ fn render(findings: &[checks_green::Finding]) -> String {
 /// the poll continues. That is the predecessor's posture and the safe one — a
 /// transient failure to look must never terminate a wait with a verdict nobody
 /// took.
-fn read(config: &Config, etag: Option<&str>) -> String {
+/// One conditional read of the check runs, as raw response bytes.
+///
+/// PUBLIC SO THERE IS ONE READER RATHER THAN TWO (CLOUD-1338). `land`'s lap asks
+/// this question alternately with a staleness one, so it cannot use [`watch`]'s
+/// loop — and a lap that spawned the forge client itself would be a second
+/// authority over the request, the argv and the failure posture. The loop is the
+/// caller's; the read stays here.
+///
+/// An unreadable answer is the empty string, never an error: every failure to
+/// reach the forge is a could-not-look that the caller's own poll must survive.
+#[must_use]
+pub fn read(config: &Config, etag: Option<&str>) -> String {
     #[expect(
         clippy::disallowed_types,
         reason = "stays: reading check runs is a network call and this crate carries no HTTP client, so the forge's own client IS the read (CLOUD-1143)"
@@ -501,6 +524,17 @@ fn record(progress: &Progress, signal: &str, value: &str) {
 }
 
 /// The wait between requests. A real sleep, and the only clock in the module.
+///
+/// PUBLIC FOR THE SAME REASON [`read`] IS (CLOUD-1338): a caller driving one
+/// poll at a time needs the interval the server asked for, and re-deriving the
+/// pause at the call site would put a second clock in the crate — the one thing
+/// `clippy.toml`'s timer ban exists to keep out. Named `pause` rather than
+/// `sleep` on the public surface because what a caller is asking for is the
+/// interval BETWEEN asks, not a duration of its own choosing.
+pub fn pause(seconds: u64) {
+    sleep(seconds);
+}
+
 fn sleep(seconds: u64) {
     if seconds > 0 {
         #[expect(

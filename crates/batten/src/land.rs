@@ -308,6 +308,144 @@ impl Answered {
     }
 }
 
+/// How a lap's wait ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Waited {
+    /// The green question answered first: every required check is terminal.
+    Green {
+        /// The forge's verdict, as a token.
+        verdict: String,
+    },
+    /// The staleness question answered first: the base moved, so the run in
+    /// flight is already spend for a verdict nobody will read.
+    Stale {
+        /// Where the base points now.
+        base: String,
+    },
+    /// Neither question answered inside the lap's bound.
+    ///
+    /// **Exit `3`'s reading, and not an error.** A wait that ran out of asks has
+    /// learned nothing, which is a different state from either answer and from a
+    /// failure — the caller laps again rather than concluding anything.
+    Unanswered,
+}
+
+/// Ask both questions until one answers.
+///
+/// # The race, and why this alternates rather than forking
+///
+/// The two questions are asked in ONE loop, one after the other, and the first
+/// to answer returns. That is not a weaker form of the concurrent race it
+/// replaces — it is a stronger form of the property that race exists for.
+///
+/// **The loser's answer is voided by construction here.** Two pollers running
+/// concurrently both produce answers, and voiding the loser's is then something
+/// the caller has to remember to do; alternating means the loser is simply never
+/// asked again once the winner has spoken. A lap physically cannot read both.
+///
+/// It is also the only shape available without a second authority. `pr_watch`'s
+/// own loop polls until ITS question answers, so racing it in a thread would
+/// leave the loser running with nobody able to stop it — a scoped join would
+/// hang on it, and a detached one would keep spending the forge's rate limit
+/// after the lap had moved on.
+///
+/// The cost is one extra round trip per cycle, and the staleness arm is free of
+/// the metered tier entirely: it is ref discovery over the engine's own client,
+/// so it spawns nothing and asks the forge's API for nothing.
+///
+/// # The bound is a COUNT
+///
+/// `asks` is how many times the pair is asked, never a deadline. A wall clock
+/// would reintroduce the VM-reap gap `mem:workflow/landing-loop` records, and
+/// `clippy.toml`'s timer ban is the mechanism that refuses one in this crate.
+/// The delay between asks is the server's own interval — a derived delay bounded
+/// by a real exit condition, which is the shape `run-shape-guard` admits.
+///
+/// # Errors
+///
+/// Only for a stream that will not accept output. **Every failure to reach
+/// either the forge or the remote is a could-not-look**: the arm reports nothing
+/// that cycle and the pair is asked again, because a lap that concluded from an
+/// unreachable forge would decide about the network rather than about the work.
+pub fn wait(
+    config: &crate::pr_watch::Config,
+    roster: &crate::checks_green::Roster,
+    remote: &str,
+    reference: &str,
+    base: &str,
+    asks: u32,
+    out: &mut dyn std::io::Write,
+) -> Result<Waited> {
+    writeln!(
+        out,
+        "land: waiting on {} — green or stale, whichever answers first",
+        config.sha
+    )?;
+    let mut poll = crate::pr_watch::Poll::default();
+    for _ in 0..asks {
+        // ARM ONE: is this commit green? The conditional read is `pr_watch`'s,
+        // so the argv, the client and the empty-string-on-failure posture stay
+        // its business and this loop only decides when to ask.
+        let raw = crate::pr_watch::read(config, poll.etag());
+        let interval = poll.absorb(&raw, config.interval);
+        if let Ok(crate::checks_green::Verdict::Green) =
+            crate::checks_green::decide(poll.runs(), roster)
+        {
+            return Ok(Waited::Green {
+                verdict: String::from("green"),
+            });
+        }
+
+        // ARM TWO: has the base moved out from under it? Ref discovery over the
+        // engine's own client — no forge API, no `gh`, no `git`, and nothing
+        // against the metered tier.
+        if let Ok(advertisement) =
+            crate::lease::advertise(remote, crate::lease::Service::UploadPack)
+        {
+            let now = advertisement.head_of(reference);
+            if now != base {
+                return Ok(Waited::Stale {
+                    base: now.to_owned(),
+                });
+            }
+        }
+
+        crate::pr_watch::pause(interval);
+    }
+    Ok(Waited::Unanswered)
+}
+
+/// Both arms of one wait, from whichever of them answered.
+///
+/// **THE SIGNATURE IS THE MECHANISM.** A caller cannot build one arm and forget
+/// the other: it hands in what each question said — `None` where a question was
+/// abandoned unread — and gets the pair back. The alternative, letting the caller
+/// assemble a `Vec`, is what makes recording only the winner writable, and a
+/// record with a winner and no loser is byte-identical to what a lap that read
+/// BOTH sides produces. `lap-waits-on-one-answer` would then have nothing to
+/// tell the two apart, which is the whole property.
+///
+/// Both arms always appear, so the count of ANSWERING arms is what varies and
+/// the module's reading of it is meaningful.
+#[must_use]
+pub fn answers(sha: &str, green: Option<&str>, stale: Option<&str>) -> Vec<Answered> {
+    vec![
+        Answered {
+            arm: Arm::Green,
+            verdict: green.map(ToOwned::to_owned),
+            sha: sha.to_owned(),
+        },
+        Answered {
+            arm: Arm::Stale,
+            // THE STALE ARM'S VERDICT IS A TOKEN, NEVER THE NEW BASE. The sha it
+            // moved to is a pointer a reader may want, but this column is what
+            // the module compares against `-`, so it stays a closed vocabulary.
+            verdict: stale.map(|_| String::from("moved")),
+            sha: sha.to_owned(),
+        },
+    ]
+}
+
 /// Append this wait's outcomes to the branch's record.
 ///
 /// BOTH ARMS IN ONE CALL, so a caller cannot write the winner and forget the

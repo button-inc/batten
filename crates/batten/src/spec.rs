@@ -706,12 +706,19 @@ mod tests {
             // — and a write-bearing subtree under a `read` noun is exactly what a
             // consumer treating an entry as a prefix would pick up (CLOUD-90).
             //
-            // `replay` is the lap's git half and nothing else. Verify, push, the
-            // raced wait and the fast-forward stay in the consumer's lander until
-            // they land beside it, so this is a parallel capability rather than a
-            // cut-over — the shape `lease` took beside `land-lock`.
+            // `replay` is the lap's git half; `wait` is its raced half — the two
+            // questions asked as one loop, where the loser's exit code is voided
+            // by construction. Verify, push and the fast-forward stay in the
+            // consumer's lander until they land beside these, so this is a
+            // parallel capability rather than a cut-over — the shape `lease` took
+            // beside `land-lock`.
+            //
+            // `wait` WRITES for the same reason `replay` does: it appends the
+            // answer it acted on to the lap record, so the predicate that refuses
+            // a lap reading both answers has an object to decide over.
             "land".to_owned(),
             "land replay".to_owned(),
+            "land wait".to_owned(),
             // THE LANDING LEASE, ten arms and a noun (CLOUD-1274, CLOUD-393).
             // The noun is UNCLASSIFIED rather than read, because half the
             // subtree writes: `acquire|renew|hold|release|reserve` each reach

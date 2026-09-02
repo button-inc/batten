@@ -270,7 +270,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // and the worktree through `gitwrite`, so the same two edges are
         // forbidden — transitively, which the layering table states rather than
         // leaves to follow.
-        Some(Command::Land { command }) => run_land(command, out, err),
+        Some(Command::Land { command }) => run_land(&command, out, err),
         Some(Command::Wiring { command }) => run_wiring(&command, mode, err),
         // The refinement gate and the pull-time claim (CLOUD-1121). Both read
         // the payload the caller supplies — or, under `--issue`, the one the
@@ -5164,11 +5164,12 @@ impl TermsMissing {
 /// there were, never a hunk and never a conflict marker — which is the whole of
 /// what a conflict consists of and exactly what a report must not carry.
 fn run_land(
-    command: cli::LandCommand,
+    command: &cli::LandCommand,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let cli::LandCommand::Replay { reference } = command;
+    let (cli::LandCommand::Replay { reference } | cli::LandCommand::Wait { reference }) = command;
+    let reference = reference.clone();
     let root = Path::new(".");
     let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
     let Ok(remotes) = git::remotes(root) else {
@@ -5178,7 +5179,7 @@ fn run_land(
     let Some((_, url)) = remotes.iter().find(|(configured, _)| *configured == name) else {
         writeln!(
             err,
-            "::error:: land: no remote named {name}, so there is no base to replay onto"
+            "::error:: land: no remote named {name}, so this lap has no base"
         )?;
         return Ok(ExitCode::Internal);
     };
@@ -5191,6 +5192,10 @@ fn run_land(
         )?;
         return Ok(ExitCode::Internal);
     };
+
+    if matches!(command, cli::LandCommand::Wait { .. }) {
+        return run_land_wait(root, url, &reference, &branch, out, err);
+    }
 
     match land::replay(root, url, &reference, &branch)? {
         land::Replay::Conflicted { commit, paths } => {
@@ -5217,6 +5222,116 @@ fn run_land(
             Ok(ExitCode::Success)
         }
     }
+}
+
+/// `batten land wait` (CLOUD-1338): the lap's raced wait, and the record it
+/// leaves for a module to decide over.
+///
+/// # The roster is read from the environment, not from flags
+///
+/// `pr watch` takes its roster on the command line because a caller may be
+/// asking about somebody else's repository. A lap is always asking about THIS
+/// one, and the checks that carry a verdict here are already named once, in the
+/// consumer's own `$CI_REQUIRED_CHECKS` — which is where the bash lander reads
+/// them too. Re-declaring them as flags would put a second spelling of one set
+/// on the surface, and the two would drift.
+///
+/// # Both arms are recorded, winner and loser alike
+///
+/// [`land::record_wait`] takes both in one call precisely so this cannot write
+/// only the winner: a record with one answer and no loser is what a lap that
+/// read BOTH sides also produces, and `lap-waits-on-one-answer` would then have
+/// nothing to tell them apart.
+fn run_land_wait(
+    root: &Path,
+    remote: &str,
+    reference: &str,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let Ok(sha) = git::head_commit(root) else {
+        writeln!(err, "::error:: land: cannot read this clone's HEAD")?;
+        return Ok(ExitCode::Internal);
+    };
+    let required = std::env::var("CI_REQUIRED_CHECKS").unwrap_or_default();
+    let roster = checks_green::Roster {
+        required: roster_field(Some(&required)),
+        absent_ok: roster_field(std::env::var("CI_ABSENT_OK").ok().as_deref()),
+        answered: roster_field(Some(
+            &std::env::var("CI_ANSWERED_CONCLUSIONS")
+                .unwrap_or_else(|_| String::from("success,failure,timed_out,action_required")),
+        )),
+        fanin: std::env::var("CI_FANIN_CHECK")
+            .ok()
+            .filter(|n| !n.is_empty()),
+    };
+    // BEFORE THE LOOP, exactly as `pr_watch::watch` does it: a roster that can
+    // decide nothing is a statement about the invocation, and one polled forever
+    // would be a hang whose cause is a typo.
+    if let Err(problem) = checks_green::decide(&[], &roster) {
+        writeln!(err, "::error:: land wait: {problem}")?;
+        return Ok(ExitCode::Usage);
+    }
+
+    // The base as this clone last saw it. The wait is asking whether the REMOTE
+    // has moved past it, so the comparison needs the local reading rather than a
+    // freshly fetched one — a base refreshed first would compare a value to
+    // itself and never report stale.
+    let tracking = format!(
+        "refs/remotes/origin/{}",
+        reference.rsplit('/').next().unwrap_or(reference)
+    );
+    let base = git::resolve_ref(root, &tracking)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    let config = pr_watch::Config {
+        sha: sha.clone(),
+        repo: std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned()),
+        interval: 1,
+        progress: None,
+    };
+    // A COUNT, never a deadline (CLOUD-1177). The default is generous because
+    // the cost of too many asks is a few conditional requests the forge answers
+    // `304`, and the cost of too few is a lap that reports no answer while one
+    // was moments away.
+    let asks = std::env::var("LAND_ANSWER_MAX_UNKNOWNS")
+        .ok()
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .filter(|asks| *asks > 0)
+        .unwrap_or(3600);
+
+    let waited = land::wait(&config, &roster, remote, reference, &base, asks, out)?;
+    let (answers, code) = match &waited {
+        land::Waited::Green { verdict } => (
+            land::answers(&sha, Some(verdict.as_str()), None),
+            ExitCode::Success,
+        ),
+        land::Waited::Stale { base } => (
+            land::answers(&sha, None, Some(base.as_str())),
+            ExitCode::Violation,
+        ),
+        land::Waited::Unanswered => (land::answers(&sha, None, None), ExitCode::Internal),
+    };
+    land::record_wait(root, branch, &answers)?;
+
+    match &waited {
+        land::Waited::Green { .. } => {
+            writeln!(out, "land: {sha} is green; the loser was voided unread")?;
+        }
+        land::Waited::Stale { base } => {
+            writeln!(
+                out,
+                "land: {reference} moved to {base} under {sha}; this lap's run is already waste"
+            )?;
+        }
+        land::Waited::Unanswered => {
+            writeln!(out, "land: no answer yet on {sha} after {asks} ask(s)")?;
+        }
+    }
+    Ok(code)
 }
 
 fn lease_terms(root: &Path) -> std::result::Result<lease::Terms, TermsMissing> {

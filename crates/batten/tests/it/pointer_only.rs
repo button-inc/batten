@@ -561,6 +561,12 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // before it replays, so a corpus with no remote configured cannot reach the
     // replay at all and could-not-look is its honest answer here.
     "land replay",
+    // `land wait` joins it because the two arms share one preamble: the remote is
+    // resolved for BOTH before either reaches its own work, so a corpus with no
+    // remote configured stops the wait in the same place it stops the replay. The
+    // roster refusal below it — a `Usage` about the invocation — is never reached
+    // here, which is why naming that one as the sweep's answer was wrong.
+    "land wait",
 ];
 
 /// One entry per leaf verb of [`SURFACE`], asserted total by
@@ -647,6 +653,17 @@ const CENSUS: &[Verb] = &[
     // as hunks, so there is no prose channel for a marker to travel down.
     Verb {
         path: "land replay",
+        args: &["refs/heads/main"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `land wait` is pointer-only for a narrower reason than its sibling and it
+    // is worth stating, because the verb reaches a forge: what it renders is a
+    // sha, a base and an ASK COUNT, and the one string that could carry anything
+    // is `checks_green`'s roster verdict — a token per required name, never a
+    // check's own output.
+    Verb {
+        path: "land wait",
         args: &["refs/heads/main"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,

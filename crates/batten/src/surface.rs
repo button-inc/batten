@@ -3876,6 +3876,19 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[LAND_REFERENCE],
     },
+    // `write`, and the write is the RECORD rather than the wait: asking two
+    // questions is a read, and what this leaves behind is both arms' answers for
+    // a module to decide over. It is `write` rather than `read` for that reason
+    // alone, which is the effect model working — the allowlist is derived from
+    // the declaration, so a verb that writes anywhere may not sit under `read`.
+    CommandDecl {
+        path: "land wait",
+        id: "land.wait",
+        about: "Ask whether this head is green and whether its base still holds; the first answer decides",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[LAND_REFERENCE],
+    },
 ];
 
 /// Whether `token` is a declared spelling of a flag that consumes the *next*

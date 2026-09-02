@@ -1099,6 +1099,24 @@ expression: stdout_of(&output)
             }
           ],
           "subcommands": []
+        },
+        {
+          "path": "land wait",
+          "id": "land.wait",
+          "about": "Ask whether this head is green and whether its base still holds; the first answer decides",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "reference",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The remote reference to replay onto"
+            }
+          ],
+          "subcommands": []
         }
       ]
     },
