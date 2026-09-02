@@ -206,6 +206,51 @@ fn a_row_declaring_no_obligations_passes() {
     assert!(verdicts(&root).is_empty(), "{:?}", verdicts(&root));
 }
 
+/// THE RECORD IS A HISTORY AND THE GATE DECIDES OVER THE PRESENT. A row readied
+/// and then un-readied carries both lines, and judging the superseded one makes
+/// a corrected Ready block unfixable: the only remedies left are editing an
+/// uncommittable receipt or writing a test for work that does not exist.
+/// Measured on CLOUD-1336 (2026-09-02), filed with a claims object, un-refined
+/// minutes later, and still refused.
+///
+/// Over the ENGINE rather than a fabricated document, because the ordering this
+/// reads is the recorder's own append order and the stamp is the column it
+/// writes — a `with input as` case would assert the reading against a record
+/// this crate wrote by hand.
+#[test]
+fn a_superseded_obligation_is_not_judged() {
+    let root = repo(
+        "obligations-superseded",
+        &[
+            &line("1,crates/batten/tests/it/missing.rs:slug-one"),
+            "issue CLOUD-1 2026-01-02T00:00:00Z unready - - - -",
+        ],
+        None,
+    );
+    assert!(
+        verdicts(&root).is_empty(),
+        "the later line is what the tracker now says: {:?}",
+        verdicts(&root)
+    );
+}
+
+/// ANTI-VACUITY for the case above: it is the LATEST line that decides, not the
+/// presence of an un-ready one anywhere in the record. Without this, a row could
+/// be un-readied once and never judged again.
+#[test]
+fn a_later_ready_line_supersedes_an_earlier_unready_one() {
+    let root = repo(
+        "obligations-re-readied",
+        &[
+            "issue CLOUD-1 2026-01-01T00:00:00Z unready - - - -",
+            "issue CLOUD-1 2026-01-02T00:00:00Z ready - - - \
+             1,crates/batten/tests/it/missing.rs:slug-one",
+        ],
+        None,
+    );
+    assert_eq!(verdicts(&root), vec![UNBOUND.to_owned()]);
+}
+
 /// ANTI-VACUITY over the whole file: the row this suite exercises is the one the
 /// committed config declares, so a rename or a scope change reddens here rather
 /// than leaving every case above passing over a module nothing runs.

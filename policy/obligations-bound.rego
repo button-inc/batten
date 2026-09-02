@@ -37,9 +37,21 @@
 # forgery control the `verdict` column has, earned when `ready-lint` over a
 # self-assembled payload was measured green three times against text in a local
 # file, once under an id no row carried.
+#
+# THE RECORD IS A HISTORY AND THE GATE DECIDES OVER THE PRESENT. Every write to
+# a row appends a line, so a row that was readied and then un-readied carries
+# both readings. Judging every line makes a corrected Ready block UNFIXABLE: the
+# superseded line stands forever, the gate refuses over a promise the tracker no
+# longer carries, and the only two remedies are to edit an uncommittable receipt
+# or to write a test for work that does not exist. Measured 2026-09-02 on
+# CLOUD-1336, filed with a claims object, un-refined minutes later, and still
+# refused. So the set is the LATEST line per issue id, compared as fixed-width
+# ISO-8601 — the same reading `filed-here.rego` takes, and for the same reason:
+# a tracker's own ordering is not a fact any tree surface carries.
 #MUTANT-SUITE crates/batten/tests/it/obligations_bound.rs
 #MUTANT unbound-file-unread|s@^\tnot obligation_row.file in input.tree.tracked$@\tfalse@|an_obligation_naming_no_tracked_file_is_refused
 #MUTANT undeclared-slug-unread|s@^\tnot declares_slug(obligation_row)$@\tfalse@|an_obligation_whose_slug_no_row_declares_is_refused
+#MUTANT superseded-line-judged|s@^\trow\.stamp == latest\[row\.id\]$@\ttrue@|a_superseded_obligation_is_not_judged
 
 # METADATA
 # description: |
@@ -72,17 +84,36 @@ column(columns, at) := value if {
 # precisely the rows this gate is for. A row recorded by an older recorder, with
 # no column at all, reads the same way and is judged as it was before this
 # module existed.
-obligation contains entry if {
+# Every recorded `issue` line, kept whole so the arms below can ask both what it
+# says and when it was said.
+recorded contains {"id": columns[1], "stamp": columns[2], "columns": columns} if {
 	some raw in lines
 	columns := split(raw, " ")
 	columns[0] == "issue"
-	packed := column(columns, 7)
+}
+
+# The most recent recorded stamp per issue id.
+#
+# LEXICOGRAPHIC ON A FIXED-WIDTH ISO-8601 INSTANT, which is a comparison and not
+# a parse — the recorder writes the tracker's own `updatedAt`, and nothing here
+# needs to know what a month is.
+latest[id] := stamp if {
+	some row in recorded
+	id := row.id
+	stamps := sort([other.stamp | some other in recorded; other.id == id])
+	stamp := stamps[count(stamps) - 1]
+}
+
+obligation contains entry if {
+	some row in recorded
+	row.stamp == latest[row.id]
+	packed := column(row.columns, 7)
 	packed != "-"
 	some pair in split(substring(packed, indexof(packed, ",") + 1, -1), ",")
 	at := indexof(pair, ":")
 	at > 0
 	entry := {
-		"id": columns[1],
+		"id": row.id,
 		"file": substring(pair, 0, at),
 		"slug": substring(pair, at + 1, -1),
 	}
@@ -184,6 +215,48 @@ test_a_row_declaring_no_obligations_passes if {
 		[],
 		{},
 	)
+}
+
+# A SUPERSEDED LINE IS NOT JUDGED. The record is append-only, so a row readied
+# and then un-readied carries both readings; the later one is what the tracker
+# now says, and the earlier one is history.
+test_a_superseded_obligation_is_not_judged if {
+	count(violation) == 0 with input as board(
+		[
+			bound,
+			"issue CLOUD-1 2026-01-02T00:00:00Z unready - - - -",
+		],
+		[],
+		{},
+	)
+}
+
+# AND THE LATEST LINE IS WHAT DECIDES, not merely the presence of an un-ready
+# one — otherwise a row could be un-readied once and never judged again.
+test_a_later_ready_line_supersedes_an_earlier_unready_one if {
+	some v in violation with input as board(
+		[
+			"issue CLOUD-1 2026-01-01T00:00:00Z unready - - - -",
+			"issue CLOUD-1 2026-01-02T00:00:00Z ready - - - 1,tests/a.rs:slug-one",
+		],
+		[],
+		{},
+	)
+	v.verdict == "test name undefined"
+}
+
+# ONE ROW'S SUPERSESSION SAYS NOTHING ABOUT ANOTHER'S: the latest line is per id.
+test_supersession_is_per_issue_id if {
+	some v in violation with input as board(
+		[
+			bound,
+			"issue CLOUD-1 2026-01-02T00:00:00Z unready - - - -",
+			"issue CLOUD-2 2026-01-03T00:00:00Z ready - - - 1,tests/b.rs:slug-two",
+		],
+		[],
+		{},
+	)
+	v.subjects[0].path == "tests/b.rs"
 }
 
 test_an_absent_record_is_silent if {
