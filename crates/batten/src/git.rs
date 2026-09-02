@@ -24,12 +24,20 @@
 //!
 //! # Merged-ness (CLOUD-36)
 //!
-//! # Two backends, and where the line is (CLOUD-320's `git.rs` row)
+//! # One backend now, and what the confinement became (CLOUD-320's `git.rs` row)
 //!
-//! Part of this module answers in-process through `gix`, part shells out, and
-//! the split is a **decision with measurements behind it** rather than a
-//! migration someone abandoned half-done. `gix_is_confined_to_this_module` keeps
-//! the in-process half from spreading across the crate.
+//! This heading read *"Two backends, and where the line is"* and the paragraph
+//! under it said part of this module shells out — **which the paragraph four
+//! lines below has contradicted since CLOUD-740 landed**, in this same header.
+//! Corrected rather than left as a second authority: there is one backend, it is
+//! `gix`, and the split the section named is gone.
+//!
+//! What the in-process choice bought stands unchanged and is recorded below;
+//! what moved is the confinement. `gix_is_confined_to_the_git_modules` names a
+//! CLOSED list of three rather than this file alone, because the effect split
+//! that matters — a `read`-effect gate must not reach a write — is
+//! `policy/module-layering.rego`'s forbidden edges over the use graph, and
+//! folding the write half back in here would make those edges unspellable.
 //!
 //! **In-process, because each had a defect a library makes unrepresentable.**
 //! [`show`] read a caller's ref out of argv, so `--config-from
@@ -4287,13 +4295,26 @@ mod tests {
         // Built by concatenation so this test's own source does not count as
         // a definition (the same trick state.rs plays with its baked literal).
         let needle = ["fn repo", "_root"].concat();
+        // `gix::discover` RATHER THAN `gix::`, and the narrowing is this gate
+        // being made to enforce what it already says (CLOUD-1274). The comment
+        // above states the subject outright — "what is forbidden is *root
+        // resolution*, not git access" — and the token list then forbade every
+        // reach for the library, which is git access. The two were the same
+        // predicate only while one module held all of it.
+        //
+        // `gix::discover` is the resolver's own spelling and it still matches
+        // both forms this crate could use (`gix::discover_opts` at the call site
+        // below, and `gix::discover::upwards::Options` beside it), so the teeth
+        // are on the actual second resolver. Who may reach the BACKEND at all is
+        // `gix_is_confined_to_the_git_modules`'s question, not this one, and
+        // holding it here too meant a fix to either had to be argued twice.
         let forbidden = [
             "show-toplevel",
             "show-cdup",
             "git-common-dir",
             "git_common_dir",
             "git2::",
-            "gix::",
+            "gix::discover",
         ];
         let mut definitions = 0;
         for (dir, scan_tokens) in [("src", true), ("tests", false)] {
@@ -4543,24 +4564,71 @@ mod tests {
         );
     }
 
+    /// The modules that may reach the git backend, and there are exactly three.
+    ///
+    /// **A CLOSED LIST, not an exemption** — a fourth module still fails, which
+    /// is the whole of what this gate is for.
+    const GIT_MODULES: [&str; 3] = ["git.rs", "gitwrite.rs", "lease.rs"];
+
     #[test]
-    fn gix_is_confined_to_this_module() {
-        // The successor to `show`'s `--end-of-options` assertion, which the
-        // Ready block asked for and which this change makes unspellable: there
-        // is no argv left to carry the token. What replaces it is the boundary
-        // that matters while `git.rs` is mid-migration (CLOUD-320's row) — two
-        // git backends coexist here ON PURPOSE and in ONE module, so the
-        // in-process half cannot spread across the crate without deleting the
-        // assertion that says it may not.
+    fn gix_is_confined_to_the_git_modules() {
+        // WIDENED FROM ONE MODULE TO THREE (CLOUD-1274), and the premise that
+        // said one is expired rather than merely inconvenient. It read: "two git
+        // backends coexist here ON PURPOSE and in ONE module, so the in-process
+        // half cannot spread across the crate." CLOUD-740 ended that — this
+        // module's own header says NOTHING HERE SPAWNS `git` ANY MORE, and
+        // `no_second_git_invoker_exists` is terminal over the whole of `src/`.
+        // There is one backend now, so "do not let the new half spread while the
+        // old half is still here" is a rule about a state the tree left.
+        //
+        // WHAT REPLACED IT IS NOT NOTHING, and that is why this is a widening
+        // rather than a deletion. Two properties survive the premise:
+        //
+        //   * git access stays enumerable. This list is closed, so a module that
+        //     reaches for the backend is a change somebody has to make here and
+        //     justify, which is what the original assertion actually bought.
+        //   * the EFFECT split is `policy/module-layering.rego`'s, and it is
+        //     strictly stronger than confinement ever was: `hook -> gitwrite`,
+        //     `check -> gitwrite`, `hook -> lease` and `check -> lease` are
+        //     forbidden over the resolved use graph, so a gate declared `read`
+        //     cannot reach a write however many modules exist.
+        //
+        // AND MERGING THEM INTO THIS FILE WOULD HAVE BEEN WORSE, which is the
+        // argument that decided it. `check` and `hook` legitimately reach
+        // `git.rs`; folding the remote-write half in here would make those four
+        // forbidden edges unspellable and hand every read-effect gate transitive
+        // reach to a push. The gate that was refusing pointed at the safer of two
+        // designs only by accident of its wording.
         for (path, source) in crate_sources(true) {
-            if path.file_name().and_then(|n| n.to_str()) == Some("git.rs") {
+            let name = path.file_name().and_then(|name| name.to_str());
+            if name.is_some_and(|name| GIT_MODULES.contains(&name)) {
                 continue;
             }
             assert!(
                 !source.contains("gix::"),
-                "{}: reaches gix directly; the in-process git backend is git.rs's \
-                 alone until CLOUD-320's migration finishes (CLOUD-718)",
+                "{}: reaches gix directly; the git backend belongs to {GIT_MODULES:?} \
+                 and a fourth module is a decision to record beside that list \
+                 (CLOUD-718, widened by CLOUD-1274)",
                 path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn every_declared_git_module_exists_and_reaches_gix() {
+        // ANTI-VACUITY, both directions. A name in the list that no file carries
+        // would silently exempt nothing while reading as coverage; a name whose
+        // file never reaches gix is an exemption nobody needs, and leaving it
+        // there is how the list grows into an allowlist that means nothing.
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for name in GIT_MODULES {
+            let path = src.join(name);
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|_| panic!("{name} is declared a git module and does not exist"));
+            assert!(
+                source.contains("gix::"),
+                "{name} is declared a git module and reaches gix nowhere, so its \
+                 entry exempts nothing and should be dropped"
             );
         }
     }
