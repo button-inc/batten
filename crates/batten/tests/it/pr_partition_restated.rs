@@ -184,15 +184,19 @@ fn the_ordinary_possessive_uses_stay_clean() {
 }
 
 #[test]
-fn an_unparsed_source_is_reported_rather_than_passed() {
+fn an_unreadable_source_is_reported_rather_than_passed() {
     // COULD NOT LOOK IS NOT CLEAN, over the compiled binary rather than over a
     // fabricated `missing` map. `.claude/rules/policy-modules.md` is explicit that
     // a `with input as` case cannot establish this: it manufactures the very
     // channel the engine may never populate, so the module's own tier passes
     // whether or not `input.tree.missing` is ever filled for a `line_sources`
     // glob. Invalid UTF-8 is the cheapest declared source that exists and will
-    // not read, which is the `unparsed` cause as opposed to `absent`.
-    let repo = scratch("pr-partition-unparsed");
+    // not read. `NotAcquired` files it under `unreadable` rather than `unparsed`,
+    // because nothing was ever handed to a parser -- and a `line_sources` glob has
+    // no parser at all, so `unreadable` is the only could-not-look cause this
+    // module can reach. The first version of this case asserted `unparsed` and it
+    // is what caught the module asking for a cause that cannot occur.
+    let repo = scratch("pr-partition-unreadable");
     write(&repo, "batten.toml", &config());
     write(&repo, "pr-partition-restated.rego", MODULE);
     std::fs::create_dir_all(repo.join("prose")).expect("create prose dir");

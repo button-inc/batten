@@ -77,13 +77,28 @@ violation contains {
 	number := index + 1
 }
 
-# COULD NOT LOOK IS NOT CLEAN, and `unparsed` only.
+# COULD NOT LOOK IS NOT CLEAN, and `unreadable` is the only cause reachable here.
 #
 # The asymmetry is `harness-wiring`'s and it is load-bearing for the same reason:
 # a glob matching no file on some checkout is the ordinary case, and firing on
 # absence would redden a consumer for a state nobody caused. A declared source
 # that EXISTS and could not be read is a file this module reported green over
 # without opening.
+#
+# WHY NOT `unparsed`, WHICH IS WHAT THIS CLAUSE FIRST ASKED FOR. `NotAcquired`
+# splits the two on whether a parser ever saw the bytes: `unparsed` is "read as
+# text and the parser refused it", while non-UTF-8 and every other I/O failure are
+# `unreadable` because "nothing was ever handed to a parser". A `line_sources`
+# glob reads raw lines and has no parser at all, so `unparsed` cannot occur on this
+# module's own declared sources and the clause asking for it was DEAD. Naming a
+# cause this rule cannot reach is also the coverage-without-walking shape the
+# registry rules refuse one file over.
+#
+# FOUND BY THE COMPILED TIER, NOT BY READING. The load-time tier passed over the
+# dead version, because a `with input as` case supplies whatever cause its author
+# believed in -- which is exactly the failure `.claude/rules/policy-modules.md`
+# records two live instances of, arriving on the module written to close that
+# class.
 violation contains {
 	"rule": "pr-partition-restated",
 	"verdict": "source parse refused",
@@ -94,7 +109,7 @@ violation contains {
 
 unreadable contains name if {
 	some name, cause in input.tree.missing
-	cause == "unparsed"
+	cause == "unreadable"
 }
 
 # --- the load-time tier ------------------------------------------------------
@@ -119,7 +134,7 @@ unreadable contains name if {
 #
 # So the split is by SUBJECT rather than by convenience. These cases pin the
 # PREDICATE: that a matching line is refused, that the finding points at a
-# path and a line and carries no text, that `unparsed` speaks and `absent` does
+# path and a line and carries no text, that `unreadable` speaks and `absent` does
 # not. What they cannot pin is the row's WORDING -- whether it discriminates the
 # partition claim from the four ordinary possessive uses this tree already
 # carries. That is a claim about consumer config, so it belongs in the tier that
@@ -162,8 +177,8 @@ test_the_finding_points_at_a_line_and_never_at_the_text if {
 	not "text" in object.keys(s)
 }
 
-test_an_unparsed_source_is_reported_rather_than_passed if {
-	some v in violation with input as {"tree": {"lines": {}, "missing": {"policy/x.rego": "unparsed"}}}
+test_an_unreadable_source_is_reported_rather_than_passed if {
+	some v in violation with input as {"tree": {"lines": {}, "missing": {"policy/x.rego": "unreadable"}}}
 		with data.batten.patterns as fixture_patterns
 	v.verdict == "source parse refused"
 }
@@ -177,4 +192,4 @@ test_an_absent_source_answers_nothing if {
 
 #MUTANT-SUITE crates/batten/tests/it/pr_partition_restated.rs
 #MUTANT partition-unread|s@\tregex.match\(data.batten.patterns\["pr-partition-prose"\], line\)@\tfalse@|a_matching_line_is_refused
-#MUTANT missing-channel-silent|s@\tcause == "unparsed"@\tfalse@|an_unparsed_source_is_reported_rather_than_passed
+#MUTANT missing-channel-silent|s@\tcause == "unreadable"@\tfalse@|an_unreadable_source_is_reported_rather_than_passed
