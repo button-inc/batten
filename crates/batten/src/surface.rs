@@ -3184,6 +3184,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // one mechanism read from both ends.
     CommandDecl {
         path: "task",
+        id: "task",
         about: "What long-running tasks are doing, recorded where it can be read without a log",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -3194,6 +3195,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // the derived read-only allowlist.
     CommandDecl {
         path: "task register",
+        id: "task.register",
         about: "Record that a task has started, under its pid",
         data_channel: false,
         effect: Effect::Write,
@@ -3201,6 +3203,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     CommandDecl {
         path: "task phase",
+        id: "task.phase",
         about: "Record what a registered task is now doing",
         data_channel: false,
         effect: Effect::Write,
@@ -3214,6 +3217,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // livelock a hang detector cannot see.
     CommandDecl {
         path: "task tick",
+        id: "task.tick",
         about: "Record that a task's loop went round",
         data_channel: false,
         effect: Effect::Write,
@@ -3221,6 +3225,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     CommandDecl {
         path: "task sig",
+        id: "task.sig",
         about: "Record that the world a task is watching moved",
         data_channel: false,
         effect: Effect::Write,
@@ -3228,6 +3233,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     CommandDecl {
         path: "task unregister",
+        id: "task.unregister",
         about: "Drop a task's record, which its exit path does and a kill cannot",
         data_channel: false,
         effect: Effect::Write,
@@ -3236,6 +3242,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // `read`, structurally: one field out of one record, opening nothing else.
     CommandDecl {
         path: "task read",
+        id: "task.read",
         about: "One field of one task's record, so a prober composes rather than parsing the layout",
         data_channel: false,
         effect: Effect::Read,
@@ -3248,6 +3255,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // false in the one direction the derived allowlist exists to prevent.
     CommandDecl {
         path: "task alive",
+        id: "task.alive",
         about: "What tasks are running right now and what phase each is in — one call, no log reading",
         data_channel: false,
         effect: Effect::Write,
@@ -3261,6 +3269,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // carried.
     CommandDecl {
         path: "singleton",
+        id: "singleton",
         about: "Whether a second copy of a task may start in this clone",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -3271,6 +3280,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // would put a writing verb on the derived read-only allowlist.
     CommandDecl {
         path: "singleton acquire",
+        id: "singleton.acquire",
         about: "Take a task's lock for a pid, or refuse naming the process that holds it",
         data_channel: false,
         effect: Effect::Write,
@@ -3278,6 +3288,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     CommandDecl {
         path: "singleton release",
+        id: "singleton.release",
         about: "Drop a task's lock, which its exit trap does and a kill cannot",
         data_channel: false,
         effect: Effect::Write,

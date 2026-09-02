@@ -1971,6 +1971,7 @@ impl Fact {
             | Fact::State
             | Fact::Forge
             | Fact::ToolVerdict
+            | Fact::Minted
             | Fact::Captured
             | Fact::Tasks
             | Fact::Extracted

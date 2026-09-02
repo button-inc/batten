@@ -1094,6 +1094,7 @@ expression: stdout_of(&output)
           "short": null,
           "long": "instant",
           "takes_value": true,
+          "positional": false,
           "help": "The epoch second to judge time-dependent records against, supplied as data"
         }
       ],
@@ -2163,20 +2164,25 @@ expression: stdout_of(&output)
     },
     {
       "path": "singleton",
+      "id": "singleton",
       "about": "Whether a second copy of a task may start in this clone",
       "effect": "unclassified",
+      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "singleton acquire",
+          "id": "singleton.acquire",
           "about": "Take a task's lock for a pid, or refuse naming the process that holds it",
           "effect": "write",
+          "data_channel": false,
           "flags": [
             {
               "name": "pid",
               "short": null,
               "long": null,
               "takes_value": true,
+              "positional": true,
               "help": "The process the record is keyed by"
             },
             {
@@ -2184,6 +2190,7 @@ expression: stdout_of(&output)
               "short": null,
               "long": "recheck-ms",
               "takes_value": true,
+              "positional": false,
               "help": "Milliseconds between the two sightings a reclaim requires"
             },
             {
@@ -2191,6 +2198,7 @@ expression: stdout_of(&output)
               "short": null,
               "long": null,
               "takes_value": true,
+              "positional": true,
               "help": "The task's name, which is what the lock is keyed by"
             }
           ],
@@ -2198,14 +2206,17 @@ expression: stdout_of(&output)
         },
         {
           "path": "singleton release",
+          "id": "singleton.release",
           "about": "Drop a task's lock, which its exit trap does and a kill cannot",
           "effect": "write",
+          "data_channel": false,
           "flags": [
             {
               "name": "task",
               "short": null,
               "long": null,
               "takes_value": true,
+              "positional": true,
               "help": "The task's name, which is what the lock is keyed by"
             }
           ],
@@ -2385,20 +2396,25 @@ expression: stdout_of(&output)
     },
     {
       "path": "task",
-      "about": "What long-running tasks are doing, read without opening a log",
+      "id": "task",
+      "about": "What long-running tasks are doing, recorded where it can be read without a log",
       "effect": "unclassified",
+      "data_channel": false,
       "flags": [],
       "subcommands": [
         {
           "path": "task alive",
+          "id": "task.alive",
           "about": "What tasks are running right now and what phase each is in — one call, no log reading",
           "effect": "write",
+          "data_channel": false,
           "flags": [
             {
               "name": "instant",
               "short": null,
               "long": "instant",
               "takes_value": true,
+              "positional": false,
               "help": "The epoch second to judge time-dependent records against, supplied as data"
             },
             {
@@ -2406,7 +2422,164 @@ expression: stdout_of(&output)
               "short": null,
               "long": "program-root",
               "takes_value": true,
+              "positional": false,
               "help": "The directory this consumer keeps its task programs in, matched inside a live process's cmdline"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "task phase",
+          "id": "task.phase",
+          "about": "Record what a registered task is now doing",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "pid",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The process the record is keyed by"
+            },
+            {
+              "name": "value",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The value to record; its stamp moves only when it changes"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "task read",
+          "id": "task.read",
+          "about": "One field of one task's record, so a prober composes rather than parsing the layout",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "field",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The record field to print"
+            },
+            {
+              "name": "pid",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The process the record is keyed by"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "task register",
+          "id": "task.register",
+          "about": "Record that a task has started, under its pid",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "phase",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "What the task is doing; absent is `starting`"
+            },
+            {
+              "name": "pid",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The process the record is keyed by"
+            },
+            {
+              "name": "task",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The task's name, as its callers know it"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "task sig",
+          "id": "task.sig",
+          "about": "Record that the world a task is watching moved",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "pid",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The process the record is keyed by"
+            },
+            {
+              "name": "value",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The value to record; its stamp moves only when it changes"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "task tick",
+          "id": "task.tick",
+          "about": "Record that a task's loop went round",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "pid",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The process the record is keyed by"
+            },
+            {
+              "name": "value",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The value to record; its stamp moves only when it changes"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "task unregister",
+          "id": "task.unregister",
+          "about": "Drop a task's record, which its exit path does and a kill cannot",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "pid",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The process the record is keyed by"
             }
           ],
           "subcommands": []
@@ -2666,6 +2839,10 @@ expression: stdout_of(&output)
     {
       "id": "state.list",
       "path": "state list"
+    },
+    {
+      "id": "task.read",
+      "path": "task read"
     },
     {
       "id": "worktree.status",
