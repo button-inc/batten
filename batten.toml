@@ -6167,7 +6167,6 @@ measured = "2026-09-02"
 # and the caller collapses them — so an operator who reads the caller rather than
 # the callee deletes files and gets nowhere.
 
-
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
 count = 175
