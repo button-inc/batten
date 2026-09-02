@@ -222,9 +222,13 @@ pub fn resolve(
         let Some((_, prompt_digest)) = prompt(&row.prompt) else {
             continue;
         };
-        let Look::Is(subject) = subject_digest(root, row) else {
+        let Ok(bytes) = std::fs::read(root.join(&row.path)) else {
+            // COULD NOT READ THE SUBJECT is could-not-look, and it must not
+            // dispatch: a review keyed to bytes nobody could read would be a
+            // record about a subject that does not exist.
             continue;
         };
+        let subject = digest(&bytes);
         let path = record_path(&git_dir, &row.id, &prompt_digest, &subject);
         // SPAWN ON MISS, READ ON HIT. The dispatch is the engine's rather than a
         // call somebody has to remember, which is the whole difference from a
@@ -233,7 +237,7 @@ pub fn resolve(
         // (CLOUD-1265). A hit costs a file read, so the agent runs once per
         // unique subject and every later landing lap is free.
         if matches!(read(&path), Look::IsNot) {
-            dispatch(root, row, &path);
+            dispatch(root, row, &path, &subject);
         }
         let Look::Is(findings) = read(&path) else {
             continue;
@@ -258,14 +262,6 @@ pub fn resolve(
     Look::Is(found)
 }
 
-/// The digest of whatever this row declares as its subject.
-fn subject_digest(root: &Path, row: &crate::facts::ReviewQuery) -> Look<String> {
-    let Ok(bytes) = std::fs::read(root.join(&row.path)) else {
-        return Look::CouldNotLook;
-    };
-    Look::Is(digest(&bytes))
-}
-
 /// Run the vendored prompt over this row's subject and store what it pointed at.
 ///
 /// # Everything that can go wrong leaves NO record, deliberately
@@ -276,10 +272,31 @@ fn subject_digest(root: &Path, row: &crate::facts::ReviewQuery) -> Look<String> 
 /// into a clean review — `secrets.rs`' invariant carried verbatim, **clean is
 /// never inferred from a stream that failed to parse**, and here the stakes are
 /// the whole gate rather than one finding.
-fn dispatch(root: &Path, row: &crate::facts::ReviewQuery, path: &Path) {
+fn dispatch(root: &Path, row: &crate::facts::ReviewQuery, path: &Path, subject_digest: &str) {
     let Some((text, _)) = prompt(&row.prompt) else {
         return;
     };
+    // THE SUBJECT TRAVELS AS A POINTER, NEVER AS BYTES — Batten's law, not an
+    // economy.
+    //
+    // `judge.rs` states the law at its own head: "sensitive or bulky content is
+    // reduced to a pointer and never dumped into a model's context", and names
+    // the LLM judge "the ONE component that inverts it". A review dispatch must
+    // not be a second inversion. So what crosses is the vendored prompt, the
+    // subject's PATH, and the subject's DIGEST — and the agent reads the bytes
+    // with its own tools, under whatever access its operator gave it.
+    //
+    // That is not a weaker claim about what was reviewed. The digest in the
+    // record is over the bytes on disk, so a record still cannot be keyed to
+    // anything but the exact subject; what changes is that Batten never becomes
+    // the thing that moved somebody's file into a model.
+    //
+    // It is also what lets a subject with no repo path work at all. `judge`'s
+    // fail-closed rule reads a span with no path provenance as PROTECTED and
+    // refuses the whole invocation — correct for a span, and fatal for a tracker
+    // body, which legitimately has an issue key instead of a path. A pointer has
+    // no such problem.
+    let pointer = format!("{} {}\n", row.path, subject_digest);
     #[expect(
         clippy::disallowed_types,
         reason = "stays: this fact IS Cost::Effect — resolving it dispatches the vendored prompt, which is the classification rather than an accident of it. A verb the caller must remember instead is the producer-writes-outside shape CLOUD-1265 measures dead (CLOUD-472)"
@@ -297,9 +314,17 @@ fn dispatch(root: &Path, row: &crate::facts::ReviewQuery, path: &Path) {
     let Ok(mut child) = spawned else {
         return;
     };
+    // THE PROMPT AND THEN THE POINTER. The prompt ALONE was what this function
+    // sent before, and that was the defect: the agent was told what to look for
+    // and never told what to look at, so its answer was a review of nothing while
+    // the record was keyed to bytes it had never seen — a record that reads as a
+    // completed review and is not one, which is worse than no record at all.
     if let Some(mut stdin) = child.stdin.take() {
         use std::io::Write as _;
-        if stdin.write_all(text.as_bytes()).is_err() {
+        if stdin.write_all(text.as_bytes()).is_err()
+            || stdin.write_all(b"\n").is_err()
+            || stdin.write_all(pointer.as_bytes()).is_err()
+        {
             return;
         }
     }
