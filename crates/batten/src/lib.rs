@@ -304,7 +304,6 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // the fetch stays with the poller that already holds the body.
         Some(Command::Checks { command }) => run_checks(command, out, err),
         Some(Command::Pr { command }) => run_pr(command, &overrides, mode, out, err),
-        Some(Command::Pr { command }) => run_pr(command, out, err),
         // The task registry (CLOUD-425). No config chain: the store is the git
         // dir's, and no key could layer over "what is running right now".
         Some(Command::Task { command }) => run_task(command, out, err),
@@ -2321,42 +2320,6 @@ fn run_receipt(
     }
 }
 
-fn run_pr(
-    command: PrCommand,
-    overrides: &Overrides,
-    mode: Mode,
-    out: &mut dyn Write,
-    err: &mut dyn Write,
-) -> Result<ExitCode> {
-    let (sha, repo, interval, progress, progress_id, required, absent_ok, answered, fanin) =
-        match command {
-            PrCommand::Derive { pr } => return run_pr_derive(&pr, overrides, out),
-            PrCommand::File { pr } => return run_pr_file(&pr, overrides, mode, out),
-            PrCommand::Link { pr, key } => return run_pr_link(&pr, &key, overrides, mode, err),
-            PrCommand::Ensure { pr } => return run_pr_ensure(&pr, overrides, mode, err),
-            PrCommand::Closes { pr } => return run_pr_closes(&pr, overrides, mode, err),
-            PrCommand::Watch {
-                sha,
-                repo,
-                interval,
-                progress,
-                progress_id,
-                required,
-                absent_ok,
-                answered,
-                fanin,
-            } => (
-                sha,
-                repo,
-                interval,
-                progress,
-                progress_id,
-                required,
-                absent_ok,
-                answered,
-                fanin,
-            ),
-        };
 /// The task registry's reader (CLOUD-425), ported off `mise-tasks/alive.sh`.
 ///
 /// **The exit table is this repository's, not the predecessor's.** `alive.sh`
@@ -2509,18 +2472,42 @@ fn supplied_epoch(raw: Option<&str>) -> Result<u64> {
         .map_err(|_| UsageError::raise("--instant takes a whole number of seconds since the epoch"))
 }
 
-fn run_pr(command: PrCommand, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
-    let PrCommand::Watch {
-        sha,
-        repo,
-        interval,
-        progress,
-        progress_id,
-        required,
-        absent_ok,
-        answered,
-        fanin,
-    } = command;
+fn run_pr(
+    command: PrCommand,
+    overrides: &Overrides,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let (sha, repo, interval, progress, progress_id, required, absent_ok, answered, fanin) =
+        match command {
+            PrCommand::Derive { pr } => return run_pr_derive(&pr, overrides, out),
+            PrCommand::File { pr } => return run_pr_file(&pr, overrides, mode, out),
+            PrCommand::Link { pr, key } => return run_pr_link(&pr, &key, overrides, mode, err),
+            PrCommand::Ensure { pr } => return run_pr_ensure(&pr, overrides, mode, err),
+            PrCommand::Closes { pr } => return run_pr_closes(&pr, overrides, mode, err),
+            PrCommand::Watch {
+                sha,
+                repo,
+                interval,
+                progress,
+                progress_id,
+                required,
+                absent_ok,
+                answered,
+                fanin,
+            } => (
+                sha,
+                repo,
+                interval,
+                progress,
+                progress_id,
+                required,
+                absent_ok,
+                answered,
+                fanin,
+            ),
+        };
 
     // A NUMBER OR A REFUSAL, never a silent fallback. An interval that did not
     // parse is a typo in an invocation, and swallowing it would put the poll on

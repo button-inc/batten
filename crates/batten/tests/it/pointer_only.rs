@@ -1548,6 +1548,8 @@ const CENSUS: &[Verb] = &[
         path: "record closes",
         args: &[],
         stdin: Stdin::PrBody,
+        disposition: Disposition::PointerOnly,
+    },
     // The task registry's six writers (CLOUD-425). Each answers with silence and
     // an exit code — the record's destination is a keyed file under `$GIT_DIR`,
     // so there is nothing for a successful write to say. `PointerOnly` rather

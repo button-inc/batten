@@ -3169,16 +3169,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         effect: Effect::Unclassified,
         flags: &[PR_NUMBER],
-    // The `task` noun (CLOUD-425), ported off `mise-tasks/alive.sh` under
-    // CLOUD-843.
-    //
-    // ONE LEAF, WHICH IS A COST RATHER THAN A DESIGN. A noun with a single verb
-    // is the singleton shape CLOUD-1184 counts as a defect, and the writer half
-    // that would have populated it could not land: `mise-tasks/land-lock.sh`
-    // binds the retiring writer to a variable and spends it with arguments, and
-    // `shell-retirement` has no admitted addition for a spend site (CLOUD-1283).
-    // Shipping the writer verbs unconsumed would be dead surface every gate here
-    // would then certify, so they are not shipped.
+    },
     // The `task` noun (CLOUD-425), ported off `mise-tasks/task-registry.sh` and
     // `mise-tasks/alive.sh` under CLOUD-843. Both halves, because the registry is
     // one mechanism read from both ends.
