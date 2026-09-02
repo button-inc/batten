@@ -9336,7 +9336,7 @@ when the condition holds — that is a background wait and is allowed.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "until <test>; do sleep 1; done"
+target = "until <test>; do sleep 1; done — where <test> reads something the harness does NOT report, never a process table"
 
 [[verdict.route]]
 id = "task run other"
@@ -9363,10 +9363,52 @@ is allowed.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "until <test>; do sleep 1; done"
+target = "until <test>; do sleep 1; done — where <test> reads something the harness does NOT report, never a process table"
 
 [[verdict.route]]
 id = "task run other"
+kind = "command"
+target = "mise run alive"
+
+# THE OTHER HALF OF THE ROW ABOVE, and it exists because that row's own exemption
+# was the escape (CLOUD-1337). `timer run refused` allows a backgrounded `sleep`
+# wrapped in `until`/`while`, on sound reasoning: a loop testing a condition exits
+# on the condition rather than on the clock. But the exemption asks WHETHER there
+# is a condition and never WHAT it is about — so a loop polling a LOCAL PROCESS
+# passed, and that is the one condition the harness already reports.
+#
+# MEASURED 2026-09-02: eleven of these on one container, the oldest 9h35m, while
+# exactly one real job existed. AGENTS.md has carried the rule since CLOUD-821
+# with its measurement and the claim that the shape is "refused by
+# `run-shape-guard`" — a claim that was false for as long as it stood. This class
+# is what makes it true.
+[[verdict]]
+id = "task watch duplicate"
+gloss = "a backgrounded wait polls a process whose exit is already notified"
+class = """
+The harness re-invokes the caller when a backgrounded task exits, measured 523 of \
+524 in one session including every failure, so a loop reading the process table \
+asks a question that is already answered and cannot be answered sooner. What it \
+costs is not the CPU of a `sleep`: it is a watcher that outlives the thing it \
+watches, because nothing retires it when the answer arrives. \
+A CONDITION THE HARNESS DOES NOT REPORT IS NOT THIS CLASS — a forge status, a \
+remote queue, a file another machine writes are all still allowed, and the \
+`until` form stays the recommended shape for them. \
+The narrower reading is refused deliberately too: these eleven were ALSO broken, \
+since `pgrep -f` reads full command lines and a mediated call runs as \
+`bash -c` over the whole text, so the pattern was a substring of the polling \
+shell's own command line and the probe matched itself forever. Refusing only that \
+is satisfied by bracketing the pattern, which buys eleven working watchers \
+instead of eleven broken ones and no less waste. The wait is the defect.
+"""
+
+[[verdict.route]]
+id = "turn watch first"
+kind = "command"
+target = "delete the loop and end the turn — the backgrounded task wakes you on exit, and the turn in between is the designed state"
+
+[[verdict.route]]
+id = "task watch other"
 kind = "command"
 target = "mise run alive"
 

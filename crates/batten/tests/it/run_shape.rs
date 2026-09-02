@@ -662,3 +662,84 @@ fn a_command_with_no_git_commit_in_it_is_untouched() {
     allowed(&root, "ls -la");
     allowed(&root, "hg commit");
 }
+
+// --- the wait that duplicates a notification (CLOUD-1337) --------------------
+//
+// `timer run refused` exempts a backgrounded `sleep` wrapped in `until`/`while`,
+// on sound reasoning: a loop testing a condition exits on the condition rather
+// than on the clock. The exemption asks WHETHER there is a condition and never
+// WHAT it is about, so a loop polling the local process table passed — and that
+// is the one condition the harness already reports, since a backgrounded task
+// re-invokes its caller on exit.
+//
+// MEASURED 2026-09-02: eleven of these on one container, the oldest 9h35m, while
+// exactly one real job existed. AGENTS.md had carried the rule since CLOUD-821
+// AND the claim that the shape was "refused by `run-shape-guard`"; it was not.
+//
+// OVER THE COMPILED BINARY BECAUSE THE LOOK-THROUGH IS THE ENGINE'S. The module
+// resolves a condition segment's program through `hook::segments`, and a
+// `with input as` case supplies segments by hand — so it would pass over an
+// engine that tokenised `until ! pgrep` differently than the fixture assumed.
+// That is exactly how this predicate was wrong on its first three cases.
+
+#[test]
+fn a_backgrounded_wait_polling_a_process_is_refused() {
+    let root = fixture("polls-a-process");
+    denied_background(
+        &root,
+        "until ! pgrep -f 'mise run verify' >/dev/null; do sleep 20; done",
+        true,
+    );
+}
+
+#[test]
+fn a_bracketed_pattern_is_refused_just_the_same() {
+    // THE CASE THAT SEPARATES THIS RULE FROM THE WRONG ONE. Those eleven waits
+    // were ALSO broken — `pgrep -f` reads full command lines and a mediated call
+    // runs as `bash -c` over the whole text, so the pattern was a substring of
+    // the polling shell's own command line and the probe matched itself forever.
+    //
+    // Bracketing is the standard fix for that, and if it were an exit from this
+    // gate the remedy would buy eleven WORKING watchers and no less waste. The
+    // wait is the defect, not the typo.
+    let root = fixture("polls-a-process-bracketed");
+    denied_background(
+        &root,
+        "until ! pgrep -f '[m]ise run verify' >/dev/null; do sleep 20; done",
+        true,
+    );
+}
+
+#[test]
+fn a_liveness_signal_is_the_same_question() {
+    // `kill -0` asks "is this alive" as a signal rather than as a listing, and it
+    // is what a caller reaches for once `pgrep` is refused.
+    let root = fixture("polls-by-signal");
+    denied_background(
+        &root,
+        "while kill -0 $PID 2>/dev/null; do sleep 5; done",
+        true,
+    );
+}
+
+#[test]
+fn a_wait_on_a_condition_nobody_reports_is_clean() {
+    // THE ANTI-VACUITY MIRROR. Without it every case above is satisfied by a rule
+    // that refuses all waits — and this form is what `timer run refused`'s own
+    // route still recommends for a condition the harness does not report.
+    let root = fixture("waits-on-a-remote");
+    allowed_background(
+        &root,
+        "until curl -sf https://example.test/ready; do sleep 5; done",
+        true,
+    );
+}
+
+#[test]
+fn a_process_read_outside_a_loop_is_not_a_wait() {
+    // Asking once and returning is the route this class recommends, so refusing
+    // it would refuse its own remedy.
+    let root = fixture("reads-a-process-once");
+    allowed_background(&root, "pgrep -f mise", true);
+    allowed(&root, "mise run alive");
+}

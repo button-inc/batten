@@ -63,6 +63,8 @@ rules contains "foreground-sleep"
 
 rules contains "background-timer"
 
+rules contains "polls-a-local-process"
+
 # CLOUD-613's three, and none of them is over a program NAME — a mutation on the
 # `sleep` or `git` token survives, because every ALLOW row already fails some
 # other conjunct. Each of these corrupts the conjunct that carries the verdict.
@@ -81,6 +83,8 @@ rules contains "background-timer"
 #MUTANT-OWNER CLOUD-989|the mutation applies and alters reachable code, and the case it names cannot observe the change — a downstream guard or a second arm masks it. That is a defect in the DECLARATION, which `SURVIVED` mis-attributes to the suite; CLOUD-989's fork is what reports it correctly, and these are the live instances its own acceptance says it lacked
 #MUTANT single-quoted-span-judged|s@^single_scrubbed := quoted_out(code_lines.*@single_scrubbed := code_lines@|a_git_commit_inside_a_quoted_span_is_prose
 #MUTANT-SUITE crates/batten/tests/it/run_shape.rs
+#MUTANT process-poll-unread|s@^\tcount(process_probes) > 0$@\tfalse@|a_backgrounded_wait_polling_a_process_is_refused
+#MUTANT bracket-is-an-exit|s@^\tcondition_program(segment) in {"pgrep", "pkill", "ps", "jobs"}$@\tcondition_program(segment) in {"pgrep", "pkill", "ps", "jobs"}; not contains(segment.raw, "[")@|a_bracketed_pattern_is_refused_just_the_same
 
 violation contains {
 	"rule": "commit-names-no-message-source",
@@ -137,6 +141,43 @@ violation contains {
 	not waits_on_condition
 }
 
+# A backgrounded wait that polls the LOCAL PROCESS TABLE (CLOUD-1337).
+#
+# `waits_on_condition` above exempts a `sleep` loop from `background-timer` on
+# sound reasoning: a loop testing a condition exits on the condition rather than
+# on the clock. That holds for a condition NOTHING ELSE REPORTS — a CI run, a
+# remote queue, a file another machine writes. It does not hold for a local
+# process, because the harness already re-invokes the caller when a backgrounded
+# task exits. Polling one duplicates a notification that is guaranteed to fire.
+#
+# THE EXEMPTION ASKS WHETHER THERE IS A CONDITION, NEVER WHAT IT IS ABOUT, and
+# `until` was the escape. AGENTS.md has carried the rule since CLOUD-821, with the
+# measurement — "490 in one session, 2 changed a decision" — and the claim that
+# the shape is "refused by `run-shape-guard`". It was not. This arm is what makes
+# that sentence true rather than something to soften.
+#
+# MEASURED 2026-09-02: eleven of these ran on one container, the oldest 9h35m,
+# while exactly one real job existed.
+#
+# THE NARROWER RULE WAS DRAFTED FIRST AND WOULD HAVE MADE THIS WORSE, which is
+# why the wider one is here. Those eleven were also BROKEN: `pgrep -f` reads full
+# command lines, a mediated call runs as `bash -c '<the whole text>'`, so the
+# pattern was a substring of the polling shell's own command line by construction
+# and the probe matched itself forever. Refusing only that is satisfied by
+# bracketing the pattern (`[m]ise`) — eleven correctly-functioning watchers
+# instead of eleven broken ones, every one still redundant. The waste is the
+# wait, not the typo, so a bracketed pattern is refused here too.
+violation contains {
+	"rule": "polls-a-local-process",
+	"verdict": "task watch duplicate",
+	"subjects": [{"count": count(process_probes)}],
+} if {
+	sleeps
+	input.call["run-in-background"] == true
+	waits_on_condition
+	count(process_probes) > 0
+}
+
 # ---------------------------------------------------------------------------
 # CLOUD-613's terms, over `input.call.segments`.
 #
@@ -178,6 +219,53 @@ waits_on_condition if {
 	some segment in input.call.segments
 	some word in segment.words
 	word in {"until", "while"}
+}
+
+# Every reader of the LOCAL process table in this call.
+#
+# The set is the programs whose whole purpose is answering "is this process still
+# alive" — the question the exit notification already answers. `kill -0` is that
+# same question spelled as a signal, which is why it is here rather than being
+# left out as "not a process lister".
+#
+# NEVER A PATTERN AND NEVER A PID (non-negotiable rule 4): a probe's operand on
+# this surface carries this consumer's task names and paths. The COUNT travels and
+# the text does not, which is also why the finding cannot name which wait it was.
+#
+# Indexed by SEGMENT so two probes in one call count twice — a compound that polls
+# a process and then polls another is two duplications, not one.
+process_probes contains i if {
+	some i, segment in input.call.segments
+	condition_program(segment) in {"pgrep", "pkill", "ps", "jobs"}
+}
+
+# `kill -0 <pid>` is a liveness test rather than a signal, and it is the spelling
+# a caller reaches for once `pgrep` is refused.
+process_probes contains i if {
+	some i, segment in input.call.segments
+	condition_program(segment) == "kill"
+	some word in segment.words
+	word == "-0"
+}
+
+# The program a LOOP CONDITION segment invokes.
+#
+# `keywords` looks through `do`/`then`/… — which is what lets `sleeps` reach a
+# loop BODY — and a condition segment begins with `until` or `while`, often with
+# `!` after it. Neither is in that set, so `words_program_index` resolves the
+# keyword itself and every probe below would miss.
+#
+# A NARROWER LOOK-THROUGH HERE RATHER THAN A WIDER `keywords`, deliberately:
+# `sleeps` shares that set, so adding `until`/`while` to it would change which
+# program every landed call resolves to. This rule is new and may carry its own;
+# the shared authority stays where it is.
+#
+# The filter drops those tokens ANYWHERE rather than only in a leading run, which
+# is the cheaper predicate and is safe here because none of the three is a
+# plausible operand of a process probe.
+condition_program(segment) := name if {
+	rest := [w | some w in segment.words; not w in {"until", "while", "!"}]
+	name := basename(rest[words_program_index(rest)])
 }
 
 # `git commit`, resolved over WORDS the engine split rather than a string this
@@ -543,6 +631,81 @@ test_a_backgrounded_bare_sleep_is_a_timer if {
 
 # THE ALLOW THAT MATTERS. This is the form both refusals recommend, and denying
 # it is what would get the rule switched off.
+# THE MEASURED SHAPE (CLOUD-1337). A backgrounded wait polling the process table
+# is refused, because the harness already reports that exit. Eleven of these ran
+# on one container, the oldest 9h35m.
+test_a_backgrounded_wait_polling_a_process_is_refused if {
+	some v in violation with input as {"call": {
+		"command": "until ! pgrep -f mise >/dev/null; do sleep 20; done",
+		"run-in-background": true,
+		"segments": [
+			seg(["until", "!", "pgrep", "-f", "mise"], ";", false),
+			seg(["do", "sleep", "20"], ";", false),
+			seg(["done"], null, false),
+		],
+	}}
+	v.verdict == "task watch duplicate"
+}
+
+# THE CASE THAT SEPARATES THIS RULE FROM THE WRONG ONE. Those eleven were also
+# self-matching, and the fix for a self-match is to bracket the pattern. If that
+# were an exit from this gate, the remedy would buy eleven WORKING watchers and no
+# less waste. The wait is the defect, so a bracketed pattern is refused too.
+test_a_bracketed_pattern_is_refused_just_the_same if {
+	some v in violation with input as {"call": {
+		"command": "until ! pgrep -f [m]ise >/dev/null; do sleep 20; done",
+		"run-in-background": true,
+		"segments": [
+			seg(["until", "!", "pgrep", "-f", "[m]ise"], ";", false),
+			seg(["do", "sleep", "20"], ";", false),
+			seg(["done"], null, false),
+		],
+	}}
+	v.verdict == "task watch duplicate"
+}
+
+# `kill -0` is the same liveness question spelled as a signal, and it is the
+# spelling a caller reaches for once `pgrep` is refused.
+test_a_liveness_signal_is_the_same_question if {
+	some v in violation with input as {"call": {
+		"command": "while kill -0 $PID 2>/dev/null; do sleep 5; done",
+		"run-in-background": true,
+		"segments": [
+			seg(["while", "kill", "-0", "$PID"], ";", false),
+			seg(["do", "sleep", "5"], ";", false),
+			seg(["done"], null, false),
+		],
+	}}
+	v.verdict == "task watch duplicate"
+}
+
+# THE ANTI-VACUITY MIRROR, and without it every case above is satisfied by a rule
+# that refuses all waits. A condition the harness does NOT report stays allowed —
+# that is the whole narrowing, and `timer run refused`'s route still recommends
+# this shape for it.
+test_a_wait_on_a_condition_nobody_reports_is_clean if {
+	count(violation) == 0 with input as {"call": {
+		"command": "until curl -sf https://example.test/ready; do sleep 5; done",
+		"run-in-background": true,
+		"segments": [
+			seg(["until", "curl", "-sf", "https://example.test/ready"], ";", false),
+			seg(["do", "sleep", "5"], ";", false),
+			seg(["done"], null, false),
+		],
+	}}
+}
+
+# A PROCESS READ WITH NO LOOP IS NOT A WAIT. `mise run alive` asks once and
+# returns, which is the route this class recommends — refusing it would refuse
+# its own remedy.
+test_a_process_read_outside_a_loop_is_not_a_wait if {
+	count(violation) == 0 with input as {"call": {
+		"command": "pgrep -f mise",
+		"run-in-background": true,
+		"segments": [seg(["pgrep", "-f", "mise"], null, false)],
+	}}
+}
+
 test_a_backgrounded_wait_on_a_condition_is_allowed if {
 	count(violation) == 0 with input as {"call": {
 		"command": "until [ -f /tmp/done ]; do sleep 1; done",
