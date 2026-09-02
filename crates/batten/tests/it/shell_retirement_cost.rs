@@ -38,6 +38,7 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use batten::rules;
@@ -97,7 +98,7 @@ fn base(count: usize) -> Vec<(String, String)> {
             // Ordinary source lines. None carries an arm marker, so every one of
             // them is a line the scan must look at and reject — which is the work
             // being measured.
-            body.push_str(&format!("// corpus file {file} line {line}\n"));
+            let _ = writeln!(body, "// corpus file {file} line {line}");
         }
         files.push((format!("crates/batten/tests/it/corpus_{file}.rs"), body));
     }

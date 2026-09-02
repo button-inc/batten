@@ -80,6 +80,7 @@
 
 use crate::common;
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use common::{batten, git_in, run_with_stdin, scratch, stdout, write};
@@ -123,11 +124,12 @@ fn verdict_rows() -> String {
         {
             continue;
         }
-        rows.push_str(&format!(
+        let _ = write!(
+            rows,
             "[[verdict]]\nid = \"{}\"\ngloss = \"a fixture gloss\"\nclass = \"A fixture class.\"\n\n\
              [[verdict.route]]\nid = \"module read first\"\nkind = \"document\"\ntarget = \"policy/perf-assert.rego\"\n\n",
             verdict.id
-        ));
+        );
     }
     rows
 }

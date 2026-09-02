@@ -262,6 +262,27 @@ fn committed_budget_surfaces(dir: &Path) {
     fs::create_dir_all(dir.join(".serena")).expect("create fixture serena dir");
     fs::write(dir.join(".serena/project.yml"), "initial_prompt: ''\n")
         .expect("write fixture project config");
+    // The committed `perf-assert` row declares `README.md` as a LITERAL `lines`
+    // entry (CLOUD-1321), so it is acquired whether or not this fixture has one
+    // and an absent file reaches the module through `input.tree.missing`. That is
+    // deliberate there — a glob would match nothing in a treeless fixture and the
+    // could-not-look clause would be unreachable — and it means a fixture running
+    // the committed config owes this surface exactly as it owes `AGENTS.md`.
+    //
+    // The table AGREES with the module's `budgets`, so a case about some other
+    // rule is not also a case about the published budget.
+    fs::write(
+        dir.join("README.md"),
+        "| path | what it does | p50 | p95 | budget |\n\
+         | ---- | ------------ | --- | --- | ------ |\n\
+         | `noop` | process start | 2.1 ms | 2.4 ms | \u{2264} 100 ms |\n\
+         | `check` | one-rule tree | 2.3 ms | 2.7 ms | \u{2264} 100 ms |\n\
+         | `hook` | adjudication | 2.8 ms | 3.0 ms | \u{2264} 100 ms |\n\
+         | `passthrough` | a call no rule selects | \u{2014} | \u{2014} | \u{2264} 100 ms |\n\
+         | `posttool` | a PostToolUse call | \u{2014} | \u{2014} | \u{2264} 100 ms |\n\
+         | `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | \u{2264} 100 ms |\n",
+    )
+    .expect("write fixture README");
     committed_policy_modules(dir);
 }
 
