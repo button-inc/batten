@@ -38,8 +38,8 @@
 # self-assembled payload was measured green three times against text in a local
 # file, once under an id no row carried.
 #MUTANT-SUITE crates/batten/tests/it/obligations_bound.rs
-#MUTANT unbound-file-unread|s@^\tnot obligation.file in input.tree.tracked$@\tfalse@|an_obligation_naming_no_tracked_file_is_refused
-#MUTANT undeclared-slug-unread|s@^\tnot declares_slug(obligation)$@\tfalse@|an_obligation_whose_slug_no_row_declares_is_refused
+#MUTANT unbound-file-unread|s@^\tnot obligation_row.file in input.tree.tracked$@\tfalse@|an_obligation_naming_no_tracked_file_is_refused
+#MUTANT undeclared-slug-unread|s@^\tnot declares_slug(obligation_row)$@\tfalse@|an_obligation_whose_slug_no_row_declares_is_refused
 
 # METADATA
 # description: |
