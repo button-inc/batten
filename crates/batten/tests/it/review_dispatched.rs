@@ -210,7 +210,14 @@ fn a_missing_runner_is_could_not_look_and_never_a_refusal() {
 /// and nothing is refused.
 #[test]
 fn a_branch_that_did_not_touch_the_subject_owes_no_review() {
-    let root = repo("review-dispatched-untouched", "body\n", "", 0);
+    // THE RUNNER FAILS HERE ON PURPOSE, and that is what makes this case
+    // discriminate. With a runner that exits 0 the record is present, so the
+    // absence arm is false and the delta narrowing decides nothing observable:
+    // the case passes whether the module reads the delta or not, which is exactly
+    // what `untouched-subject-priced` measured when it SURVIVED. A failing runner
+    // leaves no record, so absence holds and the ONLY thing keeping this tree
+    // quiet is that the subject is outside the delta.
+    let root = repo("review-dispatched-untouched", "body\n", "", 1);
     // Move `origin/main` up to HEAD, so the subject is no longer in the delta.
     let head = common::git_in(&root, &["rev-parse", "HEAD"]);
     common::git_in(
