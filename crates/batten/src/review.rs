@@ -134,12 +134,45 @@ pub struct Subject {
 enum Dispatch {
     /// It ran and a record was written.
     Ran,
-    /// It ran and gave nothing usable — non-zero, or a stream that is not
-    /// pointers. The review was ASKED FOR and did not answer, which is the
-    /// branch's problem and must refuse.
+    /// It ran and did not complete — a non-zero exit. The review was ASKED FOR
+    /// and did not answer, which is the branch's problem and must refuse.
+    ///
+    /// **A stream that is not pointers is NOT this**, and used to be: completion
+    /// is the whole contract the gate reads, so demanding the agent speak
+    /// Batten's line format made every real reviewer's output a failed dispatch.
     Failed,
-    /// There is no runner here to ask. Could-not-look, never a finding.
+    /// There is no runner here to ask, or its own probe says it cannot review —
+    /// not installed, or installed and unauthenticated. Could-not-look, never a
+    /// finding: this is a fact about the machine rather than about the branch.
     NoRunner,
+}
+
+/// Whether the runner's own probe says it can review here.
+///
+/// **The runner is the authority on its own readiness**, which is why this is a
+/// declared subcommand rather than a check Batten invents. A reviewer knows
+/// whether its CLI is installed AND whether a session is authenticated; the
+/// engine can see neither, and inferring readiness from a file's existence
+/// answers a narrower question than the one that matters.
+///
+/// Conservative in the direction that costs nothing: anything other than an
+/// explicit `"ready": true` reads as NOT ready, so a probe that fails to spawn,
+/// exits non-zero, or answers in a shape this does not recognise leaves the
+/// review unjudged rather than refusing a branch over an environment nobody can
+/// see. `serde_json` rather than a substring scan, so a `"ready": false` beside
+/// a `"nextSteps"` mentioning the word cannot read as true.
+fn ready(root: &Path, row: &crate::facts::ReviewQuery) -> bool {
+    let Some((code, stdout)) = crate::exec::piped(root, Path::new(&row.runner), &row.probe, "")
+    else {
+        return false;
+    };
+    if code != 0 {
+        return false;
+    }
+    serde_json::from_str::<serde_json::Value>(&stdout)
+        .ok()
+        .and_then(|value| value.get("ready").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
 }
 
 /// One dispatched review.
@@ -360,12 +393,31 @@ fn dispatch(
     //
     // `None` is the runner not being here, which is the distinction the whole
     // `Dispatch` enum exists to preserve.
-    let Some((code, stdout)) = crate::exec::piped(
-        root,
-        Path::new(&row.runner),
-        &row.args,
-        &format!("{text}\n{pointer}"),
-    ) else {
+    // THE PROBE FIRST, so "cannot review here" is a READING rather than an
+    // inference from a missing file.
+    //
+    // `is_file()` alone cannot tell a machine that never installed the reviewer
+    // from one where it is installed and unauthenticated, and those are different
+    // remedies for the operator. A declared probe answers it: the reviewer
+    // batten's customers run reports `ready` alongside `node`, `npm`, `codex` and
+    // `auth`, with `nextSteps` attached. An undeclared probe skips this entirely,
+    // so a row that says nothing is judged exactly as before.
+    if !row.probe.is_empty() && !ready(root, row) {
+        return Dispatch::NoRunner;
+    }
+    // THE PROMPT GOES DOWN THE CHANNEL THE RUNNER ACTUALLY READS. A runner that
+    // ignores stdin discards it in SILENCE and reviews whatever it chose to look
+    // at, so the record would attest to a review that never asked the question.
+    let mut args = row.args.clone();
+    let stdin = match row.prompt_arg {
+        crate::facts::PromptArg::Stdin => format!("{text}\n{pointer}"),
+        crate::facts::PromptArg::Positional => {
+            args.push(format!("{text}\n{pointer}"));
+            String::new()
+        }
+    };
+    let Some((code, stdout)) = crate::exec::piped(root, Path::new(&row.runner), &args, &stdin)
+    else {
         return Dispatch::NoRunner;
     };
     // THE CROSS-CHECK. A non-zero status means the agent itself failed, and
@@ -373,9 +425,19 @@ fn dispatch(
     if code != 0 {
         return Dispatch::Failed;
     }
-    let Some(body) = pointers_in(&stdout) else {
-        return Dispatch::Failed;
-    };
+    // COMPLETION IS THE CONTRACT, AND THE FINDINGS ARE A BONUS.
+    //
+    // The gate over this fact refuses ABSENCE and never reads a finding, so
+    // demanding the agent speak Batten's line format couples the record to a
+    // schema nothing consumes — and guarantees that a real reviewer's output is
+    // rejected as unparseable, leaving no record and a refusal that blames the
+    // branch for somebody else's stdout. A run that exited 0 reviewed the
+    // subject; that is what is being attested.
+    //
+    // A runner that DOES emit pointers still gets them stored, so a consumer who
+    // wires one loses nothing. What changed is that failing to is no longer a
+    // failed dispatch.
+    let body = pointers_in(&stdout).unwrap_or_default();
     if let Some(parent) = path.parent()
         && std::fs::create_dir_all(parent).is_err()
     {

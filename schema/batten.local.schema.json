@@ -491,6 +491,21 @@
         }
       ]
     },
+    "PromptArg": {
+      "description": "How a dispatched prompt reaches its runner (CLOUD-472).\n\nTwo spellings rather than a bool, because the axis is not \"on or off\" — it is\nWHICH channel, and a third (a temporary file, say) is a plausible fourth\nrunner's answer. A bool would have to be renamed to admit one.",
+      "oneOf": [
+        {
+          "description": "Written to the child's stdin. The default, and what the first landed\nrunner contract assumed.",
+          "type": "string",
+          "const": "stdin"
+        },
+        {
+          "description": "Appended to `args` as the last positional. What a runner taking a focus\nstring needs — and what the reviewer batten's customers run requires.",
+          "type": "string",
+          "const": "positional"
+        }
+      ]
+    },
     "ReceiptKey": {
       "description": "Which git fact a receipt is keyed to, and therefore what invalidates it.\n\nThe distinction is not a tuning knob, it is what the receipt *attests*.\nA `head` receipt claims something about those exact bytes, so an amend or a\nrebase must expire it. A `branch` receipt claims a decision about the work,\nwhich every commit on the branch continues to serve, so a SHA-keyed one\nwould demand a re-claim per commit — the false-positive rate that gets a\nguard bypassed. Both spellings are carried from the shell layer that proved\nthem (`ready-guard` keys by SHA, `claim-check` by branch).\n\n**`ValueEnum` because the CLI selects the same keying** (CLOUD-741). A\n`receipt` rule is pinned to [`RuleScope::MediatedCall`], so `batten check`\ncan never evaluate one and `verify` cannot reach this predicate through the\nengine — which left `verify` re-implementing it in shell, weakly enough that\nCLOUD-516's own incident passed. `receipt status --key branch` is how the\ntree surface reaches the one implementation instead, so config and CLI must\nname the keying with the same tokens or the two surfaces disagree about what\nthey asked for. `clap`'s and serde's renames both land on `head`/`branch`;\nthe `clap(rename_all)` is stated rather than inferred so a future variant\ncannot drift them apart.",
       "oneOf": [
@@ -604,9 +619,20 @@
             "null"
           ]
         },
+        "probe": {
+          "description": "A subcommand that answers whether this runner can review AT ALL.\n\n**Readiness as a declared reading rather than an inference.** Without it\nthe engine infers \"no runner\" from a missing file, which cannot tell a\nmachine that never installed the reviewer from one where it is installed\nand not authenticated — different remedies, and the operator gets neither.\n\nThe runner is the authority on its own readiness: it knows whether its\ndependencies resolve and whether a session is authenticated, and the\nengine can see neither. Reviewers in this class expose exactly such a\nsubcommand, reporting a boolean beside the remedy steps; the row names\nwhich one, because whose reviewer it is is the consumer's business.\n\nAbsent keeps today's behaviour, so a row that declares none is judged\nexactly as it was before this column existed.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "prompt": {
           "description": "Which VENDORED prompt to dispatch, by id.\n\nVendored rather than a path, and that is the safety property: the text is\ncompiled into the binary, so its digest is a constant of the build and a\nconsumer cannot satisfy the gate by pointing it at an easier prompt.",
           "type": "string"
+        },
+        "prompt_arg": {
+          "description": "How the prompt reaches the runner.\n\n**Declared because a runner that ignores the channel discards the prompt\nSILENTLY**, and the record then reads as a completed review of whatever\nthe agent chose to look at. Measured against a real reviewer whose review\nsubcommand takes its focus as a POSITIONAL and wires stdin only for a\ndifferent subcommand: the dispatch succeeds, exits zero and steers\nnothing. Which reviewer, and the reading, are CLOUD-472's — a consumer's\ntool is not this crate's to name (non-negotiable rule 1).\n\nDefaults to stdin, which is what the first landed runner contract\nassumed, so a row that says nothing keeps its behaviour.",
+          "$ref": "#/$defs/PromptArg"
         },
         "runner": {
           "description": "The agent to dispatch it through.",

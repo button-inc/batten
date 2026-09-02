@@ -76,10 +76,18 @@ fn stub(root: &Path, emits: &str, code: i32) {
     fs::write(
         &path,
         format!(
-            "#!/bin/sh\ncat >/dev/null\necho x >> \"$(dirname \"$0\")/calls\"\nprintf '%s' {emits:?}\nexit {code}\n"
+            "#!/bin/sh\n\
+             if [ \"$1\" = setup ]; then printf '%s' \"$(cat \"$(dirname \"$0\")/ready\")\"; exit 0; fi\n\
+             cat >/dev/null\n\
+             echo \"$@\" >> \"$(dirname \"$0\")/calls\"\n\
+             printf '%s' {emits:?}\n\
+             exit {code}\n"
         ),
     )
     .expect("write the stub");
+    // The probe's answer lives beside the stub so a case can set it without
+    // rewriting the program: readiness is what varies, not the runner.
+    fs::write(root.join("ready"), r#"{"ready": true}"#).expect("write the probe answer");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -245,18 +253,25 @@ fn an_absent_record_is_refused_over_the_engines_own_projection() {
     assert_eq!(verdicts(&root), vec![RULE.to_owned()]);
 }
 
-/// CLEAN IS NEVER INFERRED FROM A STREAM THAT FAILED TO PARSE. An agent that
-/// answered in prose has not produced pointers, and storing the subset that
-/// happened to parse would be a silent partial answer.
+/// THE EXIT STATUS DECIDES, NOT THE PARSE — and this case is what tells them
+/// apart, because it hands the runner a PERFECTLY PARSEABLE stream and a
+/// non-zero exit.
+///
+/// It replaces a case that asserted the opposite: a prose answer used to be a
+/// failed dispatch, on `secrets.rs`' invariant that clean is never inferred from
+/// a stream that failed to parse. That invariant still holds where it belongs —
+/// a run that did not COMPLETE records nothing — but it was reaching too far.
+/// The gate refuses absence and never reads a finding, so demanding Batten's
+/// line format from the agent made every reviewer that speaks its own into a
+/// failure, and refused the branch for somebody else's stdout.
 #[test]
-fn a_runner_that_answers_in_prose_leaves_no_record() {
-    let root = repo(
-        "review-dispatched-prose",
-        "body\n",
-        "I reviewed it and it looks fine.\n",
-        0,
+fn a_runner_that_exits_non_zero_leaves_no_record_even_with_clean_output() {
+    let root = repo("review-red-but-parseable", "body\n", "a.md 3 §7\n", 1);
+    assert_eq!(
+        verdicts(&root),
+        vec![RULE.to_owned()],
+        "completion is the contract, and this run did not complete"
     );
-    assert_eq!(verdicts(&root), vec![RULE.to_owned()]);
 }
 
 // ---------------------------------------------------------------------------
@@ -321,5 +336,161 @@ fn the_committed_row_is_the_one_these_cases_exercise() {
     assert!(
         batten::review::prompt(&review.prompt).is_some(),
         "the committed row's prompt id is one this binary vendors"
+    );
+}
+
+/// The last argument the stub was invoked with, or the empty string.
+///
+/// This is what proves the prompt REACHED the runner. Nothing in the record can
+/// show it: a review dispatched with the prompt discarded writes a record
+/// byte-identical to one dispatched with it delivered, which is exactly why the
+/// defect this case exists for survived being tested.
+fn last_call(root: &Path) -> String {
+    fs::read_to_string(root.join("calls")).unwrap_or_default()
+}
+
+fn row_with(root: &Path, extra: &serde_json::Value) -> Rule {
+    let mut review = serde_json::json!({
+        "id": REVIEW,
+        "prompt": REVIEW,
+        "runner": root.join("runner.sh").display().to_string(),
+        "version": "0",
+        "subject": "document",
+        "path": SUBJECT,
+    });
+    let (Some(base), Some(more)) = (review.as_object_mut(), extra.as_object()) else {
+        panic!("both are objects");
+    };
+    for (key, value) in more {
+        base.insert(key.clone(), value.clone());
+    }
+    serde_json::from_value(serde_json::json!({
+        "id": RULE,
+        "kind": "policy",
+        "scope": "tree",
+        "base": "origin/main",
+        "delta_sources": [SUBJECT],
+        "module": "policy/review-dispatched.rego",
+        "severity": "deny",
+        "review": [review],
+    }))
+    .expect("the loader accepts the row")
+}
+
+fn verdicts_with(root: &Path, extra: &serde_json::Value) -> Vec<String> {
+    let verdicts = common::verdicts_in(root);
+    rules::run_static(
+        &[row_with(root, extra)],
+        &[],
+        batten::policy::Vocabulary {
+            patterns: &[],
+            verdicts: &verdicts,
+            recorders: &[],
+        },
+        root,
+    )
+    .expect("the read surface runs a policy row")
+    .findings
+    .into_iter()
+    .map(|finding| finding.rule)
+    .collect()
+}
+
+// ---------------------------------------------------------------------------
+// THE PROMPT REACHES THE RUNNER, which no record can attest to.
+// ---------------------------------------------------------------------------
+
+/// A POSITIONAL runner is handed the prompt as an argument.
+///
+/// Measured against a real reviewer whose review subcommand takes focus as a
+/// POSITIONAL and wires stdin only for a different subcommand: a prompt sent down
+/// stdin is discarded in silence and the review runs unsteered, exiting zero. The
+/// record is identical either way — only the invocation shows it.
+#[test]
+fn a_positional_runner_is_handed_the_prompt_as_an_argument() {
+    let root = repo("review-prompt-positional", "body\n", "", 0);
+    assert!(
+        verdicts_with(&root, &serde_json::json!({"prompt_arg": "positional"})).is_empty(),
+        "the dispatch completed"
+    );
+    // THE POINTER, not a phrase from the prompt: the prose is edited freely and
+    // an assertion on it breaks for a reason that has nothing to do with the
+    // channel. The subject pointer is the last thing written into the payload, so
+    // finding it in argv proves the WHOLE payload arrived positionally.
+    assert!(
+        last_call(&root).contains(SUBJECT),
+        "the prompt and its pointer must arrive as an argument: {:?}",
+        last_call(&root)
+    );
+}
+
+/// AND THE DEFAULT STILL SENDS IT ON STDIN, so the landed contract is unchanged
+/// for a row that declares nothing.
+#[test]
+fn a_row_declaring_no_channel_still_sends_the_prompt_on_stdin() {
+    let root = repo("review-prompt-stdin", "body\n", "", 0);
+    assert!(verdicts(&root).is_empty(), "the dispatch completed");
+    assert!(
+        !last_call(&root).contains(SUBJECT),
+        "the default channel is stdin, so no argument carries the payload: {:?}",
+        last_call(&root)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// READINESS IS THE RUNNER'S OWN ANSWER.
+// ---------------------------------------------------------------------------
+
+/// A runner that is INSTALLED and says it cannot review is could-not-look.
+///
+/// This is the arm `is_file()` cannot reach: the program is right there, so
+/// every file-existence check says "runner present", and the branch would be
+/// refused for an environment that is simply not authenticated.
+#[test]
+fn a_runner_whose_probe_says_it_is_not_ready_is_could_not_look() {
+    let root = repo("review-probe-unready", "body\n", "", 0);
+    fs::write(
+        root.join("ready"),
+        r#"{"ready": false, "nextSteps": ["authenticate the reviewer"]}"#,
+    )
+    .expect("the probe answers not-ready");
+    assert!(
+        verdicts_with(&root, &serde_json::json!({"probe": ["setup", "--json"]})).is_empty(),
+        "an unauthenticated reviewer is unjudgeable, not guilty"
+    );
+    assert_eq!(calls(&root), 0, "and nothing was dispatched");
+}
+
+/// A ready runner dispatches, so the probe is a gate rather than a wall.
+#[test]
+fn a_runner_whose_probe_says_it_is_ready_dispatches() {
+    let root = repo("review-probe-ready", "body\n", "", 0);
+    assert!(
+        verdicts_with(&root, &serde_json::json!({"probe": ["setup", "--json"]})).is_empty(),
+        "the dispatch completed"
+    );
+    assert_eq!(calls(&root), 1, "the probe passed and the review ran");
+}
+
+// ---------------------------------------------------------------------------
+// COMPLETION IS THE CONTRACT.
+// ---------------------------------------------------------------------------
+
+/// A REAL REVIEWER'S OUTPUT IS NOT A FAILED DISPATCH. The gate refuses absence
+/// and never reads a finding, so demanding Batten's line format would reject
+/// every reviewer that speaks its own — leaving no record, and refusing the
+/// branch for somebody else's stdout.
+#[test]
+fn a_runner_that_answers_in_its_own_format_still_records() {
+    let root = repo(
+        "review-foreign-format",
+        "body\n",
+        "{\"exitStatus\":0,\"payload\":{\"findings\":[]}}\n",
+        0,
+    );
+    assert!(
+        verdicts(&root).is_empty(),
+        "a completed review records whatever it said: {:?}",
+        verdicts(&root)
     );
 }
