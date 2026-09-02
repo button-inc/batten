@@ -560,13 +560,21 @@ mod tests {
         // verb ("structurally incapable, not merely well-behaved") cannot be
         // made about a verb whose whole job is adjudicating someone else's
         // write. Pinned here so the correction cannot be undone by a row edit.
+        // DERIVED FROM THE ROW (CLOUD-1191), so the pin survives the rename it
+        // is pinning against. Spelled `hook` until CLOUD-1192 moved the path to
+        // `adjudicate`; a literal here would have gone quietly green on that
+        // rename by asking about a path the surface no longer declares —
+        // asserting nothing, in the unsafe direction this case exists to stop.
+        let path = crate::surface::mediation()
+            .expect("the surface declares a mediation row")
+            .path;
         let allowlist = read_only_allowlist(&spec());
         assert!(
-            !allowlist.iter().any(|entry| entry.path == "hook"),
+            !allowlist.iter().any(|entry| entry.path == path),
             "the mediation entrypoint leaked into the read-only allowlist: {allowlist:?}"
         );
-        assert_eq!(effect_for("hook"), Effect::Unclassified);
-        assert!(!effect_for("hook").is_read_only());
+        assert_eq!(effect_for(path), Effect::Unclassified);
+        assert!(!effect_for(path).is_read_only());
     }
 
     #[test]

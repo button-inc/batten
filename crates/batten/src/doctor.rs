@@ -1200,7 +1200,9 @@ mod tests {
         );
 
         // The same shape with a verb the surface does not declare. This is what a
-        // half-done rename leaves in a committed wiring file.
+        // half-done rename leaves in a committed wiring file. `adjudicate` is the
+        // path CLOUD-1192 proposes, so this is the exact string that row's
+        // rename would strand if it landed without this derivation.
         let stale = format!(
             "{} adjudicate --harness {}",
             crate::surface::BINARY,
@@ -1855,8 +1857,21 @@ mod tests {
                 "a legitimate spelling must stay green — {spelling}"
             );
         }
+        // DERIVED, because a literal here is the fourth spelling CLOUD-1191
+        // removed — this assertion hardcoded `hook` and went red on the rename,
+        // which is the derivation catching its own test rather than the test
+        // catching the derivation.
+        let argv = crate::surface::mediation_argv().expect("declared");
         assert!(
-            reaches_engine("/opt/bin/batten.exe hook --harness claude-code", harness),
+            reaches_engine(
+                &format!(
+                    "/opt/bin/{}.exe {} {}",
+                    crate::surface::BINARY,
+                    argv.join(" "),
+                    harness.as_str()
+                ),
+                harness
+            ),
             "the stem match is what lets a Windows image pass"
         );
         // And the drift case the existing suite pins stays drift.
