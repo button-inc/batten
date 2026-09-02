@@ -164,6 +164,19 @@ pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 /// failure (I/O, a missing external tool, or an internal invariant violation).
 /// Such errors map to [`ExitCode::Internal`] at the boundary; a *policy
 /// violation*, by contrast, is a normal return of [`ExitCode::Violation`].
+// THE DISPATCH IS ONE ARM PER VERB, WITH ITS REASON BESIDE IT, and that is the
+// point of it rather than a size to be managed — the same argument `spec.rs`'s
+// committed row set carries. Splitting the table to satisfy a line count would
+// scatter the one place a reader can see the whole surface and what each arm
+// answers to, and would put a verb's rationale somewhere its dispatch is not.
+//
+// `#[expect]` rather than `#[allow]` for `.claude/rules/rust.md`'s reason: it is
+// self-cleaning in both directions, so if the table ever shrinks back under the
+// ceiling this annotation goes red rather than quietly outliving its cause.
+#[expect(
+    clippy::too_many_lines,
+    reason = "a dispatch table's length is its verb count; splitting it scatters the surface"
+)]
 pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let Cli {
         strictness,

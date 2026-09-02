@@ -59,12 +59,14 @@ pub struct Cli {
 pub struct CheckFlags {
     /// Emit findings as byte-stable JSON instead of pointer lines.
     pub json: bool,
-    /// Run only the declared row with this id (CLOUD-1051).
+    /// Run only the declared rows with these ids (CLOUD-1051, repeatable since
+    /// CLOUD-1358).
     ///
-    /// `None` is every applicable row, which is what `check` has always meant. A
-    /// `Some` naming no declared row is a usage error rather than a clean run
-    /// over nothing — see `surface::CHECK_RULE`.
-    pub rule: Option<String>,
+    /// EMPTY is every applicable row, which is what `check` has always meant. An
+    /// id naming no declared row is a usage error rather than a clean run over
+    /// nothing, and that refusal is PER ID — see `select_rules`, where a typo
+    /// riding along with a valid sibling is the case the arity opened.
+    pub rule: Vec<String>,
     /// `--staged`: judge only what the git index holds differently from `HEAD`
     /// (CLOUD-519).
     pub staged: bool,
@@ -78,6 +80,29 @@ pub struct CheckFlags {
     pub since: Option<String>,
 }
 
+/// `enforce`'s flags, which travel together for `CheckFlags`'s reason.
+///
+/// A payload struct rather than fields on the variant, and the shape is a
+/// REPAIR rather than symmetry for its own sake. `Enforce` carried its flags
+/// inline, so adding `--rule` to it was `enum_struct_variant_field_added` — a
+/// major break `semver` refused, on a verb whose flag set is the one most likely
+/// to grow again. `#[non_exhaustive]` on the enum does not reach a variant's
+/// fields; only a named struct does. Paying the break once here is what stops
+/// the next flag paying it again.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct EnforceFlags {
+    /// Emit findings as byte-stable JSON instead of pointer lines.
+    pub json: bool,
+    /// Run only the declared row with this id, or every applicable row.
+    ///
+    /// The narrowing `check` has carried since CLOUD-1051, extended to the
+    /// spawning verb for the one caller `check` cannot serve: a case whose
+    /// SUBJECT is a `kind = "command"` row, and repeatable since CLOUD-1358.
+    /// See `surface::ENFORCE_RULE`.
+    pub rule: Vec<String>,
+}
+
 /// The top-level subcommands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -85,10 +110,7 @@ pub enum Command {
     /// Run the applicable read-only gates against the repository.
     Check(CheckFlags),
     /// Run every configured rule, including kinds that execute a configured command.
-    Enforce {
-        /// Emit findings as byte-stable JSON instead of pointer lines.
-        json: bool,
-    },
+    Enforce(EnforceFlags),
     /// Inspect configuration.
     Config {
         /// The chosen sub-verb.
@@ -317,12 +339,32 @@ pub enum Command {
         /// The chosen sub-verb.
         command: LeaseCommand,
     },
-    /// The landing lap's replay (CLOUD-1335), beside `mise-tasks/land.sh` rather
-    /// than replacing it.
+    /// Whether this container matches what the repository declares (CLOUD-1324).
+    ///
+    /// Appended for the reason `Lease` above states, which every new variant
+    /// here answers to: this enum carries no `repr`, so a variant placed beside
+    /// its neighbours in the surface would shift every later discriminant and
+    /// `mise run semver` would read that as a break the crate has to declare. It
+    /// was written beside `Provision` first, which is where a reader looks for
+    /// it, and `semver` said so.
+    Startup {
+        /// Run each failing row's declared repair, then re-decide its check.
+        repair: bool,
+        /// Whether the data channel was asked for.
+        json: bool,
+    },
+    /// The landing lap (CLOUD-1335, CLOUD-1338), beside `mise-tasks/land.sh`
+    /// rather than replacing it.
     ///
     /// Appended for the reason `Lease` records: this enum carries no `repr`, so a
     /// variant placed beside its neighbours shifts every later discriminant and
     /// the compatibility gate reads that as a break the crate has to declare.
+    ///
+    /// AFTER `Startup` RATHER THAN BEFORE IT, and that ordering was decided by a
+    /// rebase rather than chosen: both variants were written as the last one, and
+    /// `Startup` is the one already on the landing target. Placing `Land` ahead of
+    /// it would shift a discriminant that has already shipped, which is the exact
+    /// break the paragraph above exists to avoid.
     Land {
         /// The chosen sub-verb.
         command: LandCommand,
@@ -331,9 +373,9 @@ pub enum Command {
 
 /// Subcommands of `land`.
 ///
-/// THE LAP IS fetch → replay → verify → push → wait → fast-forward, and three of
-/// those are here. Verify and the fast-forward stay in the consumer's lander
-/// until they land beside these, so this is a parallel capability rather than a
+/// THE LAP IS fetch → replay → verify → push → wait → fast-forward, and four of
+/// those are here. The fast-forward comment stays in the consumer's lander until
+/// it lands beside these, so this is a parallel capability rather than a
 /// cut-over. A bare verb with no sub-command would have to be widened into this
 /// shape later, which is a surface break for a change that adds a capability.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -751,6 +793,8 @@ pub enum WiringCommand {
         yes: bool,
         /// Report what would be removed and remove nothing.
         dry_run: bool,
+        /// Decide whether a repair is owed, and remove nothing.
+        check: bool,
     },
 }
 
@@ -1374,6 +1418,7 @@ fn wiring_of(matches: &ArgMatches) -> Option<WiringCommand> {
         ("reclaim", matches) => Some(WiringCommand::Reclaim {
             yes: flag(matches, "yes"),
             dry_run: flag(matches, "dry_run"),
+            check: flag(matches, "check"),
         }),
         _ => None,
     }
@@ -1429,6 +1474,35 @@ fn worktree_of(matches: &ArgMatches) -> Option<WorktreeCommand> {
     }
 }
 
+/// `land`'s four sub-verbs, read the way [`lease_of`] reads its own.
+///
+/// The two positionals are `required` on their surface rows, so `clap` refuses an
+/// absent one before this runs and the defaults below are unreachable — which
+/// matters here for the reason it matters there: an empty reference would be
+/// replayed against, rather than reported as unanswerable.
+///
+/// `push` and `verify` take none, each for its own reason recorded on the
+/// variant.
+fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
+    let reference_of = |matches: &ArgMatches| {
+        matches
+            .get_one::<String>("reference")
+            .cloned()
+            .unwrap_or_default()
+    };
+    match matches.subcommand()? {
+        ("replay", matches) => Some(LandCommand::Replay {
+            reference: reference_of(matches),
+        }),
+        ("wait", matches) => Some(LandCommand::Wait {
+            reference: reference_of(matches),
+        }),
+        ("push", _) => Some(LandCommand::Push),
+        ("verify", _) => Some(LandCommand::Verify),
+        _ => None,
+    }
+}
+
 /// `lease`'s nine arms (CLOUD-1274).
 ///
 /// Every positional here is `required` on its surface row, so `clap` refuses an
@@ -1466,32 +1540,6 @@ fn lease_of(matches: &ArgMatches) -> Option<LeaseCommand> {
         ("reserve", matches) => Some(LeaseCommand::Reserve {
             branch: branch_of(matches),
         }),
-        _ => None,
-    }
-}
-
-/// `land`'s one sub-verb, read the way [`lease_of`] reads its own.
-///
-/// The positional is `required` on its surface row, so `clap` refuses an absent
-/// one before this runs and the default below is unreachable — which matters
-/// here for the reason it matters there: an empty reference would be replayed
-/// against, rather than reported as unanswerable.
-fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
-    match matches.subcommand()? {
-        ("replay", matches) => Some(LandCommand::Replay {
-            reference: matches
-                .get_one::<String>("reference")
-                .cloned()
-                .unwrap_or_default(),
-        }),
-        ("wait", matches) => Some(LandCommand::Wait {
-            reference: matches
-                .get_one::<String>("reference")
-                .cloned()
-                .unwrap_or_default(),
-        }),
-        ("push", _) => Some(LandCommand::Push),
-        ("verify", _) => Some(LandCommand::Verify),
         _ => None,
     }
 }
@@ -1781,13 +1829,23 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
     match name {
         "check" => Some(Command::Check(CheckFlags {
             json: flag(matches, "json"),
-            rule: matches.get_one::<String>("rule").cloned(),
+            // `get_many`, not `get_one`: the flag is an `Append` action, so
+            // `get_one` would keep only the LAST `--rule` and silently narrow a
+            // selection the caller widened — `ValueDecl::StrMany`'s own hazard.
+            rule: matches
+                .get_many::<String>("rule")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
             staged: flag(matches, "staged"),
             since: matches.get_one::<String>("since").cloned(),
         })),
-        "enforce" => Some(Command::Enforce {
+        "enforce" => Some(Command::Enforce(EnforceFlags {
             json: flag(matches, "json"),
-        }),
+            rule: matches
+                .get_many::<String>("rule")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+        })),
         "config" => config_of(matches).map(|command| Command::Config { command }),
         "lint" => lint_of(matches).map(|command| Command::Lint { command }),
         "spec" => matches
@@ -1808,6 +1866,10 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
             dry_run: flag(matches, "dry_run"),
         }),
         "policy" => policy_of(matches).map(|command| Command::Policy { command }),
+        "startup" => Some(Command::Startup {
+            repair: flag(matches, "repair"),
+            json: flag(matches, "json"),
+        }),
         "provision" => provision_of(matches).map(|command| Command::Provision { command }),
         "defects" => defects_of(matches).map(|command| Command::Defects { command }),
         "design" => design_of(matches).map(|command| Command::Design { command }),
