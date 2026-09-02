@@ -12589,8 +12589,32 @@ fn run_doctor(command: &cli::DoctorCommand, out: &mut dyn Write) -> Result<ExitC
     match *command {
         cli::DoctorCommand::Diagnose { json } => run_diagnose(json, out),
         cli::DoctorCommand::Hooks { json } => run_doctor_hooks(json, out),
+        cli::DoctorCommand::Mediator { json } => run_doctor_mediator(json, out),
         cli::DoctorCommand::Session { json } => run_doctor_session(json, out),
     }
+}
+
+/// Was the engine the registrations reach built from this tree (CLOUD-1349)?
+///
+/// `doctor hooks` answers whether the registrations reach an engine; this answers
+/// WHICH one, and the gap between those two questions is where a session spends
+/// six hours believing it is mediated. Rationale, and why it is a sub-verb rather
+/// than a fourth check in the bare report, on [`doctor::Mediator`].
+///
+/// One pointer line, never a digest: a hash is stable per content but varies per
+/// machine, so emitting one would defeat the byte-stability §6 requires of this
+/// verb's output while telling the reader nothing they can act on. The remedy is
+/// `mise run install:local` and the verdict is what says whether to run it.
+fn run_doctor_mediator(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
+    let report = doctor::diagnose_mediator(Path::new("."));
+    if json {
+        // A data channel emits its document unconditionally, including when the
+        // mediator is current: JSON that is sometimes absent is unparseable.
+        writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
+    } else {
+        writeln!(out, "{}", report.line())?;
+    }
+    Ok(report.code())
 }
 
 fn run_diagnose(json: bool, out: &mut dyn Write) -> Result<ExitCode> {

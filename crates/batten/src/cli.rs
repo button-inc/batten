@@ -1133,6 +1133,15 @@ pub enum DoctorCommand {
         /// Emit the per-harness diagnosis as byte-stable JSON.
         json: bool,
     },
+    /// Whether the engine the registrations reach was built from this tree.
+    ///
+    /// A sub-verb rather than a check in the bare report, because whether an
+    /// install is current is a property of the world and bare `doctor` answers a
+    /// property of the commit — see [`crate::doctor::Mediator`].
+    Mediator {
+        /// Emit the comparison as byte-stable JSON.
+        json: bool,
+    },
     /// Whether this session has declared work it has not finished.
     Session {
         /// Emit the count and the open ids as byte-stable JSON.
@@ -1460,6 +1469,9 @@ fn design_of(matches: &ArgMatches) -> Option<DesignCommand> {
 fn doctor_of(matches: &ArgMatches) -> DoctorCommand {
     match matches.subcommand() {
         Some(("hooks", matches)) => DoctorCommand::Hooks {
+            json: flag(matches, "json"),
+        },
+        Some(("mediator", matches)) => DoctorCommand::Mediator {
             json: flag(matches, "json"),
         },
         Some(("session", matches)) => DoctorCommand::Session {

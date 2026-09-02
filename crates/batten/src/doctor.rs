@@ -207,6 +207,116 @@ const PIN_RECORD: &str = "pin-record";
 /// registration nor a sibling.
 const HOOK_HANDLERS: &str = "hook-handlers";
 
+/// Which engine the hook registrations actually reach (CLOUD-1349).
+///
+/// **A stale mediator reads exactly like a working one**, which is the worst
+/// shape in this model rather than an ordinary bug: silence from the hook is the
+/// documented signal that it IS mediating, so an engine enforcing an old rule
+/// table and one enforcing the committed table produce identical evidence. Every
+/// other defence sits above where this fails — `input.tree.missing` as a channel,
+/// `NotAcquired` keeping `Absent` and `Unparsed` apart, `RuleSkipped` reported
+/// rather than folded into clean. Measured three times in one container on
+/// 2026-09-02.
+///
+/// **A SUB-VERB, NOT A CHECK IN THE BARE REPORT, AND THE PLACEMENT IS THE WHOLE
+/// DECISION.** This landed once inside [`diagnose`] and was refused by `verify`:
+/// `crates/batten/tests/it/doctor.rs::this_repository_is_healthy` went red
+/// because `land` had rebuilt `target/release/batten` while the installed copy
+/// was an hour old. The check was telling the truth. Whether a container's
+/// install is current is a property of the WORLD, and bare `doctor` answers a
+/// property of the COMMIT — so folding it in made a commit gate answer on install
+/// recency. `.claude/rules/toolchain.md` records that exact defect for
+/// `lock-check`, whose remedy was the same split: the pure gate keeps its
+/// question, the world-fact gets its own caller. House style §2 already specifies
+/// `doctor <SUB>` for a focused diagnostic, so the shape was available.
+///
+/// **Content, never the version string, correcting this row's own §2.** Measured:
+/// `batten --version` read `0.0.137`, the workspace read `0.0.137`, and that
+/// binary refused the tree's own `batten.toml` with `unknown field
+/// endpoint_contains`. A config surface moves without a version bump, and on a
+/// fast-forward-only trunk that is the ordinary case, so version equality does
+/// not discriminate. The digest catches that and every case a version would.
+///
+/// **Nothing is executed.** `doctor` is `Effect::Read` and the agent allowlist is
+/// `filter(effect == read)` with no second list, so spawning a program named by a
+/// wiring file would put config-supplied code behind a row any consumer's agent
+/// may call — CLOUD-170's actual invariant, and the reason [`on_path`] stats
+/// rather than runs. Hashing a file reaches none of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case", tag = "state")]
+pub enum Mediator {
+    /// The resolved binary is byte-identical to this tree's build.
+    Current,
+    /// Both were read and they differ.
+    Stale,
+    /// This tree does not build a mediator, so there is nothing to compare.
+    ///
+    /// Distinct from the two below: a consumer checkout is not a failed lookup,
+    /// it is a question with no referent.
+    NotApplicable,
+    /// This tree builds one, but nothing named `batten` resolves on `PATH`.
+    Unresolvable,
+    /// This tree builds one and the built artifact could not be read.
+    Unbuilt,
+}
+
+impl Mediator {
+    /// The pointer line this renders as, without a trailing newline.
+    #[must_use]
+    pub const fn line(&self) -> &'static str {
+        match self {
+            Mediator::Current => "mediator ok",
+            Mediator::Stale => "mediator failed mediator-stale",
+            Mediator::NotApplicable => "mediator ok not-applicable",
+            Mediator::Unresolvable => "mediator failed mediator-unresolvable",
+            Mediator::Unbuilt => "mediator failed mediator-unbuilt",
+        }
+    }
+
+    /// The exit code this maps to.
+    ///
+    /// [`ExitCode::Violation`] is unreachable, inheriting the promise the parent
+    /// makes: a mediating harness reads `2` as a deny, and "your install is out
+    /// of date" is not "policy says no".
+    #[must_use]
+    pub const fn code(&self) -> ExitCode {
+        match self {
+            Mediator::Current | Mediator::NotApplicable => ExitCode::Success,
+            Mediator::Stale | Mediator::Unresolvable | Mediator::Unbuilt => ExitCode::Usage,
+        }
+    }
+}
+
+/// Compare the mediator on `PATH` against the artifact `dir` builds.
+///
+/// Reads both files and hashes them; spawns nothing. Length is compared first
+/// only as a short-circuit — two files of different lengths cannot be identical.
+#[must_use]
+pub fn diagnose_mediator(dir: &Path) -> Mediator {
+    // The tree builds a mediator iff it carries the crate that produces one.
+    // Asking the manifest rather than looking for the artifact keeps "a consumer
+    // checkout" and "batten's own checkout before its first build" distinct: the
+    // second is a could-not-look and the first is not a question at all.
+    if !dir.join("crates/batten/Cargo.toml").is_file() {
+        return Mediator::NotApplicable;
+    }
+    let Some(resolved) = crate::rules::on_path_verbatim("batten") else {
+        return Mediator::Unresolvable;
+    };
+    let built = dir.join("target/release/batten");
+    let (Ok(left), Ok(right)) = (std::fs::read(&resolved), std::fs::read(&built)) else {
+        return Mediator::Unbuilt;
+    };
+    if left.len() != right.len() {
+        return Mediator::Stale;
+    }
+    if crate::receipt::hex_sha256(&left) == crate::receipt::hex_sha256(&right) {
+        Mediator::Current
+    } else {
+        Mediator::Stale
+    }
+}
+
 /// Whether `program` resolves to an existing file on `PATH`.
 ///
 /// **Stats, never executes.** Running the program to see whether it exists is
