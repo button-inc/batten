@@ -105,6 +105,7 @@ const CANDIDATES: &[&str] = &[
     "point",
     "port",
     "program",
+    "prompt",
     "prose",
     "reach",
     "read",

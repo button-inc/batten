@@ -4822,6 +4822,41 @@ reduce = "present"
 # validated these bytes at this version — absent from the map, not a verdict — so
 # this row is inert on a checkout nobody has recorded against, which is every
 # checkout today.
+# CLOUD-472's consumer, and the row that makes `Fact::Review` a gate rather than
+# a store.
+#
+# `[[rule.review]]` is what pays for it, on `[[rule.tools]]`'s shape and for
+# `symbols = true`'s reason: this is the second `Cost::Effect` fact, so a MISS
+# dispatches an agent — minutes and tokens, where clippy is seconds. The digest
+# key makes that once per unique subject rather than once per landing lap, but a
+# run that paid it unasked would still be the shape that gets a gate switched off.
+#
+# `scope = "tree"` is forced rather than chosen: `Fact::Review` is not
+# `Surface::Hook`, and `validate()` refuses a mediated row declaring a
+# tree-surface fact. A round trip to an agent on every tool call would be
+# disqualifying against the invocation budget besides.
+#
+# THE PROMPT ID NAMES A VENDORED PROMPT, never a path. Its text is compiled into
+# the binary, so its digest is a constant of the build — which is what makes "a
+# particular prompt ran" a checkable claim rather than an intention, and what
+# stops a consumer satisfying the gate by pointing it at an easier one.
+[[rule]]
+id = "review-dispatched"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["AGENTS.md"]
+module = "policy/review-dispatched.rego"
+severity = "deny"
+
+[[rule.review]]
+id = "ready-pressure-test"
+prompt = "ready-pressure-test"
+runner = "batten-review-runner"
+version = "0"
+subject = "document"
+path = "AGENTS.md"
+
 [[rule]]
 id = "validator-verdict-clean"
 kind = "policy"
@@ -6643,6 +6678,10 @@ gloss = "an executable"
 [[vocabulary.subject]]
 word = "plan"
 gloss = "the work a branch declared it would do"
+
+[[vocabulary.subject]]
+word = "prompt"
+gloss = "a vendored agent prompt"
 
 [[vocabulary.subject]]
 word = "prose"
@@ -9046,6 +9085,46 @@ target = "mise.toml"
 # counts one collection plus a page guard, so the second condition is
 # `review read absent`'s below. Leaving it named here would send a reader looking for
 # threads on a head whose only problem is that nobody looked.
+# CLOUD-472. A declared review that never ran over these bytes.
+#
+# THE SUBJECT IS `prompt`, NOT `review`, and the distinction is load-bearing
+# rather than fussy: `review answer missing` and `review read absent` below are
+# about the FORGE's review of a pull request, and a reader meeting a third
+# `review …` class would have to look up which kind it meant. This one is about a
+# vendored prompt this repository dispatches itself.
+[[verdict]]
+id = "prompt run never"
+gloss = "a review this branch declared it would run has not run over these bytes"
+class = """
+Refuses ABSENCE and nothing else. A declared id missing from the review store \
+means the vendored prompt has not been shown to run over this subject, which is \
+a comparison of two digests — a record keyed to another prompt, or to bytes that \
+have since changed, lives under a different name and does not answer. What the \
+agent CONCLUDED is never read: refusing on that would be a model verdict wearing \
+an exit code, which non-negotiable rule 3 forbids, and the fact is shaped so it \
+cannot be written. A review that ran and pointed at something is as clean as one \
+that pointed at nothing, deliberately — pricing findings is how you buy an agent \
+that reports none. This is the opposite arm from `forge check red`, which reads \
+absence as could-not-look because the forge may legitimately not have judged \
+yet; a review this branch was supposed to dispatch and did not is the branch's \
+own conduct.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run verify"
+
+[[verdict.route]]
+id = "task run other"
+kind = "command"
+target = "check the declared runner is installed and on PATH — a dispatch that cannot spawn leaves no record, exactly as one that never ran"
+
+[[verdict.route]]
+id = "path admit first"
+kind = "override"
+precondition = "the review cannot be dispatched in this environment at all — no runner exists here — rather than not having been dispatched in one where it could"
+
 [[verdict]]
 id = "review answer missing"
 gloss = "readying would buy a CI matrix on a head carrying unresolved review threads"

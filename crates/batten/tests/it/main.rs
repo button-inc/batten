@@ -164,6 +164,7 @@ mod refusal_ceiling;
 mod remedy_authorship;
 mod retirement_doctrine;
 mod review_answered;
+mod review_dispatched;
 mod rule_cost_census;
 mod rules_builtin_claims;
 mod rules_drift;

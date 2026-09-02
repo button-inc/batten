@@ -121,6 +121,27 @@ pub struct Subject {
     pub digest: String,
 }
 
+/// Why a dispatch produced no record, when it produced none.
+///
+/// **The three are not interchangeable and the first is the load-bearing one.**
+/// A runner that is not installed is a fact about the ENVIRONMENT; an agent that
+/// ran and failed is a fact about the RUN. Collapsing them makes a machine with
+/// no reviewer indistinguishable from a branch that skipped its review, and a
+/// gate over that would refuse every checkout where nobody has installed the
+/// agent — which is a verdict about the operator wearing a verdict about the
+/// branch. `symbols::resolve` keeps the identical pair apart, in the same words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Dispatch {
+    /// It ran and a record was written.
+    Ran,
+    /// It ran and gave nothing usable — non-zero, or a stream that is not
+    /// pointers. The review was ASKED FOR and did not answer, which is the
+    /// branch's problem and must refuse.
+    Failed,
+    /// There is no runner here to ask. Could-not-look, never a finding.
+    NoRunner,
+}
+
 /// One dispatched review.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -236,8 +257,16 @@ pub fn resolve(
         // `validator-verdict-clean` reads a record nothing ever writes
         // (CLOUD-1265). A hit costs a file read, so the agent runs once per
         // unique subject and every later landing lap is free.
-        if matches!(read(&path), Look::IsNot) {
-            dispatch(root, row, &path, &subject);
+        if matches!(read(&path), Look::IsNot)
+            && dispatch(root, row, &path, &subject) == Dispatch::NoRunner
+        {
+            // COULD NOT LOOK, FOR THE WHOLE FACT rather than for this row.
+            // `input.tree.review` is `null` and every gate over it goes quiet,
+            // which is the honest answer on a machine that has no reviewer: the
+            // question "was this reviewed" cannot be put where nothing can
+            // review. A per-row absence here would read as "this one was
+            // skipped", which is a different and false claim.
+            return Look::CouldNotLook;
         }
         let Look::Is(findings) = read(&path) else {
             continue;
@@ -272,9 +301,14 @@ pub fn resolve(
 /// into a clean review — `secrets.rs`' invariant carried verbatim, **clean is
 /// never inferred from a stream that failed to parse**, and here the stakes are
 /// the whole gate rather than one finding.
-fn dispatch(root: &Path, row: &crate::facts::ReviewQuery, path: &Path, subject_digest: &str) {
+fn dispatch(
+    root: &Path,
+    row: &crate::facts::ReviewQuery,
+    path: &Path,
+    subject_digest: &str,
+) -> Dispatch {
     let Some((text, _)) = prompt(&row.prompt) else {
-        return;
+        return Dispatch::NoRunner;
     };
     // THE SUBJECT TRAVELS AS A POINTER, NEVER AS BYTES — Batten's law, not an
     // economy.
@@ -297,55 +331,45 @@ fn dispatch(root: &Path, row: &crate::facts::ReviewQuery, path: &Path, subject_d
     // body, which legitimately has an issue key instead of a path. A pointer has
     // no such problem.
     let pointer = format!("{} {}\n", row.path, subject_digest);
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: this fact IS Cost::Effect — resolving it dispatches the vendored prompt, which is the classification rather than an accident of it. A verb the caller must remember instead is the producer-writes-outside shape CLOUD-1265 measures dead (CLOUD-472)"
-    )]
-    let spawned = std::process::Command::new(&row.runner)
-        .args(&row.args)
-        .current_dir(root)
-        .stdin(std::process::Stdio::piped())
-        // Both streams captured, NEITHER forwarded: an agent's stderr is prose,
-        // and echoing a child's stream would put output Batten never shaped onto
-        // Batten's own (rule 4).
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn();
-    let Ok(mut child) = spawned else {
-        return;
-    };
-    // THE PROMPT AND THEN THE POINTER. The prompt ALONE was what this function
-    // sent before, and that was the defect: the agent was told what to look for
-    // and never told what to look at, so its answer was a review of nothing while
-    // the record was keyed to bytes it had never seen — a record that reads as a
-    // completed review and is not one, which is worse than no record at all.
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write as _;
-        if stdin.write_all(text.as_bytes()).is_err()
-            || stdin.write_all(b"\n").is_err()
-            || stdin.write_all(pointer.as_bytes()).is_err()
-        {
-            return;
-        }
-    }
-    let Ok(output) = child.wait_with_output() else {
-        return;
+    // THROUGH `exec::piped`, WHICH IS THE PLACED CHILD-PROCESS ADAPTER, rather
+    // than a `Command::new` of this module's own.
+    //
+    // That helper exists for exactly this and says so: two callers had each grown
+    // their own spawn, "which is two spawns in two unplaced modules and one shape
+    // written twice". This was very nearly the third — the first attempt spawned
+    // directly and then placed `review` in `policy/spawn-adapters.rego`'s table,
+    // which is the move that rule's own remedy tells you not to make. Routing
+    // here instead means there is no new spawn site to place at all.
+    //
+    // It also buys the shebang resolution ladder, which a `#!/usr/bin/env`
+    // runner needs on a host where `CreateProcess` refuses an extensionless
+    // program — a refusal the caller would otherwise read as could-not-look.
+    //
+    // `None` is the runner not being here, which is the distinction the whole
+    // `Dispatch` enum exists to preserve.
+    let Some((code, stdout)) = crate::exec::piped(
+        root,
+        Path::new(&row.runner),
+        &row.args,
+        &format!("{text}\n{pointer}"),
+    ) else {
+        return Dispatch::NoRunner;
     };
     // THE CROSS-CHECK. A non-zero status means the agent itself failed, and
     // findings parsed out of a failed run describe a review that did not finish.
-    if !output.status.success() {
-        return;
+    if code != 0 {
+        return Dispatch::Failed;
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
     let Some(body) = pointers_in(&stdout) else {
-        return;
+        return Dispatch::Failed;
     };
     if let Some(parent) = path.parent()
         && std::fs::create_dir_all(parent).is_err()
     {
-        return;
+        return Dispatch::Failed;
     }
     let _ = std::fs::write(path, body);
+    Dispatch::Ran
 }
 
 /// Keep only the lines that are pointers, and refuse the stream if any line is
