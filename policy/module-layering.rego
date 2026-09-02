@@ -269,6 +269,30 @@ declared_modules := {
 	# recorded verdict MEANS is `policy/validator-verdict-clean.rego`'s, and this
 	# module never reads a finding.
 	"record",
+	# `advisory` arrived with CLOUD-896 and this rule named it a tenth time: the
+	# module was written, `test:cargo` was green over its six cases, and this is
+	# what said nobody had placed it.
+	#
+	# It is a LEAF beside `refusal`, and the pairing is the placement's content:
+	# `refusal` bounds ONE emitted deny line and this bounds ONE emission of the
+	# whole advisory channel, so the two answer the same question over the two
+	# documents a boundary can produce. It reaches `severity` for the tier it
+	# orders by and `budget` for the estimator — the same estimator `refusal`
+	# reaches, because a second one would be a second authority over what a token
+	# costs. It reaches no decider and no store: WHICH producers exist is `lib`'s,
+	# and `lib` is the caller that hands the whole set over.
+	"advisory",
+	# `hookcost` arrived with CLOUD-417 and this rule named it an eleventh time.
+	#
+	# It is a MEASUREMENT module and it is placed by what it does NOT reach: it
+	# reads a parsed `transcript` and counts, so it sits above `transcript` and
+	# `budget` and below `lib`, and it reaches no decider, no store and no
+	# `hook`. That last one is the placement's content rather than an omission --
+	# a module measuring what the mediated boundary COSTS must not be reachable
+	# from that boundary, or the measurement joins the thing it measures. It
+	# reaches `budget` for the estimator every other ceiling here counts with,
+	# and `findings` to mint the two engine-produced findings it raises.
+	"hookcost",
 	# `task` arrived with CLOUD-425, and this rule named it a twelfth time — the
 	# module was written, both tiers were green, and this is what said nobody had
 	# placed it.
