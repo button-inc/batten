@@ -175,6 +175,29 @@ fn a_tree_that_builds_one_with_no_mediator_on_path_is_could_not_look() {
 }
 
 #[test]
+fn two_equally_stale_binaries_agree_and_this_reports_current() {
+    // THE BOUND, ASSERTED RATHER THAN ONLY DESCRIBED. The comparison is
+    // install-against-build, so when the BUILD is itself behind the source both
+    // sides agree and the verdict is `ok`. Measured 2026-09-02 while this row was
+    // in flight: `land` rebased onto a `main` carrying a new `[[rule.review]]`
+    // key, the engine refused the tree's own batten.toml, and this verb answered
+    // `mediator ok` one command later.
+    //
+    // Pinned as a case because a bound stated only in prose is one a later change
+    // can quietly widen or narrow with nothing going red. If a build-freshness
+    // predicate ever lands, this case is what must be revisited — deliberately,
+    // and not by discovering the comment was already false.
+    let dir = mediator_fixture("mediator-both-stale", b"old build", b"old build");
+    // The source moving is what the pair cannot see: the fixture's own manifest
+    // is rewritten after both binaries were planted, and nothing in the verdict
+    // changes.
+    fs::write(dir.join("crates/batten/Cargo.toml"), "# moved on\n").unwrap();
+    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output), "mediator ok\n");
+}
+
+#[test]
 fn the_verdict_carries_no_path_and_no_digest() {
     // §6 and rule 4 over this verb specifically: it is about two absolute paths
     // and two hashes, which is the shape most likely to leak one into output.
