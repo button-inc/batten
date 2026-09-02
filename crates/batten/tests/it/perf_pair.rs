@@ -90,6 +90,7 @@
 
 use crate::common;
 
+use batten::perf::{base_arm_is_built, base_binary, base_target_dir, perf_dir};
 use common::{Fixture, run, stdout};
 
 /// A checkout with a committed base and nothing after it, so HEAD IS its merge
@@ -153,6 +154,135 @@ fn perf_is_a_noun_that_performs_no_default_action() {
     assert!(
         !output.status.success(),
         "a bare noun is a usage error, not an action"
+    );
+}
+
+/// Stage a base arm as a completed build for `sha`, and answer with the binary
+/// it wrote.
+///
+/// The bytes are a marker rather than an executable: every case below asks
+/// whether the engine will REACH for this path, which is decided before anything
+/// runs it.
+fn stage_base_arm(repo: &std::path::Path, sha: &str) -> std::path::PathBuf {
+    let bin = base_binary(&perf_dir(repo), sha);
+    std::fs::create_dir_all(bin.parent().expect("the binary sits under release/"))
+        .expect("stage the base arm's target directory");
+    std::fs::write(&bin, b"a previously built base arm").expect("stage the base arm's binary");
+    bin
+}
+
+/// A base arm built from ANOTHER merge base is not this one's, and is rebuilt.
+///
+/// THE DISCRIMINATOR (CLOUD-1331 §7). Without the key the two directories are one
+/// path, so the previous merge base's binary is handed to hyperfine as this
+/// branch's baseline and the ratio is a comparison of two unrelated commits — a
+/// wrong verdict that looks exactly like a right one, which is the class this
+/// repository keeps re-meeting.
+///
+/// SHOWN ABLE TO FAIL by the mutation that is the natural wrong implementation:
+/// drop `format!("base-{base_sha}")` back to a constant `"base-target"` in
+/// `perf::base_target_dir` and this case goes red, while every other case in this
+/// file stays green.
+#[test]
+fn a_base_arm_from_another_merge_base_is_not_reused() {
+    let repo = repo("perf-pair-base-key");
+    let built = "1111111111111111111111111111111111111111";
+    let wanted = "2222222222222222222222222222222222222222";
+    let stale = stage_base_arm(&repo, built);
+
+    assert!(
+        base_arm_is_built(&perf_dir(&repo), built),
+        "the fixture must actually stage an arm, or this case asserts nothing"
+    );
+    assert!(
+        !base_arm_is_built(&perf_dir(&repo), wanted),
+        "an arm built from {built} is not an arm built from {wanted}"
+    );
+    assert_ne!(
+        base_binary(&perf_dir(&repo), wanted),
+        stale,
+        "the two bases must not resolve to one path — that is the whole refusal"
+    );
+}
+
+/// A base arm built from THIS merge base is reused, and cargo is not spawned.
+///
+/// The saving half. `measure` guards the `build(&base_tree, …)` call on exactly
+/// this predicate, so a `true` here IS "no cargo runs for the base arm" — which
+/// is what makes the job's `Compiling` count for that arm zero on a run whose
+/// merge base matches its predecessor's.
+#[test]
+fn a_base_arm_from_this_merge_base_is_reused() {
+    let repo = repo("perf-pair-base-reuse");
+    let sha = "3333333333333333333333333333333333333333";
+    let staged = stage_base_arm(&repo, sha);
+
+    assert!(base_arm_is_built(&perf_dir(&repo), sha));
+    assert_eq!(
+        base_binary(&perf_dir(&repo), sha),
+        staged,
+        "the reused binary is the one the keyed directory holds"
+    );
+}
+
+/// A directory with no binary in it is not a built arm.
+///
+/// This gate is killed routinely — `land` races it against `main-watch`, and the
+/// harness kills a foreground command at ~2 minutes — so a base directory left
+/// behind by a build that never linked is the ordinary case rather than the
+/// exotic one. Reading its existence as "built" would hand hyperfine a path it
+/// cannot execute and report the could-not-look as a measurement.
+#[test]
+fn a_base_directory_with_no_binary_is_not_a_built_arm() {
+    let repo = repo("perf-pair-base-partial");
+    let sha = "4444444444444444444444444444444444444444";
+    std::fs::create_dir_all(base_target_dir(&perf_dir(&repo), sha).join("release"))
+        .expect("stage a killed build's leftovers");
+    assert!(
+        !base_arm_is_built(&perf_dir(&repo), sha),
+        "an empty directory is not a build"
+    );
+}
+
+/// THE ANTI-VACUITY MIRROR: a first run with nothing cached builds both arms.
+///
+/// Without it the three cases above are satisfied by a predicate that always
+/// answers "rebuild", which would leave the measurement correct and buy nothing.
+/// A checkout that has never run the pair has no keyed directory for any base, so
+/// the guard in `measure` falls through to the build it always did.
+#[test]
+fn a_first_run_with_nothing_cached_builds_the_base_arm() {
+    let repo = repo("perf-pair-base-cold");
+    let sha = "5555555555555555555555555555555555555555";
+    assert!(
+        !perf_dir(&repo).join("pair").exists(),
+        "the fixture must be cold, or this case asserts nothing"
+    );
+    assert!(
+        !base_arm_is_built(&perf_dir(&repo), sha),
+        "a checkout that has never measured has no arm to reuse"
+    );
+}
+
+/// The keyed directory is a SIBLING of the per-run one, not inside it.
+///
+/// CLOUD-1331's other half, and the one a key alone does not buy. `out_dir`
+/// `remove_dir_all`s `<perf>/pair` at the start of every run, so a keyed
+/// directory underneath it would be deleted microseconds before the base build
+/// ran — which is precisely what made the restored bytes unusable on the two
+/// measured CI runs. Asserting the containment directly is what keeps a later
+/// tidy-up from moving it back under the wipe.
+#[test]
+fn the_keyed_base_directory_survives_the_per_run_wipe() {
+    let repo = repo("perf-pair-base-lifetime");
+    let sha = "6666666666666666666666666666666666666666";
+    let keyed = base_target_dir(&perf_dir(&repo), sha);
+    let wiped = perf_dir(&repo).join("pair");
+    assert!(
+        !keyed.starts_with(&wiped),
+        "{} is inside {}, which every run deletes",
+        keyed.display(),
+        wiped.display()
     );
 }
 

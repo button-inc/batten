@@ -436,10 +436,77 @@ fn run(dir: &Path, program: &str, args: &[String], env: &[(String, String)]) -> 
     Ok(status.success())
 }
 
+/// The directory this module owns under the checkout, which is NOT the same
+/// thing as [`out_dir`].
+///
+/// The distinction is the whole of CLOUD-1331, and it is a LIFETIME rather than a
+/// layout preference. Everything under [`out_dir`] belongs to one run and is
+/// deleted at the start of the next; the keyed base build below is a fact about a
+/// COMMIT and outlives every run that reads it.
+#[must_use]
+pub fn perf_dir(repo: &Path) -> PathBuf {
+    repo.join(env_or(OUT_DIR_VAR, DEFAULT_OUT_DIR))
+}
+
+/// The base arm's target directory, NAMED FOR THE COMMIT IT IS A BUILD OF.
+///
+/// # Why it is keyed, and why it is not under [`out_dir`]
+///
+/// The base binary is a pure function of the merge-base SHA, the pinned
+/// toolchain and `[profile.release]`, so rebuilding it per run buys nothing:
+/// `main` advances only by fast-forward to already-judged SHAs, so consecutive
+/// pull requests share a merge base for hours and every one of them was
+/// compiling the identical binary from nothing — 13.5 minutes of the `perf` job's
+/// 13.7 (CLOUD-1331, measured over runs 33586699312 and 33584118886).
+///
+/// It used to live at `out.join("base-target")`, and that placement made the
+/// build **unreusable by construction** rather than merely unreused: [`out_dir`]
+/// `remove_dir_all`s the whole `pair/` directory at the start of every run, so
+/// anything a CI cache had restored there was deleted microseconds before the
+/// base build ran. The bytes WERE in the cache — `Swatinem/rust-cache` carries
+/// the entire `target/` directory, `target/perf/**` included, and the post-job
+/// cleaner walked `target/perf/pair/base-tree/…` on both measured runs. So the
+/// key alone would not have been enough; moving out of the wipe is the other
+/// half.
+///
+/// **The SHA is in the path, and that IS the refusal.** A directory built from
+/// another base does not answer to this name, so a stale arm cannot be measured
+/// as this one — the discriminator is structural rather than a check somebody has
+/// to remember to write. `.github/workflows/ci.yml`'s `perf` job keys its
+/// `actions/cache` entry on the same SHA plus the toolchain and lockfile hash, so
+/// the two authorities over "which base" are one string computed one way.
+///
+/// The separate target directory itself is unchanged and still carries the
+/// reason `measure` gives for it — sharing the main one would have the two builds
+/// evict each other's artifacts and race the target-dir lock under `verify`.
+#[must_use]
+pub fn base_target_dir(perf_dir: &Path, base_sha: &str) -> PathBuf {
+    perf_dir.join(format!("base-{base_sha}"))
+}
+
+/// The binary [`base_target_dir`] holds once the base arm has been built.
+#[must_use]
+pub fn base_binary(perf_dir: &Path, base_sha: &str) -> PathBuf {
+    base_target_dir(perf_dir, base_sha)
+        .join("release")
+        .join("batten")
+}
+
+/// Whether the base arm can be measured without spawning cargo at all.
+///
+/// A FILE rather than a path that exists: a build killed mid-link — and this gate
+/// is killed routinely — or a cache entry saved from one leaves the directory
+/// behind with no binary in it, and reading that as "built" would hand hyperfine
+/// a path it cannot execute and report the could-not-look as a measurement.
+#[must_use]
+pub fn base_arm_is_built(perf_dir: &Path, base_sha: &str) -> bool {
+    base_binary(perf_dir, base_sha).is_file()
+}
+
 /// The out directory this run owns, emptied first so a previous run's records
 /// can never be read as this one's.
 fn out_dir(repo: &Path) -> Result<PathBuf> {
-    let dir = repo.join(env_or(OUT_DIR_VAR, DEFAULT_OUT_DIR)).join("pair");
+    let dir = perf_dir(repo).join("pair");
     if dir.exists() {
         std::fs::remove_dir_all(&dir)
             .with_context(|| format!("perf-pair: could not clear {}", dir.display()))?;
@@ -451,8 +518,16 @@ fn out_dir(repo: &Path) -> Result<PathBuf> {
 }
 
 /// Build `-p batten --release` in `dir`, with an optional target directory.
+///
+/// NOT `--quiet`, and the flag's removal is CLOUD-1331's measurement half rather
+/// than a taste. The row's acceptance is a `Compiling` line count per arm read
+/// from the job log, and `--quiet` suppresses every one of them — so the count
+/// answered `0` on a run that compiled the whole closure twice and would answer
+/// `0` again after the fix, which is a reading that cannot tell the two apart.
+/// Cargo's progress goes to stderr, so nothing changes for `perf-gate.sh`, which
+/// redirects this command's STDOUT to a file and greps `^arm=`.
 fn build(dir: &Path, target_dir: Option<&Path>, what: &str) -> Result<()> {
-    let args: Vec<String> = ["build", "--quiet", "--release", "-p", "batten"]
+    let args: Vec<String> = ["build", "--release", "-p", "batten"]
         .iter()
         .map(|a| (*a).to_owned())
         .collect();
@@ -606,9 +681,27 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
         // Its own target dir: sharing the main one would make the two builds
         // evict each other's artifacts on every lap, and would race the
         // target-dir lock against whatever else `verify` is running.
-        let base_target = out.join("base-target");
-        build(&base_tree, Some(&base_target), "base")?;
-        (base_target.join("release/batten"), base_tree)
+        //
+        // KEYED AND OUTSIDE `out`, which is CLOUD-1331 — see `base_target_dir`
+        // for why both halves are load-bearing. The tree is still materialised on
+        // the reuse path: `wired_command` reads the BASE tree's own settings file
+        // to derive that arm's invocation, so skipping it would measure the head
+        // wiring against the base binary.
+        let perf = perf_dir(repo);
+        let base_bin = base_binary(&perf, base_sha);
+        if !base_arm_is_built(&perf, base_sha) {
+            build(&base_tree, Some(&base_target_dir(&perf, base_sha)), "base")?;
+            // A cargo that exits 0 without leaving the binary is could-not-look,
+            // never a measurement: hyperfine would report the missing path as a
+            // failed command and `perf-compare` would read the gap as a verdict.
+            if !base_arm_is_built(&perf, base_sha) {
+                bail!(
+                    "perf-pair: the base build left no binary at {} — nothing to measure. No measurement.",
+                    base_bin.display()
+                );
+            }
+        }
+        (base_bin, base_tree)
     };
 
     arms(repo, &out, &base_bin, &head_bin, &base_tree)

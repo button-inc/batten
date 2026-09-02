@@ -633,6 +633,44 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: perf
+      # CLOUD-1331. The BASE arm is a pure function of the merge-base SHA, the
+      # pinned toolchain and `[profile.release]`, and `main` advances only by
+      # fast-forward to already-judged SHAs — so consecutive pull requests share a
+      # merge base for hours and every one of them was compiling the identical
+      # binary from nothing. Measured over runs 33586699312 and 33584118886, the
+      # `mise run perf-gate` step was 13.5 min of a 13.7 min job.
+      #
+      # WHY `rust-cache` ABOVE DOES NOT ALREADY DO THIS. It does carry the bytes —
+      # its cache paths are the whole of `target/`, `target/perf/**` included —
+      # but `perf::out_dir` deleted `target/perf/pair/` at the start of every run
+      # and the base target directory lived inside it, so the restore was thrown
+      # away microseconds before the base build ran. `perf.rs` moves that
+      # directory out of the wipe and names it for the merge base; this entry is
+      # what carries it between runs.
+      #
+      # THE SHA IS COMPUTED THE WAY THE ENGINE COMPUTES IT, and that is the one
+      # thing this step cannot get approximately right. `perf pair` resolves the
+      # merge base of `origin/main` and HEAD, so a key built from
+      # `github.event.pull_request.base.sha` — the base branch TIP, not the merge
+      # base — would name a directory `perf.rs` never writes, and the entry would
+      # miss forever while looking exactly like a hit. A silent no-op is the one
+      # failure a cache cannot report.
+      #
+      # NO `restore-keys`. A prefix hit restores SOME other base's directory under
+      # this base's name, which is the stale arm the keyed path exists to refuse,
+      # and `perf.rs` would then measure it as this base. Exact or nothing: a miss
+      # costs exactly the build this job pays today.
+      #
+      # A BARE STEP RATHER THAN A TASK, deliberately: `ci-local-parity` requires
+      # every `mise run <task>` a workflow names to be one `verify` runs, and a
+      # runner-side cache restore has no local counterpart to be.
+      - name: Resolve the merge base the pair will build
+        id: base
+        run: echo "sha=$(git merge-base origin/main HEAD)" >>"$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/perf/base-${{ steps.base.outputs.sha }}
+          key: perf-base-${{ runner.os }}-${{ hashFiles('mise.lock', 'Cargo.lock') }}-${{ steps.base.outputs.sha }}
       - run: mise run perf-gate
 
   # Single fan-in status. Point branch protection at `final` instead of
