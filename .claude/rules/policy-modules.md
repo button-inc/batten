@@ -180,9 +180,22 @@ declared ref (CLOUD-1203); `input.tree.forge` is the forge's verdict for a
 declared SHA, from a record a producer wrote outside the engine (CLOUD-1154);
 `input.tree["tool-verdict"]` is a third-party tool's verdict keyed to
 (tool, pinned version, input digest), so a differently-pinned or stale record
-does not answer (CLOUD-1171); and `input.tree.captured` is a declared REDUCTION
+does not answer (CLOUD-1171); `input.tree.captured` is a declared REDUCTION
 over the capture store — `present`, `count` or a bounded token, never a payload
-(CLOUD-1188).
+(CLOUD-1188); and `input.tree.review` is whether a VENDORED agent prompt was
+dispatched over a declared subject, keyed by (prompt digest, subject digest) so
+editing the subject leaves the record under a name nothing looks up (CLOUD-472).
+
+**`review` is the one key whose ARM a module must get right rather than merely
+its spelling, so it is worth the extra sentence.** A declared id ABSENT from the
+map was never dispatched, and that absence is the ONLY thing a predicate over it
+may refuse on. Its `findings` are pointers — `{path, line, clause}`, with no
+field an agent's prose could occupy — and a module refusing on what the agent
+CONCLUDED would be a model verdict wearing an exit code, which non-negotiable
+rule 3 forbids. `forge-verdict-required` refuses the opposite arm for a reason
+that does not carry: the forge is a third party that may legitimately not have
+judged yet, where a review this branch was supposed to dispatch and did not is
+the branch's own conduct.
 
 A **mediated-call** module (`scope = "mediated_call"`, run by `batten hook`)
 reads `input.call.command`, `input.call.segments`, `input.call.programs`,

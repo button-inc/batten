@@ -636,6 +636,16 @@ pub enum Fact {
     /// Where the crate uses a type a delegated analyser resolved by NAME, rather
     /// than by spelling (CLOUD-760). The first `Cost::Effect` fact.
     Symbols,
+    /// That a **vendored** agent prompt was dispatched over a **declared**
+    /// subject, and what it pointed at (CLOUD-472).
+    ///
+    /// The second `Cost::Effect` fact, and the third adopter of `secrets.rs`'
+    /// delegated-analyser shape. What it answers is deliberately narrow: THAT a
+    /// particular prompt ran over these exact bytes. What the agent concluded
+    /// reaches the input as pointers and never as prose, and no gate may decide
+    /// on it — see [`REVIEW`] for why that bound is what makes an LLM in the
+    /// resolution path compatible with non-negotiable rule 3.
+    Review,
     /// How the **declared** globs' paths differ from a **declared** base rev:
     /// added, edited, deleted (CLOUD-1059).
     BaseDelta,
@@ -1189,6 +1199,66 @@ pub const LANDING: Class = Class::new(Cost::Read, Surface::Check);
 /// SECOND class of the same fact is buildable later, and would be a different
 /// `Class` rather than a quiet reinterpretation of this one.
 pub const SYMBOLS: Class = Class::new(Cost::Effect, Surface::Check);
+
+/// [`Fact::Review`] — **the second occupant of [`Cost::Effect`]**, and the one
+/// that had to state why an LLM in the resolution path is not a model verdict in
+/// a gate.
+///
+/// `effect` x `check`, both halves for [`SYMBOLS`]' reasons: resolving it RUNS A
+/// PROGRAM, and `run_static` already refuses a spawning kind on the mediated
+/// path, so a fact resolvable there would weaken a structural guarantee into a
+/// convention.
+///
+/// # What it answers, and the narrowness IS the mechanism
+///
+/// **THAT a vendored prompt ran over these exact bytes.** Not whether the review
+/// was good, not whether its findings are real, not whether the subject is ready.
+/// Those are judgements and non-negotiable rule 3 forbids a gate deciding any of
+/// them.
+///
+/// The distinction is what makes this fact legal at all. A gate reading this
+/// fact refuses **ABSENCE** — no record for this (prompt, subject) pair — which
+/// is a comparison of two digests and is as deterministic as any other fact
+/// here. A gate refusing on what the agent CONCLUDED would be a model verdict
+/// wearing an exit code, and `review-dispatched.rego` is written so it cannot
+/// express one: the findings reach the module as pointers, and a pointer carries
+/// no claim to weigh.
+///
+/// **This is why the cheaper tiers do not substitute.** `ready-lint` gates the
+/// SHAPE of a refinement block, and shape is what an author optimises against
+/// once the gate exists — the measured failure that opened CLOUD-472, where
+/// every clause was present and none had been pressure-tested.
+/// `obligations-bound` binds a §7 entry to a killer mutation, but only at
+/// implementation time: at refinement there is no code, no case file and no
+/// `#MUTANT` row for it to reach. Confirming a named prompt ran over these bytes
+/// is a hash comparison that no better-shaped prose can satisfy, because the
+/// prose is the input to the hash.
+///
+/// # Keyed by (prompt digest, subject digest), for [`TOOL_VERDICT`]'s reason
+///
+/// The prompt is VENDORED — compiled into the binary the way
+/// `src/policy/presets/**` are — so its digest is a constant of this build and
+/// "a particular prompt" is a checkable claim rather than an intention. The
+/// subject's digest is the other half, so a record goes stale by construction
+/// the moment the thing reviewed changes: edit the ticket body or push a commit
+/// and the record no longer answers. That is the anti-staleness property a
+/// `status: clean` marker can never provide.
+///
+/// **Two subjects, one mechanism.** At refinement the subject is the body the
+/// TRACKER returned, which is the same forgery control the `verdict` recorder
+/// column earned; at landing it is the branch's delta.
+///
+/// # Three answers, and a gate that merges any two reports clean
+///
+/// `null` is could-not-look — no row declared a review, or no store is readable.
+/// A declared id ABSENT from the map has no record: the prompt never ran over
+/// these bytes, and that is the refusal. An id PRESENT with an empty findings
+/// object ran and pointed at nothing, which is clean. `forge-verdict-required`'s
+/// header states the same three and refuses the opposite one, and the asymmetry
+/// is deliberate: the forge is a third party that may legitimately not have
+/// judged yet, where a review this branch was supposed to dispatch and did not
+/// is the branch's own conduct.
+pub const REVIEW: Class = Class::new(Cost::Effect, Surface::Check);
 /// [`Fact::BaseDelta`] — how the **declared** globs' paths differ from a
 /// **declared** base rev (CLOUD-1059).
 ///
@@ -1265,6 +1335,7 @@ impl Fact {
         Fact::Invocations,
         Fact::Uses,
         Fact::Symbols,
+        Fact::Review,
         Fact::BaseDelta,
         Fact::Records,
         Fact::Pinned,
@@ -1304,6 +1375,7 @@ impl Fact {
             Fact::Invocations => "invocations",
             Fact::Uses => "uses",
             Fact::Symbols => "symbols",
+            Fact::Review => "review",
             Fact::BaseDelta => "base-delta",
             Fact::Records => "records",
             Fact::Pinned => "pinned-programs",
@@ -1351,6 +1423,7 @@ impl Fact {
             Fact::Invocations => INVOCATIONS,
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
+            Fact::Review => REVIEW,
             Fact::BaseDelta => BASE_DELTA,
             Fact::Records => RECORDS,
             Fact::Pinned => PINNED,
@@ -1437,6 +1510,10 @@ impl Fact {
             // independent of the surface one, which is exactly what makes the
             // pair expressive rather than redundant.
             Fact::Symbols => Some("symbols"),
+            // The dispatch tier (CLOUD-472). Tree surface for `Symbols`' reason
+            // — `run_static` refuses a spawning kind on the mediated path — and
+            // `Cost::Effect` for its own: resolving it runs an agent.
+            Fact::Review => Some("review"),
             // Tree-only for the same reason (CLOUD-1059): the answer is a walk
             // of the base tree and a walk of the working tree, which is a
             // `check`-surface cost and not a mediated call's.
@@ -1542,6 +1619,7 @@ impl Fact {
             | Fact::Produced
             | Fact::Records => Self::keyed_read_schema_fragment(self),
             Fact::Symbols => Self::symbols_schema_fragment(),
+            Fact::Review => Self::review_schema_fragment(),
             Fact::Uses => serde_json::json!({
                 "type": "object",
                 "description": "Fact::Uses (CLOUD-762). Path -> that file's `use` edges. `to` is the module or crate reached AFTER resolution through the crate root's re-export table; `item` the imported leaf name; `origin` one of internal/external/root-item/local; `via_root` whether resolution supplied `to` rather than the text, which is the flag that marks an edge a line predicate reads wrongly. An edge still `root-item` is one the root's table could not name, and is could-not-look at the edge level rather than an edge onto nothing. A path absent from this map could not be parsed; a path present with an empty array imports nothing.",
@@ -1674,6 +1752,58 @@ impl Fact {
         })
     }
 
+    /// The schema fragment for [`Fact::Review`] (CLOUD-472).
+    ///
+    /// **Every leaf is a pointer or a digest**, which is what makes rule 4
+    /// structural here rather than a habit the resolution has to keep: there is
+    /// no string field an agent's prose could occupy, so a module cannot lift a
+    /// sentence into a finding even if one were recorded.
+    fn review_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            // NULLABLE for `symbols_schema_fragment`'s reason: the projection
+            // emits `null` for both did-not-look answers, and a schema typing
+            // this as a bare object refuses the module that handles them.
+            "type": ["object", "null"],
+            "description": "Fact::Review (CLOUD-472). Declared id -> the record that a VENDORED agent prompt was dispatched over that id's subject. The second Cost::Effect fact. KEYED BY (prompt digest, subject digest): the prompt is compiled into this binary so its digest is a constant of the build, and the subject's digest is the bytes reviewed -- so editing the ticket body or pushing a commit leaves the record under a different name where it does not answer. A declared id ABSENT from this map was never dispatched, and that absence is the only thing a gate may refuse on; an id PRESENT with an empty `findings` array ran and pointed at nothing. `null` is could-not-look. WHAT THE AGENT CONCLUDED IS NEVER HERE AS PROSE -- `findings` carries pointers, because a gate deciding on an agent's judgement would be a model verdict wearing an exit code, which non-negotiable rule 3 forbids.",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "provenance": {
+                        "type": "object",
+                        "properties": {
+                            "tool": {"type": "string"},
+                            "version": {"type": "string"},
+                            "invocation": {"type": "array", "items": {"type": "string"}},
+                            "prompt": {"type": "string"},
+                        },
+                        "additionalProperties": false,
+                    },
+                    "subject": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"type": "string"},
+                            "digest": {"type": "string"},
+                        },
+                        "additionalProperties": false,
+                    },
+                    "findings": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "line": {"type": "integer"},
+                                "clause": {"type": "string"},
+                            },
+                            "additionalProperties": false,
+                        },
+                    },
+                },
+                "additionalProperties": false,
+            },
+        })
+    }
+
     /// The schema fragment for the facts that constrain nothing but their own
     /// prose (CLOUD-1051 split this out; CLOUD-880 set the precedent).
     ///
@@ -1734,6 +1864,7 @@ impl Fact {
             | Fact::Uses
             | Fact::Produced
             | Fact::Symbols
+            | Fact::Review
             | Fact::BaseDelta
             | Fact::Records
             | Fact::GitHead
@@ -1874,6 +2005,7 @@ impl Fact {
             | Fact::Invocations
             | Fact::Uses
             | Fact::Symbols
+            | Fact::Review
             | Fact::BaseDelta
             | Fact::Pinned
             | Fact::GitHead
@@ -2044,6 +2176,7 @@ impl Fact {
             | Fact::Invocations
             | Fact::Uses
             | Fact::Symbols
+            | Fact::Review
             | Fact::BaseDelta
             | Fact::Records
             | Fact::Staged
@@ -2856,6 +2989,50 @@ impl ToolQuery {
                     || part.contains('\\')
             })
     }
+}
+
+/// One declared review a policy row reads (CLOUD-472).
+///
+/// **On the row rather than in a top-level table**, for [`ToolQuery`]'s reason:
+/// the declaration and the rule that reads it are one object, so a row cannot
+/// name a review nothing enables and a review cannot outlive its reader.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewQuery {
+    /// The key this review is projected under in `input.tree.review`.
+    ///
+    /// The declared id rather than the composed key, because a composed key
+    /// carries two digests that move whenever the prompt or the subject does — a
+    /// module written against one would have to be edited on every edit to the
+    /// thing it judges.
+    pub id: String,
+    /// Which VENDORED prompt to dispatch, by id.
+    ///
+    /// Vendored rather than a path, and that is the safety property: the text is
+    /// compiled into the binary, so its digest is a constant of the build and a
+    /// consumer cannot satisfy the gate by pointing it at an easier prompt.
+    pub prompt: String,
+    /// The agent to dispatch it through.
+    pub runner: String,
+    /// The version the runner is pinned at, recorded as provenance.
+    ///
+    /// A component of the record rather than a comparison made after the read,
+    /// for [`ToolQuery::version`]'s reason: a version compared afterwards is a
+    /// comparison a module can forget to make.
+    pub version: String,
+    /// The exact flags, so a reader can tell which question was asked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// What KIND of thing is being reviewed, e.g. `document`.
+    pub subject: String,
+    /// The repository-relative path whose bytes the review was taken over.
+    ///
+    /// Its digest is the second component of the key, so a review goes stale by
+    /// construction the moment the subject changes — the anti-staleness half, and
+    /// the one a `reviewed: true` marker could never provide.
+    pub path: String,
 }
 
 /// What joins a [`ToolQuery`]'s components into one record name.

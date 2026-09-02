@@ -582,6 +582,52 @@
         }
       ]
     },
+    "ReviewQuery": {
+      "description": "One declared review a policy row reads (CLOUD-472).\n\n**On the row rather than in a top-level table**, for [`ToolQuery`]'s reason:\nthe declaration and the rule that reads it are one object, so a row cannot\nname a review nothing enables and a review cannot outlive its reader.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "The exact flags, so a reader can tell which question was asked.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "description": "The key this review is projected under in `input.tree.review`.\n\nThe declared id rather than the composed key, because a composed key\ncarries two digests that move whenever the prompt or the subject does — a\nmodule written against one would have to be edited on every edit to the\nthing it judges.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The repository-relative path whose bytes the review was taken over.\n\nIts digest is the second component of the key, so a review goes stale by\nconstruction the moment the subject changes — the anti-staleness half, and\nthe one a `reviewed: true` marker could never provide.",
+          "type": "string"
+        },
+        "prompt": {
+          "description": "Which VENDORED prompt to dispatch, by id.\n\nVendored rather than a path, and that is the safety property: the text is\ncompiled into the binary, so its digest is a constant of the build and a\nconsumer cannot satisfy the gate by pointing it at an easier prompt.",
+          "type": "string"
+        },
+        "runner": {
+          "description": "The agent to dispatch it through.",
+          "type": "string"
+        },
+        "subject": {
+          "description": "What KIND of thing is being reviewed, e.g. `document`.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The version the runner is pinned at, recorded as provenance.\n\nA component of the record rather than a comparison made after the read,\nfor [`ToolQuery::version`]'s reason: a version compared afterwards is a\ncomparison a module can forget to make.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "prompt",
+        "runner",
+        "version",
+        "subject",
+        "path"
+      ]
+    },
     "Rewrite": {
       "description": "One reference-to-path rewrite for a [`CeilingUnit::TrackedArtifacts`] ceiling\n(CLOUD-925).\n\nBoth fields are the **consumer's**. A shorthand a repository writes in its own\nprompts to name its own files is a property of that repository, so naming\neither half in `crates/batten` would be the consumer-specific identifier\nnon-negotiable rule 1 forbids — the same split\n[`crate::budget::EmbeddedDecl`] already makes for a config key it counts.",
       "type": "object",
@@ -1120,6 +1166,13 @@
             "string",
             "null"
           ]
+        },
+        "review": {
+          "description": "The vendored reviews this policy row reads, **declared** (CLOUD-472).\n\nEach becomes an entry of `input.tree.review` under its own `id`. Declared\nper row for `symbols`' reason and more so: this is the second\n`Cost::Effect` fact, and a MISS dispatches an agent — minutes and tokens,\nwhere clippy is seconds. The digest key makes that once per unique\nsubject rather than once per lap, but a run that paid it unasked would\nstill be the shape that gets a gate switched off.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReviewQuery"
+          }
         },
         "run": {
           "description": "The retired spelling of [`Rule::check`], present only so the refusal can\nname its replacement.\n\nCarried as a field rather than left to `deny_unknown_fields` for the\nsame reason [`crate::config::OverrideConfig::min_batten_version`] is:\n\"unknown field `run`\" reads as a typo, where this is a rename with one\nspecific fix. Every deny points to it (CLOUD-122).\n\nDeliberately absent from [`Rule::columns`]: that census classifies the\ncolumns a kind may *carry*, and no kind carries this one — it is refused\noutright by [`Rule::validate`], ahead of any per-kind question.",

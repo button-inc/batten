@@ -2131,6 +2131,16 @@ pub struct Rule {
     /// asked would make `check` unusable.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub symbols: bool,
+    /// The vendored reviews this policy row reads, **declared** (CLOUD-472).
+    ///
+    /// Each becomes an entry of `input.tree.review` under its own `id`. Declared
+    /// per row for `symbols`' reason and more so: this is the second
+    /// `Cost::Effect` fact, and a MISS dispatches an agent — minutes and tokens,
+    /// where clippy is seconds. The digest key makes that once per unique
+    /// subject rather than once per lap, but a run that paid it unasked would
+    /// still be the shape that gets a gate switched off.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review: Vec<crate::facts::ReviewQuery>,
     /// The refs this policy row resolves, **declared** (CLOUD-907).
     ///
     /// Each becomes an entry of `input.tree["git-refs"]` carrying the commit it
@@ -3319,6 +3329,10 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
     ColumnCensus {
         field: "symbols",
         declares: Declares::Fact(crate::facts::Fact::Symbols, |rule| rule.symbols),
+    },
+    ColumnCensus {
+        field: "review",
+        declares: Declares::Fact(crate::facts::Fact::Review, |rule| !rule.review.is_empty()),
     },
     ColumnCensus {
         field: "refs",
@@ -6140,6 +6154,7 @@ fn run(
     // family and for the same reason: a projection must not spawn, so the spend
     // happens once here and only when a row declared it.
     let symbols = symbols_fact(rules, root);
+    let review = review_fact(rules, root);
     // THE OUT-OF-ROOT FILES (CLOUD-1167), acquired once for the whole run beside
     // the families above and, like every one of them, ONLY FOR WHAT A ROW
     // DECLARED. A ruleset naming no `[[rule.external]]` reads no environment
@@ -6229,6 +6244,7 @@ fn run(
         records: &records,
         git: &git,
         symbols: &symbols,
+        review: &review,
         state: state.as_ref(),
         forge: forge.as_ref(),
         tool_verdicts: tool_verdicts.as_ref(),
@@ -6533,6 +6549,7 @@ struct RunInputs<'a> {
     git: &'a crate::git::GitFacts,
     /// The symbol census, iff this rule set declared it (CLOUD-760).
     symbols: &'a crate::facts::Look<crate::symbols::Resolved>,
+    review: &'a crate::facts::Look<std::collections::BTreeMap<String, crate::review::Record>>,
     /// The engine's own finding store, per declared ref (CLOUD-1203). `None` is
     /// could-not-look and covers both nobody-asked and no-store-bound.
     state: Option<&'a BTreeMap<String, Vec<String>>>,
@@ -7484,6 +7501,7 @@ pub(crate) struct Resolved<'a> {
     pub git: &'a crate::git::GitFacts,
     /// The symbol census, iff this rule set declared it (CLOUD-760).
     pub symbols: &'a crate::facts::Look<crate::symbols::Resolved>,
+    pub review: &'a crate::facts::Look<std::collections::BTreeMap<String, crate::review::Record>>,
     /// The out-of-root files this rule set declared (CLOUD-1167).
     pub external: &'a BTreeMap<String, Acquired>,
     /// The engine's own finding store, per declared ref (CLOUD-1203). `None`
@@ -7997,6 +8015,67 @@ fn symbols_fact(rules: &[Rule], root: &Path) -> crate::facts::Look<crate::symbol
 /// The three-valued distinction the doc comment at its call site describes lives
 /// here rather than there, and the seam is the one that survives: this is the
 /// only arm whose value is a nested document rather than a `json!` of a field.
+/// Resolve the review fact, or say the run was never asked for one.
+///
+/// `IsNot` when no row declares a review, which is what keeps the cost off every
+/// other consumer — the same gating `symbols_fact` applies one rung down.
+fn review_fact(
+    rules: &[Rule],
+    root: &Path,
+) -> crate::facts::Look<std::collections::BTreeMap<String, crate::review::Record>> {
+    let declared: Vec<crate::facts::ReviewQuery> = rules
+        .iter()
+        .flat_map(|rule| rule.review.iter().cloned())
+        .collect();
+    crate::review::resolve(root, &declared)
+}
+
+/// The review fact as the tree document carries it.
+///
+/// A declared id ABSENT from the map is the refusal a gate reads, so this map is
+/// deliberately partial: an id whose prompt has not run over its subject
+/// contributes no entry, where one that ran and pointed at nothing contributes an
+/// entry with an empty `findings`. Merging those two is the false clean the whole
+/// fact exists to prevent.
+fn review_value(
+    review: &crate::facts::Look<std::collections::BTreeMap<String, crate::review::Record>>,
+) -> serde_json::Value {
+    match review {
+        crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => serde_json::Value::Null,
+        crate::facts::Look::Is(found) => serde_json::Value::Object(
+            found
+                .iter()
+                .map(|(id, record)| {
+                    (
+                        id.clone(),
+                        serde_json::json!({
+                            "provenance": {
+                                "tool": record.provenance.tool,
+                                "version": record.provenance.version,
+                                "invocation": record.provenance.invocation,
+                                "prompt": record.provenance.prompt,
+                            },
+                            "subject": {
+                                "kind": record.subject.kind,
+                                "digest": record.subject.digest,
+                            },
+                            "findings": record
+                                .findings
+                                .iter()
+                                .map(|finding| serde_json::json!({
+                                    "path": finding.path,
+                                    "line": finding.line,
+                                    "clause": finding.clause,
+                                }))
+                                .collect::<Vec<_>>(),
+                        }),
+                    )
+                })
+                .collect(),
+        ),
+    }
+}
+
 fn symbols_value(symbols: &crate::facts::Look<crate::symbols::Resolved>) -> serde_json::Value {
     match symbols {
         crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => serde_json::Value::Null,
@@ -8171,6 +8250,7 @@ pub(crate) fn tree_document(
             //   third answer and a real one: the analyser ran and resolved no
             //   site. `null` and `[]` are the pair this projection keeps apart.
             crate::facts::Fact::Symbols => symbols_value(resolved.symbols),
+            crate::facts::Fact::Review => review_value(resolved.review),
             // CLOUD-1059, and `null` here carries BOTH could-not-look conditions
             // the family already collapses: no row declared a delta, and a row
             // declared one whose base did not resolve. A migration gate reads the
@@ -8333,6 +8413,7 @@ fn policy_rule(
         },
         tracked,
         &Resolved {
+            review: inputs.review,
             produced,
             records,
             git,
@@ -11668,6 +11749,7 @@ mod tests {
             },
             &[],
             &super::Resolved {
+                review: &crate::facts::Look::IsNot,
                 produced: &BTreeMap::new(),
                 records: &BTreeMap::new(),
                 git: &crate::git::GitFacts::default(),
@@ -12243,6 +12325,7 @@ mod tests {
             },
             &files,
             &super::Resolved {
+                review: &crate::facts::Look::IsNot,
                 produced: &BTreeMap::new(),
                 records: &BTreeMap::new(),
                 git: &crate::git::GitFacts::default(),
@@ -12385,6 +12468,7 @@ mod tests {
                 records: &self.records,
                 git: &self.git,
                 symbols: &self.symbols,
+                review: &crate::facts::Look::IsNot,
                 state: None,
                 forge: None,
                 tool_verdicts: None,
@@ -12396,6 +12480,7 @@ mod tests {
 
     fn blank(id: &str, kind: RuleKind) -> Rule {
         Rule {
+            review: Vec::new(),
             id: id.to_owned(),
             kind,
             glob: None,

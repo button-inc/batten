@@ -1100,6 +1100,35 @@ transcript CONTENT needs 1029 first, and nothing landed authorises one.
   row would override four correct per-verb answers with one weaker sentence.
   Per-path beats per-verb only where the path fact dominates. It makes a message
   specific; it does not make the named surface reachable (CLOUD-663).
+- `review.rs` — the vendored-prompt dispatch tier (CLOUD-472): the SECOND
+  occupant of `Cost::Effect` and the third adopter of `secrets.rs`'
+  delegated-analyser shape, after `symbols.rs`. It answers one narrow question —
+  **did a particular vendored prompt run over these exact bytes** — and that
+  narrowness is the mechanism rather than a limitation: a gate over it refuses
+  ABSENCE, which is a comparison of two digests, so no model verdict reaches an
+  exit code (rule 3). The findings reach a module as `{path, line, clause}`
+  pointers with no field an agent's prose could occupy, so rule 4 holds
+  structurally rather than by the parser remembering to strip.
+  **It is what the cheaper tiers cannot be.** `ready-lint` gates the SHAPE of a
+  refinement block, and shape is what an author optimises against once the gate
+  exists — the measured failure that opened CLOUD-472, where every clause was
+  present and none had been pressure-tested. `obligations-bound` binds a §7 entry
+  to a killer mutation, but only at implementation time; at refinement there is
+  no code, no case file and no `#MUTANT` row to reach. A hash comparison is what
+  better-shaped prose cannot satisfy, because the prose is the input to the hash.
+  **Spawn on miss, read on hit**, keyed by (prompt digest, subject digest) —
+  `step-receipt`'s pattern, so the agent runs once per unique subject rather than
+  once per landing lap, and editing the ticket body or pushing a commit leaves
+  the record under a name nothing looks up. The keying is the anti-staleness
+  property, not an optimisation.
+  **The dispatch is the ENGINE's**, which is the whole difference from
+  `tool-verdict`'s producer-writes-outside store — identical read shape, measured
+  dead, because somebody has to remember to run the tool and pipe its output
+  (CLOUD-1265). The prompt is compiled in the way `policy/presets/**` are, so its
+  digest is a constant of the build and a consumer cannot satisfy the gate by
+  pointing it at an easier prompt. Every failure path — runner missing, non-zero
+  exit, unparseable stream — leaves NO record, so a broken agent and one that
+  never ran are indistinguishable and both refuse.
 - `refusal.rs` — the refusal contract (CLOUD-122): ONE `Refusal` value —
   `{rule, reason, fix}` — constructed at every deny site and projected onto
   whatever channel a host reads, so the shape is never re-typed per harness.

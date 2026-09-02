@@ -1558,6 +1558,7 @@ fn default_rules() -> Vec<Rule> {
         extract: Vec::new(),
         landing: Vec::new(),
         symbols: false,
+        review: Vec::new(),
         delta_sources: Vec::new(),
         run: None,
         verbatim: None,

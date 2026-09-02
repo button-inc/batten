@@ -6123,6 +6123,10 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // adjudicating a validator is a `batten check` run by construction,
             // so no mediated-call consumer is being turned away.
             crate::facts::Fact::ToolVerdict => None,
+            // The dispatch tier is `Surface::Check` (CLOUD-472): `run_static`
+            // refuses a spawning kind on the mediated path, so a projection here
+            // would offer a module a key the hook surface can never fill.
+            crate::facts::Fact::Review => None,
             // CLOUD-1188. `Surface::Check` in `facts.rs`, so this arm is `None`
             // by the model rather than by this function's opinion. Answering
             // means reading and parsing the capture store until a declared key
@@ -8155,6 +8159,7 @@ mod tests {
 
     fn shape(id: &str, pattern: &str, contains: Option<&str>) -> Rule {
         Rule {
+            review: Vec::new(),
             id: id.to_owned(),
             kind: crate::rules::RuleKind::Shape,
             glob: None,
