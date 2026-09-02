@@ -92,10 +92,31 @@ wait_answers := [answer |
 # question is *how many distinct arms answered*, so the same arm reporting twice
 # — a retry, a re-read — is still one arm having answered. Counting the LINES
 # there would refuse a lap that merely looked twice.
-wait_answered contains arm if {
+wait_answered := {answer.arm |
 	some answer in wait_answers
 	answer.verdict != "-"
-	arm := answer.arm
+}
+
+# The commits the answering arms judged.
+#
+# A SET, so two arms answering about the same commit — the ordinary case — is one
+# commit rather than two.
+#
+# **DEFINED BEFORE IT IS REFERENCED, AND THAT IS LOAD-BEARING RATHER THAN
+# TIDINESS.** Rego is specified as order-independent and regorus is not: a rule
+# defined BELOW the rule that reads it resolves to undefined, so the reader's
+# whole body fails and it contributes no finding. Measured here twice — first as
+# a `wait_subject` helper below the violation, then as this set below it — and
+# both times the module loaded, evaluated, passed its own `test_` cases and
+# refused nothing.
+#
+# The load-time tier structurally cannot catch it: those tests sit at the bottom
+# of the file, so every reference they make is backward and resolves. Only the
+# compiled tier sees it, which is the sharpest instance of why that tier is not
+# optional.
+wait_shas := {answer.sha |
+	some answer in wait_answers
+	answer.verdict != "-"
 }
 
 # Refused: more than one arm answered, so the lap has two verdicts and the
@@ -108,22 +129,30 @@ wait_answered contains arm if {
 violation contains {
 	"rule": "lap-waits-on-one-answer",
 	"verdict": "wait read both",
-	"subjects": [{"count": count(wait_answered)}, {"artifact": wait_subject}],
+	"subjects": [{"count": count(wait_answered)}, {"artifact": sha}],
 } if {
 	count(wait_answered) > 1
+	count(wait_shas) == 1
+	some sha in wait_shas
 }
 
-# The commit the wait was about, where every answer agrees on one.
+# Refused, with no single commit to name.
 #
-# UNDEFINED IS NOT AN OPTION HERE — the violation above reads this — so it falls
-# back to the could-not-look token rather than leaving the rule unresolvable. A
-# lap whose arms disagree about which commit they judged is a different defect
-# and not this module's, so it reports `-` rather than picking one.
-wait_subject := sha if {
-	shas := {answer.sha | some answer in wait_answers; answer.verdict != "-"}
-	count(shas) == 1
-	some sha in shas
-} else := "-"
+# TWO ARMS RATHER THAN A DEFAULTED HELPER. The first draft named the commit
+# through `wait_subject := sha if { ... } else := "-"`, a rule the violation's
+# object depended on. Binding the commit in the body by iteration instead — the
+# way the sibling module binds its path — removes that dependency, and the case
+# with no single commit to name gets its own arm and OMITS the key rather than
+# inventing a `-` pointer. The two arms are mutually exclusive, so a lap that
+# read both answers yields exactly one finding either way.
+violation contains {
+	"rule": "lap-waits-on-one-answer",
+	"verdict": "wait read both",
+	"subjects": [{"count": count(wait_answered)}],
+} if {
+	count(wait_answered) > 1
+	count(wait_shas) != 1
+}
 
 # --- the load-time tier ------------------------------------------------------
 #
@@ -183,6 +212,18 @@ test_no_wait_line_at_all_is_clean if {
 
 # NEITHER ARM COULD LOOK, which is a statement about the forge rather than about
 # the lap, and allows.
+# ARMS THAT DISAGREE ABOUT THE COMMIT still refuse, and omit the pointer rather
+# than picking one — a lap whose two arms judged different commits has read two
+# answers whatever else is wrong with it.
+test_arms_judging_different_commits_refuse_without_a_pointer if {
+	some v in violation with input as wait_record([
+		"wait green success abc1234",
+		"wait stale moved def5678",
+	])
+	count(v.subjects) == 1
+	v.subjects[0].count == 2
+}
+
 test_neither_arm_answering_is_clean if {
 	count(violation) == 0 with input as wait_record([
 		"wait green - abc1234",

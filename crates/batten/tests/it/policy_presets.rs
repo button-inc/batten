@@ -964,6 +964,11 @@ fn the_landing_loop_preset_refuses_a_lap_that_read_both_answers() {
     );
     assert_eq!(both.len(), 1, "a lap that read both sides of the race");
     assert_eq!(
+        both[0].subjects.len(),
+        2,
+        "the refusal counts the arms AND names the commit they agreed on"
+    );
+    assert_eq!(
         bundle.attribute(&both[0]),
         "lap-waits-on-one-answer",
         "a preset finding names its own predicate id"

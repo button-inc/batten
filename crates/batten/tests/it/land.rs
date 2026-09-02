@@ -30,7 +30,7 @@ use crate::common;
 
 use std::path::Path;
 
-use batten::land::{self, Replay};
+use batten::land::{self, Answered, Arm, Replay};
 
 use common::{Fixture, batten, scratch, stderr, stdout};
 
@@ -158,6 +158,78 @@ fn an_already_current_lap_is_clean() {
     assert_eq!(
         code, 0,
         "an already-current branch replayed nothing: {err}{out}"
+    );
+}
+
+/// (CLOUD-1338) A lap that read both sides of its race is refused, over the real
+/// writer and the real engine.
+///
+/// The sibling of the conflict case, and it exists for the same measured reason:
+/// the module's own suite supplies its record with `with input as`, which
+/// fabricates the column layout and the store. This drives
+/// [`batten::land::record_wait`] — the writer that cannot record half a race —
+/// and reads back through `batten check`.
+#[test]
+fn a_lap_that_read_both_answers_is_refused_and_one_answer_is_not() {
+    let repo = repo("land-wait-both");
+    let branch = branch_of(&repo);
+
+    land::record_wait(
+        &repo,
+        &branch,
+        &[
+            Answered {
+                arm: Arm::Green,
+                verdict: Some(String::from("success")),
+                sha: String::from("abc1234"),
+            },
+            Answered {
+                arm: Arm::Stale,
+                verdict: Some(String::from("moved")),
+                sha: String::from("abc1234"),
+            },
+        ],
+    )
+    .expect("record the doubly-answered wait");
+
+    let (code, out, err) = check(&repo);
+    assert_eq!(code, 2, "a lap that read both answers: {err}{out}");
+    assert!(
+        format!("{out}{err}").contains("lap-waits-on-one-answer"),
+        "the finding names its own predicate, got {out}{err}"
+    );
+}
+
+/// THE ANTI-VACUITY MIRROR for the race, and the reading a naive port gets
+/// wrong: a VOIDED loser is the design working, so a lap that raced properly
+/// must not be refused.
+#[test]
+fn a_lap_whose_loser_was_voided_is_clean() {
+    let repo = repo("land-wait-voided");
+    let branch = branch_of(&repo);
+
+    land::record_wait(
+        &repo,
+        &branch,
+        &[
+            Answered {
+                arm: Arm::Green,
+                verdict: Some(String::from("success")),
+                sha: String::from("abc1234"),
+            },
+            Answered {
+                arm: Arm::Stale,
+                verdict: None,
+                sha: String::from("abc1234"),
+            },
+        ],
+    )
+    .expect("record the raced wait");
+
+    let (code, out, err) = check(&repo);
+    assert_eq!(
+        code, 0,
+        "one answer beside one voided loser is the race working: {err}{out}"
     );
 }
 
