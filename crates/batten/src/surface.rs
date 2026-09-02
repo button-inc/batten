@@ -2507,17 +2507,64 @@ pub const SURFACE: &[CommandDecl] = &[
     // `write`, and the honest class rather than the convenient one: it builds
     // into `target/`, adds and removes a detached worktree, and clears its own
     // output directory. NOT `destructive`, which would bind `-y` — everything it
-    // removes is a build artifact it created, and the frozen `perf-gate.sh`
-    // invokes this with no flags, so a prompt would wedge the gate rather than
-    // protect anything.
+    // removes is a build artifact it created, and `perf gate` below invokes the
+    // same measurement with no flags, so a prompt would wedge the gate rather
+    // than protect anything.
     //
-    // `data_channel: false`: the records are a line protocol two frozen callers
-    // already parse (`perf-gate` greps `^arm=`, `perf-compare` reads the fields),
-    // so a `--json` here would be a second encoding of a contract, not a channel.
+    // `data_channel: false`: the records are a line protocol, and `perf compare`
+    // still reads exactly that protocol on stdin, so a `--json` here would be a
+    // second encoding of a contract rather than a channel. (Until CLOUD-1163 unit
+    // 10 the readers were two shell programs; retiring them removed the second
+    // implementation, not the protocol.)
     CommandDecl {
         path: "perf pair",
         id: "perf.pair",
         about: "Measure this branch and its merge base back to back on one machine, and print both arms as paired records",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[FlagDecl {
+            id: "null",
+            long: Some("null"),
+            short: None,
+            help: "Measure HEAD against itself, so the ratio is the noise floor rather than a comparison",
+            env: EnvDecl::None,
+            global: false,
+            positional: false,
+            required: false,
+            hidden: false,
+            rung: Rung::None,
+            value: ValueDecl::Bool,
+        }],
+    },
+    // The verdict over a pair, retired out of `mise-tasks/perf-compare.sh` under
+    // CLOUD-1163 unit 10.
+    //
+    // `read`, and it is the only member of this subtree that is: it opens no file,
+    // spawns nothing and builds nothing — it reads paired records on stdin and
+    // decides a ratio. The noun above is declared `write` precisely because §5
+    // forbids inheritance in both directions, so this row states its own class
+    // rather than taking the subtree's.
+    //
+    // `data_channel: false`, like every other member of this subtree, and the
+    // reason is that a verdict is not data. THE EXIT CODE IS THE CONTRACT — 0, 2,
+    // 3 — and the lines are pointers a human reads. Declaring a channel here would
+    // oblige a `--json` flag (`every_data_emitting_verb_declares_the_json_flag`),
+    // which would be a second rendering of the same decision with no caller
+    // asking for it: `verify` and the `perf` CI job both test for zero.
+    CommandDecl {
+        path: "perf compare",
+        id: "perf.compare",
+        about: "Decide whether a paired measurement read on stdin regressed past the threshold",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[],
+    },
+    // The composition `verify` and CI call, retired out of `mise-tasks/perf-gate.sh`
+    // in the same delta. `write`, because it runs the pair.
+    CommandDecl {
+        path: "perf gate",
+        id: "perf.gate",
+        about: "Measure this branch against its merge base and refuse a regression",
         data_channel: false,
         effect: Effect::Write,
         flags: &[FlagDecl {

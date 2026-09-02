@@ -505,6 +505,13 @@ mod tests {
                 // unclassified because its DECISION mediates writes.
                 "payload".to_owned(),
                 "payload field".to_owned(),
+                // The comparison verb ALONE, never the `perf` noun and never
+                // `pair` or `gate` beside it (CLOUD-1163 unit 10): those build two
+                // release binaries and materialise a tree, so the noun takes the
+                // conservative reading exactly as `provision` does below. This one
+                // opens no file and spawns nothing — it reads records on stdin and
+                // decides a ratio.
+                "perf compare".to_owned(),
                 // The `policy` noun is on the list with its verbs, unlike
                 // `receipt`: every verb in its §2 subtree is read, so there is
                 // no write for the noun row to smuggle on (CLOUD-50).
@@ -774,6 +781,11 @@ mod tests {
             // this assertion exists to prompt — and the row is `write`, so
             // it is deliberately absent from the read allowlist above.
             "perf".to_owned(),
+            // The verdict and the composition, retired out of
+            // `mise-tasks/perf-compare.sh` and `mise-tasks/perf-gate.sh` under
+            // CLOUD-1163 unit 10. `compare` is the subtree's one `read` member.
+            "perf compare".to_owned(),
+            "perf gate".to_owned(),
             "perf pair".to_owned(),
             "policy".to_owned(),
             "policy budget".to_owned(),

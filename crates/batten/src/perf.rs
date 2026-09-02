@@ -73,6 +73,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 
+use crate::error::UsageError;
 use crate::hook::{Event, Harness, WiringFile};
 
 /// The base a comparison is taken against, and the run counts.
@@ -268,9 +269,15 @@ pub struct Record {
 impl std::fmt::Display for Record {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Same units, same rounding and same field order as `perf`, plus the
-        // `arm=` field that makes a record half of a pair. `perf-compare` parses
-        // this and `perf-gate` greps `^arm=`, so the shape is a CONTRACT with two
-        // frozen callers rather than a rendering choice.
+        // `arm=` field that makes a record half of a pair.
+        //
+        // STILL A CONTRACT, AND ITS READER IS NO LONGER FROZEN (CLOUD-1163 unit
+        // 10). This used to be read by two shell programs — `perf-compare` parsed
+        // the fields and `perf-gate` grepped `^arm=` — and both are retired onto
+        // `compare` and `gate` below. The shape is kept because `perf compare`
+        // still takes records on STDIN, which is what lets every verdict be
+        // exercised without a build; what is gone is the second implementation of
+        // the reader that could disagree with this writer.
         write!(
             f,
             "arm={} path={} p50={} p95={} mean={} runs={}",
@@ -993,6 +1000,304 @@ fn summarise(
 // ---------------------------------------------------------------------------
 // The acquisition sweep (CLOUD-935), ported out of `bench/acquisition/sweep.py`
 // under CLOUD-1229.
+// --- the verdict over a pair, and the composition (CLOUD-1163 unit 10) -------
+//
+// Ported off `mise-tasks/perf-compare.sh` and `mise-tasks/perf-gate.sh`, which are
+// deleted in the same delta. It lives beside `pair` for the reason the sweep does
+// below: the record shape is a CONTRACT, and a reader in another module is a
+// second spelling of it that can disagree with the writer.
+//
+// THE COMPOSITION STOPS BEING A PIPELINE, WHICH RETIRES THE DEFECT `perf-gate.sh`
+// SPENT ITS HEADER GUARDING AGAINST. That program redirected through a temporary
+// file and greppped `^arm=`, because `perf-pair | perf-compare` would hand the
+// pipeline the GATE's exit status alone — so a measurement that failed outright
+// arrived as empty stdin and was reported as could-not-look, the right code for
+// the wrong reason. In process there is no pipeline, no temporary file and no
+// grep: `gate` holds `Outcome` as a value and matches on it, so a skip and a
+// failed measurement are different variants rather than two readings of one
+// stream.
+
+/// The ratio a path may reach before it is a regression.
+///
+/// **Measured, not chosen** (2026-08-11, a 4-core `x86_64` container): the identical
+/// binary as both arms, 100 runs each after 10 warmups, ten repeats across three
+/// paths — 30 ratios of a comparison that by construction measures nothing. They
+/// spread 0.966 to 1.102. So a 10% swing is what this experiment produces when
+/// NOTHING changed, and a threshold near 1.10 would be a coin flip.
+///
+/// 1.30 clears that measured maximum with room for a busier runner. The asymmetry
+/// is deliberate: a false failure costs a confused author and, repeated, gets the
+/// gate switched off, while a regression small enough to slip under 1.30 is caught
+/// by the trunk series instead. Re-measure with `perf pair --null`.
+const REGRESSION_RATIO: f64 = 1.30;
+
+/// The measured null maximum, n=30. **Reported, never compared against** — it is
+/// in the refusal so a reader can see the threshold is clear of the noise.
+const NOISE_FLOOR: f64 = 1.102;
+
+/// The environment override on the threshold, kept from the shell so the floor
+/// stays re-measurable without an edit.
+const REGRESSION_RATIO_VAR: &str = "BENCH_REGRESSION_RATIO";
+
+/// One parsed `arm=` record. Separate from [`Record`] because a record READ is a
+/// different object from a record WRITTEN: the writer knows its arm as a
+/// `&'static str` and this cannot.
+#[derive(Debug, Clone, PartialEq)]
+struct Paired {
+    arm: String,
+    path: String,
+    p50: f64,
+}
+
+/// What the comparison decided.
+#[derive(Debug, Default, PartialEq)]
+pub struct Comparison {
+    /// Paths past their limit, rendered as the refusal's pointer lines.
+    pub regressed: Vec<String>,
+    /// Accepted-but-past-threshold paths, rendered as warnings. **Reported on
+    /// every run, never silent**: an accepted regression that stops being visible
+    /// is a raised threshold with extra steps.
+    pub accepted: Vec<String>,
+    /// Lapsed rows, which stop exempting and say so.
+    pub lapsed: Vec<String>,
+    /// The threshold actually applied, for the summary line.
+    pub threshold: f64,
+}
+
+impl Comparison {
+    /// The one-line summary. **It must not claim more than the run established**:
+    /// saying "every path is within 1.30x" over a run that accepted one past it is
+    /// the same false green this gate exists to refuse, one layer up in its own
+    /// output.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let threshold = self.threshold;
+        if self.accepted.is_empty() {
+            format!("perf-compare: every measured path is within {threshold}x of the merge base")
+        } else {
+            format!(
+                "perf-compare: every measured path is within {threshold}x of the merge base, \
+                 except {} accepted above",
+                self.accepted.len()
+            )
+        }
+    }
+}
+
+fn parse_field<'a>(words: &[&'a str], key: &str) -> Option<&'a str> {
+    words
+        .iter()
+        .find_map(|word| word.strip_prefix(key)?.strip_prefix('='))
+}
+
+/// Read the paired records, refusing anything that is not one.
+///
+/// # Errors
+///
+/// Empty input, or a non-blank line that is not a record. **Noise in a stream that
+/// carries verdict input is could-not-look, never a pass** — a reader that skipped
+/// what it did not understand would compare whatever happened to parse.
+fn parse_pairs(input: &str) -> Result<Vec<Paired>> {
+    if input.trim().is_empty() {
+        return Err(UsageError::raise(
+            "perf-compare: stdin is empty — redirect `mise run perf-pair` to a file and read \
+             it back. No verdict."
+                .to_owned(),
+        ));
+    }
+    let mut records = Vec::new();
+    let mut malformed = Vec::new();
+    for (index, line) in input.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let number = index + 1;
+        if !line.starts_with("arm=") {
+            malformed.push(number);
+            continue;
+        }
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let arm = parse_field(&words, "arm").unwrap_or_default();
+        let path = parse_field(&words, "path").unwrap_or_default();
+        let p50 = parse_field(&words, "p50").unwrap_or_default();
+        // `p50 == "0"` is refused with the same words the shell used: a zero
+        // denominator is not a measurement, and dividing by it would produce an
+        // infinity that reads as a catastrophic regression.
+        let value = p50.parse::<f64>();
+        let ok = matches!(arm, "base" | "head")
+            && !path.is_empty()
+            && p50 != "0"
+            && value.as_ref().is_ok_and(|parsed| parsed.is_finite());
+        match (ok, value) {
+            (true, Ok(p50)) => records.push(Paired {
+                arm: arm.to_owned(),
+                path: path.to_owned(),
+                p50,
+            }),
+            _ => malformed.push(number),
+        }
+    }
+    if !malformed.is_empty() {
+        let pointers = malformed
+            .iter()
+            .map(|number| {
+                format!(
+                    "  stdin:{number}: not an `arm=<base|head> path=<id> p50=… p95=… mean=… \
+                     runs=…` record"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(UsageError::raise(format!(
+            "perf-compare: stdin carries lines that are not paired records, so no comparison \
+             is possible:\n{pointers}"
+        )));
+    }
+    Ok(records)
+}
+
+/// Decide the ratios.
+///
+/// **p50, not p95, and the reason is the pairing.** p95 is the right statistic for
+/// an absolute budget, because a hook's worst case is what an agent feels. It is
+/// the wrong one for a ratio: the tail is where a runner's contention lands, so a
+/// p95 ratio is the noisiest number available, while p50 is the most stable
+/// estimate of what the binary itself costs.
+///
+/// # Errors
+///
+/// Anything that means no comparison happened: unreadable input, no `head` arm, or
+/// a head path the base never measured. **An unpaired path is could-not-look,
+/// never a pass** — it means the base build failed to measure that path, and
+/// reporting green over a comparison that did not happen is the partial-coverage
+/// false green this repository keeps re-meeting.
+pub fn compare(
+    input: &str,
+    exempt: &[crate::config::PerfExempt],
+    today: &str,
+) -> Result<Comparison> {
+    let records = parse_pairs(input)?;
+    let threshold = std::env::var(REGRESSION_RATIO_VAR)
+        .ok()
+        .and_then(|raw| raw.parse::<f64>().ok())
+        .filter(|parsed| parsed.is_finite() && *parsed > 0.0)
+        .unwrap_or(REGRESSION_RATIO);
+
+    let heads: Vec<&Paired> = records.iter().filter(|row| row.arm == "head").collect();
+    if heads.is_empty() {
+        return Err(UsageError::raise(
+            "perf-compare: no `head` measurements on stdin — the driver produced no arm to \
+             judge. No verdict."
+                .to_owned(),
+        ));
+    }
+
+    let mut decided = Comparison {
+        threshold,
+        ..Comparison::default()
+    };
+    for head in heads {
+        let Some(base) = records
+            .iter()
+            .find(|row| row.arm == "base" && row.path == head.path)
+        else {
+            return Err(UsageError::raise(format!(
+                "perf-compare: path '{}' was measured on head but not on base, so it was \
+                 never compared. No verdict.",
+                head.path
+            )));
+        };
+        let ratio = round3(head.p50 / base.p50);
+        let mut limit = threshold;
+        let mut accepted = None;
+        if let Some(row) = exempt.iter().find(|row| row.path == head.path) {
+            // A LAPSED ROW STOPS EXEMPTING AND SAYS SO, rather than quietly
+            // continuing or refusing outright: the path drops back to the
+            // ordinary threshold, which is what makes the expiry a ratchet
+            // instead of a cliff.
+            if row.expires.as_str() < today {
+                decided.lapsed.push(format!(
+                    "perf-compare: the exemption for '{}' lapsed on {} and no longer applies. \
+                     Fix the regression or take the decision again with a new date.",
+                    row.path, row.expires
+                ));
+            } else if row.ratio.parse::<f64>().is_ok_and(|raised| raised > limit) {
+                // IT ONLY EVER RAISES THE BAR. A branch already inside the
+                // ordinary threshold is judged by the ordinary threshold, so an
+                // accepted regression cannot become a licence to drift up to it.
+                // Infallible here: the value parsed in the guard above, and
+                // `Perf::validate` refused a table whose rows do not.
+                limit = row.ratio.parse::<f64>().unwrap_or(limit);
+                accepted = Some(row);
+            }
+        }
+        if ratio > limit {
+            decided.regressed.push(format!(
+                "  {}: base p50={}ms -> head p50={}ms ({ratio}x)",
+                head.path,
+                round2(base.p50),
+                round2(head.p50)
+            ));
+        } else if let Some(row) = accepted.filter(|_| ratio > threshold) {
+            decided.accepted.push(format!(
+                "perf-compare: {} is {ratio}x, past the {threshold}x threshold, accepted \
+                 until {} — {}",
+                head.path, row.expires, row.reason
+            ));
+        }
+    }
+    Ok(decided)
+}
+
+/// The refusal's own opening line, which names the threshold AND the measured
+/// noise floor so a reader can see the one is clear of the other.
+#[must_use]
+pub fn regression_header(threshold: f64) -> String {
+    format!(
+        "perf-compare: an invocation path is measurably slower than the merge base \
+         (threshold {threshold}x, measured noise floor {NOISE_FLOOR}x):"
+    )
+}
+
+/// What `gate` composed: the pair, then the verdict over it.
+#[derive(Debug)]
+pub enum Gate {
+    /// Nothing to compare — the binary cannot have changed on this branch.
+    Skipped(String),
+    /// The pair was measured and judged.
+    Judged(Comparison),
+}
+
+/// `perf pair` and `perf compare`, composed — the one name `verify` and CI call.
+///
+/// # Errors
+///
+/// Whatever [`pair`] or [`compare`] could not do. Every one is a property of the
+/// CHECKOUT rather than a verdict about the branch, and the caller maps it to a
+/// could-not-look rather than to a regression.
+pub fn gate(
+    repo: &Path,
+    options: Options,
+    exempt: &[crate::config::PerfExempt],
+    today: &str,
+) -> Result<Gate> {
+    match pair(repo, options)? {
+        // A SKIP IS A PASS, NOT AN EMPTY MEASUREMENT. `pair` has already
+        // established that the binary cannot have changed, and handing an empty
+        // stream to `compare` would turn a sound skip into a could-not-look —
+        // which is exactly what the shell's `grep '^arm='` was there to prevent.
+        Outcome::Skipped(reason) => Ok(Gate::Skipped(reason)),
+        Outcome::Measured(records) => {
+            let rendered = records
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(Gate::Judged(compare(&rendered, exempt, today)?))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 //
 // WHY IT LIVES HERE RATHER THAN IN ITS OWN MODULE, and it is the same argument

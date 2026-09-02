@@ -176,6 +176,11 @@ pub struct Config {
     /// could-not-look rather than as a default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready: Option<Ready>,
+    /// Accepted invocation-latency regressions (CLOUD-1163 unit 10). Absent
+    /// means this file accepts none, which is the safe direction — an absent
+    /// table cannot exempt a path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perf: Option<Perf>,
     /// Programs that only ever READ the operands they are given, so naming a
     /// [`Config::protected`] path is not a mutation (CLOUD-1141).
     ///
@@ -556,6 +561,124 @@ pub struct Config {
     /// (CLOUD-720). Absent means the strict default: an unreachable ref refuses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trust: Option<Trust>,
+}
+
+/// The `[perf]` table: accepted invocation-latency regressions (CLOUD-1163
+/// unit 10, ported off `mise-tasks/perf-compare.sh`'s `EXEMPT` heredoc).
+///
+/// # Why the rows are config and the THRESHOLD is not
+///
+/// The threshold is a property of the EXPERIMENT — a null comparison of one
+/// identical binary as both arms spread 0.966–1.102, and 1.30 clears that
+/// measured maximum. It says nothing about any consumer, so it stays a constant
+/// in [`crate::perf`] with its measurement beside it.
+///
+/// Each row here is the opposite: it names a path, a date and a REASON, and every
+/// reason this consumer has written cites a tracker key. Non-negotiable rule 1
+/// forbids a consumer identifier anywhere in `crates/batten`, so the table cannot
+/// be a literal in the crate whatever its shape — which is what decides this,
+/// rather than a preference for configurability.
+///
+/// # Why a table rather than a raised threshold
+///
+/// A raised threshold is a repo-wide answer to a one-branch question: it stops
+/// the gate asking about every other path, and nothing records what it was raised
+/// for. A row accepts ONE path at ONE ratio until ONE date, so the gate keeps
+/// asking everything else at the ordinary threshold and the decision expires by
+/// itself. That is `prebuilt-lint`'s waiver semantics (CLOUD-92), one gate over.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Perf {
+    /// The accepted regressions. Absent or empty means every path is judged at
+    /// the ordinary threshold, which is the safe direction: an absent table
+    /// cannot exempt anything.
+    #[serde(default, rename = "exempt", skip_serializing_if = "Vec::is_empty")]
+    pub exempt: Vec<PerfExempt>,
+}
+
+/// One accepted regression: a path, its raised ratio, an expiry and a reason.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PerfExempt {
+    /// The measured path this accepts, matched exactly against a record's
+    /// `path=` field.
+    pub path: String,
+    /// The ratio this path may reach. **It only ever RAISES the bar**: a branch
+    /// already inside the ordinary threshold is judged by the ordinary
+    /// threshold, so an accepted regression cannot become a licence to drift up
+    /// to it.
+    ///
+    /// **Text rather than a float, and the reason is [`Config`]'s own derive.**
+    /// `Config` is `Eq`, which no `f64` field can be, and the alternative was to
+    /// drop `Eq` from the whole authority so that one row could hold a number —
+    /// a change to every comparison in the crate to save one parse here. The
+    /// value is validated as a positive finite number at load, so the parse
+    /// below cannot be reached with anything else, and text is what the retired
+    /// shell held it as anyway.
+    pub ratio: String,
+    /// The date this acceptance lapses, `YYYY-MM-DD`. A lapsed row stops
+    /// exempting rather than quietly continuing.
+    pub expires: String,
+    /// Why this regression is accepted. Required and non-empty: an exemption
+    /// nobody explained is indistinguishable from a threshold nobody defends.
+    pub reason: String,
+}
+
+impl Perf {
+    /// Prove every row well formed at LOAD, which is where the shell read them
+    /// one at a time and could only refuse the row it happened to reach.
+    ///
+    /// # Errors
+    ///
+    /// A row with an empty path or reason, a non-positive ratio, or an expiry
+    /// that is not `YYYY-MM-DD`. Each is a table that would decide the wrong
+    /// thing rather than fail, which is CLOUD-253's rule for every table here.
+    pub fn validate(&self) -> Result<()> {
+        for (index, row) in self.exempt.iter().enumerate() {
+            let at = format!("[[perf.exempt]] #{}", index + 1);
+            if row.path.trim().is_empty() {
+                return Err(UsageError::raise(format!("{at}: `path` is empty")));
+            }
+            if row.reason.trim().is_empty() {
+                return Err(UsageError::raise(format!(
+                    "{at} ({}): `reason` is empty. An exemption nobody explained is a \
+                     threshold nobody defends.",
+                    row.path
+                )));
+            }
+            if !row
+                .ratio
+                .parse::<f64>()
+                .is_ok_and(|ratio| ratio.is_finite() && ratio > 0.0)
+            {
+                return Err(UsageError::raise(format!(
+                    "{at} ({}): `ratio` must be a positive number, not `{}`",
+                    row.path, row.ratio
+                )));
+            }
+            // Compared as fixed-width text against `YYYY-MM-DD`, which is what
+            // the shell's `[[ "$expires" < "$TODAY" ]]` did and what keeps this
+            // free of a date dependency. The shape check is what makes that
+            // comparison meaningful: `2026-9-1` sorts before `2026-11-30` and
+            // would lapse a row that has not.
+            let shaped =
+                row.expires.len() == 10
+                    && row.expires.chars().enumerate().all(
+                        |(position, character)| match position {
+                            4 | 7 => character == '-',
+                            _ => character.is_ascii_digit(),
+                        },
+                    );
+            if !shaped {
+                return Err(UsageError::raise(format!(
+                    "{at} ({}): `expires` must be YYYY-MM-DD, not `{}`. It is compared as \
+                     text, so a short field lapses a row that has not.",
+                    row.path, row.expires
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The `[ready]` table: the refinement gate's consumer-set thresholds.
@@ -1377,6 +1500,13 @@ fn validate_sections(config: &Config) -> Result<()> {
     if let Some(defects) = &config.defects {
         defects.validate()?;
     }
+    // Same reason again, and the rows are the kind that decide the wrong thing
+    // rather than fail: a malformed `expires` still COMPARES, so a short date
+    // lapses a row that has not and the path silently drops to the ordinary
+    // threshold. The shell could only refuse the row it happened to reach.
+    if let Some(perf) = &config.perf {
+        perf.validate()?;
+    }
     // Same reason, sharpened by what this table's values ARE: two floors, each
     // asserting it equals a measured worst lap times a stated factor. That
     // arithmetic is checkable and nothing else checks it, so a floor that
@@ -1525,6 +1655,9 @@ impl Config {
             // reader takes as could-not-look and exempts everything — the same
             // direction every other field here grants.
             ready: None,
+            // Declaring nothing accepts no regression, which is also the safe
+            // reading: an authority that cannot be read must not exempt a path.
+            perf: None,
             // No protected paths means the unknown-program clause has nothing to
             // guard, so an empty reader set costs nothing here and is the honest
             // value: a config declaring nothing declares no readers either.

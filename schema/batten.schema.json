@@ -247,6 +247,17 @@
         "$ref": "#/$defs/NamedPattern"
       }
     },
+    "perf": {
+      "description": "Accepted invocation-latency regressions (CLOUD-1163 unit 10). Absent\nmeans this file accepts none, which is the safe direction — an absent\ntable cannot exempt a path.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Perf"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "program": {
       "description": "The programs a `[[recorder]]` may run, by id.\n\nNamed rather than inline so one program has one spelling, which is\n`[[pattern]]`'s rule one layer over — and so `validate` can refuse a\nrecorder naming a program nothing declares instead of leaving a column\nthat renders could-not-look forever.",
       "type": "object",
@@ -2149,6 +2160,49 @@
           "type": "string",
           "const": "file_text"
         }
+      ]
+    },
+    "Perf": {
+      "description": "The `[perf]` table: accepted invocation-latency regressions (CLOUD-1163\nunit 10, ported off `mise-tasks/perf-compare.sh`'s `EXEMPT` heredoc).\n\n# Why the rows are config and the THRESHOLD is not\n\nThe threshold is a property of the EXPERIMENT — a null comparison of one\nidentical binary as both arms spread 0.966–1.102, and 1.30 clears that\nmeasured maximum. It says nothing about any consumer, so it stays a constant\nin [`crate::perf`] with its measurement beside it.\n\nEach row here is the opposite: it names a path, a date and a REASON, and every\nreason this consumer has written cites a tracker key. Non-negotiable rule 1\nforbids a consumer identifier anywhere in `crates/batten`, so the table cannot\nbe a literal in the crate whatever its shape — which is what decides this,\nrather than a preference for configurability.\n\n# Why a table rather than a raised threshold\n\nA raised threshold is a repo-wide answer to a one-branch question: it stops\nthe gate asking about every other path, and nothing records what it was raised\nfor. A row accepts ONE path at ONE ratio until ONE date, so the gate keeps\nasking everything else at the ordinary threshold and the decision expires by\nitself. That is `prebuilt-lint`'s waiver semantics (CLOUD-92), one gate over.",
+      "type": "object",
+      "properties": {
+        "exempt": {
+          "description": "The accepted regressions. Absent or empty means every path is judged at\nthe ordinary threshold, which is the safe direction: an absent table\ncannot exempt anything.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PerfExempt"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "PerfExempt": {
+      "description": "One accepted regression: a path, its raised ratio, an expiry and a reason.",
+      "type": "object",
+      "properties": {
+        "expires": {
+          "description": "The date this acceptance lapses, `YYYY-MM-DD`. A lapsed row stops\nexempting rather than quietly continuing.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The measured path this accepts, matched exactly against a record's\n`path=` field.",
+          "type": "string"
+        },
+        "ratio": {
+          "description": "The ratio this path may reach. **It only ever RAISES the bar**: a branch\nalready inside the ordinary threshold is judged by the ordinary\nthreshold, so an accepted regression cannot become a licence to drift up\nto it.\n\n**Text rather than a float, and the reason is [`Config`]'s own derive.**\n`Config` is `Eq`, which no `f64` field can be, and the alternative was to\ndrop `Eq` from the whole authority so that one row could hold a number —\na change to every comparison in the crate to save one parse here. The\nvalue is validated as a positive finite number at load, so the parse\nbelow cannot be reached with anything else, and text is what the retired\nshell held it as anyway.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why this regression is accepted. Required and non-empty: an exemption\nnobody explained is indistinguishable from a threshold nobody defends.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "ratio",
+        "expires",
+        "reason"
       ]
     },
     "Production": {

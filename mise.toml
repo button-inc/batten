@@ -475,7 +475,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,attestation-check,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-race-check,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-matcher-check,hook-pin-check,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,perf-compare,perf-gate,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reclaim-census,release-assets-check,release-due,release-tag-shape,release-tracking-check,released,remedy-authorship,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared"
+MUTANT_GATES = "alive,attestation-check,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-race-check,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-matcher-check,hook-pin-check,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reclaim-census,release-assets-check,release-due,release-tag-shape,release-tracking-check,released,remedy-authorship,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1260,6 +1260,49 @@ description = "Measure this branch and its merge base back to back on one machin
 # `origin/main`, 100 runs, 10 warmups, and `target/perf`, each still overridable
 # through the `BENCH_*` variables CI already exports.
 run = "cargo run --quiet -p batten -- perf pair"
+
+[tasks."perf-compare"]
+description = "Gate: this branch has not made an invocation path measurably slower than its merge base (reads a paired measurement on stdin)"
+# CLOUD-172's verdict, ported off `mise-tasks/perf-compare.sh` under CLOUD-1163
+# unit 10.
+#
+# THE TASK NAME SURVIVES THE MIGRATION, for `perf-pair`'s reason above.
+#
+# STILL A PURE FUNCTION OF STDIN, which is the property worth keeping rather than
+# an artefact of the shell. `perf pair` measures and this decides, so every
+# verdict is exercisable in milliseconds with no build, no hyperfine and no merge
+# base — which is what `crates/batten/tests/it/perf_compare.rs` does 20 times.
+# Folding the comparison invisibly into `perf-gate` would have cost exactly that.
+#
+# THE THRESHOLD IS IN THE CRATE AND THE EXEMPTIONS ARE IN `batten.toml`, and the
+# split is non-negotiable rule 1 rather than taste: 1.30 is a property of the
+# EXPERIMENT (the measured null spread, 0.966-1.102) and names no consumer, while
+# every accepted row this repository has written cites a tracker key, which may
+# not appear anywhere in `crates/batten`.
+run = "cargo run --quiet -p batten -- perf compare"
+
+[tasks."perf-gate"]
+description = "Gate: measure this branch against its merge base and refuse a regression — the one call `verify` and CI make"
+# The composition, ported off `mise-tasks/perf-gate.sh` in the same delta.
+#
+# THE TASK NAME SURVIVES THE MIGRATION, and here it is load-bearing twice over:
+# `verify`'s body runs `mise run perf-gate` and `.github/workflows/ci.yml`'s
+# `perf` job runs it as a required check, so a renamed task would need a workflow
+# edit to land this one. `ci-local-parity` also requires every task a
+# `pull_request` workflow names to be one `verify` runs, and one name is what
+# keeps that correspondence readable.
+#
+# THE REDIRECT-THROUGH-A-FILE IS GONE, AND THAT IS THE POINT OF THE PORT. The
+# program it replaces could not pipe `perf-pair` into `perf-compare`: a pipeline
+# hands on the LAST command's exit status, so a measurement that failed outright
+# reached the gate as empty stdin and was reported as its could-not-look — the
+# right code for the wrong reason, one step from a producer's failure vanishing.
+# It answered with a temporary file, a `grep '^arm='` to tell a skip from a
+# measurement, and an explicit passthrough of the producer's code. In process
+# there is no pipeline: `perf::gate` holds the outcome as a value and matches on
+# it, so a skip and a failed measurement are different variants rather than two
+# readings of one byte stream.
+run = "cargo run --quiet -p batten -- perf gate"
 
 [tasks."mutant"]
 description = "Gate: every declared gate has a mutation its own suite is PROVEN to catch (CLOUD-418)"

@@ -6501,6 +6501,50 @@ email = "alec@wenzowski.com"
 [ready]
 prose_dialect_required_from = "2026-09-02T00:00:00.000Z"
 
+# ACCEPTED INVOCATION-LATENCY REGRESSIONS (CLOUD-1163 unit 10), transcribed
+# verbatim off the `EXEMPT` heredoc of the retired `mise-tasks/perf-compare.sh`.
+#
+# WHY A TABLE RATHER THAN A RAISED THRESHOLD. A raised `REGRESSION_RATIO` is a
+# repo-wide answer to a one-branch question: it stops the gate asking about every
+# other path on every future PR, and nothing records what it was raised for. Each
+# row accepts ONE path at ONE ratio until ONE date, with the reason attached, so
+# the gate keeps asking everything else at 1.30 and the decision expires by
+# itself. `prebuilt-lint`'s waiver semantics (CLOUD-92), one gate over.
+#
+# WHY THE ROWS ARE HERE AND THE THRESHOLD IS NOT. 1.30 is a property of the
+# EXPERIMENT — a null comparison of one identical binary as both arms spread
+# 0.966 to 1.102, and 1.30 clears that measured maximum — so it names no consumer
+# and stays a constant in `crates/batten/src/perf.rs` beside its measurement.
+# Every row below cites a tracker key, and non-negotiable rule 1 forbids a
+# consumer identifier anywhere in the crate. That is what decides the split; it
+# is not a preference for configurability.
+#
+# EXEMPT ROWS ARE REPORTED ON EVERY RUN, never silently: an accepted regression
+# that stops being visible is a raised threshold with extra steps. A row only ever
+# RAISES its path's bar, so a branch already inside 1.30 is judged at 1.30.
+[[perf.exempt]]
+path = "posttool"
+ratio = "2.20"
+expires = "2026-11-30"
+# THE ONE CASE WHERE THE PAIRING DOES NOT MEASURE A REGRESSION AT ALL, and the
+# ratio says so: 1.806x, far past a noise floor of 1.102x and not remotely a
+# slowdown of the same work. The base binary performs NO capture on a post-tool
+# call — CLOUD-919 is what adds one — so the arm's two sides are "no write" and
+# "an fsync'd small-file write plus a provenance append", and dividing one by the
+# other prices the FEATURE rather than its cost drifting. The number is still
+# gated: `perf-assert` holds the arm to the absolute 100ms budget, where it sits
+# two orders of magnitude inside. The expiry is the point — once CLOUD-919 lands,
+# `main` carries a capturing binary, the next branch's pairing compares write to
+# write, and the ordinary 1.30 applies. A row left standing past that would be
+# exempting a real regression.
+reason = "CLOUD-919 adds a per-call capture write the base binary does not perform, so this arm's pairing measures write-vs-no-write rather than a regression. Measured 1.806x on one container; perf-assert still holds it to the absolute 100ms budget. Lapses once main carries a capturing binary and the pairing compares like with like"
+
+[[perf.exempt]]
+path = "wired"
+ratio = "1.60"
+expires = "2026-11-30"
+reason = "CLOUD-843: a migrated gate compiles per mediated call. Measured: the same predicate against CLOUD-857's projected input.call.segments is 1.17x, so this expires with that row rather than standing on its own"
+
 [epoch]
 # `.mcp.json` is here for the agent-context record (CLOUD-579), which covers the
 # agent config a repository governs itself with through the epoch rather than by

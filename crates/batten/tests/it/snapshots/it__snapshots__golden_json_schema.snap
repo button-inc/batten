@@ -1458,6 +1458,33 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
+          "path": "perf compare",
+          "id": "perf.compare",
+          "about": "Decide whether a paired measurement read on stdin regressed past the threshold",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "perf gate",
+          "id": "perf.gate",
+          "about": "Measure this branch against its merge base and refuse a regression",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "null",
+              "short": null,
+              "long": "null",
+              "takes_value": false,
+              "positional": false,
+              "help": "Measure HEAD against itself, so the ratio is the noise floor rather than a comparison"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "perf pair",
           "id": "perf.pair",
           "about": "Measure this branch and its merge base back to back on one machine, and print both arms as paired records",
@@ -2394,6 +2421,10 @@ expression: stdout_of(&output)
     {
       "id": "payload.field",
       "path": "payload field"
+    },
+    {
+      "id": "perf.compare",
+      "path": "perf compare"
     },
     {
       "id": "policy",

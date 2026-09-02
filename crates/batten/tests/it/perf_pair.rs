@@ -5,23 +5,25 @@
 //! `crates/batten/src/perf.rs` unit-tests the skip predicate directly, which is
 //! the right home for it: the predicate is pure, and keeping it exercisable
 //! without a build is the whole reason it is separable from the measurement.
-//! What those cases cannot establish is the part two FROZEN callers depend on —
-//! that the binary actually answers the way `mise-tasks/perf-gate.sh` reads it.
+//! What those cases cannot establish is that the BINARY answers the way a caller
+//! reads it: a skip must exit 0 and print no record, and only a could-not-look
+//! may be non-zero. Nothing below the boundary can assert that.
 //!
-//! That reading is a contract, not a convention, and `perf-gate.sh` states it:
-//! it redirects this command to a file and distinguishes a skip from a
-//! measurement **by looking for `^arm=`, never by a second exit code**. Its own
-//! comment gives the reason — flattening the two "would make a shallow clone
+//! **The caller that forced this contract is retired, and the contract is not**
+//! (CLOUD-1163 unit 10). `mise-tasks/perf-gate.sh` redirected this command to a
+//! file and told a skip from a measurement **by looking for `^arm=`, never by a
+//! second exit code**, because flattening the two "would make a shallow clone
 //! indistinguishable from a branch that made the hook slower, which is the
 //! difference `verify` needs in order to tell 'fix your change' from 'fix your
-//! checkout'." So a skip must exit 0 and print no record, and only a
-//! could-not-look may be non-zero. Nothing below the boundary can assert that.
+//! checkout'." `perf gate` makes that a variant rather than a reading — but `perf
+//! pair` is still invoked alone whenever the noise floor is re-measured, and this
+//! is the tier that holds it to answering the same way.
 //!
 //! # What is deliberately not here
 //!
 //! The measurement itself needs two release builds and a worktree, so it is not
 //! exercised — the predecessor suite made the same call for the same reason.
-//! `tests/perf-compare.bats` covers the decision over the records.
+//! `perf_compare.rs` covers the decision over the records.
 //!
 //! # The retirement ledger
 //!

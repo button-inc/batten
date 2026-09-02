@@ -447,6 +447,28 @@ fn pr_body() -> String {
     format!("Closes CLOUD-1\n\n{}\n", canary("body"))
 }
 
+/// Paired records read on stdin by `perf compare` (CLOUD-1163 unit 10).
+///
+/// **The canary rides in `mean`, and choosing the field was the whole exercise.**
+/// Most of this record is emitted BY DESIGN: `path` is the benchmark id a refusal
+/// must name, and the two `p50`s are the measurement the ratio is computed from,
+/// so a canary in any of them would assert the opposite of rule 4. `mean` is the
+/// field the comparison deliberately never reads — the module states why p50 and
+/// not p95, and mean is unused entirely — so it is content the verb was handed and
+/// has no business repeating.
+///
+/// The pair regresses on purpose (3.0 -> 9.0, 3x against a 1.30x threshold), so
+/// the verb answers with a VERDICT rather than a could-not-look. A refusal is
+/// where a gate is most tempted to quote its input, and it is the only path here
+/// worth pointing this census at.
+fn paired_records() -> String {
+    let canary = canary("mean");
+    format!(
+        "arm=base path=noop p50=3.0 p95=3.0 mean={canary} runs=100\n\
+         arm=head path=noop p50=9.0 p95=9.0 mean={canary} runs=100\n"
+    )
+}
+
 /// A ledger row read on stdin by `defects add -n`. The caller wrote it, so its
 /// bytes are a declaration.
 fn incoming_record() -> String {
@@ -486,6 +508,7 @@ enum Stdin {
     ForgeVerdict,
     PlanEntries,
     PrBody,
+    PairedRecords,
 }
 
 struct Verb {
@@ -1231,6 +1254,36 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The verdict over a pair, and the composition that takes one (CLOUD-1163
+    // unit 10). Both report a BENCHMARK ID, two p50s and a ratio — the same
+    // numbers `pair` already emits, rearranged into a comparison. Nothing else
+    // reaches the output: not the records that were rejected (a malformed line is
+    // reported as `stdin:<n>`, never quoted), and not the hyperfine output behind
+    // any of it.
+    //
+    // The one thing here that IS content is an exemption's `reason`, carried into
+    // the `::warning::` line verbatim. That is deliberate rather than an
+    // oversight, and it is not a leak: the reason is text the committed authority
+    // declares in order to be read at exactly this moment, so suppressing it would
+    // make an accepted regression anonymous — which is the failure the loud line
+    // exists to prevent. Rule 4 is about not quoting the SUBJECT a check read; a
+    // config value that exists to be quoted is the check's own vocabulary.
+    //
+    // In this corpus both answer over empty stdin, so `compare` is a could-not-look
+    // and `gate` skips on a fixture whose HEAD is its own merge base. Both are
+    // pointers either way, which is what is being decided.
+    Verb {
+        path: "perf compare",
+        args: &[],
+        stdin: Stdin::PairedRecords,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "perf gate",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The mutation sweep and its census (CLOUD-1267). Both report a GATE NAME, a
     // mutation id and a case name — never a line of the mutated source, which is
     // the one thing a mutation runner is uniquely placed to leak, and the reason
@@ -1455,6 +1508,7 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
         Stdin::ForgeVerdict => forge_verdict(),
         Stdin::PlanEntries => plan_entries(),
         Stdin::PrBody => pr_body(),
+        Stdin::PairedRecords => paired_records(),
     };
     // A BROKEN PIPE HERE IS THE CHILD BEING FAST, NOT A FAILURE. This corpus runs
     // every verb, and a verb that reads no stdin may exit before the write lands —

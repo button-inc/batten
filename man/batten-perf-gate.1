@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-perf-gate 1  batten 
+.SH NAME
+batten\-perf\-gate \- Measure this branch against its merge base and refuse a regression
+.SH SYNOPSIS
+\fBbatten perf gate\fR [\fB\-\-null\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Measure this branch against its merge base and refuse a regression
+.SH OPTIONS
+.TP
+\fB\-\-null\fR
+Measure HEAD against itself, so the ratio is the noise floor rather than a comparison
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

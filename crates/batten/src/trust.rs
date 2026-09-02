@@ -827,6 +827,25 @@ pub enum WeakeningKind {
     /// there is no local file that could add one. This comparison is between two
     /// committed refs, where an added row is a tightening like any other.
     StartupRowRemoved,
+    /// A `[[perf.exempt]]` row was ADDED, or an existing one raised its ratio or
+    /// pushed its expiry out, so an invocation path may now get slower without
+    /// the gate refusing it (CLOUD-1163 unit 10).
+    ///
+    /// **The direction is the opposite of every other row in this table, which is
+    /// why it needs saying.** Elsewhere a REMOVED entry is the weakening — a
+    /// dropped `[[verb]]`, a dropped protected path. Here the table is a list of
+    /// EXEMPTIONS, so adding to it is what lowers a bar and removing from it
+    /// tightens. A comparison that reused `removed_entries` would have reported
+    /// the tightening and passed the weakening.
+    ///
+    /// **Appended rather than placed beside `ReadyCutoverRelaxed`**, which is
+    /// where it belongs by subject and not by compatibility: this enum carries no
+    /// `repr`, so a variant inserted among its neighbours shifts every later
+    /// discriminant and `semver` reports the whole tail as moved. Measured on this
+    /// change's first draft — 24 kinds reported shifted, from `ProvisionRemoved`
+    /// to `StartupRowRemoved`. `cli::Command` states the same rule for the same
+    /// reason.
+    PerfExemptionAdded,
 }
 
 impl WeakeningKind {
@@ -888,6 +907,7 @@ impl WeakeningKind {
         WeakeningKind::OfflineFallbackEnabled,
         WeakeningKind::ProtectedReaderAdded,
         WeakeningKind::VocabularyAbandoned,
+        WeakeningKind::PerfExemptionAdded,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -907,6 +927,7 @@ impl WeakeningKind {
             WeakeningKind::MinVersionLowered => "min-version-lowered",
             WeakeningKind::EpochPathRemoved => "epoch-path-removed",
             WeakeningKind::ReadyCutoverRelaxed => "ready-cutover-relaxed",
+            WeakeningKind::PerfExemptionAdded => "perf-exemption-added",
             WeakeningKind::VerbRemoved => "verb-removed",
             WeakeningKind::PatternRemoved => "pattern-removed",
             WeakeningKind::VerdictOverrideAdded => "verdict-override-added",
@@ -1031,6 +1052,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "ready",
         coverage: Coverage::Compared(&[WeakeningKind::ReadyCutoverRelaxed]),
+    },
+    FieldCoverage {
+        field: "perf",
+        coverage: Coverage::Compared(&[WeakeningKind::PerfExemptionAdded]),
     },
     FieldCoverage {
         field: "unlanded",
@@ -1696,6 +1721,60 @@ fn mint_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
 /// cutover took that function past its declared line budget, which is the budget
 /// working: a function accumulating one self-contained block per config key is
 /// exactly what it exists to interrupt.
+/// The accepted-regression table (CLOUD-1163 unit 10).
+///
+/// **ADDED rather than removed, which is the opposite of every other table
+/// here.** This one is a list of EXEMPTIONS: a new row lets an invocation path
+/// get slower without the gate refusing it, and a row that raised its ratio or
+/// pushed its expiry out does the same thing to a path that already had one.
+/// Removing a row TIGHTENS and is not reported — so [`removed_entries`], which
+/// every neighbour uses, would have reported the tightening and passed the
+/// weakening.
+///
+/// A pushed-out expiry at an unchanged ratio counts, and it is the half that
+/// would otherwise go unnoticed: an acceptance is a ratio AND a date, so renewing
+/// one silently is how a dated decision becomes permanent.
+fn perf_exemption_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    let rows = |config: &Config| {
+        config
+            .perf
+            .as_ref()
+            .map(|perf| perf.exempt.clone())
+            .unwrap_or_default()
+    };
+    let was = rows(base);
+    let mut found = Vec::new();
+    for now in rows(working) {
+        let from = match was.iter().find(|row| row.path == now.path) {
+            // A path with no row before: the whole exemption is new.
+            None => Some("-".to_owned()),
+            // A path that had one: only a RAISED ratio or a LATER expiry is a
+            // weakening. The date compares as text, which is exact for
+            // `YYYY-MM-DD`; the ratio needs a parse, and an unparseable one
+            // cannot reach here because `Perf::validate` refuses the table.
+            Some(row) => {
+                let raised = now
+                    .ratio
+                    .parse::<f64>()
+                    .ok()
+                    .zip(row.ratio.parse::<f64>().ok())
+                    .is_some_and(|(now, was)| now > was);
+                (raised || now.expires > row.expires)
+                    .then(|| format!("{} until {}", row.ratio, row.expires))
+            }
+        };
+        if let Some(from) = from {
+            found.push(Weakening::new(
+                WeakeningKind::PerfExemptionAdded,
+                format!("perf.exempt.{}", now.path),
+                from,
+                format!("{} until {}", now.ratio, now.expires),
+            ));
+        }
+    }
+    found
+}
+
 fn cutover_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     type Cutover = (&'static str, fn(&Config) -> Option<String>);
     const CUTOVERS: &[Cutover] = &[
@@ -1755,6 +1834,8 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     // both sides are fixed-width ISO-8601 UTC, which is the same reading
     // `policy/filed-here.rego` takes of a tracker stamp.
     found.extend(cutover_weakenings(base, working));
+
+    found.extend(perf_exemption_weakenings(base, working));
 
     // The mutating-verb table: a removed row un-gates a tool call at the
     // `PreToolUse` boundary, which is the most consequential of these.
@@ -3372,6 +3453,69 @@ mod tests {
         // branch that adopts the ratchet, which is the direction that makes a
         // gate get switched off.
         assert!(weakenings(&config(""), &base).is_empty());
+    }
+
+    /// CLOUD-1163 unit 10. The DIRECTION is the whole of it here too, and it runs
+    /// opposite to every other table in this module: these rows are exemptions, so
+    /// adding one lowers a bar and removing one raises it. All four arms are here
+    /// because a comparison that reused `removed_entries` would have reported the
+    /// tightening and passed the weakening.
+    #[test]
+    fn accepting_a_new_perf_regression_is_a_weakening() {
+        let row = |ratio: &str, expires: &str| {
+            format!(
+                "[[perf.exempt]]\npath = \"wired\"\nratio = \"{ratio}\"\n\
+                 expires = \"{expires}\"\nreason = \"a measured acceptance\"\n"
+            )
+        };
+        let none = config("");
+        let accepted = config(&row("1.60", "2026-11-30"));
+
+        // A path that had no row now has one: the whole exemption is new.
+        assert_eq!(
+            only(&none, &accepted),
+            Weakening::new(
+                WeakeningKind::PerfExemptionAdded,
+                "perf.exempt.wired",
+                "-",
+                "1.60 until 2026-11-30",
+            )
+        );
+
+        // A RAISED RATIO on a path that already had a row lets it get slower
+        // still, which is the same move in smaller steps.
+        assert_eq!(
+            only(&accepted, &config(&row("2.00", "2026-11-30"))),
+            Weakening::new(
+                WeakeningKind::PerfExemptionAdded,
+                "perf.exempt.wired",
+                "1.60 until 2026-11-30",
+                "2.00 until 2026-11-30",
+            )
+        );
+
+        // A PUSHED-OUT EXPIRY is the other half, and it is the one that would go
+        // unnoticed: the ratio is unchanged, so a comparison reading only the
+        // number would see a row that had not moved. An acceptance is a ratio AND
+        // a date, and renewing it silently is how a dated decision becomes
+        // permanent.
+        assert_eq!(
+            only(&accepted, &config(&row("1.60", "2027-06-30"))),
+            Weakening::new(
+                WeakeningKind::PerfExemptionAdded,
+                "perf.exempt.wired",
+                "1.60 until 2026-11-30",
+                "1.60 until 2027-06-30",
+            )
+        );
+
+        // REMOVING A ROW TIGHTENS, and an earlier expiry or a lower ratio does
+        // too. None is reported — without these arms the gate would fire on every
+        // branch that lets an acceptance lapse, which is the direction that gets a
+        // gate switched off.
+        assert!(weakenings(&accepted, &none).is_empty());
+        assert!(weakenings(&accepted, &config(&row("1.40", "2026-11-30"))).is_empty());
+        assert!(weakenings(&accepted, &config(&row("1.60", "2026-06-30"))).is_empty());
     }
 
     #[test]

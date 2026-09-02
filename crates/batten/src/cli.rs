@@ -526,6 +526,20 @@ pub enum PerfCommand {
         /// and the flag exists so that floor stays re-measurable.
         null: bool,
     },
+    /// Decide the ratio over a paired measurement read on stdin (CLOUD-1163
+    /// unit 10, ported off `mise-tasks/perf-compare.sh`).
+    ///
+    /// **Appended rather than placed beside `Pair`**, for the reason `Semver`
+    /// states on the parent enum: this enum carries no `repr`, so a variant
+    /// inserted among its neighbours shifts every later discriminant.
+    Compare,
+    /// Measure the pair and decide it — the one name `verify` and CI call
+    /// (ported off `mise-tasks/perf-gate.sh`).
+    Gate {
+        /// Passed through to the pair, so the null floor stays re-measurable
+        /// through the composed name as well as the bare one.
+        null: bool,
+    },
 }
 
 /// Everything `batten exec` was asked for, as one value.
@@ -1324,6 +1338,10 @@ fn mutate_of(matches: &ArgMatches) -> Option<MutateCommand> {
 fn perf_of(matches: &ArgMatches) -> Option<PerfCommand> {
     match matches.subcommand()? {
         ("pair", matches) => Some(PerfCommand::Pair {
+            null: flag(matches, "null"),
+        }),
+        ("compare", _) => Some(PerfCommand::Compare),
+        ("gate", matches) => Some(PerfCommand::Gate {
             null: flag(matches, "null"),
         }),
         _ => None,

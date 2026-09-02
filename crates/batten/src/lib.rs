@@ -256,7 +256,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         },
         Some(Command::Override { command }) => run_override(command, &overrides, out, err),
         Some(Command::Semver { command }) => run_semver(command, mode, out, err),
-        Some(Command::Perf { command }) => run_perf(command, out, err),
+        Some(Command::Perf { command }) => run_perf(command, &overrides, out, err),
         Some(Command::Mutate { command }) => run_mutate(command, out, err),
         // The landing lease (CLOUD-1274). Every arm reaches the network, which
         // is why nothing on the `check` or `hook` surface may reach this module —
@@ -4822,38 +4822,142 @@ fn commit_policy(overrides: &Overrides) -> Result<commit::Commit> {
 /// whose arm is a nested destructure stops it being readable as a table.
 /// `batten perf pair`: measure this branch against its merge base, or say why not.
 ///
-/// THE EXIT CONTRACT IS A FROZEN CALLER'S, not a preference. `mise-tasks/perf-gate.sh`
-/// runs this, redirects it to a file, and distinguishes a SKIP from a measurement
-/// by looking for `^arm=` — never by a second exit code. So a skip prints its one
-/// human line and answers `Success`, and only a could-not-look is non-zero. The
-/// gate's own comment states why it must stay that way: flattening the two would
-/// make a shallow clone indistinguishable from a branch that made the hook slower.
+/// THE EXIT CONTRACT OUTLIVED THE CALLER THAT FORCED IT (CLOUD-1163 unit 10).
+/// `mise-tasks/perf-gate.sh` used to run `pair`, redirect it to a file, and
+/// distinguish a SKIP from a measurement by looking for `^arm=` — never by a
+/// second exit code — because flattening the two would make a shallow clone
+/// indistinguishable from a branch that made the hook slower. That program is
+/// retired and `Gate` below makes the distinction a variant rather than a
+/// reading, but the contract stands unchanged for `pair` INVOKED ALONE, which is
+/// still how the noise floor is re-measured: a skip prints its one human line and
+/// answers `Success`, and only a could-not-look is non-zero.
 fn run_perf(
     command: cli::PerfCommand,
+    overrides: &Overrides,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let cli::PerfCommand::Pair { null } = command;
     let root = hook_authority_root();
-    match perf::pair(root, perf::Options { null }) {
-        Ok(perf::Outcome::Measured(records)) => {
-            for record in records {
-                writeln!(out, "{record}")?;
+    match command {
+        cli::PerfCommand::Pair { null } => match perf::pair(root, perf::Options { null }) {
+            Ok(perf::Outcome::Measured(records)) => {
+                for record in records {
+                    writeln!(out, "{record}")?;
+                }
+                Ok(ExitCode::Success)
             }
-            Ok(ExitCode::Success)
+            Ok(perf::Outcome::Skipped(reason)) => {
+                writeln!(out, "{reason}")?;
+                Ok(ExitCode::Success)
+            }
+            // Could-not-look, and it reaches stderr in the `::error::` shape the
+            // workflow annotates. A measurement that did not happen is never
+            // reported as a verdict about the branch.
+            Err(reason) => {
+                writeln!(err, "::error:: {reason}")?;
+                Ok(ExitCode::Internal)
+            }
+        },
+        cli::PerfCommand::Compare => {
+            let mut input = String::new();
+            std::io::stdin().read_to_string(&mut input)?;
+            report_comparison(
+                perf::compare(&input, &exempt_rows(overrides)?, &today()?),
+                out,
+                err,
+            )
         }
-        Ok(perf::Outcome::Skipped(reason)) => {
-            writeln!(out, "{reason}")?;
-            Ok(ExitCode::Success)
-        }
-        // Could-not-look, and it reaches stderr in the `::error::` shape the
-        // workflow annotates. A measurement that did not happen is never reported
-        // as a verdict about the branch.
-        Err(reason) => {
-            writeln!(err, "::error:: {reason}")?;
-            Ok(ExitCode::Internal)
+        cli::PerfCommand::Gate { null } => {
+            match perf::gate(
+                root,
+                perf::Options { null },
+                &exempt_rows(overrides)?,
+                &today()?,
+            ) {
+                // A SKIP IS A PASS. `pair` established that the binary cannot
+                // have changed, so there is nothing to compare and nothing to
+                // refuse.
+                Ok(perf::Gate::Skipped(reason)) => {
+                    writeln!(out, "{reason}")?;
+                    writeln!(
+                        out,
+                        "perf-gate: nothing to compare — the binary is unchanged on this branch"
+                    )?;
+                    Ok(ExitCode::Success)
+                }
+                Ok(perf::Gate::Judged(comparison)) => report_comparison(Ok(comparison), out, err),
+                Err(reason) => {
+                    writeln!(err, "::error:: {reason}")?;
+                    Ok(ExitCode::Internal)
+                }
+            }
         }
     }
+}
+
+/// The accepted regressions the committed authority declares, or none.
+///
+/// Absent is an empty table rather than a refusal: a consumer that accepts no
+/// regression is the ordinary case, and it must not have to say so.
+fn exempt_rows(overrides: &Overrides) -> Result<Vec<config::PerfExempt>> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    Ok(config.perf.map(|perf| perf.exempt).unwrap_or_default())
+}
+
+/// Today, as `YYYY-MM-DD`, resolved HERE rather than inside the predicate.
+///
+/// The clock is a boundary read for the reason `config::deprecation_of` already
+/// writes down: a predicate that read the wall clock would answer differently
+/// tomorrow for the same commit, which is the one property a gate must not have.
+fn today() -> Result<String> {
+    Ok(waiver::today()?.text())
+}
+
+/// Render a comparison and map it to the exit contract.
+///
+/// **The codes are BATTEN's, not the retired shell's, and that is a deliberate
+/// change rather than a port defect.** `perf-compare.sh` answered 1 for a
+/// regression and 2 for could-not-look; here `2` is the policy verdict
+/// everywhere and `1`/`3` are the only codes a failure produces, with no per-verb
+/// exception. Both callers — `verify` and the `perf` job — test for zero, so no
+/// caller can tell the difference; the ledger records it as `changed` rather than
+/// carried so a reader is not told the codes survived.
+fn report_comparison(
+    comparison: Result<perf::Comparison>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let comparison = match comparison {
+        Ok(comparison) => comparison,
+        Err(reason) => {
+            writeln!(err, "::error:: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    // A lapsed exemption is reported whether or not the path then regressed: the
+    // row stopped applying, and that is news even on a branch inside the
+    // ordinary threshold.
+    for line in &comparison.lapsed {
+        writeln!(err, "::error:: {line}")?;
+    }
+    // LOUD ON EVERY RUN, on stderr beside the refusals, because this is the line
+    // that stops an accepted regression from becoming invisible.
+    for line in &comparison.accepted {
+        writeln!(err, "::warning:: {line}")?;
+    }
+    if comparison.regressed.is_empty() {
+        writeln!(out, "{}", comparison.summary())?;
+        return Ok(ExitCode::Success);
+    }
+    writeln!(
+        err,
+        "::error:: {}",
+        perf::regression_header(comparison.threshold)
+    )?;
+    for line in &comparison.regressed {
+        writeln!(err, "{line}")?;
+    }
+    Ok(ExitCode::Violation)
 }
 
 /// `batten mutate`: does each declared gate have a mutation its declared suite
