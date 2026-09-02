@@ -31,6 +31,7 @@
 #MUTANT roster-may-miss-a-job|s@not job_in_roster(name)@false@|a_pull_request_job_missing_from_the_roster_is_refused
 #MUTANT roster-may-name-a-ghost|s@not roster_name_has_a_job(name)@false@|a_roster_name_matching_no_job_is_refused
 #MUTANT dependabot-may-return|s@not dependabot_absent@false@|a_returned_dependabot_config_is_refused
+#MUTANT cache-path-may-carry-the-base|s@^\tpath_varies_between_runs(step)$@\tfalse@|a_cached_path_carrying_an_expression_is_refused
 #MUTANT lander-may-not-abandon|s@not lander_calls_abandon@false@|a_lander_that_never_abandons_is_refused
 #
 #MUTANT-SUITE crates/batten/tests/it/ci_parity.rs
@@ -65,6 +66,8 @@ rules contains "check-status-decided-in-one-place"
 rules contains "every-bot-branch-has-a-watcher"
 
 rules contains "foreign-cargo-is-the-declared-spelling"
+
+rules contains "cache-path-is-rebase-stable"
 
 # --- the manifest, and the guard ----------------------------------------------
 
@@ -527,6 +530,49 @@ violation contains {
 	not watched(bot_prefix(config))
 }
 
+# --- a cached path holds still across a rebase (CLOUD-1342) -------------------
+#
+# `actions/cache` identifies an entry by key AND VERSION, and it defines version
+# as "a hash generated for a combination of compression tool used … and the
+# `path` of directories being cached". So a `path` carrying a workflow EXPRESSION
+# is a path that can differ between two runs of the same job — and when it does,
+# the entry the first run saved is unreachable to the second whatever its key
+# says. The miss is total and it is silent: the step reports `Cache not found`
+# and the job simply does the work again.
+#
+# MEASURED, AND THE FIRST DIAGNOSIS BLAMED THE WRONG HALF. The `perf` job cached
+# `target/perf/base-<merge base>`, interpolated; `land` rebases every lap, so the
+# merge base moved on every lap and the entry's identity moved with it — 4 runs
+# across 2 pull requests, ZERO hits, ~190 MB written and discarded each time. The
+# remedy first written down was to drop the SHA from the KEY, which would have
+# changed nothing whatever, because the path had already put the entry out of
+# reach. That wrong turn is why this is a predicate and not a comment: the defect
+# costs a full build every run, is invisible in the job log, and reads exactly
+# like a cache that has not been populated yet.
+#
+# THE KEY IS DELIBERATELY NOT JUDGED. An expression BELONGS in a key — that is
+# what a key is for, and a key that never moves never SAVES, since "if the
+# provided `key` matches an existing cache, a new cache is not created". The path
+# is the half that has to hold still, and a rule over both would refuse the one
+# shape that works.
+
+cache_action(step) if startswith(object.get(step, "uses", ""), "actions/cache@")
+
+path_varies_between_runs(step) if contains(object.get(step, ["with", "path"], ""), "${{")
+
+violation contains {
+	"rule": "cache-path-is-rebase-stable",
+	"verdict": "path reach dead",
+	"subjects": [{"path": path}, {"artifact": name}],
+} if {
+	governed
+	some path, _ in workflow
+	some name, job in workflow[path].jobs
+	some step in job.steps
+	cache_action(step)
+	path_varies_between_runs(step)
+}
+
 # --- could not look -----------------------------------------------------------
 #
 # A DECLARED SOURCE THAT WOULD NOT PARSE is not an absent one. Absent is
@@ -964,6 +1010,72 @@ test_a_lease_step_that_is_not_first_is_refused if {
 	found := violation with input as swap(".github/workflows/ci.yml", wf)
 	some f in found
 	f.verdict == "lease guard absent"
+}
+
+# --- a cached path holds still across a rebase --------------------------------
+
+# The landed defect, as a case: an interpolated path moves the entry's VERSION,
+# so the entry a previous run saved cannot be found however the key is spelled.
+test_a_cached_path_carrying_an_expression_is_refused if {
+	wf := object.union(sound_workflow, {"jobs": {"perf": {
+		"name": "perf",
+		"runs-on": "ubuntu-latest",
+		"steps": [lease_first, {
+			"uses": "actions/cache@v6.1.0",
+			"with": {"path": "target/perf/base-${{ steps.base.outputs.sha }}", "key": "perf-base"},
+		}],
+	}}})
+	found := violation with input as swap(".github/workflows/ci.yml", wf)
+	some f in found
+	f.verdict == "path reach dead"
+	some sub in f.subjects
+	sub.artifact == "perf"
+}
+
+# THE KEY IS NOT THE SUBJECT, and this is the case that says so. A key carrying
+# the same expression is the WORKING shape — it is what makes a moved base miss
+# primarily, and a miss is what buys the save — so a predicate that fired here
+# would refuse the fix along with the defect.
+test_an_expression_in_the_key_alone_is_clean if {
+	wf := object.union(sound_workflow, {"jobs": {"perf": {
+		"name": "perf",
+		"runs-on": "ubuntu-latest",
+		"steps": [lease_first, {
+			"uses": "actions/cache@v6.1.0",
+			"with": {"path": "target/perf/base-seed", "key": "perf-base-${{ steps.base.outputs.sha }}"},
+		}],
+	}}})
+	found := violation with input as swap(".github/workflows/ci.yml", wf)
+	every f in found {
+		f.verdict != "path reach dead"
+	}
+}
+
+# A STEP THAT IS NOT THIS ACTION IS NOT THIS RULE'S BUSINESS. `rust-cache` takes
+# no `path` at all, and a rule reading every step's `with.path` would judge an
+# upload or a checkout on a question that does not apply to it.
+test_another_action_interpolating_a_path_is_not_judged if {
+	wf := object.union(sound_workflow, {"jobs": {"perf": {
+		"name": "perf",
+		"runs-on": "ubuntu-latest",
+		"steps": [lease_first, {
+			"uses": "actions/upload-artifact@v4",
+			"with": {"path": "out/${{ github.run_id }}"},
+		}],
+	}}})
+	found := violation with input as swap(".github/workflows/ci.yml", wf)
+	every f in found {
+		f.verdict != "path reach dead"
+	}
+}
+
+# THE SOUND TREE IS SILENT, which is the arm that keeps the rule from being one
+# that fires on everything and therefore decides nothing.
+test_a_sound_tree_has_no_varying_cache_path if {
+	found := violation with input as sound_input
+	every f in found {
+		f.verdict != "path reach dead"
+	}
 }
 
 # A FAN-IN IS EXEMPT, and for a reason rather than by name: it cannot start

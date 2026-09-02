@@ -641,12 +641,13 @@ jobs:
         with:
           # The profile is part of the key — see the `ci` job above.
           shared-key: perf-${{ hashFiles('Cargo.toml') }}
-      # CLOUD-1331. The BASE arm is a pure function of the merge-base SHA, the
-      # pinned toolchain and `[profile.release]`, and `main` advances only by
-      # fast-forward to already-judged SHAs — so consecutive pull requests share a
-      # merge base for hours and every one of them was compiling the identical
-      # binary from nothing. Measured over runs 33586699312 and 33584118886, the
-      # `mise run perf-gate` step was 13.5 min of a 13.7 min job.
+      # CLOUD-1331, corrected by CLOUD-1342. The BASE arm is a pure function of
+      # the merge-base SHA, the pinned toolchain and `[profile.release]`, and
+      # `main` advances only by fast-forward to already-judged SHAs — so
+      # consecutive pull requests share a merge base for hours and every one of
+      # them was compiling the identical binary from nothing. Measured over runs
+      # 33586699312 and 33584118886, `mise run perf-gate` was 13.5 min of a
+      # 13.7 min job.
       #
       # WHY `rust-cache` ABOVE DOES NOT ALREADY DO THIS. It does carry the bytes —
       # its cache paths are the whole of `target/`, `target/perf/**` included —
@@ -664,12 +665,38 @@ jobs:
       # miss forever while looking exactly like a hit. A silent no-op is the one
       # failure a cache cannot report.
       #
-      # NO `restore-keys`. A prefix hit restores SOME other base's directory under
-      # this base's name, which is the stale arm the keyed path exists to refuse,
-      # and `perf.rs` would then measure it as this base. Exact or nothing: a miss
-      # costs exactly the build this job pays today.
+      # THE CACHED PATH CARRIES NO SHA, AND THAT IS THE WHOLE OF CLOUD-1342. This
+      # step first cached `target/perf/base-<sha>` directly, and an entry is
+      # identified by key AND VERSION, where the action defines version as "a
+      # hash generated for a combination of compression tool used … and the
+      # `path` of directories being cached". So the PATH moved every time the
+      # merge base did and the entry moved with it: 4 runs across 2 pull
+      # requests, ZERO hits, ~190 MB written and discarded each time. No key
+      # repairs that, which is why the fix is the path and not the key.
       #
-      # A BARE STEP RATHER THAN A TASK, deliberately: `ci-local-parity` requires
+      # THE SHA STAYS IN THE KEY, AND DROPPING IT IS THE OPPOSITE DEFECT. "If the
+      # provided `key` matches an existing cache, a new cache is not created" —
+      # so a key that never moved would restore one base's closure forever and
+      # never store the current one. A moved base has to MISS on the primary key,
+      # because that miss is what buys the save.
+      #
+      # `restore-keys` IS SAFE HERE, AND ONLY HERE, BECAUSE THE PREFIX HIT LANDS
+      # IN A SEED DIRECTORY NOTHING MEASURES. A prefix hit restoring some other
+      # base's build under THIS base's name is exactly the stale arm `perf.rs`'s
+      # keyed directory exists to refuse. The seed is therefore restored beside
+      # the arm and copied in with its BINARY REMOVED, which leaves
+      # `base_arm_is_built()` false: cargo runs against the base tree that was
+      # actually materialised, and reuses the dependency closure only.
+      #
+      # Measured locally 2026-09-02 with `Cargo.lock` byte-identical across the
+      # pair, so the residue is the cost of the copy rather than lockfile churn:
+      # cold 239 `Compiling` in 4m42s, seeded 64 in 2m07s, same base 0. The win
+      # is ~2m35s of a 13.5 min step and is stated as that rather than as the
+      # whole problem. Cross-PR sharing stays impossible — every entry is scoped
+      # to `refs/pull/N/merge` and nothing writes from `main` — and that half is
+      # CLOUD-840's.
+      #
+      # BARE STEPS RATHER THAN TASKS, deliberately: `ci-local-parity` requires
       # every `mise run <task>` a workflow names to be one `verify` runs, and a
       # runner-side cache restore has no local counterpart to be.
       - name: Resolve the merge base the pair will build
@@ -677,9 +704,32 @@ jobs:
         run: echo "sha=$(git merge-base origin/main HEAD)" >>"$GITHUB_OUTPUT"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: target/perf/base-${{ steps.base.outputs.sha }}
+          path: target/perf/base-seed
           key: perf-base-${{ runner.os }}-${{ hashFiles('mise.lock', 'Cargo.lock') }}-${{ steps.base.outputs.sha }}
+          restore-keys: |
+            perf-base-${{ runner.os }}-${{ hashFiles('mise.lock', 'Cargo.lock') }}-
+      # Absent seed is a cold run, which is a pass: the gate builds what it needs.
+      - name: Seed the base arm from the restored closure
+        env:
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: |
+          seed=target/perf/base-seed
+          [ -d "$seed" ] || exit 0
+          arm="target/perf/base-$BASE_SHA"
+          rm -rf "$arm"
+          cp -a "$seed" "$arm"
+          rm -f "$arm/release/batten"
       - run: mise run perf-gate
+      # Absent arm means the gate SKIPPED — no crate source moved — so the seed
+      # stays as restored and the entry is saved unchanged under the new key.
+      - name: Carry this base's closure into the entry
+        env:
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: |
+          arm="target/perf/base-$BASE_SHA"
+          [ -d "$arm" ] || exit 0
+          rm -rf target/perf/base-seed
+          cp -a "$arm" target/perf/base-seed
 
   # Single fan-in status. Point branch protection at `final` instead of
   # enumerating every leg, so adding a job never requires a ruleset change.

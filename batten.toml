@@ -8769,6 +8769,27 @@ kind = "document"
 target = ".github/workflows/ci.yml"
 
 [[verdict]]
+id = "path reach dead"
+gloss = "a cached path carries an expression, so no later run can reach the entry"
+class = """
+`actions/cache` identifies an entry by key AND version, and version is derived \
+from the `path` being cached. A path carrying a workflow expression can differ \
+between two runs of the same job, and when it does the entry the first run saved \
+is unreachable to the second whatever the key says. The miss is total and \
+silent: the step reports `Cache not found` and the job does the work again, \
+which reads exactly like a cache nothing has populated yet. Measured over the \
+`perf` job, whose path interpolated the merge base while the lander rebased \
+every lap: 4 runs across 2 pull requests, 0 hits, ~190 MB written and discarded \
+each time. The key is deliberately not judged here — an expression belongs in a \
+key, and a key that never moves never saves.
+"""
+
+[[verdict.route]]
+id = "workflow read first"
+kind = "document"
+target = ".github/workflows/ci.yml"
+
+[[verdict]]
 id = "lease guard absent"
 gloss = "a job can start spending before the landing lease authorises its branch"
 class = """

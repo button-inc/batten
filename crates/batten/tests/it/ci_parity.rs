@@ -780,6 +780,56 @@ fn a_precondition_invoked_without_the_tolerant_suffix_is_refused() {
 }
 
 #[test]
+fn a_cached_path_carrying_an_expression_is_refused() {
+    // The landed defect (CLOUD-1342). `actions/cache` identifies an entry by key
+    // AND version, and version is derived from the `path` — so a path carrying an
+    // expression moves the entry out of reach of the next run whatever the key
+    // says. Measured before the fix: 4 runs across 2 pull requests, 0 hits,
+    // ~190 MB written and discarded each time, and the job log said only
+    // `Cache not found`.
+    let root = sound("cache-path-varies");
+    common::write(
+        &root,
+        ".github/workflows/ci.yml",
+        &WORKFLOW.replace(
+            "      - run: mise run lint\n",
+            "      - uses: actions/cache@v6.1.0\n        with:\n          path: \
+             target/perf/base-${{ steps.base.outputs.sha }}\n          key: perf-base\n      \
+             - run: mise run lint\n",
+        ),
+    );
+    assert!(
+        !findings(&root).is_empty(),
+        "a cached path that differs between runs of the same job should be refused"
+    );
+}
+
+#[test]
+fn an_expression_in_the_cache_key_alone_is_clean() {
+    // The other direction, and it is the one that keeps the rule from refusing
+    // its own fix: an expression BELONGS in a key. A key that never moves never
+    // saves, because "if the provided `key` matches an existing cache, a new
+    // cache is not created" — so the moved-base MISS is what buys the save, and a
+    // predicate reading both halves would forbid the only shape that works.
+    let root = sound("cache-key-varies");
+    common::write(
+        &root,
+        ".github/workflows/ci.yml",
+        &WORKFLOW.replace(
+            "      - run: mise run lint\n",
+            "      - uses: actions/cache@v6.1.0\n        with:\n          path: \
+             target/perf/base-seed\n          key: perf-base-${{ steps.base.outputs.sha }}\n      \
+             - run: mise run lint\n",
+        ),
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "an expression in the key is the working shape and must not be refused: {:?}",
+        findings(&root)
+    );
+}
+
+#[test]
 fn a_workflow_reading_check_runs_without_the_one_predicate_is_refused() {
     // Every hand-rolled copy of the green predicate so far has counted a wholly
     // skipped set as zero outstanding, which is green — and a wholly skipped set
