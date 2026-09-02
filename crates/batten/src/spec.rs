@@ -897,6 +897,15 @@ mod tests {
             // what this assertion exists to prompt.
             "semver".to_owned(),
             "semver check".to_owned(),
+            // One task per clone (CLOUD-428), ported off
+            // `mise-tasks/singleton.sh` under CLOUD-843. Both verbs are
+            // `Effect::Write` and so are deliberately absent from the read
+            // allowlist above: `acquire` READS to decide and WRITES the lock it
+            // hands out, and a row claiming `read` would put a writing verb on
+            // the derived allowlist.
+            "singleton".to_owned(),
+            "singleton acquire".to_owned(),
+            "singleton release".to_owned(),
             "spec".to_owned(),
             // The container's declared preconditions (CLOUD-1324) — §9's
             // check/fix pair, as one verb and a `--repair` flag rather than two
@@ -921,6 +930,20 @@ mod tests {
             // `-y` binding rather than a new exception.
             "target".to_owned(),
             "target prune".to_owned(),
+            // The task registry (CLOUD-425), ported off
+            // `mise-tasks/task-registry.sh` and `mise-tasks/alive.sh` under
+            // CLOUD-843 — both halves, because the registry is one mechanism
+            // read from both ends. Only `task read` is on the read allowlist
+            // above: the five writers edit a record under the git dir, and
+            // `alive` REAPS the corpse it reports, so it writes too.
+            "task".to_owned(),
+            "task alive".to_owned(),
+            "task phase".to_owned(),
+            "task read".to_owned(),
+            "task register".to_owned(),
+            "task sig".to_owned(),
+            "task tick".to_owned(),
+            "task unregister".to_owned(),
             // The one write path over a host's hook registrations
             // (CLOUD-893). Both rows are here and NEITHER is on the
             // read-only allowlist above: the noun is `Unclassified` because
