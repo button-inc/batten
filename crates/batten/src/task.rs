@@ -750,8 +750,21 @@ mod tests {
         let dead = "4194304";
         let live = std::process::id().to_string();
 
+        // THE ONE ARM THAT IS PLATFORM-SPLIT, AND IT ASSERTS THE ASYMMETRY
+        // RATHER THAN SKIPPING IT. `pid_exists` has no probe off unix — the
+        // `#[cfg(not(unix))]` arm answers `true` for every parseable pid, on
+        // purpose, so that nothing is ever reported dead and nothing is ever
+        // REAPED there. A reclaim therefore cannot happen on Windows, and this
+        // case is where that decision is written down as an assertion instead of
+        // only as a doc comment. `#[cfg(unix)]` over the whole test would have
+        // left the Windows contract unstated, which is what let CI find it.
+        #[cfg(unix)]
         // The only reclaimable reading: the same pid twice, and it is gone.
         assert!(may_reclaim(dead, Some(dead)));
+        #[cfg(not(unix))]
+        // Off unix the identical reading is NOT reclaimable, because the probe
+        // that would call it dead does not exist.
+        assert!(!may_reclaim(dead, Some(dead)));
         // The lock changed hands to a NEW holder while the first's trap was
         // removing it. Reclaiming here robs whoever holds it now.
         assert!(!may_reclaim(dead, Some(&live)));
