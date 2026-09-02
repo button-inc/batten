@@ -77,7 +77,7 @@ use crate::common;
 
 use std::path::PathBuf;
 
-use common::{run_with_stdin, stdout};
+use common::{run_with_stdin_at_real_root, stdout};
 
 /// The four rule ids that carry the `gh` lifecycle, as `batten.toml` declares
 /// them.
@@ -113,7 +113,7 @@ fn bash_payload(command: &str) -> String {
 /// `"permissionDecision": "deny"`, and that an allowed command produces no
 /// document at all. The exit-code adapter collapses both into a status.
 fn decision(command: &str) -> String {
-    stdout(&run_with_stdin(
+    stdout(&run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "claude-code"],
         &bash_payload(command),
@@ -282,7 +282,7 @@ fn an_allowed_command_emits_no_decision() {
 
 #[test]
 fn unparseable_input_fails_open() {
-    let out = stdout(&run_with_stdin(
+    let out = stdout(&run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "claude-code"],
         "not json",
@@ -296,7 +296,7 @@ fn unparseable_input_fails_open() {
 /// Run one command with an environment variable set, and return the document.
 fn decision_with_env(command: &str, key: &str, value: &str) -> String {
     stdout(
-        &common::batten()
+        &common::batten_at_real_root()
             .args(["hook", "--harness", "claude-code"])
             .current_dir(root())
             .env(key, value)

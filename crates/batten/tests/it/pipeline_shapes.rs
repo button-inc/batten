@@ -30,7 +30,7 @@ use crate::common;
 
 use std::path::PathBuf;
 
-use common::{run, run_with_stdin, stderr};
+use common::{run, run_with_stdin_at_real_root, stderr};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -45,7 +45,7 @@ fn payload(command: &str) -> String {
 }
 
 fn verdict(command: &str) -> Option<i32> {
-    run_with_stdin(
+    run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],
         &payload(command),
@@ -68,7 +68,7 @@ fn assert_allowed(command: &str) {
 /// shapes render three causes, and the substitution family asserts that the
 /// cause points at the operand a caller can act on.
 fn cause(command: &str) -> String {
-    stderr(&run_with_stdin(
+    stderr(&run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],
         &payload(command),
@@ -198,7 +198,7 @@ fn the_refusal_states_the_principle_rather_than_naming_one_command() {
     // CLOUD-199's second instance happened because an agent complied with the
     // narrower wording exactly and made the same error on the next command. The
     // cause therefore has to generalise, and the remedy has to be the row's.
-    let refusal = stderr(&run_with_stdin(
+    let refusal = stderr(&run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],
         &payload("mise run verify | tail -6"),

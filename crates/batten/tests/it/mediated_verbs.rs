@@ -34,7 +34,7 @@ use crate::common;
 
 use std::path::PathBuf;
 
-use common::{run, run_with_stdin, stderr};
+use common::{run, run_with_stdin_at_real_root, stderr};
 
 /// A protected path this repository declares, and one it does not.
 ///
@@ -64,7 +64,7 @@ fn bash_payload(command: &str) -> String {
 /// `exit-code` rather than `claude-code`: the code *is* the whole channel there,
 /// so a verdict is read from the status without parsing a decision document.
 fn verdict(command: &str) -> Option<i32> {
-    run_with_stdin(
+    run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],
         &bash_payload(command),
@@ -104,7 +104,7 @@ fn assert_allowed(command: &str) {
 /// `_memory`; no other row's text does. A caller that stops emitting that token
 /// fails this, which is the direction worth protecting.
 fn assert_not_refused_as_a_write(command: &str) {
-    let refusal = stderr(&run_with_stdin(
+    let refusal = stderr(&run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],
         &bash_payload(command),
@@ -278,7 +278,7 @@ fn the_deny_names_the_whole_action_and_the_serena_tool_to_use_instead() {
     // gets must still name the surface that owns the file, and for a subcommand
     // row it must name the action rather than only the front-end — a refusal
     // saying `git` would read as a ban on every use of version control.
-    let refusal = stderr(&run_with_stdin(
+    let refusal = stderr(&run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],
         &bash_payload(&format!("git mv {GUARDED} .serena/memories/renamed.md")),
@@ -286,7 +286,7 @@ fn the_deny_names_the_whole_action_and_the_serena_tool_to_use_instead() {
     assert!(refusal.contains("git mv"), "names the action: {refusal}");
     assert!(refusal.contains(GUARDED), "names where: {refusal}");
 
-    let edit = stderr(&run_with_stdin(
+    let edit = stderr(&run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],
         &bash_payload(&format!("sed -i s/a/b/ {GUARDED}")),
@@ -334,7 +334,7 @@ fn the_deny_names_the_whole_action_and_the_serena_tool_to_use_instead() {
 /// route. Both directions, or neither means anything — CLOUD-418.
 #[test]
 fn a_registered_module_gets_its_own_route_and_not_the_memory_one() {
-    let module = stderr(&run_with_stdin(
+    let module = stderr(&run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],
         &bash_payload("sed -i s/a/b/ policy/shell-retirement.rego"),
@@ -362,7 +362,7 @@ fn a_registered_module_gets_its_own_route_and_not_the_memory_one() {
 
     // THE MIRROR. Without it the assertions above pass over a build that simply
     // stopped naming the Serena tools anywhere.
-    let memory = stderr(&run_with_stdin(
+    let memory = stderr(&run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],
         &bash_payload(&format!("sed -i s/a/b/ {GUARDED}")),
@@ -446,7 +446,7 @@ fn no_byte_of_the_mediated_command_reaches_either_stream() {
     // the rule, the action, the path and the remedy — never the command line,
     // which is the caller's own text and could carry anything.
     let canary = "CANARY-SECRET-VALUE";
-    let output = run_with_stdin(
+    let output = run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],
         &bash_payload(&format!("sed -i s/a/{canary}/ {GUARDED}")),
@@ -478,7 +478,7 @@ fn write_payload(tool: &str, path: &str) -> String {
 }
 
 fn write_verdict(tool: &str, path: &str) -> Option<i32> {
-    run_with_stdin(
+    run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],
         &write_payload(tool, path),
@@ -813,7 +813,7 @@ fn bash_payload_in(cwd: &std::path::Path, command: &str) -> String {
 }
 
 fn verdict_in(cwd: &std::path::Path, command: &str) -> Option<i32> {
-    run_with_stdin(
+    run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],
         &bash_payload_in(cwd, command),
@@ -953,7 +953,7 @@ fn read_payload(path: &str) -> String {
 }
 
 fn read_verdict(path: &str) -> Option<i32> {
-    run_with_stdin(
+    run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],
         &read_payload(path),
@@ -969,7 +969,7 @@ fn a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers() {
         Some(2),
         "a generic file read of a memory is refused"
     );
-    let refusal = stderr(&run_with_stdin(
+    let refusal = stderr(&run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],
         &read_payload(GUARDED),
@@ -1015,6 +1015,6 @@ fn a_write_to_a_memory_is_still_refused_as_a_write() {
          \"tool_input\":{{\"file_path\":{}}}}}",
         serde_json::to_string(GUARDED).expect("a path is encodable")
     );
-    let run = run_with_stdin(&root(), &["hook", "--harness", "exit-code"], &payload);
+    let run = run_with_stdin_at_real_root(&root(), &["hook", "--harness", "exit-code"], &payload);
     assert_eq!(run.status.code(), Some(2), "a write is still a write");
 }

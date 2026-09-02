@@ -235,10 +235,116 @@ pub(crate) fn batten() -> Command {
     command
 }
 
+/// The state root a suite whose subject is the REAL repository must run under.
+///
+/// **A THIRD SUPPRESSION CHANNEL, AND THE ONE NEITHER SCRUB IN [`batten`] CAN
+/// SEE.** That function removes every `BATTEN_` variable the surface declares and
+/// every bypass name beside it, and both of those are walks over ENVIRONMENT
+/// VARIABLES. An **admission** is not one: CLOUD-1051 retired
+/// `BATTEN_FILED_HERE_BYPASS` and its siblings precisely so that suppressing a
+/// refusal would cost a signed record in the state store rather than a knowable
+/// string anyone could export. So the channel that replaced the scrubbed ones is
+/// unreachable from the scrub by construction — the same shape as `BATTEN_BIN`,
+/// and for the same reason.
+///
+/// **Measured 2026-09-02, and it is a false green in the unsafe direction.** A
+/// spent admission for `batten.toml` in the DEVELOPER'S OWN store turned
+/// `cli.rs::the_committed_protected_paths_fire_on_a_mutating_verb` green-side:
+/// `mv batten.toml elsewhere.toml` answered exit `0` where the case demands `2`,
+/// and the case reported that the committed protected-path policy refuses a
+/// write while a record on that machine was admitting it.
+///
+/// **WHY IT IS NOT THE DEFAULT IN [`batten`], WHICH WAS THE FIRST SHAPE TRIED.**
+/// A fixture suite may spawn a child that WRITES the store and then read it back
+/// IN-PROCESS — `admission.rs`'s `a_correctly_answered_override_completes_end_to_end`
+/// does exactly that, through `admission::load`, which resolves the root from the
+/// PARENT's environment. Redirecting only the child splits the two and the case
+/// fails looking for a record the child filed elsewhere. That case is not the
+/// defect: its subject is a scratch repo, so it already has a state segment of
+/// its own and cannot collide with the real one.
+///
+/// The defect is narrower than "every spawn", and naming it precisely is what
+/// keeps this from being a change to how every suite runs: **a suite whose
+/// subject is the COMMITTED configuration must drive the binary at the real
+/// repository root, and the state segment is derived from that root — so it, and
+/// only it, shares the developer's own segment.** Hence a helper the real-root
+/// suites apply, rather than a default every fixture suite inherits.
+///
+/// **Per PROCESS**, because nextest runs each case in its own process: state one
+/// spawn writes is still there for the next spawn in the same case, and no case
+/// can reach another's. Under `target/`, so `cargo clean` collects it, and
+/// resolved once so the directory is created on the first use rather than every.
+pub(crate) fn scratch_state_root() -> &'static Path {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = target_tmp().join(format!("state-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create the scratch state root");
+        dir
+    })
+}
+
+/// The state ROOTS a command has been pointed at, as `(name, value)` pairs.
+///
+/// Here rather than in the asserting suite because this module is the one place
+/// the variables may be named at all —
+/// `primitives::no_suite_sets_the_state_dir_variables_itself` enforces exactly
+/// that, and it is right to: CLOUD-619's defect was fourteen copies of the name,
+/// one of which was POSIX-only and redirected nothing on Windows. A suite
+/// checking the redirect must therefore ask this module rather than re-type the
+/// names, or it becomes the fifteenth copy while asserting that there are none.
+///
+/// `LOCALAPPDATA` is deliberately absent: [`state_dir`] points it at a `cache`
+/// subdirectory rather than at the root, so including it would make a caller
+/// compare two different things under one name.
+#[must_use]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays with the harness spawn it reads: the subject is what a child's environment carries, which is a property of the command rather than of anything in-process"
+)]
+pub(crate) fn state_roots(command: &Command) -> Vec<(String, PathBuf)> {
+    command
+        .get_envs()
+        .filter_map(|(name, value)| {
+            let name = name.to_str()?.to_owned();
+            (name == "XDG_DATA_HOME" || name == "APPDATA")
+                .then(|| Some((name, PathBuf::from(value?))))?
+        })
+        .collect()
+}
+
+/// `batten`, pointed at a state root of the suite's own — for the suites whose
+/// subject is the committed configuration and which therefore run at the real
+/// repository root. See [`scratch_state_root`] for what this contains and why it
+/// is not the default.
+#[must_use]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays with the harness spawn it configures, exactly as `state_home` does: the state root a child resolves is a property of that child's environment"
+)]
+pub(crate) fn batten_at_real_root() -> Command {
+    let mut command = batten();
+    state_dir(&mut command, scratch_state_root());
+    command
+}
+
 /// Run `batten` with `args` in `dir`.
 #[must_use]
 pub(crate) fn run(dir: &Path, args: &[&str]) -> Output {
     batten()
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("run batten")
+}
+
+/// [`run`] for a suite whose subject is the committed configuration, so its state
+/// root is the suite's own rather than the developer's.
+///
+/// See [`scratch_state_root`] for the defect this closes and why it is a separate
+/// entry point rather than [`batten`]'s default.
+#[must_use]
+pub(crate) fn run_at_real_root(dir: &Path, args: &[&str]) -> Output {
+    batten_at_real_root()
         .args(args)
         .current_dir(dir)
         .output()
@@ -370,10 +476,29 @@ pub(crate) fn state_dir<'a>(command: &'a mut Command, dir: &Path) -> &'a mut Com
 /// of agreement with [`batten`].
 #[must_use]
 pub(crate) fn run_with_stdin(dir: &Path, args: &[&str], input: &str) -> Output {
+    stdin_run(batten(), dir, args, input)
+}
+
+/// [`run_with_stdin`] for a suite whose subject is the committed configuration,
+/// so its state root is the suite's own rather than the developer's.
+///
+/// See [`scratch_state_root`] for the defect this exists to close and for why it
+/// is a separate entry point rather than [`batten`]'s default.
+#[must_use]
+pub(crate) fn run_with_stdin_at_real_root(dir: &Path, args: &[&str], input: &str) -> Output {
+    stdin_run(batten_at_real_root(), dir, args, input)
+}
+
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: this IS the spawn-and-pipe harness, and taking the command lets the two entry points above share one body rather than drifting apart — the founding reason this module exists"
+)]
+#[must_use]
+fn stdin_run(mut command: Command, dir: &Path, args: &[&str], input: &str) -> Output {
     use std::io::Write as _;
     use std::process::Stdio;
 
-    let mut child = batten()
+    let mut child = command
         .args(args)
         .current_dir(dir)
         .stdin(Stdio::piped())

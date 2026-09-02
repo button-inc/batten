@@ -114,7 +114,7 @@ fn repo_with_gh_policy(name: &str) -> PathBuf {
 /// points at `crates/batten/`, which has no `batten.toml` — that is the
 /// no-authority case, which several tests want.
 fn run_hook_in(dir: &std::path::Path, harness: &str, payload: &str, bypass: bool) -> Output {
-    let mut command = batten();
+    let mut command = common::batten_at_real_root();
     command
         .current_dir(dir)
         .args(["hook", "--harness", harness])
@@ -151,7 +151,7 @@ fn run_hook_with_env(
     payload: &str,
     env: &[(&str, &str)],
 ) -> Output {
-    let mut command = batten();
+    let mut command = common::batten_at_real_root();
     command
         .current_dir(dir)
         .args(["hook", "--harness", harness])

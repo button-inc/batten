@@ -21,7 +21,7 @@ use crate::common;
 
 use std::path::PathBuf;
 
-use common::{run_with_stdin, stderr};
+use common::{run_with_stdin_at_real_root, stderr};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -37,7 +37,7 @@ fn payload(command: &str) -> String {
 
 /// The refusal text a mediated call produces, or `None` where it was allowed.
 fn refusal(command: &str) -> Option<String> {
-    let run = run_with_stdin(
+    let run = run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],
         &payload(command),

@@ -31,7 +31,7 @@ use crate::common;
 
 use std::path::PathBuf;
 
-use common::{Fixture, run_with_stdin, stderr, stdout};
+use common::{Fixture, run_with_stdin_at_real_root, stderr, stdout};
 
 /// The repository root, whose committed `batten.toml` registers both modules.
 fn root() -> PathBuf {
@@ -66,7 +66,8 @@ fn bash_payload(command: &str) -> String {
 /// case reading one stream would pass against a build that silently stopped
 /// delivering, which is the thing this file is here to catch.
 fn reported(payload: &str) -> String {
-    let answer = run_with_stdin(&root(), &["hook", "--harness", "claude-code"], payload);
+    let answer =
+        run_with_stdin_at_real_root(&root(), &["hook", "--harness", "claude-code"], payload);
     format!("{}{}", stdout(&answer), stderr(&answer))
 }
 
@@ -82,7 +83,8 @@ fn signals(payload: &str) -> bool {
 #[test]
 fn a_write_to_a_governed_shell_path_signals_without_refusing() {
     let payload = write_payload("Write", "mise-tasks/ready-lint.sh");
-    let answer = run_with_stdin(&root(), &["hook", "--harness", "exit-code"], &payload);
+    let answer =
+        run_with_stdin_at_real_root(&root(), &["hook", "--harness", "exit-code"], &payload);
     assert_eq!(
         answer.status.code(),
         Some(0),
@@ -248,7 +250,7 @@ fn an_advised_and_denied_call_emits_only_the_refusal() {
         .file("policy/shell-write-advisory.rego", &module);
 
     let payload = write_payload("Write", "mise-tasks/ready-lint.sh");
-    let answer = run_with_stdin(
+    let answer = run_with_stdin_at_real_root(
         bench.path(),
         &["hook", "--harness", "claude-code"],
         &payload,
@@ -282,7 +284,8 @@ fn an_advised_and_denied_call_emits_only_the_refusal() {
 #[test]
 fn an_advised_and_allowed_call_still_speaks() {
     let payload = write_payload("Write", "mise-tasks/ready-lint.sh");
-    let answer = run_with_stdin(&root(), &["hook", "--harness", "exit-code"], &payload);
+    let answer =
+        run_with_stdin_at_real_root(&root(), &["hook", "--harness", "exit-code"], &payload);
     let reported = format!(
         "{}{}",
         String::from_utf8_lossy(&answer.stdout),

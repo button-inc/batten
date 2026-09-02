@@ -34,7 +34,7 @@ use crate::common;
 
 use std::path::PathBuf;
 
-use common::{run_with_stdin, stderr};
+use common::{run_with_stdin_at_real_root, stderr};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -50,7 +50,7 @@ fn payload(command: &str) -> String {
 
 /// The exit code and the refusal text together, because both are asserted.
 fn adjudicate(command: &str) -> (Option<i32>, String) {
-    let outcome = run_with_stdin(
+    let outcome = run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],
         &payload(command),

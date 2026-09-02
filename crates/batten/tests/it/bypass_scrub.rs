@@ -175,6 +175,150 @@ fn the_hatch_is_load_bearing() {
     );
 }
 
+/// THE THIRD CHANNEL, AND THE ONE THIS FILE ALREADY KNEW ABOUT.
+///
+/// `the_hatch_is_load_bearing` above had to stop observing the hatch through a
+/// protected-path refusal, and its comment says why in as many words: *"that
+/// class declares an override route and the boundary honours a spent admission
+/// for it, so the variable stopped being its way out."* So this suite recorded
+/// that an ADMISSION had replaced the variable for that class — and then left the
+/// admission store ambient, which is the half nobody closed.
+///
+/// The two scrubs this file asserts are walks over ENVIRONMENT VARIABLES, and an
+/// admission is a signed record in the state store rather than a knowable string.
+/// CLOUD-1051 made it that way on purpose. So the channel that replaced the
+/// scrubbed ones is unreachable from either walk by construction, and the state
+/// root has to be redirected explicitly instead.
+///
+/// A FIXTURE HOME CANNOT ESCAPE THIS, which is why the redirect belongs in
+/// `common::batten()` rather than in each case. The state segment is derived from
+/// the repository root, so a suite whose subject is the COMMITTED config — this
+/// one, `mediated_verbs.rs`, `gh_guard.rs`, `pipeline_shapes.rs`,
+/// `refusal_ceiling.rs` — runs against the real root and therefore reads the real
+/// repository's own segment. `mediated_admission.rs` is unaffected for exactly
+/// the same reason, in the other direction: its fixture is a scratch repo, so it
+/// has always had a segment of its own.
+#[test]
+fn the_ambient_state_root_never_reaches_the_binary_under_test() {
+    // READ THROUGH `common`, NEVER BY NAMING THE VARIABLES HERE. That module is
+    // the one place they may be spelled, which
+    // `primitives::no_suite_sets_the_state_dir_variables_itself` enforces — a
+    // case that re-typed them to assert the redirect would become the copy that
+    // audit exists to refuse, while claiming there are none.
+    let redirected = common::state_roots(&common::batten_at_real_root());
+    assert_eq!(
+        redirected.len(),
+        2,
+        "both state roots must be redirected, on every platform: {redirected:?}"
+    );
+    let scratch_root = common::scratch_state_root();
+    for (name, value) in &redirected {
+        assert_eq!(
+            value.as_path(),
+            scratch_root,
+            "{name} must point at the suite's own state root, never the developer's"
+        );
+    }
+}
+
+/// THE ANTI-VACUITY MIRROR for the case above, and the same shape
+/// `the_hatch_is_load_bearing` uses one screen up: it shows an admission
+/// genuinely disarming the committed policy, so redirecting the store it lives in
+/// is load-bearing rather than tidy.
+///
+/// Over the REAL repository root, deliberately — a scratch fixture would prove
+/// the mechanism and miss the defect, because the defect IS that these suites
+/// share the real repository's segment. Contained only because the case above now
+/// holds: every spawn here writes into the suite's own state root, so issuing and
+/// spending a real admission cannot touch the developer's store.
+///
+/// MEASURED 2026-09-02, before the redirect landed. A spent admission for
+/// `batten.toml` — taken by hand, for unrelated work, hours earlier in the same
+/// session — turned
+/// `cli.rs::the_committed_protected_paths_fire_on_a_mutating_verb` green-side:
+/// `mv batten.toml elsewhere.toml` answered exit `0` where that case demands `2`.
+/// The suite reported that the committed protected-path policy refuses a write
+/// while a record on the machine was admitting it.
+#[test]
+fn an_admission_in_the_store_disarms_the_committed_protected_gate() {
+    let root = at_root("batten.toml");
+    let root = root.parent().expect("the committed config has a parent");
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "mv batten.toml elsewhere.toml"},
+    })
+    .to_string();
+
+    let refused = run(common::batten_at_real_root().current_dir(root), &payload);
+    assert_eq!(
+        refused,
+        Some(2),
+        "the committed policy must refuse on its own, or the comparison below proves nothing"
+    );
+
+    let answers = "precondition=the suite is demonstrating that this channel admits, which is \
+                   the property the redirect above exists to contain\n\
+                   lost=nothing: this admission is spent inside the suite's own state root and \
+                   is unreachable from any other process\n\
+                   rejected-route=every declared route is a real remedy for a real write; this \
+                   case is not making one, it is proving the channel is load-bearing\n";
+    let issued = common::run_with_stdin_at_real_root(
+        root,
+        &[
+            "override",
+            "request",
+            "--rule",
+            "protected-mutation",
+            "--verdict",
+            "path write refused",
+            "--subject",
+            "batten.toml",
+        ],
+        answers,
+    );
+    assert!(
+        issued.status.success(),
+        "the request must issue: {}",
+        String::from_utf8_lossy(&issued.stderr)
+    );
+    let admission = String::from_utf8_lossy(&issued.stdout)
+        .split_whitespace()
+        .last()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(!admission.is_empty(), "the request must name an address");
+
+    let spent = common::run_at_real_root(
+        root,
+        &[
+            "override",
+            "spend",
+            "--admission",
+            &admission,
+            "--rule",
+            "protected-mutation",
+            "--verdict",
+            "path write refused",
+            "--subject",
+            "batten.toml",
+        ],
+    );
+    assert!(
+        spent.status.success(),
+        "the admission must spend: {}",
+        String::from_utf8_lossy(&spent.stderr)
+    );
+
+    let admitted = run(common::batten_at_real_root().current_dir(root), &payload);
+    assert_eq!(
+        admitted,
+        Some(0),
+        "a spent admission admits the write — which is why the store must never be the \
+         developer's"
+    );
+}
+
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: the subject of `the_hatch_is_load_bearing` is what \
