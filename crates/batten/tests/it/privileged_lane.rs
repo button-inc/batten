@@ -72,6 +72,22 @@ fn fixture(name: &str, workflow: &str, body: &str) -> PathBuf {
             "id = \"workflow read first\"\n",
             "kind = \"document\"\n",
             "target = \".github/workflows\"\n\n",
+            // The split's second class (CLOUD-1317). Declaring it is not
+            // optional here and the registry pushes both ways: the module can
+            // raise it, so a fixture omitting the row fails to load with an
+            // undeclared token — and a row nothing raises fails the load too, so
+            // it cannot be declared anywhere the module does not emit it.
+            "[[verdict]]\n",
+            "id = \"lane resolve missing\"\n",
+            "gloss = \"a job that looks up an outside head holds contents:write and tests no origin\"\n",
+            "class = \"\"\"\n",
+            "No trigger carries a head, so the job resolved one through the pulls API and the \\\n",
+            "test belongs on what the lookup returned.\n",
+            "\"\"\"\n\n",
+            "[[verdict.route]]\n",
+            "id = \"workflow read first\"\n",
+            "kind = \"document\"\n",
+            "target = \".github/workflows\"\n\n",
             "[[verdict]]\n",
             "id = \"workflow parse broken\"\n",
             "gloss = \"a workflow could not be parsed, so its lanes were never judged\"\n",
@@ -110,6 +126,27 @@ fn denied(root: &Path) {
     assert!(
         text.contains("privileged-lane-tests-origin"),
         "the finding names the rule: {text}"
+    );
+}
+
+/// Denied AND under the named class.
+///
+/// `denied` asserts only the rule id, which every arm of this module shares — so
+/// it cannot see the class split at all. A pair of cases using it would stay
+/// green over a module that collapsed the two classes back into one, which is
+/// the regression CLOUD-1317 exists to prevent.
+fn denied_under(root: &Path, class: &str) {
+    let output = common::run(root, &["check"]);
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert_eq!(
+        output.status.code(),
+        Some(batten::exit::ExitCode::Violation.code()),
+        "expected the policy verdict: {text}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        text.contains(class),
+        "the finding must name `{class}`, so its reader knows which field to test: {text}"
     );
 }
 
@@ -231,3 +268,73 @@ fn a_read_only_lane_is_not_a_subject() {
 // module's own `test_an_unparseable_workflow_denies_rather_than_passing` is
 // GREEN, because `with input as` hands itself the populated `missing` the engine
 // never builds (CLOUD-845).
+
+// --- the class split, over the compiled binary (CLOUD-1317) -----------------
+//
+// THE OBVIOUS ASSERTION DOES NOT WORK, AND FINDING THAT OUT IS THE POINT OF THIS
+// TIER. `check`'s line is `<path> <rule-id>` and its `--json` finding carries
+// `rule`, `path`, `severity`, `report` and `identity` — the verdict class is on
+// NEITHER. Two cases asserting the class appears in `check` output fail against a
+// correctly split module, which is a test asserting its own premise rather than
+// its conclusion (`.claude/rules/rust.md`, CLOUD-249). Measured, not reasoned:
+// both were written that way first and both went red for that reason.
+//
+// What the engine DOES carry through is the registry, and its two directions are
+// exactly a statement about how many classes the module raises. So the split is
+// asserted where the engine actually decides it.
+
+/// Both classes declared: the module loads and the lane is denied.
+///
+/// The anti-vacuity half. Without it the case below is satisfied by a fixture
+/// that refuses every config, which would name the missing class every time and
+/// prove nothing.
+#[test]
+fn a_resolver_lane_is_denied_where_both_classes_are_declared() {
+    let root = fixture(
+        "resolve-class",
+        "auto-bot-land.yml",
+        "on:\n  issue_comment:\n    types: [created]\njobs:\n  land:\n    permissions:\n      \
+         contents: write\n    steps:\n      - run: gh api repos/$REPO/pulls?state=open\n",
+    );
+    denied(&root);
+}
+
+/// Dropping the resolve class refuses the LOAD, naming the token nothing declares.
+///
+/// This is the split, asserted over the compiled binary: an unsplit module raises
+/// one token, so a config declaring only `lane guard missing` would load clean and
+/// this case would go green for the wrong reason. It is red on a collapse and red
+/// on a rename, which is what a class the reporting surface never prints needs.
+///
+/// Exit `1`, not `2`: a config that will not load is a statement about the
+/// invocation, never a verdict about the repository.
+#[test]
+fn dropping_the_resolve_class_refuses_the_load_rather_than_reporting_one_class() {
+    let root = fixture(
+        "resolve-class-undeclared",
+        "auto-bot-land.yml",
+        "on:\n  issue_comment:\n    types: [created]\njobs:\n  land:\n    permissions:\n      \
+         contents: write\n    steps:\n      - run: gh api repos/$REPO/pulls?state=open\n",
+    );
+    let config = root.join("batten.toml");
+    let text = fs::read_to_string(&config).expect("the fixture authority is readable");
+    let without = text
+        .split("[[verdict]]\n")
+        .filter(|block| !block.starts_with("id = \"lane resolve missing\""))
+        .collect::<Vec<_>>()
+        .join("[[verdict]]\n");
+    assert_ne!(without, text, "the fixture must actually declare the class");
+    fs::write(&config, without).expect("rewrite the fixture authority");
+
+    let output = common::run(&root, &["check"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(batten::exit::ExitCode::Usage.code()),
+        "an undeclared class is a config fault, not a verdict: {stderr}"
+    );
+    assert!(
+        stderr.contains("lane resolve missing"),
+        "the refusal names the token nothing declares: {stderr}"
+    );
+}

@@ -39,25 +39,29 @@ import rego.v1
 # the compiled binary over a real tree, so there is now a named case a mutation
 # can turn red, and this gate joins $MUTANT_GATES.
 #
-# THE THIRD CONJUNCT IS THE ONE WORTH CORRUPTING, and choosing an input for it
-# took two attempts — which is the whole value of declaring a mutation rather than
-# assuming one. A mutation over the trigger list proves little: both spellings deny
-# the lanes that matter, so it would pass under the corruption.
+# THE HEAD-RESOLUTION CONJUNCT IS THE ONE WORTH CORRUPTING, and choosing an input
+# for it took two attempts — which is the whole value of declaring a mutation
+# rather than assuming one. A mutation over the trigger list proves little: both
+# spellings deny the lanes that matter, so it would pass under the corruption.
 #
 # THE FIRST CHOICE SURVIVED, AND THAT IS HOW THIS PARAGRAPH GOT CORRECTED. It
-# named `perf.yml` as what the third conjunct keeps out of the subject set. It is
-# not: `perf.yml` triggers only on `schedule` and `workflow_dispatch`, neither of
-# which is in `outsider_reachable`, so the FIRST conjunct already excludes it and
-# dropping the third changes nothing about it. A mutation over a conjunct that
+# named `perf.yml` as what the conjunct keeps out of the subject set. It is not:
+# `perf.yml` triggers only on `schedule` and `workflow_dispatch`, neither of which
+# is in `outsider_reachable`, so the FIRST conjunct already excludes it and
+# dropping this one changes nothing about it. A mutation over a conjunct that
 # another conjunct already excludes cannot discriminate, and surviving is the only
 # way that gets found.
 #
 # What discriminates is an outsider-reachable writer that resolves no outside
 # head: `issue_comment` plus `contents: write`, with no `pull_request` or
 # `workflow_run` trigger and no `/pulls` reference anywhere. Clean today, a
-# finding the moment the third conjunct stops being asked.
-# `tests/privileged-lane.bats` carries that input under the name below.
-#MUTANT third-conjunct-dropped|s@^\tselects_outside_head(doc, body)$@\ttrue@|an_outsider_reachable_writer_that_resolves_no_outside_head_is_not_a_subject
+# finding the moment `resolves_head` stops being asked.
+#
+# The row moved with the split (CLOUD-1317): the conjunct it corrupts is now
+# `resolves_head(body)` inside the `lane resolve missing` arm, which is where that
+# question is asked. The named case is unchanged, because the input that
+# discriminates it is unchanged.
+#MUTANT resolution-conjunct-dropped|s@^\tresolves_head(body)$@\ttrue@|an_outsider_reachable_writer_that_resolves_no_outside_head_is_not_a_subject
 #MUTANT-SUITE crates/batten/tests/it/privileged_lane.rs
 
 rules contains "privileged-lane-tests-origin"
@@ -76,7 +80,11 @@ violation contains {
 	is_workflow(path)
 }
 
-# The finding itself: a subject job that never mentions the head's origin.
+# The finding, in two classes, because the two have DIFFERENT REMEDIES
+# (CLOUD-1317). The subject set is unchanged and so is the finding count; what
+# changed is that the refusal now says which field its reader must test.
+#
+# Arm one: the EVENT carries the head, so the test is on the event.
 violation contains {
 	"rule": "privileged-lane-tests-origin",
 	"verdict": "lane guard missing",
@@ -85,7 +93,32 @@ violation contains {
 	some path, doc in input.tree.documents
 	is_workflow(path)
 	some job, body in doc.jobs
-	is_subject(doc, body)
+	outsider_reachable(doc)
+	grants_write(doc, body)
+	trigger_carries_head(doc)
+	not tests_origin(body)
+}
+
+# Arm two: no trigger carries a head, so the job LOOKED ONE UP, and the test
+# belongs on what the lookup returned.
+#
+# `not trigger_carries_head(doc)` is what keeps the arms disjoint. Without it a
+# `workflow_run` job that also calls `/pulls` would raise BOTH classes for one
+# job, doubling the finding count over a tree nothing changed — and the reader
+# would get two remedies for one fix. Arm one wins that overlap deliberately: its
+# remedy is the earlier of the two, applied before the lookup happens at all.
+violation contains {
+	"rule": "privileged-lane-tests-origin",
+	"verdict": "lane resolve missing",
+	"subjects": [{"path": path}, {"artifact": job}],
+} if {
+	some path, doc in input.tree.documents
+	is_workflow(path)
+	some job, body in doc.jobs
+	outsider_reachable(doc)
+	grants_write(doc, body)
+	not trigger_carries_head(doc)
+	resolves_head(body)
 	not tests_origin(body)
 }
 
@@ -98,6 +131,12 @@ is_workflow(path) if {
 # author can influence. A gate whose first firing is a false positive gets an
 # exception written for it, and the exception is what rots.
 #
+# THE THIRD IS ALSO WHERE THE CLASS SPLIT LIVES (CLOUD-1317), which is why it is
+# no longer wrapped in an `is_subject` helper. `selects_outside_head` was a
+# disjunction over two arms with two different remedies, so collapsing them into
+# one predicate was exactly what made the refusal unable to say which field to
+# test. The two arms are named separately below and each `violation` asks for one.
+#
 # THIS PARAGRAPH USED TO NAME `perf.yml` AS WHAT THE THIRD CONJUNCT SPARES, AND
 # THAT WAS WRONG (CLOUD-931). Measured: `perf.yml` triggers on `schedule` and
 # `workflow_dispatch`, and neither is in `outsider_reachable`'s list below — so it
@@ -105,23 +144,14 @@ is_workflow(path) if {
 # it. The declared mutation above SURVIVED against exactly that reading, which is
 # how the error was found rather than inherited by the next lane.
 #
-# The input that actually discriminates this conjunct is outsider-reachable AND
-# write-granting AND resolving no outside head: an `issue_comment` job with no
-# `/pulls` lookup. `tests/privileged-lane.bats` carries it and the mutation names
-# it, so the claim is held by a case rather than by this paragraph. Note that
-# `test_a_scheduled_writer_with_no_outside_head_is_not_a_subject` below does NOT
-# hold it either: that input is not outsider-reachable, so it passes with this
-# conjunct deleted.
-is_subject(doc, body) if {
-	outsider_reachable(doc)
-	grants_write(doc, body)
-	selects_outside_head(doc, body)
-}
+# The input that actually discriminates the third conjunct is outsider-reachable
+# AND write-granting AND resolving no outside head: an `issue_comment` job with no
+# `/pulls` lookup. `crates/batten/tests/it/privileged_lane.rs` carries it and the
+# mutation names it, so the claim is held by a case rather than by this paragraph.
+# Note that `test_a_scheduled_writer_with_no_outside_head_is_not_a_subject` below
+# does NOT hold it either: that input is not outsider-reachable, so it passes with
+# the conjunct deleted.
 
-# `schedule` and `workflow_dispatch` are deliberately absent: neither is reachable
-# by someone without write access. A schedule that goes on to resolve an outside
-# head is still caught, by `selects_outside_head` below — which is why that clause
-# reads the job body and not only the trigger.
 outsider_reachable(doc) if {
 	some trigger in ["pull_request", "pull_request_target", "issue_comment", "workflow_run"]
 	doc.on[trigger]
@@ -135,15 +165,18 @@ grants_write(doc, _) if {
 	doc.permissions.contents == "write"
 }
 
-# Either the trigger inherently carries an outside head, or the job goes and finds
-# one through the pulls API. The second arm is what keeps a schedule-driven
-# resolver — `auto-bot-land`'s cron arm is exactly one — inside the subject set.
-selects_outside_head(doc, _) if {
+# The trigger inherently carries an outside head. `github.event.<trigger>` then
+# holds `head_repository.full_name`, which is the field this arm's remedy names.
+trigger_carries_head(doc) if {
 	some trigger in ["pull_request", "pull_request_target", "workflow_run"]
 	doc.on[trigger]
 }
 
-selects_outside_head(_, body) if {
+# The job goes and finds a head through the pulls API. This is what keeps a
+# schedule-driven resolver — `auto-bot-land`'s cron arm is exactly one — inside
+# the subject set, and its remedy names `.head.repo.full_name` on the RESOLVED
+# pull request, because the event payload carries no head to test.
+resolves_head(body) if {
 	contains(json.marshal(body), "/pulls")
 }
 
@@ -219,9 +252,13 @@ test_a_scheduled_writer_with_no_outside_head_is_not_a_subject if {
 }
 
 # A schedule-only lane that DOES go looking for pull requests is a subject, even
-# though no trigger carries a head.
-test_a_scheduled_resolver_of_pulls_is_a_subject if {
-	count(violation) == 1 with input as {"tree": {
+# though no trigger carries a head — and it raises the RESOLVE class, because the
+# field its remedy names is on the pull request rather than on the event.
+#
+# Asserting the class rather than only the count is what makes this case
+# discriminate the split: a single-class implementation still counts one here.
+test_a_resolver_of_pulls_raises_the_resolve_class if {
+	found := violation with input as {"tree": {
 		"documents": {".github/workflows/auto-bot-land.yml": {
 			"on": {"issue_comment": {}},
 			"jobs": {"land": {
@@ -231,6 +268,47 @@ test_a_scheduled_resolver_of_pulls_is_a_subject if {
 		}},
 		"missing": [],
 	}}
+	count(found) == 1
+	some finding in found
+	finding.verdict == "lane resolve missing"
+}
+
+# A trigger-carried head raises the GUARD class, which is the other half of the
+# same discrimination: if both inputs raised one class, this pair would be green
+# over an unsplit module.
+test_a_trigger_carried_head_raises_the_guard_class if {
+	found := violation with input as {"tree": {
+		"documents": {".github/workflows/auto-bot-land.yml": {
+			"on": {"workflow_run": {}},
+			"jobs": {"land": {
+				"permissions": {"contents": "write"},
+				"if": "startsWith(github.event.workflow_run.head_branch, 'renovate/')",
+			}},
+		}},
+		"missing": [],
+	}}
+	count(found) == 1
+	some finding in found
+	finding.verdict == "lane guard missing"
+}
+
+# A job that is BOTH — a trigger carries a head and it also calls `/pulls` — is
+# reported once, under the guard class. Without the `not trigger_carries_head`
+# conjunct this counts two, which is the overlap the arms are made disjoint for.
+test_a_job_matching_both_arms_is_reported_once if {
+	found := violation with input as {"tree": {
+		"documents": {".github/workflows/auto-bot-land.yml": {
+			"on": {"workflow_run": {}},
+			"jobs": {"land": {
+				"permissions": {"contents": "write"},
+				"steps": [{"run": "gh api repos/$REPO/pulls?state=open"}],
+			}},
+		}},
+		"missing": [],
+	}}
+	count(found) == 1
+	some finding in found
+	finding.verdict == "lane guard missing"
 }
 
 test_a_read_only_lane_is_not_a_subject if {

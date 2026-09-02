@@ -8261,12 +8261,38 @@ target = "mise run lint:deno"
 
 [[verdict]]
 id = "lane guard missing"
-gloss = "a job an outside author can reach holds contents:write and tests no head origin"
+gloss = "a job whose TRIGGER carries an outside head holds contents:write and tests no origin"
 class = """
-The privileged-lane shape: a trigger an outside author can fire, a token that can \
-write, and no check that the head being built came from this repository. Test the \
-head's origin before the job does anything with its permissions, or drop the \
-permission.
+The privileged-lane shape where the event itself hands the job a head: \
+`pull_request`, `pull_request_target` or `workflow_run`, a token that can write, \
+and no check that the head came from this repository. The head is on the event, \
+so the test is on the event -- compare `head_repository.full_name` against \
+`github.repository` before the job does anything with its permissions, or drop \
+the permission.
+
+Its sibling `lane resolve missing` is the same shape reached the other way, and \
+the split exists because the two name DIFFERENT FIELDS: a lane told to read \
+`head_repository.full_name` on an `issue_comment` event is being sent to a field \
+its payload does not carry.
+"""
+
+[[verdict.route]]
+id = "workflow read first"
+kind = "document"
+target = ".github/workflows"
+
+[[verdict]]
+id = "lane resolve missing"
+gloss = "a job that LOOKS UP an outside head holds contents:write and tests no origin"
+class = """
+The same privileged-lane shape reached the other way: no trigger carries a head, \
+so the job goes and finds one through the pulls API -- a cron arm, or an \
+`issue_comment` responding to a command. The event payload has no head to test, \
+so the test belongs on the RESOLVED pull request: compare `.head.repo.full_name` \
+against this repository on what the lookup returned, before checking it out.
+
+Reached only where no trigger carries a head, so a job that is both is reported \
+once, under `lane guard missing`, whose remedy is the earlier of the two.
 """
 
 [[verdict.route]]
