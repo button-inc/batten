@@ -6953,6 +6953,59 @@ owner = "CLOUD-312"
 expires = "2027-02-28"
 
 [[hook.handler]]
+id = "session-wiring"
+on = "session-start"
+run = ["mise", "run", "session:wiring"]
+# THE THIRD REPAIR OF LAUNCHER-PROVISIONED STATE, and it is here for the reason
+# the two rows above it are (CLOUD-1079). `session:identity` beats a `--global`
+# identity write; `session:signing` beats a `--global` signing write; this beats
+# a hook REGISTRATION the same launcher merges into `~/.claude/`. One mechanism,
+# three subjects, and this was the subject nobody had wired.
+#
+# WHY IT EXISTS AT ALL, because the row it closes spent weeks reading as somebody
+# else's job. `~/.claude/launcher-settings.json` registers
+# `session-start-git-identity.sh` and `stop-hook-git-check.sh`, the second of
+# which exits 2 on every correctly-attributed commit here and prescribes the
+# identity `[attribution] identity_deny` forbids. From "Claude Code MERGES hooks
+# across settings files, so a lower-precedence file can add one and never remove
+# one" — true, and measured — the inference drawn was that turning them off is an
+# owner action on the provisioning configuration, outside this repository. That
+# is false, it is CLOUD-1356's root sentence, and the distinction it misses is
+# the whole of this row: the repo cannot unregister the hook THROUGH A SETTINGS
+# FILE, which is not the same as cannot repair the wiring. `batten wiring
+# reclaim` removes the REGISTRATION and never the file that carries it — which is
+# also why a blind `rm` is the wrong instrument, since
+# `session-start-git-identity.sh` sets `core.hooksPath` for the whole container
+# and that line may be load-bearing.
+#
+# A REPAIR THAT RUNS ONCE LOSES TO A REWRITE THAT RUNS EVERY SESSION. A previous
+# session ran `wiring reclaim -y` by hand and the launcher re-provisioned over
+# it, from which the same row concluded permanent impossibility. The answer was
+# never a better one-off; it is this row, which runs at the same cadence as the
+# thing it is undoing.
+#
+# THE RESIDUE IS STATED RATHER THAN ABSORBED: both scripts were measured with
+# mtime 16:59 — rewritten MID-session, not only at session start — so this closes
+# the session-start window and does not hold against a mid-session rewrite. What
+# would close that is the container's Setup script, which already calls
+# `mise run deps-install` and runs upstream of both the rewrite and the harness
+# snapshot. CLOUD-1079 owns that half; this row is the half that is expressible
+# here.
+#
+# AFTER `session-batten`, because `batten wiring reclaim` is the binary answering
+# about its own registrations — the same ordering `session-attribution-identity`
+# takes above, and for the same reason. BEFORE the preflight and the census, so
+# both observe the repaired wiring rather than the launcher's: a census that
+# reported `merged_siblings: 2` because it ran first would be reporting a state
+# this sequence had already been asked to fix.
+#
+# The bound is the task's, not a guess: `wiring reclaim` reads settings files and
+# rewrites registrations, opening no network and building nothing.
+timeout_ms = 30000
+owner = "CLOUD-1079"
+expires = "2027-02-28"
+
+[[hook.handler]]
 id = "session-container-preflight"
 on = "session-start"
 run = ["mise", "run", "container-preflight"]

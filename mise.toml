@@ -2185,7 +2185,7 @@ description = "Session start: reclaim the hook surface from launcher-provisioned
 # `deps-install` above already describes, which the container's setup script
 # calls before any session begins — upstream of both the rewrite and the harness
 # snapshot.
-run = "batten wiring reclaim >/tmp/session-start-wiring.log 2>&1 || { echo '::error:: session-start: wiring reclaim failed — see /tmp/session-start-wiring.log' >&2; tail -5 /tmp/session-start-wiring.log >&2; exit 1; }"
+run = "batten wiring reclaim -y >/tmp/session-start-wiring.log 2>&1 || { echo '::error:: session-start: wiring reclaim failed — see /tmp/session-start-wiring.log' >&2; tail -5 /tmp/session-start-wiring.log >&2; exit 1; }"
 
 [tasks."session:census"]
 description = "Session start: record this boot and read back what was running when the container we replaced went down (CLOUD-451)"
