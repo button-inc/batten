@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use common::{Fixture, StateHome, at_root, batten, scratch};
 
 /// The README section these examples are drawn from.
-const SECTION: &str = "## Extending Batten: three surfaces, and which to reach for";
+const SECTION: &str = "## Extending Batten: ten rule kinds, and which to reach for";
 
 fn readme() -> String {
     fs::read_to_string(at_root("README.md")).expect("read README.md")
@@ -339,5 +339,150 @@ fn only_exec_claims_a_channel_carrying_codes_batten_did_not_choose() {
     assert!(
         section.contains("never a `2`") || section.contains("never mints a `2`"),
         "the section must keep the property fail-open rests on: no `2` is minted here"
+    );
+}
+
+// --- the guide is COMPLETE, not merely correct (CLOUD-936) ------------------
+//
+// The cases above execute the examples the section carries. These ask whether
+// the section carries an example for everything the engine has — a different
+// question, and the one that was silently wrong: the heading said "three
+// surfaces" over a table of three while `RuleKind` had ten variants, so every
+// test here passed over a guide that omitted a whole rule kind and the entire
+// preset mechanism.
+//
+// A CENSUS OVER THE ENUM, NOT A LIST. A list is precisely what went stale, and
+// `facts.rs` records the same lesson in its own words: "a list is what was
+// already wrong here: an eighth variant would join the enum and go unasserted in
+// silence."
+
+/// The extension section, bounded at the next top-level heading.
+///
+/// Bounded so a kind named elsewhere in the README cannot satisfy a claim about
+/// the extension GUIDE, which is the surface a consumer is sent to.
+fn extension_section() -> String {
+    let readme = readme();
+    let start = readme
+        .find("## Extending Batten")
+        .expect("the README carries an extension section");
+    let rest = &readme[start..];
+    let end = rest[3..]
+        .find("\n## ")
+        .map_or(rest.len(), |offset| offset + 3);
+    rest[..end].to_owned()
+}
+
+/// Every kind has a row in the WHICH-TO-REACH-FOR TABLE, not merely a mention.
+///
+/// THE FIRST VERSION OF THIS ASSERTION DID NOT DISCRIMINATE, AND THE PROBE IS
+/// WHAT SAID SO. It searched the whole section for `` `policy` ``; deleting the
+/// `policy` row from the table left the word in the subsection heading below, so
+/// the test passed over the exact defect this row was filed for — a consumer
+/// scanning the table to pick a kind would not find it. Measured, not reasoned:
+/// the probe went green and the assertion was rewritten.
+///
+/// The table is the surface, so the table is what is asserted.
+#[test]
+fn the_extension_guide_gives_every_rule_kind_a_row_in_the_table() {
+    let section = extension_section();
+    let rows: Vec<&str> = section
+        .lines()
+        .filter(|line| line.starts_with('|'))
+        .collect();
+    let missing: Vec<&str> = batten::rules::RuleKind::ALL
+        .iter()
+        .map(|kind| kind.as_str())
+        .filter(|token| !rows.iter().any(|row| row.contains(&format!("`{token}`"))))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "README.md's which-to-reach-for table has no row for {missing:?} — a shipped \
+         rule kind a consumer scanning the table to pick one cannot find"
+    );
+}
+
+/// The heading counts the kinds it goes on to list.
+///
+/// The heading was the first thing that was wrong and the last thing anyone
+/// would check. A heading naming a number is a claim; this holds it to the enum.
+#[test]
+fn the_extension_headings_count_matches_the_enum() {
+    let section = extension_section();
+    let heading = section.lines().next().expect("the section has a heading");
+    let spelled = [
+        "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven",
+        "twelve",
+    ];
+    let expected = spelled
+        .get(batten::rules::RuleKind::ALL.len() - 1)
+        .expect("the spelled-out numbers cover the enum");
+    assert!(
+        heading.contains(expected),
+        "the heading says `{heading}` over {} rule kinds — it should say `{expected}`",
+        batten::rules::RuleKind::ALL.len()
+    );
+}
+
+/// Every shipped preset is named in the config a new repository starts from.
+///
+/// CLOUD-836 vendored the presets so a consumer would not author every predicate
+/// from scratch. That argument was unrealised while the starter mentioned none of
+/// them: the feature shipped and the documented path did not reach it.
+#[test]
+fn the_starter_config_names_every_shipped_preset() {
+    for file in ["crates/batten/src/starter.toml", "batten.example.toml"] {
+        let text =
+            fs::read_to_string(at_root(file)).unwrap_or_else(|_| panic!("{file} is readable"));
+        let missing: Vec<&str> = batten::preset::MANIFESTS
+            .iter()
+            .map(|manifest| manifest.name)
+            .filter(|name| !text.contains(name))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{file} names no {missing:?} — a preset the binary ships that the config a \
+             consumer starts from does not mention"
+        );
+    }
+}
+
+/// And the guide shows how to switch one on, not merely that they exist.
+///
+/// Separate from the name census: listing six names satisfies that one while
+/// leaving a reader with no idea how to reach any of them.
+#[test]
+fn the_extension_guide_shows_how_to_enable_a_preset() {
+    let section = extension_section();
+    assert!(
+        section.contains("preset = \""),
+        "README.md's extension section shows no `preset =` row, so a reader is told \
+         presets exist and not how to reach one"
+    );
+}
+
+/// The documented preset row is EXECUTED, like every other example here.
+///
+/// This suite's whole discipline: a worked example is a claim about what the
+/// binary does. A preset example that does not load would be the documentation
+/// defect this row is about, one layer down.
+#[test]
+fn the_documented_preset_example_loads() {
+    let (repo, home) = repo_with(
+        "readme-preset",
+        "version = 1\n\n\
+         [[rule]]\n\
+         id = \"trunk-based\"\n\
+         kind = \"policy\"\n\
+         scope = \"mediated_call\"\n\
+         preset = \"trunk-based\"\n\
+         severity = \"deny\"\n",
+    );
+    let (code, _, stderr) = run(&repo, &home, &["check"]);
+    assert_eq!(code, 0, "the documented preset row must load: {stderr}");
+    // And the README carries the row this just ran, so deleting the example
+    // cannot leave this passing.
+    assert!(
+        extension_section().contains("preset = \"trunk-based\""),
+        "the README no longer carries the preset example this case executes"
     );
 }

@@ -100,3 +100,33 @@ scope = "tree"
 # this list is config and a tracked path that cannot be read is unreadable config.
 [epoch]
 tracked = ["batten.toml"]
+
+# THE BATTERIES: policy presets, compiled into the binary.
+#
+# Every rule above is one predicate over one object. A `policy` rule is a Rego
+# module deciding over the whole resolved fact set, which is what makes a
+# predicate over the RELATIONSHIP between facts expressible — the engine's rule
+# loop is flat, so no row can consume another's verdict.
+#
+# You do not have to write one to get value from them. Batten ships modules for
+# common practices, and enabling one is a rule row naming it. `batten config show`
+# lists what this binary carries; today that is `ci-hygiene`, `commit-hygiene`,
+# `landing-loop`, `pinned-toolchain`, `shell-hygiene` and `trunk-based`.
+#
+# SCOPE IS THE FIELD TO GET RIGHT. A preset's modules read one surface's facts:
+# `tree` for the working tree, `mediated_call` for the single command a hook is
+# adjudicating. Enabling one at the wrong scope is refused at LOAD, naming both —
+# it does not quietly evaluate and decide nothing.
+#
+# A preset is deny-only, like every module, so switching one on can only ADD
+# refusals. There is no network and no registry: the bytes ship inside the binary
+# you already trust, under the same checksum as the rest of it.
+#
+# Uncomment to enable one:
+#
+# [[rule]]
+# id = "trunk-based"
+# kind = "policy"
+# scope = "mediated_call"
+# preset = "trunk-based"
+# severity = "deny"

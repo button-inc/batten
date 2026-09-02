@@ -288,17 +288,82 @@ _diagnostic_, so it never returns `2` — every failure it can report is the
 config-or-usage class, and a harness must never read "this checkout is
 misconfigured" as a policy denial.
 
-## Extending Batten: three surfaces, and which to reach for
+## Extending Batten: ten rule kinds, and which to reach for
 
 Any predicate you can express as a command plus an exit code is expressible in
-Batten. There are three ways to do it, and the failure mode is picking the wrong
-one — so the boundary matters more than the mechanics.
+Batten — and most of them need no command at all. The failure mode is picking the
+wrong kind, so the boundary matters more than the mechanics.
 
-| What you are gating on                                  | Reach for                | Where it is configured           |
-| ------------------------------------------------------- | ------------------------ | -------------------------------- |
-| A **file's contents**                                   | a `command` rule kind    | `[[rule]]` with `kind="command"` |
-| A **command's output**, when the tool lies about exit 0 | `exec` output predicates | `[[exec_pattern]]`               |
-| An **existing warn finding**, to make it block          | `fail_on_warning`        | a top-level key                  |
+**Reach for the narrowest kind that fits.** A `command` rule spawns a process,
+which can read any file and reach the network; every other kind is decided from
+facts the boundary already resolved. That is why a `command` rule runs only under
+`batten enforce` while the rest are admitted to the read-only `check` surface.
+
+| What you are gating on                                             | Reach for  | Where it is configured            |
+| ------------------------------------------------------------------ | ---------- | --------------------------------- |
+| A **literal string** banned from matched files                     | `forbid`   | `[[rule]]` with `kind="forbid"`   |
+| A **file's contents**, judged by a program you supply              | `command`  | `[[rule]]` with `kind="command"`  |
+| A **command line** an agent is about to run                        | `shape`    | `[[rule]]` with `kind="shape"`    |
+| A **count that must not grow** — a budget you are paying down      | `ratchet`  | `[[rule]]` with `kind="ratchet"`  |
+| Whether a **verification receipt** exists and still answers        | `receipt`  | `[[rule]]` with `kind="receipt"`  |
+| The **shape of a pipeline** — how a call is composed               | `pipeline` | `[[rule]]` with `kind="pipeline"` |
+| A judgement a **model** makes, recorded with its own no-fix reason | `judge`    | `[[rule]]` with `kind="judge"`    |
+| **Credentials** reaching a file, via a pinned scanner              | `secrets`  | `[[rule]]` with `kind="secrets"`  |
+| A **document's** own structure                                     | `document` | `[[rule]]` with `kind="document"` |
+| A **relationship between facts** no single row can express         | `policy`   | `[[rule]]` with `kind="policy"`   |
+
+Two surfaces are not rule kinds and are configured on their own:
+
+| What you are gating on                                  | Reach for                | Where it is configured |
+| ------------------------------------------------------- | ------------------------ | ---------------------- |
+| A **command's output**, when the tool lies about exit 0 | `exec` output predicates | `[[exec_pattern]]`     |
+| An **existing warn finding**, to make it block          | `fail_on_warning`        | a top-level key        |
+
+### Gating on a relationship between facts — a `policy` rule
+
+The other kinds are each one predicate over one object. A `policy` rule is a
+[Rego](https://www.openpolicyagent.org/docs/latest/policy-language/) module
+deciding over the whole resolved fact set, which is what makes a predicate over
+the _relationship between_ facts expressible at all — the engine's own rule loop
+is flat, and no row can consume another's verdict.
+
+```toml
+[[rule]]
+id = "no-orphan-workflow"
+kind = "policy"
+scope = "tree"
+sources = [".github/workflows/*.yml"]
+module = "policy/no-orphan-workflow.rego"
+severity = "deny"
+```
+
+A module is **deny-only by construction** — there is no allow spelling — so
+enabling one can never weaken policy, which is what preserves the raise-only
+invariant above. A refusal it raises is `{rule, verdict, subjects}`, and the
+`verdict` is a declared class rather than free prose, so
+`batten policy explain <class>` reaches the remedy from any refusal.
+
+### Presets: the batteries, and how to switch one on
+
+Batten ships policy modules for common practices, compiled into the binary. They
+are the reason a new repository does not have to author every predicate from
+scratch — the same shape Conftest, Semgrep, ESLint and Clippy all take.
+
+```toml
+[[rule]]
+id = "trunk-based"
+kind = "policy"
+scope = "mediated_call"
+preset = "trunk-based"
+severity = "deny"
+```
+
+`batten config show` lists the presets this binary ships. Each declares the
+**scope** its modules decide, and enabling one at the other scope is refused at
+load rather than quietly deciding nothing.
+
+There is **no network and no registry**: a preset's bytes ship inside the binary
+you already trust, under the same checksum as the rest of it.
 
 Everything a consumer adds is **raise-only** (§8): a git-ignored
 `batten.local.toml` may add a rule or a pattern, never redefine or remove one the
