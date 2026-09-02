@@ -6144,7 +6144,29 @@ measured = "2026-09-02"
 # the gate is what the number is compared against — a basis refreshed from a
 # second reading of the tree would red again on the next lap while looking correct
 # in review. Which file the two readers disagree about is unresolved and is not
-# this bundle's; it is a pointer for whoever takes CLOUD-1158's floor re-derivation.
+# this bundle's; it is a pointer for whoever takes CLOUD-1158's floor re-derivation.#
+# THE DISAGREEING READER IS THE GLOB IMPLEMENTATION, NOT A MISSING FILE, and the
+# entry above leaves it open. Measured 2026-09-02 over one tree:
+# `git ls-files 'crates/batten/tests/**/*.rs'` and the gate's own walk differ by
+# exactly `crates/batten/tests/policy_modules.rs` — the one `.rs` sitting directly
+# under `tests/` with no intervening directory. Git pathspec requires `**/` to
+# match at least one path component; a globset-style `**/` matches zero. Same glob
+# string, two grammars, one file.
+#
+# So the entry above is right to write down the GATE's reading, and the reason is
+# sharper than "the gate is what the number is compared against": a `git ls-files`
+# reading is not a worse measurement of the same set, it is a measurement of a
+# DIFFERENT set. Whoever takes CLOUD-1158's floor re-derivation should read the
+# floors against the gate's walk for the same reason.
+#
+# AND THE CALLER MISREPORTS THIS REFUSAL, which cost an hour on the branch that
+# found it. `verify` says "not enough disk to run the gate, and pruning did not
+# recover it — the refusal above names free space and the floor". It does not: the
+# refusal names a STEM COUNT, and free space was 3GB clear of the floor on the lap
+# that tripped it. `target prune`'s stale-basis exit is not its below-floor exit,
+# and the caller collapses them — so an operator who reads the caller rather than
+# the callee deletes files and gets nowhere.
+
 
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
