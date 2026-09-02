@@ -105,11 +105,14 @@ mediator := "batten"
 # §2 refuses merging two units because that "would manufacture the glue this
 # partition exists to avoid" -- so this row points at that unit rather than being
 # discharged here.
-declared := {
-	"mise-tasks/run-shape-guard.sh": "CLOUD-1163",
-	"stop-hook-git-check.sh": "CLOUD-1314",
-	"session-start-git-identity.sh": "CLOUD-1314",
-}
+# THE TWO MERGED ROWS ARE GONE BECAUSE THEIR SUBJECTS ARE (CLOUD-1314). Both
+# launcher hooks were removed from `~/.claude/launcher-settings.json` and both
+# programs deleted, so the rows would now match nothing and `stale` would refuse
+# them -- which is that direction working, and the reason a retirement deletes its
+# own row rather than leaving a licence behind. Nothing on a merged surface is
+# declared any more: a command there that is not the mediator is a stray, and
+# `hook wire duplicate` refuses their return, which is CLOUD-1314's acceptance.
+declared := {"mise-tasks/run-shape-guard.sh": "CLOUD-1163"}
 
 # The committed hook surfaces, one per harness in `Harness::ALL` that has one.
 #
@@ -488,7 +491,10 @@ test_a_declaration_matching_something_is_not_stale if {
 
 # --- the merged half -----------------------------------------------------------
 
-merged_declared := {
+# The two commands CLOUD-1314 removed. Kept as a fixture rather than deleted with
+# their rows, because "these exact programs are refused if they come back" is the
+# acceptance clause that row names, and it needs the names to assert it.
+retired_hooks := {
 	"~/.claude/stop-hook-git-check.sh",
 	"~/.claude/session-start-git-identity.sh",
 }
@@ -498,11 +504,18 @@ test_a_merged_registration_the_table_does_not_declare_is_refused if {
 	v.verdict == "hook wire duplicate"
 }
 
-test_a_declared_merged_command_is_excused_and_an_undeclared_one_is_not if {
-	vs := verdicts with input as launcher(merged_declared)
+# CLOUD-1314'S ACCEPTANCE. The rows are gone because the subjects are, so these two
+# are no longer excused by anything -- re-provisioning either is refused like any
+# other second decider. Without this case the deletion would be indistinguishable
+# from having quietly stopped watching them.
+test_the_retired_launcher_hooks_are_refused_if_they_return if {
+	vs := verdicts with input as launcher(retired_hooks)
+	"hook wire duplicate" in vs
+}
+
+test_the_mediator_alone_on_a_merged_surface_is_clean if {
+	vs := verdicts with input as launcher({mediates})
 	not "hook wire duplicate" in vs
-	some v in violation with input as launcher({"~/.claude/other-hook.sh"})
-	v.verdict == "hook wire duplicate"
 }
 
 # NEVER A PATH on the merged finding, on either field: a merged path is under
@@ -524,15 +537,20 @@ test_a_merged_row_is_unenforced_where_no_merged_surface_was_read if {
 	not "hook declare stale" in vs
 }
 
-test_a_merged_row_matching_nothing_is_stale_once_a_surface_was_read if {
-	some v in violation with input as launcher({mediates})
-	v.verdict == "hook declare stale"
+# NO MERGED ROW IS DECLARED ANY MORE, so a read merged surface spends nothing and
+# the committed row is judged on its own surface. The `enforced` merged arm stays
+# in the module for the next merged row rather than being deleted with these two:
+# removing it would be coverage loss dressed as cleanup, and it is unreachable
+# rather than wrong.
+test_a_read_merged_surface_alone_spends_no_declaration if {
+	vs := verdicts with input as launcher({mediates})
+	not "hook declare stale" in vs
 }
 
 # ANTI-VACUITY over BOTH classes at once, which the committed-only case cannot
 # reach: every declared row matches on the surface that owns it, so nothing fires.
 test_both_surfaces_wired_correctly_is_clean if {
-	count(violation) == 0 with input as whole({mediates, guard}, {mediates}, merged_declared)
+	count(violation) == 0 with input as whole({mediates, guard}, {mediates}, {mediates})
 }
 
 # --- could-not-look, per cause -------------------------------------------------
@@ -570,7 +588,12 @@ test_an_undeclared_name_in_the_channel_is_not_this_modules_business if {
 # correct here while reddening every CI runner.
 
 # One receipt reading, as the engine projects it: id -> subject -> token.
-read(status) := {"tree": {"minted": {"issue-status": {"CLOUD-1314": status}}}}
+#
+# Keyed to the row the table still carries. It named CLOUD-1314 until that row's
+# two subjects were removed with their hooks, and the case went red on the same
+# commit -- which is the coupling working: a `spent` case naming a key no row
+# declares is testing nothing.
+read(status) := {"tree": {"minted": {"issue-status": {"CLOUD-1163": status}}}}
 
 test_a_row_whose_owner_has_closed_is_spent if {
 	some v in violation with input as read("done")

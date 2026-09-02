@@ -298,9 +298,14 @@ const MEDIATOR: &str = "batten hook --harness claude-code";
 /// rather than assumed.
 const DECLARED_SIBLING: &str = "$CLAUDE_PROJECT_DIR/mise-tasks/run-shape-guard.sh";
 
-/// Both merged commands the merged module declares, spelled as the launcher
-/// writes them — with a directory, so the basename reduction is exercised.
-const DECLARED_MERGED: [&str; 2] = [
+/// The two launcher hooks CLOUD-1314 removed, spelled as the launcher wrote them
+/// — with a directory, so the basename reduction is still exercised.
+///
+/// No longer declared by anything: both were deleted from
+/// `~/.claude/launcher-settings.json` and both programs removed, so their rows
+/// went with them. Kept here because "these exact commands are refused if they
+/// return" is that row's acceptance clause, and asserting it needs the names.
+const RETIRED_MERGED: [&str; 2] = [
     "~/.claude/session-start-git-identity.sh",
     "~/.claude/stop-hook-git-check.sh",
 ];
@@ -366,7 +371,9 @@ fn clean_committed() -> String {
 }
 
 fn clean_merged() -> String {
-    wiring(&[], &DECLARED_MERGED)
+    // THE MEDIATOR ALONE. Nothing else is declared on a merged surface any more,
+    // so this is what a clean launcher looks like after CLOUD-1314.
+    wiring(&[], &[MEDIATOR])
 }
 
 #[test]
@@ -546,7 +553,7 @@ fn the_engine_reads_a_closed_owner_off_a_minted_receipt() {
     // The tree is otherwise CLEAN — every declared row matches something wired —
     // so the only thing that can redden this run is the owner's status.
     let (repo, outside) = fixture("owner-closed", &clean_committed(), Some(&clean_merged()));
-    receipt(&repo, "CLOUD-1314", "done", now());
+    receipt(&repo, "CLOUD-1163", "done", now());
     let output = check(&repo, Some(&outside));
     assert!(
         !output.status.success(),
@@ -555,13 +562,11 @@ fn the_engine_reads_a_closed_owner_off_a_minted_receipt() {
     );
     // A COUNT, never the key: the table's directions point at nothing openable.
     //
-    // TWO, from ONE reading, and that is a property worth pinning rather than an
-    // off-by-one to paper over: `spent` is keyed by the ROW, and both merged rows
-    // name this same owner. A single receipt therefore closes both, which is what
-    // an owner-shaped licence looks like when it expires — a `1` here would mean
-    // the predicate had stopped at the first row it matched.
+    // ONE, because the table now carries one row. It was TWO until CLOUD-1314's two
+    // merged rows were deleted with their subjects, and that number moving with the
+    // table is the coupling working rather than a fixture drifting.
     assert!(
-        findings(&output).contains("2 harness-wiring"),
+        findings(&output).contains("1 harness-wiring"),
         "wrong finding: {}",
         findings(&output)
     );
@@ -577,7 +582,7 @@ fn an_open_owner_is_not_spent() {
     // The other direction, and without it the case above passes over a module that
     // fires on any reading at all.
     let (repo, outside) = fixture("owner-open", &clean_committed(), Some(&clean_merged()));
-    receipt(&repo, "CLOUD-1314", "in-progress", now());
+    receipt(&repo, "CLOUD-1163", "in-progress", now());
     let output = check(&repo, Some(&outside));
     assert!(
         output.status.success(),
@@ -597,7 +602,7 @@ fn a_reading_older_than_the_declared_bound_does_not_answer() {
     // sorts first by digest — here, a status read eight days ago would still say
     // `done` forever.
     let (repo, outside) = fixture("owner-stale", &clean_committed(), Some(&clean_merged()));
-    receipt(&repo, "CLOUD-1314", "done", now() - 8 * 86_400);
+    receipt(&repo, "CLOUD-1163", "done", now() - 8 * 86_400);
     let output = check(&repo, Some(&outside));
     assert!(
         output.status.success(),
@@ -636,6 +641,45 @@ fn a_merged_registration_the_table_does_not_declare_is_refused() {
     assert!(
         findings(&output).contains("harness-wiring"),
         "wrong finding: {}",
+        findings(&output)
+    );
+}
+
+#[test]
+fn the_retired_launcher_hooks_are_refused_if_they_return() {
+    // CLOUD-1314'S ACCEPTANCE, over the compiled binary rather than only in the
+    // module's own tier.
+    //
+    // Both hooks were removed from `~/.claude/launcher-settings.json` and both
+    // programs deleted, so their `declared` rows went with them — a row matching
+    // nothing is what `stale` refuses, which is why the deletion had to be a pair.
+    // Nothing excuses them now, so re-provisioning either is refused like any other
+    // second decider on a hook surface.
+    //
+    // Without this case, deleting the rows would be indistinguishable from having
+    // quietly stopped watching those two commands — which is the permanent-exemption
+    // shape arriving by the opposite route from `spent`.
+    let (repo, outside) = fixture(
+        "retired-return",
+        &clean_committed(),
+        Some(&wiring(&[], &RETIRED_MERGED)),
+    );
+    let output = check(&repo, Some(&outside));
+    assert!(
+        !output.status.success(),
+        "a retired launcher hook came back and was allowed: {}",
+        findings(&output)
+    );
+    // A COUNT AND NO PATH: a merged path is under somebody's home directory and
+    // differs per machine, so rule 4 and §6 byte-stability both forbid it travelling.
+    assert!(
+        findings(&output).contains("2 harness-wiring"),
+        "wrong finding: {}",
+        findings(&output)
+    );
+    assert!(
+        !findings(&output).contains(".claude"),
+        "a merged path travelled into the finding: {}",
         findings(&output)
     );
 }
@@ -716,13 +760,13 @@ fn a_wrapper_that_reaches_the_mediator_is_not_a_second_decider() {
     let (repo, outside) = fixture(
         "wrapper",
         &clean_committed(),
+        // The wrapper ALONE. It used to carry the two launcher hooks beside it,
+        // which was fine while their rows declared them; CLOUD-1314 deleted both
+        // rows with their subjects, so including them here would now be testing
+        // the stray predicate instead of the wrapper one.
         Some(&wiring(
             &[],
-            &[
-                "mise exec -- batten hook --harness claude-code",
-                DECLARED_MERGED[0],
-                DECLARED_MERGED[1],
-            ],
+            &["mise exec -- batten hook --harness claude-code"],
         )),
     );
     let output = check(&repo, Some(&outside));
