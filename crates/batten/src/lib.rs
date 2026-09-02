@@ -181,13 +181,13 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // total — the workspace lints forbid panicking on a reachable path.
         None => Ok(ExitCode::Success),
         Some(Command::Check(flags)) => run_check(&flags, mode, &overrides, out, err),
-        Some(Command::Enforce { json, rule }) => run_rules(
+        Some(Command::Enforce(flags)) => run_rules(
             out,
             err,
             mode,
             &overrides,
             rules::run_all_over,
-            RunRequest::spawning(json, rule.as_deref()),
+            RunRequest::spawning(flags.json, flags.rule.as_deref()),
         ),
         Some(Command::Config { command }) => run_config(&command, &overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),

@@ -78,6 +78,28 @@ pub struct CheckFlags {
     pub since: Option<String>,
 }
 
+/// `enforce`'s flags, which travel together for `CheckFlags`'s reason.
+///
+/// A payload struct rather than fields on the variant, and the shape is a
+/// REPAIR rather than symmetry for its own sake. `Enforce` carried its flags
+/// inline, so adding `--rule` to it was `enum_struct_variant_field_added` — a
+/// major break `semver` refused, on a verb whose flag set is the one most likely
+/// to grow again. `#[non_exhaustive]` on the enum does not reach a variant's
+/// fields; only a named struct does. Paying the break once here is what stops
+/// the next flag paying it again.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct EnforceFlags {
+    /// Emit findings as byte-stable JSON instead of pointer lines.
+    pub json: bool,
+    /// Run only the declared row with this id, or every applicable row.
+    ///
+    /// The narrowing `check` has carried since CLOUD-1051, extended to the
+    /// spawning verb for the one caller `check` cannot serve: a case whose
+    /// SUBJECT is a `kind = "command"` row. See `surface::ENFORCE_RULE`.
+    pub rule: Option<String>,
+}
+
 /// The top-level subcommands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -85,16 +107,7 @@ pub enum Command {
     /// Run the applicable read-only gates against the repository.
     Check(CheckFlags),
     /// Run every configured rule, including kinds that execute a configured command.
-    Enforce {
-        /// Emit findings as byte-stable JSON instead of pointer lines.
-        json: bool,
-        /// Run only the declared row with this id, or every applicable row.
-        ///
-        /// The narrowing `check` has carried since CLOUD-1051, extended to the
-        /// spawning verb for the one caller `check` cannot serve: a case whose
-        /// SUBJECT is a `kind = "command"` row.
-        rule: Option<String>,
-    },
+    Enforce(EnforceFlags),
     /// Inspect configuration.
     Config {
         /// The chosen sub-verb.
@@ -1700,10 +1713,10 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
             staged: flag(matches, "staged"),
             since: matches.get_one::<String>("since").cloned(),
         })),
-        "enforce" => Some(Command::Enforce {
+        "enforce" => Some(Command::Enforce(EnforceFlags {
             json: flag(matches, "json"),
             rule: matches.get_one::<String>("rule").cloned(),
-        }),
+        })),
         "config" => config_of(matches).map(|command| Command::Config { command }),
         "lint" => lint_of(matches).map(|command| Command::Lint { command }),
         "spec" => matches
