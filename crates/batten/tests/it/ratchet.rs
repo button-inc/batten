@@ -2064,3 +2064,61 @@ fn removing_an_inline_body_never_violates_either_row() {
 // withdrawn: "a tier far under budget is drift-loose, not a silent pass" the ratchet direction, preserved as the `elif` on `median < BUDGET / LOOSE_FACTOR`; it is the arm most likely to rot unnoticed and that is stated here rather than hidden
 // withdrawn: "a red gate is still timed, because cost is not correctness" preserved as the `|| true` on the `hk check` line, which is now load-bearing without a case behind it
 // withdrawn: "no hk on PATH is could-not-look, never a verdict" the one property that must not collapse into a pass; preserved structurally — `command -v hk` failing exits 1 under `set -e` — rather than by assertion
+
+// --- the ledger for a WITHDRAWAL: `replay` (CLOUD-1163 unit 11) ---
+//
+// A THIRD WITHDRAWAL BLOCK, AND THE FIRST WHOSE SUBJECT NEVER DECIDED ANYTHING.
+// The two above retire a mechanism onto something else — a workflow step, a
+// module — and price the arms against that successor. This one has no successor
+// at either end, because `replay` was never reachable: a pattern scan of
+// `mise.toml`, `hk.pkl`, `.claude/settings.json` and `.github/workflows/` at
+// `9e7a9a91` finds the word only in prose, and the sole caller of
+// `replay-pointers.py` was `replay.sh:80` itself.
+//
+// CLOUD-1115 IS THE ARGUMENT FOR THE DELETION RATHER THAN AGAINST IT, and that
+// inversion is the whole of why this unit was reachable when the row first read
+// as blocked. That issue's title is that `replay`'s tree arm "has never run
+// against a real gate and cannot pass it", and its §8 opens "Blockers. None, in
+// either direction." A gate off the landing path, invoked by nothing, whose one
+// live arm cannot pass, is a gate deciding nothing — and CLOUD-909's own header
+// says as much in the present tense: "THIS HARNESS HAS NO LIVE CONSUMER YET."
+//
+// WHAT IS ACTUALLY LOST, and it is not the fidelity property. `replay` was to be
+// the evidence that a migrated gate answers the way the bash it replaced did.
+// That property is UNESTABLISHED either way: the harness never ran against a real
+// migration, so deleting it removes an unexercised instrument rather than a
+// result. What the fifteen cases below pinned is the instrument's own
+// discrimination — that it refuses a vacuous pass, refuses an identity
+// translation, and reports a divergence instead of admitting one. Those are good
+// properties of a thing nobody built a consumer for, and they die with it.
+//
+// THE ONE FINDING WORTH CARRYING FORWARD, because it cost a measurement and would
+// be re-derived by whoever revives this: `batten check` renders `path:line rule`
+// for a tree-scoped row and no remedy at all, because rule 4 IS its output
+// contract — so a fidelity harness that greps refusal output for remedy prose
+// reports every faithful migration of a tree gate as having lost one. The remedy
+// has to be read from the DECLARATION (a `forbid` row's column, a policy module's
+// own text), never from the refusal. That is recorded here rather than in a
+// deleted file.
+//
+// The two file arms name each other, as `withdrawn_subjects` demands.
+// `mise-tasks/replay-pointers.py` needs no arm and gets none: `governed_when_deleted`
+// excludes `.py`, so it is simply deleted — and it is still named as the suite's
+// co-subject, which dies in this same delta, so `SubjectFacts::died` holds.
+// withdrawn: mise-tasks/replay.sh tests/replay.bats the harness has no successor at either end — nothing in `crates/batten` decides it, no `policy/*.rego` replaces it, and no task, hook or workflow ever invoked it; CLOUD-1163 unit 11, on CLOUD-1115's own measurement
+// withdrawn: tests/replay.bats mise-tasks/replay.sh both declared subjects die in this same delta and no instrument replaces them, so the cases have nowhere to go rather than somewhere unnamed; CLOUD-1163 unit 11
+// withdrawn: "a faithful migration replays green across every carried case" the green arm of an instrument that never ran against a real migration; there is nothing left to be green
+// withdrawn: "a module whose pointer set differs is reported, naming the case" the per-case divergence report, which is the harness's whole output surface and dies with it
+// withdrawn: "the refusal does not print the two pointer sets side by side" rule 4 over the harness's own output; the rule still binds every gate that exists, this pinned it for one that no longer does
+// withdrawn: "a translation declared as an identity is refused" the anti-carry-over arm — `1=1` is the naive `assert_equal $status 1` written down — and it guarded a declaration format nothing now reads
+// withdrawn: "0=0 is the one identity that is not a carry-over" the carve-out for the exit code both contracts spell the same; meaningless without the translation it qualified
+// withdrawn: "an exit code the translation does not name is a refusal, never a pass" fail-closed on an undeclared status, over a declaration surface this delta removes
+// withdrawn: "a divergence on a case marked changed passes, and the same one otherwise fails" the arm that made the harness consume CLOUD-908's `carried`/`changed` markers rather than a second list; the markers survive and their consumer does not
+// withdrawn: "a migrated refusal that dropped its remedy is reported" the remedy-preservation check; its finding is carried in the prose above rather than in a case, because there is no program left to assert it against
+// withdrawn: "an unreadable head answer is could-not-look, not an empty pointer set" could-not-look over the extractor's input, distinguishing a shape it cannot read from an answer of nothing
+// withdrawn: "a document with no findings key is could-not-look too" the same distinction on a well-formed document missing the key, which is the half that fails silently
+// withdrawn: "the extractor reports only the rule it was asked about" the filter standing in for a `check --rule` flag; without it every migration read as divergent, and the flag it stood in for now exists on the binary
+// withdrawn: "the remedy is read from the declaration, and a policy row from its module" the case behind the finding above, covering both shapes a migration produces
+// withdrawn: "a rule the head config does not carry is could-not-look" a broken declaration read as could-not-look rather than blamed on the migration
+// withdrawn: "a suite that never invokes the program is a refusal, not a silent pass" the vacuous-pass refusal, and the one this repository has measured four times elsewhere; it is refused here by an instrument that is itself now gone
+// withdrawn: "no declared replay at all is not a failure" the mid-campaign carve-out that kept the task useful before its first consumer existed — a consumer that never arrived, which is this withdrawal's premise
