@@ -132,6 +132,7 @@ mod memory_injection;
 mod mise_pin_agreement;
 mod mutate;
 mod narrow_adoption;
+mod obligations_bound;
 mod perf_pair;
 mod pinned_programs;
 mod pipeline_shapes;

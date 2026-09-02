@@ -1469,6 +1469,31 @@ zero-is-a-count = true
 name = "sec1"
 value = { program = { run = "named-paths", read = "stdout", stdin = { section = { from = { result = "description" }, label = "clause-label", select = "clause-one" } } } }
 
+# THE §7 OBLIGATIONS THE ROW DECLARES (CLOUD-472), as `<file>:<slug>` per entry.
+#
+# `cites` above is the precedent and the shape is identical: an `authority`
+# column reading a prefixed stdout line, over the description the TRACKER
+# returned rather than a payload the caller assembled. That is what makes the set
+# unforgeable by the author, and it was earned — `ready-lint` over a
+# self-assembled payload was measured green three times against text in a local
+# file, once under an id no row carried.
+#
+# THE THREE-VALUED READ IS THE WHOLE POINT HERE. An ABSENT line is
+# could-not-look: a prose-dialect block emits none, and reading that as "declares
+# no obligations" would exempt exactly the rows this gate exists for. A PRESENT
+# and empty line is the honest zero — the object was read and declares none.
+# `Read::StdoutLine` keeps those apart by construction, which is why the
+# obligation set rides a line rather than an exit status.
+#
+# EVERY ROW WRITING `board-writes` CARRIES THIS COLUMN, because the readers index
+# positionally: a recorder that skipped it would put its neighbour's value where
+# this one belongs for exactly the rows it did write.
+[[recorder.columns]]
+name = "obligations"
+value = { authority = { ask = "ready", read = { stdout-line = "obligations " }, stdin = { object = { id = { result = "id" }, description = { result = "description" } } } } }
+counted-with = ":"
+zero-is-a-count = true
+
 # A GROOM OF A ROW THIS BRANCH FILED, and without it `filed-here-check`'s third
 # remedy is unreachable. That gate tells a branch which filed an unrefined row to
 # groom it and re-run `land` — but a groom is a `save_issue` WITH an id, so the
@@ -1528,6 +1553,31 @@ zero-is-a-count = true
 name = "sec1"
 value = { program = { run = "named-paths", read = "stdout", stdin = { section = { from = { result = "description" }, label = "clause-label", select = "clause-one" } } } }
 
+# THE §7 OBLIGATIONS THE ROW DECLARES (CLOUD-472), as `<file>:<slug>` per entry.
+#
+# `cites` above is the precedent and the shape is identical: an `authority`
+# column reading a prefixed stdout line, over the description the TRACKER
+# returned rather than a payload the caller assembled. That is what makes the set
+# unforgeable by the author, and it was earned — `ready-lint` over a
+# self-assembled payload was measured green three times against text in a local
+# file, once under an id no row carried.
+#
+# THE THREE-VALUED READ IS THE WHOLE POINT HERE. An ABSENT line is
+# could-not-look: a prose-dialect block emits none, and reading that as "declares
+# no obligations" would exempt exactly the rows this gate exists for. A PRESENT
+# and empty line is the honest zero — the object was read and declares none.
+# `Read::StdoutLine` keeps those apart by construction, which is why the
+# obligation set rides a line rather than an exit status.
+#
+# EVERY ROW WRITING `board-writes` CARRIES THIS COLUMN, because the readers index
+# positionally: a recorder that skipped it would put its neighbour's value where
+# this one belongs for exactly the rows it did write.
+[[recorder.columns]]
+name = "obligations"
+value = { authority = { ask = "ready", read = { stdout-line = "obligations " }, stdin = { object = { id = { result = "id" }, description = { result = "description" } } } } }
+counted-with = ":"
+zero-is-a-count = true
+
 # A COMMENT IS RECORDED AND NEVER GATED. It is the honest common case — a comment
 # on the row that already owns a finding — and pricing it would push the pressure
 # toward silence, which is the failure `finding-sink-check` exists to catch. So the
@@ -1572,6 +1622,10 @@ value = { literal = "-" }
 
 [[recorder.columns]]
 name = "sec1"
+value = { literal = "-" }
+
+[[recorder.columns]]
+name = "obligations"
 value = { literal = "-" }
 
 # ─── THE PR BODY REACHES THE PREDICATE BY HOOK (CLOUD-1051, phase B0) ───
@@ -4460,6 +4514,26 @@ severity = "deny"
 #
 # NO `line_sources`: the subject is the record `batten record plan` wrote and the
 # delta the engine already resolved. This row opens no file.
+# CLOUD-472. A §7 obligation is bound to a case, or it is not landing.
+#
+# `line_sources` is where a reader should look hardest, because the failure it
+# guards is silent: the module resolves a declared slug by reading the named
+# file's lines, so an obligation naming a file OUTSIDE these globs can never be
+# bound and the rule would refuse it for the wrong reason. The globs are the
+# places a `#MUTANT` row can legitimately live.
+#
+# `delta_sources` is the whole tree because the subject is the recorded
+# obligation set rather than any path this branch happens to touch.
+[[rule]]
+id = "obligations-bound"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["**"]
+line_sources = ["crates/batten/tests/**/*.rs", "policy/*.rego", "tests/**/*.bats", "mise-tasks/**"]
+module = "policy/obligations-bound.rego"
+severity = "deny"
+
 [[rule]]
 id = "plan-complete"
 kind = "policy"
@@ -7716,6 +7790,45 @@ precondition = "the row DOCUMENTS the change being landed, so naming its files i
 # one: `stop_nudges` rule 5 asked the right question with no exit code,
 # `ready.rs` emitted `dialect prose` with no ratchet, and `graph-check` counts a
 # `wip` in the wrong unit. A reporting surface with nothing downstream of it.
+# CLOUD-472's core. The Ready block is the only artifact that still remembers
+# what was promised, and until now nothing read it at implementation time.
+[[verdict]]
+id = "test name undefined"
+gloss = "an obligation this row declared names no case, or a case with no mutation that could kill it"
+class = """
+`ready-lint` gates the SHAPE of a Ready block and `verify` gates the CODE, and \
+nothing compared them -- so an obligation could be written, pass refinement, and \
+land with no test behind it while every gate stayed green. Measured on \
+CLOUD-369, which merged by fast-forward with an acceptance bullet that did not \
+describe the code. The reason it is structural rather than inattention: tests \
+written FROM an implementation can only confirm it, and are incapable of \
+catching an obligation that was dropped, because a missing behaviour has no \
+code to write a test against. This rule and `mise run mutant` are one \
+obligation in two halves -- this asks whether something is bound to the \
+promise, the sweep asks whether it discriminates, and a case that cannot fail \
+is not coverage.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "write the case the obligation names, in the file it names"
+
+[[verdict.route]]
+id = "task run other"
+kind = "command"
+target = "mise run mutant"
+
+[[verdict.route]]
+id = "task run last"
+kind = "command"
+target = "groom the row: an obligation you are not keeping should not be declared"
+
+[[verdict.route]]
+id = "path admit first"
+kind = "override"
+precondition = "the obligation is discharged by a successor this change declares in the `[rule.conserves]` ledger, so the case moved rather than never existing"
+
 [[verdict]]
 id = "plan declare held"
 gloss = "an entry this branch declared is neither completed nor withdrawn"
