@@ -573,7 +573,12 @@ fn a_tree_with_no_wiring_surface_is_not_stale() {
     write(
         &repo,
         "policy/harness-declared.json",
-        "{\n  \"matches-nothing.sh\": \"CLOUD-1\"\n}\n",
+        // A COMMITTED row — it carries a `/` — because `enforced` splits on exactly
+        // that: a slash-bearing pattern is judged where a COMMITTED surface was
+        // read and a bare basename where a MERGED one was. A basename here takes
+        // the `merged_read` arm, which this guard's mutation does not touch, so
+        // the case would still not observe it.
+        "{\n  \"mise-tasks/matches-nothing.sh\": \"CLOUD-1\"\n}\n",
     );
     let module = std::fs::read_to_string(at_root("policy/harness-wiring.rego")).unwrap();
     write(&repo, "harness-wiring.rego", &module);
