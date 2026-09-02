@@ -517,3 +517,106 @@ fn a_successful_record_says_nothing() {
         stderr(&outcome)
     );
 }
+
+// --- the SHIPPED module, over the shipped producer ---------------------------
+//
+// Every case above installs `PROBE`, which is the right shape for asserting what
+// the ENGINE projects: a fixture module can vary one key component at a time and
+// say so in its own vocabulary. It is the wrong shape for asserting anything
+// about `policy/validator-verdict-clean.rego`, and for the whole life of that
+// module nothing asserted anything about it over the compiled binary — its
+// `#MUTANT-SUITE` named this file, no case in this file installed it, so a
+// mutation of its `violation` body SURVIVED and the row carried a
+// `#MUTANT-OWNER` conceding the gap.
+//
+// The gap is closed here rather than re-declared. `owned` is a literal set in the
+// module — `{"config-validator", "renovate-config"}` — so the fixture below
+// declares `config-validator` by that name: a suite that renamed it to something
+// convenient would pass while the shipped selector matched nothing, which is the
+// same dead gate one level in.
+
+/// The shipped predicate, never a copy of it.
+const SHIPPED: &str = include_str!("../../../../policy/validator-verdict-clean.rego");
+
+/// Registers the shipped module over the id its `owned` set actually names.
+const SHIPPED_CONFIG: &str = r#"version = 1
+
+[[rule]]
+id = "validator-verdict-clean"
+kind = "policy"
+scope = "tree"
+module = "validator-verdict-clean.rego"
+severity = "deny"
+
+[[rule.tools]]
+id = "config-validator"
+tool = "checker"
+version = "1.1.0"
+input = "subject.toml"
+
+[[verdict]]
+id = "tool judge dirty"
+gloss = "a declared validator recorded a finding over the bytes it read"
+class = "A fixture copy of the shipped class; the registry's own row is in batten.toml."
+
+[[verdict.route]]
+id = "tool fix input"
+kind = "document"
+target = "validator-verdict-clean.rego"
+"#;
+
+/// A repository carrying the SHIPPED module, whose `config-validator` record is
+/// written by the shipped producer rather than planted.
+fn shipped_fixture(name: &str) -> PathBuf {
+    let dir = scratch(&format!("validator-verdict-clean-{name}"));
+    write(&dir, "batten.toml", SHIPPED_CONFIG);
+    write(&dir, "validator-verdict-clean.rego", SHIPPED);
+    write(&dir, "subject.toml", SUBJECT);
+    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    dir
+}
+
+#[test]
+fn the_shipped_module_refuses_a_recorded_error() {
+    // THE POSITIVE FOR THE SHIPPED PREDICATE, and the case its declared mutation
+    // reddens. `status error` is the exact token `[tasks.record-verdicts]` pipes
+    // in when `pkl eval` exits non-zero, so this is the production path and not a
+    // vocabulary the suite invented.
+    let dir = shipped_fixture("error");
+    let minted = record_tool(&dir, "config-validator", "status error\n");
+    assert!(
+        minted.status.success(),
+        "the producer must mint the record\n{}{}",
+        stdout(&minted),
+        stderr(&minted)
+    );
+
+    let outcome = check(&dir);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert!(
+        answer.contains("validator-verdict-clean"),
+        "a recorded error must reach the shipped predicate and refuse\n{answer}{cause}"
+    );
+}
+
+#[test]
+fn the_shipped_module_passes_a_recorded_clean() {
+    // THE DISCRIMINATING HALF. Without it the case above is satisfied by a module
+    // that refuses unconditionally, which is what a surviving mutation looks like
+    // from the outside.
+    let dir = shipped_fixture("clean");
+    let minted = record_tool(&dir, "config-validator", "status clean\n");
+    assert!(
+        minted.status.success(),
+        "the producer must mint the record\n{}{}",
+        stdout(&minted),
+        stderr(&minted)
+    );
+
+    let outcome = check(&dir);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert!(
+        !answer.contains("validator-verdict-clean"),
+        "the reserved clean status is not a finding\n{answer}{cause}"
+    );
+}

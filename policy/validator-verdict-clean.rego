@@ -153,5 +153,4 @@ test_could_not_look_does_not_fault if {
 }
 
 #MUTANT-SUITE crates/batten/tests/it/tool_verdict_facts.rs
-#MUTANT-OWNER CLOUD-1265|nothing WRITES a `tool-verdict` record, so this predicate resolves `null` and refuses nothing on any real checkout; the tier it names drives the FACT and never the predicate
-#MUTANT unclean-verdict-unread|s@^\tcount(refused) > 0$@\tfalse@|a_declared_key_reads_its_own_record
+#MUTANT unclean-verdict-unread|s@^\tcount(refused) > 0$@\tfalse@|the_shipped_module_refuses_a_recorded_error
