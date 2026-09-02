@@ -9776,10 +9776,18 @@ id = "task run other"
 kind = "command"
 target = "check the declared runner is installed and on PATH — a dispatch that cannot spawn leaves no record, exactly as one that never ran"
 
-[[verdict.route]]
-id = "path admit first"
-kind = "override"
-precondition = "the review cannot be dispatched in this environment at all — no runner exists here — rather than not having been dispatched in one where it could"
+# NO OVERRIDE ROUTE, AND ITS ABSENCE IS THE DECISION (CLOUD-472). One was drafted
+# — precondition "the review cannot be dispatched in this environment at all — no
+# runner exists here" — and withdrawn before landing, because that state is not a
+# refusal to begin with. `policy/review-dispatched.rego` reads an absent runner as
+# could-not-look; `a_missing_runner_is_could_not_look_and_never_a_refusal` asserts
+# it over the compiled binary and `could-not-look-refused` is the declared mutation
+# that pins it. So no case matching the precondition ever produces this verdict,
+# and the route was a hatch for a door that is never shut.
+#
+# What remains has command routes and needs no hatch: the runner is here and was
+# asked, and left no record. That is the branch's own conduct, and the two routes
+# above name what to do about it.
 
 [[verdict]]
 id = "review answer missing"
