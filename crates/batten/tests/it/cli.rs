@@ -1276,11 +1276,24 @@ fn spec_emits_the_derived_read_only_allowlist() {
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("spec stdout is valid JSON");
 
-    let allowlist: Vec<&str> = value["read_only_allowlist"]
+    // An entry is `{id, path}` since CLOUD-969, and reading BOTH halves here is
+    // the point of the reconciliation: a consumer that pinned paths alone loses
+    // its allowlist to a rename, in the direction where a path it still trusts
+    // no longer means what it did.
+    let entries = value["read_only_allowlist"]
         .as_array()
-        .expect("the emitted document carries the derived allowlist")
+        .expect("the emitted document carries the derived allowlist");
+    let ids: Vec<&str> = entries
         .iter()
-        .map(|path| path.as_str().expect("an allowlist entry is a string"))
+        .map(|entry| entry["id"].as_str().expect("every entry carries its id"))
+        .collect();
+    let allowlist: Vec<&str> = entries
+        .iter()
+        .map(|entry| {
+            entry["path"]
+                .as_str()
+                .expect("every entry carries its path")
+        })
         .collect();
 
     assert!(allowlist.contains(&"check"), "{allowlist:?}");
@@ -1290,9 +1303,17 @@ fn spec_emits_the_derived_read_only_allowlist() {
     assert!(!allowlist.contains(&"enforce"), "{allowlist:?}");
     assert!(!allowlist.contains(&"hook"), "{allowlist:?}");
 
-    let mut sorted = allowlist.clone();
+    // Sorted by the STABLE half (§6). Asserting the path order instead would
+    // pin an order the document does not have, and would move under a rename
+    // that changed nothing about which commands are read-only.
+    let mut sorted = ids.clone();
     sorted.sort_unstable();
-    assert_eq!(allowlist, sorted, "the emitted allowlist is sorted (§6)");
+    assert_eq!(ids, sorted, "the emitted allowlist is sorted by id (§6)");
+    assert_eq!(
+        ids.len(),
+        allowlist.len(),
+        "every entry carries both halves: {ids:?} {allowlist:?}"
+    );
 }
 
 #[test]

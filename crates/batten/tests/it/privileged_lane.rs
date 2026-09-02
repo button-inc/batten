@@ -129,27 +129,6 @@ fn denied(root: &Path) {
     );
 }
 
-/// Denied AND under the named class.
-///
-/// `denied` asserts only the rule id, which every arm of this module shares — so
-/// it cannot see the class split at all. A pair of cases using it would stay
-/// green over a module that collapsed the two classes back into one, which is
-/// the regression CLOUD-1317 exists to prevent.
-fn denied_under(root: &Path, class: &str) {
-    let output = common::run(root, &["check"]);
-    let text = String::from_utf8_lossy(&output.stdout).into_owned();
-    assert_eq!(
-        output.status.code(),
-        Some(batten::exit::ExitCode::Violation.code()),
-        "expected the policy verdict: {text}{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        text.contains(class),
-        "the finding must name `{class}`, so its reader knows which field to test: {text}"
-    );
-}
-
 fn clean(root: &Path) {
     let output = common::run(root, &["check"]);
     assert_eq!(

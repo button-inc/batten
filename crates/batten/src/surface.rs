@@ -386,7 +386,27 @@ impl FlagDecl {
 #[non_exhaustive]
 pub struct CommandDecl {
     /// The full, root-relative path (`config show`, never `batten config show`).
+    ///
+    /// The HUMAN spelling, and the one thing about a row that is expected to
+    /// change. Pin a consumer against [`CommandDecl::id`] instead.
     pub path: &'static str,
+    /// The stable identity a third party pins against (CLOUD-969).
+    ///
+    /// # Why this is declared rather than derived
+    ///
+    /// An id computed from `path` is the path with extra steps: it re-breaks on
+    /// exactly the rename it exists to survive. This is a LITERAL, and the whole
+    /// of its contract is that **it is not edited when `path` changes** — a
+    /// rename moves the spelling and leaves the identity alone, which is what
+    /// lets a consumer's pinned read-only allowlist keep matching.
+    ///
+    /// The initial values were seeded from the paths as they stood when this
+    /// field landed, because a seed has to come from somewhere and an arbitrary
+    /// one would be unreadable in `spec.rs`'s committed row set. That seeding is
+    /// a one-time event and emphatically not a rule: the resemblance between an
+    /// id and its path today is history, not a derivation, and re-deriving one
+    /// later would undo the field.
+    pub id: &'static str,
     /// The one-line human summary, rendered as `clap`'s `about`.
     pub about: &'static str,
     /// The declared effect (§5). Self-declared, never inherited.
@@ -1603,6 +1623,8 @@ fn shell_parser() -> ValueParser {
 /// diffing.
 pub const ROOT: CommandDecl = CommandDecl {
     path: "",
+    // The root is the binary; the release tag is its identity (CLOUD-969).
+    id: "",
     about: env!("CARGO_PKG_DESCRIPTION"),
     effect: Effect::Ask,
     // A bare invocation performs no default action, so there is no answer to
@@ -1734,6 +1756,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // path off the process-spawning surface.
     CommandDecl {
         path: "check",
+        id: "check",
         about: "Run the applicable read-only gates against the repository",
         data_channel: true,
         effect: Effect::Read,
@@ -1745,6 +1768,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // the derived read-only allowlist by construction.
     CommandDecl {
         path: "enforce",
+        id: "enforce",
         about: "Run every configured rule, including kinds that execute a configured command",
         data_channel: true,
         effect: Effect::Unclassified,
@@ -1758,6 +1782,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // `2` here, which is the property fail-open actually depends on.
     CommandDecl {
         path: "exec",
+        id: "exec",
         about: "Run a command — or a `:::` bundle — and report a pointer to what it wrote",
         // The child owns stdout, so Batten must not interleave a document of its
         // own with the child's bytes. The pointer surface over captured output is
@@ -1803,6 +1828,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // entry as a prefix (CLOUD-121).
     CommandDecl {
         path: "capture",
+        id: "capture",
         about: "Captured command output: navigate what `exec` already ran, without running it again",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -1826,6 +1852,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // `-J` ladder is byte-stable text by construction.
     CommandDecl {
         path: "capture show",
+        id: "capture.show",
         about: "Print a capture's pointer, or the lines a selection asks for, with no second run",
         data_channel: true,
         effect: Effect::Read,
@@ -1850,6 +1877,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // alongside `--json`.
     CommandDecl {
         path: "capture find",
+        id: "capture.find",
         about: "Resolve a stored tool response by the key it carries, with no handle to look up first",
         data_channel: true,
         effect: Effect::Read,
@@ -1864,6 +1892,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // Fixed reads of the store's own directory plus arithmetic over the entries.
     CommandDecl {
         path: "capture list",
+        id: "capture.list",
         about: "List this repository's captures as handles, in a fixed order",
         data_channel: true,
         effect: Effect::Read,
@@ -1876,6 +1905,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // needs rather than prompted into the void.
     CommandDecl {
         path: "capture prune",
+        id: "capture.prune",
         about: "Remove this repository's captures — the one removal path; captures never expire on their own",
         data_channel: false,
         effect: Effect::Destructive,
@@ -1894,6 +1924,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // as a prefix (CLOUD-121).
     CommandDecl {
         path: "mcp",
+        id: "mcp",
         about: "Dispatch a declared MCP call and hand back a reduction instead of the payload",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -1931,6 +1962,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // `--json` because there is no second encoding to choose between.
     CommandDecl {
         path: "mcp call",
+        id: "mcp.call",
         about: "Dispatch one declared method, store the response, and print the declared reduction",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -1955,6 +1987,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // `--dry-run` on it would be a flag over an action that does not exist.
     CommandDecl {
         path: "target",
+        id: "target",
         about: "Inspect and reclaim this repository's build tree",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -1970,6 +2003,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // program that must never be prompted into the void.
     CommandDecl {
         path: "target prune",
+        id: "target.prune",
         about: "Reclaim superseded build artifacts, and refuse below the measured disk floor for the build the next lap will run",
         data_channel: false,
         effect: Effect::Destructive,
@@ -1977,6 +2011,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     CommandDecl {
         path: "config",
+        id: "config",
         about: "Inspect configuration",
         data_channel: false,
         effect: Effect::Read,
@@ -1984,6 +2019,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     CommandDecl {
         path: "config show",
+        id: "config.show",
         about: "Print the effective configuration",
         data_channel: true,
         effect: Effect::Read,
@@ -1998,6 +2034,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // CLOUD-133's, which defines the record it would be stamped on.
     CommandDecl {
         path: "config epoch",
+        id: "config.epoch",
         about: "Print the content hash of the governing config surface",
         data_channel: true,
         effect: Effect::Read,
@@ -2012,6 +2049,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // rather than a flag on that one.
     CommandDecl {
         path: "config deprecations",
+        id: "config.deprecations",
         about: "Report schema keys removed since a published release with no deprecation window",
         data_channel: true,
         // Reads committed bytes at a ref and the schema this binary derives.
@@ -2021,6 +2059,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     CommandDecl {
         path: "config lint",
+        id: "config.lint",
         about: "Report policy smells in batten.toml (any smell is a violation)",
         data_channel: true,
         // Still `read` with `--host-rules`: the flag names a file or `-` the
@@ -2036,6 +2075,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // committed authority, which is a different subject, not a second kind.
     CommandDecl {
         path: "lint",
+        id: "lint",
         about: "Lint an artifact against a declared schema",
         data_channel: false,
         effect: Effect::Read,
@@ -2046,6 +2086,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // text the caller names, nothing on disk changes, and no process is spawned.
     CommandDecl {
         path: "lint brief",
+        id: "lint.brief",
         about: "Check a delegation brief against the handoff schema (any missing section is a violation)",
         data_channel: true,
         effect: Effect::Read,
@@ -2056,6 +2097,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     CommandDecl {
         path: "spec",
+        id: "spec",
         about: "Print the tool's own command spec",
         // Emits data, but through `--format`: an encoding selector, not a
         // channel toggle. `tests::spec_switches_format_rather_than_declaring_json`
@@ -2082,6 +2124,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // lint` is not one of its diagnostics (CLOUD-66).
     CommandDecl {
         path: "doctor",
+        id: "doctor",
         about: "Diagnose whether Batten can run in this repository",
         data_channel: true,
         effect: Effect::Read,
@@ -2104,6 +2147,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // row already classifies the verb this way.
     CommandDecl {
         path: "doctor hooks",
+        id: "doctor.hooks",
         about: "Diagnose whether batten is wired on every hook surface of every harness",
         // Per-harness detail is the whole reason this is a sub-verb rather than a
         // line in `doctor`'s summary, and `-J` is where that detail goes.
@@ -2119,6 +2163,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // and per §5 does not lower the declared effect.
     CommandDecl {
         path: "init",
+        id: "init",
         about: "Write a starter batten.toml, refusing to overwrite an existing one",
         // The pointer it emits is one path; a JSON document of one field would
         // be a second shape for the same answer.
@@ -2139,6 +2184,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // suppression that size.
     CommandDecl {
         path: "baseline",
+        id: "baseline",
         about: "Record the findings that already exist, so only new ones fail",
         // No `-J`, matching every other write row (`init`, `defects add`,
         // `provision apply`). The set a baseline holds is read back through
@@ -2152,6 +2198,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     CommandDecl {
         path: "generate",
+        id: "generate",
         about: "Emit artifacts derived from the command spec, on stdout",
         data_channel: false,
         effect: Effect::Read,
@@ -2159,6 +2206,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     CommandDecl {
         path: "generate completions",
+        id: "generate.completions",
         about: "Emit the shell completion script for one shell",
         // The artifact *is* the output; there is no human rendering to switch
         // away from, and a shell script is not JSON.
@@ -2181,6 +2229,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // covers for completions and man pages.
     CommandDecl {
         path: "generate hooks",
+        id: "generate.hooks",
         about: "Emit one harness's hook registrations, on stdout",
         // The registrations ARE the output, and they are JSON because the hosts'
         // config files are — not because this is a batten document with a human
@@ -2196,6 +2245,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     CommandDecl {
         path: "generate man",
+        id: "generate.man",
         about: "Emit the roff man page for one command, on stdout",
         // The page IS the output, and roff is not JSON.
         data_channel: false,
@@ -2212,6 +2262,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     CommandDecl {
         path: "generate markdown",
+        id: "generate.markdown",
         about: "Emit the whole command surface as one markdown reference, on stdout",
         // One document, no human/machine split to toggle between.
         data_channel: false,
@@ -2228,6 +2279,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // an `input` document the engine never emits.
     CommandDecl {
         path: "generate schema",
+        id: "generate.schema",
         about: "Emit the JSON Schema for a config or policy-input surface, derived from the types that define it",
         data_channel: false,
         effect: Effect::Read,
@@ -2251,6 +2303,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // it belongs on the derived read-only allowlist.
     CommandDecl {
         path: "perf",
+        id: "perf",
         about: "Measure this repository's own invocation cost",
         data_channel: false,
         effect: Effect::Write,
@@ -2271,6 +2324,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // so a `--json` here would be a second encoding of a contract, not a channel.
     CommandDecl {
         path: "perf pair",
+        id: "perf.pair",
         about: "Measure this branch and its merge base back to back on one machine, and print both arms as paired records",
         data_channel: false,
         effect: Effect::Write,
@@ -2295,6 +2349,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // which it belongs on the derived read-only allowlist.
     CommandDecl {
         path: "mutate",
+        id: "mutate",
         about: "Decide whether this repository's gates discriminate, rather than merely parse",
         data_channel: false,
         effect: Effect::Write,
@@ -2316,6 +2371,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // a contract rather than a channel.
     CommandDecl {
         path: "mutate sweep",
+        id: "mutate.sweep",
         about: "Apply every declared mutation to its source and report the ones its declared suite did not catch",
         data_channel: false,
         effect: Effect::Write,
@@ -2334,6 +2390,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // first runs.
     CommandDecl {
         path: "mutate census",
+        id: "mutate.census",
         about: "Report every gate in the tree that is neither mutation-enforced nor carrying a filed exemption",
         data_channel: false,
         effect: Effect::Read,
@@ -2347,6 +2404,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // subtree, and the day a mutating verb joins it, this row changes with it.
     CommandDecl {
         path: "policy",
+        id: "policy",
         about: "Inspect the thresholds and path sets this repository holds itself to",
         data_channel: false,
         effect: Effect::Read,
@@ -2357,6 +2415,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // the `read` structural promise requires (CLOUD-50).
     CommandDecl {
         path: "policy budget",
+        id: "policy.budget",
         about: "Judge the always-loaded instruction set against its declared token budget",
         data_channel: true,
         effect: Effect::Read,
@@ -2379,6 +2438,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // rule 4 keeps off every channel never reaches this verb at all.
     CommandDecl {
         path: "policy hooks",
+        id: "policy.hooks",
         about: "Judge this session's hook output against its declared per-session budget",
         data_channel: true,
         effect: Effect::Read,
@@ -2394,6 +2454,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // `filter(effect == read)` with no second list to maintain.
     CommandDecl {
         path: "policy test",
+        id: "policy.test",
         about: "Run each registered module's own `test_` rules and report the predicates none exercised",
         data_channel: true,
         effect: Effect::Read,
@@ -2412,6 +2473,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // engine already holds. One read, one answer.
     CommandDecl {
         path: "policy tools",
+        id: "policy.tools",
         about: "Print the tool names the mediated-call rows decide, one per line",
         data_channel: true,
         effect: Effect::Read,
@@ -2433,6 +2495,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // file.
     CommandDecl {
         path: "policy explain",
+        id: "policy.explain",
         about: "Resolve a verdict token to its class definition and the routes out of it",
         data_channel: true,
         effect: Effect::Read,
@@ -2456,6 +2519,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // either (CLOUD-701).
     CommandDecl {
         path: "commit",
+        id: "commit",
         about: "The shape a commit must take here: what its subject may say",
         data_channel: false,
         effect: Effect::Read,
@@ -2467,6 +2531,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // promise requires.
     CommandDecl {
         path: "commit check",
+        id: "commit.check",
         about: "Refuse a commit subject that does not follow the configured convention",
         data_channel: true,
         effect: Effect::Read,
@@ -2484,6 +2549,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // CLOUD-1059 made editing a shell rule refusable.
     CommandDecl {
         path: "ready",
+        id: "ready",
         about: "Whether an issue's Ready block satisfies the checkable clauses of the gate",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -2498,6 +2564,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // lint that echoed them would leak it through CI logs.
     CommandDecl {
         path: "ready lint",
+        id: "ready.lint",
         about: "Refuse an issue whose Ready block fails a checkable clause of the Definition of Ready",
         data_channel: true,
         effect: Effect::Read,
@@ -2506,6 +2573,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // The `checks` noun (CLOUD-1143), ported off `mise-tasks/checks-green.sh`.
     CommandDecl {
         path: "checks",
+        id: "checks",
         about: "Whether a commit's check runs answer the question a landing depends on",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -2533,6 +2601,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // meant to preserve it.
     CommandDecl {
         path: "checks green",
+        id: "checks.green",
         about: "Refuse a head whose required checks are red, still running, or not yet registered",
         data_channel: true,
         effect: Effect::Read,
@@ -2557,6 +2626,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // declared family instead of stranding another namespace on one leaf.
     CommandDecl {
         path: "pr",
+        id: "pr",
         about: "The pull request a landing drives, and the answers it waits on",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -2577,6 +2647,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // and `checks green`.
     CommandDecl {
         path: "pr watch",
+        id: "pr.watch",
         about: "Poll a head's check runs until the required set answers, then report the verdict",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -2596,6 +2667,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // same terms.
     CommandDecl {
         path: "claim",
+        id: "claim",
         about: "Whether the issue you are about to pull is actually unclaimed",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -2608,6 +2680,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // a writing verb on the derived read-only allowlist.
     CommandDecl {
         path: "claim check",
+        id: "claim.check",
         about: "Refuse a pull of an issue somebody is already on, and mint the receipt when it is free",
         data_channel: true,
         effect: Effect::Write,
@@ -2615,6 +2688,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     CommandDecl {
         path: "semver",
+        id: "semver",
         about: "Whether this branch's API delta is compatible with the bump it claims",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -2622,6 +2696,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     CommandDecl {
         path: "semver check",
+        id: "semver.check",
         about: "Refuse an API break this branch's commits do not declare",
         // NO DATA CHANNEL, declared rather than defaulted. The verdict is one
         // human line naming the route and the failing lint ids; there is no `-J`
@@ -2634,6 +2709,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     CommandDecl {
         path: "attribution",
+        id: "attribution",
         about: "What produced commits may carry about the tooling that made them",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -2644,6 +2720,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // code is reachable, which is what the `read` structural promise requires.
     CommandDecl {
         path: "attribution check",
+        id: "attribution.check",
         about: "Refuse vendor authorship, branding or session links in commit metadata",
         data_channel: true,
         effect: Effect::Read,
@@ -2654,6 +2731,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // a developer's own unrelated repositories.
     CommandDecl {
         path: "attribution identity",
+        id: "attribution.identity",
         about: "Set this clone's repo-local git identity when it is unset or denied",
         data_channel: false,
         effect: Effect::Write,
@@ -2667,6 +2745,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // posture as `receipt`: listed with its reason, never guessed (CLOUD-51).
     CommandDecl {
         path: "worktree",
+        id: "worktree",
         about: "Worktrees and the work in them: what is at risk",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -2677,6 +2756,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // it must never reach is user-supplied code, which no path here does.
     CommandDecl {
         path: "worktree status",
+        id: "worktree.status",
         about: "Report work that is uncommitted, unpushed, or not landed on the configured target",
         data_channel: true,
         effect: Effect::Read,
@@ -2688,6 +2768,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // consumer that treats an entry as a prefix (CLOUD-90).
     CommandDecl {
         path: "override",
+        id: "override",
         about: "Issued admissions: an override is a record, never a variable somebody knows",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -2712,6 +2793,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // stdout, which a JSON document of one field would not improve.
     CommandDecl {
         path: "override request",
+        id: "override.request",
         about: "Answer a class's declared precondition and receive an admission for one situation",
         data_channel: false,
         effect: Effect::Write,
@@ -2738,6 +2820,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // exit code carries it.
     CommandDecl {
         path: "override spend",
+        id: "override.spend",
         about: "Spend an issued admission against the situation it was issued for",
         data_channel: false,
         effect: Effect::Write,
@@ -2754,6 +2837,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // allowlist for any consumer that treats an entry as a prefix (CLOUD-90).
     CommandDecl {
         path: "provision",
+        id: "provision",
         about: "Pinned tools this repository provisions, cached out of tree",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -2766,6 +2850,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // executing an artifact fetched from the internet.
     CommandDecl {
         path: "provision status",
+        id: "provision.status",
         about: "Report which provisioned tools do not match the manifest",
         data_channel: true,
         effect: Effect::Read,
@@ -2776,6 +2861,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // authored — the cache is out of tree and Batten's own.
     CommandDecl {
         path: "provision apply",
+        id: "provision.apply",
         about: "Fetch, verify against the pinned checksum, and install into the out-of-tree cache",
         data_channel: false,
         effect: Effect::Write,
@@ -2795,6 +2881,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // is listed with a stated reason rather than guessed; this is that reason.
     CommandDecl {
         path: "hook",
+        id: "hook",
         about: "Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)",
         // Excluded deliberately: `hook`'s stdout is already a harness-shaped
         // decision document that the host parses. A second JSON shape on the
@@ -2819,6 +2906,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // unenforced for every mediated call.
     CommandDecl {
         path: "payload",
+        id: "payload",
         about: "Read a hook payload from stdin",
         data_channel: false,
         effect: Effect::Read,
@@ -2842,6 +2930,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // into a silent fail-open, which is worse than the latency.
     CommandDecl {
         path: "payload field",
+        id: "payload.field",
         about: "Print one field of a hook payload read from stdin, for a shell hook that must not depend on jq",
         data_channel: false,
         effect: Effect::Read,
@@ -2867,6 +2956,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // (CLOUD-203).
     CommandDecl {
         path: "receipt",
+        id: "receipt",
         about: "Verification receipts: SHA-keyed claims a named check passed, invalidated by git facts",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -2875,6 +2965,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // Creates state the caller can recreate by re-running the check.
     CommandDecl {
         path: "receipt record",
+        id: "receipt.record",
         about: "Record that the named check concluded pass against the current HEAD",
         // Records state and reports nothing; there is no document to emit.
         data_channel: false,
@@ -2899,6 +2990,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // byte-identical: the SHA keying was the only keying this verb had.
     CommandDecl {
         path: "receipt status",
+        id: "receipt.status",
         about: "Judge the named check's recorded receipt against HEAD and origin/main",
         data_channel: true,
         effect: Effect::Read,
@@ -2920,6 +3012,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // already take.
     CommandDecl {
         path: "defects",
+        id: "defects",
         about: "The append-only defect ledger: the lessons this repository has already paid for",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -2929,6 +3022,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // the derived read-only allowlist.
     CommandDecl {
         path: "defects query",
+        id: "defects.query",
         about: "List recorded defects, as pointers",
         data_channel: true,
         effect: Effect::Read,
@@ -2939,6 +3033,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // construction — and `-n` previews without touching the tree.
     CommandDecl {
         path: "defects add",
+        id: "defects.add",
         about: "Append defect records read as JSONL on stdin",
         // Reports counts on stderr under -n; there is no document to emit.
         data_channel: false,
@@ -2952,6 +3047,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // prefixes (CLOUD-170).
     CommandDecl {
         path: "design",
+        id: "design",
         about: "Design-evidence claims: the integrity of the record behind a decision",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -2962,6 +3058,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // possible `read`, so it joins the derived read-only allowlist.
     CommandDecl {
         path: "design audit",
+        id: "design.audit",
         about: "Audit a JSONL design-evidence claim stream on stdin for record integrity",
         data_channel: true,
         effect: Effect::Read,
@@ -2972,6 +3069,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // advertise a write-bearing prefix on the derived allowlist (CLOUD-170).
     CommandDecl {
         path: "state",
+        id: "state",
         about: "The out-of-tree findings store: which store belongs to this checkout",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -2983,6 +3081,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // existed.
     CommandDecl {
         path: "state adopt",
+        id: "state.adopt",
         about: "Bind this checkout to its findings store, minting one only if none exists",
         // Reports what it bound on stderr; there is no document to emit.
         data_channel: false,
@@ -2998,6 +3097,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // agent allowlist, for a side effect nobody asked that invocation for.
     CommandDecl {
         path: "state record",
+        id: "state.record",
         about: "Record this ref's findings into the store, and GC instances whose ref is gone",
         data_channel: false,
         effect: Effect::Write,
@@ -3010,6 +3110,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // worktree (CLOUD-78's no-implicit-upgrade rule).
     CommandDecl {
         path: "state migrate",
+        id: "state.migrate",
         about: "Upgrade the findings store to this binary's record version",
         // Reports counts on stderr; there is no document to emit.
         data_channel: false,
@@ -3037,6 +3138,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // outside a unit test ever wrote one.
     CommandDecl {
         path: "state settle",
+        id: "state.settle",
         about: "Record what was decided about a stored finding",
         // Reports the identity and the token on stderr; there is no document.
         data_channel: false,
@@ -3062,6 +3164,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // configured command is reachable from this path (CLOUD-170).
     CommandDecl {
         path: "state list",
+        id: "state.list",
         about: "List stored findings and the refs they were observed in",
         data_channel: true,
         effect: Effect::Read,
@@ -3096,6 +3199,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // as a prefix (CLOUD-170).
     CommandDecl {
         path: "record",
+        id: "record",
         about: "Out-of-tree verdict stores: what something else judged, keyed so a stale answer cannot answer",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -3122,6 +3226,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // declared is unspellable.
     CommandDecl {
         path: "record tool",
+        id: "record.tool",
         about: "Record a declared tool row's verdict, read as `<name> <token>` lines on stdin",
         // Records state and reports nothing; there is no document to emit.
         data_channel: false,
@@ -3137,6 +3242,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // and building both is what wakes `forge-verdict-required` up.
     CommandDecl {
         path: "record forge",
+        id: "record.forge",
         about: "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin",
         data_channel: false,
         effect: Effect::Write,
@@ -3161,6 +3267,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // entry as a prefix (CLOUD-90).
     CommandDecl {
         path: "wiring",
+        id: "wiring",
         about: "Repair a host's hook registrations",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -3181,6 +3288,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // rule that never prompts cannot hang.
     CommandDecl {
         path: "wiring reclaim",
+        id: "wiring.reclaim",
         about: "Remove non-batten hook registrations from this host's merged surfaces",
         data_channel: false,
         effect: Effect::Destructive,
@@ -3225,6 +3333,37 @@ pub fn effect_for(path: &str) -> Effect {
         .iter()
         .find(|decl| decl.path == path)
         .map_or(Effect::Ask, |decl| decl.effect)
+}
+
+/// Resolve the declared stable id for a full command path (CLOUD-969).
+///
+/// `None` for a path [`SURFACE`] does not declare — the root program node is the
+/// only one in practice, and it is deliberately not given an identity of its
+/// own: it is the binary, which the tag already names.
+#[must_use]
+pub fn id_for(path: &str) -> Option<&'static str> {
+    SURFACE
+        .iter()
+        .find(|decl| decl.path == path)
+        .map(|decl| decl.id)
+}
+
+/// Whether a command answers through the `-J` data channel (§6).
+///
+/// A path absent from [`SURFACE`] is `false`, which is the same conservative
+/// reading [`effect_for`] takes: an unrecognised command is not asserted to
+/// carry a machine channel it may not have.
+///
+/// Published since CLOUD-969, because it was a build-time-only column before —
+/// so a spec consumer could only INFER the data channel by scanning a row's
+/// flags for one named `json`, which is a second derivation of a fact the
+/// surface already declares.
+#[must_use]
+pub fn data_channel_for(path: &str) -> bool {
+    SURFACE
+        .iter()
+        .find(|decl| decl.path == path)
+        .is_some_and(|decl| decl.data_channel)
 }
 
 /// The parent path of a command path: `"config show"` → `"config"`, and a
@@ -3373,6 +3512,74 @@ pub fn command() -> Command {
         .iter()
         .fold(root, |root, flag| root.arg(arg_of(flag)));
     attach(root, "")
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod identity_tests {
+    use super::{ROOT, SURFACE};
+
+    /// Every declared command carries a stable id (CLOUD-969).
+    ///
+    /// The root is exempt and is the ONLY exemption: it is the binary, which the
+    /// release tag already identifies. Naming it here rather than testing
+    /// `path != ""` keeps the exemption a decision a reader can see.
+    #[test]
+    fn every_declared_path_has_an_id() {
+        let unidentified: Vec<&str> = SURFACE
+            .iter()
+            .filter(|decl| decl.id.is_empty())
+            .map(|decl| decl.path)
+            .collect();
+        assert!(
+            unidentified.is_empty(),
+            "commands with no stable id, so nothing a consumer can pin: {unidentified:?}"
+        );
+        assert!(
+            ROOT.id.is_empty(),
+            "the root is the binary and takes no identity of its own"
+        );
+    }
+
+    /// No two commands share an id.
+    ///
+    /// A duplicate is worse than a missing id: two rows answer to one handle, so
+    /// a consumer pinning it gets whichever the lookup reaches first — and
+    /// `id_for` finds the first, which makes the second silently unreachable.
+    #[test]
+    fn no_id_is_declared_twice() {
+        let mut duplicated: Vec<(&str, &str)> = Vec::new();
+        for (at, decl) in SURFACE.iter().enumerate() {
+            if let Some(other) = SURFACE[..at].iter().find(|prior| prior.id == decl.id) {
+                duplicated.push((other.path, decl.path));
+            }
+        }
+        assert!(
+            duplicated.is_empty(),
+            "two commands share a stable id, so one of them is unreachable through it: \
+             {duplicated:?}"
+        );
+    }
+
+    /// An id is not the path, and this is what stops it drifting back into one.
+    ///
+    /// The seeds resemble their paths because they were seeded from them once
+    /// (see [`super::CommandDecl::id`]), and the failure mode is a later author
+    /// reading that resemblance as a RULE and "fixing" an id during a rename —
+    /// which undoes the whole field. There is no honest exit code over intent,
+    /// so what is asserted is the reachable half: the lookup answers by path and
+    /// returns the declared literal, never a computed one.
+    #[test]
+    fn the_lookup_returns_the_declared_literal_rather_than_a_computed_one() {
+        for decl in SURFACE {
+            assert_eq!(
+                super::id_for(decl.path),
+                Some(decl.id),
+                "`{}` must resolve to the id its own row declares",
+                decl.path
+            );
+        }
+    }
 }
 
 #[cfg(test)]

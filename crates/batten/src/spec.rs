@@ -13,7 +13,7 @@ use clap::{Arg, ArgAction, Command};
 use serde::Serialize;
 
 use crate::effect::Effect;
-use crate::surface::effect_for;
+use crate::surface::{data_channel_for, effect_for, id_for};
 
 /// A single flag or positional argument in the emitted spec.
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -26,6 +26,14 @@ pub struct FlagSpec {
     pub long: Option<String>,
     /// Whether the argument consumes a value (a bare boolean flag does not).
     pub takes_value: bool,
+    /// Whether the argument is POSITIONAL rather than a named flag (CLOUD-969).
+    ///
+    /// Without this a positional emits as `long: null, takes_value: true`, which
+    /// is byte-identical to a flag that lost its long form — so a consumer
+    /// reconstructing an invocation from this document writes `--<name> <value>`
+    /// for something that takes neither, produces a broken command line, and
+    /// gets no signal that it did.
+    pub positional: bool,
     /// The one-line human summary, if the command declares one.
     pub help: Option<String>,
 }
@@ -37,10 +45,22 @@ pub struct CommandSpec {
     /// The full, root-relative command path (`config show`); the bare program
     /// name for the root node.
     pub path: String,
+    /// The stable id declared on this command's `SURFACE` row (CLOUD-969).
+    ///
+    /// `None` only for the root program node, which declares no row of its own.
+    /// This is what a consumer pins against; `path` is the spelling and moves.
+    pub id: Option<String>,
     /// The one-line human summary, if the command declares one.
     pub about: Option<String>,
     /// The declared effect, resolved from the §5 table (`ask` when absent).
     pub effect: Effect,
+    /// Whether this command answers through the `-J` data channel (§6).
+    ///
+    /// Published since CLOUD-969. It was a build-time-only column, so a consumer
+    /// had to infer the channel by looking for a flag named `json` — a second
+    /// derivation of something the surface already declares, and one that reads
+    /// `spec` (whose switch is `--format`) wrong in both directions.
+    pub data_channel: bool,
     /// Flags and positionals, sorted by name for byte-stability.
     pub flags: Vec<FlagSpec>,
     /// Subcommands, sorted by path for byte-stability.
@@ -63,6 +83,9 @@ fn flag_of(arg: &Arg) -> FlagSpec {
             ArgAction::SetTrue | ArgAction::SetFalse | ArgAction::Count
         ),
         help: arg.get_help().map(ToString::to_string),
+        // clap's own answer, not a heuristic over the long/short pair: a flag
+        // may legitimately carry neither.
+        positional: arg.is_positional(),
     }
 }
 
@@ -95,6 +118,8 @@ fn walk(command: &Command, prefix: &str) -> CommandSpec {
 
     CommandSpec {
         effect: effect_for(&path),
+        data_channel: data_channel_for(&path),
+        id: id_for(&path).map(ToOwned::to_owned),
         about: command.get_about().map(ToString::to_string),
         flags: flags_of(command),
         subcommands,
@@ -115,8 +140,12 @@ pub fn describe(root: &Command) -> CommandSpec {
 
     CommandSpec {
         path: root.get_name().to_owned(),
+        // The root is the binary, which the release tag already identifies; an
+        // id here would be a second name for the same thing.
+        id: None,
         about: root.get_about().map(ToString::to_string),
         effect: Effect::Ask,
+        data_channel: false,
         flags: flags_of(root),
         subcommands,
     }
@@ -130,6 +159,11 @@ pub fn describe(root: &Command) -> CommandSpec {
 /// were and a derivation can be added beside them without moving anything.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct SpecDocument {
+    /// The shape this document is in (CLOUD-969).
+    ///
+    /// Emitted FIRST because it is what a consumer reads before deciding whether
+    /// it understands the rest.
+    pub spec_version: u32,
     /// The command tree itself, at the document root.
     #[serde(flatten)]
     pub command: CommandSpec,
@@ -137,8 +171,44 @@ pub struct SpecDocument {
     /// Emitted rather than left to each consumer to re-derive: a second
     /// implementation of the `effect == read` filter is a second place for it
     /// to be wrong, and this one is wrong in the unsafe direction.
-    pub read_only_allowlist: Vec<String>,
+    ///
+    /// Each entry carries the stable id ALONGSIDE the path since CLOUD-969, and
+    /// that reconciliation is the point rather than a convenience: this is §5's
+    /// safety-critical derivation, and keyed on the spelling alone a rename
+    /// silently stops a consumer's pinned allowlist from matching — in the
+    /// direction where a path it still trusts no longer means what it did.
+    pub read_only_allowlist: Vec<ReadOnlyEntry>,
 }
+
+/// One row of the derived read-only allowlist: the stable identity, and the
+/// spelling to invoke today.
+///
+/// A struct rather than a bare path (CLOUD-969). Two keys rather than two
+/// parallel lists, because two lists can disagree about their own ordering and
+/// a consumer would have to zip them to find out.
+#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ReadOnlyEntry {
+    /// The stable id declared on the command's `SURFACE` row. Pin against this.
+    pub id: String,
+    /// The path to invoke today. Human-facing, and expected to move.
+    pub path: String,
+}
+
+/// The shape of the emitted document.
+///
+/// A SOURCE LITERAL, deliberately, and never `CARGO_PKG_VERSION`: a version that
+/// moves with the crate says "the binary changed", which is what the release tag
+/// already says, and tells a consumer nothing about whether the document it is
+/// about to parse is one it understands.
+///
+/// **When it moves:** on any change to the emitted shape a consumer could
+/// notice — a key added, removed or renamed, or a value's type changed. It does
+/// NOT move when a command row is added, removed or renamed: that is the
+/// surface changing, not the document's shape, and it is exactly what the
+/// per-row `id` exists to let a consumer track. Pre-`0.1.0` there is no
+/// back-compatibility surface (house style §2), so this is a statement about the
+/// document rather than a promise about old ones.
+pub const SPEC_VERSION: u32 = 1;
 
 /// Describe the whole surface as the emitted document: [`describe`] plus the
 /// derivations taken from that same walk.
@@ -146,6 +216,7 @@ pub struct SpecDocument {
 pub fn document(root: &Command) -> SpecDocument {
     let command = describe(root);
     SpecDocument {
+        spec_version: SPEC_VERSION,
         read_only_allowlist: read_only_allowlist(&command),
         command,
     }
@@ -169,17 +240,30 @@ pub fn to_json(spec: &SpecDocument) -> anyhow::Result<String> {
 /// what makes the derivation reachable by the agent that has to honour it
 /// rather than only by this crate's own tests.
 #[must_use]
-pub fn read_only_allowlist(spec: &CommandSpec) -> Vec<String> {
-    let mut paths = Vec::new();
-    collect_read_only(spec, spec.path.as_str(), &mut paths);
-    paths.sort();
-    paths
+pub fn read_only_allowlist(spec: &CommandSpec) -> Vec<ReadOnlyEntry> {
+    let mut entries = Vec::new();
+    collect_read_only(spec, spec.path.as_str(), &mut entries);
+    // By ID, not by path: the sort key has to be the stable half, or the
+    // document's byte order moves under a rename that changed nothing about
+    // which commands are read-only.
+    entries.sort();
+    entries
 }
 
-fn collect_read_only(node: &CommandSpec, root_name: &str, out: &mut Vec<String>) {
+fn collect_read_only(node: &CommandSpec, root_name: &str, out: &mut Vec<ReadOnlyEntry>) {
     // The bare root program declares no effect of its own; skip it.
     if node.path != root_name && node.effect.is_read_only() {
-        out.push(node.path.clone());
+        // A read-only row with no declared id cannot be listed: the whole value
+        // of this list is that a consumer can pin it, and an entry it cannot pin
+        // is one it must re-derive by path — the second derivation this list
+        // exists to remove. `every_declared_path_has_an_id` is what makes the
+        // case unreachable rather than merely unlikely.
+        if let Some(id) = &node.id {
+            out.push(ReadOnlyEntry {
+                id: id.clone(),
+                path: node.path.clone(),
+            });
+        }
     }
     for sub in &node.subcommands {
         collect_read_only(sub, root_name, out);
@@ -257,9 +341,31 @@ mod tests {
             &mut expected,
         );
         expected.retain(|path| effect_for(path).is_read_only());
-        expected.sort();
 
-        assert_eq!(document.read_only_allowlist, expected);
+        // Compared as PATHS, sorted by id — because the emitted list is ordered
+        // by its stable half (CLOUD-969) and re-sorting the expectation by path
+        // would assert an order the document deliberately does not have.
+        let emitted: Vec<String> = document
+            .read_only_allowlist
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+        let mut emitted_sorted = emitted.clone();
+        emitted_sorted.sort();
+        expected.sort();
+        assert_eq!(emitted_sorted, expected);
+
+        // And every entry's id is the one its own row declares, so the pair a
+        // consumer pins against cannot drift apart inside the document.
+        for entry in &document.read_only_allowlist {
+            assert_eq!(
+                crate::surface::id_for(&entry.path),
+                Some(entry.id.as_str()),
+                "the allowlist entry for `{}` must carry its declared id",
+                entry.path
+            );
+        }
+
         assert_eq!(
             document.read_only_allowlist,
             read_only_allowlist(&document.command)
@@ -283,8 +389,20 @@ mod tests {
     #[test]
     fn allowlist_is_exactly_the_read_commands() {
         // The derived allowlist is every read-effect command path, sorted.
+        //
+        // Compared as paths since CLOUD-969: the emitted entry is `{id, path}`
+        // and ordered by its stable half, so this literal is sorted by path and
+        // the emitted paths are sorted to meet it. What the list pins is WHICH
+        // commands are read-only, which is the safety-critical half; that each
+        // entry carries its declared id is pinned by
+        // `the_emitted_allowlist_is_exactly_the_read_effect_filter`.
+        let mut emitted: Vec<String> = read_only_allowlist(&spec())
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect();
+        emitted.sort();
         assert_eq!(
-            read_only_allowlist(&spec()),
+            emitted,
             vec![
                 // The gate half of the attribution pair. It reads commit metadata
                 // through git's read-only plumbing and matches configured patterns
@@ -408,7 +526,7 @@ mod tests {
         // allowlist is the artifact an agent actually consumes.
         let allowlist = read_only_allowlist(&spec());
         assert!(
-            !allowlist.contains(&"enforce".to_owned()),
+            !allowlist.iter().any(|entry| entry.path == "enforce"),
             "the process-spawning verb leaked into the read-only allowlist: {allowlist:?}"
         );
         assert_eq!(effect_for("enforce"), Effect::Unclassified);
@@ -427,7 +545,7 @@ mod tests {
         // write. Pinned here so the correction cannot be undone by a row edit.
         let allowlist = read_only_allowlist(&spec());
         assert!(
-            !allowlist.contains(&"hook".to_owned()),
+            !allowlist.iter().any(|entry| entry.path == "hook"),
             "the mediation entrypoint leaked into the read-only allowlist: {allowlist:?}"
         );
         assert_eq!(effect_for("hook"), Effect::Unclassified);
