@@ -181,13 +181,13 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // total — the workspace lints forbid panicking on a reachable path.
         None => Ok(ExitCode::Success),
         Some(Command::Check(flags)) => run_check(&flags, mode, &overrides, out, err),
-        Some(Command::Enforce { json }) => run_rules(
+        Some(Command::Enforce { json, rule }) => run_rules(
             out,
             err,
             mode,
             &overrides,
             rules::run_all_over,
-            RunRequest::spawning(json),
+            RunRequest::spawning(json, rule.as_deref()),
         ),
         Some(Command::Config { command }) => run_config(&command, &overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),
@@ -10765,18 +10765,35 @@ impl<'a> RunRequest<'a> {
         }
     }
 
-    /// `enforce`'s request. Deliberately NOT narrowable: `--rule` exists so a
-    /// migrated gate keeps its task name on the read surface, and every caller
-    /// that needs it is a `check` caller. Offering it here too would be surface
-    /// nobody asked for, on the verb that spawns.
-    /// `enforce` is not scopable either, and for the same reason: the flags are
-    /// `check`'s, and a verb that spawns has no caller asking to spawn over a
-    /// narrowed set.
-    const fn spawning(json: bool) -> RunRequest<'static> {
+    /// `enforce`'s request, narrowable since 2026-09-01.
+    ///
+    /// THIS REVERSES A RECORDED DECISION AND THE CONDITION IT NAMED HAS FAILED.
+    /// This doc said `enforce` was "deliberately NOT narrowable", because
+    /// "every caller that needs it is a `check` caller" and offering it here
+    /// "would be surface nobody asked for, on the verb that spawns". Both halves
+    /// were true when written. The second is not any more.
+    ///
+    /// The caller is a case whose SUBJECT is a spawning row:
+    /// `the_committed_delegating_rule_spawns_nothing_when_its_glob_misses`
+    /// asserts that a `kind = "command"` row whose glob misses spawns nothing.
+    /// `check` must refuse that by construction, so the case cannot take the
+    /// read-surface narrowing, and without one it evaluates all 103 rows to
+    /// assert one — 206s of a 1482s suite on the Windows runner, which is the
+    /// critical path and bills at 2x.
+    ///
+    /// So this is not surface nobody asked for. It is the one shape the original
+    /// reasoning could not have covered, since a case about a spawning row is
+    /// exactly the case that cannot migrate to `check`.
+    ///
+    /// `enforce` is still not SCOPABLE, and that half stands unchanged: `--staged`
+    /// and `--since` are `check`'s, and no caller asks to spawn over a narrowed
+    /// file set. Narrowing WHICH ROWS run and narrowing WHICH FILES they select
+    /// against are orthogonal, and only the first has a caller here.
+    const fn spawning(json: bool, only: Option<&'a str>) -> RunRequest<'a> {
         RunRequest {
             surface: Surface::Spawning,
             json,
-            only: None,
+            only,
             scope: CheckScope::Tree,
         }
     }

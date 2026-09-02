@@ -4,10 +4,13 @@
 .SH NAME
 batten\-enforce \- Run every configured rule, including kinds that execute a configured command
 .SH SYNOPSIS
-\fBbatten enforce\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBbatten enforce\fR [\fB\-\-rule\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 Run every configured rule, including kinds that execute a configured command
 .SH OPTIONS
+.TP
+\fB\-\-rule\fR
+Run only the declared rule with this id
 .TP
 \fB\-J\fR, \fB\-\-json\fR
 Emit byte\-stable JSON instead of pointer lines

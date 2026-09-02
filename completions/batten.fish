@@ -107,6 +107,7 @@ complete -c batten -n "__fish_batten_using_subcommand check" -l no-color -d 'Nev
 complete -c batten -n "__fish_batten_using_subcommand check" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand check" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand check" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand enforce" -l rule -d 'Run only the declared rule with this id' -r
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"

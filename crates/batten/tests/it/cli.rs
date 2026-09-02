@@ -6148,8 +6148,21 @@ fn the_committed_delegating_rule_spawns_nothing_when_its_glob_misses() {
     let marker = format!("{} HEAD\n", "<".repeat(7));
     fs::write(dir.join("notes.txt"), marker).expect("write out-of-glob source");
 
+    // `enforce --rule`, not a bare `enforce`. The property is about ONE row —
+    // `no-conflict-markers`, `kind = "command"`, `glob = "crates/**"` — and the
+    // narrowing is what makes the assertion say so. Unnarrowed, exit 0 and an
+    // empty stdout also claimed that none of the other 103 rows fires on this
+    // fixture, which is incidental to the property and cost 206s of a 1482s
+    // suite on the Windows runner.
+    //
+    // The discriminator above is untouched by the narrowing: exit 0 is still
+    // reachable only if this row's glob selected nothing and no process was
+    // spawned. `check --rule` is not available here and that is the point — the
+    // SUBJECT is a spawning kind, so the read-effect verb must refuse it.
     let output = batten()
         .arg("enforce")
+        .arg("--rule")
+        .arg("no-conflict-markers")
         .current_dir(&dir)
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")

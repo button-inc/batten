@@ -88,6 +88,12 @@ pub enum Command {
     Enforce {
         /// Emit findings as byte-stable JSON instead of pointer lines.
         json: bool,
+        /// Run only the declared row with this id, or every applicable row.
+        ///
+        /// The narrowing `check` has carried since CLOUD-1051, extended to the
+        /// spawning verb for the one caller `check` cannot serve: a case whose
+        /// SUBJECT is a `kind = "command"` row.
+        rule: Option<String>,
     },
     /// Inspect configuration.
     Config {
@@ -1696,6 +1702,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         })),
         "enforce" => Some(Command::Enforce {
             json: flag(matches, "json"),
+            rule: matches.get_one::<String>("rule").cloned(),
         }),
         "config" => config_of(matches).map(|command| Command::Config { command }),
         "lint" => lint_of(matches).map(|command| Command::Lint { command }),

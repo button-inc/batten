@@ -872,6 +872,47 @@ const CHECK_RULE: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--rule <id>` on `enforce`: the same narrowing, on the verb that spawns.
+///
+/// # This reverses a recorded decision, and that decision named its condition
+///
+/// `RunRequest::spawning` said `enforce` was "deliberately NOT narrowable",
+/// because "every caller that needs it is a `check` caller" and offering it here
+/// "would be surface nobody asked for, on the verb that spawns". The reasoning
+/// was sound and the condition it rested on has since failed: a caller exists.
+///
+/// `the_committed_delegating_rule_spawns_nothing_when_its_glob_misses` asserts a
+/// property OF a `kind = "command"` row — that a glob miss spawns nothing — so
+/// `check` must refuse it by construction (`V-SPAWN-ON-READ-VERB`, and the verb
+/// is the thing that is wrong there, not the rule). It therefore cannot take the
+/// `check` narrowing, and without one it evaluates all 103 rows to assert one.
+/// Measured on the Windows runner, 2026-09-01: 206s of a 1482s suite, on the
+/// job that is the critical path and bills at 2x.
+///
+/// So the surface is no longer unasked-for. It is asked for by the one shape the
+/// original reasoning could not have covered — a case whose SUBJECT is a
+/// spawning row.
+///
+/// # Everything `CHECK_RULE` refuses, this refuses identically
+///
+/// A `--rule` naming no declared row is a usage error, never a clean run. That
+/// property matters more here, not less: a narrowed spawn that silently selected
+/// nothing would report "the gate passed" from a gate that never ran, on the
+/// surface that is allowed to execute configured commands.
+const ENFORCE_RULE: FlagDecl = FlagDecl {
+    id: "rule",
+    long: Some("rule"),
+    short: None,
+    help: "Run only the declared rule with this id",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--staged` on `check`: judge the index rather than the whole tree (CLOUD-519).
 ///
 /// A pre-commit hook, or an agent's mediated call, re-reads every file in the
@@ -1808,7 +1849,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Run every configured rule, including kinds that execute a configured command",
         data_channel: true,
         effect: Effect::Unclassified,
-        flags: &[JSON],
+        flags: &[ENFORCE_RULE, JSON],
     },
     // `exec` runs a command the caller names, so it is the second process-spawning
     // verb after `enforce` and takes the same conservative reading. It is a
