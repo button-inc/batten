@@ -129,6 +129,9 @@ const CONFIG: &str = "config";
 /// against it, so a checkout where this fails is one where those silently have
 /// nothing to stand on.
 const GIT_REPO: &str = "git-repo";
+/// This harness's plan/todo surface has been SURVEYED — which is a different
+/// question from whether it has one (CLOUD-472).
+const PLAN_SURFACE: &str = "plan-surface";
 /// Every `command`-kind rule names a program that resolves on `PATH`.
 ///
 /// A missing binary is otherwise discovered at `enforce` time, mid-run, as a
@@ -275,6 +278,44 @@ pub fn diagnose(dir: &Path) -> Report {
                 || Check::passed(HOOK_HANDLERS),
                 |reason| Check::failed(HOOK_HANDLERS, reason),
             ),
+    );
+
+    // THE HOST'S PLAN SURFACE, REPORTED AND NEVER GATED ON (CLOUD-472).
+    //
+    // `plan-complete` reads a store `batten record plan` writes, so it fails
+    // closed on every host and this check decides nothing about it. What it
+    // answers is whether the human's NATIVE todo view can be kept in step —
+    // and, more importantly, it makes an unsurveyed host say so out loud.
+    //
+    // `Unsurveyed` is a FAILED check rather than a passed one, which is the
+    // whole reason the column has two variants. An absence of data reading as
+    // an absence of capability is the trap `hook::Harness::operation_of`
+    // records for Gemini and Copilot, and a diagnostic that reported "no plan
+    // tool" for a host nobody has looked at would be repeating it in the one
+    // place an operator goes to find out what is true.
+    // OVER THE TABLE, NOT OVER THE RUNNING HOST, because `diagnose` takes a
+    // directory: it answers for the checkout in front of it and has no harness
+    // to ask. Inferring one from the environment would be manufacturing the
+    // fact this check exists to report honestly.
+    // AN UNSURVEYED HOST MUST NAME WHO OWES THE SURVEY, and naming one changes
+    // no exit code. That is `#MUTANT-OWNER`'s bargain: the declaration buys that
+    // the gap is STATED, never that it is forgiven, and a check that reddened on
+    // every unsurveyed host would be permanently red on this repository — which
+    // is how a diagnostic stops being run at all.
+    //
+    // What it does catch is a harness added with neither a fetch nor an owner,
+    // which is the moment the gap becomes invisible.
+    checks.push(
+        if crate::hook::Harness::ALL.iter().any(|harness| {
+            matches!(
+                harness.capabilities().plan_tools,
+                crate::hook::PlanTools::Unsurveyed(owner) if owner.is_empty()
+            )
+        }) {
+            Check::failed(PLAN_SURFACE, "harness-unsurveyed-and-unowned")
+        } else {
+            Check::passed(PLAN_SURFACE)
+        },
     );
 
     // The working-tree authority: `doctor` diagnoses the checkout in front of
@@ -1703,7 +1744,13 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            vec![CONFIG, GIT_REPO, COMMAND_PROGRAMS, HOOK_HANDLERS]
+            vec![
+                CONFIG,
+                GIT_REPO,
+                COMMAND_PROGRAMS,
+                HOOK_HANDLERS,
+                PLAN_SURFACE
+            ]
         );
     }
 
