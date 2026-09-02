@@ -1694,13 +1694,43 @@ pub fn bail(
 /// costs one lap and the holder's own fence catches it before it acts; a wrongly
 /// renewed one wedges the fleet for as long as nobody notices. Release is the
 /// cheap direction.
+///
+/// # `/proc` is the whole mechanism, so this probe is Linux-only and says so
+///
+/// The command line comes from `/proc/<pid>/cmdline`, which exists on Linux and
+/// nowhere else this crate builds for. That was left implicit and the Windows job
+/// found it: the read simply failed, the unevaluable-reads-as-gone arm answered
+/// `false`, and the ANTI-VACUITY case beside it — the one proving the predicate
+/// does not answer `false` for everything — was the thing that went red. A probe
+/// that is inert on a target is exactly what that case exists to catch, and it
+/// caught it on the one platform `cross-check` cannot see, because `cross-check`
+/// type-checks and does not run.
+///
+/// So the platform split is declared rather than inherited. On a target without
+/// `/proc` the answer is `false` for every pid, which is the stated asymmetry
+/// taken to its limit: the probe contributes nothing and the lease is decided by
+/// the corroboration clocks alone. That is inert, not wrong — but it is a
+/// property somebody should have to delete a `cfg` to change, rather than one
+/// that follows silently from a missing file.
 #[must_use]
+#[cfg(target_os = "linux")]
 pub fn holder_alive(pid: u32, marker: &str) -> bool {
     let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
         return false;
     };
     let command = String::from_utf8_lossy(&raw).replace('\0', " ");
     command.contains(marker)
+}
+
+/// The same question where no `/proc` answers it — see the Linux arm's docs.
+///
+/// Inert by construction: every pid reads as gone, so this never renews a lease
+/// on a holder's behalf and never contributes to stealing one either. A steal
+/// still needs the corroboration clocks `turn` requires.
+#[must_use]
+#[cfg(not(target_os = "linux"))]
+pub fn holder_alive(_pid: u32, _marker: &str) -> bool {
+    false
 }
 
 /// The lease ref's health, as a gate rather than a report.
@@ -2372,15 +2402,33 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn this_process_is_alive_under_a_marker_it_carries() {
         // The anti-vacuity mirror: without it the case above is satisfied by a
         // predicate that answers `false` for everything.
+        //
+        // LINUX-ONLY, and the `cfg` is the finding rather than a convenience. The
+        // case read `/proc` directly and panicked on Windows CI — which is this
+        // assertion doing its job on a target where the predicate really IS
+        // vacuous, not a fixture that needed relaxing. The platform arm below
+        // pins what that target answers, so the vacuity is declared instead of
+        // being reported as a failure nobody could act on.
         let mine = std::process::id();
         let raw =
             std::fs::read(format!("/proc/{mine}/cmdline")).expect("this process has a cmdline");
         let command = String::from_utf8_lossy(&raw).replace('\0', " ");
         let word = command.split_whitespace().next().expect("argv0").to_owned();
         assert!(holder_alive(mine, &word));
+    }
+
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn without_proc_the_probe_is_inert_rather_than_wrong() {
+        // The other half of the split: on a target with no `/proc` every pid
+        // reads as gone, including this process under its own argv0. Pinned so
+        // the inertness is a declared property rather than something a reader
+        // has to infer from a `cfg` on the function.
+        assert!(!holder_alive(std::process::id(), "batten"));
     }
 
     #[test]
