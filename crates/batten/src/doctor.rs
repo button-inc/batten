@@ -51,6 +51,25 @@ pub struct Check {
     /// A stable reason id when it failed; absent when it passed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<&'static str>,
+    /// WHICH declared thing failed, when the class alone cannot be acted on.
+    ///
+    /// **A diagnosis nobody can act on is a sensor, not a check** (CLOUD-1317).
+    /// `program-not-on-path` named a class and no member, so a reader learned
+    /// that one of twelve `command` rows could not run and had to re-derive
+    /// which — measured on this repository, where `hk` resolves only under
+    /// `mise exec` and the bare token said so to nobody.
+    ///
+    /// **These are DECLARED IDENTIFIERS, never content**, which is what keeps
+    /// non-negotiable rule 4 intact: a program name and a rule id come out of
+    /// the consumer's own committed `batten.toml`, so emitting them republishes
+    /// a value the reader already has rather than lifting a byte out of a file
+    /// the check read. That is the same line `doctor hooks` already draws when it
+    /// names a harness and an event but counts siblings rather than naming them.
+    ///
+    /// Sorted and deduplicated at construction, so §6 byte-stability does not
+    /// depend on the order a walk happened to yield.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subjects: Vec<String>,
 }
 
 impl Check {
@@ -59,6 +78,7 @@ impl Check {
             name,
             ok: true,
             reason: None,
+            subjects: Vec::new(),
         }
     }
 
@@ -67,6 +87,24 @@ impl Check {
             name,
             ok: false,
             reason: Some(reason),
+            subjects: Vec::new(),
+        }
+    }
+
+    /// The same failure, naming the declared subjects a reader must act on.
+    fn failed_naming(
+        name: &'static str,
+        reason: &'static str,
+        subjects: impl IntoIterator<Item = String>,
+    ) -> Self {
+        let mut subjects: Vec<String> = subjects.into_iter().collect();
+        subjects.sort();
+        subjects.dedup();
+        Check {
+            name,
+            ok: false,
+            reason: Some(reason),
+            subjects,
         }
     }
 
@@ -74,6 +112,9 @@ impl Check {
     #[must_use]
     pub fn line(&self) -> String {
         match self.reason {
+            Some(reason) if !self.subjects.is_empty() => {
+                format!("{} failed {reason} {}", self.name, self.subjects.join(" "))
+            }
             Some(reason) => format!("{} failed {reason}", self.name),
             None => format!("{} ok", self.name),
         }
@@ -237,14 +278,24 @@ pub fn diagnose(dir: &Path) -> Report {
     let rules = resolve::resolve(dir, &crate::Overrides::default())
         .map(|resolved| resolved.rules)
         .unwrap_or_default();
-    let missing = rules
+    //
+    // NAMED rather than counted (CLOUD-1317). `any()` answered whether SOME
+    // declared program was unreachable, which is true or false and actionable
+    // neither way: measured on this repository the answer was `true` because
+    // `hk` resolves only under `mise exec`, and nothing said so. Collecting the
+    // names turns the same walk into a diagnosis a reader can fix, and they are
+    // this consumer's own declared tokens rather than anything the check read
+    // out of a file.
+    let missing: Vec<String> = rules
         .iter()
         .filter_map(Rule::program)
-        .any(|program| !on_path(program));
-    checks.push(if missing {
-        Check::failed(COMMAND_PROGRAMS, "program-not-on-path")
-    } else {
+        .filter(|program| !on_path(program))
+        .map(str::to_owned)
+        .collect();
+    checks.push(if missing.is_empty() {
         Check::passed(COMMAND_PROGRAMS)
+    } else {
+        Check::failed_naming(COMMAND_PROGRAMS, "program-not-on-path", missing)
     });
 
     // The handler table, off the same resolved config. `today` is read once
