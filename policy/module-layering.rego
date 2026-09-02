@@ -77,6 +77,13 @@ declared_modules := {
 	# is the binary entry point rather than a `pub mod` of the library, and it is
 	# declared rather than excluded: it is a file in the judged set, and a
 	# selector carve-out would be an exemption where a placement is honest.
+	# `preset` arrived with CLOUD-1181 and this rule named it before a human did
+	# — the same property the entries above record, working again. It sits BELOW
+	# `policy` and `verdict`: both read it, and it reads neither. That direction is
+	# the manifest's whole point — a preset's identity, scope, modules and
+	# vocabulary are one declaration that the two consumers project, rather than
+	# three tables that had to know about each other.
+	"preset",
 	"brief", "main", "selfwrite",
 	# `patch` arrived with CLOUD-739 and this rule named it before a human did —
 	# the same property the three above record, working a second time. `symbols`

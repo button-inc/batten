@@ -1127,23 +1127,34 @@ pub fn native_tokens() -> BTreeSet<&'static str> {
 /// `String`s and cannot be a `const`. [`vendored`] converts. The alternative —
 /// building the table at runtime from literals — puts the same data one
 /// indirection further from the reader for nothing.
-struct VendoredVerdict {
-    id: &'static str,
-    gloss: &'static str,
-    class: &'static str,
-    routes: &'static [VendoredRoute],
+#[derive(Debug)]
+pub struct VendoredVerdict {
+    /// The three-word class token.
+    pub id: &'static str,
+    /// The one-line summary.
+    pub gloss: &'static str,
+    /// The prose a reader dereferences through `batten policy explain`.
+    pub class: &'static str,
+    /// The declared remedies.
+    pub routes: &'static [VendoredRoute],
 }
 
 /// One vendored route. See [`VendoredVerdict`].
-struct VendoredRoute {
-    id: &'static str,
-    kind: RouteKind,
-    target: &'static str,
-    precondition: Option<&'static str>,
+#[derive(Debug)]
+pub struct VendoredRoute {
+    /// The route's own three-word id.
+    pub id: &'static str,
+    /// Which kind of remedy it is.
+    pub kind: RouteKind,
+    /// What it points at.
+    pub target: &'static str,
+    /// The condition an override route states.
+    pub precondition: Option<&'static str>,
 }
 
 /// A `command`-kind route, which is most of them.
-const fn run(id: &'static str, target: &'static str) -> VendoredRoute {
+#[must_use]
+pub const fn run(id: &'static str, target: &'static str) -> VendoredRoute {
     VendoredRoute {
         id,
         kind: RouteKind::Command,
@@ -1153,7 +1164,8 @@ const fn run(id: &'static str, target: &'static str) -> VendoredRoute {
 }
 
 /// A `document`-kind route.
-const fn read(id: &'static str, target: &'static str) -> VendoredRoute {
+#[must_use]
+pub const fn read(id: &'static str, target: &'static str) -> VendoredRoute {
     VendoredRoute {
         id,
         kind: RouteKind::Document,
@@ -1169,7 +1181,8 @@ const fn read(id: &'static str, target: &'static str) -> VendoredRoute {
 /// unread, and the precondition is the whole payload — it is what
 /// [`crate::admission::questions_for`] renders the first question from. A helper
 /// that took a target would invite one to be written and then silently ignored.
-const fn admit(id: &'static str, precondition: &'static str) -> VendoredRoute {
+#[must_use]
+pub const fn admit(id: &'static str, precondition: &'static str) -> VendoredRoute {
     VendoredRoute {
         id,
         kind: RouteKind::Override,
@@ -1556,265 +1569,6 @@ it in. A row that cannot resolve is a rule that will report a missing scanner at
 it was supposed to decide something.",
         routes: &[read("config read first", "batten.toml")],
     },
-    // ── vendored presets ────────────────────────────────────────────────────
-    VendoredVerdict {
-        id: "commit ship empty",
-        gloss: "an empty commit records that somebody wanted a new SHA",
-        class: "A commit records a change. The reachable use of an empty one is kicking a \
-pipeline, which spends a run to re-ask a question the previous run already answered and \
-leaves a commit in the history no reader can act on. If the goal is a fresh run, re-run \
-the pipeline.",
-        routes: &[run("task run first", "re-run the pipeline")],
-    },
-    VendoredVerdict {
-        id: "trunk push forced",
-        gloss: "a force push rewrites a shared branch under whoever already fetched it",
-        class: "Rewriting a published branch invalidates every checkout of it that \
-already exists, and the holder finds out by having their next pull fail in a way that \
-looks like their own mistake. `--force-with-lease` refuses when the remote moved, which \
-is the same operation with the one check that makes it safe.",
-        routes: &[run("patch run first", "git push --force-with-lease")],
-    },
-    VendoredVerdict {
-        id: "pin reach loose",
-        gloss: "a program the project's pin provides was reached around the pin",
-        class: "The pinned toolchain is what makes one machine's run mean anything about \
-another's, and it supplies an ENVIRONMENT as well as a binary. A program reached around \
-it runs a different version, or the same version without the variables the project sets \
-— and the failure that produces looks like the failure being investigated rather than \
-like a wrong invocation. Measured on one consumer: sixty runs of a test suite died on an \
-unset variable instead of on the assertion, and the report that followed was published \
-as three claims about the tree, all false.",
-        routes: &[run(
-            "task run first",
-            "run the declared task, or invoke the program through the pin",
-        )],
-    },
-    VendoredVerdict {
-        id: "program name unnamed",
-        gloss: "the file runs a shell and its name does not say so",
-        class: "Every instrument that selects by extension — a formatter, a linter, a \
-CI path filter — covers this file silently and exits 0. A green run over it therefore \
-means nothing was looked at rather than nothing was found, which is worse than a red \
-one. Name the language in the filename, or declare the file's coverage another way.",
-        routes: &[run("patch run first", "git mv")],
-    },
-    VendoredVerdict {
-        id: "program resolve missing",
-        gloss: "a run-time sibling path is computed and the tree carries no such file",
-        class: "The shape resolves a path beside the running program and then guards it \
-with a test that exits 0, so the reference does not fail — it goes silent, and the \
-behaviour it was reaching for simply never happens. A path that must exist should be \
-asserted rather than tested.",
-        routes: &[read("source read first", "the computed path")],
-    },
-    VendoredVerdict {
-        id: "job run early",
-        gloss: "a job spends a runner on a pull request still being verified locally",
-        class: "A draft says the author is still verifying locally, and it is also the lever a \
-red run pulls: a lander that re-drafts stops further spend while the failure is diagnosed. A \
-single job missing the guard defeats both, and the run it buys is one nobody reads. Measured on \
-one repository: a workflow triggered by any pull request touching a workflow file spent a runner \
-on every push to a draft for its whole life, and re-drafting did not close the tap.",
-        routes: &[read("source read first", "the job's condition")],
-    },
-    VendoredVerdict {
-        id: "workflow run twice",
-        gloss: "a pull-request workflow pays out a run its own next push made obsolete",
-        class: "A landing lap rebases and pushes. Without `cancel-in-progress` the superseded \
-commit's run is billed in full for a verdict nobody will read, and a lander loses the ability to \
-cancel a doomed run by simply pushing the next one. Declaring the group is not enough — the \
-value is what does the work, and it is a boolean rather than the string `true`.",
-        routes: &[read(
-            "source read first",
-            "the workflow's concurrency block",
-        )],
-    },
-    VendoredVerdict {
-        id: "workflow declare missing",
-        gloss: "a workflow can have two runs racing at all",
-        class: "Superseding is the pull-request half of this and is not the whole of it: a \
-comment- or schedule-triggered workflow never reaches that guard, so the property that matters \
-off the landing path — that a workflow cannot race itself — reaches none of them. Measured: N \
-concurrent comment invocations ran N concurrent attempts to advance a trunk branch, at 245 \
-refusals against 6 merges in half an hour. A scheduled workflow must NOT cancel its own previous \
-tick, so declaring a group is all this asks.",
-        routes: &[read("source read first", "the workflow")],
-    },
-    VendoredVerdict {
-        id: "review watch missing",
-        gloss: "a draft-gated workflow can never be superseded once it skips",
-        class: "Omitting `types:` defaults to `[opened, synchronize, reopened]`. Where the jobs \
-are draft-gated, a pull request created as a draft mints a skipped run on `opened`, and with no \
-`ready_for_review` there is no event left that could replace it — a waiter correctly refuses to \
-read a skip as an answer and polls forever. Measured as a deadlock across two pull requests at \
-once, both fully green but for one such name.",
-        routes: &[read(
-            "source read first",
-            "the pull_request trigger's types",
-        )],
-    },
-    VendoredVerdict {
-        id: "workflow run loose",
-        gloss: "a branch scope written where filtering is already too late",
-        class: "A job condition is evaluated AFTER the run exists, so a branch scope expressed \
-only there creates a run and then skips it. Measured on one lane: 1131 inserted-and-skipped runs \
-in 25 hours — no runner minutes, which is why it survived, but 46% of every run in the \
-repository, enough that paginating the run list stops being stable. The filter belongs on the \
-trigger, where it is free.",
-        routes: &[read("source read first", "the workflow_run trigger")],
-    },
-    VendoredVerdict {
-        id: "event bind loose",
-        gloss: "a comment predicate fires from anywhere in a body anyone can write",
-        class: "An unanchored substring test fires from mid-sentence, from inside backticks, from \
-a quoted block. That makes the repository's own writing ABOUT a trigger an invocation of it, and \
-every artifact that has to name the token in order to be about it a live round. The class is the \
-unanchored read of a body anyone can write, not the one token read that way.",
-        routes: &[read("source read first", "the job condition")],
-    },
-    VendoredVerdict {
-        id: "merge run early",
-        gloss: "a comment-triggered merge delegates the draft question to the ruleset",
-        class: "A draft head grades no checks where every pull-request workflow is draft-gated, \
-and a branch ruleset admits that empty set as satisfying required-checks-green. So a merge path \
-that never reads the draft state has no draft check at all, and can advance the trunk to a commit \
-CI never ran on. Deciding not to ask is not the same as asking.",
-        routes: &[read("source read first", "the merge job")],
-    },
-    VendoredVerdict {
-        id: "event reach dead",
-        gloss: "a declared trigger starts a run in which every job skips",
-        class: "The trigger exists and does nothing: the run list shows a run, and only the job's \
-conclusion says it did not happen. Measured on one lane where a manual trigger was added so it \
-could be exercised without waiting on a late cron, and every job's condition still admitted only \
-the two original events. Judged only where a condition MENTIONS the event name at all, since a \
-workflow that does not discriminate by event answers for every trigger it declares.",
-        routes: &[read("source read first", "the job conditions")],
-    },
-    VendoredVerdict {
-        id: "job start same",
-        gloss: "two scheduled workflows contend for the same runners at the same minute",
-        class: "Every scheduled workflow's header tends to claim a staggered slot and nothing \
-checks it, so two pairs drifted onto the same minute and the second pair landed after the first \
-was found. Compared as LITERAL expressions rather than firing times: an every-30-minutes \
-schedule genuinely overlaps every hourly slot, and flagging that would make the class fire \
-forever on a workflow doing nothing wrong.",
-        routes: &[read("source read first", "the schedule trigger")],
-    },
-    VendoredVerdict {
-        id: "job require unseen",
-        gloss: "a fan-in enumerates its own dependencies and has gone stale",
-        class: "Branch protection points at one aggregating job so that adding a leg never needs \
-a ruleset change — which only holds if that job's assertion follows its dependency list by \
-itself. Measured: a fan-in enumerated three of its four dependencies, so a red fourth left green \
-the one check the host requires. A set-wide predicate cannot go stale, because it names nothing.",
-        routes: &[read("source read first", "the fan-in job")],
-    },
-    VendoredVerdict {
-        id: "cache build loose",
-        gloss: "a cache-warming build recompiles and writes nothing on every run",
-        class: "A build that compiles to fill a cache and runs nothing judges nothing, which is \
-why it is exempt from parity rules — and that exemption is what makes it easy to leave running \
-for nothing. Measured: two cache entries carrying the same key across five merges, each cycle \
-compiling for ~145s and saving nothing, because the restore skips saving when the key already \
-exists. One condition reading the restore's hit flag is the whole fix.",
-        routes: &[read("source read first", "the compile step")],
-    },
-    VendoredVerdict {
-        id: "cache name unknown",
-        gloss: "the cache guard names a step that does not exist, so it admits every run",
-        class: "The other direction of the same defect, and it has the same symptom with no \
-signal. If the action stops emitting the hit flag the expression is empty, the guard holds, and \
-the compile runs — wasteful, but visible in the bill. If the step id is dropped or renamed while \
-the guard keeps naming it, the expression is ALSO empty and the build silently reverts to \
-compiling every time. So the class names both halves: the guard must be present, and the step it \
-reads must exist.",
-        routes: &[read("source read first", "the restore step")],
-    },
-    VendoredVerdict {
-        id: "input render dropped",
-        gloss: "an unquoted comment truncates a value before it ever reaches the forge",
-        class: "YAML opens a comment at an unquoted space-hash, so a value carrying an \
-interpolation after one parses to the bare text before it and the rest is discarded. Measured: \
-one workflow carried exactly that for a day and 30 consecutive runs reported a title equal to the \
-workflow name, so a caller keying on the interpolated value could never match. Linters pass over \
-the line because a comment is legal YAML, and review reads it as the thing it was meant to be. \
-Read pre-parse, because the parse is what destroys the evidence. Quoting the value is the fix.",
-        routes: &[read("source read first", "the truncated line")],
-    },
-    VendoredVerdict {
-        id: "head grade twice",
-        gloss: "the forge already judged this commit and a second run would re-ask it",
-        class: "A commit that has not changed cannot get a different verdict, so a second \
-run over it buys an answer that is already recorded and spends the metered tier to do it. \
-Measured on one consumer's landing bot over a half hour: 400 runs, 248 executed, against 5 \
-merges. Read the recorded verdict rather than asking for it again; if the intent was to \
-judge different work, the commit is what has to change.",
-        routes: &[
-            read("source read first", "the forge record for this commit"),
-            // THE PRECONDITION IS THE WHOLE OF THIS ROUTE. A re-grade is
-            // legitimate when the recorded verdict is about the RUNNER rather
-            // than about the commit — a lost agent, an evicted node, an
-            // infrastructure fault — because that verdict answers a question
-            // nobody asked. It is not legitimate because the answer was
-            // unwelcome, which is the case this condition exists to exclude.
-            admit(
-                "path admit first",
-                "the recorded verdict is about a runner fault rather than about this commit",
-            ),
-        ],
-    },
-    VendoredVerdict {
-        id: "patch ship twice",
-        gloss: "the target already carries this branch's changes, so landing them again buys nothing",
-        class: "A landing attempt over work the target already has runs a matrix, holds the \
-fleet's landing slot while it does, and merges a no-op or a conflict. The answer is decided by \
-PATCH IDENTITY rather than by reachability, which is what makes it trustworthy here: a rebased, \
-squash-merged or cherry-picked branch leaves the same change on the target under a different \
-commit with no ancestry path back, and on a fast-forward trunk that is the ordinary way work \
-lands. Close the branch, or rebase onto the target and see what is genuinely left.",
-        routes: &[
-            read("record read first", "the landing verdict for this target"),
-            // The one legitimate re-land, and it is narrow on purpose. Patch
-            // identity answers about CONTENT, so deliberately re-applying a
-            // change the target once carried and later reverted is
-            // indistinguishable from never having landed it — the same bytes,
-            // arriving for a different reason. That is the case this admits, and
-            // it is not "the answer was inconvenient".
-            admit(
-                "patch admit first",
-                "the change is being deliberately re-applied after the target reverted it, so identical content is the intent rather than a duplicate",
-            ),
-        ],
-    },
-    VendoredVerdict {
-        id: "lease grant other",
-        gloss: "a live landing lease names a different branch, and no reservation names this one",
-        class: "A landing lease is how a fleet keeps two branches from buying overlapping CI for \
-a trunk only one of them can fast-forward onto. This branch is neither the holder nor the \
-successor admitted behind it, so a matrix spent now is a matrix the holder's merge invalidates. \
-Wait for the lease to lapse or be released, or reserve the slot behind the holder — the loop that \
-does both lives outside the engine, which only reads the answer. Every reading this refusal \
-cannot take ALLOWS: an unreadable lease stops every job in the fleet, where waving one matrix \
-through costs one matrix.",
-        routes: &[
-            read(
-                "lease read first",
-                "the lease grading recorded for this branch",
-            ),
-            // The wedged holder, and it is narrow on purpose. The lease grades
-            // LIVENESS rather than PROGRESS (CLOUD-499), so a holder that beats
-            // steadily while making none holds forever and starves the fleet.
-            // That is the case this admits, and it is not "the wait was
-            // inconvenient" — a holder that is merely slow is the mechanism
-            // working.
-            admit(
-                "lease admit first",
-                "the holder is wedged rather than slow — it is beating without advancing, so waiting for a lapse it keeps renewing starves the fleet indefinitely",
-            ),
-        ],
-    },
 ];
 
 /// Every class the binary ships, as the registry carries them.
@@ -1824,26 +1578,41 @@ through costs one matrix.",
 /// a question about the pair, and this function knows only one of them.
 #[must_use]
 pub fn vendored() -> Vec<DeclaredVerdict> {
+    // Native rows here, preset rows from their own manifests (CLOUD-1181). The
+    // presets' half used to sit in this same table under a comment, so a preset
+    // class and the preset that raises it were declared in different modules
+    // with nothing tying them together.
     VENDORED
         .iter()
-        .map(|entry| DeclaredVerdict {
-            id: entry.id.to_owned(),
-            gloss: entry.gloss.to_owned(),
-            class: entry.class.to_owned(),
-            routes: entry
-                .routes
-                .iter()
-                .map(|route| Route {
-                    id: route.id.to_owned(),
-                    kind: route.kind,
-                    target: route.target.to_owned(),
-                    precondition: route.precondition.map(str::to_owned),
-                })
-                .collect(),
-            successor: None,
-            withdrawn: None,
-        })
+        .map(declared_from)
+        .chain(crate::preset::verdict_rows())
         .collect()
+}
+
+/// One vendored row, as the registry carries it.
+///
+/// Shared with [`crate::preset`] so the two halves of the vendored registry
+/// cannot be projected differently — which is the same "one authority per fact"
+/// reason the manifests exist at all.
+#[must_use]
+pub fn declared_from(entry: &VendoredVerdict) -> DeclaredVerdict {
+    DeclaredVerdict {
+        id: entry.id.to_owned(),
+        gloss: entry.gloss.to_owned(),
+        class: entry.class.to_owned(),
+        routes: entry
+            .routes
+            .iter()
+            .map(|route| Route {
+                id: route.id.to_owned(),
+                kind: route.kind,
+                target: route.target.to_owned(),
+                precondition: route.precondition.map(str::to_owned),
+            })
+            .collect(),
+        successor: None,
+        withdrawn: None,
+    }
 }
 
 #[cfg(test)]

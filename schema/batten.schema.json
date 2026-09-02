@@ -2917,12 +2917,12 @@
             "null"
           ],
           "enum": [
-            "commit-hygiene",
-            "trunk-based",
-            "shell-hygiene",
-            "pinned-toolchain",
             "ci-hygiene",
-            "landing-loop"
+            "commit-hygiene",
+            "landing-loop",
+            "pinned-toolchain",
+            "shell-hygiene",
+            "trunk-based"
           ]
         },
         "produces": {

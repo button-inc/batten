@@ -67,6 +67,7 @@ pub mod perf;
 pub mod pinned;
 pub mod policy;
 pub mod pr_watch;
+pub mod preset;
 pub mod provision;
 pub mod prune;
 pub mod ready;

@@ -1872,6 +1872,22 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   projection that spawned would be the class's whole point undone. `Surface::Hook`
   is refused (`tests/facts.rs`'s `no_effect_fact_is_hook_resolvable`), as a
   census over `Fact::ALL` rather than an assertion about this one variant.
+- `preset.rs` — one manifest per vendored preset (CLOUD-1181): identity, the
+  `scope` its modules decide, the modules themselves, and the refusal classes
+  they raise. It exists because a preset used to be three unrelated `const`s that
+  nothing tied together — the name-to-modules table here, the verdict rows inside
+  `verdict.rs`'s `VENDORED` under a comment, and a branch exempting it from the
+  `[[pattern]]` refusal — so a preset carried no identity beyond its name, no
+  version, and no declared scope. **Below `policy` and `verdict`, and it reads
+  neither**: both project the one declaration rather than three tables knowing
+  about each other, which is what `module-layering` pins. `scope` is the field
+  the row was written for, and the honest reading of what it buys is in the load
+  site's own comment: a mismatch was ALREADY refused by the module input-key
+  check, so this refuses earlier and names the preset a consumer enabled rather
+  than a module inside the binary. **A manifest is not permission to fetch one**
+  — CLOUD-129's no-network verdict is unchanged, `include_str!` at build time,
+  and what the manifest buys CLOUD-970 is that the trust question becomes
+  askable at all.
 - `policy.rs` — the policy evaluator (CLOUD-647, CLOUD-689): a `[[rule]]` of
   kind `policy` names a **registered** Rego module, and the module decides over
   the resolved fact set. It exists because `run` is a flat loop where no row

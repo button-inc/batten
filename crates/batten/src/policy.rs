@@ -214,181 +214,34 @@ pub struct Violation {
     pub subjects: Vec<crate::verdict::Subject>,
 }
 
-/// Every vendored preset: its name, and the modules it ships.
-///
-/// # Why Batten ships defaults at all
-///
-/// A consumer adopting Batten got an empty `batten.toml` and had to author every
-/// predicate from scratch, which is the anomaly rather than the discipline —
-/// Conftest ships OCI bundles, Semgrep `p/default`, `ESLint`'s `recommended`,
-/// Clippy its lint groups. And the non-negotiable that looks like it forbids
-/// this argues *for* it: "adopt prior art; don't expand the core". A preset is
-/// prior art shipped **as data**, which is the opposite of expanding the core.
-///
-/// # Why this is not the OCI distribution CLOUD-129 rejected
-///
-/// That verdict was about *remote policy fetch* being a supply-chain surface,
-/// and it is intact. There is no network here, no registry and no
-/// trust-on-first-use: `include_str!` at build time, so the bytes ship inside
-/// the binary the operator already trusts, under the same checksum as everything
-/// else in it. Its other ground — one committed authority per repo — does not
-/// reach a preset either, because **a preset is not an authority; it is content
-/// the authority enables.**
-///
-/// # Rule 1 lives here, and this is the most inviting place in the crate to
-/// break it
-///
-/// The temptation is to vendor *this repository's* gates. A preset may contain
-/// predicates true of a **practice** — trunk-based branching, commit shape — and
-/// never one naming a path, a task, a tracker key or an entity. The mechanism
-/// is not new prose: `batten.toml`'s rule-1 `forbid` rows glob `crates/**`, and
-/// these sources are under it, so they are already scanned on every gate
-/// invocation. `presets_are_inside_the_rule_one_glob` asserts that coverage
-/// rather than leaving it to be true by accident.
-///
-/// # One list, derived
-///
-/// The valid name set is [`preset_names`], read off this table — never a
-/// hand-maintained second list, which is `surface::SURFACE`'s discipline and the
-/// reason a preset cannot be enabled that does not exist.
-const PRESETS: &[(&str, &[(&str, &str)])] = &[
-    (
-        "commit-hygiene",
-        &[(
-            "<preset:commit-hygiene>/no-empty-commit.rego",
-            include_str!("policy/presets/commit-hygiene/no-empty-commit.rego"),
-        )],
-    ),
-    (
-        "trunk-based",
-        &[(
-            "<preset:trunk-based>/no-force-push.rego",
-            include_str!("policy/presets/trunk-based/no-force-push.rego"),
-        )],
-    ),
-    // The first TREE-scoped preset (CLOUD-864). The two above judge a command;
-    // this one judges files, which is why it is the one that needed `lines` to
-    // reach paths by glob — a practice about 143 files cannot be a row that
-    // names 143 paths.
-    (
-        "shell-hygiene",
-        &[
-            (
-                "<preset:shell-hygiene>/shebang-names-its-language.rego",
-                include_str!("policy/presets/shell-hygiene/shebang-names-its-language.rego"),
-            ),
-            (
-                "<preset:shell-hygiene>/sibling-resolves.rego",
-                include_str!("policy/presets/shell-hygiene/sibling-resolves.rego"),
-            ),
-        ],
-    ),
-    // CLOUD-1028. The first preset whose predicate reads a RESOLVED SET rather
-    // than the call alone: which programs a pin provides is a different answer in
-    // every project, so a practice about them cannot be spelled as a pattern. It
-    // names no tool, no task and no mediator, which is what keeps it on the
-    // preset side of non-negotiable rule 1 — the boundary answers both halves,
-    // and the module asks only whether they line up.
-    (
-        "pinned-toolchain",
-        &[(
-            "<preset:pinned-toolchain>/pinned-program-via-the-pin.rego",
-            include_str!("policy/presets/pinned-toolchain/pinned-program-via-the-pin.rego"),
-        )],
-    ),
-    // CLOUD-1161. The generic half of `ci-local-parity`'s retirement: what a
-    // hosted-CI run COSTS, and whether the wiring that decides it can be
-    // reached at all. Tree-scoped like `shell-hygiene`, and the second preset
-    // to read a PARSED document rather than lines — a workflow's jobs, triggers
-    // and concurrency block are structure, and a line-oriented reading cannot
-    // say which job a key belongs to.
-    //
-    // The split from the consumer's own module is not tidiness. A required-check
-    // roster, a task name and a bot's branch prefix are that repository's facts;
-    // shipping them here would bake one consumer's job names into every
-    // consumer's binary, which is the violation non-negotiable rule 1 names.
-    (
-        "ci-hygiene",
-        &[
-            (
-                "<preset:ci-hygiene>/spend-is-authorised.rego",
-                include_str!("policy/presets/ci-hygiene/spend-is-authorised.rego"),
-            ),
-            (
-                "<preset:ci-hygiene>/wiring-can-be-reached.rego",
-                include_str!("policy/presets/ci-hygiene/wiring-can-be-reached.rego"),
-            ),
-        ],
-    ),
-    // CLOUD-1269. The generic third of a landing loop. Landing judgements split
-    // three ways and only one third belongs here: the effect and the poll stay
-    // outside (CLOUD-1170's own split), the roster and the trunk's name are the
-    // consumer's `batten.toml`, and what is left is a predicate over facts the
-    // boundary already resolved.
-    //
-    // TREE-SCOPED, because it decides over what the forge recorded rather than
-    // over a command. Its sibling `landing-spend` is the same practice on the
-    // other surface, and the two are separate presets rather than one because a
-    // `[[rule]]` row carries ONE scope and `policy::load` refuses two rows
-    // naming one preset — a bundle cannot span both.
-    (
-        "landing-loop",
-        &[
-            (
-                "<preset:landing-loop>/graded-head-is-not-regraded.rego",
-                include_str!("policy/presets/landing-loop/graded-head-is-not-regraded.rego"),
-            ),
-            // The second landing judgement, and the one whose NAME had to change
-            // to match its fact (CLOUD-1280). CLOUD-1269 asked for
-            // `target-is-fast-forwardable`; no fact decides descendant-ness,
-            // because CLOUD-36 decides merged-ness by patch identity and
-            // `policy/ancestry-decides-nothing.rego` now refuses acquiring a
-            // reachability answer at all. What `input.tree.landing` does answer
-            // is whether the target already carries this work — a real landing
-            // judgement, under the name that describes it.
-            (
-                "<preset:landing-loop>/already-landed-work-is-not-relanded.rego",
-                include_str!(
-                    "policy/presets/landing-loop/already-landed-work-is-not-relanded.rego"
-                ),
-            ),
-            // The lease, and the one predicate here that reads a record the
-            // CONSUMER's own `[[recorder]]` wrote rather than a fact the engine
-            // acquires. It selects on a generic `lease` kind column instead of on
-            // the record's name, which is the consumer's (rule 1).
-            (
-                "<preset:landing-loop>/lease-authorises-the-branch.rego",
-                include_str!("policy/presets/landing-loop/lease-authorises-the-branch.rego"),
-            ),
-        ],
-    ),
-];
+// `PRESETS` moved to `crate::preset::MANIFESTS` (CLOUD-1181). It was one of
+// three parallel tables describing a preset, none of which knew about the
+// others; the doc comment that stood here — why Batten ships defaults, why this
+// is not the OCI distribution CLOUD-129 rejected, and why rule 1 is most
+// inviting to break at a preset — moved with it.
+//
+// CLOUD-129's VERDICT IS UNCHANGED and the manifest is not permission to fetch
+// one: `include_str!` at build time, no network, no registry, no
+// trust-on-first-use. `crate::preset`'s own header says so at length, because a
+// reader arriving at a "manifest" reasonably wonders whether something resolves
+// it, and the answer is that nothing does.
 
 /// Every vendored preset's name, in a stable order.
 ///
-/// Derived from [`PRESETS`] so the binary and the published schema cannot
+/// Derived from [`crate::preset::MANIFESTS`] so the binary and the published
+/// schema cannot
 /// disagree about what may be enabled — the same discipline `surface::SURFACE`
 /// carries, and the reason an unknown name is a config error rather than a
 /// silent no-op.
 #[must_use]
 pub fn preset_names() -> Vec<&'static str> {
-    PRESETS.iter().map(|(name, _)| *name).collect()
+    crate::preset::names()
 }
 
-/// The modules a named preset ships, or `None` when nothing ships under that
-/// name.
-///
-/// The pointer paths are `<preset:name>/…` rather than a filesystem path,
-/// deliberately: a preset has no path in the consumer's tree, and printing one
-/// would send a reader looking for a file that is not there. A finding still
-/// names the PREDICATE rather than this, so it stays indistinguishable in shape
-/// from an in-repo one.
-fn preset_modules(name: &str) -> Option<&'static [(&'static str, &'static str)]> {
-    PRESETS
-        .iter()
-        .find(|(preset, _)| *preset == name)
-        .map(|(_, modules)| *modules)
-}
+// `preset_modules` is gone (CLOUD-1181): the load site reads the whole manifest
+// now, so a second lookup returning only the modules was one more place that
+// could answer about a preset without seeing its scope — which is the fact the
+// manifest exists to stop being separable.
 
 /// One module inside a bundle: its repository-relative path, and nothing else.
 ///
@@ -856,7 +709,7 @@ pub fn load(
         // consumer who enabled `trunk-basd` should be told, not quietly gated by
         // nothing.
         if let Some(name) = rule.preset.as_deref() {
-            let modules = preset_modules(name).ok_or_else(|| {
+            let manifest = crate::preset::find(name).ok_or_else(|| {
                 UsageError::raise(format!(
                     "rule `{}` enables the preset `{name}`, which this binary does not ship; \
                      the ones it does are {}",
@@ -864,6 +717,41 @@ pub fn load(
                     preset_names().join(", ")
                 ))
             })?;
+            // THE SCOPE CHECK (CLOUD-1181) — AND WHAT IT DOES IS NOT WHAT THE
+            // ROW PREDICTED, WHICH IS WORTH THE PARAGRAPH.
+            //
+            // The row expected a scope mismatch to produce an empty violation
+            // set: modules read the other surface's `input.*` keys, read
+            // undefined, refuse nothing, and a dead gate is byte-identical to a
+            // clean tree. MEASURED, THAT WAS ALREADY REFUSED. With this branch
+            // disabled and the binary rebuilt, enabling `trunk-based` at `tree`
+            // still fails to load — `check_tree_paths_are_emittable` catches the
+            // module reading `input.call` on the tree surface and says so.
+            //
+            // So this is not a hole being closed. What it buys is narrower and
+            // still worth having: the refusal now PRECEDES compilation and names
+            // the preset the consumer enabled, where the existing one names a
+            // module inside the binary that the consumer never wrote and cannot
+            // open. And the manifest's `scope` is a DECLARATION — the row's real
+            // gap was that "a consumer enabling a preset today cannot see which
+            // surface it decides", which no refusal fixes because it is a
+            // question asked before anything is enabled.
+            //
+            // Stated rather than absorbed, because shipping this as "closes the
+            // silent dead gate" would have been a claim about a channel nobody
+            // measured, which is the defect `.claude/rules/policy-modules.md`
+            // records against its own earlier revisions.
+            if manifest.scope != rule.scope {
+                return Err(UsageError::raise(format!(
+                    "rule `{}` enables the preset `{name}` at scope `{}`, but its modules \
+                     decide `{}` — at the wrong scope they read keys the engine never builds, \
+                     so the rule would evaluate and refuse nothing",
+                    rule.id,
+                    rule.scope.as_str(),
+                    manifest.scope.as_str()
+                )));
+            }
+            let modules = manifest.modules;
             let sources: Vec<(String, String)> = modules
                 .iter()
                 .map(|(path, source)| ((*path).to_owned(), (*source).to_owned()))

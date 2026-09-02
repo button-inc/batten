@@ -144,6 +144,7 @@ mod policy_tree;
 mod policy_whole_set;
 mod pr_watch;
 mod prebuilt_lint;
+mod preset_manifest;
 mod preset_segments;
 mod primitives;
 mod privileged_lane;
