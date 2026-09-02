@@ -937,7 +937,7 @@ trace\:"Add everything"))' \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:batten-doctor-command-$line[1]:"
         case $line[1] in
-            (hooks)
+            (mediator)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
@@ -968,7 +968,7 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
-(session)
+(hooks)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
@@ -1011,11 +1011,11 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:batten-doctor-help-command-$line[1]:"
         case $line[1] in
-            (hooks)
+            (mediator)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
-(session)
+(hooks)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -5013,11 +5013,11 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:batten-help-doctor-command-$line[1]:"
         case $line[1] in
-            (hooks)
+            (mediator)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
-(session)
+(hooks)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -6107,8 +6107,8 @@ _batten__subcmd__design__subcmd__help__subcmd__help_commands() {
 (( $+functions[_batten__subcmd__doctor_commands] )) ||
 _batten__subcmd__doctor_commands() {
     local commands; commands=(
+'mediator:Diagnose whether the engine the registrations reach was built from this tree' \
 'hooks:Diagnose whether batten is wired on every hook surface of every harness' \
-'session:Diagnose whether this session has declared work it has not finished' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten doctor commands' commands "$@"
@@ -6116,8 +6116,8 @@ _batten__subcmd__doctor_commands() {
 (( $+functions[_batten__subcmd__doctor__subcmd__help_commands] )) ||
 _batten__subcmd__doctor__subcmd__help_commands() {
     local commands; commands=(
+'mediator:Diagnose whether the engine the registrations reach was built from this tree' \
 'hooks:Diagnose whether batten is wired on every hook surface of every harness' \
-'session:Diagnose whether this session has declared work it has not finished' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten doctor help commands' commands "$@"
@@ -6132,20 +6132,20 @@ _batten__subcmd__doctor__subcmd__help__subcmd__hooks_commands() {
     local commands; commands=()
     _describe -t commands 'batten doctor help hooks commands' commands "$@"
 }
-(( $+functions[_batten__subcmd__doctor__subcmd__help__subcmd__session_commands] )) ||
-_batten__subcmd__doctor__subcmd__help__subcmd__session_commands() {
+(( $+functions[_batten__subcmd__doctor__subcmd__help__subcmd__mediator_commands] )) ||
+_batten__subcmd__doctor__subcmd__help__subcmd__mediator_commands() {
     local commands; commands=()
-    _describe -t commands 'batten doctor help session commands' commands "$@"
+    _describe -t commands 'batten doctor help mediator commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__doctor__subcmd__hooks_commands] )) ||
 _batten__subcmd__doctor__subcmd__hooks_commands() {
     local commands; commands=()
     _describe -t commands 'batten doctor hooks commands' commands "$@"
 }
-(( $+functions[_batten__subcmd__doctor__subcmd__session_commands] )) ||
-_batten__subcmd__doctor__subcmd__session_commands() {
+(( $+functions[_batten__subcmd__doctor__subcmd__mediator_commands] )) ||
+_batten__subcmd__doctor__subcmd__mediator_commands() {
     local commands; commands=()
-    _describe -t commands 'batten doctor session commands' commands "$@"
+    _describe -t commands 'batten doctor mediator commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__enforce_commands] )) ||
 _batten__subcmd__enforce_commands() {
@@ -6449,8 +6449,8 @@ _batten__subcmd__help__subcmd__design__subcmd__audit_commands() {
 (( $+functions[_batten__subcmd__help__subcmd__doctor_commands] )) ||
 _batten__subcmd__help__subcmd__doctor_commands() {
     local commands; commands=(
+'mediator:Diagnose whether the engine the registrations reach was built from this tree' \
 'hooks:Diagnose whether batten is wired on every hook surface of every harness' \
-'session:Diagnose whether this session has declared work it has not finished' \
     )
     _describe -t commands 'batten help doctor commands' commands "$@"
 }
@@ -6459,10 +6459,10 @@ _batten__subcmd__help__subcmd__doctor__subcmd__hooks_commands() {
     local commands; commands=()
     _describe -t commands 'batten help doctor hooks commands' commands "$@"
 }
-(( $+functions[_batten__subcmd__help__subcmd__doctor__subcmd__session_commands] )) ||
-_batten__subcmd__help__subcmd__doctor__subcmd__session_commands() {
+(( $+functions[_batten__subcmd__help__subcmd__doctor__subcmd__mediator_commands] )) ||
+_batten__subcmd__help__subcmd__doctor__subcmd__mediator_commands() {
     local commands; commands=()
-    _describe -t commands 'batten help doctor session commands' commands "$@"
+    _describe -t commands 'batten help doctor mediator commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__enforce_commands] )) ||
 _batten__subcmd__help__subcmd__enforce_commands() {
