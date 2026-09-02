@@ -53,7 +53,7 @@ trace\:"Add everything"))' \
         case $line[1] in
             (check)
 _arguments "${_arguments_options[@]}" : \
-'--rule=[Run only the declared rule with this id]: :_default' \
+'*--rule=[Run only the declared rules with these ids (repeatable)]: :_default' \
 '--since=[Judge only the paths changed against this rev]: :_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
@@ -87,7 +87,7 @@ trace\:"Add everything"))' \
 ;;
 (enforce)
 _arguments "${_arguments_options[@]}" : \
-'--rule=[Run only the declared rule with this id]: :_default' \
+'*--rule=[Run only the declared rules with these ids (repeatable)]: :_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \

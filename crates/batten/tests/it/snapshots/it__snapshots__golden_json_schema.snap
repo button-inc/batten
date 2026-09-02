@@ -394,7 +394,7 @@ expression: stdout_of(&output)
           "long": "rule",
           "takes_value": true,
           "positional": false,
-          "help": "Run only the declared rule with this id"
+          "help": "Run only the declared rules with these ids (repeatable)"
         },
         {
           "name": "since",
@@ -876,7 +876,7 @@ expression: stdout_of(&output)
           "long": "rule",
           "takes_value": true,
           "positional": false,
-          "help": "Run only the declared rule with this id"
+          "help": "Run only the declared rules with these ids (repeatable)"
         }
       ],
       "subcommands": []

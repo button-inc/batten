@@ -83,7 +83,7 @@ complete -c batten -n "__fish_batten_needs_command" -f -a "record" -d 'Out-of-tr
 complete -c batten -n "__fish_batten_needs_command" -f -a "wiring" -d 'Repair a host\'s hook registrations'
 complete -c batten -n "__fish_batten_needs_command" -f -a "lease" -d 'The landing lease: one branch spends a matrix at a time'
 complete -c batten -n "__fish_batten_needs_command" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c batten -n "__fish_batten_using_subcommand check" -l rule -d 'Run only the declared rule with this id' -r
+complete -c batten -n "__fish_batten_using_subcommand check" -l rule -d 'Run only the declared rules with these ids (repeatable)' -r
 complete -c batten -n "__fish_batten_using_subcommand check" -l since -d 'Judge only the paths changed against this rev' -r
 complete -c batten -n "__fish_batten_using_subcommand check" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
@@ -108,7 +108,7 @@ complete -c batten -n "__fish_batten_using_subcommand check" -l no-color -d 'Nev
 complete -c batten -n "__fish_batten_using_subcommand check" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand check" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand check" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c batten -n "__fish_batten_using_subcommand enforce" -l rule -d 'Run only the declared rule with this id' -r
+complete -c batten -n "__fish_batten_using_subcommand enforce" -l rule -d 'Run only the declared rules with these ids (repeatable)' -r
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
