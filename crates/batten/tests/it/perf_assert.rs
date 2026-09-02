@@ -44,23 +44,34 @@
 // carried: mise-tasks/perf-assert.sh policy/perf-assert.rego crates/batten/tests/it/perf_assert.rs
 // carried: tests/perf-assert.bats policy/perf-assert.rego crates/batten/tests/it/perf_assert.rs
 
-//! # RETIREMENT LEDGER — `tests/perf-assert.bats`, 16 cases
+//! # RETIREMENT LEDGER — `tests/perf-assert.bats`, 17 cases
 //!
 //! CARRIED — the budget verdict, the presence gate and the README clause, which
 //! are the whole of what the gate decided.
 
-// carried: "records inside budget pass" crates/batten/tests/it/perf_assert.rs
-// carried: "a path over budget is named, and a sibling inside budget is not reported" crates/batten/tests/it/perf_assert.rs
-// carried: "a budgeted path missing from the records is could-not-look" crates/batten/tests/it/perf_assert.rs
-// carried: "wired over budget is a violation" crates/batten/tests/it/perf_assert.rs
-// carried: "wired missing from the records is could-not-look" crates/batten/tests/it/perf_assert.rs
-// carried: "posttool missing from the records is could-not-look" crates/batten/tests/it/perf_assert.rs
-// carried: "posttool over budget is a violation" crates/batten/tests/it/perf_assert.rs
-// carried: "a README publishing a different budget is a violation" crates/batten/tests/it/perf_assert.rs
-// carried: "a README with no row for a budgeted path is a violation" crates/batten/tests/it/perf_assert.rs
-// carried: "a README with no wired row is a violation" crates/batten/tests/it/perf_assert.rs
+// carried: "records inside budget pass, and say so" crates/batten/tests/it/perf_assert.rs
 // carried: "the real README publishes the budgets this gate enforces" crates/batten/tests/it/perf_assert.rs
-// carried: "a missing README is could-not-look" crates/batten/tests/it/perf_assert.rs
+// carried: "a budgeted path over its budget is a violation, and is named" crates/batten/tests/it/perf_assert.rs
+// carried: "a budgeted path missing from the records is exit 2, not a pass" crates/batten/tests/it/perf_assert.rs
+// carried: "a README publishing a different budget fails" crates/batten/tests/it/perf_assert.rs
+// carried: "a README with no row for a budgeted path fails" crates/batten/tests/it/perf_assert.rs
+// carried: "a missing README is could-not-look, not a pass" crates/batten/tests/it/perf_assert.rs
+// carried: "a wired path over budget is named, with its measurement and its ceiling" crates/batten/tests/it/perf_assert.rs
+// carried: "a missing wired record is exit 2 — could not look is not a pass" crates/batten/tests/it/perf_assert.rs
+// carried: "a missing posttool record is exit 2 — the capture cost cannot go unmeasured" crates/batten/tests/it/perf_assert.rs
+// carried: "a posttool path over budget is named, with its measurement and its ceiling" crates/batten/tests/it/perf_assert.rs
+// carried: "a README with no wired row fails, so the budget cannot be enforced unpublished" crates/batten/tests/it/perf_assert.rs
+
+//! CHANGED — the ungated-path case, and it is the one this row deliberately
+//! inverts. `check` was measured and NOT budgeted, on the predecessor's argument
+//! that a tree walk over a large consumer repo is legitimately slower and no
+//! ceiling could tell that apart from a regression. CLOUD-1321 re-decides it with
+//! a number: the `perf` arm is a one-rule FIXTURE repo, so it is bounded by what
+//! batten costs rather than by a consumer's tree, which is the reasoning that
+//! budgets `noop`. So the successor asserts the opposite of what this case
+//! asserted, and says so here rather than letting a `carried` arm hide it.
+
+// changed: "the ungated path is never a violation, however slow" crates/batten/tests/it/perf_assert.rs `check` is budgeted now (CLOUD-1321); the successor is `a_measurement_inside_every_budget_is_silent`, which includes `check` among the paths a clean record must satisfy, and an unbudgeted path staying ungated is `an_unbudgeted_path_in_the_record_is_ignored` in the module tier
 
 //! CHANGED — the four stdin-parsing cases. Their subject was the program's own
 //! record parser, and there is no parser left to test: the record reaches the
@@ -70,10 +81,10 @@
 //! meaning is conserved and its exit code moves from the program's `2` to the
 //! engine's contract.
 
-// changed: "empty stdin is could-not-look" crates/batten/tests/it/perf_assert.rs the record store is read by key rather than piped, so an empty stream is an absent record and the module abstains
-// changed: "whitespace-only stdin is could-not-look" crates/batten/tests/it/perf_assert.rs the record store is read by key rather than piped, so an empty stream is an absent record and the module abstains
-// changed: "a line that is not a record is could-not-look, naming the line" crates/batten/tests/it/perf_assert.rs `batten record tool` refuses a malformed line at the write, so the reader never sees one
-// changed: "a record with a non-numeric p95 is could-not-look" crates/batten/tests/it/perf_assert.rs the comparison is numeric in the module and a non-numeric token cannot satisfy it, so such a path is not judged rather than crashing the gate
+// changed: "empty stdin is exit 2, and names the redirect" crates/batten/tests/it/perf_assert.rs the record store is read by key rather than piped, so there is no stdin to be empty and an absent record makes the module abstain — `no_record_at_all_is_silent`
+// changed: "whitespace-only stdin is empty, not malformed" crates/batten/tests/it/perf_assert.rs the record store is read by key rather than piped, so there is no stdin to be whitespace and an absent record makes the module abstain — `no_record_at_all_is_silent`
+// changed: "a line that is not a record is exit 2 and points at the line" crates/batten/tests/it/perf_assert.rs `batten record tool` refuses a line carrying no token at the WRITE, so the reader never sees a malformed one and the pointer moves to the producer
+// changed: "a record whose p95 is not a number is malformed, not zero" crates/batten/tests/it/perf_assert.rs the comparison is numeric in Rego and a non-numeric token cannot satisfy it, so such a path is not judged rather than read as zero
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
