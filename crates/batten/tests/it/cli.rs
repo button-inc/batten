@@ -6203,6 +6203,29 @@ fn the_committed_delegating_rule_spawns_nothing_when_its_glob_misses() {
     );
 }
 
+/// The rule ids each of the two committed-ruleset cases below asserts.
+///
+/// Named once rather than spelled at each of the four call sites: the arms are a
+/// banned-shape run and its clean-fixture discriminator, and a narrowing that
+/// drifted between them would leave the discriminator proving nothing about the
+/// set the other arm ran.
+const AGNOSTICISM_RULES: [&str; 4] = [
+    "no-consumer-account-literal",
+    "no-consumer-entity-path",
+    "no-consumer-repo-name",
+    "no-tracker-key-in-core",
+];
+
+/// See [`AGNOSTICISM_RULES`].
+const PORTABILITY_RULES: [&str; 6] = [
+    "no-gnu-sed-z",
+    "no-gnu-sed-in-place",
+    "no-bash4-mapfile",
+    "no-gnu-xargs-r",
+    "no-branch-f-main",
+    "no-util-linux-flock",
+];
+
 #[test]
 fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     // Non-negotiable rule 1 — "no consumer-specific identifier anywhere in
@@ -6268,14 +6291,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     // and contributes nothing, leaving the CLOUD-7 findings alone on stdout.
     let output = batten()
         .arg("enforce")
-        .arg("--rule")
-        .arg("no-consumer-account-literal")
-        .arg("--rule")
-        .arg("no-consumer-entity-path")
-        .arg("--rule")
-        .arg("no-consumer-repo-name")
-        .arg("--rule")
-        .arg("no-tracker-key-in-core")
+        .args(AGNOSTICISM_RULES.iter().flat_map(|id| ["--rule", id]))
         .current_dir(&dirty)
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
@@ -6316,14 +6332,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
 
     let output = batten()
         .arg("enforce")
-        .arg("--rule")
-        .arg("no-consumer-account-literal")
-        .arg("--rule")
-        .arg("no-consumer-entity-path")
-        .arg("--rule")
-        .arg("no-consumer-repo-name")
-        .arg("--rule")
-        .arg("no-tracker-key-in-core")
+        .args(AGNOSTICISM_RULES.iter().flat_map(|id| ["--rule", id]))
         .current_dir(&clean)
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
@@ -6426,18 +6435,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     // reason.
     let output = batten()
         .arg("enforce")
-        .arg("--rule")
-        .arg("no-gnu-sed-z")
-        .arg("--rule")
-        .arg("no-gnu-sed-in-place")
-        .arg("--rule")
-        .arg("no-bash4-mapfile")
-        .arg("--rule")
-        .arg("no-gnu-xargs-r")
-        .arg("--rule")
-        .arg("no-branch-f-main")
-        .arg("--rule")
-        .arg("no-util-linux-flock")
+        .args(PORTABILITY_RULES.iter().flat_map(|id| ["--rule", id]))
         .current_dir(&dirty)
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
@@ -6498,18 +6496,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
 
     let output = batten()
         .arg("enforce")
-        .arg("--rule")
-        .arg("no-gnu-sed-z")
-        .arg("--rule")
-        .arg("no-gnu-sed-in-place")
-        .arg("--rule")
-        .arg("no-bash4-mapfile")
-        .arg("--rule")
-        .arg("no-gnu-xargs-r")
-        .arg("--rule")
-        .arg("no-branch-f-main")
-        .arg("--rule")
-        .arg("no-util-linux-flock")
+        .args(PORTABILITY_RULES.iter().flat_map(|id| ["--rule", id]))
         .current_dir(&clean)
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
