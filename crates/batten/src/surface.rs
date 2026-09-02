@@ -2702,6 +2702,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // reading of this code can keep.
     CommandDecl {
         path: "pr derive",
+        id: "pr.derive",
         about: "The tracker row a bot's pull request implies, as a payload the refinement gate reads",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -2712,6 +2713,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // read-only allowlist.
     CommandDecl {
         path: "pr file",
+        id: "pr.file",
         about: "Open the mirror issue a bot's pull request implies, and report its number",
         data_channel: false,
         effect: Effect::Write,
@@ -2720,6 +2722,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // `write`: it rewrites the pull request's body so the merge moves the row.
     CommandDecl {
         path: "pr link",
+        id: "pr.link",
         about: "Write the closing key into a bot pull request's body, so its merge moves the row",
         data_channel: false,
         effect: Effect::Write,
@@ -2729,6 +2732,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // is what makes it safe on a lander tick.
     CommandDecl {
         path: "pr ensure",
+        id: "pr.ensure",
         about: "File the row and link it, doing whatever this tick can and saying what it did",
         data_channel: false,
         effect: Effect::Write,
@@ -2740,6 +2744,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // is not the answer at the ref move.
     CommandDecl {
         path: "pr closes",
+        id: "pr.closes",
         about: "Whether a pull request's body still closes a tracker key, asked at the last moment",
         data_channel: false,
         effect: Effect::Unclassified,
@@ -2787,6 +2792,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // exactly that: that predicate is decided offline against the merge base.
     CommandDecl {
         path: "claim bot",
+        id: "claim.bot",
         about: "Attest a bot branch from the lane's public facts, and mint the receipt when they hold",
         data_channel: false,
         effect: Effect::Write,
@@ -2794,6 +2800,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     CommandDecl {
         path: "claim carry",
+        id: "claim.carry",
         about: "Attest that this branch only carries licence rows forward, and mint the receipt when it does",
         data_channel: true,
         effect: Effect::Write,
@@ -3375,6 +3382,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // anti-staleness argument, applied to a different key.
     CommandDecl {
         path: "record plan",
+        id: "record.plan",
         about: "Record this branch's plan, read as `<id> <status>` lines on stdin",
         data_channel: false,
         effect: Effect::Write,
@@ -3394,6 +3402,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // No positional, for `record plan`'s reason: the branch is the key.
     CommandDecl {
         path: "record closes",
+        id: "record.closes",
         about: "Record which rows this branch's pull request body closes, read on stdin",
         data_channel: false,
         effect: Effect::Write,
