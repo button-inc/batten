@@ -10,6 +10,15 @@
 //! the one behaviour the design forbids. [`a_conflicting_replay_refuses`] is
 //! therefore the load-bearing case here and the clean one is its control.
 //!
+//! **What that case does NOT discriminate, said plainly rather than left to be
+//! assumed:** it separates *refusing* from *resolving*, and it does not separate
+//! `TreatAsUnresolved::forced_resolution` from the laxer `git()` — a two-sided
+//! edit of one line is unresolved under either. Catching a downgrade between
+//! those two needs a fixture where a resolution STRATEGY is what settles it, and
+//! the landed options configure no strategy, so there is nothing here to build
+//! one from yet. The strict reading is still what the code asks for; this suite
+//! is simply not the sensor on that half.
+//!
 //! # No `git` binary anywhere in this file
 //!
 //! The fixtures are built with `gix` and with `gitwrite`'s own writes, so what

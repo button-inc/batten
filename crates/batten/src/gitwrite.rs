@@ -552,12 +552,20 @@ fn materialise(
         }
         let mut file = std::fs::File::create(&target)
             .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not open: {err}"))?;
-        let source = converted.as_read().ok_or_else(|| {
-            anyhow::anyhow!(
+        // `ToWorktreeOutcome` IS the reader. `as_read` is the NARROWER question —
+        // "did an external driver hand back a stream" — and it answers `None` for
+        // the unfiltered case, which is every path in a repository that configures
+        // no driver. Reading that `None` as "cannot be read" turned the common
+        // case into a refusal, which is exactly what the clean-replay case caught.
+        //
+        // The delayed case has to be asked separately, because the `Read` impl
+        // PANICS on it rather than erroring.
+        if converted.is_delayed() {
+            return Err(anyhow::anyhow!(
                 "gitwrite: {relative} is behind a delayed filter, which is not supported"
-            )
-        })?;
-        std::io::copy(source, &mut file)
+            ));
+        }
+        std::io::copy(&mut converted, &mut file)
             .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not write: {err}"))?;
         drop(file);
         if mode == gix::index::entry::Mode::FILE_EXECUTABLE {
