@@ -33,7 +33,7 @@ use batten::rules::{self, Rule};
 /// struct-literalled: `Rule` carries `deny_unknown_fields`, so this goes through
 /// the same column census a consumer's config does and a row the loader would
 /// refuse cannot be smuggled in by hand.
-fn row() -> Rule {
+pub(crate) fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
         "id": "shell-retirement",
         "kind": "policy",
@@ -64,7 +64,7 @@ fn row() -> Rule {
 /// `origin/main` is a real remote-tracking ref rather than a local branch,
 /// because that is the name the committed row declares and a fixture that
 /// resolved a different one would be testing a different question.
-fn repo(name: &str, base: &[(&str, &str)], head: &Head<'_>) -> PathBuf {
+pub(crate) fn repo(name: &str, base: &[(&str, &str)], head: &Head<'_>) -> PathBuf {
     let root = common::scratch(&format!("shell-retirement-{name}"));
     common::git_in(&root, &["init", "--initial-branch=main"]);
     write_all(&root, base);
@@ -88,9 +88,9 @@ fn repo(name: &str, base: &[(&str, &str)], head: &Head<'_>) -> PathBuf {
 }
 
 /// What the working tree does to the base: files written, files removed.
-struct Head<'a> {
-    written: &'a [(&'a str, &'a str)],
-    removed: &'a [&'a str],
+pub(crate) struct Head<'a> {
+    pub(crate) written: &'a [(&'a str, &'a str)],
+    pub(crate) removed: &'a [&'a str],
 }
 
 fn write_all(root: &Path, files: &[(&str, &str)]) {
@@ -103,7 +103,7 @@ fn write_all(root: &Path, files: &[(&str, &str)]) {
     }
 }
 
-fn install_module(root: &Path) {
+pub(crate) fn install_module(root: &Path) {
     let source = common::at_root("policy/shell-retirement.rego")
         .canonicalize()
         .expect("the committed module is where the row says it is");
@@ -114,7 +114,7 @@ fn install_module(root: &Path) {
 /// The vocabulary the installed module needs, read off the module itself
 /// (CLOUD-1050). Derived rather than listed: this fixture copies the COMMITTED
 /// module in so it cannot drift, and a hand-written table beside it would.
-fn scan(root: &Path) -> rules::Scan {
+pub(crate) fn scan(root: &Path) -> rules::Scan {
     let verdicts = common::verdicts_in(root);
     // THE COMMITTED PATTERN TABLE, and it stopped being optional the moment the
     // module started resolving `data.batten.patterns[…]` (CLOUD-1219). An empty

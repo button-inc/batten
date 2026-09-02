@@ -1265,6 +1265,20 @@ withdrawal_reason(path) := words if {
 # case the comment on `arms_for` names for exactly this reason. A comprehension
 # always succeeds, so these two rules are total by construction.
 arm_pairs := {[path, row] |
+	# THE GUARD IS FIRST, AND IT IS WHAT KEEPS THE COMMON CASE FREE. `policy::deny`
+	# queries `data.batten` once for the whole package, so every rule in it is
+	# evaluated whether or not a `violation` body reads it — where the FUNCTION
+	# this replaced was only ever called from inside `some path in delta.deleted`.
+	# Without this conjunct the index is therefore built on every run, and a change
+	# deleting no governed path pays a corpus scan the predecessor never paid.
+	# Measured on the fixture corpus: the zero-deletion floor went 388ms -> 864ms,
+	# a 2.2x regression on by far the most common shape.
+	#
+	# A failing conjunct yields no bindings for the generators after it, so when
+	# the delta deletes nothing this comprehension costs one `count` and stops. It
+	# stays a comprehension, so it still always succeeds and `arms_for` stays
+	# total.
+	count(delta.deleted) > 0
 	some file, lines in input.tree.lines
 	startswith(file, "crates/batten/tests/")
 	some line in lines
