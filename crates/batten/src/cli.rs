@@ -192,6 +192,13 @@ pub enum Command {
         /// The chosen sub-verb.
         command: DefectsCommand,
     },
+    /// Whether this container matches what the repository declares.
+    Startup {
+        /// Run each failing row's declared repair, then re-decide its check.
+        repair: bool,
+        /// Whether the data channel was asked for.
+        json: bool,
+    },
     /// Pinned tools this repository provisions.
     Provision {
         /// The chosen sub-verb.
@@ -709,6 +716,8 @@ pub enum WiringCommand {
         yes: bool,
         /// Report what would be removed and remove nothing.
         dry_run: bool,
+        /// Decide whether a repair is owed, and remove nothing.
+        check: bool,
     },
 }
 
@@ -1328,6 +1337,7 @@ fn wiring_of(matches: &ArgMatches) -> Option<WiringCommand> {
         ("reclaim", matches) => Some(WiringCommand::Reclaim {
             yes: flag(matches, "yes"),
             dry_run: flag(matches, "dry_run"),
+            check: flag(matches, "check"),
         }),
         _ => None,
     }
@@ -1737,6 +1747,10 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
             dry_run: flag(matches, "dry_run"),
         }),
         "policy" => policy_of(matches).map(|command| Command::Policy { command }),
+        "startup" => Some(Command::Startup {
+            repair: flag(matches, "repair"),
+            json: flag(matches, "json"),
+        }),
         "provision" => provision_of(matches).map(|command| Command::Provision { command }),
         "defects" => defects_of(matches).map(|command| Command::Defects { command }),
         "design" => design_of(matches).map(|command| Command::Design { command }),

@@ -10394,11 +10394,44 @@ pub(crate) fn spawn_resolving<T>(
     program: &str,
     spawn: impl FnMut(&str, &[&str]) -> std::io::Result<T>,
 ) -> std::io::Result<T> {
+    // THE PIN IS READ FIRST, AND ASKED ONLY WHERE THE READING CANNOT ANSWER.
+    // `pinned::cached` is a file read with an honest could-not-look, so the
+    // ordinary call pays a file read and nothing else.
+    //
+    // THE REPAIR IS HERE RATHER THAN AT THE FOOT OF THE LADDER (CLOUD-1324). The
+    // record is memoised and keyed to the pin's configuration as it stands, so a
+    // manifest edited mid-session invalidates it and every pinned program reads
+    // as missing until the next session start — measured: `mise.toml` changed at
+    // 03:56, a record written the previous day stopped validating, and
+    // `no-conflict-markers` could not launch `hk`.
+    //
+    // A STALE MEMO IS THE ENGINE'S OWN BOOKKEEPING, NOT A FACT ABOUT THE TREE,
+    // and it must not decide whether a gate can run. So could-not-look re-asks
+    // the pin and re-records, and the next call is a file read again.
+    //
+    // Repairing the ANSWER rather than delegating the SPAWN is the part that has
+    // to stay this way. A recovery rung that handed an unresolved program to the
+    // runner would spawn the runner successfully and report a program the pin
+    // does not provide as ran-and-failed, which is a different fix from
+    // not-installed and the distinction `action` reports on.
+    //
+    // `IsNot` is left alone rather than folded into the repair: it is a resolved
+    // answer — the pin was reached and provides nothing — and re-asking would
+    // turn every unpinned project's spawn into two.
+    //
+    // Bounded to ONCE PER ROOT PER PROCESS by `pinned::repaired`, and that bound
+    // is not an optimisation — see its own doc for what an unbounded repair costs.
+    let read = root.map_or(crate::facts::Look::CouldNotLook, crate::pinned::cached);
+    let pinned = match (&read, root) {
+        (crate::facts::Look::CouldNotLook, Some(root)) => crate::pinned::repaired(root),
+        _ => read,
+    };
     spawn_resolving_on(
         std::env::var_os("PATH").as_deref(),
         root,
         program,
         &executable_extensions(),
+        &pinned,
         spawn,
     )
 }
@@ -10417,8 +10450,38 @@ fn spawn_resolving_on<T>(
     root: Option<&Path>,
     program: &str,
     extensions: &[String],
+    pinned: &crate::pinned::PinnedFacts,
     mut spawn: impl FnMut(&str, &[&str]) -> std::io::Result<T>,
 ) -> std::io::Result<T> {
+    // RUNG 0: THE PIN, AND IT IS FIRST RATHER THAN A FALLBACK (CLOUD-1324).
+    //
+    // A project that pins its tools gets the pinned ones, so where the pin
+    // provides this program the pinned build IS the program and a `PATH` hit
+    // would be a different one — a different version, a different environment.
+    // That is `pinned-toolchain`'s own argument, which refuses exactly this for
+    // an agent's argv; the engine's own spawn had no such rung and reached
+    // around the pin every time.
+    //
+    // MEASURED: `no-conflict-markers` declared `hk`, nothing a toolchain manager
+    // provides is on bare `PATH` -- nor should it be -- so the rule could not
+    // launch and contributed nothing. A merge-conflict gate that silently never
+    // ran, and `doctor` could say only that SOME declared program was missing.
+    //
+    // REWRITTEN RATHER THAN REFUSED, which is the whole point: a config row names
+    // the tool it means, the boundary resolves how to reach it, and no author has
+    // to know that the answer is spelled through a runner. A gate refusing the
+    // direct spelling would put that knowledge back on every author and every
+    // consumer, for a problem the engine can simply solve.
+    //
+    // Could-not-look falls straight through to the ladder below. A pin that
+    // cannot be read is not evidence the program is unpinned, and refusing on it
+    // would make every spawn depend on a memoised file.
+    if matches!(pinned, crate::facts::Look::Is(programs) if programs.contains(program))
+        && let Ok(ok) = spawn(crate::pinned::MEDIATOR, &["exec", "--", program])
+    {
+        return Ok(ok);
+    }
+
     let first = match spawn(program, &[]) {
         Ok(ok) => return Ok(ok),
         Err(err) => err,
@@ -10480,6 +10543,14 @@ fn spawn_resolving_on<T>(
         }
     }
 
+    // NO RECOVERY RUNG HERE, DELIBERATELY. Handing an unresolved program to the
+    // runner as a last resort spawns the runner — which is on `PATH`, that being
+    // what a pin IS — so it succeeds, and a program nothing provides comes back
+    // as ran-and-failed instead of could-not-spawn. Measured on
+    // `action::tests::a_clean_action_says_nothing_and_an_unspawnable_one_is_distinguishable`:
+    // not-installed is a different fix from ran-and-failed, and that rung erased
+    // the difference. The staleness this was reaching for is repaired in
+    // `spawn_resolving`, over the ANSWER rather than over the spawn.
     Err(latest)
 }
 
@@ -15466,6 +15537,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             Some(Path::new("/nowhere")),
             "judge-stub",
             &[".EXE".to_owned()],
+            &crate::facts::Look::CouldNotLook,
             windows_like_spawn(Path::new("/nowhere"), &dirs, &log),
         );
 
@@ -15503,6 +15575,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             None,
             "stub",
             &[".EXE".to_owned()],
+            &crate::facts::Look::CouldNotLook,
             windows_like_spawn(&bin, &dirs, &log),
         )
         .expect_err("nothing here can run it");
@@ -15520,6 +15593,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             None,
             "no-such-program-anywhere",
             &[".EXE".to_owned()],
+            &crate::facts::Look::CouldNotLook,
             windows_like_spawn(&bin, &dirs, &std::cell::RefCell::new(Vec::new())),
         )
         .expect_err("it is not there");
@@ -15547,6 +15621,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             None,
             &scanner.display().to_string(),
             &[".EXE".to_owned()],
+            &crate::facts::Look::CouldNotLook,
             windows_like_spawn(Path::new("/nowhere"), &dirs, &log),
         );
 
@@ -15578,6 +15653,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             Some(root.as_path()),
             "bin/checker",
             &[".EXE".to_owned()],
+            &crate::facts::Look::CouldNotLook,
             windows_like_spawn(&root, &dirs, &log),
         );
         assert!(out.is_ok());
@@ -15586,6 +15662,61 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             Some("sh".to_owned())
         );
     }
+
+    /// A program the pin provides is reached THROUGH the pin, before `PATH`.
+    ///
+    /// Asserted as the FIRST logged spawn rather than as "the call succeeded":
+    /// nothing a toolchain manager provides is on bare `PATH`, so a ladder that
+    /// reached the pinned program some other way would be running a different
+    /// build — the failure `pinned-toolchain` refuses for an agent's argv and the
+    /// engine's own spawn had no rung for. Measured: `no-conflict-markers`
+    /// declared `hk`, and the rule could not launch at all.
+    ///
+    /// The two arms differ only in the fact, which is what makes this
+    /// discriminate: could-not-look must fall straight through, since a pin that
+    /// cannot be read is not evidence the program is unpinned.
+    #[test]
+    fn a_pinned_program_is_reached_through_the_pin_and_an_unread_pin_is_not() {
+        let attempts = |pinned: &crate::pinned::PinnedFacts| {
+            let log = std::cell::RefCell::new(Vec::new());
+            let _out = spawn_resolving_on(
+                Some(std::ffi::OsStr::new("")),
+                None,
+                "hk",
+                &[".EXE".to_owned()],
+                pinned,
+                |program: &str, extra: &[&str]| {
+                    log.borrow_mut().push((
+                        program.to_owned(),
+                        extra.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
+                    ));
+                    Err::<&'static str, _>(std::io::Error::from(std::io::ErrorKind::NotFound))
+                },
+            );
+            log.into_inner()
+        };
+
+        let provided = crate::facts::Look::Is(
+            ["hk".to_owned()].into_iter().collect::<std::collections::BTreeSet<_>>(),
+        );
+        assert_eq!(
+            attempts(&provided).first().cloned(),
+            Some((
+                crate::pinned::MEDIATOR.to_owned(),
+                vec!["exec".to_owned(), "--".to_owned(), "hk".to_owned()]
+            )),
+            "the pin is rung 0, not a fallback"
+        );
+
+        assert_eq!(
+            attempts(&crate::facts::Look::CouldNotLook)
+                .first()
+                .cloned(),
+            Some(("hk".to_owned(), vec![])),
+            "could-not-look falls through to the ladder rather than assuming the pin"
+        );
+    }
+
     /// An unparseable `key_shape` is a LOAD error, never a per-call discard.
     ///
     /// The direction is what makes this worth a case: discarded per call, the

@@ -63,7 +63,7 @@ fn a_healthy_repository_exits_zero() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         stdout(&output),
-        "config ok\ngit-repo ok\ncommand-programs ok\nhook-handlers ok\nplan-surface ok\ndoctor: 5 check(s), 0 failed\n"
+        "config ok\ngit-repo ok\ncommand-programs ok\npin-record ok\nhook-handlers ok\nplan-surface ok\ndoctor: 6 check(s), 0 failed\n"
     );
 }
 
@@ -117,15 +117,16 @@ fn every_check_is_reported_not_just_the_first_failure() {
     assert!(text.contains("git-repo failed"), "got: {text}");
     // Five checks now; still two failures, because a checkout with no config
     // declares no handlers and `hook-handlers` passes vacuously over an empty
-    // table. That is the honest answer — there is nothing there to be wrong —
-    // and it is why the count moved while the failure count did not.
+    // table, and a checkout with no pin record has no stale one. That is the
+    // honest answer — there is nothing there to be wrong — and it is why the
+    // count moved while the failure count did not.
     //
     // `plan-surface` passes for a different reason worth keeping distinct: it
     // reads the COMMITTED harness table rather than this checkout, so it says
     // the same thing in every scratch repository. What it can fail on is a
     // harness declaring neither a fetched spelling nor the row that owes the
     // survey (CLOUD-472), which is a defect in the crate and not in a tree.
-    assert!(text.contains("doctor: 5 check(s), 2 failed"), "got: {text}");
+    assert!(text.contains("doctor: 6 check(s), 2 failed"), "got: {text}");
 }
 
 // --- doctor never renders a policy verdict -----------------------------------
@@ -256,6 +257,7 @@ fn json_is_valid_and_carries_every_check() {
             "config",
             "git-repo",
             "command-programs",
+            "pin-record",
             "hook-handlers",
             "plan-surface"
         ]

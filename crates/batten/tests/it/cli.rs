@@ -2216,10 +2216,24 @@ fn every_normalized_event_resolves_to_its_golden_decision() {
                     Some(0),
                     "{at}: an unadjudicated event must not deny"
                 );
-                assert!(
-                    String::from_utf8_lossy(&output.stdout).is_empty(),
-                    "{at}: an unadjudicated event emits no decision document"
-                );
+                // NO DECISION, WHICH IS NOT THE SAME AS NO OUTPUT — and the
+                // difference is the advisory channel, which `SessionStart`
+                // legitimately carries (CLOUD-1324). This read `is_empty()`,
+                // which passed only because no fixture here had ever tripped an
+                // advisory; the drift reporter could already emit one on this
+                // very event. So an unadjudicated event is held to what the
+                // message claims: it may say things, and it may not decide.
+                let raw = String::from_utf8_lossy(&output.stdout).into_owned();
+                if !raw.trim().is_empty() {
+                    let document: serde_json::Value =
+                        serde_json::from_str(&raw).unwrap_or_else(|_| {
+                            panic!("{at}: anything on stdout is one JSON document: {raw}")
+                        });
+                    assert!(
+                        document["hookSpecificOutput"]["permissionDecision"].is_null(),
+                        "{at}: an unadjudicated event emits no decision document: {raw}"
+                    );
+                }
             }
         }
     }

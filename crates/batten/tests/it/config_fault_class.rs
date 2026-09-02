@@ -115,6 +115,13 @@ const FAULTS: &[(&str, &str, &str)] = &[
          [[provision]]\nname = \"twice\"\nversion = \"1.0.0\"\nbinary = \"b\"\n\
          [[provision]]\nname = \"twice\"\nversion = \"1.0.0\"\nbinary = \"b\"\n",
     ),
+    (
+        "startup declare refused",
+        "startup",
+        "version = 1\n\
+         [[startup]]\nid = \"twice\"\ngloss = \"g\"\ncheck = [\"true\"]\n\
+         [[startup]]\nid = \"twice\"\ngloss = \"g\"\ncheck = [\"true\"]\n",
+    ),
     // NOT a `Config` table: a remedy is resolved across the redirect, verb and
     // rule tables at once, which is why it is a call at the load rather than a
     // validator over one field — and why CLOUD-1189 could not declare a class

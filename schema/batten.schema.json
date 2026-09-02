@@ -336,6 +336,13 @@
         "type": "string"
       }
     },
+    "startup": {
+      "description": "What this repository's container must be, and how it is repaired\n(CLOUD-1324). Each `[[startup]]` row names a `check` deciding whether\nthe environment is right and, optionally, the `repair` that makes it so.\n\nA REPO-COMMITTED RULE RATHER THAN AN ENGINE CONSTANT, which is the whole\nreason the table exists: which preconditions a container needs is a\nproperty of the project being gated, never of Batten (non-negotiable\nrule 1), and the alternative it replaced was a boolean per repair inside\na table about hook events. Absent or empty means this repository states\nno preconditions.\n\nHarness-agnostic by construction: a row names a command and an exit code\nand knows nothing about which agent harness is running.\n\nDELIBERATELY NOT `[[provision]]`, which is CLOUD-90's binary manifest —\na pinned version, a URL and a checksum for one fetched tool. That table\nanswers *is this artifact the one we pinned*; this one answers *is this\ncontainer the one we declared*, and folding them together would give one\nnoun two subjects. The two are siblings rather than rivals: both are\nhouse-style §9's check/fix duality, which `provision status`/`provision\napply` established here first and this table follows.\n\nThe type, its validator and the spawn are [`crate::startup`].",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Startup"
+      }
+    },
     "strictness": {
       "description": "How strictly the gates apply. Absent means \"this file does not speak to\nstrictness\", which is what lets [`crate::resolve`] attribute the\neffective value to the layer that actually set it. Policy-bearing, so an\noverride may only raise it (§8).",
       "anyOf": [
@@ -3544,6 +3551,43 @@
       "required": [
         "id",
         "path"
+      ]
+    },
+    "Startup": {
+      "description": "One declared precondition, and optionally the fix for it.",
+      "type": "object",
+      "properties": {
+        "check": {
+          "description": "The command deciding whether the environment is right, as argv.\n\nExit `0` is provisioned; anything else is not. argv rather than a shell\nstring for `[[hook.action]]`'s reason — there is then no quoting layer\nbetween what an operator wrote and what runs: no word splitting, no glob\nexpansion, no `$(…)`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "gloss": {
+          "description": "What this row is about, in one line, for a reader of the config.\n\nRequired rather than optional: a precondition nobody wrote the meaning of\ndown is one the next reader cannot decide whether to keep — and since the\nreport is pointer-only, this is the only place that meaning can live.",
+          "type": "string"
+        },
+        "id": {
+          "description": "The stable token a report names.\n\nSeparate from the command for [`crate::markers::Marker`]'s reason: the\nargv is free to change without the thing it is called in reports changing\nwith it.",
+          "type": "string"
+        },
+        "repair": {
+          "description": "The command that fixes it, as argv. Absent means diagnose-only.\n\nA row with no repair is not a lesser row: some preconditions genuinely\ncannot be fixed from inside the container, and a row saying so is more\nuse than a repair that silently does nothing.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "gloss",
+        "check"
       ]
     },
     "Strictness": {

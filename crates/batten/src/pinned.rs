@@ -113,7 +113,7 @@ const RECORD: &str = "pinned-programs";
 
 /// The mediator this fact asks. One name, matching [`crate::rules::RequireVia`]'s
 /// single variant — a second spelling of "which pin" is a second thing to drift.
-const MEDIATOR: &str = "mise";
+pub(crate) const MEDIATOR: &str = "mise";
 
 /// The record, as one writer writes it and one reader reads it.
 ///
@@ -236,6 +236,26 @@ pub fn cached(root: &Path) -> PinnedFacts {
     }
 }
 
+/// Whether a record exists that can no longer answer (CLOUD-1324). Never spawns.
+///
+/// **The two could-not-looks have different remedies, and only one of them is a
+/// fault.** A project with no pin at all has no record and nothing to repair;
+/// a project whose record stopped validating has a real thing to fix, and until
+/// it is fixed every pinned program reads as absent. [`cached`] correctly answers
+/// could-not-look to both, which is right for a fact and useless for a diagnosis.
+///
+/// So the question is asked as a file read over the two things a reader can act
+/// on: a record is THERE, and it does not answer. Measured — `mise.toml` changed
+/// at 03:56 and a record written the previous day stopped validating, leaving
+/// `doctor` able to say only that some declared program was missing.
+///
+/// A record that cannot be located at all is not stale: it is absent, which this
+/// reports as `false` for the same reason the fact allows on could-not-look.
+#[must_use]
+pub fn record_is_stale(root: &Path) -> bool {
+    record_path(root).is_some_and(|path| path.is_file()) && matches!(cached(root), Look::CouldNotLook)
+}
+
 /// Ask the pin, record the answer, and return it. Spawns.
 ///
 /// Called where an `Effect` is admissible — at session start, once — so that
@@ -251,6 +271,41 @@ pub fn refresh(root: &Path) -> PinnedFacts {
         // session resolves again — which is the same could-not-look the reader
         // already handles.
         let _recorded = record(root, &configs(root), programs);
+    }
+    resolved
+}
+
+/// [`refresh`], at most once per root per process (CLOUD-1324).
+///
+/// **The bound is not an optimisation.** `refresh` spawns the runner twice, and
+/// `record` may be unable to write the answer down — no git directory, a
+/// read-only tree — in which case [`cached`] still cannot answer on the next
+/// call. An unbounded repair would then pay those two spawns for EVERY program
+/// of EVERY rule. Measured as flakiness first: without it, one `enforce` over a
+/// fixture became slow enough under a parallel suite to be indistinguishable
+/// from a broken gate.
+///
+/// **Keyed by root rather than a bare once-cell**, which is the part a first
+/// draft got wrong: one process judges many trees — every fixture in the suite,
+/// and any tool driving several checkouts — so a single cached answer would hand
+/// the second tree the first tree's toolchain. The map is small and lives for the
+/// process, matching how long the answer is good for.
+///
+/// A poisoned lock answers could-not-look rather than panicking: this is a repair,
+/// and a repair that kills the run is worse than one that declines.
+#[must_use]
+pub fn repaired(root: &Path) -> PinnedFacts {
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeMap<PathBuf, PinnedFacts>>> =
+        std::sync::OnceLock::new();
+    let memo = MEMO.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
+    if let Ok(seen) = memo.lock()
+        && let Some(answer) = seen.get(root)
+    {
+        return answer.clone();
+    }
+    let resolved = refresh(root);
+    if let Ok(mut seen) = memo.lock() {
+        seen.insert(root.to_owned(), resolved.clone());
     }
     resolved
 }

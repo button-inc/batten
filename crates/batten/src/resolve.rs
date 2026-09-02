@@ -622,6 +622,13 @@ pub struct Resolved {
     /// could run anything under the agent's own hook.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hook: Option<crate::action::HookConfig>,
+    /// The container preconditions (CLOUD-1324), as the authority states them.
+    /// Not layered, and for `hook`'s reason rather than a consistency one: a
+    /// startup row is a command, and a repair row is a command run WITHOUT a
+    /// flag at session start, so a local file able to add one could run anything
+    /// under the agent's own session start.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub startup: Vec<crate::startup::Startup>,
     /// The judge payload boundary (CLOUD-135), as the authority states it. Not
     /// layered: every field is refusing by default and widening it is the
     /// weakening, so there is no raise-only reading a local file could be
@@ -1645,6 +1652,7 @@ fn assemble(
         hook_output: repo.hook_output.clone(),
         must_land_on: repo.must_land_on.clone(),
         hook: repo.hook.clone(),
+        startup: repo.startup.clone(),
         transcript: repo.transcript.clone(),
         attribution: repo.attribution.clone(),
         commit: repo.commit.clone(),
@@ -1773,6 +1781,13 @@ fn attribution(
         ("mcp", authority_set(repo.mcp.is_some())),
         ("defects", authority_set(repo.defects.is_some())),
         ("provision", authority_set(!repo.provisions.is_empty())),
+        // The container's declared preconditions (CLOUD-1324). `authority_set`
+        // like every sibling above: `[[startup]]` is read from the committed
+        // authority alone — a repair is a command run without a flag at session
+        // start, so a local file able to add one could run anything under the
+        // agent's own session start — and this row is what says so in the
+        // provenance the `config show` reader sees.
+        ("startup", authority_set(!repo.startup.is_empty())),
         ("drain", authority_set(repo.drain.is_some())),
     ])
 }

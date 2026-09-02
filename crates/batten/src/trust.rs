@@ -785,6 +785,22 @@ pub enum WeakeningKind {
     /// configs can settle. Narrowing this to "handlers that would have denied"
     /// would be a gate estimating rather than deciding (non-negotiable rule 3).
     HandlerRemoved,
+    /// A `[[startup]]` row the base ref carried and the working tree does not
+    /// (CLOUD-1324).
+    ///
+    /// A row is a precondition the base ref asserted about the container, so
+    /// deleting one removes a bar — the same reading `HandlerRemoved` takes, and
+    /// for the same reason: whether the check would have failed is a runtime
+    /// fact about a declared program, not something two parsed configs can
+    /// settle, so narrowing this to "rows that would have failed" would be a
+    /// gate estimating rather than deciding (non-negotiable rule 3).
+    ///
+    /// The REMOVED direction only. A row ADDED is a precondition gained, and its
+    /// repair is a command — but that is exactly why `[[startup]]` is not
+    /// layered at all: `resolve` reads it from the committed authority alone, so
+    /// there is no local file that could add one. This comparison is between two
+    /// committed refs, where an added row is a tightening like any other.
+    StartupRowRemoved,
     /// `[trust] offline_fallback` went on, so an unreachable base ref may now be
     /// answered from a pinned config instead of refusing (CLOUD-720).
     ///
@@ -862,6 +878,7 @@ impl WeakeningKind {
         WeakeningKind::JudgePayloadLimitRaised,
         WeakeningKind::DesignCaptureLimitRaised,
         WeakeningKind::HandlerRemoved,
+        WeakeningKind::StartupRowRemoved,
         WeakeningKind::OfflineFallbackEnabled,
         WeakeningKind::ProtectedReaderAdded,
         WeakeningKind::VocabularyAbandoned,
@@ -920,6 +937,7 @@ impl WeakeningKind {
             WeakeningKind::JudgePayloadLimitRaised => "judge-payload-limit-raised",
             WeakeningKind::DesignCaptureLimitRaised => "design-capture-limit-raised",
             WeakeningKind::HandlerRemoved => "handler-removed",
+            WeakeningKind::StartupRowRemoved => "startup-row-removed",
             WeakeningKind::OfflineFallbackEnabled => "offline-fallback-enabled",
         }
     }
@@ -1192,6 +1210,10 @@ pub const CENSUS: &[FieldCoverage] = &[
             WeakeningKind::DefectsLedgerRemoved,
             WeakeningKind::DefectsClassAdded,
         ]),
+    },
+    FieldCoverage {
+        field: "startup",
+        coverage: Coverage::Compared(&[WeakeningKind::StartupRowRemoved]),
     },
     FieldCoverage {
         field: "provisions",
@@ -1907,6 +1929,14 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         "hook.handler",
     ));
 
+    // The container's declared preconditions (CLOUD-1324), by the same reading.
+    found.extend(removed_entries(
+        WeakeningKind::StartupRowRemoved,
+        &startup_ids(base),
+        &startup_ids(working),
+        "startup",
+    ));
+
     // The judge's privacy boundary (CLOUD-135). Compared from both sides
     // regardless of whether either declares the table: an absent `[judge]` is
     // the *tightest* setting — pointer-only, at the engine's ceiling — so a
@@ -2061,6 +2091,16 @@ fn ids(entries: impl Iterator<Item = String>) -> Vec<String> {
 /// plus an addition, and only the removal is a weakening: that is the correct
 /// answer, since nothing can tell a rename from a deletion-and-replacement, and
 /// treating it as neither would be the silence this comparison exists to end.
+/// Every declared `[[startup]]` row id, in declaration order.
+///
+/// Ids rather than whole rows, matching [`handler_ids`]: what is compared is
+/// which preconditions the ref asserted, and an EDITED row is a different
+/// question that two parsed configs cannot answer honestly — a changed `check`
+/// may be stricter or looser, and only running both would say which.
+fn startup_ids(config: &Config) -> Vec<String> {
+    config.startup.iter().map(|row| row.id.clone()).collect()
+}
+
 fn handler_ids(config: &Config) -> Vec<String> {
     config.hook.as_ref().map_or_else(Vec::new, |hook| {
         hook.handlers
@@ -3152,6 +3192,43 @@ mod tests {
         assert!(
             weakenings(&action, &config("")).is_empty(),
             "an action is not a bar, so its removal is not a weakening"
+        );
+    }
+
+    #[test]
+    fn dropping_a_startup_row_is_a_weakening_and_adding_one_is_not() {
+        // A `[[startup]]` row is a precondition the base ref asserted about the
+        // container, so deleting one removes a bar (CLOUD-1324) — the same
+        // reading `HandlerRemoved` takes.
+        //
+        // BOTH DIRECTIONS, because the direction is the property being pinned: a
+        // case asserting only that "something is reported" would pass over a
+        // comparison wired backwards, and this one would then refuse every
+        // repository that ADDS a precondition.
+        let row = config(
+            "[[startup]]\nid = \"probe\"\ngloss = \"a probe\"\ncheck = [\"true\"]\n",
+        );
+        assert_eq!(
+            only(&row, &config("")),
+            Weakening::new(
+                WeakeningKind::StartupRowRemoved,
+                "startup[probe]",
+                "present",
+                "absent",
+            )
+        );
+        assert!(weakenings(&config(""), &row).is_empty());
+
+        // An EDITED row is deliberately not compared. Whether a changed `check`
+        // is stricter or looser is a runtime fact about two declared programs,
+        // and a gate answering it from two parsed configs would be estimating
+        // rather than deciding (non-negotiable rule 3).
+        let edited = config(
+            "[[startup]]\nid = \"probe\"\ngloss = \"a probe\"\ncheck = [\"false\"]\n",
+        );
+        assert!(
+            weakenings(&row, &edited).is_empty(),
+            "an edited check is not a comparison two parsed configs can settle"
         );
     }
 

@@ -426,6 +426,31 @@ pub struct Config {
     /// The type, its validator and the spawn are [`crate::action`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hook: Option<crate::action::HookConfig>,
+    /// What this repository's container must be, and how it is repaired
+    /// (CLOUD-1324). Each `[[startup]]` row names a `check` deciding whether
+    /// the environment is right and, optionally, the `repair` that makes it so.
+    ///
+    /// A REPO-COMMITTED RULE RATHER THAN AN ENGINE CONSTANT, which is the whole
+    /// reason the table exists: which preconditions a container needs is a
+    /// property of the project being gated, never of Batten (non-negotiable
+    /// rule 1), and the alternative it replaced was a boolean per repair inside
+    /// a table about hook events. Absent or empty means this repository states
+    /// no preconditions.
+    ///
+    /// Harness-agnostic by construction: a row names a command and an exit code
+    /// and knows nothing about which agent harness is running.
+    ///
+    /// DELIBERATELY NOT `[[provision]]`, which is CLOUD-90's binary manifest —
+    /// a pinned version, a URL and a checksum for one fetched tool. That table
+    /// answers *is this artifact the one we pinned*; this one answers *is this
+    /// container the one we declared*, and folding them together would give one
+    /// noun two subjects. The two are siblings rather than rivals: both are
+    /// house-style §9's check/fix duality, which `provision status`/`provision
+    /// apply` established here first and this table follows.
+    ///
+    /// The type, its validator and the spawn are [`crate::startup`].
+    #[serde(default, rename = "startup", skip_serializing_if = "Vec::is_empty")]
+    pub startup: Vec<crate::startup::Startup>,
     /// The optional LLM judge's payload-privacy boundary (CLOUD-135): what may
     /// cross into a model call. Absent means no judge is configured; present and
     /// empty means pointers and hashes only, which is also what every field
@@ -1369,6 +1394,13 @@ fn validate_sections(config: &Config) -> Result<()> {
         Native::ProvisionTableRefused,
         crate::provision::validate(&config.provisions),
     )?;
+    // A row that could never decide, a repair that runs nothing, an id declared
+    // twice: each refused here rather than once per session, where the failure
+    // would look like a broken container instead of a typo in this file.
+    under(
+        Native::StartupTableRefused,
+        crate::startup::validate(&config.startup),
+    )?;
     Ok(())
 }
 
@@ -1522,6 +1554,10 @@ impl Config {
             prune: None,
             defects: None,
             provisions: Vec::new(),
+            // Declaring no container preconditions is the ordinary case: a
+            // project that states none has nothing for `batten startup` to
+            // decide, which is a different thing from one whose checks all pass.
+            startup: Vec::new(),
             // Declaring no transcript is the ordinary case, and it is not the
             // same as pointing at one that is missing: the first says the
             // capability was never claimed, the second that it was claimed and
@@ -1915,6 +1951,11 @@ mod tests {
             "provisions",
             "crate::provision::validate(",
             Native::ProvisionTableRefused,
+        ),
+        (
+            "startup",
+            "crate::startup::validate(",
+            Native::StartupTableRefused,
         ),
         (
             "waivers",

@@ -2102,6 +2102,22 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   is CLOUD-778's seam widened to a SEQUENCE — the readings a run takes, in order,
   last repeating — because the discriminating case needs the second reading to
   differ from the first.
+- `startup.rs` — the `[[startup]]` table (CLOUD-1324): what a container must be
+  and how it is repaired. Sibling to `provision.rs` and the split is the SUBJECT —
+  that one answers *is this artifact the one we pinned*, this one *is this
+  container the one we declared*. Same §9 check/fix pair, as one verb and a flag
+  (`batten startup`, `--repair`) rather than two sub-verbs, because both halves
+  decide the same rows and the fix half's report IS the check re-run. A row is
+  `id`/`gloss`/`check` argv/optional `repair` argv; nothing in it names a harness
+  or a platform, which is what makes the table the harness-agnostic answer to
+  "what does this box need". After a repair the check is RE-DECIDED, so a repair
+  that exits zero having fixed nothing reports `repair-failed`; a check that
+  cannot be spawned is could-not-look — never a pass, and never a licence to
+  mutate. The declared repairs also run at `SessionStart` without a flag, because
+  writing a `repair` in the committed authority IS the authorisation; `--repair`
+  is the out-of-band surface `setup.sh` uses. Replaced `[hook]
+  reclaim_at_session_start`, a boolean about one harness-shaped repair in a table
+  about hook events.
 - `provision.rs` — the `[[provision]]` manifest (CLOUD-90): pinned tools fetched
   and cached out of tree. §9's check/fix pair — `provision status` (read) is
   freshness, `provision apply [-n]` (write) is the fix. **The provisioned binary

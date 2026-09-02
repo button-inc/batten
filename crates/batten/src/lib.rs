@@ -101,6 +101,7 @@ pub mod spec;
 /// program, which is the classification rather than an accident of it.
 pub mod symbols;
 
+pub mod startup;
 pub mod state;
 pub mod stop;
 pub mod store;
@@ -294,6 +295,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Design { command }) => match command {
             DesignCommand::Audit { json } => run_design_audit(json, &overrides, out),
         },
+        Some(Command::Startup { repair, json }) => run_startup(repair, json, &overrides, out),
         Some(Command::Provision { command }) => match command {
             ProvisionCommand::Status { json } => run_provision_status(json, &overrides, out),
             ProvisionCommand::Apply { dry_run } => run_provision_apply(dry_run, &overrides, err),
@@ -374,6 +376,73 @@ fn run_design_audit(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
 /// absent budget: zero entries is a complete and honest answer — this repository
 /// provisions nothing — where a budget verb with no budget would be claiming to
 /// have measured something it did not. The two absences are different claims.
+/// Decide every `[[startup]]` row, repairing when asked (CLOUD-1324).
+///
+/// # Why one verb and a flag rather than two sub-verbs
+///
+/// `provision status`/`provision apply` split because they have different
+/// subjects: one reads a checksum, the other fetches an artifact. Here both
+/// halves decide the SAME rows against the SAME checks, and the fix half's
+/// report is precisely the check re-run. Two sub-verbs would have to duplicate
+/// the whole report, and a reader comparing them would be comparing two
+/// renderings of one answer.
+///
+/// # Exit
+///
+/// `0` when every row is provisioned — on the first look or after this run's
+/// repair — and `1` otherwise. Never `2`: a container that does not match what
+/// the repository declares is the config-or-usage class, and a mediating harness
+/// reading `2` as a policy denial must not be told this is one (§7). That is
+/// `doctor`'s reasoning and this verb inherits it.
+///
+/// # The report
+///
+/// Pointer-only: each row's declared id and a verdict token, in declaration
+/// order, so the output is byte-stable for a given tree (§6). Silence means
+/// there were no rows to decide — which is not the same as every row passing,
+/// and is why the count is always the last line.
+fn run_startup(
+    repair: bool,
+    json: bool,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let here = Path::new(".");
+    let outcomes = if repair {
+        startup::repair(here, &config.startup)
+    } else {
+        startup::evaluate(here, &config.startup)
+    };
+    let failed = outcomes.iter().filter(|outcome| !outcome.ok).count();
+
+    if json {
+        writeln!(out, "{}", serde_json::to_string_pretty(&outcomes)?)?;
+    } else {
+        // EVERY ROW, not only the failing ones, and deliberately unlike
+        // `provision status`. A reader running this is asking whether the
+        // container is right, and a silent pass over a row whose check never ran
+        // is indistinguishable from a row that was never declared — which is the
+        // could-not-look-as-clean failure the whole table exists to refuse.
+        for outcome in &outcomes {
+            writeln!(out, "{}", outcome.line())?;
+        }
+        writeln!(
+            out,
+            "startup: {} row(s), {failed} failed",
+            outcomes.len()
+        )?;
+    }
+    // `Usage`, never `Violation` — `doctor`'s reasoning, inherited: a mediating
+    // harness reads `2` as a policy denial, and "this container is not what the
+    // repository declares" is not one (§7).
+    Ok(if failed == 0 {
+        ExitCode::Success
+    } else {
+        ExitCode::Usage
+    })
+}
+
 fn run_provision_status(
     json: bool,
     overrides: &Overrides,
@@ -3426,9 +3495,11 @@ fn run_capture_prune(
 /// Whatever the chosen sub-verb could not do.
 fn run_wiring(command: &cli::WiringCommand, mode: Mode, err: &mut dyn Write) -> Result<ExitCode> {
     match command {
-        cli::WiringCommand::Reclaim { yes, dry_run } => {
-            run_wiring_reclaim(*yes, *dry_run, mode, err)
-        }
+        cli::WiringCommand::Reclaim {
+            yes,
+            dry_run,
+            check,
+        } => run_wiring_reclaim(*yes, *dry_run, *check, mode, err),
     }
 }
 
@@ -3451,10 +3522,17 @@ fn run_wiring(command: &cli::WiringCommand, mode: Mode, err: &mut dyn Write) -> 
 fn run_wiring_reclaim(
     yes: bool,
     dry_run: bool,
+    check: bool,
     mode: Mode,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     use etcetera::BaseStrategy as _;
+
+    // `--check` IS `--dry-run` plus an exit code, and reusing the computation is
+    // what stops the two answers from being able to disagree. A separate walk
+    // would be a second authority over "is a repair owed" — the class this
+    // repository has measured twice.
+    let dry_run = dry_run || check;
 
     // `hook_authority_root`, NOT `git::repo_root` — and the difference is a linked
     // worktree, which is CLOUD-824's defect one layer over. `reclaim` derives the
@@ -3525,7 +3603,21 @@ fn run_wiring_reclaim(
              restart the harness before reading `doctor hooks` as green",
         )?;
     }
-    Ok(ExitCode::Success)
+    // THE ONE PLACE THIS VERB DECIDES. Bare and `--dry-run` are both `Success`
+    // whatever they found, deliberately — a repair is not a check, and `doctor
+    // hooks` answers the *is there a sibling* question as a count because
+    // whether one is legitimate is a consumer's judgement. `--check` is where a
+    // consumer has already made that judgement, in a `[[startup]]` row, and is
+    // asking for the same walk as an exit code.
+    //
+    // `Usage`, never `Violation`: a merged surface carrying somebody else's hook
+    // is the config-or-usage class, and a mediating harness reading `2` as a
+    // policy denial must not be told this is one (§7).
+    Ok(if check && done.siblings() > 0 {
+        ExitCode::Usage
+    } else {
+        ExitCode::Success
+    })
 }
 
 /// One half of a `FROM:TO` range, as a 1-indexed line number.
@@ -7060,8 +7152,17 @@ fn collect_batch_advice(
         drain_advisories(envelope, overrides, mode, err, advice)?;
     }
     report_contract_drift(envelope, overrides, advice);
+    // ORDER IS LOAD-BEARING: `refresh_pinned` rebuilds the record the health
+    // report then reads, so a session whose pin record went stale between
+    // sessions reports the repaired state rather than the state it started in.
     refresh_pinned(envelope, overrides);
+    // EXPIRY BEFORE REPAIR, and the order is the whole of the race argument
+    // `expire_wiring_record` used to give for the repair living elsewhere: in one
+    // process, in this order, the record describing what this session LOADED is
+    // dropped before a repair can write one describing what it FIXED.
     expire_wiring_record(envelope);
+    repair_startup_rows(envelope, overrides);
+    report_container_health(envelope, overrides, advice);
     Ok(())
 }
 
@@ -7107,6 +7208,150 @@ fn refresh_pinned(envelope: &hook::Envelope, overrides: &Overrides) {
     let _refreshed = pinned::refresh(here);
 }
 
+/// Run this repository's declared `[[startup]]` repairs, once per session
+/// (CLOUD-1324).
+///
+/// # Repair rather than refusal, and the measurement behind that
+///
+/// A launcher that re-provisions its own hook registrations does it on its own
+/// schedule: observed here rewriting two surfaces at 03:49 that were emptied at
+/// 01:08, mid-session. A gate keyed on the count is therefore red at
+/// unpredictable moments and blocks work that has nothing to do with it — which
+/// is exactly what `[hook] exclusive = true` did to this repository before it was
+/// withdrawn. A repair has no such failure mode: it runs at the one moment the
+/// environment is about to be used, and a later drift is repaired at the next
+/// session start instead of refusing a commit in the middle of this one.
+///
+/// # Why no flag is needed here, and one is needed on the verb
+///
+/// `batten startup --repair` makes a person say what they are asking for.
+/// Nothing asks here, because the consumer already did: **a `repair` written in
+/// the committed authority IS the authorisation to run it.** A row with no
+/// `repair` is untouched, which is how a consumer declares a precondition it
+/// wants reported and not acted on.
+///
+/// Rewriting anything under a person's `$HOME` therefore requires a row saying
+/// so. That is non-negotiable rule 1's posture one layer up: which repairs a
+/// container needs is the project's statement, never the engine's.
+///
+/// # Never a verdict, and silent on every failure
+///
+/// `SessionStart` is not a call being adjudicated. What is still wrong after the
+/// repairs is reported by [`report_container_health`], which runs next; nothing
+/// here can refuse a session, because a session refused over its own environment
+/// is one that cannot run the repair the report names.
+fn repair_startup_rows(envelope: &hook::Envelope, overrides: &Overrides) {
+    if envelope.event != hook::Event::SessionStart {
+        return;
+    }
+    let here = hook_authority_root();
+    if !here.join(config::CONFIG_FILE).exists() {
+        return;
+    }
+    let Ok(resolved) = resolve::resolve(here, overrides) else {
+        return;
+    };
+    // Discarded deliberately: what the repairs found is `report_container_health`'s
+    // to say, off a fresh reading. Reporting it from here would describe a state
+    // that the very next call re-decides.
+    let _outcomes = startup::repair(here, &resolved.startup);
+}
+
+/// Say at session start whether this container is misconfigured (CLOUD-1324).
+///
+/// # Why the report is pushed rather than waited for
+///
+/// `batten doctor` already answers this, and answering it is not the problem:
+/// **nobody runs it.** A container that is missing a program, wired to hooks the
+/// tree does not declare, or carrying a pin record that stopped validating looks
+/// exactly like a healthy one until some gate silently decides nothing — which is
+/// the failure this whole file exists to refuse, one level up. The session's
+/// first moment is the only point where the news is still cheap: everything after
+/// it is work done on an unknown machine.
+///
+/// So the diagnosis rides the advisory channel at `SessionStart`, and the agent
+/// learns what is broken before it has spent anything on it.
+///
+/// # Silent on a healthy container, which is what keeps it credible
+///
+/// Every check passing emits nothing. An advisory that speaks every session is
+/// one every reader learns to scroll past, and the drift notice above already
+/// pays for that lesson.
+///
+/// # Pointer-only (non-negotiable rule 4)
+///
+/// [`doctor::Check::line`] is the §6 rendering — a check name, a verdict token,
+/// and the consumer's own declared subjects. No path off the disk, no file
+/// contents, no host identity. It is the same bytes `batten doctor` prints, from
+/// the same producer, so the advisory and the verb cannot disagree.
+///
+/// # Never a verdict
+///
+/// A `Warning`, not a refusal. `SessionStart` is not a call being adjudicated,
+/// and a broken container is a provisioning failure rather than a policy one —
+/// refusing the session would leave the reader unable to run the very repair the
+/// advisory names.
+fn report_container_health(
+    envelope: &hook::Envelope,
+    overrides: &Overrides,
+    advice: &mut Vec<advisory::Advice>,
+) {
+    if envelope.event != hook::Event::SessionStart {
+        return;
+    }
+    let here = hook_authority_root();
+    // A tree with no consumer has nothing to be misconfigured FOR, which is
+    // `refresh_pinned`'s narrowing and for the same reason.
+    if !here.join(config::CONFIG_FILE).exists() {
+        return;
+    }
+    let report = doctor::diagnose(here);
+    // THE CONSUMER'S OWN ROWS, RE-DECIDED AFTER THE REPAIRS RAN. `evaluate`
+    // rather than `repair`: `repair_startup_rows` already had its turn, and a
+    // second repair pass here would report the state of a third one. What is
+    // left is what a reader actually has to deal with.
+    let rows = resolve::resolve(here, overrides)
+        .map(|resolved| startup::evaluate(here, &resolved.startup))
+        .unwrap_or_default();
+    let failing: Vec<String> = report
+        .checks
+        .iter()
+        .filter(|check| !check.ok)
+        .map(doctor::Check::line)
+        .chain(
+            rows.iter()
+                .filter(|outcome| !outcome.ok)
+                .map(startup::Outcome::line),
+        )
+        .collect();
+    if failing.is_empty() {
+        return;
+    }
+    let mut out = String::from(
+        "container-health: this session's environment does not match what the tree declares\n\n",
+    );
+    for line in &failing {
+        out.push_str("  ");
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str(
+        "\n`batten doctor` reports the engine's own checks and `batten startup` this\n\
+         repository's declared `[[startup]]` rows; `-J` is the data channel for both. Each\n\
+         line above names what failed and the subjects it failed over, and a row's meaning\n\
+         is its `gloss` in `batten.toml`.\n\n\
+         A gate whose program cannot be reached decides NOTHING while the config reads as\n\
+         if it does, so treat this as work before the work rather than as background noise.\n\
+         Every declared repair has already run this session; what is listed is what it did\n\
+         not fix. `batten startup --repair` runs them again by hand.\n\n\
+         Reported at session start only, and only when something is wrong.\n",
+    );
+    advice.push(advisory::Advice::new(
+        severity::AdvisoryTier::Warning,
+        out,
+    ));
+}
+
 /// Drop the at-load wiring record at the one moment it stops being true
 /// (CLOUD-893).
 ///
@@ -7116,11 +7361,15 @@ fn refresh_pinned(envelope: &hook::Envelope, overrides: &Overrides) {
 /// `batten wiring reclaim` leaves behind, and it needs no session identity to do
 /// it: the event IS the identity.
 ///
-/// **The clear has exactly one writer, which is why the repair has none here.**
-/// Running the reclaim from a session-start handler would put a write and this
+/// **The clear has exactly one writer, and the repair is now sequenced against
+/// it rather than kept away from it** (CLOUD-1324). This comment used to read
+/// *"running the reclaim from a session-start handler would put a write and this
 /// clear inside one unordered batch, and whichever landed second would decide
-/// between the honest red and the false green the record exists to refuse. So
-/// `reclaim` stays explicitly invoked and this stays the only expiry.
+/// between the honest red and the false green the record exists to refuse"* —
+/// which is a correct argument about an unordered batch of independent handlers
+/// and not one about [`collect_batch_advice`], where the order is written down
+/// in one process. Expiry first, then [`reclaim_wiring`]: the record this session
+/// loaded under is gone before a repair can write one describing the repair.
 ///
 /// Silent on every failure, and never a verdict. A session-start hook that
 /// refused a session over a stale bookkeeping file would be a gate on the wrong

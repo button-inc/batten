@@ -206,13 +206,63 @@ $ batten doctor
 config ok
 git-repo ok
 command-programs ok
-doctor: 3 check(s), 0 failed
+pin-record ok
+hook-handlers ok
+plan-surface ok
+doctor: 6 check(s), 0 failed
 ```
 
 `doctor` reports whether Batten can run here at all, with `-J` for a machine
 reading. It never returns `2`, deliberately: every failure it can report is the
 config-or-usage class, and "this checkout is misconfigured" must never be read as
 a policy denial.
+
+A `command` row's program counts as reachable if it is on `PATH` **or** the
+project's pin provides it — the spawn resolves it either way, so a probe that
+asked only about bare `PATH` would report every pinned tool as missing.
+`pin-record` is asked separately because a memo that stopped validating and a
+tool that was never installed are different faults with different repairs.
+
+**You do not have to remember to run it.** A container whose environment does not
+match what the tree declares says so on the advisory channel at session start,
+naming the failing checks and their subjects; a healthy one is silent.
+
+## `batten startup` — the preconditions this repository declares
+
+`doctor` answers whether Batten can run here. `batten startup` answers whether
+this **container** is what the repository declared, off `[[startup]]` rows in
+`batten.toml`: each is a `check` command whose exit code decides, plus the
+`repair` that makes it so.
+
+```console
+$ batten startup
+engine-on-path ok
+hook-surfaces-are-battens failed not-provisioned
+startup: 2 row(s), 1 failed
+```
+
+Bare, it decides and changes nothing. `batten startup --repair` runs each failing
+row's repair and then **re-runs its check**, so a repair that exits zero having
+fixed nothing is reported rather than believed:
+
+```console
+$ batten startup --repair
+engine-on-path ok
+hook-surfaces-are-battens ok repaired
+startup: 2 row(s), 0 failed
+```
+
+`ok repaired` means this run moved that row. A row that keeps needing repair
+every session is a row whose check is wrong, and the two renderings are what let
+you see that.
+
+The declared repairs also run on their own at session start — writing a `repair`
+in the committed authority is the authorisation to run it — so `--repair` is for
+provisioning a container out of band, which is what the committed `setup.sh`
+does. A row with no `repair` is reported and never acted on.
+
+What a row means is its `gloss` in `batten.toml`: the report is pointer-only, so
+the id is all it carries.
 
 ## Overrides may tighten, never weaken
 

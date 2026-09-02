@@ -1126,6 +1126,57 @@ const PRUNE: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `--repair` on `startup` (CLOUD-1324): make the environment fixes, do not
+/// only report them.
+///
+/// **Opt-in, and the opt-in is the point.** Bare `batten startup` decides every
+/// `[[startup]]` row and mutates nothing; this flag is what turns the same rows
+/// into repairs. A person or a setup script reaching for it has to say so, which
+/// is what makes "batten will change your environment" a thing written on the
+/// command line rather than a thing a reader has to infer from a config file.
+///
+/// It is deliberately NOT `--yes`. `-y` pre-answers a confirmation a destructive
+/// verb would otherwise refuse without; this selects a different mode of a verb
+/// that is perfectly useful without it.
+/// `--check` on `wiring reclaim` (CLOUD-1324): decide whether a repair is owed.
+///
+/// The CHECK HALF of a verb that was only ever the fix half. `doctor hooks`
+/// reports `merged_siblings` as a COUNT and deliberately never as a failure —
+/// whether a hook beside batten's is legitimate is a consumer's judgement, which
+/// the engine may not make. A `[[startup]]` row is where a consumer now makes
+/// it, and a row needs a command that DECIDES; this is that command, over the
+/// same surfaces and the same selector the repair uses.
+///
+/// It reuses `--dry-run`'s whole computation and differs only in the exit code,
+/// which is what keeps the two answers from being able to disagree.
+const CHECK: FlagDecl = FlagDecl {
+    id: "check",
+    long: Some("check"),
+    short: None,
+    help: "Exit non-zero if a repair is owed, and remove nothing",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+const REPAIR: FlagDecl = FlagDecl {
+    id: "repair",
+    long: Some("repair"),
+    short: None,
+    help: "Run each failing row's declared repair, then re-decide its check",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 const DRY_RUN: FlagDecl = FlagDecl {
     id: "dry_run",
     long: Some("dry-run"),
@@ -3047,6 +3098,25 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[DRY_RUN],
     },
+    // The container's own preconditions (CLOUD-1324), as `[[startup]]` rows
+    // declare them. §9's check/fix pair again — `provision status`/`provision
+    // apply` established the shape here first — with the two halves as one verb
+    // and a flag rather than two sub-verbs, because unlike the manifest above
+    // there is exactly one subject and re-deciding IS the fix half's report.
+    //
+    // `Unclassified` rather than `Read`, and for `enforce`'s stated reason: a
+    // row's `check` is a command the operator declared, so bare `startup` runs
+    // user-supplied code even though it writes nothing itself. §5 says such a
+    // verb is listed unclassified with a stated reason rather than guessed, and
+    // it is excluded from the derived read-only allowlist by construction.
+    CommandDecl {
+        path: "startup",
+        id: "startup",
+        about: "Report whether this container matches what the repository declares",
+        data_channel: true,
+        effect: Effect::Unclassified,
+        flags: &[REPAIR, JSON],
+    },
     // `hook` adjudicates another tool's call: its own execution only reads
     // stdin and config, but its *decision* mediates writes, so it is listed
     // unclassified rather than allowed to leak into the derived read-only
@@ -3508,8 +3578,12 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "wiring.reclaim",
         about: "Remove non-batten hook registrations from this host's merged surfaces",
         data_channel: false,
+        // `Destructive` is the VERB's classification and stays so, even though
+        // `--check` and `--dry-run` write nothing: §5 classifies a command by
+        // what it may do, not by what a particular invocation chose. A reader
+        // must not learn that a destructive verb is sometimes safe.
         effect: Effect::Destructive,
-        flags: &[DRY_RUN],
+        flags: &[DRY_RUN, CHECK],
     },
     // CLOUD-1274. THE LANDING LEASE, and the noun is `unclassified` for
     // `provision`'s reason rather than `policy`'s: the subtree writes — a

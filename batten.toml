@@ -6521,6 +6521,18 @@ wiring = [".claude/settings.json"]
 # The two rows are therefore back in `policy/harness-declared.json` naming
 # CLOUD-1314, which is open and owns their removal. The flag goes back to
 # undeclared -- the honest state, and the one the capability shipped in.
+#
+# WHAT REPLACES IT IS A REPAIR, NOT A SECOND VERDICT (CLOUD-1324), and it lives
+# in `[[startup]]` below rather than here. The reason `exclusive` cannot stand is
+# the rewrite SCHEDULE rather than the judgement: this consumer really does mean
+# its merged surfaces to be batten's, and the flag only fails because the platform
+# re-provisions mid-session, so a gate keyed on the count is red at moments nobody
+# chose. A `[[startup]]` row spends the same judgement on a repair instead.
+#
+# It cannot make THIS session's wiring true -- a host reads its hooks when the
+# session begins -- so the at-load record stays the honest answer about what was
+# loaded, and `policy/harness-declared.json` still carries the two rows for
+# CLOUD-1314 to close.
 [[hook.handler]]
 id = "mcp-attach-check"
 on = "user-prompt-submit"
@@ -10014,3 +10026,32 @@ The could-not-look arm, and it is conditioned on there being a claim to judge ra
 id = "task run first"
 kind = "command"
 target = "mise run rules-drift"
+
+# --- what this container must be, and how it repairs itself (CLOUD-1324) ------
+#
+# THE PATTERN THIS SETS IS "REPO-COMMITTED, HARNESS-AGNOSTIC RULE". Each row is
+# a command and an exit code deciding whether the environment is right, plus the
+# command that makes it so. Nothing here names an agent harness, a hosting
+# platform, or the Setup script field that provisioned the box -- a row says what
+# the RESULT has to look like, which is the only half a repository can own.
+#
+# The two halves that make this a rule rather than a script: the check DECIDES
+# (rule 3), and after a repair runs the check is RE-DECIDED, so a repair that
+# exits zero having fixed nothing is reported rather than believed.
+#
+# These run at every session start without anyone passing a flag, because
+# declaring a `repair` here IS the authorisation to run it. `batten startup`
+# reports them; `batten startup --repair` runs them by hand, which is what the
+# committed setup script does before an agent ever attaches.
+
+[[startup]]
+id = "engine-on-path"
+gloss = "the engine every hook registration invokes by bare name resolves on PATH"
+check = ["mise", "run", "deps"]
+repair = ["mise", "run", "deps-install"]
+
+[[startup]]
+id = "hook-surfaces-are-battens"
+gloss = "no non-batten hook registration survives on this host's merged surfaces"
+check = ["batten", "wiring", "reclaim", "--check"]
+repair = ["batten", "wiring", "reclaim", "-y"]

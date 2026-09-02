@@ -155,6 +155,26 @@ fn dry_run_reports_what_would_go_and_writes_nothing() {
     assert!(surface.contains("stop-hook-git-check"));
 }
 
+/// `--check` DECIDES where the bare verb and `--dry-run` only report.
+///
+/// The pair is what makes it a decider rather than a third rendering: the same
+/// surfaces, red while a sibling is there and green once it is gone. Without the
+/// second half a build that always exits 1 satisfies the first.
+#[test]
+fn check_is_red_while_a_sibling_stands_and_green_once_it_is_gone() {
+    let bench = bench("reclaim-check");
+    let (status, err) = bench.reclaim(&["--check"]);
+    assert_eq!(status, 1, "a repair is owed: {err}");
+    // Decides without repairing — `--check` implies `--dry-run`, so the surface
+    // it just judged is untouched.
+    assert!(bench.surface_text().contains("session-start-git-identity"));
+
+    let (status, err) = bench.reclaim(&["-y"]);
+    assert_eq!(status, 0, "{err}");
+    let (status, err) = bench.reclaim(&["--check"]);
+    assert_eq!(status, 0, "nothing is owed once the repair ran: {err}");
+}
+
 #[test]
 fn the_repair_takes_the_siblings_and_leaves_battens_own_registration() {
     let bench = bench("reclaim-repair");
@@ -295,6 +315,97 @@ fn a_session_start_expires_the_record_which_is_the_restart_this_reports() {
     };
     assert!(outcome.status.success(), "{}", stderr(&outcome));
     assert!(!bench.record().exists());
+}
+
+/// Drive one `SessionStart` through the real hook entry point.
+///
+/// Shared by the two cases below so the only difference between them is the
+/// config they were built with, which is what makes the pair discriminate.
+fn session_start(bench: &Bench) -> std::process::Output {
+    use std::io::Write as _;
+    let mut child = common::batten()
+        .current_dir(&bench.repo)
+        .args(["hook", "--harness", "claude-code"])
+        .at_home(&bench.home)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the binary runs");
+    child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(br#"{"hook_event_name":"SessionStart"}"#)
+        .expect("write stdin");
+    child.wait_with_output().expect("wait for batten")
+}
+
+/// A consumer that DECLARED the repair as a `[[startup]]` row gets it at session
+/// start, without invoking the verb (CLOUD-1324).
+///
+/// The measured reason for a repair rather than `exclusive`'s refusal: this
+/// repository's launcher rewrites both surfaces mid-session — observed at 03:49
+/// over a surface emptied at 01:08 — so a gate on the count is red at moments
+/// nobody chose and blocks every commit made after the rewrite. A repair runs at
+/// the one moment the host is about to read its hooks and refuses nothing.
+///
+/// Asserted over the SURFACE rather than over stdout, because the repair is
+/// deliberately silent: it says nothing an agent has to read, which is the whole
+/// point of solving the problem instead of reporting it.
+#[test]
+fn a_declared_repair_takes_the_siblings_at_session_start() {
+    let bench = bench("reclaim-declared");
+    // THE BUILT BINARY BY PATH, not `batten` by bare name. The committed config
+    // spells the bare name because a container has the engine on PATH — that is
+    // `engine-on-path`'s own row — but a fixture must not depend on whether this
+    // suite's host does, or the case would pass or fail on the developer's
+    // installation rather than on the code under test.
+    write(
+        &bench.repo,
+        "batten.toml",
+        &format!(
+            "version = 1\n\n\
+             [[startup]]\n\
+             id = \"hook-surfaces-are-battens\"\n\
+             gloss = \"no non-batten registration survives\"\n\
+             check = [{bin}, \"wiring\", \"reclaim\", \"--check\"]\n\
+             repair = [{bin}, \"wiring\", \"reclaim\", \"-y\"]\n",
+            bin = serde_json::to_string(env!("CARGO_BIN_EXE_batten")).unwrap()
+        ),
+    );
+    let outcome = session_start(&bench);
+    assert!(outcome.status.success(), "{}", stderr(&outcome));
+
+    let surface = bench.surface_text();
+    // The same load-bearing positive the verb's own case carries: a `retain` at
+    // the wrong level takes batten's registration out with the siblings, and
+    // every negative below is satisfied by that bug.
+    assert!(
+        surface.contains("batten hook --harness claude-code"),
+        "{surface}"
+    );
+    assert!(!surface.contains("session-start-git-identity"), "{surface}");
+    assert!(!surface.contains("stop-hook-git-check"), "{surface}");
+}
+
+/// THE ANTI-VACUITY MIRROR, and the flag is the only difference.
+///
+/// Rewriting files under somebody's `$HOME` is not the engine's to decide for a
+/// project. Without this case the one above is satisfied by a build that
+/// reclaims unconditionally — which would repair every adopter's home directory
+/// on upgrade, the opposite of house-style §8's raise-only promise.
+#[test]
+fn an_undeclared_repair_leaves_the_merged_surface_exactly_as_it_found_it() {
+    let bench = bench("reclaim-undeclared");
+    let before = bench.surface_text();
+    let outcome = session_start(&bench);
+    assert!(outcome.status.success(), "{}", stderr(&outcome));
+    assert_eq!(
+        bench.surface_text(),
+        before,
+        "an undeclared repair is not a quiet one — it is no repair at all"
+    );
 }
 
 #[test]

@@ -173,13 +173,21 @@ const GIT_REPO: &str = "git-repo";
 /// This harness's plan/todo surface has been SURVEYED — which is a different
 /// question from whether it has one (CLOUD-472).
 const PLAN_SURFACE: &str = "plan-surface";
-/// Every `command`-kind rule names a program that resolves on `PATH`.
+/// Every `command`-kind rule names a program the spawn can reach — on `PATH`, or
+/// through the project's pin.
 ///
 /// A missing binary is otherwise discovered at `enforce` time, mid-run, as a
 /// failure of the gate rather than of the setup. §9 is explicit that a rule
 /// "names a command already on the operator's PATH" — this is the probe that
 /// says whether that premise holds, before anything depends on it.
 const COMMAND_PROGRAMS: &str = "command-programs";
+/// The pin's memoised program set is either absent or able to answer.
+///
+/// Its own row rather than a mode of [`COMMAND_PROGRAMS`] (CLOUD-1324): a record
+/// that stopped validating and a program that was never installed are different
+/// faults with different repairs, and reporting either as the other sends a
+/// reader to the wrong one.
+const PIN_RECORD: &str = "pin-record";
 /// Every declared `[[hook.handler]]` names a live retirement and resolves to a
 /// program that exists (CLOUD-984).
 ///
@@ -217,6 +225,27 @@ fn on_path(program: &str) -> bool {
         return Path::new(program).is_file();
     }
     crate::rules::on_path_verbatim(program).is_some()
+}
+
+/// Whether the project's pin provides this program (CLOUD-1324).
+///
+/// **The probe must agree with the spawn**, which is [`on_path`]'s own rule and
+/// the reason this exists: the spawn ladder resolves a pinned program through the
+/// pin, so a probe asking only about bare `PATH` diagnoses a run that would have
+/// worked. Nothing a toolchain manager provides is on bare `PATH` — nor should it
+/// be, since a program reached around the pin is a different build — so without
+/// this every pinned program reads as missing and the report is noise.
+///
+/// **Reads the record, never asks the pin.** Resolving spawns, and `doctor` is a
+/// read verb; `pinned::cached` is a file read whose could-not-look is honest.
+/// A record that cannot answer leaves the program to the `PATH` probe alone,
+/// which is the conservative direction: it reports a program the spawn might
+/// still recover, rather than hiding one that is genuinely gone.
+fn provided_by_pin(dir: &Path, program: &str) -> bool {
+    matches!(
+        crate::pinned::cached(dir),
+        crate::facts::Look::Is(ref programs) if programs.contains(program)
+    )
 }
 
 /// Whether a handler's declared program is something that could be spawned.
@@ -286,16 +315,39 @@ pub fn diagnose(dir: &Path) -> Report {
     // names turns the same walk into a diagnosis a reader can fix, and they are
     // this consumer's own declared tokens rather than anything the check read
     // out of a file.
-    let missing: Vec<String> = rules
+    // REACHABLE MEANS REACHABLE THE WAY THE SPAWN REACHES IT, which is `PATH` OR
+    // the pin (CLOUD-1324). Nothing a toolchain manager provides is on bare
+    // `PATH` — nor should it be — so without the second arm every pinned program
+    // reads as missing and the whole check is noise.
+    let unreachable: Vec<String> = rules
         .iter()
         .filter_map(Rule::program)
-        .filter(|program| !on_path(program))
+        .filter(|program| !on_path(program) && !provided_by_pin(dir, program))
         .map(str::to_owned)
         .collect();
-    checks.push(if missing.is_empty() {
+    checks.push(if unreachable.is_empty() {
         Check::passed(COMMAND_PROGRAMS)
     } else {
-        Check::failed_naming(COMMAND_PROGRAMS, "program-not-on-path", missing)
+        Check::failed_naming(COMMAND_PROGRAMS, "program-not-on-path", unreachable)
+    });
+
+    // THE PIN'S OWN BOOKKEEPING, ASKED SEPARATELY — because "this program is
+    // missing" and "I cannot tell whether it is" have different remedies, and
+    // folding the second into the first sends a reader to install a tool that is
+    // already there. Overloading the check above with it was measured doing
+    // exactly that: a fixture with no pin at all reported its genuinely-absent
+    // program as a stale record.
+    //
+    // Not fatal to the run — `spawn_resolving` re-asks the pin and re-records
+    // when the reading cannot answer — but a record that stopped validating is a
+    // real thing to see, and `doctor` is a read verb, so saying so is all it may
+    // do. Silence where no record exists: a project with no pin has nothing to
+    // repair, which is why this asks whether one is THERE and does not answer,
+    // rather than asking whether an answer came back.
+    checks.push(if crate::pinned::record_is_stale(dir) {
+        Check::failed(PIN_RECORD, "pin-record-stale")
+    } else {
+        Check::passed(PIN_RECORD)
     });
 
     // The handler table, off the same resolved config. `today` is read once
@@ -1788,6 +1840,11 @@ mod tests {
         // `COMMAND_PROGRAMS` already asks of a `command` rule — same family,
         // same verb, one more row. What the case forbids is `doctor hooks`
         // leaking into this list, which it still does not.
+        //
+        // `PIN_RECORD` joins on the same footing (CLOUD-1324): the pin's memo is
+        // resolved config too, and whether it can still answer decides whether
+        // `COMMAND_PROGRAMS` above is reading the pin or guessing. Its own row
+        // rather than a mode of that one, because the repairs differ.
         let names: Vec<&str> = diagnose(&scratch("bare-unchanged"))
             .checks
             .iter()
@@ -1799,6 +1856,7 @@ mod tests {
                 CONFIG,
                 GIT_REPO,
                 COMMAND_PROGRAMS,
+                PIN_RECORD,
                 HOOK_HANDLERS,
                 PLAN_SURFACE
             ]

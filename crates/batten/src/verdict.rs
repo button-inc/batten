@@ -998,6 +998,8 @@ pub enum Native {
     RecorderTableRefused,
     /// The `[[provision]]` table would not load.
     ProvisionTableRefused,
+    /// The `[[startup]]` table would not load.
+    StartupTableRefused,
 }
 
 impl Native {
@@ -1040,6 +1042,7 @@ impl Native {
         Native::MintTableRefused,
         Native::RecorderTableRefused,
         Native::ProvisionTableRefused,
+        Native::StartupTableRefused,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1068,6 +1071,7 @@ impl Native {
         Native::MintTableRefused,
         Native::RecorderTableRefused,
         Native::ProvisionTableRefused,
+        Native::StartupTableRefused,
     ];
 
     /// The token this class is declared and rendered under.
@@ -1107,6 +1111,7 @@ impl Native {
             Native::MintTableRefused => "mint declare refused",
             Native::RecorderTableRefused => "recorder declare refused",
             Native::ProvisionTableRefused => "provision declare refused",
+            Native::StartupTableRefused => "startup declare refused",
         }
     }
 }
@@ -1569,6 +1574,12 @@ it in. A row that cannot resolve is a rule that will report a missing scanner at
 it was supposed to decide something.",
         routes: &[read("config read first", "batten.toml")],
     },
+    VendoredVerdict {
+        id: "startup declare refused",
+        gloss: "the startup table would not load",
+        class: "`[[startup]]` is how a repository states what its container must be and how that is repaired. A row that could never decide -- an empty check, a repair that runs nothing, an id declared twice -- is a precondition reported as broken every session with no repair reachable, so it is refused here rather than once per session, where the failure would read as a broken container instead of a typo in this file.",
+        routes: &[read("config read first", "batten.toml")],
+    },
 ];
 
 /// Every class the binary ships, as the registry carries them.
@@ -1897,7 +1908,8 @@ mod tests {
                 | Native::FactTableRefused
                 | Native::MintTableRefused
                 | Native::RecorderTableRefused
-                | Native::ProvisionTableRefused => native.id(),
+                | Native::ProvisionTableRefused
+                | Native::StartupTableRefused => native.id(),
             };
             // The prefix is gone (CLOUD-1284), so what makes this a token is the
             // ARITY: exactly three words. Asserting that here rather than a

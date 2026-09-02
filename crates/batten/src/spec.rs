@@ -831,6 +831,15 @@ mod tests {
             "semver".to_owned(),
             "semver check".to_owned(),
             "spec".to_owned(),
+            // The container's declared preconditions (CLOUD-1324) — §9's
+            // check/fix pair, as one verb and a `--repair` flag rather than two
+            // sub-verbs, because both halves decide the same rows and the fix
+            // half's report IS the check re-run. §2 gains the row in the same
+            // change, which is what this assertion exists to prompt. Absent from
+            // the read-only list above and correctly so: a row's `check` is a
+            // command the operator declared, so bare `startup` runs
+            // user-supplied code even though it writes nothing itself.
+            "startup".to_owned(),
             "state".to_owned(),
             "state adopt".to_owned(),
             "state list".to_owned(),
