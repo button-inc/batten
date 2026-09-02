@@ -613,9 +613,37 @@ assigned_value(line) := value if {
 # had BEFORE the edit, which is the only side on which the dying path is still
 # resolvable. Reading the head would let an edit introduce the very binding it
 # then claims to be following.
-script_dir_vars(path) := names if {
+#
+# A RULE KEYED BY PATH, READ THROUGH A FUNCTION — and the indirection is the
+# whole fix rather than a style (CLOUD-843). A Rego FUNCTION is re-evaluated at
+# every call; a rule indexed by key is evaluated once and cached as data. This
+# body scans every line of the file, and `retired_path_vars` below both scans
+# every line AND reaches this through `is_retired_reference_by_text`'s third arm
+# — so as two functions the pair was O(L²) in the edited file's line count, with
+# a `regex.match` innermost, re-entered per (added × removed × deleted ×
+# spelling).
+#
+# MEASURED, and it is a non-termination rather than a slowdown: `batten check
+# --rule shell-retirement` spun for three hours on a delta editing
+# `tests/land-lock.bats` (~2200 lines) and `mise-tasks/land-lock.sh` (~1800),
+# the two largest governed files in the tree. Bisected — `origin/main` returns in
+# under a second, and reverting both edited files returns the same tree to under
+# a second. It went unseen because every earlier retirement DELETED governed
+# files and edited none, and this path is only reached by an edit.
+#
+# That made it a campaign-stopper rather than a local defect: retiring a program
+# requires editing whatever calls it, so every remaining unit of CLOUD-843 would
+# have hit it.
+#
+# The function is kept as the reader so every call site and every name held to
+# the generated schema stays byte-identical, and the predicate is unchanged —
+# `mise run policy-test`'s cases over this module are what hold that.
+script_dir_vars(path) := script_dir_vars_of[path]
+
+script_dir_vars_of[path] := names if {
+	some path, lines in delta["base-lines"]
 	names := {variable |
-		some line in delta["base-lines"][path]
+		some line in lines
 		variable := assigned_name(line)
 		some form in spellings(assigned_value(line))
 		regex.match(data.batten.patterns["shell-script-directory"], form)
@@ -628,9 +656,22 @@ script_dir_vars(path) := names if {
 # spent as `"$lint"` a hundred lines later. Without this the ARITY of the call
 # cannot change, and every real repointing onto a verb changes it — a path is one
 # word and `mise run x` is three.
-retired_path_vars(path, gone) := names if {
+#
+# KEYED BY THE PAIR, for the reason the rule above gives at length: this is the
+# inner half of the O(L²), because `is_retired_reference_by_text`'s third arm
+# iterates `script_dir_vars(path)` once per line of this file. Cached by
+# (path, gone) it is evaluated once per pair the delta actually has.
+#
+# The domain is the same `base-lines` keys crossed with the paths this delta
+# deletes, which is exactly the set of arguments any call site can supply — so
+# the rule answers wherever the function used to, and nowhere else.
+retired_path_vars(path, gone) := retired_path_vars_of[[path, gone]]
+
+retired_path_vars_of[[path, gone]] := names if {
+	some path, lines in delta["base-lines"]
+	some gone in delta.deleted
 	names := {variable |
-		some line in delta["base-lines"][path]
+		some line in lines
 		variable := assigned_name(line)
 		some form in spellings(assigned_value(line))
 		is_retired_reference_by_text(path, form, gone)
