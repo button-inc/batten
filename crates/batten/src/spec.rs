@@ -723,6 +723,7 @@ mod tests {
             "land".to_owned(),
             "land push".to_owned(),
             "land replay".to_owned(),
+            "land verify".to_owned(),
             "land wait".to_owned(),
             // THE LANDING LEASE, ten arms and a noun (CLOUD-1274, CLOUD-393).
             // The noun is UNCLASSIFIED rather than read, because half the

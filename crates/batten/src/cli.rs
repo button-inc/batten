@@ -356,6 +356,14 @@ pub enum LandCommand {
     /// it is on, and a reference argument here would let a caller push this
     /// head somewhere the rest of the lap is not looking.
     Push,
+    /// Run the consumer's own gate over this head and record what it said.
+    ///
+    /// NO POSITIONAL EITHER, and for a sharper reason than `push`'s: the
+    /// command is the CONSUMER's — `mise run verify` here, something else
+    /// elsewhere — so it arrives from the environment rather than from argv.
+    /// A flag would put a second spelling of one name on the surface, and the
+    /// two would drift.
+    Verify,
 }
 
 /// Subcommands of `mutate`.
@@ -1483,6 +1491,7 @@ fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
                 .unwrap_or_default(),
         }),
         ("push", _) => Some(LandCommand::Push),
+        ("verify", _) => Some(LandCommand::Verify),
         _ => None,
     }
 }

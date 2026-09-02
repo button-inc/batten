@@ -5176,9 +5176,22 @@ fn run_land(
         cli::LandCommand::Replay { reference } | cli::LandCommand::Wait { reference } => {
             reference.clone()
         }
-        cli::LandCommand::Push => String::new(),
+        cli::LandCommand::Push | cli::LandCommand::Verify => String::new(),
     };
     let root = Path::new(".");
+
+    // VERIFY RUNS BEFORE THE REMOTE IS RESOLVED, and that ordering is the point
+    // rather than a shortcut. Verifying is a question about the WORKING TREE:
+    // a clone with no remote can still answer it, and making the whole verb
+    // depend on a remote would refuse a lap step that had everything it needed.
+    if matches!(command, cli::LandCommand::Verify) {
+        let Ok(Some(branch)) = git::current_branch(root) else {
+            writeln!(err, "::error:: land: a detached HEAD has no branch to key")?;
+            return Ok(ExitCode::Internal);
+        };
+        return run_land_verify(root, &branch, out, err);
+    }
+
     let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
     let Ok(remotes) = git::remotes(root) else {
         writeln!(err, "::error:: land: cannot read this repository's remotes")?;
@@ -5247,6 +5260,59 @@ fn run_land(
                 "land: replayed {commits} commit(s) of {branch} onto {reference}; head is {head}"
             )?;
             Ok(ExitCode::Success)
+        }
+    }
+}
+
+/// `batten land verify` (CLOUD-1338): the lap's gate, run and recorded.
+///
+/// # `$LAND_VERIFY` and no default, which is non-negotiable rule 1 as a mechanism
+///
+/// The bash lander runs `mise run verify`. That name is THIS consumer's, and a
+/// default compiled in here would be a consumer's vocabulary inside
+/// `crates/batten` — the rule's plainest violation. So the command is read from
+/// the environment and an absent one is a `Usage` refusal rather than a guess.
+///
+/// The failure mode a default would buy is worse than the refusal, which is why
+/// this is not merely tidy: a lap in a repository whose gate is spelled
+/// differently would run something else, get a `0`, and record the head as
+/// verified. A refusal costs one line of configuration; a wrong default costs a
+/// receipt that is not true.
+///
+/// # Whitespace splitting, and its stated bound
+///
+/// The value is split on whitespace, so a gate whose argv carries a quoted
+/// argument with a space in it cannot be spelled here. That bound is real and is
+/// accepted rather than papered over with a shell: handing this to `sh -c` would
+/// make the engine compose a shell line out of an environment variable, which is
+/// exactly the argv-composition `policy/spawn-adapters.rego` records refusing for
+/// `prune`'s deletes. A consumer needing that writes a script and names it.
+fn run_land_verify(
+    root: &Path,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let declared = std::env::var("LAND_VERIFY").unwrap_or_default();
+    let command: Vec<String> = declared.split_whitespace().map(str::to_owned).collect();
+    if command.is_empty() {
+        writeln!(
+            err,
+            "::error:: land verify: $LAND_VERIFY names no command, and this engine does not know what verifying means in this repository"
+        )?;
+        return Ok(ExitCode::Usage);
+    }
+    match land::verify(root, branch, &command)? {
+        land::Verified::Clean(head) => {
+            writeln!(out, "land: {head} passed the configured gate")?;
+            Ok(ExitCode::Success)
+        }
+        // A REFUSAL IS A VERDICT ABOUT THE REPOSITORY, so `2`. The gate's own
+        // output already went to the caller's terminal; repeating a pointer to
+        // it here would be the payload rule's exact failure.
+        land::Verified::Refused(head) => {
+            writeln!(out, "land: {head} was refused by the configured gate")?;
+            Ok(ExitCode::Violation)
         }
     }
 }

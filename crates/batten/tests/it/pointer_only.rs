@@ -681,6 +681,18 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // `land verify` reports a sha and a token. The gate's own output is the one
+    // thing that could carry anything, and it never passes through this verb at
+    // all — `exec` writes it to the caller's terminal, and what comes back here
+    // is an exit code. On this corpus `$LAND_VERIFY` names nothing, so the verb
+    // refuses before running anything, which is `Usage` rather than a
+    // could-not-look and needs no entry in the set above.
+    Verb {
+        path: "land verify",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "check",
         args: &[],

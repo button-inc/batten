@@ -4745,6 +4745,35 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__land__subcmd__help_commands" \
@@ -4766,6 +4795,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (push)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(verify)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -5586,6 +5619,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (push)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(verify)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -6437,6 +6474,7 @@ _batten__subcmd__help__subcmd__land_commands() {
 'replay:Advance the base and replay this branch onto it, recording the outcome' \
 'wait:Ask whether this head is green and whether its base still holds; the first answer decides' \
 'push:Push this branch to its own ref, under receive-pack'\''s compare-and-swap' \
+'verify:Run the configured gate over this head and record what it answered' \
     )
     _describe -t commands 'batten help land commands' commands "$@"
 }
@@ -6449,6 +6487,11 @@ _batten__subcmd__help__subcmd__land__subcmd__push_commands() {
 _batten__subcmd__help__subcmd__land__subcmd__replay_commands() {
     local commands; commands=()
     _describe -t commands 'batten help land replay commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__land__subcmd__verify_commands] )) ||
+_batten__subcmd__help__subcmd__land__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help land verify commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__land__subcmd__wait_commands] )) ||
 _batten__subcmd__help__subcmd__land__subcmd__wait_commands() {
@@ -6883,6 +6926,7 @@ _batten__subcmd__land_commands() {
 'replay:Advance the base and replay this branch onto it, recording the outcome' \
 'wait:Ask whether this head is green and whether its base still holds; the first answer decides' \
 'push:Push this branch to its own ref, under receive-pack'\''s compare-and-swap' \
+'verify:Run the configured gate over this head and record what it answered' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten land commands' commands "$@"
@@ -6893,6 +6937,7 @@ _batten__subcmd__land__subcmd__help_commands() {
 'replay:Advance the base and replay this branch onto it, recording the outcome' \
 'wait:Ask whether this head is green and whether its base still holds; the first answer decides' \
 'push:Push this branch to its own ref, under receive-pack'\''s compare-and-swap' \
+'verify:Run the configured gate over this head and record what it answered' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten land help commands' commands "$@"
@@ -6912,6 +6957,11 @@ _batten__subcmd__land__subcmd__help__subcmd__replay_commands() {
     local commands; commands=()
     _describe -t commands 'batten land help replay commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__land__subcmd__help__subcmd__verify_commands] )) ||
+_batten__subcmd__land__subcmd__help__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten land help verify commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__land__subcmd__help__subcmd__wait_commands] )) ||
 _batten__subcmd__land__subcmd__help__subcmd__wait_commands() {
     local commands; commands=()
@@ -6926,6 +6976,11 @@ _batten__subcmd__land__subcmd__push_commands() {
 _batten__subcmd__land__subcmd__replay_commands() {
     local commands; commands=()
     _describe -t commands 'batten land replay commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__land__subcmd__verify_commands] )) ||
+_batten__subcmd__land__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten land verify commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__land__subcmd__wait_commands] )) ||
 _batten__subcmd__land__subcmd__wait_commands() {

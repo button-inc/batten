@@ -1110,6 +1110,15 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "land verify",
+          "id": "land.verify",
+          "about": "Run the configured gate over this head and record what it answered",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
           "path": "land wait",
           "id": "land.wait",
           "about": "Ask whether this head is green and whether its base still holds; the first answer decides",

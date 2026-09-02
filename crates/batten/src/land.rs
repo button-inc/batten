@@ -531,9 +531,117 @@ pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
     Ok(pushed)
 }
 
+/// What the lap's verification said about this head.
+///
+/// # The engine does not know what "verify" means here
+///
+/// A lap verifies by running the consumer's own gate, and the NAME of that gate
+/// is the consumer's — `mise run verify` in this repository, something else
+/// everywhere else. Non-negotiable rule 1 puts that name outside `crates/batten`
+/// entirely, so the command arrives as argv the caller resolved and this module
+/// never composes one.
+///
+/// # And it spawns nothing itself
+///
+/// [`crate::exec::run_in`] is the sanctioned child-process boundary and is
+/// already placed in `policy/spawn-adapters.rego`; routing through it is what
+/// keeps `land` off that table. A `Command::new` here would be a second spawning
+/// site for a job the boundary already does, which is what the placement rule
+/// exists to refuse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verified {
+    /// The gate answered clean for this sha.
+    Clean(String),
+    /// The gate refused. The lap stops here — this is a failed `verify`, which
+    /// the design names as one of the three things that end a lap.
+    Refused(String),
+}
+
+impl Verified {
+    /// The record line this outcome writes.
+    ///
+    /// Four columns, `verify <verdict> <sha> <path>`, the store's shape. The
+    /// fourth is always `-`: a verdict about a whole tree has no one path to
+    /// point at, and inventing one would be worse than the dash.
+    ///
+    /// POINTER-ONLY. The gate's own output is not carried at any width — it went
+    /// to the caller's terminal where it belongs, and a record read by a
+    /// predicate is no place for a test runner's stdout.
+    #[must_use]
+    pub fn line(&self) -> String {
+        match self {
+            Self::Clean(sha) => format!("verify clean {sha} -"),
+            Self::Refused(sha) => format!("verify refused {sha} -"),
+        }
+    }
+}
+
+/// Run the consumer's gate over this head and record what it said.
+///
+/// `command` is argv the CALLER resolved, for the reason [`Verified`] states.
+/// An empty one is a usage error rather than a default, because guessing a
+/// consumer's gate would put that consumer's vocabulary in this crate.
+///
+/// # Errors
+///
+/// An empty command, a HEAD this clone cannot resolve, or a boundary that cannot
+/// start the program. A gate that RAN and refused is [`Verified::Refused`], not
+/// an error: that is an answer about the tree.
+pub fn verify(root: &Path, branch: &str, command: &[String]) -> Result<Verified> {
+    if command.is_empty() {
+        return Err(crate::error::UsageError::raise(String::from(
+            "land: no verify command is configured, and this engine does not know what verifying means here",
+        )));
+    }
+    let head = crate::git::head_commit(root).context("land: read this clone's HEAD")?;
+    // A REFUSAL TRAVELS AS AN ERROR THROUGH THIS BOUNDARY, because `exec` exists
+    // to pass a child's status through to the caller. Here it is an ANSWER, so
+    // the two are told apart rather than collapsed: a code that came back at all
+    // is the gate speaking, and only a failure to START is this lap's problem.
+    let verified = match crate::exec::run_in(root, command) {
+        Ok(crate::exit::ExitCode::Success) => Verified::Clean(head),
+        Ok(_) => Verified::Refused(head),
+        Err(problem) => match problem.downcast_ref::<crate::error::Passthrough>() {
+            Some(_) => Verified::Refused(head),
+            None => return Err(problem.context("land: run the configured verify command")),
+        },
+    };
+    append(root, branch, std::slice::from_ref(&verified.line()))?;
+    Ok(verified)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The verify family writes the same four columns every other family does.
+    #[test]
+    fn every_verify_outcome_writes_four_columns_led_by_the_kind() {
+        for outcome in [
+            Verified::Clean(String::from("abc1234")),
+            Verified::Refused(String::from("abc1234")),
+        ] {
+            let line = outcome.line();
+            let columns: Vec<&str> = line.split(' ').collect();
+            assert_eq!(columns.len(), 4, "four columns exactly, got {line:?}");
+            assert_eq!(columns[0], "verify", "the kind column leads: {line:?}");
+        }
+    }
+
+    /// NO DEFAULT COMMAND, asserted rather than described. A default would be a
+    /// consumer's task name compiled into this crate, which non-negotiable rule
+    /// 1 forbids — and the failure mode of guessing one is worse than refusing,
+    /// because a lap would report a gate as clean having run something else.
+    #[test]
+    fn an_unconfigured_verify_command_refuses_rather_than_guessing() {
+        let Err(problem) = verify(Path::new("."), "work", &[]) else {
+            panic!("an empty command must refuse rather than run something");
+        };
+        assert!(
+            format!("{problem}").contains("does not know what verifying means"),
+            "the refusal names the missing configuration: {problem}"
+        );
+    }
 
     /// The push family writes the same four columns every other family does.
     ///

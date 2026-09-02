@@ -3906,6 +3906,24 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[],
     },
+    // `write`, and the write is the RECORD — the gate itself does whatever it
+    // does, and this verb neither knows nor claims. It is `write` rather than
+    // `read` for the allowlist's reason: the effect model is derived from this
+    // declaration, so a verb that appends to the lap record may not sit under a
+    // `read` noun however read-like its subject looks.
+    //
+    // NO FLAGS. The command is the consumer's and arrives from the environment,
+    // for the reason `land wait` reads its roster there: a lap is always asking
+    // about THIS repository, and a flag would be a second spelling of a name the
+    // consumer already declares once.
+    CommandDecl {
+        path: "land verify",
+        id: "land.verify",
+        about: "Run the configured gate over this head and record what it answered",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
 ];
 
 /// Whether `token` is a declared spelling of a flag that consumes the *next*
