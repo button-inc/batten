@@ -180,6 +180,7 @@ mod retirement_doctrine;
 mod review_answered;
 mod review_dispatched;
 mod rule_cost_census;
+mod rule_cost_rung;
 mod rules_builtin_claims;
 mod rules_drift;
 mod run_shape;
