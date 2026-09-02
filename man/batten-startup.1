@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-startup 1  batten 
+.SH NAME
+batten\-startup \- Report whether this container matches what the repository declares
+.SH SYNOPSIS
+\fBbatten startup\fR [\fB\-\-repair\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Report whether this container matches what the repository declares
+.SH OPTIONS
+.TP
+\fB\-\-repair\fR
+Run each failing row\*(Aqs declared repair, then re\-decide its check
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

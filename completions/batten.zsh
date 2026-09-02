@@ -3089,6 +3089,38 @@ esac
     ;;
 esac
 ;;
+(startup)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--repair[Run each failing row'\''s declared repair, then re-decide its check]' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (hook)
 _arguments "${_arguments_options[@]}" : \
 '--harness=[The harness whose payload to decode and whose decision channel to answer in]: :((claude-code\:"Claude Code'\''s \`PreToolUse\` payload; a deny is returned as the \`hookSpecificOutput.permissionDecision\` JSON object on stdout with exit \`0\` — the channel the production shell guards already use"
@@ -4078,6 +4110,7 @@ debug\:"Add resolution detail"
 trace\:"Add everything"))' \
 '-n[Preview what would be applied, writing nothing]' \
 '--dry-run[Preview what would be applied, writing nothing]' \
+'--check[Exit non-zero if a repair is owed, and remove nothing]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '*--silent[Say nothing but a verdict or a usage error]' \
 '*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
@@ -5055,6 +5088,10 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(startup)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (hook)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -5333,6 +5370,7 @@ _batten_commands() {
 'worktree:Worktrees and the work in them\: what is at risk' \
 'override:Issued admissions\: an override is a record, never a variable somebody knows' \
 'provision:Pinned tools this repository provisions, cached out of tree' \
+'startup:Report whether this container matches what the repository declares' \
 'hook:Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)' \
 'payload:Read a hook payload from stdin' \
 'receipt:Verification receipts\: SHA-keyed claims a named check passed, invalidated by git facts' \
@@ -5873,6 +5911,7 @@ _batten__subcmd__help_commands() {
 'worktree:Worktrees and the work in them\: what is at risk' \
 'override:Issued admissions\: an override is a record, never a variable somebody knows' \
 'provision:Pinned tools this repository provisions, cached out of tree' \
+'startup:Report whether this container matches what the repository declares' \
 'hook:Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)' \
 'payload:Read a hook payload from stdin' \
 'receipt:Verification receipts\: SHA-keyed claims a named check passed, invalidated by git facts' \
@@ -6447,6 +6486,11 @@ _batten__subcmd__help__subcmd__semver__subcmd__check_commands() {
 _batten__subcmd__help__subcmd__spec_commands() {
     local commands; commands=()
     _describe -t commands 'batten help spec commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__startup_commands] )) ||
+_batten__subcmd__help__subcmd__startup_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help startup commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__state_commands] )) ||
 _batten__subcmd__help__subcmd__state_commands() {
@@ -7268,6 +7312,11 @@ _batten__subcmd__semver__subcmd__help__subcmd__help_commands() {
 _batten__subcmd__spec_commands() {
     local commands; commands=()
     _describe -t commands 'batten spec commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__startup_commands] )) ||
+_batten__subcmd__startup_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten startup commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__state_commands] )) ||
 _batten__subcmd__state_commands() {
