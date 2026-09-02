@@ -3,21 +3,28 @@
 //! # What this owns and what it deliberately does not
 //!
 //! A lap is fetch → replay → verify → push → wait → fast-forward, and a refusal
-//! starts the next one by itself. This module owns the **replay** half: bring the
-//! base forward, replay the branch onto it, and record what happened. The
-//! remaining phases stay in the consumer's lander until they land here too, so
-//! this is a parallel capability rather than a cut-over — the same shape
-//! `batten lease` took beside `land-lock`.
+//! starts the next one by itself. This module owns the **git and record** work:
+//! bring the base forward, replay the branch onto it, and write down what the
+//! replay and the wait did. It stands beside the consumer's lander rather than
+//! replacing it — the same shape `batten lease` took beside `land-lock`.
 //!
 //! # It DECIDES nothing, and that separation is the whole design
 //!
-//! Whether a lap may continue after a conflicted replay is a policy question, and
-//! it is answered by `rebase-conflict-stops-the-lap` in the `landing-loop` preset
-//! over the record this module writes. That is CLOUD-1148's thesis read forwards:
+//! Two policy questions arise in a lap and neither is answered here. *May a lap
+//! continue past a conflicted replay?* is `rebase-conflict-stops-the-lap`'s.
+//! *Which answer may a lap act on when its wait raced two questions?* is
+//! `lap-waits-on-one-answer`'s. Both are `landing-loop` preset predicates over
+//! the records this module writes, which is CLOUD-1148's thesis read forwards:
 //! the mechanics move to the engine and the decisions become Rego. So nothing
-//! here branches on "should we stop" — it performs the replay, writes down what
-//! the replay did, and reports. A consumer that wants a different rule about
-//! conflicts writes a different module and this code does not change.
+//! here branches on "should we stop" — it does the work, writes down what it
+//! did, and reports. A consumer wanting different rules writes different modules
+//! and this code does not change.
+//!
+//! **That is also why the wait's LOSER is recorded.** The obvious shape writes
+//! only the arm that won, and then a lap that raced properly and a lap that read
+//! both answers produce identical records — so the module has nothing to decide
+//! over. Writing the loser as an explicit could-not-look is what keeps the
+//! property visible to something outside this file.
 //!
 //! The one thing it will not do is **resolve** a conflict.
 //! [`crate::gitwrite::rebase`] refuses with `Rebase::Conflicted` rather than
@@ -177,21 +184,36 @@ fn tracking_ref(reference: &str) -> String {
 /// here and reads back through `batten check`, so the writer and the vendored
 /// module meet over the engine rather than over a fixture somebody typed.
 ///
-
 /// APPEND, NEVER REPLACE, because the store is a HISTORY and the predicate over
 /// it reads the last line: a lap that conflicted and a later lap that resolved
 /// the conflict are two facts, and a store keeping only the newer one cannot say
 /// that the older was ever true. `record::store` replaces, which is right for the
 /// stores that answer "what is the current state" and wrong for this one.
 ///
-/// A DETACHED HEAD HAS NOTHING TO KEY ON, exactly as the claim receipt does not,
-/// so the write is skipped rather than failing the replay. The replay itself
-/// happened either way, and turning "nowhere to write this down" into "the lap
-/// failed" would report a verdict about the clone as a verdict about the branch.
 /// # Errors
 ///
 /// A store directory or file that will not open or append.
 pub fn record(root: &Path, branch: &str, outcome: &Replay) -> Result<()> {
+    append(root, branch, std::slice::from_ref(&outcome.line()))
+}
+
+/// Append `lines` to this branch's lap record.
+///
+/// ONE WRITER FOR BOTH FAMILIES, because the store is shared: a replay outcome
+/// and a wait outcome go to the same file and are told apart by their KIND
+/// column, so two writers computing the path separately would be two authorities
+/// over one location.
+///
+/// A DETACHED HEAD HAS NOTHING TO KEY ON, exactly as the claim receipt does not,
+/// so the write is skipped rather than failing the lap. The work itself happened
+/// either way, and turning "nowhere to write this down" into "the lap failed"
+/// would report a verdict about the clone as a verdict about the branch.
+///
+/// ONE OPEN FOR THE WHOLE BATCH, which is what makes `record_wait`'s both-arms
+/// signature mean something: a race's two lines land together or not at all,
+/// rather than leaving a record with a winner and no loser — the exact shape a
+/// lap reading both sides would also produce.
+fn append(root: &Path, branch: &str, lines: &[String]) -> Result<()> {
     let Ok(git_dir) = crate::git::git_dir(root) else {
         return Ok(());
     };
@@ -205,14 +227,104 @@ pub fn record(root: &Path, branch: &str, outcome: &Replay) -> Result<()> {
         .append(true)
         .open(&path)
         .with_context(|| format!("land: open the lap record {}", path.display()))?;
-    writeln!(file, "{}", outcome.line())
-        .with_context(|| format!("land: append to the lap record {}", path.display()))?;
+    for line in lines {
+        writeln!(file, "{line}")
+            .with_context(|| format!("land: append to the lap record {}", path.display()))?;
+    }
     Ok(())
 }
 
 /// The record this module writes, and the one `record::VERB_WRITTEN` names so a
 /// module can read it back.
 pub const LAP_RECORD: &str = "lap";
+
+/// Which arm of the lap's raced wait an answer came from (CLOUD-1338).
+///
+/// # The race, and why it is two arms rather than one wait
+///
+/// A lap asks two questions at once — *is this commit green?* and *is this
+/// commit still landable?* — and whichever answers first decides. The loser's
+/// answer is **voided**: the moment the base advances, the run in flight is
+/// spend for a verdict nobody will read, and the next lap's push supersedes it
+/// through the forge's own cancel-in-progress, which is why nothing here cancels
+/// a run by hand.
+///
+/// The arms are named rather than numbered because the record is what
+/// `lap-waits-on-one-answer` reads, and a reviewer chasing a refusal needs to
+/// know WHICH question answered, not that some arm did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arm {
+    /// Is the commit green? — the check-run roster's verdict.
+    Green,
+    /// Has the base moved out from under it? — the staleness question.
+    Stale,
+}
+
+impl Arm {
+    /// The token this arm writes into the record's second column.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Green => "green",
+            Self::Stale => "stale",
+        }
+    }
+}
+
+/// One arm's answer, or its silence.
+///
+/// **A LOSER IS RECORDED, AND RECORDING IT IS THE POINT.** The obvious shape is
+/// to write down only the arm that won — and then a lap that read both is
+/// indistinguishable from a lap that raced properly, because the record looks
+/// the same either way. Writing the loser as an explicit could-not-look is what
+/// makes the difference legible to a module: two answers is a defect, one answer
+/// beside one silence is the design working.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Answered {
+    /// Which question this is.
+    pub arm: Arm,
+    /// What it answered, or `None` where it was abandoned unread — the loser of
+    /// the race, or a poller that could not reach the forge.
+    pub verdict: Option<String>,
+    /// The commit the question was about.
+    pub sha: String,
+}
+
+impl Answered {
+    /// The record line this answer writes.
+    ///
+    /// Four columns, `wait <arm> <verdict> <sha>`, which is the layout
+    /// `lap-waits-on-one-answer` reads. Stated in both places rather than derived
+    /// for the reason its sibling gives: the module is vendored into every
+    /// consumer's binary and this writer is one consumer of it, so neither can be
+    /// the other's authority.
+    ///
+    /// POINTER-ONLY (rule 4): an arm token, a verdict token and a sha. Never a
+    /// check's log body, and never the forge's payload.
+    #[must_use]
+    pub fn line(&self) -> String {
+        let verdict = self.verdict.as_deref().unwrap_or("-");
+        format!("wait {} {verdict} {}", self.arm.token(), self.sha)
+    }
+}
+
+/// Append this wait's outcomes to the branch's record.
+///
+/// BOTH ARMS IN ONE CALL, so a caller cannot write the winner and forget the
+/// loser — which would produce exactly the record a lap reading both sides
+/// produces, and make the module unable to tell them apart. The signature is the
+/// mechanism: there is no way to record half a race.
+///
+/// # Errors
+///
+/// A store directory or file that will not open or append.
+pub fn record_wait(root: &Path, branch: &str, answers: &[Answered]) -> Result<()> {
+    append(
+        root,
+        branch,
+        &answers.iter().map(Answered::line).collect::<Vec<_>>(),
+    )
+}
 
 #[cfg(test)]
 mod tests {
@@ -287,5 +399,60 @@ mod tests {
     fn a_remote_reference_resolves_to_its_tracking_ref() {
         assert_eq!(tracking_ref("refs/heads/main"), "refs/remotes/origin/main");
         assert_eq!(tracking_ref("main"), "refs/remotes/origin/main");
+    }
+
+    /// A wait line carries four columns led by its kind, like a replay line.
+    #[test]
+    fn every_wait_answer_writes_four_columns_led_by_the_kind() {
+        for answer in [
+            Answered {
+                arm: Arm::Green,
+                verdict: Some(String::from("success")),
+                sha: String::from("abc1234"),
+            },
+            Answered {
+                arm: Arm::Stale,
+                verdict: None,
+                sha: String::from("abc1234"),
+            },
+        ] {
+            let line = answer.line();
+            let columns: Vec<&str> = line.split(' ').collect();
+            assert_eq!(columns.len(), 4, "four columns exactly, got {line:?}");
+            assert_eq!(columns[0], "wait", "the kind column leads: {line:?}");
+        }
+    }
+
+    /// **THE LOSER IS WRITTEN AS COULD-NOT-LOOK, and that is what makes the race
+    /// legible.** An arm abandoned unread records `-` rather than being omitted:
+    /// omitting it would make a lap that raced properly and a lap that read both
+    /// sides produce records nothing can tell apart.
+    #[test]
+    fn a_voided_loser_records_could_not_look_rather_than_vanishing() {
+        assert_eq!(
+            Answered {
+                arm: Arm::Stale,
+                verdict: None,
+                sha: String::from("abc1234"),
+            }
+            .line(),
+            "wait stale - abc1234"
+        );
+        assert_eq!(
+            Answered {
+                arm: Arm::Green,
+                verdict: Some(String::from("success")),
+                sha: String::from("abc1234"),
+            }
+            .line(),
+            "wait green success abc1234"
+        );
+    }
+
+    /// The two arms are distinguishable, which is what lets a module count
+    /// ANSWERING ARMS rather than recorded lines.
+    #[test]
+    fn the_two_arms_carry_different_tokens() {
+        assert_ne!(Arm::Green.token(), Arm::Stale.token());
     }
 }

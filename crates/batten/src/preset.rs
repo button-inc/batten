@@ -291,6 +291,10 @@ the pipeline.",
                 "<preset:landing-loop>/rebase-conflict-stops-the-lap.rego",
                 include_str!("policy/presets/landing-loop/rebase-conflict-stops-the-lap.rego"),
             ),
+            (
+                "<preset:landing-loop>/lap-waits-on-one-answer.rego",
+                include_str!("policy/presets/landing-loop/lap-waits-on-one-answer.rego"),
+            ),
         ],
         verdicts: &[
             VendoredVerdict {
@@ -386,6 +390,30 @@ succeed. Resolve the conflict, then lap again.",
                     admit(
                         "replay admit first",
                         "the conflict was resolved outside this lap's record, so the head being pushed is a completed replay rather than a half-applied one",
+                    ),
+                ],
+            },
+            VendoredVerdict {
+                id: "wait read both",
+                gloss: "the lap read an answer from both sides of a race the design gives one answer",
+                class: "A landing lap's wait is a race: it asks whether the commit is green and \
+whether the commit is still landable at once, and whichever answers first decides while the \
+loser's answer is VOIDED. That is the economy rather than a detail — the moment the base \
+advances, the run in flight is spend for a verdict nobody will read, and the next lap's push \
+supersedes it through the forge's own cancel-in-progress, which is why nothing cancels it by \
+hand. A lap that reads both sides has thrown that away, and it still lands green work most of \
+the time, so no test over the happy path can see it. Act on the answer that arrived first and \
+abandon the other unread.",
+                routes: &[
+                    read("record read first", "the wait outcomes this lap recorded"),
+                    // The narrow legitimate case, and it is about the RECORD
+                    // rather than about the wait: a lap resumed after a reap can
+                    // carry the previous attempt's answer beside its own, which
+                    // is two answers with only one race behind them. It is not
+                    // "both answers were interesting".
+                    admit(
+                        "wait admit first",
+                        "the second answer belongs to an earlier attempt this lap resumed rather than to a second arm of the same race",
                     ),
                 ],
             },

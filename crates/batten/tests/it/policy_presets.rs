@@ -936,3 +936,78 @@ fn the_landing_loop_preset_stops_a_conflicted_lap_and_is_green_by_turns() {
         "no recorder declared is could-not-look, and it allows"
     );
 }
+
+/// (CLOUD-1338) `lap-waits-on-one-answer` refuses a lap that read both sides of
+/// its race and is silent on one that read a single answer.
+///
+/// **The case both declared mutations must redden, from opposite sides.**
+/// `loser-read` makes the predicate never fire, which only the deny half
+/// catches; `single-answer-unpriced` makes it fire on every wait, which only the
+/// anti-vacuity half catches.
+///
+/// The two readings after them are the ones a naive port gets wrong. A VOIDED
+/// loser is the design working and must not be refused — a module counting
+/// recorded lines rather than answering arms refuses it. And one arm that read
+/// TWICE is still one answer: a module that de-duplicated nothing would refuse a
+/// lap whose poller merely retried.
+#[test]
+fn the_landing_loop_preset_refuses_a_lap_that_read_both_answers() {
+    let bundle = loaded("landing-wait", tree_preset_row("landing", "landing-loop"));
+
+    // ONE RECORD NAME, DELIBERATELY NOT A PLAUSIBLE ONE — the record's name is
+    // the CONSUMER's, so a preset must not read it by name.
+    let recorded = |lines: &str| format!(r#"{{"tree":{{"records":{{"x":[{lines}]}}}}}}"#);
+
+    let both = decided(
+        &bundle,
+        &recorded(r#""wait green success abc1234","wait stale moved abc1234""#),
+    );
+    assert_eq!(both.len(), 1, "a lap that read both sides of the race");
+    assert_eq!(
+        bundle.attribute(&both[0]),
+        "lap-waits-on-one-answer",
+        "a preset finding names its own predicate id"
+    );
+
+    // THE ANTI-VACUITY MIRROR.
+    assert!(
+        decided(&bundle, &recorded(r#""wait green success abc1234""#)).is_empty(),
+        "one answer laps on, or this refuses every wait"
+    );
+
+    // THE LOSER IS VOIDED, AND THE RECORD SHOWS IT. The lap raced, one arm
+    // answered, the other was abandoned unread — the design working.
+    assert!(
+        decided(
+            &bundle,
+            &recorded(r#""wait green success abc1234","wait stale - abc1234""#)
+        )
+        .is_empty(),
+        "a voided loser is the race working, not a second answer"
+    );
+
+    // LOOKING TWICE IS NOT ANSWERING TWICE.
+    assert!(
+        decided(
+            &bundle,
+            &recorded(r#""wait green success abc1234","wait green success abc1234""#)
+        )
+        .is_empty(),
+        "one arm that re-read is still one arm"
+    );
+
+    // Neither arm could look — a statement about the forge, not about the lap.
+    assert!(
+        decided(
+            &bundle,
+            &recorded(r#""wait green - abc1234","wait stale - abc1234""#)
+        )
+        .is_empty(),
+        "could-not-look on both arms allows"
+    );
+
+    assert!(
+        decided(&bundle, r#"{"tree":{"records":null}}"#).is_empty(),
+        "no recorder declared is could-not-look, and it allows"
+    );
+}
