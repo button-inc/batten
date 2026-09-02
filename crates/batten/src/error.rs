@@ -91,24 +91,75 @@ impl Passthrough {
 
 /// An expected bad-input error that maps to [`ExitCode::Usage`] (exit `1`).
 ///
+/// # The class is a field, not a formatted prefix
+///
+/// CLOUD-1050's measured lesson is that a refusal carried as a free `String`
+/// makes a bad refusal **expressible and uncheckable** — that is why a policy
+/// `violation` binds `{rule, verdict, subjects}` and has no `msg`. The
+/// config-load surface had the same defect: ~172 `raise` sites, none naming a
+/// class, so `batten policy explain` could not resolve a config fault and no
+/// gate held one to the `[[verdict]]` registry (CLOUD-1313).
+///
+/// Formatting a token into the message would have reproduced that defect one
+/// surface over, because nothing would check that the token is declared.
+/// [`Native`] is an enum, so a raise site can only name a class that exists,
+/// and `the_vendored_table_validates` proves every variant carries a row.
+///
 /// [`ExitCode::Usage`]: crate::ExitCode::Usage
+/// [`Native`]: crate::verdict::Native
 #[derive(Debug)]
-pub struct UsageError(pub String);
+pub struct UsageError {
+    /// The prose. Unchanged from the pre-class shape, deliberately: rewording
+    /// the twelve validators' refusals is explicitly outside CLOUD-1313.
+    pub message: String,
+    /// The declared class this fault belongs to, where one is known.
+    ///
+    /// `None` is not a gap to be closed everywhere — most `UsageError`s are
+    /// argument faults, not config faults, and inventing a class for each would
+    /// be the per-site explosion CLOUD-1313 rejected. It is `Some` exactly where
+    /// a raiser can name the table it was validating.
+    pub verdict: Option<crate::verdict::Native>,
+}
 
 impl fmt::Display for UsageError {
+    /// `<class>: <message>` when a class is known, the bare message otherwise.
+    ///
+    /// The separator is a deliberate deviation from CLOUD-1286's
+    /// `<class> <pointer…>`, and the reason is that these messages are PROSE.
+    /// That shape reads as a class followed by pointers precisely because
+    /// nothing separates them; running a class straight into a sentence would
+    /// make the first three words of the sentence look like part of the class.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        match self.verdict {
+            Some(native) => write!(f, "{}: {}", native.id(), self.message),
+            None => f.write_str(&self.message),
+        }
     }
 }
 
 impl std::error::Error for UsageError {}
 
 impl UsageError {
-    /// Build a [`UsageError`] as an [`anyhow::Error`], ready to `return Err(..)`.
+    /// Build a classless [`UsageError`] as an [`anyhow::Error`], ready to
+    /// `return Err(..)`.
     ///
     /// Named `raise` rather than `new` because it returns an [`anyhow::Error`]
     /// wrapping the `UsageError`, not `Self`.
     pub fn raise(message: impl Into<String>) -> anyhow::Error {
-        anyhow::Error::new(UsageError(message.into()))
+        anyhow::Error::new(UsageError {
+            message: message.into(),
+            verdict: None,
+        })
+    }
+
+    /// Build a [`UsageError`] that names the class it belongs to.
+    ///
+    /// Callers are the config loader's per-table wrappers; see
+    /// [`crate::config`]'s `under`.
+    pub fn raise_as(verdict: crate::verdict::Native, message: impl Into<String>) -> anyhow::Error {
+        anyhow::Error::new(UsageError {
+            message: message.into(),
+            verdict: Some(verdict),
+        })
     }
 }

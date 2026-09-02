@@ -57,6 +57,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
 use crate::rules::Rule;
+use crate::verdict::Native;
 use crate::{outputs, waiver};
 
 /// The config schema version this build understands. A file declaring any other
@@ -1010,9 +1011,18 @@ pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
     // The same validators the authority runs, over the same tables. An override
     // row is a policy row: one that loads here and gates nothing is the defect
     // CLOUD-242 named, and it does not become acceptable for being uncommitted.
-    crate::rules::validate_in(&config.rules, text, source)?;
-    crate::outputs::validate(&config.exec_patterns)?;
-    crate::waiver::validate(&config.waivers)?;
+    under(
+        Native::RuleTableRefused,
+        crate::rules::validate_in(&config.rules, text, source),
+    )?;
+    under(
+        Native::OutputTableRefused,
+        crate::outputs::validate(&config.exec_patterns),
+    )?;
+    under(
+        Native::WaiverTableRefused,
+        crate::waiver::validate(&config.waivers),
+    )?;
     Ok(config)
 }
 
@@ -1031,16 +1041,56 @@ pub fn override_schema() -> Result<String> {
     ))?)
 }
 
+/// Attach a table's declared class to a validator's refusal (CLOUD-1313).
+///
+/// # Why the class is attached HERE and not at the raise site
+///
+/// The twelve `VALIDATED_AT_LOAD` validators raise from ~172 sites, and only
+/// about thirty of those sit at a top-level `validate` — the rest are in
+/// per-entry helpers (`validate_shape`, `Rule::validate_*`), several of them
+/// shared between tables. A class per site is therefore unbuildable, and a class
+/// per site is also the wrong grain: what a reader needs to know first is which
+/// TABLE would not load, and the message the validator already composed says
+/// which row and key. That is the same division `[[verdict]]` draws between a
+/// class and its subjects.
+///
+/// So the call site is the one place that knows the table, and it is the only
+/// place that has to change.
+///
+/// # What it deliberately does not do
+///
+/// It classes a [`UsageError`] that carries none, and passes everything else
+/// through untouched — an internal failure stays internal (exit `3`), and an
+/// error that already names a class keeps it. Rewording the refusals themselves
+/// is outside CLOUD-1313.
+fn under<T>(native: crate::verdict::Native, result: Result<T>) -> Result<T> {
+    result.map_err(|err| match err.downcast::<UsageError>() {
+        Ok(usage) if usage.verdict.is_none() => UsageError::raise_as(native, usage.message),
+        Ok(usage) => anyhow::Error::new(usage),
+        Err(other) => other,
+    })
+}
+
 /// The shared body: deserialize and check the schema `version`.
-fn parse_ungated(text: &str, source: &str) -> Result<Config> {
-    let config: Config = toml::from_str(text)
-        .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?;
-    if config.version != SUPPORTED_VERSION {
-        return Err(UsageError::raise(format!(
-            "unsupported config version {} in {source}; this build supports version {SUPPORTED_VERSION}",
-            config.version
-        )));
-    }
+/// Prove every declared table well formed, each refusal naming its own class.
+///
+/// # Why this is its own function
+///
+/// It is the whole of what "the config loaded" means beyond deserializing, and
+/// it is what `every_load_time_validator_refuses_under_a_declared_class` reads:
+/// a census over a body that also carried the deserialize and the version gate
+/// would be scanning text that has nothing to do with what it decides.
+///
+/// Called from [`parse_ungated`] rather than from `parse`, so an override layer
+/// is held to the same table rules — `batten.local.toml` may add rows, and a
+/// raise-only override that adds an inert one has still written something that
+/// cannot mean anything.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) under the class of whichever table
+/// refused; see [`under`].
+fn validate_tables(config: &Config, text: &str, source: &str) -> Result<()> {
     // The verb table is validated here, at load, because nothing else validates
     // it anywhere: `verbs::validate` had no caller outside its own tests, so a
     // `[[verb]]` row that is inert — `effect = "read"` in a table named for
@@ -1053,21 +1103,33 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // In `parse_ungated` rather than `parse` so an override layer is held to it
     // too: `batten.local.toml` may add verb rows, and a raise-only override that
     // adds an inert one has still written something that cannot mean anything.
-    crate::verbs::validate(&config.verbs)?;
+    under(
+        Native::VerbTableRefused,
+        crate::verbs::validate(&config.verbs),
+    )?;
     // The named-regex table, at parse for the identical reason (CLOUD-885): a
     // malformed expression is a config fault, and refusing it here means
     // `config lint` and `doctor` catch it rather than a mediated call
     // discovering it at adjudication, which is the worst time and the wrong exit
     // class (house style §8).
-    crate::pattern::validate(&config.patterns)?;
+    under(
+        Native::PatternTableRefused,
+        crate::pattern::validate(&config.patterns),
+    )?;
     // The refusal vocabulary, at parse for the identical reason (CLOUD-1050).
     // Every clause is a property of the TABLE — a token's prefix, a gloss that
     // is one line, a route list that is not an override alone, a tombstone chain
     // that terminates — so it is knowable without a tree and belongs where a
     // config fault is reported. Registry EQUALITY against what the modules
     // actually emit needs the compiled bundles and lives in `policy::load`.
-    crate::verdict::validate(&config.verdicts, &config.vocabulary)?;
-    crate::redirect::validate(&config.redirects)?;
+    under(
+        Native::VerdictTableRefused,
+        crate::verdict::validate(&config.verdicts, &config.vocabulary),
+    )?;
+    under(
+        Native::RedirectTableRefused,
+        crate::redirect::validate(&config.redirects),
+    )?;
     // The remedies those two tables carry, resolved against the command surface
     // and the rule table (CLOUD-1189). Here rather than in `redirect::validate`
     // because it is the one clause needing a THIRD table — the `[[rule]]` ids —
@@ -1100,7 +1162,10 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
                     .as_deref()
                     .map(|text| (format!("verb[{}].redirect", verb.verb), text))
             }));
-        crate::redirect::validate_remedies(remedies, &rule_ids)?;
+        under(
+            Native::RemedyUnresolved,
+            crate::redirect::validate_remedies(remedies, &rule_ids),
+        )?;
     }
     // And the MCP table, at load for the identical reason (CLOUD-1260). Every
     // clause is a property of the TABLE — a duplicated id, a path that would
@@ -1115,7 +1180,10 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // them up and nobody checked the sibling, so an empty `token` — which
     // matches every line of every file — still loaded clean. The completeness
     // test below is what stops the next table arriving orphaned the same way.
-    crate::markers::validate(&config.markers)?;
+    under(
+        Native::MarkerTableRefused,
+        crate::markers::validate(&config.markers),
+    )?;
     // And the action table, where "validated only by the runner" would be worst
     // of all: an action is a command, and a row that loads clean but names no
     // event is a side effect the operator believes is attached and which fires
@@ -1131,31 +1199,70 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // malformed `mediated_call` row validated only by `check` is a policy row
     // that loads, matches nothing at the mediation channel, and reads as
     // coverage. `run_rule` still calls `Rule::validate` as defence in depth.
-    crate::rules::validate_in(&config.rules, text, source)?;
-    crate::outputs::validate(&config.exec_patterns)?;
+    under(
+        Native::RuleTableRefused,
+        crate::rules::validate_in(&config.rules, text, source),
+    )?;
+    under(
+        Native::OutputTableRefused,
+        crate::outputs::validate(&config.exec_patterns),
+    )?;
     // And the waiver table, where the stakes are inverted from every other row
     // here: a malformed rule fails to gate, but a malformed *waiver* is a hatch
     // whose expiry nobody could read. Refusing at load is what makes "every
     // waiver carries an expiry" true of the resolved config rather than aspirational.
-    crate::waiver::validate(&config.waivers)?;
-    crate::facts::validate(&config.facts)?;
+    under(
+        Native::WaiverTableRefused,
+        crate::waiver::validate(&config.waivers),
+    )?;
+    under(
+        Native::FactTableRefused,
+        crate::facts::validate(&config.facts),
+    )?;
     // The cross-table half (CLOUD-859), which needs both lists and so cannot live
     // in either one's own validator: a `named` receipt row over an agent-sourced
     // check is a gate no record can satisfy.
     crate::facts::validate_keying(&config.facts, &config.rules)?;
-    crate::mint::validate(&config.mints)?;
+    under(
+        Native::MintTableRefused,
+        crate::mint::validate(&config.mints),
+    )?;
     // AFTER the pattern table is validated, because a recorder's `section` names
     // a pattern id and the refusal for a missing one is only honest once the ids
     // are known to be well-formed themselves.
-    crate::recorder::validate(
-        &config.recorders,
-        &config.programs,
-        &config
-            .patterns
-            .iter()
-            .map(|pattern| pattern.id.clone())
-            .collect(),
+    under(
+        Native::RecorderTableRefused,
+        crate::recorder::validate(
+            &config.recorders,
+            &config.programs,
+            &config
+                .patterns
+                .iter()
+                .map(|pattern| pattern.id.clone())
+                .collect(),
+        ),
     )?;
+    validate_sections(config)
+}
+
+/// Prove the SINGLETON sections well formed — the `Option<T>` tables the census
+/// cannot reach, plus the two list tables that follow them.
+///
+/// # Why the split is here and not somewhere tidier
+///
+/// It is the smallest cut that keeps `validate_tables` inside the line lint
+/// **without reordering a single refusal**. Which fault a multi-fault config
+/// reports first is observable output under house style §6, so a split chosen
+/// for looks rather than for sequence would have been a silent contract change.
+///
+/// `every_load_time_validator_refuses_under_a_declared_class` reads this body
+/// together with [`validate_tables`]', because the loader is two functions and
+/// the predicate is about the loader.
+///
+/// # Errors
+///
+/// As [`validate_tables`].
+fn validate_sections(config: &Config) -> Result<()> {
     // `[budget]` is a table rather than a list, so the census below (which scans
     // `Vec<T>` fields) does not reach it — but the failure it guards against is
     // the same one: a table that parses and gates nothing. A `[budget]` header
@@ -1207,7 +1314,23 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // A pin that can never match, a name that owns a cache path twice, an empty
     // required field: each is refused here rather than at fetch time, where the
     // failure would blame the artifact for a typo in this file.
-    crate::provision::validate(&config.provisions)?;
+    under(
+        Native::ProvisionTableRefused,
+        crate::provision::validate(&config.provisions),
+    )?;
+    Ok(())
+}
+
+fn parse_ungated(text: &str, source: &str) -> Result<Config> {
+    let config: Config = toml::from_str(text)
+        .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?;
+    if config.version != SUPPORTED_VERSION {
+        return Err(UsageError::raise(format!(
+            "unsupported config version {} in {source}; this build supports version {SUPPORTED_VERSION}",
+            config.version
+        )));
+    }
+    validate_tables(&config, text, source)?;
     Ok(config)
 }
 
@@ -1686,26 +1809,81 @@ mod tests {
     use super::*;
     use crate::error::UsageError;
 
-    /// Tables whose entries are proven well formed at load, and the call in
-    /// [`parse_ungated`] that does it. Deleting a call fails the test below.
-    const VALIDATED_AT_LOAD: &[(&str, &str)] = &[
-        ("verbs", "crate::verbs::validate("),
-        ("patterns", "crate::pattern::validate("),
-        ("verdicts", "crate::verdict::validate("),
-        ("redirects", "crate::redirect::validate("),
-        ("markers", "crate::markers::validate("),
+    /// Tables whose entries are proven well formed at load, the call in
+    /// [`parse_ungated`] that does it, and the class its refusal names.
+    ///
+    /// The third column is CLOUD-1313's, and it is what makes the census a gate
+    /// over the refusal ABI rather than only over the call's existence: a
+    /// validator whose call is still there but is no longer wrapped raises a
+    /// classless `UsageError` again, which `batten policy explain` cannot
+    /// resolve, and the test below fails naming the table.
+    const VALIDATED_AT_LOAD: &[(&str, &str, Native)] = &[
+        ("verbs", "crate::verbs::validate(", Native::VerbTableRefused),
+        (
+            "patterns",
+            "crate::pattern::validate(",
+            Native::PatternTableRefused,
+        ),
+        (
+            "verdicts",
+            "crate::verdict::validate(",
+            Native::VerdictTableRefused,
+        ),
+        (
+            "redirects",
+            "crate::redirect::validate(",
+            Native::RedirectTableRefused,
+        ),
+        (
+            "markers",
+            "crate::markers::validate(",
+            Native::MarkerTableRefused,
+        ),
         // The LOCATED form (CLOUD-773): the loaders hold the config text, so a
         // composition refusal points at a line rather than only at a rule id.
         // `rules::validate_in` runs `rules::validate` first — one implementation,
         // an optional locator — so naming it here is naming the whole check.
-        ("rules", "crate::rules::validate_in("),
-        ("exec_patterns", "crate::outputs::validate("),
-        ("provisions", "crate::provision::validate("),
-        ("waivers", "crate::waiver::validate("),
-        ("facts", "crate::facts::validate("),
-        ("mints", "crate::mint::validate("),
-        ("recorders", "crate::recorder::validate("),
+        (
+            "rules",
+            "crate::rules::validate_in(",
+            Native::RuleTableRefused,
+        ),
+        (
+            "exec_patterns",
+            "crate::outputs::validate(",
+            Native::OutputTableRefused,
+        ),
+        (
+            "provisions",
+            "crate::provision::validate(",
+            Native::ProvisionTableRefused,
+        ),
+        (
+            "waivers",
+            "crate::waiver::validate(",
+            Native::WaiverTableRefused,
+        ),
+        ("facts", "crate::facts::validate(", Native::FactTableRefused),
+        ("mints", "crate::mint::validate(", Native::MintTableRefused),
+        (
+            "recorders",
+            "crate::recorder::validate(",
+            Native::RecorderTableRefused,
+        ),
     ];
+
+    /// The one CLASSED refusal that is not a `Config` table.
+    ///
+    /// `redirect::validate_remedies` needs a third table — the rule ids — so it
+    /// is a call at the load rather than a validator over one field, and the
+    /// census above (which scans `Vec<T>` fields) structurally cannot reach it.
+    /// It is listed anyway because it is the refusal CLOUD-1189 owed a class to
+    /// and could not declare one for, which is the case that produced
+    /// CLOUD-1313: leaving it out would close the row without closing its cause.
+    const CLASSED_BESIDE_THE_TABLES: &[(&str, Native)] = &[(
+        "crate::redirect::validate_remedies(",
+        Native::RemedyUnresolved,
+    )];
 
     /// Tables proven well formed somewhere else, each with the reason. Listing
     /// an exemption is the point: a reader sees the justification rather than
@@ -1733,13 +1911,22 @@ mod tests {
             let rest = &source[start..];
             &rest[..rest.find("\n}").expect("the struct closes")]
         };
-        let parse_body = {
-            let start = source
-                .find("fn parse_ungated")
-                .expect("the shared parse body is declared here");
-            let rest = &source[start..];
-            &rest[..rest.find("\n}").expect("the function closes")]
-        };
+        // BOTH bodies, because the loader is two functions and the predicate is
+        // about the loader. Reading only the first would report every section
+        // the split moved as unwrapped — the false positive that gets a gate
+        // switched off.
+        let parse_body = ["fn validate_tables", "fn validate_sections"]
+            .iter()
+            .map(|name| {
+                let start = source
+                    .find(name)
+                    .unwrap_or_else(|| panic!("`{name}` is declared here"));
+                let rest = &source[start..];
+                &rest[..rest.find("\n}").expect("the function closes")]
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parse_body = parse_body.as_str();
 
         let mut seen = Vec::new();
         for line in struct_body.lines() {
@@ -1754,7 +1941,7 @@ mod tests {
             }
             seen.push(field);
 
-            let at_load = VALIDATED_AT_LOAD.iter().find(|(name, _)| *name == field);
+            let at_load = VALIDATED_AT_LOAD.iter().find(|(name, _, _)| *name == field);
             let by_runner = VALIDATED_BY_ITS_RUNNER
                 .iter()
                 .any(|(name, _)| *name == field);
@@ -1764,11 +1951,11 @@ mod tests {
                  are proven well formed: at load, or by the runner that evaluates them. A \
                  table nothing validates is a refusal that cannot fire (CLOUD-253)."
             );
-            if let Some((_, call)) = at_load {
+            if let Some((_, call, _)) = at_load {
                 assert!(
                     parse_body.contains(call),
                     "config table `{field}` is listed as validated at load, but \
-                     `parse_ungated` does not call `{call}`."
+                     `validate_tables` does not call `{call}`."
                 );
             }
         }
@@ -1777,12 +1964,106 @@ mod tests {
             !seen.is_empty(),
             "the struct scan must actually find tables"
         );
-        for (name, _) in VALIDATED_AT_LOAD.iter().chain(VALIDATED_BY_ITS_RUNNER) {
+        for name in VALIDATED_AT_LOAD
+            .iter()
+            .map(|(name, _, _)| name)
+            .chain(VALIDATED_BY_ITS_RUNNER.iter().map(|(name, _)| name))
+        {
             assert!(
                 seen.contains(name),
                 "`{name}` is listed but is no longer a Config table; drop the stale entry."
             );
         }
+    }
+
+    /// The refusal-ABI half of the census (CLOUD-1313).
+    ///
+    /// The test above proves the call is THERE. This one proves it is still
+    /// *classed* — that its refusal names a declared class rather than the bare
+    /// `String` that made a config fault the one refusal in this engine
+    /// `batten policy explain` could not resolve.
+    ///
+    /// It reads the wrapping rather than trusting it, because a `?` that has
+    /// lost its `under(..)` compiles, passes every other test, and silently
+    /// returns to the pre-CLOUD-1313 shape.
+    #[test]
+    fn every_load_time_validator_refuses_under_a_declared_class() {
+        let source = include_str!("config.rs");
+        // BOTH bodies, because the loader is two functions and the predicate is
+        // about the loader. Reading only the first would report every section
+        // the split moved as unwrapped — the false positive that gets a gate
+        // switched off.
+        let parse_body = ["fn validate_tables", "fn validate_sections"]
+            .iter()
+            .map(|name| {
+                let start = source
+                    .find(name)
+                    .unwrap_or_else(|| panic!("`{name}` is declared here"));
+                let rest = &source[start..];
+                &rest[..rest.find("\n}").expect("the function closes")]
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parse_body = parse_body.as_str();
+
+        let listed: Vec<(&str, &str, Native)> = VALIDATED_AT_LOAD
+            .iter()
+            .copied()
+            .chain(
+                CLASSED_BESIDE_THE_TABLES
+                    .iter()
+                    .map(|(call, native)| ("(not a Config table)", *call, *native)),
+            )
+            .collect();
+
+        for (subject, call, native) in &listed {
+            let at = parse_body
+                .find(call)
+                .unwrap_or_else(|| panic!("`{subject}`: `validate_tables` does not call `{call}`"));
+            // The nearest `under(` before the call, and everything between it
+            // and the call. Unwrapping the call makes that span reach back to
+            // some *other* validator's wrapper, so the variant no longer
+            // matches — which is the direction this has to fail in.
+            let wrapper = parse_body[..at]
+                .rfind("under(")
+                .unwrap_or_else(|| panic!("`{subject}`: no `under(..)` precedes `{call}`"));
+            let span = &parse_body[wrapper..at];
+            let variant = format!("{native:?}");
+            assert!(
+                span.contains(&variant) && span.len() < 80,
+                "`{subject}`: `{call}` is not wrapped in `under(Native::{variant}, ..)`, so its \
+                 refusal carries no class and `batten policy explain {}` cannot reach it \
+                 (CLOUD-1313).",
+                native.id()
+            );
+        }
+
+        // One table, one class. Two tables sharing a class would report the
+        // wrong file to edit, and the span check above cannot see it.
+        let mut classes: Vec<&str> = listed.iter().map(|(_, _, n)| n.id()).collect();
+        classes.sort_unstable();
+        let before = classes.len();
+        classes.dedup();
+        assert_eq!(
+            before,
+            classes.len(),
+            "two load-time refusals share a class; each names the table a reader must edit"
+        );
+
+        // Both directions against the one authority. The forward direction
+        // stops a class being declared for a loader that does not raise it; the
+        // reverse stops a wrapped call whose class the published set — and so
+        // the compiled-binary tier that reads it — has never heard of.
+        let mut here: Vec<&str> = classes;
+        let mut published: Vec<&str> = Native::CONFIG_FAULTS.iter().map(|n| n.id()).collect();
+        published.sort_unstable();
+        here.sort_unstable();
+        assert_eq!(
+            here, published,
+            "`Native::CONFIG_FAULTS` and this census disagree about which classes the loader \
+             raises; they are read by different tiers, so a disagreement means one of them is \
+             describing a loader that does not exist"
+        );
     }
 
     fn is_usage_error(err: &anyhow::Error) -> bool {

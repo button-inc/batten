@@ -73,6 +73,7 @@ mod config_authority_boundary;
 mod config_base_ref_reading;
 mod config_deprecations;
 mod config_epoch;
+mod config_fault_class;
 mod config_in_directory;
 mod config_lint;
 mod config_provenance;

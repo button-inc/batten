@@ -953,6 +953,51 @@ pub enum Native {
     ContentRefused,
     /// The work this call publishes names no tracker key.
     KeyMissing,
+    // ─── the config loader's own classes (CLOUD-1313) ────────────────────────
+    //
+    // A load-time refusal was a bare `UsageError(String)` across ~172 sites, so
+    // a config fault was the ONE refusal class in this engine that
+    // `batten policy explain` could not resolve and no gate held to the
+    // registry -- CLOUD-1050's defect, one surface over.
+    //
+    // ONE CLASS PER TABLE, NOT PER SITE. Only ~30 of those raises sit at a
+    // top-level `validate`; the rest are in per-entry helpers, so a class per
+    // site is unbuildable. The class says WHICH TABLE would not load and the
+    // message carries the row and key, which is the same division `[[verdict]]`
+    // draws between a class and its subjects.
+    //
+    // They are `Native` rather than consumer rows for the reason the enum's own
+    // doc gives: the loader raises them BEFORE any config exists to declare
+    // them, so a declared-row spelling would be unsatisfiable at exactly the
+    // moment it fires. That also makes them resolvable from `vendored()` with
+    // no config load, which is what keeps `policy explain` usable over a config
+    // that will not parse.
+    /// The `[[verb]]` table would not load.
+    VerbTableRefused,
+    /// The `[[pattern]]` table would not load.
+    PatternTableRefused,
+    /// The `[[verdict]]` table would not load.
+    VerdictTableRefused,
+    /// The `[[redirect]]` table would not load.
+    RedirectTableRefused,
+    /// A declared remedy names no command that exists (CLOUD-1189's class).
+    RemedyUnresolved,
+    /// The `[[marker]]` table would not load.
+    MarkerTableRefused,
+    /// The `[[rule]]` table would not load.
+    RuleTableRefused,
+    /// The `[[exec_pattern]]` table would not load.
+    OutputTableRefused,
+    /// The `[[waiver]]` table would not load.
+    WaiverTableRefused,
+    /// The `[[fact]]` table would not load.
+    FactTableRefused,
+    /// The `[[mint]]` table would not load.
+    MintTableRefused,
+    /// The `[[recorder]]` table would not load.
+    RecorderTableRefused,
+    /// The `[[provision]]` table would not load.
+    ProvisionTableRefused,
 }
 
 impl Native {
@@ -982,6 +1027,47 @@ impl Native {
         Native::ShapeRefused,
         Native::ContentRefused,
         Native::KeyMissing,
+        Native::VerbTableRefused,
+        Native::PatternTableRefused,
+        Native::VerdictTableRefused,
+        Native::RedirectTableRefused,
+        Native::RemedyUnresolved,
+        Native::MarkerTableRefused,
+        Native::RuleTableRefused,
+        Native::OutputTableRefused,
+        Native::WaiverTableRefused,
+        Native::FactTableRefused,
+        Native::MintTableRefused,
+        Native::RecorderTableRefused,
+        Native::ProvisionTableRefused,
+    ];
+
+    /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
+    ///
+    /// One authority with three readers, which is what stops the set drifting
+    /// where it is used (CLOUD-1313): `config.rs`'s census holds its own
+    /// per-table list equal to this one in both directions, and the
+    /// compiled-binary tier holds its fixture set to it — so a fourteenth table
+    /// cannot arrive wrapped-but-untested, and a class cannot be dropped from
+    /// the loader while a fixture still claims to reach it.
+    ///
+    /// A subset of [`Native::ALL`] rather than a separate enum, because these
+    /// are resolved from the same vendored table by the same `explain` — the
+    /// only thing that distinguishes them is who raises them.
+    pub const CONFIG_FAULTS: &'static [Native] = &[
+        Native::VerbTableRefused,
+        Native::PatternTableRefused,
+        Native::VerdictTableRefused,
+        Native::RedirectTableRefused,
+        Native::RemedyUnresolved,
+        Native::MarkerTableRefused,
+        Native::RuleTableRefused,
+        Native::OutputTableRefused,
+        Native::WaiverTableRefused,
+        Native::FactTableRefused,
+        Native::MintTableRefused,
+        Native::RecorderTableRefused,
+        Native::ProvisionTableRefused,
     ];
 
     /// The token this class is declared and rendered under.
@@ -1008,6 +1094,19 @@ impl Native {
             Native::ShapeRefused => "call name refused",
             Native::ContentRefused => "input write refused",
             Native::KeyMissing => "issue name missing",
+            Native::VerbTableRefused => "verb declare refused",
+            Native::PatternTableRefused => "pattern declare refused",
+            Native::VerdictTableRefused => "verdict declare refused",
+            Native::RedirectTableRefused => "redirect declare refused",
+            Native::RemedyUnresolved => "remedy resolve missing",
+            Native::MarkerTableRefused => "marker declare refused",
+            Native::RuleTableRefused => "rule declare refused",
+            Native::OutputTableRefused => "output declare refused",
+            Native::WaiverTableRefused => "waiver declare refused",
+            Native::FactTableRefused => "fact declare refused",
+            Native::MintTableRefused => "mint declare refused",
+            Native::RecorderTableRefused => "recorder declare refused",
+            Native::ProvisionTableRefused => "provision declare refused",
         }
     }
 }
@@ -1332,6 +1431,129 @@ wanted checked, which is the likeliest place in the surface for a secret to appe
 one of them allows: the command itself, the branch name, and the commit subjects on the \
 range the row declares. None carried a key, so nothing on the published work says which row \
 it serves.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    // ── the config loader's classes (CLOUD-1313) ────────────────────────────
+    //
+    // One per `VALIDATED_AT_LOAD` table plus the remedy resolver. Each `class`
+    // says what the table is FOR and what a refusal from it therefore means,
+    // because the message the loader already carries says which row and key
+    // failed and repeating that here would be the payload rule 4 refuses.
+    //
+    // Every route is the config itself, which is not a placeholder: a config
+    // fault is edited in exactly one file, and a `command` route would have to
+    // name a task that can run over a config that does not load.
+    VendoredVerdict {
+        id: "verb declare refused",
+        gloss: "the verb table would not load",
+        class: "`[[verb]]` is how a consumer names the commands their harness mediates and \
+what effect each carries. A row that is inert -- declared twice, or read-effect in a table \
+named for mutation -- reads as covered while matching nothing, so the table is proven at \
+load rather than at the call it would have decided.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "pattern declare refused",
+        gloss: "the named-pattern registry would not load",
+        class: "`[[pattern]]` gives one concept one spelling, so a module cannot inline a \
+regex and duplication becomes unwritable rather than merely detectable. A malformed \
+expression here is a config fault, and refusing it at load is what stops a mediated call \
+discovering it at adjudication -- the worst moment and the wrong exit class.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "verdict declare refused",
+        gloss: "the refusal vocabulary would not load",
+        class: "`[[verdict]]` is the registry every other class in this table belongs to: a \
+token's arity, a gloss that is one line, a route list that is not an override alone, a \
+tombstone chain that terminates. Each clause is a property of the table, so it is knowable \
+without a tree and belongs where a config fault is reported.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "redirect declare refused",
+        gloss: "the redirect table would not load",
+        class: "`[[redirect]]` changes what a refusal SAYS for a class of path, never \
+whether it fires -- which is why it needs no raise-only clamp and why a redefinition is \
+refused for coherence with the other append-only tables rather than because it lowers a \
+bar.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "remedy resolve missing",
+        gloss: "a declared remedy names a command that does not exist",
+        class: "A refusal whose remedy points at a verb that was renamed away is worse than \
+one carrying no remedy: the reader spends the round finding out. This is the one clause \
+needing a THIRD table -- the rule ids -- so it lives at the load rather than inside either \
+remedy table's own validator, where a checker reaching past its argument would quietly \
+become the config's.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "marker declare refused",
+        gloss: "the marker table would not load",
+        class: "`[[marker]]` declares the tokens a scan treats as significant. An empty \
+`token` matches every line of every file, which loads clean and reads as coverage, so the \
+table is proven at load.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "rule declare refused",
+        gloss: "the rule table would not load",
+        class: "`[[rule]]` is the policy surface itself, and it used to be validated only by \
+whichever runner happened to evaluate it. That was defensible with one runner; with a tree \
+engine and a mediation boundary, a malformed mediated-call row validated only by the tree \
+engine is a row that loads, matches nothing at the mediation channel, and reads as \
+coverage.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "output declare refused",
+        gloss: "the exec output-predicate table would not load",
+        class: "`[[exec_pattern]]` is how a wrapped command's OUTPUT becomes a decidable \
+object rather than something a reader skims. A duplicate id makes two predicates \
+indistinguishable in the record they write.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "waiver declare refused",
+        gloss: "the waiver table would not load",
+        class: "The stakes here are inverted from every other table: a malformed rule fails \
+to gate, but a malformed WAIVER is a hatch whose expiry nobody could read. Refusing at load \
+is what makes \"every waiver carries an expiry\" true of the resolved config rather than \
+aspirational.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "fact declare refused",
+        gloss: "the fact table would not load",
+        class: "`[[fact]]` declares what the boundary resolves about a call before any rule \
+reads it. A row naming a fact the engine cannot produce is a gate that evaluates, reads \
+undefined, and refuses nothing -- the silent dead gate, decided at load instead.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "mint declare refused",
+        gloss: "the mint table would not load",
+        class: "`[[mint]]` declares what a receipt records and how long it answers for. A \
+malformed row is a receipt nothing can satisfy or one that answers forever, and both are \
+decidable from the table alone.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "recorder declare refused",
+        gloss: "the recorder table would not load",
+        class: "`[[recorder]]` binds a captured section to a named pattern. It is validated \
+AFTER the pattern registry, because a refusal for a missing pattern id is only honest once \
+the ids are known to be well formed themselves.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "provision declare refused",
+        gloss: "the provision table would not load",
+        class: "`[[provision]]` is how a pinned tool reaches the cache a rule will look for \
+it in. A row that cannot resolve is a rule that will report a missing scanner at the moment \
+it was supposed to decide something.",
         routes: &[read("config read first", "batten.toml")],
     },
     // ── vendored presets ────────────────────────────────────────────────────
@@ -1893,7 +2115,20 @@ mod tests {
                 | Native::CeilingExceeded
                 | Native::ShapeRefused
                 | Native::ContentRefused
-                | Native::KeyMissing => native.id(),
+                | Native::KeyMissing
+                | Native::VerbTableRefused
+                | Native::PatternTableRefused
+                | Native::VerdictTableRefused
+                | Native::RedirectTableRefused
+                | Native::RemedyUnresolved
+                | Native::MarkerTableRefused
+                | Native::RuleTableRefused
+                | Native::OutputTableRefused
+                | Native::WaiverTableRefused
+                | Native::FactTableRefused
+                | Native::MintTableRefused
+                | Native::RecorderTableRefused
+                | Native::ProvisionTableRefused => native.id(),
             };
             // The prefix is gone (CLOUD-1284), so what makes this a token is the
             // ARITY: exactly three words. Asserting that here rather than a

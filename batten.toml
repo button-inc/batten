@@ -6235,6 +6235,10 @@ word = "event"
 gloss = "a harness or forge event"
 
 [[vocabulary.subject]]
+word = "fact"
+gloss = "a declared fact row"
+
+[[vocabulary.subject]]
 word = "forge"
 gloss = "the code host"
 
@@ -6283,12 +6287,24 @@ word = "manifest"
 gloss = "a package manifest"
 
 [[vocabulary.subject]]
+word = "marker"
+gloss = "a declared marker row"
+
+[[vocabulary.subject]]
 word = "memory"
 gloss = "an agent memory document"
 
 [[vocabulary.subject]]
+word = "mint"
+gloss = "a declared receipt-minting row"
+
+[[vocabulary.subject]]
 word = "module"
 gloss = "a policy module"
+
+[[vocabulary.subject]]
+word = "output"
+gloss = "a declared exec output predicate"
 
 [[vocabulary.subject]]
 word = "patch"
@@ -6297,6 +6313,10 @@ gloss = "a change identified by its content"
 [[vocabulary.subject]]
 word = "path"
 gloss = "a filesystem path"
+
+[[vocabulary.subject]]
+word = "pattern"
+gloss = "a declared named-pattern row"
 
 [[vocabulary.subject]]
 word = "pin"
@@ -6309,6 +6329,18 @@ gloss = "an executable"
 [[vocabulary.subject]]
 word = "prose"
 gloss = "authored text"
+
+[[vocabulary.subject]]
+word = "provision"
+gloss = "a declared provisioned-tool row"
+
+[[vocabulary.subject]]
+word = "recorder"
+gloss = "a declared recorder row"
+
+[[vocabulary.subject]]
+word = "redirect"
+gloss = "a declared per-path remedy row"
 
 [[vocabulary.subject]]
 word = "release"
@@ -6387,8 +6419,20 @@ word = "turn"
 gloss = "one agent turn"
 
 [[vocabulary.subject]]
+word = "verb"
+gloss = "a declared mutating-verb row"
+
+[[vocabulary.subject]]
+word = "verdict"
+gloss = "a declared refusal class"
+
+[[vocabulary.subject]]
 word = "version"
 gloss = "a declared version"
+
+[[vocabulary.subject]]
+word = "waiver"
+gloss = "a declared waiver row"
 
 [[vocabulary.subject]]
 word = "workflow"
