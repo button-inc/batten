@@ -125,7 +125,7 @@ use common::{at_root, git_in, scratch, stderr, stdout, write};
 ///
 /// A LIST RATHER THAN A COUNT, because a count cannot tell an added row from a
 /// renamed one, and the ordering claim below needs the names anyway.
-const DECLARED: [&str; 10] = [
+const DECLARED: [&str; 11] = [
     "session-stamp",
     "session-install",
     "session-submodules",
@@ -134,6 +134,18 @@ const DECLARED: [&str; 10] = [
     "session-git-hooks",
     "session-attribution-identity",
     "session-signing-posture",
+    // The third repair of launcher-provisioned state (CLOUD-1079), and its
+    // POSITION is the claim rather than its presence. After `session-batten`
+    // because `batten wiring reclaim` is the binary answering about its own
+    // registrations; before the preflight and the census so both observe the
+    // repaired wiring rather than the launcher's — a census that ran first
+    // would report `merged_siblings: 2` for a state this sequence had already
+    // been asked to fix.
+    //
+    // A list rather than a count is what caught this row being added without
+    // being declared here, which is the property the header claims and this is
+    // the instance of it.
+    "session-wiring",
     "session-container-preflight",
     "session-census",
 ];
