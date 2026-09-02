@@ -1153,6 +1153,36 @@ fn check_claims(
         }
     }
 
+    // THE OBLIGATION SET, EMITTED BEFORE ANY VERDICT (CLOUD-472).
+    //
+    // Position is correctness, exactly as it is for `cites-body`: a recorder
+    // reads this line to carry the declared obligations into the tree, where a
+    // `verify`-time rule can ask whether each one is bound to a case. Emitting
+    // it after a refusal would make the set unavailable for precisely the rows
+    // most likely to carry a broken one, and a consumer would read that absence
+    // as could-not-look over a block that was read perfectly well.
+    //
+    // `<file>:<slug>` per entry, space separated. An EMPTY line is the honest
+    // zero — the object was read and declares no obligations — while no line at
+    // all is a prose block, or a payload this verb never got through, which
+    // `Read::StdoutLine` keeps apart by construction.
+    report.emissions.push(format!(
+        "obligations {}",
+        claims
+            .get("tests")
+            .and_then(serde_json::Value::as_array)
+            .map(|tests| tests
+                .iter()
+                .filter_map(|entry| {
+                    let file = entry.get("file").and_then(serde_json::Value::as_str)?;
+                    let mutation = entry.get("mutation").and_then(serde_json::Value::as_str)?;
+                    Some(format!("{file}:{mutation}"))
+                })
+                .collect::<Vec<_>>()
+                .join(" "))
+            .unwrap_or_default()
+    ));
+
     check_claimed_gate(&claims, block_line, report);
     check_claimed_type(&claims, root, block_line, report)?;
     check_claimed_blockers(grammar, payload, &claims, block_line, report);

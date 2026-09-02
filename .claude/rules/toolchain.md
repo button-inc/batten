@@ -51,6 +51,36 @@ which also refuses to re-enter a gate that is already running, the recursion
 that hung a commit when `doctor` first tried to execute a hook from inside the
 gate.
 
+**AND THE SUBJECT DECIDES BETWEEN A HOOK AND A VERB, WHICH IS THE WIDER HALF OF
+THE SAME RULE.** The directory rule above catches one of the three instances
+measured that day; the other two were proposed for `batten.toml` and would still
+have been dead. A hook MEDIATES A CALL TO SOMEBODY ELSE'S TOOL, so its subject is
+an envelope the host chose to send — and where the host spells the tool
+differently, switches it off, or was never surveyed, the envelope never arrives
+and the gate passes silently. A verb's subject is a RECORD THE AGENT MINTED, so a
+missing one refuses identically on all five. **The rule: whenever the subject is
+the agent's own conduct rather than a call it is making, land a batten verb and
+read its store — never a hook over the harness's own tool.**
+
+The three instances, because each reaches the wrong answer by a different route:
+the pressure-test subagent (its prompt proposed as `.claude/agents/*.md`, the
+directory half); the todo gate (proposed as a hook over `TaskUpdate`, whose
+spelling is `write_todos` on one host, `todowrite` on another, `update_plan` on a
+third, and unknown on two); and `ExitPlanMode`, which only one harness sends at
+all. `batten record plan` is what landed instead, and `policy/plan-complete.rego`
+refuses a branch that recorded no plan while its diff is non-empty — the arm that
+makes an empty store a finding rather than a pass.
+
+**DISABLEABILITY IS UNIVERSAL AND IS NOT THE ARGUMENT.** That reasoning was
+offered first and is wrong: this harness's own todo tools can be switched off,
+and Gemini CLI documents `useWriteTodos: false` for exactly that, so "the others
+let you turn it off" discriminates nothing. The argument is that **absence must
+be a reading, not silence** — `hook::PlanTools` therefore distinguishes
+`Surveyed(&[])`, a measured none, from `Unsurveyed(owner)`, where nobody has
+looked and the row names who owes the survey (CLOUD-209), and `doctor` fails on
+an unsurveyed surface that names no owner. A host offering no spelling reads as
+unanswered, which is a property only the engine can hold.
+
 ## Touching a governed gate: two landable shapes, and there is no third
 
 **Read this before you open a `mise-tasks/*.sh` or a `tests/**/\*.bats`.** The
