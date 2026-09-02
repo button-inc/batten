@@ -43,7 +43,8 @@ use common::{Fixture, batten, scratch, stderr, stdout};
 fn repo(name: &str) -> std::path::PathBuf {
     Fixture::at(scratch(name).join("repo"))
         .config(
-            "[[rule]]\n\
+            "version = 1\n\n\
+             [[rule]]\n\
              id = \"landing\"\n\
              kind = \"policy\"\n\
              scope = \"tree\"\n\

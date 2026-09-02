@@ -557,6 +557,10 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     "lease release",
     "lease renew",
     "lease reserve",
+    // `land replay` joins them for the same reason one hop earlier: it FETCHES
+    // before it replays, so a corpus with no remote configured cannot reach the
+    // replay at all and could-not-look is its honest answer here.
+    "land replay",
 ];
 
 /// One entry per leaf verb of [`SURFACE`], asserted total by
@@ -633,6 +637,17 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "lease reserve",
         args: &["--branch", "work"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // THE LANDING LAP (CLOUD-1335), pointer-only by construction for the lease
+    // subtree's reason: what it reports is a sha, a count and a path, and the one
+    // thing a replay could otherwise leak is the CONTENT of a conflict — which is
+    // exactly what `gitwrite::rebase` hands back as `{commit, paths}` rather than
+    // as hunks, so there is no prose channel for a marker to travel down.
+    Verb {
+        path: "land replay",
+        args: &["refs/heads/main"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
