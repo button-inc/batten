@@ -1212,6 +1212,29 @@ fn check_claimed_tests(claims: &serde_json::Value, line: usize, report: &mut Rep
                 });
             }
         }
+        // `mutation` NAMES A DECLARED `#MUTANT` SLUG (CLOUD-472). The field
+        // landed under CLOUD-418 as prose describing the mutation that would
+        // kill the case — which is a better claim than nothing and is still not
+        // joinable to anything. A slug is: `batten mutate` resolves it, applies
+        // the expression, runs the named case, and a SURVIVOR is the finding. So
+        // "pressure tested" stops being an assertion and becomes an exit code.
+        //
+        // SHAPE HERE, RESOLUTION AT `verify`. At refinement time the case does
+        // not exist yet — refusing an unresolvable slug here is the false-failure
+        // trap this row's own §3 names — so this checks only that the field is a
+        // TOKEN rather than a sentence. A slug carries no whitespace, which is
+        // the whole discriminator and is what `mutate`'s own three-field row
+        // format already requires of it.
+        let prose = entry
+            .get("mutation")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|text| text.split_whitespace().count() > 1);
+        if prose {
+            report.findings.push(Finding {
+                line,
+                rule: "test-claim-mutation-not-a-slug".to_owned(),
+            });
+        }
     }
 }
 
