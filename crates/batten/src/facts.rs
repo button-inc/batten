@@ -3084,6 +3084,37 @@ pub struct ReviewQuery {
     /// The exact flags, so a reader can tell which question was asked.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    /// How the prompt reaches the runner.
+    ///
+    /// **Declared because a runner that ignores the channel discards the prompt
+    /// SILENTLY**, and the record then reads as a completed review of whatever
+    /// the agent chose to look at. Measured against a real reviewer whose review
+    /// subcommand takes its focus as a POSITIONAL and wires stdin only for a
+    /// different subcommand: the dispatch succeeds, exits zero and steers
+    /// nothing. Which reviewer, and the reading, are CLOUD-472's — a consumer's
+    /// tool is not this crate's to name (non-negotiable rule 1).
+    ///
+    /// Defaults to stdin, which is what the first landed runner contract
+    /// assumed, so a row that says nothing keeps its behaviour.
+    #[serde(default, skip_serializing_if = "PromptArg::is_default")]
+    pub prompt_arg: PromptArg,
+    /// A subcommand that answers whether this runner can review AT ALL.
+    ///
+    /// **Readiness as a declared reading rather than an inference.** Without it
+    /// the engine infers "no runner" from a missing file, which cannot tell a
+    /// machine that never installed the reviewer from one where it is installed
+    /// and not authenticated — different remedies, and the operator gets neither.
+    ///
+    /// The runner is the authority on its own readiness: it knows whether its
+    /// dependencies resolve and whether a session is authenticated, and the
+    /// engine can see neither. Reviewers in this class expose exactly such a
+    /// subcommand, reporting a boolean beside the remedy steps; the row names
+    /// which one, because whose reviewer it is is the consumer's business.
+    ///
+    /// Absent keeps today's behaviour, so a row that declares none is judged
+    /// exactly as it was before this column existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub probe: Vec<String>,
     /// What KIND of thing is being reviewed, e.g. `document`.
     pub subject: String,
     /// The repository-relative path whose bytes the review was taken over.
@@ -3101,6 +3132,42 @@ pub struct ReviewQuery {
     /// rather than guessed at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+}
+
+/// How a dispatched prompt reaches its runner (CLOUD-472).
+///
+/// Two spellings rather than a bool, because the axis is not "on or off" — it is
+/// WHICH channel, and a third (a temporary file, say) is a plausible fourth
+/// runner's answer. A bool would have to be renamed to admit one.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Deserialize,
+    serde::Serialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum PromptArg {
+    /// Written to the child's stdin. The default, and what the first landed
+    /// runner contract assumed.
+    #[default]
+    Stdin,
+    /// Appended to `args` as the last positional. What a runner taking a focus
+    /// string needs — and what the reviewer batten's customers run requires.
+    Positional,
+}
+
+impl PromptArg {
+    /// Whether this is the serde default, so a row that says nothing stays quiet
+    /// in the emitted config rather than growing a key nobody wrote.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == PromptArg::Stdin
+    }
 }
 
 /// What joins a [`ToolQuery`]'s components into one record name.
