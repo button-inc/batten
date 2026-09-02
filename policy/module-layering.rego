@@ -66,7 +66,7 @@ declared_modules := {
 	"cli", "commit", "completion", "config", "contract", "decision", "defects",
 	"design", "doctor", "drain", "effect", "emission", "epoch", "error", "exec",
 	"exit", "facts", "findings", "git", "handler", "hook", "identity", "init",
-	"invocation", "journal", "judge", "lib", "lint", "markers", "mint", "outputs",
+	"invocation", "journal", "judge", "lib", "lint", "markers", "mint", "minted", "outputs",
 	"output", "pattern", "policy", "provision", "receipt", "redirect", "refusal",
 	"render", "resolve", "rules", "secrets", "session", "severity", "sink",
 	"spec", "state", "stop", "store", "surface", "transcript", "trust", "uses",

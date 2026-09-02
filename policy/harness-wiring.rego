@@ -89,8 +89,24 @@ mediator := "batten"
 # wrong. That issue closed by recording a PRECEDENCE (non-negotiable rule 8), which
 # stops the hook's remedy from being followed and cannot remove a program living
 # outside this repository.
+#
+# AND THE FIRST ROW WAS RE-POINTED TWICE, because the first attempt made the same
+# mistake one row over. It named CLOUD-1108 as "the open row that owns why this
+# guard cannot move yet" -- a blocker that row had already WITHDRAWN. Its
+# re-derivation of 2026-08-31 says its own measured instance is discharged: all
+# four families have a landed Rego successor (`policy/run-shape.rego` raises three,
+# `policy/task-substitution.rego` the fourth), so the file is deletable WHOLE,
+# which is the ratchet's one admitted disposition. Citing it here would have
+# restated a blocker its own body refutes -- CLOUD-1166's class, which is
+# classifying a blocker instead of reading it.
+#
+# CLOUD-1163 owns the deletion, as its unit 9, and is In Progress. Its own §1 says
+# each of its eight units "lands as its own PR with its own ledger arms", and its
+# §2 refuses merging two units because that "would manufacture the glue this
+# partition exists to avoid" -- so this row points at that unit rather than being
+# discharged here.
 declared := {
-	"mise-tasks/run-shape-guard.sh": "CLOUD-1108",
+	"mise-tasks/run-shape-guard.sh": "CLOUD-1163",
 	"stop-hook-git-check.sh": "CLOUD-1314",
 	"session-start-git-identity.sh": "CLOUD-1314",
 }
