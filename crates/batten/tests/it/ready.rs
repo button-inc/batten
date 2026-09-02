@@ -267,9 +267,14 @@ fn complete_claims() -> serde_json::Value {
         "gate": { "task": "verify", "exits": [0, 2] },
         "commit_type": "feat",
         "blockers": [],
+        // A SLUG, NOT PROSE (CLOUD-472). This fixture carried
+        // "drop the required-key check" — a sentence, which is what the field
+        // meant under CLOUD-418 and which nothing can resolve. `batten mutate`
+        // resolves a slug, so the obligation becomes checkable rather than
+        // asserted, and every case below inherits the corrected shape.
         "tests": [{
             "file": "crates/batten/tests/it/ready.rs",
-            "mutation": "drop the required-key check",
+            "mutation": "required-key-unread",
         }],
     })
 }
@@ -460,6 +465,34 @@ fn an_empty_value_is_an_omission_wearing_a_declarations_shape() {
         "an explicit empty blocker list is a declaration, not an omission: {}",
         stderr(&none_blocked)
     );
+}
+
+/// CLOUD-472. `mutation` landed under CLOUD-418 as PROSE describing the change
+/// that would kill the case — a better claim than nothing, and still joinable to
+/// nothing. A slug is joinable: `batten mutate` resolves it, applies the
+/// expression, runs the named case, and a survivor is the finding.
+///
+/// Shape only, at this tier and at this moment: the case does not exist at
+/// refinement time, so resolving the slug here would refuse every honest row
+/// before its code was written. Whitespace is the whole discriminator, because
+/// `mutate`'s own three-field row format already forbids it in a slug.
+#[test]
+fn a_mutation_written_as_prose_rather_than_a_slug_is_refused() {
+    let dir = with_tasks("ready-claims-mutation-prose");
+    let mut object = complete_claims();
+    object["tests"][0]["mutation"] = serde_json::json!("drop the required-key check");
+    let output = lint(&dir, &claims_payload(&object, &[]));
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("test-claim-mutation-not-a-slug"),
+        "the refusal must name the class: {}",
+        stderr(&output)
+    );
+
+    // THE REMEDY IS REACHABLE, which is what keeps this from being a wall: the
+    // unmodified fixture already carries a slug and passes.
+    let clean = lint(&dir, &claims_payload(&complete_claims(), &[]));
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
 }
 
 #[test]
