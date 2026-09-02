@@ -533,7 +533,7 @@ fn materialise(
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => return Err(anyhow::anyhow!("gitwrite: {relative}: {err}")),
         }
-        std::os::unix::fs::symlink(destination, &target)
+        link(destination, &target)
             .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not link: {err}"))?;
     } else {
         let mut converted = pipeline
@@ -569,8 +569,7 @@ fn materialise(
             .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not write: {err}"))?;
         drop(file);
         if mode == gix::index::entry::Mode::FILE_EXECUTABLE {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
+            make_executable(&target)
                 .map_err(|err| anyhow::anyhow!("gitwrite: {relative}'s mode: {err}"))?;
         }
     }
@@ -581,4 +580,48 @@ fn materialise(
     // already happened: a zero stat costs git a content comparison and nothing
     // else, where an error here would abandon a half-updated worktree.
     Ok(gix::index::entry::Stat::from_fs(&landed).unwrap_or_default())
+}
+
+// ---------------------------------------------------------------------------
+// The two worktree effects that are not portable, gated rather than assumed.
+//
+// `cross-check` type-checks this crate against `x86_64-pc-windows-gnu` with
+// warnings denied, and it caught both of these unconditional: `std::os::unix`
+// does not exist there, so the whole library failed to compile on a target this
+// repository claims to support. `.claude/rules/rust.md` states the convention
+// the fix takes — platform-specific code is deliberate and `#[cfg]`-gated.
+//
+// **The non-Unix arms are git's own fallbacks rather than silent no-ops**, and
+// each says which: a symlink becomes a regular file holding its target's path,
+// which is what git does under `core.symlinks=false`, and the executable bit is
+// not modelled by the filesystem at all, so there is nothing to set. Neither is
+// exercised here — this crate ships a Linux and a macOS binary — so they are
+// written to be obviously right rather than to be measured.
+
+/// Create a symbolic link, or the closest thing the platform has.
+#[cfg(unix)]
+fn link(destination: &str, target: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(destination, target)
+}
+
+/// The `core.symlinks=false` shape: the link's TARGET PATH as file content.
+///
+/// Not `std::os::windows::fs::symlink_file`, which needs a privilege an ordinary
+/// account does not hold, so it would fail rather than degrade.
+#[cfg(not(unix))]
+fn link(destination: &str, target: &Path) -> std::io::Result<()> {
+    std::fs::write(target, destination)
+}
+
+/// Set the executable bit.
+#[cfg(unix)]
+fn make_executable(target: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o755))
+}
+
+/// There is no executable bit to set, and git does not synthesise one.
+#[cfg(not(unix))]
+fn make_executable(_target: &Path) -> std::io::Result<()> {
+    Ok(())
 }
