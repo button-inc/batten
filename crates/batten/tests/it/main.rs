@@ -149,6 +149,7 @@ mod policy_severity;
 mod policy_test_suite;
 mod policy_tree;
 mod policy_whole_set;
+mod pr_partition_restated;
 mod pr_watch;
 mod prebuilt_lint;
 mod preset_manifest;

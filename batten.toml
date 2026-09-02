@@ -4895,6 +4895,40 @@ severity = "deny"
 # scan fired four times on PROSE while CLOUD-914 and CLOUD-762 were being
 # written, at no call site at all. Porting it onto lines would have inherited
 # exactly that, obfuscated needles and all.
+# AGENTS.md's branch clause, held against restatement anywhere else in the tree.
+#
+# The module's header carries the measurement -- a comment quoting one issue's own
+# partition was read as repository convention, and a planning turn produced a plan
+# split across eight requests while the contradicted rule sat loaded in the same
+# turn. What belongs here rather than there is the DECLARATION: which files this
+# repository writes binding prose in, since that is a consumer's fact and not the
+# engine's (non-negotiable rule 1).
+#
+# `line_sources` RATHER THAN `documents`, because the subject is a sentence and
+# not a parsed key. And AGENTS.md IS ABSENT FROM THE GLOBS ON PURPOSE: the file
+# that owns the decision cannot be the file that restates it, so the module needs
+# no exemption and therefore has none. `CLAUDE.md` is a symlink to that file and
+# is likewise unglobbed; globbing it would refuse the rule's own home through its
+# other name.
+#
+# THE GLOBS ARE THE BOUND, and a reviewer checks them rather than trusting a
+# claim of tree-wide reach. A path no glob names is unread -- `absent` in the
+# could-not-look channel, which the module deliberately stays silent on.
+[[rule]]
+id = "pr-partition-restated"
+kind = "policy"
+scope = "tree"
+line_sources = [
+  "policy/*.rego",
+  ".claude/rules/*.md",
+  "crates/batten/src/*.rs",
+  "mise-tasks/*.sh",
+  "batten.toml",
+]
+module = "policy/pr-partition-restated.rego"
+severity = "deny"
+reason = "AGENTS.md is the one authority on how work lands: one branch, one commit per row, and a single request over all of them. A second statement of that decision in the opposite direction is not a duplicate, it is a competing rule -- and prose in this tree is read by an agent that then acts without re-deriving, so it carries the authority of the file it sits in. Measured 2026-09-02: one such line, quoting a single issue's own arrangement, was adopted as convention and produced a plan partitioned eight ways. Delete the sentence or paraphrase it so it states no rate."
+
 [[rule]]
 id = "ancestry-decides-nothing"
 kind = "policy"
@@ -10137,6 +10171,56 @@ regex = 'holds the lists above to those two files'
 [[pattern]]
 id = "plain-dotted-version"
 regex = '^[0-9]+(\.[0-9]+)*$'
+
+# The partition claim AGENTS.md's branch clause refuses, for
+# `policy/pr-partition-restated.rego` (CLOUD-TBD). A `[[pattern]]` row rather than
+# an inline regex for the registry's own reason, and the module's header says why
+# it may not quote this string back.
+#
+# IT NAMES THE PARTITION, NEVER THE POSSESSIVE, and the difference was measured
+# rather than reasoned. Four tracked files say a change landed through a request of
+# its own and every one means the ordinary thing -- release-plz bumping a version,
+# a guard refusing the branch that introduced it. A row keyed on the possessive
+# alone refuses all four, and a rule that fires four times on correct prose is one
+# somebody switches off inside a day (CLOUD-418's shape). So each alternative
+# below carries the thing that makes it a partition: a UNIT landing that way, the
+# ledger arms the quoted issue attached to it, or a per-unit RATE.
+#
+# BOTH SPELLINGS, because the initialism is what this repository writes and the
+# expansion is what an outside contributor writes, and a row reaching only the
+# first would refuse the measured instance while admitting its paraphrase.
+#
+# THIS ROW MUST NOT MATCH ITS OWN SOURCE. The alternations are what keep it from
+# doing so -- no branch of it appears here as a literal run of text -- and that is
+# a property to re-check when editing, not a coincidence to rely on. The module's
+# suite cannot catch it; `check` over this tree can, and does.
+[[pattern]]
+id = "pr-partition-prose"
+regex = '(lands? as (its|their) own (PR|pull request)|(PR|pull request) with its own ledger|one (PR|pull request) per unit|an? (PR|pull request) per unit|each .{0,60} own (PR|pull request))'
+
+[[verdict]]
+id = "prose state other"
+gloss = "prose outside AGENTS.md states a landing arrangement that file already decides"
+class = """
+AGENTS.md owns how work lands here, and its branch clause is the whole of that decision. A sentence elsewhere in the tree stating a different arrangement is a competing authority rather than a restatement, and the cost is not confusion but action: these files are read by an agent that acts on them without re-deriving, so a local arrangement written in the register of a rule is followed as one. Measured 2026-09-02 -- a module comment quoting a single issue's own internal arrangement was adopted as convention, and the planning turn that read it partitioned its work eight ways against the rule it had loaded minutes earlier. Delete the sentence, or paraphrase it so it reports what one issue arranged without stating a rate.
+"""
+
+[[verdict.route]]
+id = "rule read first"
+kind = "document"
+target = "AGENTS.md"
+
+[[verdict]]
+id = "source parse refused"
+gloss = "a declared prose source exists and could not be read, so its lines were never judged"
+class = """
+Could-not-look is not clean (CLOUD-251). A declared source that is ABSENT is ordinary -- a consumer carries fewer of these globs, and firing on that would refuse a state nobody caused -- but one that exists and will not read is a file this gate reported green over without opening. The two causes are distinct in the engine's own channel precisely so a module can refuse the second and stay silent on the first. Fix the source or drop it from the rule's globs; a gate that cannot see its subject must say so rather than pass.
+"""
+
+[[verdict.route]]
+id = "rule read first"
+kind = "document"
+target = ".claude/rules/policy-modules.md"
 
 [[verdict]]
 id = "default state other"

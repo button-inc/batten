@@ -100,11 +100,20 @@ mediator := "batten"
 # restated a blocker its own body refutes -- CLOUD-1166's class, which is
 # classifying a blocker instead of reading it.
 #
-# CLOUD-1163 owns the deletion, as its unit 9, and is In Progress. Its own §1 says
-# each of its eight units "lands as its own PR with its own ledger arms", and its
-# §2 refuses merging two units because that "would manufacture the glue this
-# partition exists to avoid" -- so this row points at that unit rather than being
-# discharged here.
+# CLOUD-1163 owns the deletion, as its unit 9, and is In Progress. That row
+# partitions its work into units and declines to discharge two of them together,
+# so this row points at the unit rather than being discharged here.
+#
+# PARAPHRASED, NEVER QUOTED, and the change is the whole subject of
+# `pr-partition-restated`. This block used to reproduce that issue's own §1 and §2
+# verbatim -- one row's internal arrangement, set in the register of ordinary
+# normative prose, with nothing marking it as quoted. Measured 2026-09-02: a
+# planning turn read it as repository convention and partitioned its plan against
+# AGENTS.md's branch clause, which it had loaded in the same turn. AGENTS.md is the
+# one authority on how work lands here; a sentence anywhere else stating a
+# different arrangement is a competing rule rather than a restatement, because
+# these files are read by an agent that acts on them without re-deriving.
+#
 # THE TWO MERGED ROWS ARE BACK, BECAUSE THEIR SUBJECTS NEVER LEFT (CLOUD-1079).
 # CLOUD-1314 removed them on the premise that both launcher hooks were gone from
 # `~/.claude/launcher-settings.json` and both programs deleted, so the rows would
