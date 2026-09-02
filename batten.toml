@@ -6047,14 +6047,33 @@ measured = "2026-09-02"
 # measurement I did not take is the honest half of the remedy, exactly as the
 # entry above says.
 
+# THE SECOND 2026-09-02 MOVE, AND THE COUNT IS THE GATE'S OWN READING RATHER THAN
+# A SCAN'S. CLOUD-843's bats bundle added `sbom_inventory.rs`, and the live count
+# reached 175 — eleven past the basis and one outside the tolerance, so this run is
+# the gate catching a drift its own predecessor entry predicted.
+#
+# `count` moves to the live 175 with `measured`, and THE FLOORS AGAIN DELIBERATELY
+# DO NOT MOVE, for the reason the two entries above already state and which is
+# unchanged: the lap that tripped this reported 21077MB free against a 7938MB
+# declared warm floor, so free space was never what refused. Moving a floor down
+# needs the independent measurement this block names and which was not taken here.
+#
+# WORTH ONE LINE OF ITS OWN: 175 IS WHAT `batten target prune` REPORTS AS `live`,
+# and `git ls-files 'crates/batten/tests/**/*.rs'` answers 174 over the same glob.
+# The two readings disagree by one and the gate's is the one written down, because
+# the gate is what the number is compared against — a basis refreshed from a
+# second reading of the tree would red again on the next lap while looking correct
+# in review. Which file the two readers disagree about is unresolved and is not
+# this bundle's; it is a pointer for whoever takes CLOUD-1158's floor re-derivation.
+
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 164
+count = 175
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 164
+count = 175
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
