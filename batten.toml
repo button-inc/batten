@@ -5977,6 +5977,28 @@ cold = false
 name = "build"
 cold = false
 
+# `CARGO_TARGET_TMPDIR` — the integration suite's fixture scratch, and the root
+# whose absence from this table was measured rather than guessed (CLOUD-1274).
+#
+# A lap refused at 7895MB free against the 7938MB warm floor — 43 MB short — with
+# `target/tmp` holding 796MB across 5156 fixture directories that no declared root
+# reached. So the escalation ran out of roots and refused while most of a
+# gigabyte of pure residue sat on the volume, and `verify` reported it as a floor
+# nothing could recover.
+#
+# It regrows every suite run, which is what makes the omission compound: `land`
+# runs `verify` per lap, so a loop that cannot drop this wedges on a floor it
+# could satisfy.
+#
+# `cold = false`, and here that is not a judgement call — nothing under this
+# directory is a build artifact at all. `crates/batten/tests/it/common`'s
+# `scratch` WIPES each fixture directory before writing it, so no run has ever
+# depended on what a previous one left; the next build reads none of it, and a
+# suite that finds it gone materialises exactly what it always did.
+[[prune.regrowable]]
+name = "tmp"
+cold = false
+
 # ---------------------------------------------------------------------------
 # What a commit subject must look like here (CLOUD-701).
 #
