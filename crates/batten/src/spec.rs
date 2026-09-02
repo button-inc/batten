@@ -715,8 +715,13 @@ mod tests {
             //
             // `wait` WRITES for the same reason `replay` does: it appends the
             // answer it acted on to the lap record, so the predicate that refuses
-            // a lap reading both answers has an object to decide over.
+            // a lap reading both answers has an object to decide over. `push`
+            // writes further out than either — a ref on the remote, under
+            // receive-pack's own compare-and-swap — which is the second place in
+            // this crate that moves something the fleet can see, `lease` being
+            // the first, and is the sharpest reason the noun cannot be `read`.
             "land".to_owned(),
+            "land push".to_owned(),
             "land replay".to_owned(),
             "land wait".to_owned(),
             // THE LANDING LEASE, ten arms and a noun (CLOUD-1274, CLOUD-393).

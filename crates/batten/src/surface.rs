@@ -3889,6 +3889,23 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[LAND_REFERENCE],
     },
+    // `write`, and here the write is REMOTE — the only other place in this crate
+    // that moves a ref somebody else can read is `lease`'s swap. It takes no
+    // reference flag on purpose: a lap pushes the branch it is standing on, and
+    // a positional would let a caller aim this head at a ref the rest of the lap
+    // is not watching.
+    //
+    // Not `destructive`: receive-pack's compare-and-swap refuses outright when
+    // the ref has moved, so the losing case writes nothing and there is no
+    // half-applied state a rehearsal would protect against.
+    CommandDecl {
+        path: "land push",
+        id: "land.push",
+        about: "Push this branch to its own ref, under receive-pack's compare-and-swap",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
 ];
 
 /// Whether `token` is a declared spelling of a flag that consumes the *next*

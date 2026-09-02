@@ -5168,8 +5168,16 @@ fn run_land(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let (cli::LandCommand::Replay { reference } | cli::LandCommand::Wait { reference }) = command;
-    let reference = reference.clone();
+    // `push` names no reference — it pushes the branch it is on — so the shared
+    // preamble below binds an empty one for it rather than growing a second
+    // preamble. Every arm needs the same three facts: a remote, its url, and a
+    // branch to key the record on.
+    let reference = match command {
+        cli::LandCommand::Replay { reference } | cli::LandCommand::Wait { reference } => {
+            reference.clone()
+        }
+        cli::LandCommand::Push => String::new(),
+    };
     let root = Path::new(".");
     let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
     let Ok(remotes) = git::remotes(root) else {
@@ -5195,6 +5203,25 @@ fn run_land(
 
     if matches!(command, cli::LandCommand::Wait { .. }) {
         return run_land_wait(root, url, &reference, &branch, out, err);
+    }
+
+    if matches!(command, cli::LandCommand::Push) {
+        return match land::push(root, url, &branch)? {
+            land::Pushed::Landed(head) => {
+                writeln!(out, "land: {branch} on the remote now reads {head}")?;
+                Ok(ExitCode::Success)
+            }
+            // A LOST CAS IS A VERDICT ABOUT THE REPOSITORY, so `2` rather than a
+            // failure code: somebody else moved this branch, the lap has an
+            // answer, and the answer is to lap again.
+            land::Pushed::Raced => {
+                writeln!(
+                    out,
+                    "land: {branch} moved under this push; the remote refused and this lap is spent"
+                )?;
+                Ok(ExitCode::Violation)
+            }
+        };
     }
 
     match land::replay(root, url, &reference, &branch)? {

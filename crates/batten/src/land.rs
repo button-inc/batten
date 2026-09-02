@@ -464,9 +464,92 @@ pub fn record_wait(root: &Path, branch: &str, answers: &[Answered]) -> Result<()
     )
 }
 
+/// What the lap's push did to the branch's own ref on the remote.
+///
+/// # A lost race is an OUTCOME, never an error
+///
+/// [`crate::lease::push`] speaks receive-pack's own compare-and-swap, so the
+/// server applies the update only while the ref still reads what the
+/// advertisement said — decided under the server's lock rather than against
+/// whatever this clone last saw. Losing that is the fleet working: somebody else
+/// pushed the same branch between the advertisement and the update, and the
+/// answer is another lap rather than a failure.
+///
+/// That is why `Raced` is a variant here and not an `Err`. A lap that reported a
+/// lost CAS as an error would stop for something the loop already knows how to
+/// resolve, and the ONE human stop is a rebase conflict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pushed {
+    /// The remote took the update; its ref now reads this sha.
+    Landed(String),
+    /// The ref moved under the push and the server refused. Lap again.
+    Raced,
+}
+
+impl Pushed {
+    /// The record line this outcome writes.
+    ///
+    /// Four columns, `push <verdict> <sha> <path>`, the same layout every other
+    /// family in this store uses, so a module reading the store narrows on
+    /// column zero and never on a line's arity. The fourth column is always `-`:
+    /// a push has no path to point at, and a family with three columns would
+    /// shift every reader that split on four.
+    #[must_use]
+    pub fn line(&self) -> String {
+        match self {
+            Self::Landed(sha) => format!("push landed {sha} -"),
+            Self::Raced => String::from("push raced - -"),
+        }
+    }
+}
+
+/// Push this branch to its own ref on `remote`, and record what happened.
+///
+/// The object set is `lease::push`'s: the remote's ADVERTISED value is the
+/// subtraction base, so a branch this clone just replayed sends the commits the
+/// remote lacks rather than either re-sending settled history or, worse, sending
+/// too little because the base was guessed locally.
+///
+/// # Errors
+///
+/// A transport failure, an unreadable report, or a HEAD this clone cannot
+/// resolve. A rejected update is [`Pushed::Raced`] rather than an error.
+pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
+    let head = crate::git::head_commit(root).context("land: read this clone's HEAD")?;
+    let reference = format!("refs/heads/{branch}");
+    let outcome = crate::lease::push(remote, root, &reference, &head)
+        .with_context(|| format!("land: push {reference}"))?;
+    let pushed = match outcome {
+        crate::lease::Outcome::Applied => Pushed::Landed(head),
+        // THE SERVER'S REASON IS DROPPED HERE DELIBERATELY. It is a pointer for
+        // a reader on the lease's own path, and this store is read by a
+        // predicate: a free-form string in a fixed-column record is a channel
+        // for prose to travel down, which rule 4 refuses.
+        crate::lease::Outcome::Rejected { .. } => Pushed::Raced,
+    };
+    append(root, branch, std::slice::from_ref(&pushed.line()))?;
+    Ok(pushed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The push family writes the same four columns every other family does.
+    ///
+    /// Asserted here rather than trusted, for `Replay`'s reason one family over:
+    /// a module narrows on column zero and splits on four, so a family that
+    /// shipped three columns would be read through the wrong lens by every
+    /// predicate over this store rather than by its own.
+    #[test]
+    fn every_push_outcome_writes_four_columns_led_by_the_kind() {
+        for outcome in [Pushed::Landed(String::from("abc1234")), Pushed::Raced] {
+            let line = outcome.line();
+            let columns: Vec<&str> = line.split(' ').collect();
+            assert_eq!(columns.len(), 4, "four columns exactly, got {line:?}");
+            assert_eq!(columns[0], "push", "the kind column leads: {line:?}");
+        }
+    }
 
     /// The four columns the vendored module reads, pinned on this side too.
     ///

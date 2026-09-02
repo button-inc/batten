@@ -567,6 +567,9 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // roster refusal below it — a `Usage` about the invocation — is never reached
     // here, which is why naming that one as the sweep's answer was wrong.
     "land wait",
+    // And `land push`, which shares that preamble too and cannot reach the
+    // remote at all on a corpus that names none.
+    "land push",
 ];
 
 /// One entry per leaf verb of [`SURFACE`], asserted total by
@@ -665,6 +668,16 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "land wait",
         args: &["refs/heads/main"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `land push` reports a branch name and a sha, and the one string that could
+    // carry anything — receive-pack's own rejection reason — is dropped at the
+    // boundary rather than rendered, because this store is read by a predicate
+    // and a fixed-column record is no place for a server's prose.
+    Verb {
+        path: "land push",
+        args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },

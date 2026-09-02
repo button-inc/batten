@@ -59,14 +59,12 @@ pub struct Cli {
 pub struct CheckFlags {
     /// Emit findings as byte-stable JSON instead of pointer lines.
     pub json: bool,
-    /// Run only the declared rows with these ids (CLOUD-1051, repeatable since
-    /// CLOUD-1358).
+    /// Run only the declared row with this id (CLOUD-1051).
     ///
-    /// EMPTY is every applicable row, which is what `check` has always meant. An
-    /// id naming no declared row is a usage error rather than a clean run over
-    /// nothing, and that refusal is PER ID — see `select_rules`, where a typo
-    /// riding along with a valid sibling is the case the arity opened.
-    pub rule: Vec<String>,
+    /// `None` is every applicable row, which is what `check` has always meant. A
+    /// `Some` naming no declared row is a usage error rather than a clean run
+    /// over nothing — see `surface::CHECK_RULE`.
+    pub rule: Option<String>,
     /// `--staged`: judge only what the git index holds differently from `HEAD`
     /// (CLOUD-519).
     pub staged: bool,
@@ -80,29 +78,6 @@ pub struct CheckFlags {
     pub since: Option<String>,
 }
 
-/// `enforce`'s flags, which travel together for `CheckFlags`'s reason.
-///
-/// A payload struct rather than fields on the variant, and the shape is a
-/// REPAIR rather than symmetry for its own sake. `Enforce` carried its flags
-/// inline, so adding `--rule` to it was `enum_struct_variant_field_added` — a
-/// major break `semver` refused, on a verb whose flag set is the one most likely
-/// to grow again. `#[non_exhaustive]` on the enum does not reach a variant's
-/// fields; only a named struct does. Paying the break once here is what stops
-/// the next flag paying it again.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[non_exhaustive]
-pub struct EnforceFlags {
-    /// Emit findings as byte-stable JSON instead of pointer lines.
-    pub json: bool,
-    /// Run only the declared row with this id, or every applicable row.
-    ///
-    /// The narrowing `check` has carried since CLOUD-1051, extended to the
-    /// spawning verb for the one caller `check` cannot serve: a case whose
-    /// SUBJECT is a `kind = "command"` row, and repeatable since CLOUD-1358.
-    /// See `surface::ENFORCE_RULE`.
-    pub rule: Vec<String>,
-}
-
 /// The top-level subcommands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -110,7 +85,10 @@ pub enum Command {
     /// Run the applicable read-only gates against the repository.
     Check(CheckFlags),
     /// Run every configured rule, including kinds that execute a configured command.
-    Enforce(EnforceFlags),
+    Enforce {
+        /// Emit findings as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
     /// Inspect configuration.
     Config {
         /// The chosen sub-verb.
@@ -339,32 +317,12 @@ pub enum Command {
         /// The chosen sub-verb.
         command: LeaseCommand,
     },
-    /// Whether this container matches what the repository declares (CLOUD-1324).
-    ///
-    /// Appended for the reason `Lease` above states, which every new variant
-    /// here answers to: this enum carries no `repr`, so a variant placed beside
-    /// its neighbours in the surface would shift every later discriminant and
-    /// `mise run semver` would read that as a break the crate has to declare. It
-    /// was written beside `Provision` first, which is where a reader looks for
-    /// it, and `semver` said so.
-    Startup {
-        /// Run each failing row's declared repair, then re-decide its check.
-        repair: bool,
-        /// Whether the data channel was asked for.
-        json: bool,
-    },
-    /// The landing lap (CLOUD-1335, CLOUD-1338), beside `mise-tasks/land.sh`
-    /// rather than replacing it.
+    /// The landing lap's replay (CLOUD-1335), beside `mise-tasks/land.sh` rather
+    /// than replacing it.
     ///
     /// Appended for the reason `Lease` records: this enum carries no `repr`, so a
     /// variant placed beside its neighbours shifts every later discriminant and
     /// the compatibility gate reads that as a break the crate has to declare.
-    ///
-    /// AFTER `Startup` RATHER THAN BEFORE IT, and that ordering was decided by a
-    /// rebase rather than chosen: both variants were written as the last one, and
-    /// `Startup` is the one already on the landing target. Placing `Land` ahead of
-    /// it would shift a discriminant that has already shipped, which is the exact
-    /// break the paragraph above exists to avoid.
     Land {
         /// The chosen sub-verb.
         command: LandCommand,
@@ -373,9 +331,9 @@ pub enum Command {
 
 /// Subcommands of `land`.
 ///
-/// THE LAP IS fetch → replay → verify → push → wait → fast-forward, and four of
-/// those are here. The fast-forward comment stays in the consumer's lander until
-/// it lands beside these, so this is a parallel capability rather than a
+/// THE LAP IS fetch → replay → verify → push → wait → fast-forward, and three of
+/// those are here. Verify and the fast-forward stay in the consumer's lander
+/// until they land beside these, so this is a parallel capability rather than a
 /// cut-over. A bare verb with no sub-command would have to be widened into this
 /// shape later, which is a surface break for a change that adds a capability.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -392,6 +350,12 @@ pub enum LandCommand {
         /// The remote reference whose movement makes this head stale.
         reference: String,
     },
+    /// Push this branch to its own ref under receive-pack's compare-and-swap.
+    ///
+    /// NO POSITIONAL, because the ref is not a choice: a lap pushes the branch
+    /// it is on, and a reference argument here would let a caller push this
+    /// head somewhere the rest of the lap is not looking.
+    Push,
 }
 
 /// Subcommands of `mutate`.
@@ -779,8 +743,6 @@ pub enum WiringCommand {
         yes: bool,
         /// Report what would be removed and remove nothing.
         dry_run: bool,
-        /// Decide whether a repair is owed, and remove nothing.
-        check: bool,
     },
 }
 
@@ -1404,7 +1366,6 @@ fn wiring_of(matches: &ArgMatches) -> Option<WiringCommand> {
         ("reclaim", matches) => Some(WiringCommand::Reclaim {
             yes: flag(matches, "yes"),
             dry_run: flag(matches, "dry_run"),
-            check: flag(matches, "check"),
         }),
         _ => None,
     }
@@ -1521,6 +1482,7 @@ fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
                 .cloned()
                 .unwrap_or_default(),
         }),
+        ("push", _) => Some(LandCommand::Push),
         _ => None,
     }
 }
@@ -1810,23 +1772,13 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
     match name {
         "check" => Some(Command::Check(CheckFlags {
             json: flag(matches, "json"),
-            // `get_many`, not `get_one`: the flag is an `Append` action, so
-            // `get_one` would keep only the LAST `--rule` and silently narrow a
-            // selection the caller widened — `ValueDecl::StrMany`'s own hazard.
-            rule: matches
-                .get_many::<String>("rule")
-                .map(|values| values.cloned().collect())
-                .unwrap_or_default(),
+            rule: matches.get_one::<String>("rule").cloned(),
             staged: flag(matches, "staged"),
             since: matches.get_one::<String>("since").cloned(),
         })),
-        "enforce" => Some(Command::Enforce(EnforceFlags {
+        "enforce" => Some(Command::Enforce {
             json: flag(matches, "json"),
-            rule: matches
-                .get_many::<String>("rule")
-                .map(|values| values.cloned().collect())
-                .unwrap_or_default(),
-        })),
+        }),
         "config" => config_of(matches).map(|command| Command::Config { command }),
         "lint" => lint_of(matches).map(|command| Command::Lint { command }),
         "spec" => matches
@@ -1847,10 +1799,6 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
             dry_run: flag(matches, "dry_run"),
         }),
         "policy" => policy_of(matches).map(|command| Command::Policy { command }),
-        "startup" => Some(Command::Startup {
-            repair: flag(matches, "repair"),
-            json: flag(matches, "json"),
-        }),
         "provision" => provision_of(matches).map(|command| Command::Provision { command }),
         "defects" => defects_of(matches).map(|command| Command::Defects { command }),
         "design" => design_of(matches).map(|command| Command::Design { command }),

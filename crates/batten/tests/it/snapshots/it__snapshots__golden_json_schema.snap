@@ -1083,6 +1083,15 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
+          "path": "land push",
+          "id": "land.push",
+          "about": "Push this branch to its own ref, under receive-pack's compare-and-swap",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
           "path": "land replay",
           "id": "land.replay",
           "about": "Advance the base and replay this branch onto it, recording the outcome",
