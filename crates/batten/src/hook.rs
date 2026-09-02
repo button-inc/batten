@@ -309,6 +309,34 @@ impl Harness {
     }
 }
 
+/// How a host spells the agent's plan/todo tool, or that nobody has looked
+/// (CLOUD-472).
+///
+/// **Two variants for a THREE-valued fact, and the third value is
+/// `Surveyed(&[])`.** Collapsing "surveyed and this host has none" into the same
+/// answer as "nobody checked" is the exact trap [`Harness::operation_of`]'s own
+/// comment warns about, where Gemini and Copilot carry no spellings because the
+/// CLOUD-209 survey did not record them — an absence of DATA that reads as an
+/// absence of CAPABILITY. A reader who cannot tell those apart will report a
+/// host as having no todo tool when the truth is that nobody asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PlanTools {
+    /// Fetched from this host's own documentation. An empty slice is a measured
+    /// "this host offers none", which is an answer.
+    Surveyed(&'static [&'static str]),
+    /// Nobody has looked, carrying the row that OWES the survey. NOT the same as
+    /// none, and never reported as none.
+    ///
+    /// **The key changes no exit code, and that is deliberate** — it is
+    /// `#MUTANT-OWNER`'s bargain, one layer over: a declaration that suppressed
+    /// the finding would be the laundering the runner exists to refuse, so what
+    /// the key buys is that the gap is STATED rather than that it is forgiven. A
+    /// new harness added without a survey has to name who owes one, which is the
+    /// moment an author either does the fetch or admits they did not.
+    Unsurveyed(&'static str),
+}
+
 /// What one host can and cannot do (CLOUD-45).
 ///
 /// A **host × capability** table, not a list of Claude-only events — the survey
@@ -334,6 +362,22 @@ impl Harness {
 pub struct Capabilities {
     /// The events this host emits, so Batten can be invoked on them.
     pub events: &'static [Event],
+    /// How this host spells the agent's own plan/todo tool (CLOUD-472).
+    ///
+    /// **A column about what the AGENT can call, where the rest of this table is
+    /// about what the ENGINE can reach** — and it is here anyway, because this is
+    /// the one authority on host facts and a second table would be a second place
+    /// for the same answer to drift.
+    ///
+    /// Batten does not gate on it. The plan record is written by
+    /// [`crate::record::run_plan`], a verb, so the gate fails closed on every
+    /// host regardless of what this says. What the column buys is the MIRROR —
+    /// keeping the human's native todo view in step with the store — and an
+    /// honest report of hosts where that view does not exist.
+    ///
+    /// Every spelling here was FETCHED, per CLOUD-209's rule that anything
+    /// re-derived without one should be assumed wrong.
+    pub plan_tools: PlanTools,
     /// Where an escalate-to-human verdict is actually reachable on this host
     /// (CLOUD-601).
     ///
@@ -1288,6 +1332,8 @@ impl Harness {
     pub const fn capabilities(self) -> Capabilities {
         match self {
             Harness::ClaudeCode => Capabilities {
+                // Fetched: this session's own tool surface.
+                plan_tools: PlanTools::Surveyed(&["TaskCreate", "TaskUpdate"]),
                 events: CLAUDE_EVENTS,
                 // Documented, and merged most-restrictive-first by the host
                 // itself (`deny > defer > ask > allow`), so an ask cannot
@@ -1402,6 +1448,11 @@ impl Harness {
                 },
             },
             Harness::Cursor => Capabilities {
+                // Searched 2026-09-01 and NOT fetched: the host has a Todos
+                // feature from 1.2, but no vendor-documented tool spelling was
+                // found, and a name taken from a forum post is exactly what
+                // CLOUD-209's "assume it wrong without a fetch" refuses.
+                plan_tools: PlanTools::Unsurveyed("CLOUD-209"),
                 events: CONVERGED_EVENTS,
                 // The row that forced this column to become event-scoped
                 // (CLOUD-601). M1 records the verdict vocabulary as
@@ -1438,6 +1489,9 @@ impl Harness {
                 capture: UNSURVEYED_CAPTURE,
             },
             Harness::CopilotCli => Capabilities {
+                // Not fetched, like the rest of this host's tool surface — the
+                // same survey gap `operation_of` records for it.
+                plan_tools: PlanTools::Unsurveyed("CLOUD-209"),
                 events: CONVERGED_EVENTS,
                 // `Unknown`, not `No`, and not `Yes` either: M1 confirms the
                 // verdict exists and names the `preToolUse` output *fields*
@@ -1468,6 +1522,9 @@ impl Harness {
                 capture: UNSURVEYED_CAPTURE,
             },
             Harness::GeminiCli => Capabilities {
+                // Fetched 2026-09-01 from the vendor docs: `write_todos`, on by
+                // default and disableable with `"useWriteTodos": false`.
+                plan_tools: PlanTools::Surveyed(&["write_todos"]),
                 events: CONVERGED_EVENTS,
                 // Allow/deny only. A policy wanting confirmation must hard-deny
                 // here — degrading to *allow* would turn "ask a human" into "go
@@ -1502,6 +1559,8 @@ impl Harness {
                 capture: UNSURVEYED_CAPTURE,
             },
             Harness::CodexCli => Capabilities {
+                // Fetched 2026-09-01: `update_plan`, the built-in plan tool.
+                plan_tools: PlanTools::Surveyed(&["update_plan"]),
                 events: CONVERGED_EVENTS,
                 // Advertised in the output schema, marked "parsed but not
                 // supported yet" in the docs. Advertised is not available, and
@@ -1524,6 +1583,8 @@ impl Harness {
                 capture: UNSURVEYED_CAPTURE,
             },
             Harness::ExitCode => Capabilities {
+                // The neutral contract carries no host tool surface of its own.
+                plan_tools: PlanTools::Surveyed(&[]),
                 events: CONVERGED_EVENTS,
                 // Not a host: the channel is the exit status alone, which has no
                 // third value to carry an escalation. Measured, not unsurveyed.
@@ -12633,6 +12694,46 @@ deny contains "refused by themodule" if {
         (Harness::CodexCli, "NotebookEdit"),
         (Harness::ExitCode, "Write"),
     ];
+
+    #[test]
+    /// A new adapter must either name a fetched plan spelling or say who owes
+    /// the survey. CLOUD-472's column exists to keep those apart, so a row that
+    /// declares neither is the one thing it cannot express.
+    #[test]
+    fn every_harness_declares_a_plan_surface_or_names_who_owes_the_survey() {
+        for harness in Harness::ALL {
+            if let PlanTools::Unsurveyed(owner) = harness.capabilities().plan_tools {
+                assert!(
+                    !owner.is_empty(),
+                    "{}: unsurveyed with no owner — the gap has to be stated, \
+                     which is `#MUTANT-OWNER`'s bargain one layer over",
+                    harness.as_str()
+                );
+            }
+        }
+    }
+
+    /// SURVEYED-AND-NONE IS AN ANSWER; UNSURVEYED IS NOT. The whole reason the
+    /// column has two variants is that collapsing them reproduces the trap
+    /// `operation_of`'s own comment records — an absence of DATA reading as an
+    /// absence of CAPABILITY. Asserted over the committed table so a later edit
+    /// cannot quietly turn one into the other.
+    #[test]
+    fn an_unsurveyed_plan_surface_is_never_reported_as_having_none() {
+        assert_eq!(
+            Harness::ExitCode.capabilities().plan_tools,
+            PlanTools::Surveyed(&[]),
+            "the neutral contract carries no host tool surface, which is a measured none"
+        );
+        assert!(
+            matches!(
+                Harness::Cursor.capabilities().plan_tools,
+                PlanTools::Unsurveyed(_)
+            ),
+            "Cursor has a Todos feature and no vendor-documented spelling was fetched, \
+             so it is unsurveyed rather than none"
+        );
+    }
 
     #[test]
     fn every_harness_classifies_its_own_write_spelling_as_write() {
