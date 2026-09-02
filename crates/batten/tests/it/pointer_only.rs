@@ -1008,6 +1008,19 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // Pointer-only for a sharper reason than its siblings, because this verb's
+    // whole subject is two absolute paths and two digests (CLOUD-1349) — the
+    // shape most likely to leak one into output. It emits neither: the verdict is
+    // a stable token, and a digest is deliberately withheld because it is stable
+    // per content but varies per machine, so printing one would defeat §6's
+    // byte-stability while telling the reader nothing they can act on. The remedy
+    // is `mise run install:local`, and the verdict is what says whether to run it.
+    Verb {
+        path: "doctor mediator",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // THE SESSION'S OWN DECLARED WORK (CLOUD-1376), and its content class is the
     // reason it belongs here rather than being obvious. What this verb reads is a
     // task store whose members carry a `subject` and a `description` — free prose
