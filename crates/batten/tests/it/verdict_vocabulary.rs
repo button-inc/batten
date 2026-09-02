@@ -105,6 +105,7 @@ const CANDIDATES: &[&str] = &[
     "pattern",
     "pin",
     "place",
+    "plan",
     "point",
     "port",
     "program",
