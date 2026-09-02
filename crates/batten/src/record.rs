@@ -305,7 +305,13 @@ fn claim_of(git_dir: &Path, branch: &str) -> Option<String> {
 /// a diff refuses every scratch fixture and every consumer checkout — measured,
 /// it reddened four `cli.rs` cases that only wanted to exercise other rules.
 /// Keyed to a claim, it asks the question exactly where the answer is owed.
-pub const VERB_WRITTEN: &[&str] = &["claim", "plan"];
+/// `lap` joins them for the same reason and with one difference worth stating:
+/// it is the only one of the three that is a HISTORY rather than a current
+/// state. `land::replay` appends a line per lap, and
+/// `rebase-conflict-stops-the-lap` reads the last one — so a conflict resolved by
+/// a later lap stops refusing, which a store keeping only the newest line could
+/// not express.
+pub const VERB_WRITTEN: &[&str] = &["claim", "plan", crate::land::LAP_RECORD];
 
 /// The statuses a plan entry may carry.
 ///

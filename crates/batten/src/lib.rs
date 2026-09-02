@@ -55,6 +55,9 @@ pub mod init;
 pub mod invocation;
 pub mod journal;
 pub mod judge;
+/// The landing lap's replay half: advance the base, replay the branch onto it,
+/// and record what happened for a module to decide over (CLOUD-1335).
+pub mod land;
 /// The landing lease's wire half: ref discovery and a compare-and-swap over a
 /// remote ref, spoken as git smart-HTTP over [`fetch`] (CLOUD-1274).
 pub mod lease;

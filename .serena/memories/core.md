@@ -751,6 +751,20 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   `streaming-input`, which is off and would pull `parking_lot` and `gix-tempfile`,
   and a lap's fetch is a handful of commits. `module-layering` forbids
   `hook -> gitwrite` and `check -> gitwrite`.
+- `land.rs` — the landing lap's REPLAY half, and the first consumer of the two
+  modules above (CLOUD-1335). `replay` advances the base (`lease::fetch`, then
+  `gitwrite::write_objects`, then `gitwrite::set_ref` — that order, because a ref
+  moved before its objects landed names a commit the clone cannot read), replays
+  the branch onto it with `gitwrite::rebase`, and APPENDS what happened to a `lap`
+  record. **It decides nothing**: whether a lap may continue past a conflicted
+  replay is `rebase-conflict-stops-the-lap`'s verdict over that record, which is
+  CLOUD-1148's split — mechanics to the engine, decisions to Rego — and what
+  keeps this from becoming a second authority on its own subject. A conflict is
+  carried outward unchanged rather than resolved; `gitwrite::rebase` refuses
+  instead of taking a strategy, and that refusal is the loop's one human stop.
+  The record is the only `VERB_WRITTEN` store that is a HISTORY rather than a
+  current state, because the module reads its last line so a conflict a later lap
+  resolved stops refusing.
 - `lease.rs` — the landing lease's compare-and-swap, spoken as git smart-HTTP
   over `fetch.rs` (CLOUD-1274). The CAS is the PROTOCOL'S OWN: receive-pack takes
   `<old> <new> <ref>` and applies it only while the ref still reads `<old>`,

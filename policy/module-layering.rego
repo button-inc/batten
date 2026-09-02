@@ -185,6 +185,22 @@ declared_modules := {
 	# are: a gate declared `read` must not reach a write, and the read-only
 	# allowlist is derived from that declaration rather than reviewed.
 	"gitwrite",
+	# `land` arrived with CLOUD-1335 and is the first CONSUMER of the two above
+	# rather than a third adapter: it composes `lease`'s fetch with `gitwrite`'s
+	# replay into one lap and writes down what the replay did. It reaches those
+	# two, `git`, `claim`, `recorder` and `error`, and nothing else.
+	#
+	# IT DECIDES NOTHING, which is what keeps it out of the layer above. Whether
+	# a lap may continue past a conflicted replay is the `landing-loop` preset's
+	# verdict over the record this writes — the same split `lease` carries, and
+	# the reason neither becomes a second authority on its own subject.
+	#
+	# Its `hook` and `check` edges are forbidden below transitively rather than
+	# by its own effect: it reaches `lease`, so every word of the `hook -> lease`
+	# clause applies here in one more hop. A guarantee routable around by one hop
+	# is not one (CLOUD-1260), which is why the edge is listed rather than left
+	# to follow.
+	"land",
 	# `forge`, `tools`, `captured`, `taskset` arrived with CLOUD-843's substrate
 	# wave, and this rule named all four before a human did — the eighth time the
 	# absence-is-an-error clause has earned its keep, and the first on a batch.
@@ -350,8 +366,8 @@ forbidden[from] contains to if {
 		# (house style §5) and the read-only allowlist is DERIVED from that
 		# declaration, so a `check` path reaching a network write would put a
 		# writing prefix on the allowlist itself (CLOUD-90's shape).
-		"hook": {"fetch", "mcp", "lease", "gitwrite"},
-		"check": {"lease", "gitwrite"},
+		"hook": {"fetch", "mcp", "lease", "gitwrite", "land"},
+		"check": {"lease", "gitwrite", "land"},
 		# And the other direction, which is `symbols`' and `pinned`'s row again: the
 		# dispatcher sits below the engine and must not reach the module that
 		# adjudicates a mediated call. `mcp -> rules` is deliberately NOT here --
