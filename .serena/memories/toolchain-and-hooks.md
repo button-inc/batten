@@ -404,9 +404,19 @@ would set, so it chooses no evidence:
 
     ln -sfn ~/.claude/projects/<slug>/<session>.jsonl .claude/.transcript.jsonl
 
-Unfiled: the tracker was unreachable in the session that measured it
-(`mem:connector-allowlist-recovery`). It wants a row, and the fix is plausibly a
-`SessionStart` write beside the other things `session-start.sh` already asserts.
+**FILED 2026-09-02 as CLOUD-1361.** This read _"Unfiled: the tracker was
+unreachable in the session that measured it"_ — true while it held, and the same
+shape as `mem:connector-allowlist-recovery`'s sensor gap (CLOUD-1359): a session
+that cannot reach the tracker generates findings it cannot file, so this class is
+under-represented by construction rather than rare. Both filed from a session
+whose connector is bound.
+
+Its remedy line needs one correction: `session-start.sh` is **retired**
+(CLOUD-312 row 10, #804), so the session-start write lands as a
+`[[hook.handler]] on = "session-start"` row rather than as another step inside
+that script. The row also carries the half this note left implicit — the engine
+and `[transcript]`'s comment disagree about what an absent transcript means, and
+settling that comes before fixing the symlink.
 
 ## The shell tasks' exit convention is the inverse of batten's
 

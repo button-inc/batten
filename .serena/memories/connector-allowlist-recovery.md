@@ -219,12 +219,19 @@ with all its tools; this session did not bind them._ `ListMcpResourcesTool`
 (resources, not tools) and `claude mcp list` (CLI config, not connectors) prove
 NOTHING here — the only evidence is a call returning "No such tool available".
 
-**Sensor gap, unfiled because the tracker is the unreachable thing.** Both
-`mcp-attach-check` and `mcp-allow-check` pass green through this. Neither
-compares the injected config's `tools[].name` against the tools the session can
-actually call, which is the one comparison that catches it — and
-`connector-allow-resolve` already reads that file, so only the predicate is
-missing. Recorded in PR #575's body; wants a row of its own.
+**Sensor gap — FILED 2026-09-02 as CLOUD-1359.** Both `mcp-attach-check` and
+`mcp-allow-check` pass green through this. Neither compares the injected
+config's `tools[].name` against the tools the session can actually call, which
+is the one comparison that catches it — and `connector-allow-resolve` already
+reads that file, so only the predicate is missing.
+
+This paragraph read _"unfiled because the tracker is the unreachable thing"_ for
+its whole life, and that is worth keeping rather than deleting: **a defect whose
+own occurrence blocks its report is under-represented in the tracker by
+construction**, so the count of episodes is unknown rather than low. The
+deferral was real while it held and stopped being real the moment a session with
+a bound connector read this file. It is filed from one. Prior record: PR #575's
+body.
 
 ## What is NOT known
 
@@ -232,6 +239,19 @@ missing. Recorded in PR #575's body; wants a row of its own.
 - **Whether a `SessionStart` hook's settings write affects the session that is
   starting**, or only the next one. Permissions are read at startup and the hook
   runs at startup; the ordering is unmeasured. Measure it, do not assume it.
+
+  **Still unanswered 2026-09-02 — but the question's premise is now known to be
+  too simple, which changes how to measure it.** It assumes startup is one
+  ordered moment. Measured this session: `~/.claude/launcher-settings.json` and
+  both its scripts carry mtime **16:59 — MID-session**, not session start
+  (CLOUD-1079). So the launcher rewrites the settings surface while a session is
+  running, and "does my startup write take effect" and "does my write survive"
+  are two different questions with two different answers. A one-shot write can
+  lose to a later rewrite even if the ordering at startup is favourable, which
+  is why the landed answer for the hooks themselves is a repair that runs **every
+  session** rather than a write that runs once. Whoever measures this must
+  distinguish the two; a single before/after reading cannot.
+
 - **Whether the UUID survives an OAuth re-grant.** Stable across two containers
   is not stable across a re-grant.
 

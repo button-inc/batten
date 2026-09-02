@@ -111,11 +111,22 @@ and adopts a change, never to a model identity.
   Commits here are SSH-signed, so the signature term is already satisfied and the
   email term alone carries the refusal. The only value it accepts is the one
   `identity_deny` forbids: not a tuning problem, two contradictory policies.
-- **Deleting it does not survive.** It is registered in the launcher's own
-  settings, re-provisioned mid-session, and Claude Code _merges_ hooks across
-  settings files — so a lower-precedence file can add a hook and never remove
-  one. Turning it off is an owner action on the environment configuration that
-  generates those settings, outside this repository.
+- **Deleting the FILE does not survive, and that is not the same as being
+  unreachable.** It is registered in the launcher's own settings, re-provisioned
+  mid-session, and Claude Code _merges_ hooks across settings files — so a
+  lower-precedence file can add a hook and never remove one. All of that is
+  measured and all of it stands. The conclusion drawn from it —
+  _"turning it off is an owner action on the environment configuration that
+  generates those settings, outside this repository"_ — **was false, and is
+  retracted** (CLOUD-1356; CLOUD-1079 owns the fix). Merging means the repo
+  cannot unregister the hook _through a settings file_, which is a narrower
+  claim: `batten wiring reclaim` removes the **registration** without touching
+  the file that carries it, and a `[[hook.handler]] on = "session-start"` row
+  runs it every session, exactly as `session:identity` and `session:signing`
+  already beat this launcher's own `--global` writes. A repair that runs once
+  loses to a rewrite that runs every session; a repair that also runs every
+  session does not. Reaching for _"outside this repository"_ over a `$HOME` path
+  is the tell: outside the repository **root** is not outside its **reach**.
 - **The signature half is a different issue.** GitHub answers `verified: false,
 reason: unknown_key` — the key is unpublished, not absent. That is CLOUD-591's,
   and resetting the author signs nothing, so obeying trades a tracked gap for a
