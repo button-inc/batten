@@ -12244,6 +12244,10 @@ fn run_rules(
     let opts = rules::RunOptions {
         checks,
         scope: &scope,
+        // The BOUNDARY's clock, read here and handed over, because `rules.rs`
+        // holds the projection and may read none (CLOUD-1170's stated division,
+        // gated by `the_evaluation_path_reads_no_wall_clock`).
+        now: Some(now_unix()),
     };
     let scan = runner(&selected, &config.provisions, vocabulary, &root, opts)?;
     report_rule_costs(mode, err)?;

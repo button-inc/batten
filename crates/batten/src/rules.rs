@@ -5845,6 +5845,9 @@ pub fn run_static(
         RunOptions {
             checks: crate::policy::ModuleChecks::Run,
             scope: &Scope::Tree,
+            // No caller supplied one on this entry point, and `None` is the
+            // honest answer rather than a clock read this module may not make.
+            now: None,
         },
         RunKind::Static,
     )
@@ -5899,6 +5902,30 @@ pub struct RunOptions<'a> {
     pub checks: crate::policy::ModuleChecks,
     /// Which files rules are selected against.
     pub scope: &'a Scope,
+    /// The epoch second the BOUNDARY read, for the one freshness comparison a
+    /// tree run makes: `[[rule.minted]]`'s `max_age_days` (CLOUD-1187).
+    ///
+    /// Supplied rather than read here, and that is the whole reason the field
+    /// exists. `.claude/rules/policy-modules.md` states the principle for the
+    /// two landed cases this joins — a waiver's expiry and a receipt's age:
+    /// **the clock is the boundary's, never the decision's.** `rules.rs` holds
+    /// the projection, so a `SystemTime::now` here would put a value that
+    /// differs per invocation onto the input document, which is what
+    /// `ambient_authority.rs`'s `the_evaluation_path_reads_no_wall_clock`
+    /// refuses and what house style §6's byte-stable output cannot survive.
+    ///
+    /// **NOT [`crate::facts::Fact::Instant`], and the two must not be merged.**
+    /// That one is the instant a CALLER names with `hook --instant` so a lease
+    /// predicate is reproducible, and it is consumed at the boundary and reaches
+    /// no module. This is the engine's own read-time clock for a fact it
+    /// acquires. They differ in who supplies them and in what reads the answer.
+    ///
+    /// `None` is could-not-look — nobody handed one over — and is never
+    /// defaulted to a clock read. [`minted_facts`] then judges against `0`,
+    /// which makes every reading look ancient and so refuses rather than
+    /// admits: the fail-closed direction for a bound whose job is to stop a
+    /// stale answer being trusted.
+    pub now: Option<u64>,
 }
 
 /// Which files a run selects rules against (CLOUD-519).
@@ -5975,7 +6002,7 @@ fn run_static_inner(
     root: &Path,
     opts: RunOptions<'_>,
 ) -> anyhow::Result<Scan> {
-    let RunOptions { checks, scope } = opts;
+    let RunOptions { checks, scope, now } = opts;
     // POLICY BUNDLES ARE LOADED HERE, on the read surface, and that is
     // CLOUD-833's substantive claim rather than a formality. `run_static` backs
     // `check` and refuses any kind that `carries_ambient_authority` — a
@@ -6009,7 +6036,7 @@ fn run_static_inner(
             ));
         }
     }
-    run(rules, &[], root, &bundles, vocabulary, scope)
+    run(rules, &[], root, &bundles, vocabulary, scope, now)
 }
 
 /// Run only the rules that cannot spawn a process, and report the ones that can
@@ -6069,6 +6096,9 @@ pub fn run_recorded(
         &bundles,
         vocabulary,
         &Scope::Tree,
+        // The Stop-surface recorder supplies none, and `None` is the honest
+        // answer rather than a clock read this module may not make.
+        None,
     )?;
     for rule in withheld {
         // `RuleSkipped`, not a variant of its own. The distinction between "the
@@ -6109,6 +6139,9 @@ pub fn run_all(
         RunOptions {
             checks: crate::policy::ModuleChecks::Run,
             scope: &Scope::Tree,
+            // No caller supplied one on this entry point, and `None` is the
+            // honest answer rather than a clock read this module may not make.
+            now: None,
         },
         RunKind::All,
     )
@@ -6121,7 +6154,7 @@ fn run_all_inner(
     root: &Path,
     opts: RunOptions<'_>,
 ) -> anyhow::Result<Scan> {
-    let RunOptions { checks, scope } = opts;
+    let RunOptions { checks, scope, now } = opts;
     // Refuse before any work, the shape `run_static` above already uses: the
     // alternative is running the check side, exiting on its verdict, and having
     // silently ignored a repair the config declared. A key that parses and does
@@ -6136,7 +6169,7 @@ fn run_all_inner(
         }
     }
     let bundles = crate::policy::load(root, rules, vocabulary, checks, None)?;
-    run(rules, provisions, root, &bundles, vocabulary, scope)
+    run(rules, provisions, root, &bundles, vocabulary, scope, now)
 }
 
 /// Run every rule in `rules` against the tree rooted at `root`, returning all
@@ -6160,6 +6193,9 @@ fn run(
     // Which files rules are SELECTED against (CLOUD-519). Applied here, once,
     // beside the walk it narrows — never re-derived per rule.
     scope: &Scope,
+    // The instant the BOUNDARY read, threaded to `minted_facts` rather than
+    // read here — see `RunOptions::now` for why this module may not read one.
+    now: Option<u64>,
 ) -> anyhow::Result<Scan> {
     let recorders = vocabulary.recorders;
     let files = tree_files(root)?;
@@ -6267,7 +6303,7 @@ fn run(
     // THE TOOL VERDICTS (CLOUD-1171) — `forge_facts`' mechanism with a different
     // key, extracted for the same reason.
     let tool_verdicts = tool_facts(rules, root);
-    let minted = minted_facts(rules, root);
+    let minted = minted_facts(rules, root, now);
     // THE CAPTURED REDUCTIONS (CLOUD-1188) — guarded on the declaration for
     // `forge_facts`' reason, and here the guard matters more: resolving this
     // reads and parses every response in the store, so a run whose rows ask for
@@ -8115,7 +8151,11 @@ fn tool_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, BTreeMap<S
 /// precisely the wrong claim to make: the store is empty there by construction,
 /// so a gate reading it as agreement would report clean exactly where it matters
 /// least.
-fn minted_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, BTreeMap<String, String>>> {
+fn minted_facts(
+    rules: &[Rule],
+    root: &Path,
+    now: Option<u64>,
+) -> Option<BTreeMap<String, BTreeMap<String, String>>> {
     let declared: Vec<crate::facts::MintedQuery> = rules
         .iter()
         .flat_map(|rule| rule.minted.iter().cloned())
@@ -8124,18 +8164,10 @@ fn minted_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, BTreeMap
         return None;
     }
     let git_dir = crate::git::git_dir(root).ok()?;
-    Some(crate::minted::fields(&git_dir, &declared, now_unix()))
-}
-
-/// Seconds since the epoch, or zero where the clock will not read.
-///
-/// Zero makes every reading look ancient, so the bound refuses rather than
-/// admits — the fail-closed direction for a fact whose whole job is to stop a
-/// stale answer being trusted.
-fn now_unix() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
+    // `0` where nobody supplied an instant: every reading then looks ancient and
+    // the bound refuses rather than admits, which is the fail-closed direction
+    // for a fact whose job is to stop a stale answer being trusted.
+    Some(crate::minted::fields(&git_dir, &declared, now.unwrap_or(0)))
 }
 
 /// Reduce the capture store for each DECLARED row (CLOUD-1188).
