@@ -8215,20 +8215,31 @@ fn symbols_fact(rules: &[Rule], root: &Path) -> crate::facts::Look<crate::symbol
 /// through to the bare program, which is what a project with no pin has anyway.
 #[must_use]
 pub fn symbols_launcher(root: &Path) -> crate::symbols::Launcher {
-    // THE LAZY DOOR, NOT THE EAGER ONE (CLOUD-1371). `repaired` declines an
-    // ABSENT record — the bound that keeps it out of every spawn's path — and
-    // this call site is not on that path: the launcher is resolved ONCE per run,
-    // for one fact, so the two runner spawns it may cost are paid once rather
-    // than per program of per rule.
+    // THE EAGER DOOR, AND THE LAZY ONE IS REFUSED HERE — measured, having tried
+    // it (CLOUD-1371).
     //
-    // Measured, and it is why this is not left as `repaired`: with the record
-    // gone, `symbols` could not reach the analyser through the pin, the census
-    // was could-not-look, and `spawn-adapters` refused a tree with nothing wrong
-    // in it — the same finding this row's own fix had just cleared, arriving by
-    // the one route the fix did not cover.
+    // With the record gone, `symbols` cannot reach the analyser through the pin
+    // and the census is could-not-look, so `re_resolved` here looks like the
+    // obvious fix. It is not: "once per run" is true of a REAL tree and false of
+    // the suite, where every fixture root is its own tree with no record, so the
+    // lazy door spawns the runner twice per fixture and the memo bounds only the
+    // repeat. That is the exact storm the eager door's narrowness exists to
+    // prevent, and this row's own acceptance forbids it: *a fixture repository
+    // with no declared pin pays zero runner spawns*.
+    //
+    // Measured rather than reasoned, and only under the full suite:
+    // `stop_posture::a_turn_that_strands_nothing_is_silent` went red under
+    // `verify` and PASSED run alone — the load-sensitive shape the original bound
+    // was measured on ("concurrent `git commit`s inside those fixtures began
+    // failing under the load, at ~50x their isolated duration").
+    //
+    // What the census gives up is one run of latency, not the recovery: the
+    // ladder's lazy retry rebuilds the record on the first spawn that fails
+    // anywhere, and the next census reads it. Recovering a fact one run later is
+    // cheap; making every fixture pay two runner spawns is not.
     let read = crate::pinned::cached(root);
     let pinned = match read {
-        crate::facts::Look::CouldNotLook => crate::pinned::re_resolved(root),
+        crate::facts::Look::CouldNotLook => crate::pinned::repaired(root),
         other => other,
     };
     if matches!(pinned, crate::facts::Look::Is(_)) {

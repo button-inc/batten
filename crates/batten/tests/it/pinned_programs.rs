@@ -385,3 +385,52 @@ fn command_is_left_to_the_sibling_rule() {
         "an invocation belongs to the sibling rule alone: {said}"
     );
 }
+
+/// A FIXTURE PAYS NO RUNNER SPAWN, on either door (CLOUD-1371).
+///
+/// **This is the acceptance criterion a change to the repair broke, so it is a
+/// case rather than a comment.** Routing `symbols_launcher` through the lazy door
+/// made every fixture root re-ask the pin — "once per run" is true of a real tree
+/// and false of the suite, where each fixture is its own tree with no record and
+/// the memo bounds only the repeat. It went red as
+/// `stop_posture::a_turn_that_strands_nothing_is_silent` under the full suite and
+/// PASSED run alone, which is the load-sensitive shape the original bound was
+/// measured on.
+///
+/// Asserted by COUNTING spawns rather than by timing: a wall-clock assertion
+/// discriminates nothing here and would be the flake it is trying to catch. The
+/// mediator is shadowed by a stub that appends a line per invocation, so the file
+/// staying absent is the measurement.
+#[test]
+fn a_fixture_root_asks_the_pin_nothing_through_the_eager_door() {
+    let repo = repo("pinned-no-spawn");
+    let bin = repo.join("stub-bin");
+    std::fs::create_dir_all(&bin).expect("the stub directory is created");
+    let log = repo.join("mediator-calls");
+    // The mediator's name off the public composition rather than the crate-private
+    // constant: a test is not a reason to widen the API, and `mediated` is already
+    // the one spelling of that argv.
+    let (mediator, _) = pinned::mediated("anything");
+    let stub = bin.join(mediator);
+    std::fs::write(
+        &stub,
+        format!("#!/bin/sh\necho called >>'{}'\nexit 1\n", log.display()),
+    )
+    .expect("the stub is written");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+            .expect("the stub is executable");
+    }
+
+    assert!(
+        pinned::repaired(&repo).could_not_look(),
+        "a fixture with no record declines rather than asking"
+    );
+    assert!(
+        !log.exists(),
+        "and it asked NOTHING: the eager door must not reach the runner on a \
+         tree that simply has no record, which is every fixture in this suite"
+    );
+}
