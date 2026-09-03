@@ -603,7 +603,25 @@ fn the_measured_rule_keeps_precedence_when_both_would_fire() {
 fn a_turn_that_strands_nothing_is_silent() {
     let dir = repo("stop-finding-sink-clean");
     stub(&dir, "mise-tasks/finding-sink-check.sh", 0, "");
-    let stdout = stdout_of(&hook(&dir, &stop_with_transcript(&dir, "Landed.")));
+    // ISOLATED, because this is the one case here that asserts SILENCE and so is
+    // the one a real session's findings can decide. `hook_in`'s own comment
+    // states the hazard — "an ambient one would let a real session's findings
+    // decide a fixture's verdict" — and this case was reaching the ambient store
+    // anyway.
+    //
+    // Measured 2026-09-03: it failed inside a `land` lap and passed on the next
+    // isolated run of the same commit. Not a flake. `unlanded` reports once per
+    // HEAD sha, and every lap rebases to a fresh one, so the real session's
+    // unlanded work was unreported at exactly the moment the lap ran the suite
+    // and reported at every other moment. A case that goes red only while its
+    // author is landing is red for the author and green for everyone else.
+    let home = dir.join("home");
+    fs::create_dir_all(&home).expect("home dir");
+    let stdout = stdout_of(&hook_in(
+        &dir,
+        &home,
+        &stop_with_transcript(&dir, "Landed."),
+    ));
     assert!(
         !stdout.contains("additionalContext"),
         "silence is the default: {stdout}"
