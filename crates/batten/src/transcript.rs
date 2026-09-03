@@ -1190,10 +1190,17 @@ pub fn tasks_dir(template: &str, session: &str, home: Option<&std::ffi::OsStr>) 
         return substituted;
     };
     match home {
-        Some(home) if !home.is_empty() => std::path::Path::new(home)
-            .join(rest)
-            .to_string_lossy()
-            .into_owned(),
+        // SUBSTITUTION, NEVER A PATH JOIN, and Windows CI is what proved the
+        // difference. `Path::join` inserts the PLATFORM's separator, so a
+        // template written `~/.claude/tasks/{session}` came back as
+        // `/home/agent\.claude/tasks/s-1` there — the engine rewriting a
+        // separator the consumer chose.
+        //
+        // The template is the consumer's string and its shape is theirs: this
+        // function knows one placeholder and one prefix, and everything either
+        // side of them is returned exactly as written (rule 1, the same reason
+        // the layout is declared rather than derived).
+        Some(home) if !home.is_empty() => format!("{}/{rest}", home.to_string_lossy()),
         _ => substituted,
     }
 }
@@ -1299,6 +1306,25 @@ mod tests {
         assert_eq!(
             tasks_dir("/var/~/{session}", "s-1", Some(home("/home/agent"))),
             "/var/~/s-1"
+        );
+        // THE SEPARATOR IS THE CONSUMER'S, AND WINDOWS CI IS WHY THIS ARM EXISTS.
+        // An earlier revision expanded through `Path::join`, which inserts the
+        // PLATFORM's separator — so this same case returned
+        // `/home/agent\.claude/tasks/s-1` on the Windows runner while passing
+        // here. The assertion above could not see it, because the two platforms
+        // disagreed rather than the logic being wrong.
+        //
+        // A Windows-shaped home makes the property visible on EVERY platform: the
+        // home comes back exactly as given and the template's own `/` survives,
+        // so nothing in this function rewrites a separator either side chose.
+        assert_eq!(
+            tasks_dir(
+                "~/.claude/tasks/{session}",
+                "s-1",
+                Some(home("D:\\Users\\agent"))
+            ),
+            "D:\\Users\\agent/.claude/tasks/s-1",
+            "the home is returned verbatim and the template keeps its own separator"
         );
     }
 
