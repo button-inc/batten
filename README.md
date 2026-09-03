@@ -668,3 +668,5 @@ Licensed under the [Apache License, Version 2.0](LICENSE-APACHE). Unless you
 explicitly state otherwise, any contribution intentionally submitted for
 inclusion in this work, as defined in the Apache-2.0 license, shall be licensed
 as above, without any additional terms or conditions.
+
+<!-- CLOUD-867 fork-origin smoke test: inert marker, no gate reads this. -->
