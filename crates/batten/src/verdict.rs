@@ -433,6 +433,37 @@ pub fn render_line(_registry: &[DeclaredVerdict], token: &str, subjects: &[Subje
 /// route is still a way out, and rendering it in the `Fix:` slot as if it were
 /// something to run would be worse than the explicit "none declared" the empty
 /// case already produces.
+/// Every `command` route a class declares, joined for a first sighting
+/// (CLOUD-1386).
+///
+/// **[`first_command_route`] stays what a `Fix:` clause takes**, because that
+/// slot renders on every firing and a list there is the per-firing cost
+/// CLOUD-1286 measured. This is the once-per-session projection, where that
+/// budget does not apply and picking one route arbitrarily does real harm.
+///
+/// Measured: `leased-push` declares the rebase first and the explicit
+/// `--force-with-lease=<ref>:<sha>` form second. A session read the first, could
+/// not tell the class refuses a SPELLING rather than the action, and reported a
+/// working gate as a defect. The route it needed was declared, ranked second, and
+/// never rendered — so "the first one" is not a summary of the alternatives, it
+/// is one of them chosen by declaration order.
+///
+/// Overrides are excluded, as they are from the `Fix:` slot: a way through that
+/// begins by asking to be excused is not an alternative to the action, and
+/// `override request` is its own surface.
+#[must_use]
+pub fn command_routes<'a>(registry: &'a [DeclaredVerdict], token: &str) -> Vec<&'a str> {
+    let Some((entry, _)) = resolve(registry, token) else {
+        return Vec::new();
+    };
+    entry
+        .routes
+        .iter()
+        .filter(|route| route.kind == RouteKind::Command)
+        .map(|route| route.target.as_str())
+        .collect()
+}
+
 #[must_use]
 pub fn first_command_route<'a>(registry: &'a [DeclaredVerdict], token: &str) -> Option<&'a str> {
     let (entry, _) = resolve(registry, token)?;

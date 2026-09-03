@@ -169,6 +169,16 @@ pub struct Refusal {
     /// The id that refused: a `[[rule]]` row's id, or a derived gate's declared
     /// constant. What a reviewer greps for in `batten.toml`.
     rule: String,
+    /// Every `command` route the class declares, for the once-per-session
+    /// sighting (CLOUD-1386).
+    ///
+    /// **Skipped in serialization**, because it is a RENDERING input rather than
+    /// part of the refusal payload: a consumer of `{rule, verdict, reason, fix}`
+    /// asked for the remedy, and `fix` is still that. Resolved here because this
+    /// is where the registry is already in hand, which keeps `deny_text` pure and
+    /// the boundary free of a second registry lookup.
+    #[serde(skip)]
+    routes: Vec<String>,
     /// The declared class this refusal belongs to, when it has one (CLOUD-1050).
     ///
     /// `Some` for every one of Batten's OWN refusal sites, which name a
@@ -283,6 +293,11 @@ impl Refusal {
     pub fn new(rule: impl Into<String>, reason: impl Into<String>, fix: Fix) -> Refusal {
         Refusal {
             rule: rule.into(),
+            // A consumer-composed refusal names no class, so there is no registry
+            // row whose routes could be read. Empty rather than absent: the
+            // rendering arm asks whether there is anything to say, not whether a
+            // class exists.
+            routes: Vec::new(),
             verdict: None,
             reason: reason.into(),
             fix,
@@ -342,6 +357,13 @@ impl Refusal {
         };
         Refusal {
             rule: rule.into(),
+            // Resolved here rather than at the boundary because the registry is
+            // already in hand — a second lookup downstream would be a second
+            // authority over which routes the class declares.
+            routes: crate::verdict::command_routes(registry, token)
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
             verdict: Some(token.to_owned()),
             reason: crate::verdict::render_line(registry, token, subjects),
             fix,
@@ -385,6 +407,18 @@ impl Refusal {
     #[must_use]
     pub fn fix(&self) -> &Fix {
         &self.fix
+    }
+
+    /// Every `command` route the class declares (CLOUD-1386).
+    ///
+    /// **All of them, not the first**, and that distinction is the row: `fix`
+    /// carries one route because it renders on every firing and a list there is
+    /// the per-firing cost CLOUD-1286 measured. This renders once per session,
+    /// where picking by declaration order withholds the route a reader needs —
+    /// measured on `leased-push`, whose second route is the one that works.
+    #[must_use]
+    pub fn routes(&self) -> &[String] {
+        &self.routes
     }
 
     /// The text projection every channel carries.

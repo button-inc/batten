@@ -4172,15 +4172,44 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
 /// record is cleared there. So the guarantee is per session, which is the
 /// implementable approximation of "the first time this reader sees it" — and it
 /// errs toward saying it again rather than assuming it was retained.
+///
+/// # EVERY route, because "the first one" is a choice nobody made
+///
+/// The first-sighting arm renders all of the class's `command` routes rather than
+/// the one `Fix:` carries. `Fix:` takes the first because it renders on every
+/// firing and a list there is the repeat cost above. Once per session that budget
+/// is not in force, and picking by declaration order is not a summary — it is one
+/// alternative selected arbitrarily. `leased-push` is the measurement: it declares
+/// the rebase first and `--force-with-lease=<ref>:<sha>` second, and the second is
+/// the one that answers the reader who just hit it. Rendering the first alone is
+/// what produced the defect report this row exists for.
+///
+/// The caller's own narrower alternative still leads when it has one, because a
+/// consumer's `redirect` for a protected path knows something the class does not.
 #[must_use]
 pub fn deny_text(refusal: &Refusal, hatch: &str, first_sighting: bool) -> String {
     if refusal.verdict().is_some() {
-        return match (first_sighting, refusal.fix().declared_alternative()) {
-            // The first firing carries the way out. `explain` still holds the
-            // whole class — every alternative route, the question classes — and
-            // this is the one line that turns a refusal into the next action.
-            (true, Some(route)) => format!("{} — {route}", refusal.line()),
-            _ => refusal.line(),
+        if !first_sighting {
+            return refusal.line();
+        }
+        let mut routes: Vec<&str> = Vec::new();
+        for route in refusal
+            .fix()
+            .declared_alternative()
+            .into_iter()
+            .chain(refusal.routes().iter().map(String::as_str))
+        {
+            // The narrower fix is very often the class's own first route, and a
+            // reader met with the same clause twice learns that the renderer
+            // cannot count.
+            if !routes.contains(&route) {
+                routes.push(route);
+            }
+        }
+        return if routes.is_empty() {
+            refusal.line()
+        } else {
+            format!("{} — {}", refusal.line(), routes.join("; "))
         };
     }
     format!("{} Bypass with {hatch}=1.", refusal.render())
@@ -8189,6 +8218,115 @@ pub const ASK_GAPS: &[(Harness, &str)] = &[
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A class declaring two `command` routes and one `override`, so a renderer
+    /// that takes "the first one" and one that takes them all are distinguishable.
+    fn two_route_class() -> Vec<crate::verdict::DeclaredVerdict> {
+        let route = |id: &str, kind, target: &str| crate::verdict::Route {
+            id: id.to_owned(),
+            kind,
+            target: target.to_owned(),
+            precondition: match kind {
+                crate::verdict::RouteKind::Override => Some("why it should not stand".to_owned()),
+                _ => None,
+            },
+        };
+        vec![crate::verdict::DeclaredVerdict {
+            id: "branch write unsafe".to_owned(),
+            gloss: "branch write unsafe".to_owned(),
+            class: "The long definition of the class.".to_owned(),
+            routes: vec![
+                route(
+                    "branch read first",
+                    crate::verdict::RouteKind::Command,
+                    "git pull --rebase",
+                ),
+                route(
+                    "branch write refused",
+                    crate::verdict::RouteKind::Command,
+                    "git push --force-with-lease=<ref>:<sha>",
+                ),
+                route(
+                    "branch write first",
+                    crate::verdict::RouteKind::Override,
+                    "branch write unsafe",
+                ),
+            ],
+            successor: None,
+            withdrawn: None,
+        }]
+    }
+
+    /// CLOUD-1386: the first sighting carries EVERY declared `command` route.
+    ///
+    /// Measured on `leased-push`, which declares the rebase first and the
+    /// explicit `--force-with-lease=<ref>:<sha>` second. A session that read only
+    /// the first could not tell the class refuses a SPELLING rather than the
+    /// action, and reported a working gate as a design defect. So the assertion
+    /// that matters is on the SECOND route: a renderer taking `Fix:`'s single
+    /// route passes every other clause of this case.
+    #[test]
+    fn a_first_sighting_carries_every_command_route() {
+        let registry = two_route_class();
+        let refusal = Refusal::from_class(
+            "leased-push",
+            &registry,
+            "branch write unsafe",
+            &[],
+            crate::refusal::Fix::None,
+        );
+        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true);
+        assert!(
+            text.contains("git push --force-with-lease=<ref>:<sha>"),
+            "the second route is the one that answers the reader: {text}"
+        );
+        assert!(text.contains("git pull --rebase"), "{text}");
+        assert!(
+            !text.contains("override"),
+            "a way out that begins by asking to be excused is not an alternative: {text}"
+        );
+    }
+
+    /// The repeat is the bare line — the cost CLOUD-1286 measured, still unpaid.
+    #[test]
+    fn a_repeat_sighting_carries_no_route_at_all() {
+        let registry = two_route_class();
+        let refusal = Refusal::from_class(
+            "leased-push",
+            &registry,
+            "branch write unsafe",
+            &[],
+            crate::refusal::Fix::None,
+        );
+        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", false);
+        assert!(!text.contains("git pull --rebase"), "{text}");
+        assert!(!text.contains(" — "), "{text}");
+    }
+
+    /// The caller's narrower alternative leads and is not said twice.
+    ///
+    /// A consumer's `redirect` for a protected path knows something the class does
+    /// not, and it is very often the class's own first route — so a renderer that
+    /// concatenates rather than merges emits the same clause twice.
+    #[test]
+    fn a_narrower_fix_leads_and_is_never_repeated() {
+        let registry = two_route_class();
+        let refusal = Refusal::from_class(
+            "leased-push",
+            &registry,
+            "branch write unsafe",
+            &[],
+            crate::refusal::Fix::Run("git pull --rebase".to_owned()),
+        );
+        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true);
+        assert_eq!(text.matches("git pull --rebase").count(), 1, "{text}");
+        let routes = text.split(" — ").nth(1).expect("the routes clause");
+        assert!(routes.starts_with("git pull --rebase"), "{text}");
+        assert!(
+            routes.contains("git push --force-with-lease=<ref>:<sha>"),
+            "{text}"
+        );
+    }
 
     /// [`super::adjudicate`] with **no waiver declared** — the shape every case
     /// below this line was written against.

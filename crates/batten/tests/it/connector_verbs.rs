@@ -220,7 +220,13 @@ fn each_refusal_names_its_own_remedy() {
         // being wrong before, when it demanded `mise run land` from a verb whose
         // remedy is to background the command. A generic assertion, or one that
         // only checked the hop resolved, would pass over the same mismatch.
-        let row = text
+        // THE ROUTE IS NOT PART OF THE POINTER (CLOUD-1386). A first sighting
+        // appends the class's route after an em dash, so "the last word of the
+        // line" stopped being the rule id — it became the last word of a
+        // sentence. The pointer half is what this reads, and taking it
+        // explicitly says so rather than relying on the route's absence.
+        let pointer = text.split(" — ").next().unwrap_or(&text);
+        let row = pointer
             .split_whitespace()
             .next_back()
             .expect("a deny names the rule that fired");
