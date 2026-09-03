@@ -7210,17 +7210,6 @@ fn unsupported_event_note(
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "the mediated-call funnel, and it reads as one sequence: read the payload, \
-              decode it, check the host's capabilities, resolve the facts the boundary owes \
-              a pure `adjudicate`, and answer in the harness's own channel. `run_rules` \
-              carries this expectation for the same shape on the other surface. Splitting \
-              it would thread `envelope`, `policy` and the resolved fact set through \
-              helpers that exist only to satisfy a line count — and the boundary is exactly \
-              where a reader needs to see the whole order in one place, because which facts \
-              are resolved BEFORE the decision is the contract"
-)]
 fn run_hook(
     harness: hook::Harness,
     // Resolved by the dispatch (CLOUD-1170) — see `Recency::now`.
