@@ -187,9 +187,31 @@ fn stop_payload(message: &str, active: bool) -> String {
 
 fn hook(dir: &Path, payload: &str) -> Output {
     let mut command = batten();
+    // CONTAINED, on `hook_in`'s reason and after this suite paid for not being
+    // (CLOUD-1387). A `repo()` fixture carries no `.git`, so without a ceiling
+    // git's discovery walks UP — and `CARGO_TARGET_TMPDIR` sits under the real
+    // checkout, so the walk lands in it. `completion.unlanded` then read the
+    // developer's own unlanded commits and pre-empted the advisory the case was
+    // asserting, which made `a_stranded_finding_is_pointed_at_and_the_turn_still_ends`
+    // pass or fail on whether the person running it had pushed.
+    //
+    // The state home goes with it for the same reason `hook_in` states: a real
+    // session's recorded findings must not decide a fixture's verdict. Both are
+    // narrowings, so a case that passed under the ambient version passes here
+    // for a reason it now actually establishes.
+    common::state_home(
+        &mut command,
+        &scratch(&format!(
+            "{}-home",
+            dir.file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .unwrap_or("stop-posture")
+        )),
+    );
     command
         .current_dir(dir)
         .args(["hook", "--harness", "claude-code"])
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .env_remove("BATTEN_HOOK_BYPASS")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

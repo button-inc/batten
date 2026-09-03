@@ -2894,10 +2894,42 @@ pub struct CaptureQuery {
     /// The token that selects which captured response answers.
     ///
     /// An opaque string the consumer supplies. The engine knows nothing about
-    /// what it names — it matches captures containing it and reduces the first in
-    /// handle order, which is where non-negotiable rule 1 is paid: a tracker's
+    /// what it names, which is where non-negotiable rule 1 is paid: a tracker's
     /// key vocabulary is the consumer's fact and never this crate's.
+    ///
+    /// How it SELECTS depends on [`Self::key_at`], and the two are different
+    /// questions — see that field.
     pub key: String,
+    /// Where the key sits in the response, in [`Node::at`]'s spelling.
+    ///
+    /// # This is the difference between "the record about the key" and "a record mentioning it"
+    ///
+    /// Without it, selection is byte CONTAINMENT over the response and the first
+    /// match in handle order answers — so any stored document that merely cites
+    /// the key competes, and which one wins is decided by a digest. Measured
+    /// 2026-09-03 over this repository's own store (CLOUD-1387): 14 captures
+    /// contained `CLOUD-1188`, the one read carried no `project` node and
+    /// answered `false`, and the `get_issue` for that row — carrying
+    /// `project: "Batten"` — sorted later and was never consulted. A filed row
+    /// was reported unfiled, from a payload that was never about it.
+    ///
+    /// With it, the row is resolved through [`crate::capture::find`], which
+    /// selects a response whose scalar AT THIS PATH equals the key and takes the
+    /// most recent in the log's append order. That is the same selector
+    /// `capture find --key-at` already exposes, so there is one authority on what
+    /// "the capture for this key" means rather than two.
+    ///
+    /// **Optional, and absent keeps the old meaning rather than changing a
+    /// verdict silently.** A row that declares no path is still resolved by
+    /// containment: this field can only ever narrow what answers, so adding it is
+    /// raise-only in house-style §8's sense, and a consumer's landed rows do not
+    /// move underneath them.
+    ///
+    /// **The PATH is the consumer's, which is what keeps rule 1 intact.** The
+    /// engine never names `id`, or any other tracker field — it reads the path
+    /// the row supplies, exactly as `node` below is read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_at: Option<String>,
     /// The node path inside the selected response, in [`Node::at`]'s spelling.
     pub node: String,
     /// What to make of the node the path reaches.
