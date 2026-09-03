@@ -174,6 +174,7 @@ mod redirect_resolves;
 mod reference_coverage;
 mod refusal_ceiling;
 mod remedy_authorship;
+mod repetition;
 mod retirement_doctrine;
 mod review_answered;
 mod review_dispatched;

@@ -425,31 +425,35 @@ pub struct Counts {
     pub hook_decisions: usize,
     /// Hook runs that denied — `exit_code` equal to the §7 verdict code.
     pub hook_denials: usize,
-    /// How many times the session's MOST-REPEATED call identity recurred — a
-    /// call whose tool AND arguments it had already sent, counted per identity
-    /// and reduced by [`max`](Iterator::max), never summed across identities.
+    /// The TRAILING run of identical calls — the same tool and the same
+    /// arguments, with nothing else between them — counted at the end of the
+    /// stream (CLOUD-1347).
     ///
-    /// **A maximum rather than a total, and the distinction is the whole
-    /// field.** A sum over every identity is monotonic in the length of the
-    /// session: it never resets, so it grows on any session long enough to
-    /// repeat anything and says nothing about whether one call is being asked
-    /// twice. Measured over one real transcript, the max separates — 1079 for a
-    /// poll against 38 for the next-most-repeated call — where the sum over the
-    /// same stream was 1294 and discriminated nothing (CLOUD-1341).
+    /// **Adjacency is the design, not an implementation detail**, and it is what
+    /// does the false-positive work. Any intervening DISTINCT call clears the
+    /// run, so `mise run test` three times with edits between is already false
+    /// here without a carve-out, while the same call three times with nothing in
+    /// between is not a thing a productive session does. The documented
+    /// detectors converge on this shape: opencode keys on an identical
+    /// `(name, args-hash)` in the last 3 calls, OpenHands on identical
+    /// action-observation cycles.
     ///
-    /// **A scalar here rather than the per-key breakdown
-    /// [`Stream::memory_injections`] argues for**, because this is already a
-    /// reduction: the question is how far the worst identity ran, not which
-    /// identities exist, and a map would be the breakdown nobody asked for with
-    /// the answer still to be derived from it.
+    /// A WINDOW recurrence — the maximum recurrences of any one fingerprint over
+    /// a declared recent window — is a different member and a different question,
+    /// and is deliberately not this one: recurrence in a window is what
+    /// legitimate iteration looks like, so it is a sensor rather than a refusal.
     ///
     /// Identity is the tool name and a DIGEST of the arguments, so no argument
     /// text is retained — the same shape [`Event::HookOutput`] uses to decide
-    /// "the same thing said twice" without keeping what was said (rule 4). The
-    /// RESULT is deliberately not part of it: including it discriminates better
-    /// (60x against 28x) and would oblige the parser to read every result BODY,
-    /// the one payload this module exists never to touch.
-    pub repeated_calls: usize,
+    /// "the same thing said twice" without keeping what was said (rule 4).
+    pub repeat_depth: usize,
+    /// Distinct call identities this session — the PROGRESS term.
+    ///
+    /// A denominator rather than a finding on its own: a session doing many
+    /// different things has a high count, and a session orbiting has a low one
+    /// against a high [`Self::tool_calls`]. It exists so a predicate over
+    /// repetition can condition on progress instead of on repetition alone.
+    pub distinct_calls: usize,
 }
 
 /// Whether the transcript capability is available for this run.
@@ -500,11 +504,11 @@ impl Stream {
     )]
     pub fn counts(&self) -> Counts {
         let mut counts = Counts::default();
-        // Per IDENTITY, reduced by `max` after the walk — see `repeated_calls`
-        // for why a running total over all identities is the defect this
-        // replaces. Keyed by an argument DIGEST so no argument text is held.
-        let mut per_identity: std::collections::HashMap<(&str, String), usize> =
-            std::collections::HashMap::new();
+        // The fingerprint of every call, in order, so the TRAILING run can be
+        // read after the walk. Keyed by an argument DIGEST, so no argument text
+        // is held — hashed and dropped in the same expression, exactly as
+        // `Event::HookOutput` does.
+        let mut fingerprints: Vec<(&str, String)> = Vec::new();
         // A REPLAYED BLOCK IS NOT A SECOND CALL. Compaction and replay re-emit a
         // `tool_use` under the id it already carried, and counting those inflates
         // the maximum toward whatever the host chose to replay rather than toward
@@ -524,11 +528,10 @@ impl Stream {
                     counts.tool_calls += 1;
                     if seen_calls.insert(id.as_str()) {
                         let arguments = serde_json::to_vec(input).unwrap_or_default();
-                        let identity = (
+                        fingerprints.push((
                             name.as_str(),
                             crate::identity::context_fingerprint(&arguments).to_hex(),
-                        );
-                        *per_identity.entry(identity).or_insert(0) += 1;
+                        ));
                     }
                 }
                 Event::ToolResult { failed, .. } => {
@@ -559,14 +562,22 @@ impl Stream {
                 Event::HookOutput { .. } => {}
             }
         }
-        // N occurrences of one identity are N-1 recurrences, so a session that
-        // never repeated anything answers 0 rather than 1.
-        counts.repeated_calls = per_identity
-            .values()
-            .copied()
-            .max()
-            .unwrap_or(0)
-            .saturating_sub(1);
+        // THE RUN IS A COUNT OF CALLS, not of repeats: three identical calls in a
+        // row are a depth of 3, which is the threshold every documented detector
+        // is stated in. An empty stream is 0 and a single call is 1, so no
+        // session is one short of its own first call.
+        counts.repeat_depth = match fingerprints.last() {
+            None => 0,
+            Some(last) => fingerprints
+                .iter()
+                .rev()
+                .take_while(|call| *call == last)
+                .count(),
+        };
+        counts.distinct_calls = fingerprints
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len();
         counts
     }
 

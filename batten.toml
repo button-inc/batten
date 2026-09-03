@@ -5086,8 +5086,8 @@ severity = "deny"
 id = "denials"
 count = "hook-denials"
 
-# Re-asking is not waiting (CLOUD-1341, the across-turn family no command-string
-# row can reach).
+# The measured doom-loop shape: the same call, again (CLOUD-1347, the across-turn
+# family no command-string row can reach).
 #
 # WHY NO LANDED ARM REACHES IT. `run-shape`'s refusal keys on a backgrounded
 # `sleep` and CLOUD-489's on `until`/`while` inside ONE command string. The
@@ -5096,36 +5096,41 @@ count = "hook-denials"
 # verb with no argv, so `input.call.segments` gives a `shape` row nothing to
 # match. Repetition across turns appears in no command string at all.
 #
-# THE FACT IS A MAXIMUM OVER IDENTITIES, NEVER A SUM. `repeated-calls` is how far
-# the session's most-repeated (tool, arguments) identity ran. A running total
-# across every identity is monotonic in the length of the session and never
-# resets, so it fires on any session long enough to repeat anything; over the same
-# transcript the sum was 1294 and the max was 1079 against a healthy ceiling of
-# 38. The module's threshold of 100 is derived from those two numbers and would
-# be meaningless against the total.
+# TRAILING-RUN ADJACENCY, NOT A WINDOW, AND THAT IS WHAT MAKES IT SAFE.
+# `repeat-depth` is the run of identical (tool, arguments) calls at the END of the
+# stream, so any intervening DISTINCT call clears it and the edit-then-retest loop
+# is false by construction rather than by carve-out. `distinct-calls` beside it is
+# the progress term. A WINDOW recurrence — the maximum recurrences of any one
+# fingerprint over a declared recent window — is CLOUD-1350's separate member and
+# is permanently `warn` there for the opposite reason: recurrence in a window is
+# exactly what legitimate iteration looks like.
 #
 # IT SHIPS AT `warn`, AND THAT IS THE ROW'S MOST IMPORTANT FIELD. A
 # `mediated_call` row at `deny` refuses EVERY subsequent tool call once it fires,
 # and no admission can clear it: `batten override request` and `spend` are
 # themselves mediated calls, so requesting one requires making the call the deny
-# refuses. Landed at `deny` once, this predicate locked its own authoring session
-# out at ~1300 — push included, with no in-session recovery. Promotion needs the
-# finished rule shown SILENT against a real transcript first; a mutation proves
-# the predicate discriminates, never that the constant is right.
+# refuses. A predicate in this family was landed at `deny` once and locked its own
+# authoring session out at ~1300 — push included, with no in-session recovery.
+# CLOUD-1352 owns the promotion and makes a measured firing rate over this
+# repository's own history a hard precondition for it.
 #
 # COULD-NOT-LOOK IS THE COMMON CASE, exactly as the row above records: four
 # states are null and every one differs from an extractor that ran and counted
 # zero, so the module refuses only on a real count.
 [[rule]]
-id = "a-repeated-call-is-not-progress"
+id = "repetition-without-progress"
 kind = "policy"
 scope = "mediated_call"
-module = "policy/a-repeated-call-is-not-progress.rego"
+module = "policy/repetition-without-progress.rego"
 severity = "warn"
 
 [[rule.extract]]
-id = "repeats"
-count = "repeated-calls"
+id = "repeat-depth"
+count = "repeat-depth"
+
+[[rule.extract]]
+id = "distinct-calls"
+count = "distinct-calls"
 
 # A weaker spelling of a task this project already defines (CLOUD-856, the
 # successor shape for `run-shape-guard`'s `cargo-substitutes-for-a-task`).
@@ -7880,13 +7885,13 @@ target = "policy/claim-order-is-stated.rego"
 id = "turn ask twice"
 gloss = "this session has already made this call, with these arguments, many times over"
 class = """
-A call you have already made, with the same arguments, told you what it told you the first time. The count is how far the session's most-repeated identity ran — a maximum over identities, never a sum — and the threshold is measured rather than chosen: 1079 for the poll that produced this row against 38 for the next-most-repeated call in the same session. The remedy is to stop asking and wait: a backgrounded task re-invokes the session when it exits, so the notification IS the wake-up and a turn with something backgrounded is the designed state rather than one to fill.
+A call you have already made, with the same arguments and nothing in between, told you what it told you the first time. The count is the trailing run: any intervening distinct call clears it, so this is the same call three times over rather than a busy session. The remedy is not to wait and not to try again — it is to do something different, or to say why you cannot. Where the repetition is a wait, a backgrounded task re-invokes the session when it exits, so the notification IS the wake-up and a turn with something backgrounded is the designed state rather than one to fill.
 """
 
 [[verdict.route]]
 id = "module read first"
 kind = "document"
-target = "policy/a-repeated-call-is-not-progress.rego"
+target = "policy/repetition-without-progress.rego"
 
 [[verdict]]
 id = "forge check red"

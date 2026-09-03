@@ -1447,9 +1447,14 @@
           "const": "hook-denials"
         },
         {
-          "description": "How far the session's most-repeated call identity ran — a call whose tool\nAND arguments it had already sent, counted per identity and reduced by\nmaximum. Never a sum across identities: that total is monotonic in the\nlength of the session, so it grows on any session long enough to repeat\nanything (CLOUD-1341).",
+          "description": "The trailing run of identical calls — same tool, same arguments, nothing\nbetween them — at the end of the stream (CLOUD-1347). Adjacency is what\ndoes the false-positive work: any intervening distinct call clears it.",
           "type": "string",
-          "const": "repeated-calls"
+          "const": "repeat-depth"
+        },
+        {
+          "description": "Distinct call identities this session — the progress term a predicate over\nrepetition conditions on, never a finding on its own.",
+          "type": "string",
+          "const": "distinct-calls"
         }
       ]
     },
