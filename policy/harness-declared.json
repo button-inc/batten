@@ -1,1 +1,4 @@
-{}
+{
+  "stop-hook-git-check.sh": "CLOUD-1079",
+  "session-start-git-identity.sh": "CLOUD-1079"
+}
