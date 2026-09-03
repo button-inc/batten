@@ -128,3 +128,107 @@ violation contains {
 	some path, _ in input.tree.missing
 	path == "mise.toml"
 }
+
+# --- cases -----------------------------------------------------------------
+#
+# The load-time tier. It pins the PREDICATE.
+# `crates/batten/tests/it/egress_fencing.rs` is the tier that proves the ENGINE
+# builds the shape these fabricate — which is the whole reason both exist: a
+# `with input as` block writes the shape it then reads, so it stays green over a
+# key the engine never fills.
+
+# The consumer's `[[pattern]]` row, injected. A module reads
+# `data.batten.patterns[…]`, and Rego reads an undefined path as *does not hold*
+# — so a case that omitted this would exercise a predicate that decides nothing
+# and call it a pass.
+patterns := {"egress-resolver-host": `api\.github\.com`}
+
+fenced_value := "{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com{% endif %}"
+
+tree(env_table) := {"tree": {"documents": {"mise.toml": {"env": env_table}}, "missing": {}}}
+
+test_a_fence_naming_the_resolver_host_in_both_spellings_passes if {
+	count(violation) == 0 with input as tree({
+		"NO_PROXY": fenced_value,
+		"no_proxy": fenced_value,
+	})
+		with data.batten.patterns as patterns
+}
+
+# TWO FINDINGS, ONE PER SPELLING, and the count is asserted rather than glossed:
+# the predicate iterates the spellings as a set, so a fence deleted outright is
+# two refusals and not one. A case asserting `== 1` here would be wrong about the
+# rule it is pinning.
+test_a_deleted_fence_is_refused if {
+	found := violation with input as tree({"GH_TOKEN": "x"})
+		with data.batten.patterns as patterns
+	count(found) == 2
+	every finding in found {
+		finding.verdict == "task declare dropped"
+	}
+}
+
+test_a_fence_that_no_longer_names_the_resolver_host_is_refused if {
+	found := violation with input as tree({
+		"NO_PROXY": "localhost,127.0.0.1",
+		"no_proxy": "localhost,127.0.0.1",
+	})
+		with data.batten.patterns as patterns
+	count(found) == 2
+	every finding in found {
+		finding.verdict == "task declare partial"
+	}
+}
+
+# THE LOWER-CASE HALF ALONE. Every client in this class reads `no_proxy` first,
+# so a gate watching only the upper-case name would stay green while the tool
+# that actually broke is the one reading the other.
+test_fencing_only_the_upper_case_spelling_is_refused if {
+	found := violation with input as tree({
+		"NO_PROXY": fenced_value,
+		"no_proxy": "localhost",
+	})
+		with data.batten.patterns as patterns
+	count(found) == 1
+	some finding in found
+	finding.verdict == "task declare partial"
+	finding.subjects[1].artifact == "no_proxy"
+}
+
+test_fencing_only_the_lower_case_spelling_is_refused if {
+	found := violation with input as tree({
+		"NO_PROXY": "localhost",
+		"no_proxy": fenced_value,
+	})
+		with data.batten.patterns as patterns
+	count(found) == 1
+	some finding in found
+	finding.subjects[1].artifact == "NO_PROXY"
+}
+
+# COULD NOT LOOK IS NOT A PASS. The document is absent from `documents` and named
+# in `missing`, so `env` is unbound and the two clauses above cannot fire — which
+# is exactly the state that would report a clean tree without this arm.
+test_an_unreadable_authority_is_could_not_look if {
+	found := violation with input as {"tree": {
+		"documents": {},
+		"missing": {"mise.toml": "Unparsed"},
+	}}
+		with data.batten.patterns as patterns
+	count(found) == 1
+	some finding in found
+	finding.verdict == "task read unread"
+}
+
+# A DIFFERENT unreadable document says nothing about this fence, so the arm has
+# to be keyed on the path and not merely on `missing` being non-empty.
+test_an_unrelated_missing_document_is_not_this_rules_business if {
+	count(violation) == 0 with input as {"tree": {
+		"documents": {"mise.toml": {"env": {
+			"NO_PROXY": fenced_value,
+			"no_proxy": fenced_value,
+		}}},
+		"missing": {"Cargo.toml": "Unparsed"},
+	}}
+		with data.batten.patterns as patterns
+}
