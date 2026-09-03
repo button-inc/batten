@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.139](https://github.com/button-inc/batten/compare/v0.0.138...v0.0.139) - 2026-09-03
+
+### Added
+
+- *(wiring)* delete the exemption table, and the three directions that policed it
+- *(environment)* let the environment say whose $HOME this is
+- *(policy)* report a presence probe that asks the bare PATH about a pinned program
+- *(doctor)* report the declared evidence capability
+- *(spec)* admit `doctor mediator` to the read-only allowlist and the row set
+- *(doctor)* add `doctor mediator` — which engine the registrations reach
+- *(policy)* switching a gate off for a call is a decision, not a flag
+- *(config)* declare where this host keeps the session task store
+- *(doctor)* [**breaking**] give "is this session safe to end" a verb, so it stops being estimated
+- *(facts)* [**breaking**] an extraction the host cannot answer says so, instead of answering zero
+- *(facts)* price a call the session has already made, as a maximum not a total
+
+### Fixed
+
+- *(refusal)* the census annotation opens with its verdict
+- *(resolve)* attribute the refusal ceiling, which every resolved key owes
+- *(hook)* the declared ceiling bounds a first sighting, not only a repeat
+- *(hook)* a first sighting carries every route, not the first one declared
+- *(hook)* [**breaking**] a declared refusal explains itself once per session
+- *(rules)* keep the analyser on the eager door, and pin the zero-spawn bound
+- *(rules)* reach the analyser through the LAZY door too
+- *(pinned)* recover a record that stops existing mid-session
+- *(cli)* [**breaking**] a narrowed `enforce` still answers for the defect ledger
+- *(doctor)* state the blind spot `doctor mediator` has, and pin it
+- *(test)* the perf-assert tier reports a dead gate instead of passing over it
+- *(test)* the cost bound is a step-change detector, not a machine reading
+- *(test)* read the perf budgets from the module the gate retired onto
+- *(test)* name the retired bats cases exactly, and record the one this row inverts
+- *(test)* seed the README the committed perf-assert row declares, and use write!
+- *(transcript)* the tilde expands by substitution, not by a platform path join
+- *(test)* the posture cases read the real session's findings store
+- *(policy)* the claim-order row judged a tree that never made the split
+- *(claim)* state the order the receipt already required, and stop inviting the second claim
+- *(ci)* cache the perf base arm on a path that holds still across a rebase
+
+### Other
+
+- *(hook)* bundle what a refusal line needs, rather than widening a limit
+- *(hook)* measure the ceiling on prose, which is what actually reaches it
+- *(snapshot)* accept the golden schema carrying both new doctor sub-verbs
+- *(stop-posture)* isolate every case, not only the one asserting silence
+- *(test)* assert one rule with one rule — the third and largest of the family
+- *(stop-posture)* isolate the one case that asserts silence
+- *(snapshot)* accept the golden schema for `doctor mediator`
+- *(pointer-only)* classify `doctor mediator` as pointer-only
+- *(doctor)* pin `doctor mediator`, including the arm that refutes its old placement
+- *(hook)* a refused write says what the engine did, not just that it did not
+- *(cost)* the cost reading's rung and answer channel are gated, not argued
+- *(ci)* the perf budget is a rule, not a shell program
+- *(policy)* build the ledger index only when a deletion needs it, and gate the term
+- *(transcript)* the test helper stops hiding which cases are about an absent home
+- *(pointer-only)* the session verb reads real prose, then declines to print it
+- *(spec)* state the new sub-verb in the two lists that must be stated
+- *(surface)* regenerate the derived artifacts for the new sub-verb
+- *(doctor)* pin the session verb, and prove the could-not-look arm can fail
+- *(facts)* the recorded kinds are a set, not four booleans
+- *(facts)* [**breaking**] land the loop predicate as the family's own, on trailing-run adjacency
+
 ## [0.0.138](https://github.com/button-inc/batten/compare/v0.0.137...v0.0.138) - 2026-09-03
 
 ### Added
