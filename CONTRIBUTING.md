@@ -77,6 +77,28 @@ Please run `mise run ci` locally before opening a PR.
 - Every behavioral change ships with a test.
 - Reference the relevant issue in the PR description.
 
+### Contributing from a fork
+
+The bullets above describe how maintainers work in this repository. **If you are
+contributing from a fork, three of them do not apply to you, and you are not
+expected to satisfy them:**
+
+- **You do not need a tracker key.** Commits from maintainers carry a
+  `Refs: CLOUD-<n>` trailer naming the issue they serve, and `commit-lint`
+  enforces it. That tracker is private, so a fork-origin PR is exempt — the gate
+  tests the pull request's origin, not your branch name. A maintainer files the
+  issue when your work is adopted. Please do not invent a key.
+- **You cannot land your own PR.** `/fast-forward` is restricted to maintainers,
+  and a fork head additionally requires an approving review from one. Open the
+  PR and a maintainer will take it from there.
+- **`mise run verify` is the pre-ready gate for maintainers, not for you.** It
+  exists to be green before `gh pr ready`, and readying a fork PR is not
+  something you can do. `mise run ci` is the check worth running locally; CI
+  tells you the rest.
+
+Everything else holds: Conventional Commits, a test with each behavioral change,
+and small focused PRs.
+
 ## Licensing of contributions
 
 By contributing, you agree that your contributions will be licensed under the

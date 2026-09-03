@@ -3574,8 +3574,55 @@ shell = "bash -c"                                                   # uses ${sha
 run = '''
 fail=0
 keys="$(git rev-parse --show-toplevel)/mise-tasks/claimed-keys.sh"
+# THE THIRD EXEMPTION IS THE WHOLE HEAD, NOT A PER-COMMIT ARM (CLOUD-1415), which
+# is why it is hoisted out of the loop: fork-origin is a property of the PULL
+# REQUEST, and asking it once per commit would be the same question answered N
+# times. The two arms inside the loop stay per-commit because their subjects —
+# the diff and the author — genuinely vary commit to commit.
+#
+# THE SAME SHAPE AS CLOUD-1207'S, one class over. A community contributor's key
+# does not exist when the commit is authored: CLOUD-693's `batten pr ensure`
+# mints the row FROM the pull request, and the merge moves it through
+# `Closes CLOUD-<n>` in the PR BODY, which this gate does not read and should
+# not. Linear is private, so demanding the trailer demands a key the contributor
+# can neither read nor create — measured on #844, where it was the only thing
+# between an inert one-line change and green.
+#
+# IT GRANTS NOTHING, and that is what makes it an exemption rather than a hole.
+# A fork head cannot auto-land: all three privileged lanes refuse fork origin
+# (CLOUD-867, verified against a real fork 2026-09-03) and `/fast-forward`
+# additionally requires an approving OWNER/MEMBER/COLLABORATOR review. An exempt
+# fork commit reaches `main` only through a human who read the diff. What is
+# lifted is a PROCESS obligation, never a trust boundary.
+#
+# AGENTS STAY BOUND, with no agent-detection heuristic — which would be
+# unreliable anyway. Agents author on origin branches, so they are never
+# fork-origin and this gate applies to them unchanged.
+#
+# ONE CONJUNCT, DELIBERATELY. CLOUD-1207 needed two because a workflow-only diff
+# is ordinary human work here, so paths alone would have dropped the claim for a
+# real class. Fork-origin is not how this repository's own work is authored, so
+# origin alone is already narrow. An insider could push from a fork to dodge the
+# claim — they would forfeit auto-landing and need a review, so the dodge costs
+# more than complying. If that stops being true, add the second conjunct THEN;
+# do not pre-add one that excludes nothing (the measured failure of the declared
+# mutation on `privileged-lane`'s third conjunct).
+#
+# Compared as two strings rather than a boolean computed in YAML, so the
+# comparison is stated where it is made. Empty `PR_HEAD_REPO` — a PR whose fork
+# was deleted mid-flight, or any caller that is not the PR workflow, `verify`
+# included — is NOT a fork and is gated normally, which is the direction a miss
+# must fail in.
+fork_head=0
+if [ -n "${PR_HEAD_REPO:-}" ] && [ -n "${PR_BASE_REPO:-}" ] && [ "$PR_HEAD_REPO" != "$PR_BASE_REPO" ]; then
+  fork_head=1
+fi
 for sha in $(git rev-list --no-merges "${BASE_SHA:?}..${HEAD_SHA:?}"); do
   subject=$(git show -s --format=%s "$sha")
+  if [ "$fork_head" -eq 1 ]; then
+    echo "FORK  ${sha:0:8}  fork-origin head — its row is minted from the PR, after the commit"
+    continue
+  fi
   # The subject-convention half is NOT here: it is `commit-check`, above in
   # `depends`, reading `[commit].subject_pattern` from batten.toml (CLOUD-701).
   # What remains in this body is the claim half, which is about the message's

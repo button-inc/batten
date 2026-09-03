@@ -105,3 +105,19 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # The origin pair, for commit-lint's fork exemption (CLOUD-1415). Both
+          # halves are passed rather than one pre-computed boolean, so the task
+          # states the comparison it makes instead of trusting a verdict reached
+          # in YAML — the same reason `BASE_SHA`/`HEAD_SHA` are passed as SHAs.
+          #
+          # THIS IS SAFE FOR THE REASON CLOUD-867 TURNS ON. On `pull_request` the
+          # workflow file comes from the BASE repository, never the fork's diff,
+          # so a contributor cannot alter what is passed here.
+          # `head.repo.full_name` is the half a fork cannot forge; a branch name
+          # would be the half it can, which is the defect CLOUD-867 fixed.
+          #
+          # `head.repo` is null on a PR whose fork was deleted mid-flight, so the
+          # value can be empty. The task treats empty as NOT-fork and gates
+          # normally — the direction a miss must fail in.
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_BASE_REPO: ${{ github.repository }}
