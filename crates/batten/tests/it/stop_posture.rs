@@ -187,6 +187,21 @@ fn stop_payload(message: &str, active: bool) -> String {
 
 fn hook(dir: &Path, payload: &str) -> Output {
     let mut command = batten();
+    // THE STATE HOME IS CONTAINED, for the reason the unlanded fixture's own
+    // runner already states: the Stop tier reads the out-of-tree findings store,
+    // and an ambient one lets a REAL session's findings decide a fixture's
+    // verdict. Measured 2026-09-03 — `a_clean_final_message_says_nothing` failed
+    // with `unlanded: 1 commit(s) not on the landing target`, read from the
+    // checkout the suite was running in. It passes on a tree with nothing
+    // unlanded and fails on any branch mid-development, which is every branch
+    // this suite is ever run from.
+    let home = scratch(&format!(
+        "{}-home",
+        dir.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("stop-posture")
+    ));
+    common::state_home(&mut command, &home);
     command
         .current_dir(dir)
         .args(["hook", "--harness", "claude-code"])
