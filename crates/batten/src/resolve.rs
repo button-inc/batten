@@ -1779,6 +1779,11 @@ fn attribution(
         // sets for itself, so a local file raising one would be the weakening
         // `trust.rs` compares the committed bytes to catch.
         ("advisory", authority_set(repo.advisory.is_some())),
+        // The mediated refusal line's own ceiling (CLOUD-1050), authority-only for
+        // the two above's reason exactly: a local file raising it would be the
+        // weakening `trust.rs` compares the committed bytes to catch, and
+        // `refusal-ceiling-raised` is the gate that names it.
+        ("refusal", authority_set(repo.refusal.is_some())),
         // And the session ceiling beside the per-emission one (CLOUD-417),
         // authority-only for the same reason: a local file raising it would be
         // the weakening the committed-bytes comparison exists to catch.
