@@ -6099,8 +6099,17 @@ fn the_committed_repo_config_gates_a_repository() {
     // This spawns `hk`, so it needs hk on PATH — true under `mise run
     // test:cargo` and false under a bare `cargo test`, where it fails loudly
     // with "cannot run `hk`: not found on PATH" rather than passing silently.
+    //
+    // NARROWED TO THE ONE ROW IT ASSERTS (CLOUD-1358's mechanism, this case's
+    // turn). The comment above already states that the asserted stdout is
+    // byte-identical whichever of the other ~100 rows are present — so running
+    // them bought nothing and cost 436.42s on the 2-core Windows runner, 24% of
+    // that suite's entire CPU and its single largest item, against 21.5s here.
+    // The ratio is the contention signature, not a different workload.
     let output = batten()
         .arg("enforce")
+        .arg("--rule")
+        .arg("no-conflict-markers")
         .current_dir(&dir)
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
