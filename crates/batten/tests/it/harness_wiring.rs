@@ -60,15 +60,31 @@
 //! ## CARRIED — the consumer half, which is what this change actually ports
 //!
 // carried: "a PreToolUse command that does not reach the engine is a violation" crates/batten/tests/it/harness_wiring.rs
-// carried: "a declared sibling passes, and the declaration names who retires it" policy/harness-wiring.rego
-// carried: "a declaration naming no issue is itself a violation, so the hatch is never silent" policy/harness-wiring.rego
-// carried: "a declaration whose key is not a CLOUD row is unowned, not merely present" policy/harness-wiring.rego
-// carried: "a declaration matching nothing wired is stale, so the list cannot rot" policy/harness-wiring.rego
 // carried: "CLOUD-525 (a): an UNDECLARED registration on a merged surface is a violation" crates/batten/tests/it/harness_wiring.rs
-// carried: "CLOUD-525 (b): the same registration declared with an owner passes" policy/harness-wiring.rego
-// carried: "CLOUD-525 (c3): a COMMITTED row is stale with no merged surface, as before" policy/harness-wiring.rego
 // carried: "CLOUD-525: an ABSENT merged surface is the ordinary case, not a finding" crates/batten/tests/it/harness_wiring.rs
 // carried: "THE SCOPE IS EVERY EVENT NOW: a Stop sibling is a violation too" crates/batten/tests/it/harness_wiring.rs
+//!
+//! ## WITHDRAWN AGAIN — the exemption table, and this time the whole of it
+//!
+//! CLOUD-1383. Five of the rows above were about `policy/harness-declared.json`:
+//! a tolerated registration, a row naming no issue, a row matching nothing wired.
+//! They ported cleanly to the module and were live and correct there. What was
+//! wrong was one layer down — the table existed only because nothing in the
+//! container ever said whose home directory it was, so batten had to negotiate
+//! per registration and then police its own negotiation. It also drifted from the
+//! session-start repair inside a day, in the direction that reads healthy on both
+//! instruments (CLOUD-1377).
+//!
+//! `BATTEN_ENVIRONMENT=disposable` states the fact, so there is nothing to
+//! tolerate and nothing to police. A sibling is refused on either surface class,
+//! and the environment decides whether the repair may remove it.
+//!
+// withdrawn: "a declared sibling passes, and the declaration names who retires it" CLOUD-1383 deleted the exemption table; a sibling is refused rather than declared, and `a_committed_sibling_beside_the_mediator_is_refused` is the same fixture in the direction the decision now goes
+// withdrawn: "a declaration naming no issue is itself a violation, so the hatch is never silent" there is no declaration to name an issue; the hatch it guarded does not exist
+// withdrawn: "a declaration whose key is not a CLOUD row is unowned, not merely present" the same table read from its key side, and it goes with the table
+// withdrawn: "a declaration matching nothing wired is stale, so the list cannot rot" there is no list to rot; a retirement leaves no licence behind when there is nowhere to leave one
+// withdrawn: "CLOUD-525 (b): the same registration declared with an owner passes" the merged half of the tolerated-registration case, withdrawn with it
+// withdrawn: "CLOUD-525 (c3): a COMMITTED row is stale with no merged surface, as before" the per-surface-class guard for a direction that no longer exists
 //!
 //! ## CHANGED — one case, and the successor goes the other way on purpose
 //!
@@ -147,31 +163,21 @@ use common::{at_root, batten, git_in, scratch, scratch_outside_tree, stderr, std
 /// comes from config rather than from a constant.
 const ROOT_VAR: &str = "BATTEN_FIXTURE_WIRING_ROOT";
 
-/// The verdict rows both modules raise, copied because a registry is per-config.
+/// The verdict rows the module raises, copied because a registry is per-config.
 ///
 /// Their prose is trimmed; what has to match the committed config is the ID,
 /// which is what a module raises and what these cases assert on.
 ///
-/// THE KEY PATTERN IS DELIBERATELY NOT THE COMMITTED ONE. `batten.toml`'s
-/// `ready-issue-key` row spells this consumer's tracker prefix, and reproducing
-/// that expression here would put a specific consumer's vocabulary inside
-/// `crates/` — non-negotiable rule 1, which `no-tracker-key-in-core` refuses.
-/// A generic key shape matches the module's declared owners without naming any
-/// tracker, which is all the fixture needs.
-///
-/// Twice, and the second time was this comment. The first violation was the
-/// expression itself; the fix then EXPLAINED itself by quoting the prefix it had
-/// just removed, and the gate refused that too — correctly, since a grep for a
-/// consumer's names does not care which side of a `///` the name is on.
+/// NO `[[pattern]]` ROWS ANY MORE (CLOUD-1383). The fixture declared two — a
+/// generic key shape and a closed-status expression — for the three exemption
+/// directions this module no longer has. What survives them is worth keeping: the
+/// committed `ready-issue-key` row spells this consumer's tracker prefix, and
+/// reproducing that expression here would put a specific consumer's vocabulary
+/// inside `crates/`, which `no-tracker-key-in-core` refuses. It refused it twice —
+/// the second time was the comment explaining the first fix, which quoted the
+/// prefix it had just removed, and the gate was right: a grep for a consumer's
+/// names does not care which side of a `///` the name is on.
 const VERDICTS: &str = r#"
-[[pattern]]
-id = "ready-issue-key"
-regex = '[A-Z]+-[0-9]+'
-
-[[pattern]]
-id = "closed-issue-status"
-regex = '^(done|canceled|duplicate)$'
-
 [[verdict]]
 id = "hook wire duplicate"
 gloss = "a registration on a merged surface outside this repository does not reach the mediator"
@@ -202,35 +208,6 @@ id = "config read first"
 kind = "document"
 target = "harness-wiring.rego"
 
-[[verdict]]
-id = "hook declare unnamed"
-gloss = "a declared hook sibling names no issue, so it records a decision and nobody to ask"
-class = "A fixture copy of the committed row; the id is what the module raises."
-
-[[verdict.route]]
-id = "module read first"
-kind = "document"
-target = "harness-wiring.rego"
-
-[[verdict]]
-id = "hook declare stale"
-gloss = "a declared hook sibling matches nothing wired, so it is a licence with no subject"
-class = "A fixture copy of the committed row; the id is what the module raises."
-
-[[verdict.route]]
-id = "module read first"
-kind = "document"
-target = "harness-wiring.rego"
-
-[[verdict]]
-id = "hook declare spent"
-gloss = "a declared hook sibling names an issue that has closed, so its licence outlived its owner"
-class = "A fixture copy of the committed row; the id is what the module raises."
-
-[[verdict.route]]
-id = "module read first"
-kind = "document"
-target = "harness-wiring.rego"
 "#;
 
 /// The fixture config: one rule over both surface classes.
@@ -249,7 +226,7 @@ fn config() -> String {
 id = "harness-wiring"
 kind = "policy"
 scope = "tree"
-documents = [".claude/settings.json", "policy/harness-declared.json"]
+documents = [".claude/settings.json"]
 module = "harness-wiring.rego"
 severity = "deny"
 
@@ -257,13 +234,6 @@ severity = "deny"
 id = "harness-launcher-settings"
 root = "BATTEN_FIXTURE_WIRING_ROOT"
 path = ".claude/launcher-settings.json"
-
-[[rule.minted]]
-id = "issue-status"
-mint = "issue-read"
-field = 4
-recency = 2
-max_age_days = 7
 {VERDICTS}"#
     )
 }
@@ -293,58 +263,35 @@ fn wiring(pre_tool: &[&str], stop: &[&str]) -> String {
 /// The committed registration every fixture starts from.
 const MEDIATOR: &str = "batten hook --harness claude-code";
 
-/// The one committed sibling the module's table declares, spelled as the host
+/// A sibling command a case registers beside the mediator, spelled as the host
 /// spells it — with the variable prefix, so the substring match is exercised
 /// rather than assumed.
-const DECLARED_SIBLING: &str = "$CLAUDE_PROJECT_DIR/mise-tasks/some-guard.sh";
-
-/// The exemption table as the document declares it, matching `DECLARED_SIBLING`.
 ///
-/// The case's OWN row rather than whichever the repository happens to carry.
-/// Reading the table from a document is what keeps its three directions writable
-/// now that the real one is EMPTY: as a module constant they became unreachable
-/// the moment CLOUD-1163's unit 9 removed the last row, and deleting those cases
-/// to fit would have been CLOUD-908's loss on the gate CLOUD-1310 just added.
-const DECLARED_ONE: &str = r#"{"mise-tasks/some-guard.sh": "CLOUD-1"}"#;
+/// It was `DECLARED_SIBLING` until CLOUD-1383: the module read an exemption table
+/// and this was the row that excused it. There is no table now, so the same
+/// command is simply a second decider and is refused.
+const SIBLING: &str = "$CLAUDE_PROJECT_DIR/mise-tasks/some-guard.sh";
 
-/// The EMPTY table — this repository's own state after unit 9.
-const DECLARED_NONE: &str = "{}";
-
-/// The two launcher hooks CLOUD-1314 removed, spelled as the launcher wrote them
-/// — with a directory, so the basename reduction is still exercised.
+/// The two launcher hooks, spelled as the launcher wrote them — with a directory,
+/// so the basename reduction is still exercised.
 ///
-/// No longer declared by anything: both were deleted from
-/// `~/.claude/launcher-settings.json` and both programs removed, so their rows
-/// went with them. Kept here because "these exact commands are refused if they
-/// return" is that row's acceptance clause, and asserting it needs the names.
+/// They were the exemption table's last two rows, tolerated because the launcher
+/// rewrites them at every session start and no commit here could clear them.
+/// CLOUD-1383 moved that from a licence to a fact about the environment, so they
+/// are refused here like any other second decider.
 const RETIRED_MERGED: [&str; 2] = [
     "~/.claude/session-start-git-identity.sh",
     "~/.claude/stop-hook-git-check.sh",
 ];
 
-/// A repository fixture carrying both real modules, plus the out-of-root
+/// A repository fixture carrying the real module, plus the out-of-root
 /// directory the merged row points at.
 ///
 /// One of each per case: these run in parallel and `git init` races on a shared
 /// directory.
 fn fixture(name: &str, committed: &str, merged: Option<&str>) -> (PathBuf, PathBuf) {
-    fixture_with(name, committed, merged, DECLARED_ONE)
-}
-
-/// The same, with the exemption table a case wants.
-///
-/// `fixture` defaults to one declared row because most cases wire
-/// `DECLARED_SIBLING` and are about what the table excuses. The empty table is
-/// spelled at the sites that mean it rather than defaulted into every other.
-fn fixture_with(
-    name: &str,
-    committed: &str,
-    merged: Option<&str>,
-    declared: &str,
-) -> (PathBuf, PathBuf) {
     let repo = scratch(&format!("harness-wiring-{name}"));
     write(&repo, "batten.toml", &config());
-    write(&repo, "policy/harness-declared.json", declared);
 
     // THE REAL MODULES, read off the tree rather than restated. A fixture copy
     // would drift from the thing that ships, which is the whole failure this
@@ -392,14 +339,14 @@ fn findings(output: &Output) -> String {
     stdout(output)
 }
 
-/// A wiring with every declared registration present and nothing else.
+/// A wiring carrying the mediator and nothing else, on both events.
 fn clean_committed() -> String {
-    wiring(&[MEDIATOR, DECLARED_SIBLING], &[MEDIATOR])
+    wiring(&[MEDIATOR], &[MEDIATOR])
 }
 
 fn clean_merged() -> String {
-    // THE MEDIATOR ALONE. Nothing else is declared on a merged surface any more,
-    // so this is what a clean launcher looks like after CLOUD-1314.
+    // THE MEDIATOR ALONE, which is what a clean surface is on either class now
+    // that nothing may be tolerated beside it.
     wiring(&[], &[MEDIATOR])
 }
 
@@ -417,49 +364,21 @@ fn a_correctly_wired_tree_is_clean() {
 }
 
 #[test]
-fn a_mediator_only_tree_with_an_empty_table_is_clean() {
-    // THIS REPOSITORY'S OWN STATE after CLOUD-1163's unit 9, and the case the
-    // whole campaign is pointed at: nothing registered but the mediator, and an
-    // exemption table with nothing in it.
-    //
-    // Asserted rather than assumed, because "no findings" over an empty table is
-    // also what a module that decides nothing produces — the dead-gate reading
-    // that `.claude/rules/policy-modules.md` opens with. Every other case here
-    // supplies a row, so without this one the empty table is never exercised at
-    // all, and `DECLARED_NONE` would be a constant naming a state nothing reaches.
-    let (repo, outside) = fixture_with(
-        "mediator-only",
-        &wiring(&[MEDIATOR], &[MEDIATOR]),
-        Some(&clean_merged()),
-        DECLARED_NONE,
-    );
-    let output = check(&repo, Some(&outside));
-    assert!(
-        output.status.success(),
-        "a mediator-only tree with no declaration reported: {}",
-        findings(&output)
-    );
-}
-
-#[test]
-fn a_committed_sibling_the_table_does_not_declare_is_refused() {
+fn a_committed_sibling_beside_the_mediator_is_refused() {
     // THE POSITIVE the whole consumer half exists for: the engine counts this
     // command and structurally will not name it, so nothing but a consumer's own
     // module can turn the count into a verdict.
+    //
+    // `SIBLING` was declared in the exemption table until CLOUD-1383 and passed
+    // here on that row. It is refused now, which is the change read from its own
+    // side: the same command, the same surface, and no table to excuse it.
     let (repo, outside) = fixture(
         "committed-sibling",
-        &wiring(
-            &[
-                MEDIATOR,
-                DECLARED_SIBLING,
-                "$CLAUDE_PROJECT_DIR/mise-tasks/other-guard.sh",
-            ],
-            &[MEDIATOR],
-        ),
+        &wiring(&[MEDIATOR, SIBLING], &[MEDIATOR]),
         Some(&clean_merged()),
     );
     let output = check(&repo, Some(&outside));
-    assert!(!output.status.success(), "an undeclared sibling passed");
+    assert!(!output.status.success(), "a sibling passed");
     assert!(
         findings(&output).contains(".claude/settings.json harness-wiring"),
         "wrong finding: {}",
@@ -475,11 +394,7 @@ fn the_finding_points_at_the_file_and_never_at_the_command() {
     let (repo, outside) = fixture(
         "pointer",
         &wiring(
-            &[
-                MEDIATOR,
-                DECLARED_SIBLING,
-                "$CLAUDE_PROJECT_DIR/mise-tasks/other-guard.sh",
-            ],
+            &[MEDIATOR, "$CLAUDE_PROJECT_DIR/mise-tasks/other-guard.sh"],
             &[MEDIATOR],
         ),
         Some(&clean_merged()),
@@ -506,7 +421,7 @@ fn a_stop_sibling_is_refused_too_so_the_scope_is_every_event() {
     let (repo, outside) = fixture(
         "stop-sibling",
         &wiring(
-            &[MEDIATOR, DECLARED_SIBLING],
+            &[MEDIATOR],
             &[MEDIATOR, "$CLAUDE_PROJECT_DIR/mise-tasks/other-guard.sh"],
         ),
         Some(&clean_merged()),
@@ -521,65 +436,20 @@ fn a_stop_sibling_is_refused_too_so_the_scope_is_every_event() {
 }
 
 #[test]
-fn a_committed_row_matching_nothing_is_stale() {
-    // The table's other direction, and the one that keeps a landed retirement
-    // from leaving a licence behind for the next command with a similar path.
-    let (repo, outside) = fixture(
-        "stale",
-        &wiring(&[MEDIATOR], &[MEDIATOR]),
-        Some(&clean_merged()),
-    );
-    let output = check(&repo, Some(&outside));
-    assert!(!output.status.success(), "a spent declaration survived");
-    // A COUNT AND NO PATH, which is how this is told from the sibling finding
-    // above on a surface that renders no token: the table's own two directions
-    // point at nothing openable, so they render as a bare count.
-    assert!(
-        findings(&output).contains("1 harness-wiring"),
-        "wrong finding: {}",
-        findings(&output)
-    );
-    assert!(
-        !findings(&output).contains(".claude/settings.json harness-wiring"),
-        "a stale declaration reported as a sibling: {}",
-        findings(&output)
-    );
-}
-
-#[test]
-fn a_tree_with_no_wiring_surface_is_not_stale() {
-    // THE COULD-NOT-LOOK GUARD, and this case exists because its absence shipped.
-    // Without `committed_read > 0`, a declaration matches nothing in a tree that
-    // carries no wiring surface at all, and the module reports a spent licence
-    // over a tree it never looked at. Measured 2026-09-01: `cli.rs`'s fixture
-    // repos have no `.claude/settings.json`, and four of its cases went red with
-    // `1 harness-wiring` on the line above their own expected finding.
+fn a_tree_with_no_wiring_surface_is_clean() {
+    // COULD-NOT-LOOK IS NOT A FINDING, and this case exists because the opposite
+    // shipped once. Measured 2026-09-01, before CLOUD-1383 deleted the exemption
+    // table: a declared row matched nothing in a tree carrying no wiring surface
+    // at all, so the module reported a spent licence over a tree it never looked
+    // at — `cli.rs`'s fixture repos have no `.claude/settings.json` and four of
+    // its cases went red with `1 harness-wiring` above their own expected finding.
     //
-    // In the compiled tier rather than only in the module's own `test_` rules,
-    // because that is what makes the mutation on the guard land somewhere a
-    // declared `#MUTANT-SUITE` case can turn red (CLOUD-1267).
-    // A DECLARED ROW IS WHAT MAKES THE GUARD LOAD-BEARING, and its absence is why
-    // `stale-unguarded` SURVIVED. `declared` stopped being a Rego constant when
-    // CLOUD-1163 made it `policy/harness-declared.json`, and this fixture never
-    // wrote that document — so the table was undefined, `stale` had nothing to
-    // iterate, and the mutation on `committed_read > 0` changed no answer. The
-    // case asserted a clean tree and would have asserted one over a module that
-    // had stopped guarding.
-    //
-    // The row deliberately matches nothing wired: that is the state `stale`
-    // refuses, so the guard is the ONLY thing keeping this tree clean.
+    // The table is gone and with it the direction that could fire here, so the
+    // property is now structural rather than guarded. The case stays because it
+    // is what a fixture repository looks like, and a module reporting anything
+    // over one is a finding about a tree nobody judged.
     let repo = scratch("harness-wiring-no-surface");
     write(&repo, "batten.toml", &config());
-    write(
-        &repo,
-        "policy/harness-declared.json",
-        // A COMMITTED row — it carries a `/` — because `enforced` splits on exactly
-        // that: a slash-bearing pattern is judged where a COMMITTED surface was
-        // read and a bare basename where a MERGED one was. A basename here takes
-        // the `merged_read` arm, which this guard's mutation does not touch, so
-        // the case would still not observe it.
-        "{\n  \"mise-tasks/matches-nothing.sh\": \"CLOUD-1\"\n}\n",
-    );
     let module = std::fs::read_to_string(at_root("policy/harness-wiring.rego")).unwrap();
     write(&repo, "harness-wiring.rego", &module);
     git_in(&repo, &["init", "-q", "-b", "main", "."]);
@@ -592,119 +462,21 @@ fn a_tree_with_no_wiring_surface_is_not_stale() {
     );
 }
 
-/// Write one `issue-read` receipt into the fixture's own receipt store.
-///
-/// The store is under the GIT DIRECTORY, never in the tree, which is what makes
-/// this fact per-checkout and empty on any runner. The body is `[[mint]]
-/// issue-read`'s: `{id} {updatedAt} {now} {digest} {status} {ready}`, so field 4
-/// is the status and field 2 is when the reading was taken.
-fn receipt(repo: &Path, key: &str, status: &str, taken: u64) {
-    let store = repo.join(".git/batten-receipts");
-    std::fs::create_dir_all(&store).expect("receipt store");
-    std::fs::write(
-        store.join(format!("issue-read.{key}")),
-        format!("{key} 2026-01-01 {taken} abcd1234 {status} ready\n"),
-    )
-    .expect("write receipt");
-}
-
-/// Seconds since the epoch, for a receipt written "just now".
-fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
-}
+// THE FOUR `input.tree.minted` CASES MOVED RATHER THAN WENT (CLOUD-1383).
+//
+// They drove CLOUD-1310's `spent` direction — a declared row whose owning issue
+// had closed — over a real receipt in a real store, which is the only tier that
+// can show the ENGINE builds `input.tree.minted` at all. This module no longer
+// reads that fact, so the cases have no predicate here to be about.
+//
+// The fact is unmoved and so is its coverage: `crates/batten/tests/it/minted_facts.rs`
+// carries all four over a fixture module whose whole subject is the projection.
+// Deleting them with the predicate would have been the coverage loss dressed as
+// cleanup this repository refuses, on the engine half of a row that landed a day
+// earlier.
 
 #[test]
-fn the_engine_reads_a_closed_owner_off_a_minted_receipt() {
-    // CLOUD-1310'S WHOLE POINT, and it is only decidable over the compiled binary:
-    // a `with input as` case fabricates `input.tree.minted` and so passes over an
-    // engine that never builds it. This writes a real receipt into a real store and
-    // asks the shipped `check` to find it.
-    //
-    // The tree is otherwise CLEAN — every declared row matches something wired —
-    // so the only thing that can redden this run is the owner's status.
-    let (repo, outside) = fixture("owner-closed", &clean_committed(), Some(&clean_merged()));
-    receipt(&repo, "CLOUD-1", "done", now());
-    let output = check(&repo, Some(&outside));
-    assert!(
-        !output.status.success(),
-        "a row whose owner has closed was allowed: {}",
-        findings(&output)
-    );
-    // A COUNT, never the key: the table's directions point at nothing openable.
-    //
-    // ONE, because the fixture's table carries one row naming this owner.
-    //
-    // It read TWO against the real table when both merged rows named CLOUD-1314,
-    // then ONE when they were deleted with their subjects. That it moved twice is
-    // exactly why the table is a document now: a case asserting over whichever
-    // rows the repository happens to carry is a case that breaks whenever the
-    // repository changes, for reasons that are not about the predicate.
-    assert!(
-        findings(&output).contains("1 harness-wiring"),
-        "wrong finding: {}",
-        findings(&output)
-    );
-    assert!(
-        !findings(&output).contains(".claude/settings.json harness-wiring"),
-        "a spent declaration reported as a sibling: {}",
-        findings(&output)
-    );
-}
-
-#[test]
-fn an_open_owner_is_not_spent() {
-    // The other direction, and without it the case above passes over a module that
-    // fires on any reading at all.
-    let (repo, outside) = fixture("owner-open", &clean_committed(), Some(&clean_merged()));
-    receipt(&repo, "CLOUD-1", "in-progress", now());
-    let output = check(&repo, Some(&outside));
-    assert!(
-        output.status.success(),
-        "an open owner was reported spent: {}",
-        findings(&output)
-    );
-}
-
-#[test]
-fn a_reading_older_than_the_declared_bound_does_not_answer() {
-    // THE AGE BOUND, over the compiled binary, which is the one thing the module's
-    // own tier cannot reach: it fabricates the projection, so it cannot show that
-    // the ENGINE dropped a stale reading before the module ever saw it.
-    //
-    // This is why the fact is not a `captured` reduction. That store is keyed by
-    // content and carries no clock, so a mutable field answers from whichever read
-    // sorts first by digest — here, a status read eight days ago would still say
-    // `done` forever.
-    let (repo, outside) = fixture("owner-stale", &clean_committed(), Some(&clean_merged()));
-    receipt(&repo, "CLOUD-1", "done", now() - 8 * 86_400);
-    let output = check(&repo, Some(&outside));
-    assert!(
-        output.status.success(),
-        "a reading past the declared bound still answered: {}",
-        findings(&output)
-    );
-}
-
-#[test]
-fn no_receipt_store_at_all_is_not_spent() {
-    // COULD-NOT-LOOK, and it is the ORDINARY state: the store is per-checkout, so
-    // every CI runner and every fresh clone has none. A module reading that absence
-    // as a closed owner would redden everywhere for a state nobody can fix — and an
-    // engine returning an empty MAP rather than nothing would make that the module's
-    // problem to guard rather than the fact's.
-    let (repo, outside) = fixture("owner-unread", &clean_committed(), Some(&clean_merged()));
-    let output = check(&repo, Some(&outside));
-    assert!(
-        output.status.success(),
-        "a tree whose receipt store does not exist reported: {}",
-        findings(&output)
-    );
-}
-
-#[test]
-fn a_merged_registration_the_table_does_not_declare_is_refused() {
+fn a_merged_registration_beside_the_mediator_is_refused() {
     // The out-of-root half of the positive: this file is outside the checkout, so
     // no in-tree gate can see it and `input.tree.external` is the only route.
     let (repo, outside) = fixture(
@@ -713,7 +485,7 @@ fn a_merged_registration_the_table_does_not_declare_is_refused() {
         Some(&wiring(&[], &["~/.claude/some-other-hook.sh"])),
     );
     let output = check(&repo, Some(&outside));
-    assert!(!output.status.success(), "an undeclared merged hook passed");
+    assert!(!output.status.success(), "a merged sibling passed");
     assert!(
         findings(&output).contains("harness-wiring"),
         "wrong finding: {}",
@@ -722,19 +494,20 @@ fn a_merged_registration_the_table_does_not_declare_is_refused() {
 }
 
 #[test]
-fn the_retired_launcher_hooks_are_refused_if_they_return() {
-    // CLOUD-1314'S ACCEPTANCE, over the compiled binary rather than only in the
+fn the_launcher_hooks_are_refused_rather_than_tolerated() {
+    // CLOUD-1383'S ACCEPTANCE, over the compiled binary rather than only in the
     // module's own tier.
     //
-    // Both hooks were removed from `~/.claude/launcher-settings.json` and both
-    // programs deleted, so their `declared` rows went with them — a row matching
-    // nothing is what `stale` refuses, which is why the deletion had to be a pair.
-    // Nothing excuses them now, so re-provisioning either is refused like any other
-    // second decider on a hook surface.
+    // These two were the exemption table's last rows. They were tolerated because
+    // the launcher rewrites them at every session start, so no commit in this
+    // repository could clear them and refusing them would have meant a gate red on
+    // a condition nobody in the container could fix.
     //
-    // Without this case, deleting the rows would be indistinguishable from having
-    // quietly stopped watching those two commands — which is the permanent-exemption
-    // shape arriving by the opposite route from `spent`.
+    // The fact is what moved, not the subject: a container states its home
+    // directory is disposable and the session-start repair removes them before
+    // this gate reads the surface; a developer machine states nothing, keeps them,
+    // and is TOLD. So the module refuses them, which is the difference between a
+    // report and a licence.
     let (repo, outside) = fixture(
         "retired-return",
         &clean_committed(),
@@ -792,11 +565,7 @@ fn the_committed_half_survives_an_absent_merged_surface() {
     let (repo, _outside) = fixture(
         "absent-merged",
         &wiring(
-            &[
-                MEDIATOR,
-                DECLARED_SIBLING,
-                "$CLAUDE_PROJECT_DIR/mise-tasks/other-guard.sh",
-            ],
+            &[MEDIATOR, "$CLAUDE_PROJECT_DIR/mise-tasks/other-guard.sh"],
             &[MEDIATOR],
         ),
         None,
@@ -837,9 +606,9 @@ fn a_wrapper_that_reaches_the_mediator_is_not_a_second_decider() {
         "wrapper",
         &clean_committed(),
         // The wrapper ALONE. It used to carry the two launcher hooks beside it,
-        // which was fine while their rows declared them; CLOUD-1314 deleted both
-        // rows with their subjects, so including them here would now be testing
-        // the stray predicate instead of the wrapper one.
+        // which was fine while the exemption table declared them; there is no
+        // table since CLOUD-1383, so including them here would test the stray
+        // predicate instead of the wrapper one.
         Some(&wiring(
             &[],
             &["mise exec -- batten hook --harness claude-code"],

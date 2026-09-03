@@ -5616,7 +5616,6 @@ documents = [
   ".github/hooks/batten.json",
   ".gemini/settings.json",
   ".codex/hooks.json",
-  "policy/harness-declared.json",
 ]
 module = "policy/harness-wiring.rego"
 severity = "deny"
@@ -5654,27 +5653,6 @@ path = ".claude/launcher-settings.json"
 id = "harness-gemini-settings"
 root = "HOME"
 path = ".gemini/settings.json"
-
-# THE OWNER'S STATUS, off a receipt the mediated boundary already wrote
-# (CLOUD-1310). `declared` names the issue that owns each row's retirement, and a
-# row whose owner has CLOSED is the permanent exemption the table exists to
-# refuse -- measured on this branch, where all three rows named issues that had
-# shipped. `hooks-wiring-check` used to decide that from a `get_issue` payload a
-# caller piped in; a tree-scoped module has no stdin, so CLOUD-1160 retired the
-# predicate with no successor and this row is the successor.
-#
-# The indices are `[[mint]] issue-read`'s body read positionally:
-# `{id} {updatedAt} {now} {digest:description} {slug:status} {authority:ready}`,
-# so `{now}` is 2 and `{slug:status}` is 4. Seven days because the board moves in
-# days and a reading older than a working week is not evidence about now -- and
-# ABSENT is could-not-look, which on a CI runner is every row, so the predicate
-# refuses narrowly and abstains widely.
-[[rule.minted]]
-id = "issue-status"
-mint = "issue-read"
-field = 4
-recency = 2
-max_age_days = 7
 
 # CLOUD-1247, and the SIBLING of the row above rather than a duplicate of it.
 # `harness-wiring` reads the MERGED settings under `$HOME` and decides which
@@ -6947,9 +6925,8 @@ wiring = [".claude/settings.json"]
 # a state nobody in the container can fix, which is the shape a `declared` row
 # exists to carry instead.
 #
-# The two rows are therefore back in `policy/harness-declared.json` naming
-# CLOUD-1314, which is open and owns their removal. The flag goes back to
-# undeclared -- the honest state, and the one the capability shipped in.
+# The flag goes back to undeclared -- the honest state, and the one the capability
+# shipped in.
 #
 # WHAT REPLACES IT IS A REPAIR, NOT A SECOND VERDICT (CLOUD-1324), and it lives
 # in `[[startup]]` below rather than here. The reason `exclusive` cannot stand is
@@ -6960,8 +6937,15 @@ wiring = [".claude/settings.json"]
 #
 # It cannot make THIS session's wiring true -- a host reads its hooks when the
 # session begins -- so the at-load record stays the honest answer about what was
-# loaded, and `policy/harness-declared.json` still carries the two rows for
-# CLOUD-1314 to close.
+# loaded.
+#
+# AND THE EXEMPTION TABLE THAT CARRIED THE TWO ROWS IS GONE (CLOUD-1383). They
+# lived in `policy/harness-declared.json` because nothing in the container ever
+# said whose home directory it was, so the only way to keep the gate green over a
+# registration no commit here could clear was to tolerate it by name.
+# `BATTEN_ENVIRONMENT=disposable` states the fact instead: the session-start
+# repair removes them where the environment says it may, and reports them where it
+# does not. `harness-wiring` refuses them like any other second decider now.
 [[hook.handler]]
 id = "mcp-attach-check"
 on = "user-prompt-submit"
@@ -8510,13 +8494,31 @@ id = "module read first"
 kind = "document"
 target = "policy/harness-wiring.rego"
 
+# --- three tombstones, and the arm is `withdrawn` because nothing replaced them
+#
+# CLOUD-1383. These three watched `policy/harness-declared.json`, the table of
+# tolerated hook registrations: a row naming no issue, a row matching nothing
+# wired, a row whose issue had closed. All three existed to stop a licence
+# becoming permanent, and the table itself is gone — so what they refused is no
+# longer refused by anything, which is exactly the case CLOUD-1114's `withdrawn`
+# arm exists for. Naming a `successor` would be a false claim about where the
+# class went; deleting the rows would lose the ability to explain a token a
+# reader may still meet in an older transcript.
+
 [[verdict]]
 id = "hook declare unnamed"
 gloss = "a declared hook sibling names no issue, so it records a decision and nobody to ask"
 class = """
-A declaration with no owner is worse than none: it reads as a decision someone made and records nobody to ask, which is how a temporary exemption becomes permanent. Every row in the table is a registration this repository refuses and has not yet retired, so each names the issue that owns its retirement. Add the key, or delete the row and retire the command.
+A declaration with no owner is worse than none: it reads as a decision someone made and records nobody to ask, which is how a temporary exemption becomes permanent. Every row in the table was a registration this repository refused and had not yet retired, so each named the issue that owned its retirement.
 """
+withdrawn = "CLOUD-1383 removed the exemption table this judged. `BATTEN_ENVIRONMENT=disposable` states whose home directory this is, so a container's session-start repair removes a sibling registration and a developer machine reports it — neither declares a row, so no row can name no owner."
 
+# A TOMBSTONE STILL OWES A ROUTE, and the route is the module rather than a
+# command: nothing raises this any more, so there is nothing to run, and what a
+# reader meeting the historical token needs is the block that says why the whole
+# direction went. `verdict::validate` requires a route on every row and does not
+# exempt a tombstone, which is the right direction — a class a reader can look up
+# and that then hands them nothing is the bare no CLOUD-122 refuses.
 [[verdict.route]]
 id = "module read first"
 kind = "document"
@@ -8526,8 +8528,9 @@ target = "policy/harness-wiring.rego"
 id = "hook declare stale"
 gloss = "a declared hook sibling matches nothing wired, so it is a licence with no subject"
 class = """
-The table only ever grows unless a retirement deletes its own row, and a row left behind is a licence the next command with a similar path inherits silently. Delete the row: its subject is gone. A row naming a MERGED surface is unenforced where no merged surface was read, so this is never raised on a runner that has no launcher file — an absent surface is could-not-look, not a clean one.
+The table only ever grew unless a retirement deleted its own row, and a row left behind was a licence the next command with a similar path inherited silently. A row naming a MERGED surface was unenforced where no merged surface was read, so this was never raised on a runner with no launcher file — an absent surface is could-not-look, not a clean one.
 """
+withdrawn = "CLOUD-1383 removed the exemption table this judged. A retirement leaves no licence behind when there is no table to leave it in."
 
 [[verdict.route]]
 id = "module read first"
@@ -8538,8 +8541,9 @@ target = "policy/harness-wiring.rego"
 id = "hook declare spent"
 gloss = "a declared hook sibling names an issue that has closed, so its licence outlived its owner"
 class = """
-Every row in the table is a registration this repository refuses and has not yet retired, and the issue it names is what will retire it. When that issue CLOSES and the command is still wired, the licence has outlived the work it was waiting on -- which is the permanent exemption the table's other two directions exist to prevent, arriving by the one route they cannot see. Re-point the row at the issue that actually owns the removal, or retire the command and delete the row. A row nobody has read the owner of is NOT raised: the receipt store is per-checkout and empty on any runner, so absence here is could-not-look and never agreement.
+Every row in the table was a registration this repository refused and had not yet retired, and the issue it named was what would retire it. When that issue CLOSED and the command was still wired, the licence had outlived the work it was waiting on — the permanent exemption the table's other two directions existed to prevent, arriving by the one route they could not see. A row nobody had read the owner of was NOT raised: the receipt store is per-checkout and empty on any runner, so absence there was could-not-look and never agreement.
 """
+withdrawn = "CLOUD-1383 removed the exemption table this judged. A row cannot outlive its owner when there is no row."
 
 [[verdict.route]]
 id = "module read first"

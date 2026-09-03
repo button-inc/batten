@@ -65,90 +65,40 @@ rules contains "harness-wiring"
 # and allowed every mediated call silently.
 mediator := "batten"
 
-# What is wired today that should not be, naming the issue that owns its
-# retirement. This is the gate going red on the state it exists to refuse -- one
-# that shipped already-green over it would be a gate nothing can fail -- with the
-# current registration recorded rather than tolerated silently.
+# THERE IS NO EXEMPTION TABLE, AND ITS ABSENCE IS THE MECHANISM (CLOUD-1383).
 #
-# THREE rules keep the table from becoming a permanent exemption, and all three
-# are predicates below rather than prose: a row naming no issue is itself a
-# refusal (`unowned`), a row matching nothing wired is a refusal too (`stale`),
-# and a row whose issue has CLOSED is a refusal as well (`spent`) -- so a
-# retirement that lands must delete its row rather than leave a licence behind
-# for the next command with a similar path.
+# This module used to read `policy/harness-declared.json`: one row per tolerated
+# registration naming the issue that owned removing it, with three directions
+# watching the table itself -- `unowned` for a row naming no issue, `stale` for a
+# row matching nothing wired, `spent` for a row whose issue had CLOSED. All three
+# existed to stop a licence becoming permanent. That is a real failure and this
+# was the wrong layer to answer it at.
 #
-# THE THIRD ONE WAS MISSING AND ALL THREE ROWS WERE IN THE STATE IT REFUSES.
-# Measured 2026-09-02: `run-shape-guard.sh` named CLOUD-821 (Done 2026-08-28) and
-# both merged rows named CLOUD-605 (Done 2026-08-23). `hooks-wiring-check` used to
-# hold that direction from a `get_issue` payload a caller piped in; a tree-scoped
-# module has no stdin, so CLOUD-1160 retired the predicate with no successor and
-# nothing has watched it since. CLOUD-1310's `input.tree.minted` is the successor.
+# THE TABLE WAS A NEGOTIATION OVER A FACT NOBODY HAD STATED. Batten repairs the
+# hook surfaces it owns; whether a repair may REMOVE what it finds beside its own
+# registration is not a property of the finding. It is a property of whose home
+# directory this is, and with no way to ask, the module had to tolerate siblings
+# row by row and then police its own tolerance.
 #
-# The re-pointed owners are each the issue that owns the REMOVAL rather than the
-# one that recorded something about it -- the distinction the CLOUD-605 rows got
-# wrong. That issue closed by recording a PRECEDENCE (non-negotiable rule 8), which
-# stops the hook's remedy from being followed and cannot remove a program living
-# outside this repository.
+# It also drifted from the repair within a day, in the direction that reads
+# healthy: `[[hook.handler]] session-wiring` ran `batten wiring reclaim` at every
+# session start, REMOVING exactly what the table declared must be present, while
+# `wiring reclaim --check` reported nothing to do and `doctor hooks` reported
+# everything wired. Two instruments green and this gate refusing (CLOUD-1377).
+# Measured 2026-09-02, that cost one session three wrong diagnoses, a hand-write
+# into a launcher-owned file, and an escalation asserting the repository was
+# structurally broken while `main` had already dropped the rows.
 #
-# AND THE FIRST ROW WAS RE-POINTED TWICE, because the first attempt made the same
-# mistake one row over. It named CLOUD-1108 as "the open row that owns why this
-# guard cannot move yet" -- a blocker that row had already WITHDRAWN. Its
-# re-derivation of 2026-08-31 says its own measured instance is discharged: all
-# four families have a landed Rego successor (`policy/run-shape.rego` raises three,
-# `policy/task-substitution.rego` the fourth), so the file is deletable WHOLE,
-# which is the ratchet's one admitted disposition. Citing it here would have
-# restated a blocker its own body refutes -- CLOUD-1166's class, which is
-# classifying a blocker instead of reading it.
+# `BATTEN_ENVIRONMENT=disposable` removes the negotiation rather than adjudicating
+# it. A container states that its `$HOME` is disposable and the session-start
+# repair takes the siblings; a developer machine states nothing, the same walk
+# reports them and removes none. Neither needs a row, so a retirement leaves no
+# licence behind for the next command with a similar path -- which is the whole of
+# what those three directions bought.
 #
-# CLOUD-1163 owns the deletion, as its unit 9, and is In Progress. That row
-# partitions its work into units and declines to discharge two of them together,
-# so this row points at the unit rather than being discharged here.
-#
-# PARAPHRASED, NEVER QUOTED, and the change is the whole subject of
-# `pr-partition-restated`. This block used to reproduce that issue's own §1 and §2
-# verbatim -- one row's internal arrangement, set in the register of ordinary
-# normative prose, with nothing marking it as quoted. Measured 2026-09-02: a
-# planning turn read it as repository convention and partitioned its plan against
-# AGENTS.md's branch clause, which it had loaded in the same turn. AGENTS.md is the
-# one authority on how work lands here; a sentence anywhere else stating a
-# different arrangement is a competing rule rather than a restatement, because
-# these files are read by an agent that acts on them without re-deriving.
-#
-# THE TWO MERGED ROWS ARE BACK, BECAUSE THEIR SUBJECTS NEVER LEFT (CLOUD-1079).
-# CLOUD-1314 removed them on the premise that both launcher hooks were gone from
-# `~/.claude/launcher-settings.json` and both programs deleted, so the rows would
-# match nothing and `stale` would refuse them.
-#
-# The premise does not survive a session boundary, and `batten.toml` says so at its
-# own site: these two are "launcher-provisioned and rewritten at every session
-# start, so no commit here can clear them". Measured 2026-09-02 — both files
-# present with mtime 04:22, three hours AFTER the commit that deleted their rows at
-# 01:18, and the launcher registering both again.
-#
-# What the deletion bought was therefore not a closed exemption but `harness-wiring`
-# red in every session, on a condition no commit in this repository can reach. The
-# rows name CLOUD-1079, which is the row `batten.toml` already identifies as owning
-# the environment half; `spent` and `stale` still watch them, so they leave when the
-# launcher stops writing them and not before.
-# THE TABLE IS A DOCUMENT, NOT A CONSTANT, and that is what keeps its three
-# directions testable once it is EMPTY -- which is the campaign's goal state and is
-# where this repository now is.
-#
-# Measured 2026-09-02 while retiring `run-shape-guard.sh`, the table's last row: as
-# a Rego constant, an empty `declared` made `unowned`, `stale` and `spent`
-# unreachable, and `policy test` reported three cases red with no way to write them
-# -- a module constant cannot be supplied by `with input as`. Deleting those cases
-# to make the retirement fit would have been CLOUD-908's exact failure: coverage
-# loss dressed as cleanup, on the gate CLOUD-1310 had just added.
-#
-# Reading it as a declared document costs no engine change and gives the fixtures a
-# way in. It is also the better shape independently: an exemption table is data a
-# gate reads, not part of the gate.
-#
-# ABSENT IS COULD-NOT-LOOK. A tree carrying no such file declares no exemption,
-# which is what an empty object means too -- the difference between them is `unread`
-# below, and neither is "everything is excused".
-declared := input.tree.documents["policy/harness-declared.json"]
+# What stays is the part that was never the table's: a second decider registered
+# beside the mediator is refused, on both surface classes. That rule is AGENTS.md's
+# own and CLOUD-312 measured the alternative.
 
 # The committed hook surfaces, one per harness in `Harness::ALL` that has one.
 #
@@ -221,16 +171,7 @@ basename(command) := parts[count(parts) - 1] if {
 	parts := split(command, "/")
 }
 
-# How many merged surfaces were actually READ.
-#
-# Zero is COULD-NOT-LOOK, not "nothing is registered there": most machines carry
-# no launcher file and a CI runner never does. Only `stale` turns on it.
-merged_read := count([id |
-	some id in merged_ids
-	input.tree.external[id]
-])
-
-# A registration that is neither the mediator nor declared.
+# A registration that is not the mediator.
 #
 # `contains` rather than equality, deliberately: the mediator is invoked directly
 # since CLOUD-824, but a consumer may still legitimately reach it through a
@@ -238,9 +179,6 @@ merged_read := count([id |
 # rather than the spelling of the one that is there.
 stray(command) if {
 	not contains(command, mediator)
-	every pattern, _ in declared {
-		not contains(command, pattern)
-	}
 }
 
 # One finding per committed file, pointing at the FILE rather than at the command.
@@ -283,155 +221,6 @@ merged_strays contains command if {
 	stray(command)
 }
 
-# A declaration with no owner is worse than none: it reads as a decision someone
-# made and records nobody to ask.
-#
-# The key expression is the registry's `ready-issue-key`, never a literal here: a
-# tracker's vocabulary is the consumer fact `[[pattern]]` exists to give one home,
-# and every other gate that recognises a key reads the same row.
-#
-# BINDING IT FIRST IS THE COULD-NOT-LOOK ARM. Where no row is supplied the
-# expression is undefined, the body does not hold, and no row is called unowned --
-# where an undefined regex read as a failed match would call every declared row
-# unowned, which is a verdict about the registry dressed as one about the table.
-violation contains {
-	"rule": "harness-wiring",
-	"verdict": "hook declare unnamed",
-	"subjects": [{"count": count(unowned)}],
-} if {
-	count(unowned) > 0
-}
-
-unowned contains pattern if {
-	some pattern, key in declared
-	expression := data.batten.patterns["ready-issue-key"]
-	not regex.match(expression, key)
-}
-
-# How many committed wiring surfaces were actually READ.
-#
-# Zero is COULD-NOT-LOOK, not "nothing is wired here". `stale` is the only
-# predicate whose verdict turns on it, for the reason recorded there.
-committed_read := count([path |
-	some path in committed
-	input.tree.documents[path]
-])
-
-# The other direction: a declared row that matches nothing wired. Without it the
-# table only ever grows, and a retirement leaves behind a licence that the next
-# command with a similar path inherits silently.
-#
-# UNENFORCED WHERE NO SURFACE WAS READ, and this guard is the one the deleted
-# shell carried as `merged_read` and this module lost when the merged half moved
-# out. Measured 2026-09-01: without it, `cli.rs`'s fixture repos -- which carry no
-# `.claude/settings.json` at all -- reported `1 harness-wiring`, because a
-# declaration matches nothing in a tree where nothing was looked at. That is
-# could-not-look rendered as a spent licence, which is the collapse the whole
-# `missing` channel exists to prevent.
-violation contains {
-	"rule": "harness-wiring",
-	"verdict": "hook declare stale",
-	"subjects": [{"count": count(stale)}],
-} if {
-	count(stale) > 0
-}
-
-stale contains pattern if {
-	some pattern, _ in declared
-	enforced(pattern)
-	not matches_something(pattern)
-}
-
-# A COMMITTED row (it carries a `/`) is judged where a committed surface was read;
-# a MERGED row (a basename) where a merged surface was. The discriminator is the
-# shape the table already uses, so it is one already earning its keep rather than
-# a second list to keep in step.
-enforced(pattern) if {
-	contains(pattern, "/")
-	committed_read > 0
-}
-
-enforced(pattern) if {
-	not contains(pattern, "/")
-	merged_read > 0
-
-	# READ IS NOT THE SAME AS CARRIED, and `merged_read` alone cannot tell them
-	# apart (CLOUD-1340). It counts surfaces that RESOLVED; a host that writes a
-	# wiring file with no `hooks` key at all resolves one and carries nothing, so
-	# every merged row became enforced against a set with nothing in it to match
-	# and the whole table went stale at once.
-	#
-	# Measured 2026-09-02 in this container after a restart:
-	# `~/.claude/launcher-settings.json` present and hookless, the other three
-	# merged ids absent, `merged_read` = 1, `merged_commands` = {} -- and
-	# `harness-wiring` reported 2, one per row of `policy/harness-declared.json`,
-	# while `stop-hook-git-check.sh` (which those rows license) was demonstrably
-	# still running, from a surface outside the declared four.
-	#
-	# That is could-not-look rendered as a spent licence, which is the exact
-	# collapse the comment above this predicate says the `merged_read` guard exists
-	# to prevent -- so this carries that argument one step further rather than
-	# introducing a new one. A surface set carrying NO commands cannot distinguish
-	# "this row's subject was retired" from "nothing was looked at", and only the
-	# first is a finding. The remedy the bare refusal appears to name is worse than
-	# the defect: dropping the two rows turns a correct licence into a future
-	# `hook wire duplicate` the moment a host wires those scripts again.
-	#
-	# IT DOES NOT WEAKEN THE STALE DIRECTION, which is the test of the change. As
-	# soon as any merged surface carries a single command every merged row is
-	# enforced again, and a row matching nothing still fires --
-	# `test_a_merged_row_matching_nothing_is_stale` is unmoved. What stops firing is
-	# only the case where there was nothing to match against at all.
-	count(merged_commands) > 0
-}
-
-matches_something(pattern) if {
-	some entry in commands
-	contains(entry.command, pattern)
-}
-
-matches_something(pattern) if {
-	some command in merged_commands
-	contains(command, pattern)
-}
-
-# THE THIRD DIRECTION (CLOUD-1310): a row whose owning issue has CLOSED.
-#
-# `stale` catches a licence whose SUBJECT is gone. This catches one whose OWNER is
-# gone, which is the same permanent exemption arriving by the route `stale` cannot
-# see: the command is still wired, so the row matches something, and the issue that
-# was going to retire it has shipped. All three rows of this table were in exactly
-# that state when this predicate was written, which is why it is here rather than
-# in a follow-up.
-#
-# `input.tree.minted` is a field of a receipt the MEDIATED boundary already wrote
-# when somebody read the issue -- the engine fetches nothing and this module cannot
-# make it. That is the whole reason this is decidable on the tree surface at all.
-violation contains {
-	"rule": "harness-wiring",
-	"verdict": "hook declare spent",
-	"subjects": [{"count": count(spent)}],
-} if {
-	count(spent) > 0
-}
-
-# ABSENT IS COULD-NOT-LOOK, AND HERE IT IS THE ORDINARY STATE. The receipt store
-# is under the git directory, is never committed, and is empty on every CI runner
-# and every fresh clone -- so a key nobody has read simply does not appear, the
-# body does not hold, and the row is not called spent. Reading that absence as
-# "the owner is open" would be the false green this fact family exists to refuse,
-# and reading it as spent would redden every runner for a state nobody can fix.
-#
-# Binding the expression FIRST is `unowned`'s could-not-look arm for the same
-# reason: an undefined pattern must abstain rather than match nothing, which would
-# call every row's owner open.
-spent contains pattern if {
-	some pattern, key in declared
-	expression := data.batten.patterns["closed-issue-status"]
-	status := input.tree.minted["issue-status"][key]
-	regex.match(expression, status)
-}
-
 # The could-not-look clause `.claude/rules/policy-modules.md` requires, and it is
 # writable now that `input.tree.missing` carries a CAUSE (CLOUD-1309). Until this
 # change the channel was an array of names, so a module could see THAT a declared
@@ -463,13 +252,6 @@ judged(name) if {
 	name in committed
 }
 
-# The exemption table itself. A file that EXISTS and will not parse leaves the
-# module with no table at all, which reads as "nothing is declared" and would
-# silently excuse nothing while looking clean.
-judged(name) if {
-	name == "policy/harness-declared.json"
-}
-
 judged(name) if {
 	name in merged_ids
 }
@@ -482,69 +264,32 @@ judged(name) if {
 # which is why `crates/batten/tests/it/harness_wiring.rs` exists over the compiled
 # binary. CLOUD-1307 is that class landed and live in this module's own sibling.
 
-# The exemption table a case declares, as the engine projects the document.
-#
-# EVERY fixture supplies one, because reading it from a document is what makes the
-# table's own three directions writable at all once the real table is empty.
-table(rows) := {"tree": {"documents": {"policy/harness-declared.json": rows}}}
-
-wired_only(pre_tool, stop) := {"tree": {"documents": {".claude/settings.json": {"hooks": {
+wired(pre_tool, stop) := {"tree": {"documents": {".claude/settings.json": {"hooks": {
 	"PreToolUse": [{"hooks": [{"command": command} | some command in pre_tool]}],
 	"Stop": [{"hooks": [{"command": command} | some command in stop]}],
 }}}}}
 
-# A committed surface with an EMPTY table, which is this repository's real state.
-wired(pre_tool, stop) := object.union(wired_only(pre_tool, stop), table({}))
-
-# The same, with the rows a case needs declared.
-wired_with(pre_tool, stop, rows) := object.union(wired_only(pre_tool, stop), table(rows))
-
 # A merged surface carrying the commands given, under the launcher's id.
-launcher_only(commands) := {"tree": {"external": {"harness-launcher-settings": {"hooks": {"Stop": [{"hooks": [
+launcher(commands) := {"tree": {"external": {"harness-launcher-settings": {"hooks": {"Stop": [{"hooks": [
 {"command": command} |
 	some command in commands
 ]}]}}}}}
 
-launcher(commands) := object.union(launcher_only(commands), table({}))
-
-launcher_with(commands, rows) := object.union(launcher_only(commands), table(rows))
-
-# Both surface classes at once, which is the only shape that can exercise the
-# STALE union: the table declares one committed row and two merged ones, and each
-# is judged only where its own surface class was read.
+# Both surface classes at once.
 whole(pre_tool, stop, merged) := object.union(wired(pre_tool, stop), launcher(merged))
-
-whole_with(pre_tool, stop, merged, rows) := object.union(
-	object.union(wired_only(pre_tool, stop), launcher_only(merged)),
-	table(rows),
-)
 
 verdicts := {v.verdict | some v in violation}
 
 mediates := "batten hook --harness claude-code"
 
-# A sibling command a case DECLARES. It was this repository's own registration
-# until CLOUD-1163's unit 9 retired it; it survives here as a fixture because the
-# predicate is about declared-ness rather than about that program.
-guard := "$CLAUDE_PROJECT_DIR/mise-tasks/some-guard.sh"
-
-guard_row := "mise-tasks/some-guard.sh"
-
-# ANTI-VACUITY. A correctly wired tree produces no finding at all -- without this
-# every case below would pass just as well over a module that refuses everything.
+# ANTI-VACUITY, and it is THE REPOSITORY'S OWN STATE: the mediator alone on a
+# committed surface produces no finding at all. Without it every case below would
+# pass just as well over a module that refuses everything.
 test_a_correctly_wired_tree_is_clean if {
-	count(violation) == 0 with input as wired_with({mediates, guard}, {mediates}, {guard_row: "CLOUD-1"})
-}
-
-# THE REPOSITORY'S OWN STATE, and the case CLOUD-1163's unit 9 makes reachable: an
-# empty table over a mediator-only surface. Every direction abstains, which is what
-# the campaign is FOR -- and it is asserted rather than assumed, because "no
-# findings" over an empty table is also what a module that decides nothing produces.
-test_a_mediator_only_tree_with_no_declaration_is_clean if {
 	count(violation) == 0 with input as wired({mediates}, {mediates})
 }
 
-test_an_undeclared_sibling_is_refused if {
+test_a_sibling_beside_the_mediator_is_refused if {
 	some v in violation with input as wired(
 		{mediates, "$CLAUDE_PROJECT_DIR/mise-tasks/other-guard.sh"},
 		{mediates},
@@ -556,18 +301,14 @@ test_an_undeclared_sibling_is_refused if {
 # iterating one event key would pass this while looking correct.
 test_a_stop_sibling_is_refused_too if {
 	some v in violation with input as wired(
-		{mediates, guard},
+		{mediates},
 		{mediates, "$CLAUDE_PROJECT_DIR/mise-tasks/other-guard.sh"},
 	)
 	v.verdict == "hook wire loose"
 }
 
 test_a_pinned_wrapper_around_the_mediator_is_not_a_second_decider if {
-	count(violation) == 0 with input as wired_with(
-		{"mise exec -- batten hook", guard},
-		{mediates},
-		{guard_row: "CLOUD-1"},
-	)
+	count(violation) == 0 with input as wired({"mise exec -- batten hook"}, {mediates})
 }
 
 # The pointer is the FILE, never the command: the command carries this consumer's
@@ -581,69 +322,30 @@ test_the_finding_points_at_the_file_and_not_the_command if {
 	}
 }
 
-test_a_declaration_matching_nothing_is_stale if {
-	some v in violation with input as wired_with({mediates}, {mediates}, {guard_row: "CLOUD-1"})
-	v.verdict == "hook declare stale"
-}
-
-# The guard's own case, and the one whose absence `cli.rs` caught: a tree that
-# carries no wiring surface at all has not spent its declaration, it has not been
-# looked at.
-test_a_tree_with_no_wiring_surface_is_not_stale if {
-	vs := verdicts with input as {"tree": {"documents": {}}}
-	not "hook declare stale" in vs
-}
-
-test_a_declaration_matching_something_is_not_stale if {
-	vs := verdicts with input as wired({mediates, guard}, {mediates})
-	not "hook declare stale" in vs
-}
-
 # --- the merged half -----------------------------------------------------------
 
-# The two launcher-provisioned commands, and they are a fixture because they are
-# STILL HERE rather than as a memorial to their removal.
+# The two launcher-provisioned commands. They were `declared` rows keyed to
+# CLOUD-1079 until CLOUD-1383, and they are the reason this module could not
+# simply refuse a merged sibling: the launcher rewrites them at every session
+# start, so no commit in this repository could clear them and tolerating them was
+# the only way the gate stayed green.
+#
+# THE FACT IS WHAT MOVED, NOT THE SUBJECT. They are refused here like any other
+# second decider, and a disposable container's session-start repair removes them
+# before this gate reads the surface. A developer machine that is not disposable
+# keeps them and is TOLD, which is the difference between a report and a licence.
 launcher_hooks := {
 	"~/.claude/stop-hook-git-check.sh",
 	"~/.claude/session-start-git-identity.sh",
 }
 
-test_a_merged_registration_the_table_does_not_declare_is_refused if {
+test_a_merged_registration_beside_the_mediator_is_refused if {
 	some v in violation with input as launcher({mediates, "~/.claude/other-hook.sh"})
 	v.verdict == "hook wire duplicate"
 }
 
-# CLOUD-1314'S ACCEPTANCE IS WITHDRAWN, ON A MEASUREMENT RATHER THAN AN ARGUMENT.
-# It read: the rows are gone because the subjects are, so re-provisioning either is
-# refused like any other second decider — and its case asserted exactly that.
-#
-# The subjects are not gone. `~/.claude/launcher-settings.json` registers both and
-# the launcher REWRITES them at every session start, which `batten.toml` states at
-# its own site: "launcher-provisioned and rewritten at every session start, so no
-# commit here can clear them". Measured 2026-09-02: both files present, mtime
-# 04:22, three hours AFTER the commit that deleted their rows at 01:18.
-#
-# So the case was asserting a property of the world that the world does not have,
-# and what it bought was `harness-wiring` red in every session — the pre-commit gate
-# refusing every commit, on a condition no commit can reach. The rows are back,
-# keyed to CLOUD-1079, which is the row `batten.toml` already names as owning the
-# environment half. They leave when the launcher stops writing them, not before.
-test_the_launcher_hooks_are_declared_rather_than_refused if {
-	vs := verdicts with input as launcher_with(launcher_hooks, {
-		"stop-hook-git-check.sh": "CLOUD-1079",
-		"session-start-git-identity.sh": "CLOUD-1079",
-	})
-	not "hook wire duplicate" in vs
-}
-
-# THE OTHER DIRECTION, and without it the case above is satisfied by a module that
-# stopped refusing anything on a merged surface — which is what withdrawing an
-# acceptance clause has to be held to.
-test_an_undeclared_hook_beside_the_declared_pair_is_still_refused if {
-	vs := verdicts with input as launcher_with(
-		{"~/.claude/stop-hook-git-check.sh", "~/.claude/other-hook.sh"},
-		{"stop-hook-git-check.sh": "CLOUD-1079"},
-	)
+test_the_launcher_hooks_are_refused_rather_than_declared if {
+	vs := verdicts with input as launcher(launcher_hooks)
 	"hook wire duplicate" in vs
 }
 
@@ -663,62 +365,10 @@ test_the_merged_finding_carries_a_count_and_no_pointer if {
 	}
 }
 
-# THE COULD-NOT-LOOK GUARD, PER SURFACE CLASS. A merged row is unenforced where no
-# merged surface was read -- the permanent state of a CI runner -- and is judged
-# where one was.
-test_a_merged_row_is_unenforced_where_no_merged_surface_was_read if {
-	vs := verdicts with input as wired({mediates, guard}, {mediates})
-	not "hook declare stale" in vs
-}
-
-# A read merged surface spends nothing on its own: the fixture's table declares no
-# merged row, so the committed row is judged on its own surface and nothing else is.
-#
-# THIS COMMENT SAID "NO MERGED ROW IS DECLARED ANY MORE" AND THAT WAS FALSE
-# (CLOUD-1340). `policy/harness-declared.json` declares two, and both are
-# basenames, which is what makes them merged rows -- so the `enforced` merged arm
-# was described here as unreachable while being the arm every live row went
-# through. That is why the too-coarse `merged_read` guard sat unexamined: a reader
-# checking whether the arm mattered was told it did not.
-test_a_read_merged_surface_alone_spends_no_declaration if {
-	vs := verdicts with input as launcher({mediates})
-	not "hook declare stale" in vs
-}
-
-# THE GUARD CLOUD-1340 ADDED. A merged surface that RESOLVED but carries no
-# command at all is could-not-look, not a spent licence.
-#
-# Measured in this container: `~/.claude/launcher-settings.json` present and
-# hookless, the other three merged ids absent, so `merged_read` was 1 while
-# `merged_commands` was empty -- and both live rows fired at once, while the
-# `stop-hook-git-check.sh` they license was still running from a surface outside
-# the declared four.
-test_a_merged_surface_carrying_no_commands_spends_nothing if {
-	vs := verdicts with input as launcher_with({}, {"stop-hook-git-check.sh": "CLOUD-1"})
-	not "hook declare stale" in vs
-}
-
-# AND THE DIRECTION IT MUST NOT WEAKEN, which is the actual test of the change:
-# once any merged surface carries a command, every merged row is enforced again and
-# one matching nothing still fires. Without this case the guard above is satisfied
-# by a module that never reports a stale merged row at all.
-test_a_merged_row_matching_nothing_is_stale if {
-	some v in violation with input as launcher_with(
-		{mediates},
-		{"stop-hook-git-check.sh": "CLOUD-1"},
-	)
-	v.verdict == "hook declare stale"
-}
-
 # ANTI-VACUITY over BOTH classes at once, which the committed-only case cannot
-# reach: every declared row matches on the surface that owns it, so nothing fires.
+# reach: the mediator alone on each surface, so nothing fires.
 test_both_surfaces_wired_correctly_is_clean if {
-	count(violation) == 0 with input as whole_with(
-		{mediates, guard},
-		{mediates},
-		{mediates},
-		{guard_row: "CLOUD-1"},
-	)
+	count(violation) == 0 with input as whole({mediates}, {mediates}, {mediates})
 }
 
 # --- could-not-look, per cause -------------------------------------------------
@@ -748,72 +398,11 @@ test_an_undeclared_name_in_the_channel_is_not_this_modules_business if {
 	not "hook wire unread" in vs
 }
 
-# --- the owner's status (CLOUD-1310) -------------------------------------------
-#
-# THE THREE CASES MUST STAY A SET. The closed case alone passes over a module that
-# fires on any status; the open case alone passes over one that fires on none; and
-# without the unread case a module that treats a missing reading as closed looks
-# correct here while reddening every CI runner.
-
-# One receipt reading, as the engine projects it: id -> subject -> token.
-#
-# Keyed to the row the table still carries. It named CLOUD-1314 until that row's
-# two subjects were removed with their hooks, and the case went red on the same
-# commit -- which is the coupling working: a `spent` case naming a key no row
-# declares is testing nothing.
-# A declared row plus one receipt reading about its owner.
-#
-# The row is the case's own now rather than whichever the repository happens to
-# carry, which is what stopped this pair going red every time the real table
-# changed -- measured twice on this branch, once when CLOUD-1314's rows were
-# deleted and once when the table emptied entirely.
-read(status) := object.union(
-	table({"some-command.sh": "CLOUD-1"}),
-	{"tree": {"minted": {"issue-status": {"CLOUD-1": status}}}},
-)
-
-test_a_row_whose_owner_has_closed_is_spent if {
-	some v in violation with input as read("done")
-	v.verdict == "hook declare spent"
-}
-
-# `canceled` and `duplicate` close a row's owner as surely as `done` does: an
-# exemption waiting on work that was abandoned or folded into another issue is
-# waiting on nothing.
-test_an_abandoned_or_folded_owner_closes_the_row_too if {
-	some v in violation with input as read("canceled")
-	v.verdict == "hook declare spent"
-	some w in violation with input as read("duplicate")
-	w.verdict == "hook declare spent"
-}
-
-test_a_row_whose_owner_is_open_is_not_spent if {
-	vs := verdicts with input as read("in-progress")
-	not "hook declare spent" in vs
-}
-
-# COULD-NOT-LOOK, and it is the ORDINARY state: the receipt store is per-checkout
-# and empty on every runner and every fresh clone. A module reading that absence
-# as closed would redden everywhere for a state nobody can fix.
-test_a_row_nobody_has_read_the_owner_of_is_not_spent if {
-	vs := verdicts with input as {"tree": {"minted": {"issue-status": {}}}}
-	not "hook declare spent" in vs
-}
-
-# And the whole fact absent, which is what a run declaring no mint produces.
-test_no_reading_at_all_is_not_spent if {
-	vs := verdicts with input as {"tree": {"documents": {}}}
-	not "hook declare spent" in vs
+# A tree carrying nothing at all decides nothing, which is the shape a fixture repo
+# has and the one `cli.rs` reads. It abstains rather than reporting a clean wiring.
+test_a_tree_with_no_wiring_surface_is_clean if {
+	count(violation) == 0 with input as {"tree": {"documents": {}}}
 }
 
 #MUTANT-SUITE crates/batten/tests/it/harness_wiring.rs
-#MUTANT stray-unread|s@^\tnot contains(command, mediator)$@\tfalse@|a_committed_sibling_the_table_does_not_declare_is_refused
-#MUTANT stale-unguarded|s@^\tcommitted_read > 0$@\ttrue@|a_tree_with_no_wiring_surface_is_not_stale
-#MUTANT stale-never|s@^\tnot matches_something(pattern)$@\tfalse@|a_committed_row_matching_nothing_is_stale
-# NAMES THE COMPILED CASE, NOT THE LOAD-TIME ONE. `a_row_whose_owner_has_closed_is_spent`
-# is a `test_` rule in this file; `mutate` resolves the DECLARED `#MUTANT-SUITE`
-# path (CLOUD-1267), so naming it reported `names-no-case` and the mutation was
-# never applied to anything. The compiled equivalent already existed under
-# another name — it mints a real `done` receipt and asks the shipped `check` —
-# which is the tier that can actually see this predicate die.
-#MUTANT spent-never|s@^\tregex.match(expression, status)$@\tfalse@|the_engine_reads_a_closed_owner_off_a_minted_receipt
+#MUTANT stray-unread|s@^\tnot contains(command, mediator)$@\tfalse@|a_committed_sibling_beside_the_mediator_is_refused

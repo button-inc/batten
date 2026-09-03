@@ -135,6 +135,7 @@ mod mediated_admission;
 mod mediated_verbs;
 mod memories;
 mod memory_injection;
+mod minted_facts;
 mod mise_pin_agreement;
 mod mutate;
 mod mutation_declared_case;
