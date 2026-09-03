@@ -101,6 +101,10 @@ const CONTENT: &[Canary] = &[
         source: "free text inside a completed-session transcript",
     },
     Canary {
+        tag: "declared",
+        source: "the subject line of a task in the session's own store",
+    },
+    Canary {
         tag: "childout",
         source: "a wrapped or configured child's own stdout",
     },
@@ -246,6 +250,7 @@ fn authority(spawning: bool) -> String {
          \n\
          [transcript]\n\
          path = \"transcript.jsonl\"\n\
+         tasks = \"/nonexistent/{{session}}\"\n\
          \n\
          [epoch]\n\
          tracked = [\"batten.toml\"]\n",
@@ -313,6 +318,28 @@ impl Corpus {
                 ),
             )
             .file("counted.txt", &format!("{}\n", canary("counted")))
+            // The session's own task store, where the engine parks its link
+            // (CLOUD-1376). A real directory rather than a symlink: `read_dir`
+            // follows either, so the reading under test is identical, and this
+            // keeps the corpus from depending on how a platform spells a link.
+            //
+            // IT MUST BE A LIVE READING, NOT AN EXEMPTION. Without a store
+            // `doctor session` answers could-not-look — exit 3 — and this census
+            // refuses that as evidence by construction: a verb that failed
+            // internally proves nothing by not emitting content. Seeding it is
+            // what makes `doctor session` actually read prose and then decline to
+            // print it, which is the only version of this assertion worth having.
+            //
+            // The subject is a CONTENT canary because that is exactly what it is:
+            // free text an agent wrote. The verb may emit the id `1` and the
+            // counts, and must never emit the line beside them.
+            .file(
+                ".tasks/1.json",
+                &format!(
+                    "{{\n  \"id\": \"1\",\n  \"subject\": \"{}\",\n  \"status\": \"pending\"\n}}\n",
+                    canary("declared"),
+                ),
+            )
             // A published schema for `config deprecations` to compare against,
             // carrying a CONTENT canary in a description. The verb must name the
             // removed key and never the schema body, so a run that echoed what it
@@ -977,6 +1004,24 @@ const CENSUS: &[Verb] = &[
     // layout in a diagnostic that promises not to.
     Verb {
         path: "doctor hooks",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // THE SESSION'S OWN DECLARED WORK (CLOUD-1376), and its content class is the
+    // reason it belongs here rather than being obvious. What this verb reads is a
+    // task store whose members carry a `subject` and a `description` — free prose
+    // an agent wrote, which is exactly the CONTENT class above. What it emits is
+    // two integers and a list of ids.
+    //
+    // So the pointer-only promise is load-bearing rather than incidental: an id
+    // sends a reader to the task, and a subject line would hand the session its
+    // own prose back as input — the mirror a restatement can clear, which is the
+    // defect `finding-sink-check` documents at length. The compiled-binary tier
+    // asserts the negative directly, and this census is what stops a later
+    // revision widening the output without answering the question.
+    Verb {
+        path: "doctor session",
         args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
