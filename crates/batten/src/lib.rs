@@ -7410,12 +7410,27 @@ fn run_hook(
     // would trade a dropped deny for a dropped advisory.
     let ceiling = policy.advisory.as_ref();
     emit_channel(harness, &envelope, out, err, advice, ceiling, &decision)?;
-    // Resolved HERE rather than inside `render`, because `render` deliberately
-    // cannot see the policy (CLOUD-898) and that property is worth more than the
-    // convenience: a renderer that cannot see the inputs cannot re-decide by
-    // accident. A hatch NAME is not such an input — it is a string the renderer
-    // prints and never branches on — so handing it over costs nothing.
-    let hatch = match &decision {
+    let hatch = hatch_for(&policy, &decision);
+    let rendering = Rendering {
+        hatch: &hatch,
+        ceiling: policy.refusal.as_ref(),
+    };
+    render(harness, &envelope, decision, &rendering, mode, out, err)
+}
+
+/// The hatch a refusal advertises, by name.
+///
+/// RESOLVED HERE RATHER THAN INSIDE [`render`], because `render` deliberately
+/// cannot see the policy (CLOUD-898) and that property is worth more than the
+/// convenience: a renderer that cannot see the inputs cannot re-decide by
+/// accident. A hatch NAME is not such an input — it is a string the renderer
+/// prints and never branches on — so handing it over costs nothing.
+///
+/// Its own function rather than a block in the caller, because the caller reached
+/// `clippy::too_many_lines` and a length limit is answered by moving a nameable
+/// step out, never by widening the limit.
+fn hatch_for(policy: &hook::Policy, decision: &hook::Decision) -> String {
+    match decision {
         hook::Decision::Deny(refusal) | hook::Decision::Ask(refusal) => {
             policy.bypass_env_for(refusal.rule()).to_owned()
         }
@@ -7424,20 +7439,7 @@ fn run_hook(
         // these arms, and a blank one would render as `Bypass with =1.` if a
         // later arm ever did read it.
         _ => hook::BYPASS_ENV.to_owned(),
-    };
-    // Resolved here for the reason the hatch just above is, and it is the SAME
-    // ceiling `refusal_ceiling` measures — one declared authority over an emitted
-    // mediated line, governing the first sighting and the repeat alike.
-    render(
-        harness,
-        &envelope,
-        decision,
-        &hatch,
-        policy.refusal.as_ref(),
-        mode,
-        out,
-        err,
-    )
+    }
 }
 
 /// Turn a mediated refusal into an allow when a spent admission covers it.
@@ -9979,22 +9981,36 @@ fn load_exec_settings(
 /// own stdin: `run_hook` owns the boundary (stdin, the bypass variable, the
 /// config load) and this owns the contract CLOUD-40's matrix pins — including
 /// the case where writing the decision document itself fails.
+/// What a refusal line needs to render, resolved by the caller.
+///
+/// TWO VALUES THAT TRAVEL TOGETHER, and bundling them is what keeps [`render`]'s
+/// signature honest rather than merely short: both are resolved from the policy at
+/// the boundary, and NEITHER is an input to the decision. The hatch is a name the
+/// renderer prints; the ceiling is a bound on how long the printed line may be.
+/// Reaching for `policy` inside `render` to fetch either would give it back the
+/// inputs CLOUD-898 says it must not have, over values that decide nothing about
+/// the call.
+///
+/// Growing this struct is therefore the test for a third one: it belongs here if
+/// the renderer only prints or measures it, and belongs nowhere near here if the
+/// renderer would have to branch on it to decide.
+struct Rendering<'a> {
+    /// The environment variable that suppresses this refusal, by name.
+    hatch: &'a str,
+    /// What one emitted mediated line may cost, or no declared bound.
+    ceiling: Option<&'a refusal::Ceiling>,
+}
+
 fn render(
     harness: hook::Harness,
     envelope: &hook::Envelope,
     decision: hook::Decision,
-    hatch: &str,
-    // THE CEILING RIDES BESIDE THE HATCH, and for the same reason it does
-    // (CLOUD-1386). Both are resolved by the caller and neither is an input to the
-    // DECISION: the hatch is a name this prints, and this is a bound on how long
-    // the printed line may be. Reaching for `policy` here to fetch it would give
-    // the renderer back the inputs the comment below says it must not have, over a
-    // value that decides nothing about the call.
-    ceiling: Option<&refusal::Ceiling>,
+    rendering: &Rendering<'_>,
     mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    let Rendering { hatch, ceiling } = *rendering;
     // THE DECISION ARRIVES AS A VALUE, which is what makes this a renderer
     // rather than a second adjudicator (CLOUD-898). A handler's refusal and the
     // engine's own reach the host through the identical match below: a

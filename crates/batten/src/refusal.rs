@@ -680,8 +680,18 @@ mod sightings {
             std::env::temp_dir().join(format!("batten-sighting-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("the fixture directory");
-        std::process::Command::new("git")
-            .args(["init", "-q", "-b", "main", "."])
+        // The spawn census is an inventory rather than a ban, and this row's
+        // verdict is that it stays: the store is keyed off `$GIT_DIR`, so a
+        // fixture that never ran `git init` would exercise the could-not-look arm
+        // instead of the one under test. `#[expect]` rather than `#[allow]` so a
+        // deleted spawn with a stale annotation goes red too (CLOUD-743).
+        #[expect(
+            clippy::disallowed_types,
+            reason = "a test fixture needs a real git directory: `first_sighting` keys its store \
+                      off `$GIT_DIR`, and without one every case measures the unreadable-store arm"
+        )]
+        let mut git = std::process::Command::new("git");
+        git.args(["init", "-q", "-b", "main", "."])
             .current_dir(&dir)
             .status()
             .expect("git init");

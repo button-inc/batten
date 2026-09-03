@@ -300,7 +300,6 @@ impl Reclaimed {
 /// `surfaces_read` and left alone, because a file this verb cannot parse is one
 /// it must not rewrite.
 pub fn reclaim(dir: &Path, home: &Path, dry_run: bool) -> Result<Reclaimed> {
-    let mut out = Reclaimed::default();
     // WHOSE `$HOME` IS THIS (CLOUD-1383). The census below is right about WHAT is
     // a sibling on either kind of machine; what it cannot know is whether removing
     // one is welcome. In a disposable container `$HOME` is provisioned fresh and
@@ -319,7 +318,10 @@ pub fn reclaim(dir: &Path, home: &Path, dry_run: bool) -> Result<Reclaimed> {
     // differ only in whether it is acted on. A conservative run still reads every
     // surface, still counts every sibling, and still reports them — it simply
     // does not write, which is what `--check` already means here.
-    out.authoritative = crate::environment::disposable();
+    let mut out = Reclaimed {
+        authoritative: crate::environment::disposable(),
+        ..Reclaimed::default()
+    };
     let dry_run = dry_run || !out.authoritative;
     // Planned in full before anything is written, so the record describes the
     // whole pre-repair state even if a later surface refuses the write.
