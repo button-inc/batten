@@ -119,8 +119,15 @@
           "type": "string"
         },
         "key": {
-          "description": "The token that selects which captured response answers.\n\nAn opaque string the consumer supplies. The engine knows nothing about\nwhat it names — it matches captures containing it and reduces the first in\nhandle order, which is where non-negotiable rule 1 is paid: a tracker's\nkey vocabulary is the consumer's fact and never this crate's.",
+          "description": "The token that selects which captured response answers.\n\nAn opaque string the consumer supplies. The engine knows nothing about\nwhat it names, which is where non-negotiable rule 1 is paid: a tracker's\nkey vocabulary is the consumer's fact and never this crate's.\n\nHow it SELECTS depends on [`Self::key_at`], and the two are different\nquestions — see that field.",
           "type": "string"
+        },
+        "key_at": {
+          "description": "Where the key sits in the response, in [`Node::at`]'s spelling.\n\n# This is the difference between \"the record about the key\" and \"a record mentioning it\"\n\nWithout it, selection is byte CONTAINMENT over the response and the first\nmatch in handle order answers — so any stored document that merely cites\nthe key competes, and which one wins is decided by a digest. Measured\n2026-09-03 over this repository's own store (CLOUD-1387): 14 captures\ncontained `CLOUD-1188`, the one read carried no `project` node and\nanswered `false`, and the `get_issue` for that row — carrying\n`project: \"Batten\"` — sorted later and was never consulted. A filed row\nwas reported unfiled, from a payload that was never about it.\n\nWith it, the row is resolved through [`crate::capture::find`], which\nselects a response whose scalar AT THIS PATH equals the key and takes the\nmost recent in the log's append order. That is the same selector\n`capture find --key-at` already exposes, so there is one authority on what\n\"the capture for this key\" means rather than two.\n\n**Optional, and absent keeps the old meaning rather than changing a\nverdict silently.** A row that declares no path is still resolved by\ncontainment: this field can only ever narrow what answers, so adding it is\nraise-only in house-style §8's sense, and a consumer's landed rows do not\nmove underneath them.\n\n**The PATH is the consumer's, which is what keeps rule 1 intact.** The\nengine never names `id`, or any other tracker field — it reads the path\nthe row supplies, exactly as `node` below is read.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "node": {
           "description": "The node path inside the selected response, in [`Node::at`]'s spelling.",

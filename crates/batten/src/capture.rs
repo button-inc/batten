@@ -1926,6 +1926,32 @@ pub fn find(repo_root: &Path, selector: &Selector<'_>) -> Result<Option<Resolved
 ///
 /// As [`find`].
 pub fn find_in(dir: &Path, selector: &Selector<'_>) -> Result<Option<Resolved>> {
+    Ok(find_in_filtered(dir, selector, true))
+}
+
+/// [`find`] with the TOOL filter dropped: the key and its path select alone.
+///
+/// For a caller that names a key and a path and legitimately names no tool —
+/// [`crate::captured::reduce`]'s declared rows (CLOUD-1387). It is a separate
+/// entry point rather than "empty `tools` means any", because `Selector::tools`
+/// is matched with `any` and an empty slice therefore already means *no tool
+/// matches*; quietly inverting that would change what every existing caller's
+/// empty list does.
+///
+/// # Errors
+///
+/// As [`find`].
+pub fn find_any_tool(repo_root: &Path, selector: &Selector<'_>) -> Result<Option<Resolved>> {
+    Ok(find_in_filtered(&captures_dir(repo_root)?, selector, false))
+}
+
+/// The one walk both entry points share, so the ordering has a single authority.
+///
+/// Infallible by construction: a call log that cannot be read is an empty log,
+/// and a row whose blob has been pruned is skipped. Both are ordinary states of
+/// a store rather than a failure to look, so there is no error to report and the
+/// wrappers above supply the `Ok` their published signatures promise.
+fn find_in_filtered(dir: &Path, selector: &Selector<'_>, by_tool: bool) -> Option<Resolved> {
     for row in read_calls(&dir.join("calls")).iter().rev() {
         let Some(digest) = row.digest.as_deref() else {
             continue;
@@ -1933,10 +1959,11 @@ pub fn find_in(dir: &Path, selector: &Selector<'_>) -> Result<Option<Resolved>> 
         if !token_is_complete(&row.fidelity) {
             continue;
         }
-        if !selector
-            .tools
-            .iter()
-            .any(|tool| crate::rules::selects_tool_name(tool, &row.tool))
+        if by_tool
+            && !selector
+                .tools
+                .iter()
+                .any(|tool| crate::rules::selects_tool_name(tool, &row.tool))
         {
             continue;
         }
@@ -1953,7 +1980,7 @@ pub fn find_in(dir: &Path, selector: &Selector<'_>) -> Result<Option<Resolved>> 
         if crate::mint::scalar(&value, selector.key_at).as_deref() != Some(selector.key) {
             continue;
         }
-        return Ok(Some(Resolved {
+        return Some(Resolved {
             capture: Capture {
                 stream: Stream::Response.as_str(),
                 bytes: bytes.len() as u64,
@@ -1961,9 +1988,9 @@ pub fn find_in(dir: &Path, selector: &Selector<'_>) -> Result<Option<Resolved>> 
             },
             tool: row.tool.clone(),
             order: row.order,
-        }));
+        });
     }
-    Ok(None)
+    None
 }
 
 /// Remove every capture in the repository's store, returning how many went.

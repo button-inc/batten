@@ -5095,6 +5095,20 @@ severity = "deny"
 [[rule.captured]]
 id = "this-row"
 key = "CLOUD-1188"
+# THE KEY IS THE RECORD'S SUBJECT, NOT A STRING IN IT (CLOUD-1387).
+#
+# Without this path, selection is byte containment over the whole response and
+# the first match in handle order answers — so every stored document that merely
+# CITES the key competes, and a digest decides between them. Measured 2026-09-03
+# over this repository's own store: 14 captures contained `CLOUD-1188`, the one
+# read carried no `project` node and answered `false`, and the `get_issue` for
+# this row — carrying `project` — sorted later and was never consulted. A filed
+# row reported unfiled, from a payload that was never about it, and the count
+# went 0 -> 1 from ordinary board reads with no tree or config change.
+#
+# `id` is THIS TRACKER's spelling and belongs here rather than in the engine,
+# which is what keeps non-negotiable rule 1 paid while the defect is closed.
+key_at = "id"
 node = "project"
 reduce = "present"
 
