@@ -36,6 +36,7 @@ pub mod doctor;
 pub mod drain;
 pub mod effect;
 pub mod emission;
+pub mod environment;
 pub mod epoch;
 pub mod error;
 pub mod exec;
@@ -3609,7 +3610,11 @@ fn run_wiring_reclaim(
         )
     })?;
     let done = wiring::reclaim(repo, strategy.home_dir(), dry_run)?;
-    let verb = if dry_run { "would remove" } else { "removed" };
+    let verb = if dry_run || !done.authoritative {
+        "would remove"
+    } else {
+        "removed"
+    };
     output::message(
         mode,
         output::Verbosity::Normal,
@@ -3631,10 +3636,27 @@ fn run_wiring_reclaim(
             ),
         )?;
     }
+    // WHY IT REMOVED NOTHING, when it found something and was not asked to look
+    // only (CLOUD-1383). A conservative run that stays silent here is the
+    // could-not-look-as-clean shape one layer over: the operator asked for a
+    // repair, the verb reported siblings, nothing changed, and nothing said why.
+    //
+    // Emitted only when there was something to act on. A machine with no siblings
+    // needs no explanation of a removal that was never owed.
+    if !dry_run && !done.authoritative && done.siblings() > 0 {
+        output::message(
+            mode,
+            output::Verbosity::Normal,
+            err,
+            "wiring reclaim: this environment is not declared disposable, so nothing was \
+             removed — these registrations are somebody's own. Set BATTEN_ENVIRONMENT=disposable \
+             where the home directory is provisioned per session and may be taken.",
+        )?;
+    }
     // The line that stops the repair reading as completion. Emitted only when
     // something actually moved, because a run that removed nothing left no gap
     // between what this session loaded and what is on disk.
-    if !dry_run && done.siblings() > 0 {
+    if !dry_run && done.authoritative && done.siblings() > 0 {
         output::message(
             mode,
             output::Verbosity::Normal,

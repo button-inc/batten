@@ -137,6 +137,33 @@ mise reshim
 #    setup rather than at first use.
 mise run deps-install || echo "setup: 'deps-install' incomplete — see output above" >&2
 
+# 6b. THE ONE FACT ONLY THIS ENVIRONMENT CAN STATE (CLOUD-1383).
+#
+#     Batten repairs the surfaces it owns — the harness hook registrations it
+#     derives — and whether a repair may REMOVE what it finds is not a property of
+#     the finding. The census is equally right on a disposable container and on a
+#     developer's laptop; what differs is whose `$HOME` it is. So the environment
+#     states it, in the platform's one Environment variables field:
+#
+#         BATTEN_ENVIRONMENT=disposable
+#
+#     ABSENT IS THE DEFAULT AND MEANS A REAL MACHINE, which is the direction that
+#     has to be safe: a developer who never sets it gets a batten that reports and
+#     never removes, and a container whose field was mistyped gets the same — a
+#     stalled repair rather than a surprise deletion.
+#
+#     Checked here rather than assumed, because the failure is silent otherwise:
+#     an unset variable leaves every session's repair conservative, the launcher's
+#     registrations survive, and the wiring gate refuses with a remedy no verb
+#     performs. That is the exact class this script exists to make visible at
+#     setup rather than three tasks later.
+if [[ "${BATTEN_ENVIRONMENT:-}" != "disposable" ]]; then
+	echo "setup: BATTEN_ENVIRONMENT is not 'disposable' — environment repairs will REPORT" >&2
+	echo "setup: and never remove. If this container's home directory is provisioned per" >&2
+	echo "setup: session, add BATTEN_ENVIRONMENT=disposable to the Environment variables" >&2
+	echo "setup: field. If this is a real machine, this is the correct posture." >&2
+fi
+
 # 7. THE DECLARED PRECONDITIONS, REPAIRED. Every `[[startup]]` row in batten.toml
 #    is checked, repaired if it declares a repair, and re-checked; the report is
 #    one pointer line per row. `--repair` is why this line is allowed to change

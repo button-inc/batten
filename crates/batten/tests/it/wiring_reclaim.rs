@@ -97,12 +97,30 @@ impl Bench {
     }
 
     fn run(&self, args: &[&str]) -> std::process::Output {
+        self.run_in("disposable", args)
+    }
+
+    /// Drive the verb with this environment's declared kind (CLOUD-1383).
+    ///
+    /// **The fixture declares itself disposable exactly as a container does**, and
+    /// that is the honest shape rather than a convenience: the destructive arm is
+    /// licensed by a fact about the machine, so a bench asserting removal has to
+    /// state it. Before this the cases were asserting a repair no environment had
+    /// authorised — which is the behaviour a developer's laptop must NOT get.
+    fn run_in(&self, environment: &str, args: &[&str]) -> std::process::Output {
         common::batten()
             .current_dir(&self.repo)
             .args(args)
             .at_home(&self.home)
+            .env("BATTEN_ENVIRONMENT", environment)
             .output()
             .expect("the binary runs")
+    }
+
+    /// `wiring reclaim` under an environment that declared nothing.
+    fn reclaim_undeclared(&self, args: &[&str]) -> (i32, String) {
+        let outcome = self.run_in("", &[&["wiring", "reclaim"], args].concat());
+        (outcome.status.code().unwrap_or(-1), stderr(&outcome))
     }
 }
 
@@ -322,11 +340,23 @@ fn a_session_start_expires_the_record_which_is_the_restart_this_reports() {
 /// Shared by the two cases below so the only difference between them is the
 /// config they were built with, which is what makes the pair discriminate.
 fn session_start(bench: &Bench) -> std::process::Output {
+    session_start_in(bench, "disposable")
+}
+
+/// A session start under a named environment kind (CLOUD-1383).
+///
+/// **The variable has to reach the CHILD, which is the whole path under test.**
+/// The hook spawns the declared repair as its own process, so the fact travels by
+/// inheritance — and a container that sets it in the platform's one Environment
+/// variables field is doing exactly this. A fixture that set it only on the verb
+/// would prove nothing about the route a session actually takes.
+fn session_start_in(bench: &Bench, environment: &str) -> std::process::Output {
     use std::io::Write as _;
     let mut child = common::batten()
         .current_dir(&bench.repo)
         .args(["hook", "--harness", "claude-code"])
         .at_home(&bench.home)
+        .env("BATTEN_ENVIRONMENT", environment)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -387,6 +417,45 @@ fn a_declared_repair_takes_the_siblings_at_session_start() {
     );
     assert!(!surface.contains("session-start-git-identity"), "{surface}");
     assert!(!surface.contains("stop-hook-git-check"), "{surface}");
+}
+
+/// AND THE SAME SESSION START ON AN UNDECLARED MACHINE TAKES NOTHING.
+///
+/// The mirror for the case above, over the route that actually runs in a session
+/// rather than over the verb. It is the one that matters most: the repair is
+/// deliberately silent, so on a developer's laptop a declared `[[startup]]` row
+/// would otherwise delete registrations out of their real `~/.claude` with
+/// nothing printed and nothing asked. The fact travels to the spawned child by
+/// inheritance, which is exactly how a container sets it.
+#[test]
+fn a_declared_repair_takes_nothing_on_an_undeclared_machine() {
+    let bench = bench("reclaim-declared-undeclared-env");
+    write(
+        &bench.repo,
+        "batten.toml",
+        &format!(
+            "version = 1\n\n\
+             [[startup]]\n\
+             id = \"hook-surfaces-are-battens\"\n\
+             gloss = \"no non-batten registration survives\"\n\
+             check = [{bin}, \"wiring\", \"reclaim\", \"--check\"]\n\
+             repair = [{bin}, \"wiring\", \"reclaim\", \"-y\"]\n",
+            bin = serde_json::to_string(env!("CARGO_BIN_EXE_batten")).unwrap()
+        ),
+    );
+    let outcome = session_start_in(&bench, "");
+    assert!(outcome.status.success(), "{}", stderr(&outcome));
+
+    let surface = bench.surface_text();
+    assert!(
+        surface.contains("session-start-git-identity"),
+        "somebody else's registration survives an undeclared machine: {surface}"
+    );
+    assert!(surface.contains("stop-hook-git-check"), "{surface}");
+    assert!(
+        surface.contains("batten hook --harness claude-code"),
+        "and batten's own is still there: {surface}"
+    );
 }
 
 /// THE ANTI-VACUITY MIRROR, and the flag is the only difference.
@@ -484,4 +553,102 @@ fn the_fixture_home_is_never_the_real_one() {
     assert!(!real.is_empty());
     assert_ne!(bench.home.display().to_string(), real);
     assert!(Path::new(&real).exists());
+}
+
+// ---------------------------------------------------------------------------
+// Whose `$HOME` is this (CLOUD-1383).
+// ---------------------------------------------------------------------------
+
+/// AN UNDECLARED ENVIRONMENT IS SOMEBODY'S OWN MACHINE, so the repair reports and
+/// removes nothing.
+///
+/// This is the direction that has to be safe. A developer installs batten to
+/// check their commits; a tool that then deletes a hook registration out of their
+/// real `~/.claude` because a repository asked it to is doing something they never
+/// agreed to. The census is identical on both machines — what differs is the
+/// authority to act on it.
+#[test]
+fn an_undeclared_environment_reports_and_removes_nothing() {
+    let bench = bench("reclaim-undeclared");
+    let (status, err) = bench.reclaim_undeclared(&["-y"]);
+    assert_eq!(status, 0, "{err}");
+
+    // IT STILL FOUND THEM, which is the half that keeps this a posture rather
+    // than a blindfold: same walk, same count, same per-event rows.
+    assert!(
+        err.contains("would remove 2 sibling registration(s)"),
+        "the finding survives the posture: {err}"
+    );
+
+    // AND IT SAID WHY, because a repair that reports siblings, changes nothing,
+    // and explains nothing is the could-not-look-as-clean shape one layer over.
+    assert!(
+        err.contains("not declared disposable"),
+        "the reason is named: {err}"
+    );
+    assert!(
+        err.contains("BATTEN_ENVIRONMENT=disposable"),
+        "and so is the remedy: {err}"
+    );
+
+    let surface = bench.surface_text();
+    assert!(surface.contains("session-start-git-identity"), "{surface}");
+    assert!(surface.contains("stop-hook-git-check"), "{surface}");
+}
+
+/// THE TWO ARMS AGREE ABOUT SCOPE AND DIFFER ONLY IN WHETHER THEY ACT.
+///
+/// Without this, "disposable" is free to become a licence to touch more than the
+/// conservative arm ever reported — the widening the row refuses by name. Asserted
+/// as the SAME counted subjects from the same fixture, one run each.
+#[test]
+fn declaring_the_environment_changes_the_authority_and_not_the_subjects() {
+    let conservative = bench("reclaim-scope-conservative");
+    let (_, reported) = conservative.reclaim_undeclared(&["-y"]);
+
+    let authoritative = bench("reclaim-scope-authoritative");
+    let (_, acted) = authoritative.reclaim(&["-y"]);
+
+    for event in ["claude-code:SessionStart", "claude-code:Stop"] {
+        assert!(
+            reported.contains(&format!("{event} would remove 1")),
+            "the conservative arm names {event}: {reported}"
+        );
+        assert!(
+            acted.contains(&format!("{event} removed 1")),
+            "and the authoritative arm acts on the same one: {acted}"
+        );
+    }
+    assert!(reported.contains("would remove 2 sibling registration(s)"));
+    assert!(acted.contains("removed 2 sibling registration(s)"));
+
+    // Only the second one wrote.
+    assert!(authoritative.record().exists(), "the repair recorded");
+    assert!(
+        !conservative.record().exists(),
+        "and the report did not, because it changed nothing"
+    );
+}
+
+/// A MISSPELLING IS NOT A LICENCE, which is the whole reason the read is an exact
+/// match rather than a truthiness test.
+///
+/// The anti-vacuity mirror for the authoritative case: a predicate accepting
+/// "anything non-empty" passes every removal case above while turning a typo in a
+/// platform text field into a deletion from somebody's home directory.
+#[test]
+fn a_misspelled_environment_is_conservative() {
+    for wrong in ["disposible", "Disposable", "1", "true"] {
+        let bench = bench(&format!("reclaim-typo-{wrong}"));
+        let outcome = bench.run_in(wrong, &["wiring", "reclaim", "-y"]);
+        let err = stderr(&outcome);
+        assert!(
+            err.contains("would remove"),
+            "{wrong:?} must not license a removal: {err}"
+        );
+        assert!(
+            bench.surface_text().contains("stop-hook-git-check"),
+            "{wrong:?} left the surface untouched"
+        );
+    }
 }

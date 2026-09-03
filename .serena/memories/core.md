@@ -485,6 +485,14 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   reason id, never the error text, so `--json` is byte-stable and carries no
   filesystem path. Distinct from `mise-tasks/doctor.sh`, which gates this repo's own
   provisioning.
+- `environment.rs` — what KIND of machine this is (CLOUD-1383), read from the
+  environment because it is the one fact a committed file cannot hold: the same
+  commit is checked out by a disposable container and by a developer's laptop and
+  the honest answer differs. `BATTEN_ENVIRONMENT=disposable` licenses a repair to
+  REMOVE what it finds on the surfaces batten already owns; absent — the default,
+  and every misspelling — reports and never removes. It replaced a committed
+  exemption table that was a second authority over the same subject and drifted
+  from the repair within a day.
 - `epoch.rs` — `config_epoch` (CLOUD-32): a SHA-256 over the governing config
   surface, so two records carrying the same epoch were produced under provably
   the same rules. The tracked set is **config** (`[epoch] tracked`), not code —

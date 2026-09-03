@@ -257,6 +257,15 @@ pub struct Reclaimed {
     /// already existed, because the FIRST record is the one that describes what
     /// the running session loaded and a second would describe the repair.
     pub recorded: bool,
+    /// Whether this environment declared itself disposable, so the repair was
+    /// allowed to write (CLOUD-1383).
+    ///
+    /// Carried on the result rather than inferred from `surfaces_written == 0`,
+    /// because those are different answers with different remedies: a
+    /// conservative run that found nothing and a conservative run that found two
+    /// siblings it may not touch both write nothing, and only the second has
+    /// something for a reader to do.
+    pub authoritative: bool,
 }
 
 impl Reclaimed {
@@ -292,6 +301,26 @@ impl Reclaimed {
 /// it must not rewrite.
 pub fn reclaim(dir: &Path, home: &Path, dry_run: bool) -> Result<Reclaimed> {
     let mut out = Reclaimed::default();
+    // WHOSE `$HOME` IS THIS (CLOUD-1383). The census below is right about WHAT is
+    // a sibling on either kind of machine; what it cannot know is whether removing
+    // one is welcome. In a disposable container `$HOME` is provisioned fresh and
+    // taking it is the point; on a developer's real machine a registration
+    // somebody else put there is theirs, and deleting it is a hostile act by a
+    // tool they installed to check their commits.
+    //
+    // Without this fact the repository had to negotiate the difference in
+    // committed config — an exemption table naming each tolerated registration
+    // and the row that owns removing it — which is a second authority over the
+    // same subject and drifted from this verb within a day. The fact costs one
+    // environment variable and deletes the whole negotiation.
+    //
+    // THE POSTURE RIDES `dry_run` RATHER THAN ADDING A SECOND SWITCH, which keeps
+    // the promise the row makes: the two arms agree about what is in scope and
+    // differ only in whether it is acted on. A conservative run still reads every
+    // surface, still counts every sibling, and still reports them — it simply
+    // does not write, which is what `--check` already means here.
+    out.authoritative = crate::environment::disposable();
+    let dry_run = dry_run || !out.authoritative;
     // Planned in full before anything is written, so the record describes the
     // whole pre-repair state even if a later surface refuses the write.
     let mut planned: Vec<(PathBuf, serde_json::Value)> = Vec::new();
