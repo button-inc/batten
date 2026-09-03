@@ -7,6 +7,237 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.138](https://github.com/button-inc/batten/compare/v0.0.137...v0.0.138) - 2026-09-03
+
+### Added
+
+- *(land)* the lap runs the consumer's own gate, and spawns nothing to do it
+- *(land)* the lap pushes its own branch under receive-pack's compare-and-swap
+- *(land)* the lap asks its two questions in one loop and acts on one answer
+- *(policy)* a lap acts on one answer from its race, never on both
+- *(land)* `batten land replay` and the tier that joins the writer to the reader
+- *(land)* the lap's replay half, in process and deciding nothing
+- *(policy)* a lap whose replay conflicted does not continue
+- *(hook)* the advisory channel reaches a second harness
+- *(policy)* a backgrounded wait that polls a local process is refused
+- *(ready)* a refinement block owes a dispatched pressure test
+- *(policy)* the declared review becomes a gate, and an absent runner is not guilt
+- *(facts)* [**breaking**] a vendored prompt's dispatch becomes a fact the tree can read
+- *(startup)* declare what a container must be, and repair it
+- *(mcp)* [**breaking**] refuse the raw tracker read, and give its remedy a name that resolves
+- *(mcp)* the dispatch boundary mints the receipts the hook path mints
+- *(enforce)* narrow the spawning verb too, for the caller `check` cannot serve
+- *(gitwrite)* replay a branch onto a moved base, and refuse the conflict
+- *(gitwrite)* put a fetched object in the odb and move a ref, in a module that admits it writes
+- *(lease)* resolve pack deltas and fetch a ref, which the lease path never needed
+- *(git)* enumerate a branch's objects, and push one over receive-pack
+- *(lease)* garbage stops being indistinguishable from a hold, and the gate that reads it
+- *(lease)* the heartbeat learns the two ways a holder stops being one
+- *(lease)* the nine arms as a verb, and the exit table they now answer to
+- *(lease)* observe, swap, and the four bodies a lease is ever minted as
+- *(lease)* the lease body and the one question a runner can ask
+- *(lease)* read the lease body, mint one, and take gix's framing rather than a second one
+- *(lease)* speak the CAS over the client already in the closure
+- *(policy)* wire the lease record, so consumer #1 eats this food too
+- *(policy)* a blind push is the bare lease, not the flag
+- *(policy)* the leased push is the spelling that destroys a sibling's commit
+- *(record)* a verb writes the closes record, so the exemption can fire
+- *(policy)* a declared obligation names a case, or it is not landing
+- *(facts)* one definition of an issue key, and a gate on the twenty-first
+- *(ready)* a test obligation's mutation names a slug, not a sentence
+- *(hook)* a host's plan surface is surveyed, unsurveyed, or measured none
+- *(policy)* the plan a branch declared, held to its own end
+- *(ready)* the prose dialect becomes a legacy, on a declared cutover
+- *(policy)* the punt sweep gets an exit code
+- *(rules)* let a receipt row accept any one of several receipts
+- *(claim)* attest a licence-carry branch, so the lane needs no fake claim
+- *(carry)* decide whether a licence-carry branch is derivable, offline
+- *(fetch)* pair the HTTP method with its body, so PATCH becomes expressible
+- *(policy)* remove the two launcher hooks, and refuse their return
+- *(policy)* a declared exemption whose owning issue has closed is now refusable
+- *(facts)* [**breaking**] project one field of an already-minted receipt onto the tree
+- *(policy)* the could-not-look channel carries WHY, not just which
+- *(preset)* one manifest per preset, instead of three tables and four exemptions
+- *(spec)* [**breaking**] version the emitted spec and give every command a stable id
+- *(state)* an event-anchored finding can finally be answered
+- *(policy)* a remedy resolves to a declared command or rule
+- *(hook)* one budget for the advisory channel, not per producer
+- *(hook)* a generic read of a memory names the tool that answers it
+- *(policy)* read a bats suite's lines, and admit the case that dies with its subject
+- *(hook)* retire session-start.sh into ten declared handler rows
+- *(mutate)* regenerate the derived artifacts across the mcp rebase
+- *(mutate)* regenerate the golden schema and correct the noun's effect in prose
+- *(mutate)* state the new surface rows where the spec is declared by hand
+- *(mutate)* a spawning-side verb whose gate suite is a DECLARED path
+- *(recorder)* [**breaking**] the lease judgement, and the one primitive it needed
+- *(policy)* the second landing judgement, named for the fact that answers it
+- *(policy)* the file-granularity half of the port-without-retirement arm
+- *(policy)* a fifth conserves arm for a port without a retirement
+- *(facts)* build the producer the two verdict stores never had
+- *(policy)* the generic third of a landing loop, as a vendored preset
+- *(mcp)* [**breaking**] expand `${VAR}` in a source path, and declare the session wiring (CLOUD-1251)
+- *(mcp)* [**breaking**] give the engine a credential it can spend (CLOUD-1261)
+- *(commit)* carry the articulation in the commit message, so an override leaves a trail
+- *(hook)* [**breaking**] the bypass variable no longer opens the protected-path gate
+- *(hook)* make a mediated refusal admissible, so the password can stop being the only way through
+- *(mcp)* reduce a write to an acknowledgement instead of the echoed body
+- *(mcp)* [**breaking**] dispatch a declared MCP call and hand back a reduction
+
+### Fixed
+
+- *(cli)* restore what a whole-file conflict resolution discarded
+- *(policy)* a declared mutation names a case its suite has, asked where a contributor sees it
+- *(policy)* the wait predicate was a dead gate, and only the compiled tier could see it
+- *(land)* the fixture config declares its version, and the census classifies the new leaf
+- *(hook)* mint the completion verdict before any rule can return, and rank it first
+- *(config)* the merged-sibling refusal names the verb that clears it
+- *(policy)* repoint the could-not-look clause at the cause it can reach
+- *(policy)* gate AGENTS.md's branch clause against restatement in tree prose
+- *(test)* a Windows path is not a TOML escape, and a stub that cannot run is not a pass
+- *(policy)* the stale guard's case took the arm its mutation does not touch
+- *(policy)* two harness-wiring mutations reached nothing, for two reasons
+- *(facts)* the census count and the module's placement, both missed by a replay
+- *(review)* the prompt went down a channel a real runner ignores
+- *(review)* the dispatch sent a prompt and no subject
+- *(rules)* bound the pin rung to names PATH cannot resolve
+- *(symbols)* [**breaking**] reach the analyser through the pin, not through bare PATH
+- *(obligations-bound)* judge the rows the pull request lands
+- *(obligations-bound)* decide over the latest recorded line, not the history
+- *(startup)* [**breaking**] check that the engine READS the authority, and retire the two spent declarations
+- *(hook)* withdraw `exclusive`, whose zero count was an artifact of the measurer
+- *(surface)* the golden's `rule` flag was one field short of the binary
+- *(surface)* accept the golden schema for `enforce --rule`
+- *(ready)* read a plain clause label as the clause it is
+- *(perf)* keep the consumer's CI paths out of the core's doc comment
+- *(recorder)* partition the verb-written records too, and never the claim itself
+- *(lease)* the liveness probe is /proc's, and Windows CI is what said so
+- *(surface)* the lease rows carry the stable id main added, and the snapshot is regenerated
+- *(lease)* a clone with no remote is an answer, not a failure to look
+- *(gitwrite)* the worktree write assumed Unix, and the whole library stopped compiling for Windows
+- *(semver)* [**breaking**] the refusal names a lint class, and the author needs the instance
+- *(gitwrite)* the unfiltered path is the common one, and it was being refused
+- *(lease)* a pack member is not always a commit, and only a live run said so
+- *(recorder)* partition a record by the claim, not by the branch name alone
+- *(surface)* the new rows carry the id main gave every CommandDecl
+- *(claim)* the prose-dialect cutover reaches the gate that starts the work
+- *(claim)* a carried row keeps the weakening it groomed
+- *(claim)* one branch carries as many claims as it has rows
+- *(rules)* declare `checks_any`'s fact, and split the two long assertions
+- *(ci)* keep the reclaim body inline-shaped and annotate its spawns
+- *(ci)* report the reclaim verdict once per boot, not once per session
+- *(mutate)* the sweep's cargo cache is its own, never the repository's
+- *(policy)* recombine the wiring halves, and withdraw the defect that split them
+- *(verdict)* a lane refusal names which head it could not see tested
+- *(config)* [**breaking**] a config fault names the table that would not load
+- *(policy)* explain a class when the config cannot be read
+- *(policy)* a module's finding takes its remedy from the class it raises
+- *(hook)* ask Path whether a spill is absolute, rather than one platform's spelling
+- *(hook)* recover an intercepted read so the receipt it owes can mint
+- *(test)* declare the grouped module whose three cases never ran, and gate it
+- *(trust)* a verdict rename is not a hatch newly added
+- *(config)* restore the pattern id the rename sweep hit, and declare two renames
+- *(verdict)* convert fixture registry ids to the three-word grammar
+- *(verdict)* convert the classes main added after the grammar landed
+- *(hook)* bound what a session's hooks cost it, and make a repeat decidable
+- *(receipt)* a branch behind its own receipt is not a restart
+- *(rules)* derive the mediated column refusal from the fact model
+- *(hook)* [**breaking**] a bare directory destination is inside the protected set
+- *(hook)* resolve a relative operand against the caller's cwd, and stop asserting tracked-ness
+- *(hook)* verb and operand attribution stops at a newline
+- *(hook)* the hot path emits a class and its pointers, and stops
+- *(hook)* every mediated deny carries a declared class
+- *(policy)* make the stays-bash route clear the verdict that offers it
+- *(verdict)* convert every refusal class to the declared three-word grammar
+- *(verdict)* measure the single-token dictionary the verdict grammar needs
+- *(policy)* declare the third ported mutation, and drop two numbers that drift
+- *(test)* two defects this branch's own verify found, and both were mine
+- *(policy)* hold a restated arm count and the schema key set to their mechanisms
+- *(prune)* a capped floor measures the volume, so it re-measures
+- *(rules)* let a row declare the format its extension cannot name
+- *(rules)* let a module say what it could not look at
+- *(ci)* a comment quoting the ratchet's pattern incremented the ratchet
+- *(gate)* decide a weakening's admission in the verb, on three states not two
+- *(board)* mint the weakens line the claim port dropped
+- *(test)* write the fixture config through fmt::Write
+- *(mutate)* resolve a declared suite without naming a cargo target
+- *(mutate)* gate the bats fixture constants with the arm that reads them
+- *(mutate)* gate the bats arm on unix, where the vendored runner can run
+- *(mutate)* count could-not-look apart from uncaught in the sweep summary
+- *(mutate)* place the new module, carry the fixture arms, and leave graph-check alone
+- *(mutate)* resolve the lent runner inside the arm that can use it
+- *(mutate)* repair seven declared mutations the first reachable sweep found broken
+- *(test)* repoint the ported ledger arms at the it/ test home
+- *(test)* bound the ported cases to the platform their subject runs on
+- *(test)* open each ported spawn annotation with its inventory verdict
+- *(exec)* give the two pipe drains one shared deadline budget, not one each
+- *(ci)* the pending-snapshot gate was blind to half its own subject
+- *(spec)* state the record verbs in the committed row set and the golden schema
+- *(policy)* refuse a wrong-surface read in both directions, and stop the fixtures leaning on the hole
+- *(policy)* judge a mediated module's tree reads too, closing CLOUD-845's class
+- *(ci)* collapse the deps tasks to one-line shims and clear two lint slips
+- *(hook)* report a session whose SessionStart registration never ran
+- *(hook)* stop advertising a hatch that no longer opens this class
+
+### Other
+
+- *(gh-guard)* ask about the row, not the aggregate, for `gh pr create`
+- *(perf)* [**breaking**] retire perf-compare and perf-gate onto the perf verb
+- *(provisioning)* declare session-wiring in the roster that enumerates it
+- *(harness)* isolate the state root for the suites whose subject is the real repository
+- *(hook)* derive the mediation path in the two tests that pinned it
+- *(hook)* derive the mediation argv from the SURFACE row
+- *(tools)* the validator row stops advertising a gap that was closed
+- *(review)* the untouched-subject case could not see the narrowing it names
+- *(toolchain)* withdraw the replay harness, which never had a consumer
+- *(test)* name the two narrowed rule sets once rather than at four sites
+- *(surface)* regenerate the derived artifacts for the repeatable --rule
+- *(test)* assert six rules with six rules, not with all 103 — twice over
+- *(ci)* retire sbom-check onto the tool-verdict family
+- *(ci)* retire hook-latency-drift onto the workflow step it always was
+- *(cli)* [**breaking**] give `enforce` a flags struct, so its next flag is additive
+- *(test)* assert one rule with one rule, not with all 103
+- *(perf)* key the base arm on its merge base and carry it between runs
+- *(git)* the backend belongs to three named modules, and the resolver gate stops standing in for that
+- *(policy)* the engine tier cannot build an empty delta, so say so
+- *(ci)* admit a task-name span in the retirement repointing arm
+- *(rules)* drive the receipt alternation over the compiled binary
+- *(bot)* gate the bot lane suite on unix, where its stub can run
+- *(ci)* [**breaking**] retire bot-issue onto the engine, and wire the carry receipt
+- *(fetch)* drop the PATCH payload, whose premise did not survive the port
+- *(ci)* conserve the 42 cases inside unit 9's retired suites
+- *(ci)* write unit 9's retirement ledger, and drop a now-unused import
+- *(policy)* exercise the empty exemption table, which nothing reached
+- *(ci)* retire run-shape-guard, and declare the hook surface exclusive
+- *(verdict)* measure the condition word the table now declares
+- *(policy)* one receipt closes both rows that name its owner, not the first
+- *(ci)* retire ci-drift onto the verb it was already calling
+- the extension guide names all ten rule kinds and how to reach a preset
+- *(verdict)* prove a native class is raised rather than exempting it
+- *(findings)* the acceptance clauses I skipped while calling three rows done
+- *(rules)* [**breaking**] a finding records its owner instead of being looked up
+- *(hook)* pin the second interpreter residue, which had no case at all
+- *(ci)* retire hooks-wiring-check onto the two authorities it was the seam between
+- *(tests)* retire the fact-record-keying suite onto the compiled binary
+- *(agents)* a board state is a claim about the tree, and the tree wins
+- *(ci)* [**breaking**] retire lock-complete onto the index it always meant to read
+- *(ci)* retire unlanded-check onto the engine that mints its verdict
+- *(ci)* retire config-lint into the verb it already called
+- *(policy)* bind the case fixture the way a suite actually binds it
+- *(policy)* declare the landing-loop preset's mutation, which main added under the widened census
+- *(ci)* [**breaking**] retire the mutation runner onto `batten mutate`, and put the Rego layer into the enforced set
+- *(ci)* [**breaking**] port helpers and pre-commit-staging off the bats lane
+- *(harness)* group 144 integration test targets into two, and ratchet the count
+- *(harness)* fold Fixture::git to one process and drop a rename that already held
+- *(test)* memoize the harness's three re-reads of the committed config
+- *(build)* store dev debuginfo unpacked, and pin the opt-level that was unpinned
+- *(ci)* retire rules-drift onto the policy engine
+- *(ci)* retire gh-guard and memories-check onto the policy engine
+- *(ci)* retire three validator wrappers into the rows meant to decide
+- *(hook)* assert session isolation directly, not the absence of every advisory
+- *(hook)* pin that a registered module's refusal names a route, not a memory tool
+- *(hook)* prove a spent admission opens the gate, over the compiled binary
+- *(facts)* decide the runtime-discovered out-of-root set, and correct its premise
+
 ## [0.0.137](https://github.com/button-inc/batten/compare/v0.0.136...v0.0.137) - 2026-08-31
 
 ### Added
