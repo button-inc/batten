@@ -50,6 +50,116 @@ fn ledger_text(dir: &Path) -> String {
     std::fs::read_to_string(dir.join("defects.jsonl")).unwrap_or_default()
 }
 
+// --- a narrowing must not lower the gate (CLOUD-1186) ------------------------
+
+/// [`CONFIG`] plus one narrowable row that cannot fire on these fixtures.
+///
+/// A row that fired would make the cases below unable to tell the ledger's
+/// verdict from the rule's, which is the whole thing they discriminate. The glob
+/// names a path the fixtures never create.
+const CONFIG_WITH_ROW: &str = "version = 1\n\n[defects]\npath = \"defects.jsonl\"\nclasses = [\"false-green\", \"silent-skip\"]\n\n[[rule]]\nid = \"never-fires\"\nkind = \"forbid\"\nglob = \"no-such-dir/**\"\npattern = \"zzz-absent\"\nseverity = \"deny\"\nscope = \"tree\"\n";
+
+/// A repo carrying a ledger that was REWRITTEN — the violation the gate exists
+/// for — plus a narrowable row.
+fn tampered_repo(name: &str) -> PathBuf {
+    let base = format!(
+        "{}\n{}\n",
+        row("d-1", "false-green", "a.rs:1"),
+        row("d-2", "silent-skip", "b.rs:2")
+    );
+    let dir = Fixture::new(name)
+        .config(CONFIG_WITH_ROW)
+        .file("defects.jsonl", &base)
+        .git()
+        .build();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "base"]);
+    common::write(
+        &dir,
+        "defects.jsonl",
+        &format!(
+            "{}\n{}\n",
+            row("d-1", "false-green", "a.rs:1"),
+            row("d-2", "silent-skip", "SOMEWHERE-ELSE:9")
+        ),
+    );
+    dir
+}
+
+#[test]
+fn a_narrowed_enforce_still_evaluates_the_defect_ledger() {
+    // THE SECURITY PROPERTY, and the one that would silently regress. The ledger
+    // gate is engine-side rather than a `[[rule]]` row precisely so a branch
+    // cannot lower it by editing a rule table — so a narrowing that dropped it on
+    // the spawning verb would restore that lowering in one token.
+    //
+    // MEASURED AS A REAL REGRESSION, not a hypothetical: CLOUD-1358 gave
+    // `enforce` a `--rule` selector while the skip still keyed on the narrowing
+    // alone, and `batten enforce --rule <id>` skipped the ledger on `main` for a
+    // day. CLOUD-1186 had predicted it in those words before the selector landed.
+    let dir = tampered_repo("defects-narrowed-enforce");
+    let output = run(&dir, &["enforce", "--rule", "never-fires"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a narrowed enforce still answers for the ledger: {}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("defect-not-append-only"),
+        "and it is the ledger's own finding: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_narrowed_check_still_skips_the_defect_ledger() {
+    // THE OTHER HALF, unchanged and deliberately so. On the read surface the skip
+    // is the convenience it was: a caller asking about one row is not asking
+    // about the ledger, and failing there would be a verdict they did not
+    // request. Asserted rather than assumed, because "fix the hole" applied
+    // symmetrically would have taken this with it.
+    let dir = tampered_repo("defects-narrowed-check");
+    let output = run(&dir, &["check", "--rule", "never-fires"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a narrowed read is silent about the ledger: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn an_unnarrowed_check_still_answers_for_the_ledger() {
+    // THE ANTI-VACUITY MIRROR for the case above: if this fixture's ledger were
+    // clean, or the gate were off entirely, the narrowed-check case would pass
+    // for the wrong reason and prove nothing. Same repo, no narrowing.
+    let dir = tampered_repo("defects-unnarrowed-check");
+    let output = run(&dir, &["check"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the tampering IS visible to an unnarrowed run: {}",
+        stdout(&output)
+    );
+    assert!(stdout(&output).contains("defect-not-append-only"));
+}
+
+#[test]
+fn a_narrowed_enforce_naming_no_declared_row_is_a_usage_error() {
+    // The anti-vacuous-pass guarantee carries to the spawning surface: a typo
+    // must not read as "the gate passed", which is the same reasoning the ledger
+    // skip above is about, one layer up.
+    let dir = tampered_repo("defects-narrowed-unknown");
+    let output = run(&dir, &["enforce", "--rule", "no-such-row"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an unmatched id is a usage error, never a clean run: {}",
+        stdout(&output)
+    );
+}
+
 // --- the gate ------------------------------------------------------------
 
 #[test]
