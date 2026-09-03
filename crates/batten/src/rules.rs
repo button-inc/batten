@@ -8215,9 +8215,20 @@ fn symbols_fact(rules: &[Rule], root: &Path) -> crate::facts::Look<crate::symbol
 /// through to the bare program, which is what a project with no pin has anyway.
 #[must_use]
 pub fn symbols_launcher(root: &Path) -> crate::symbols::Launcher {
+    // THE LAZY DOOR, NOT THE EAGER ONE (CLOUD-1371). `repaired` declines an
+    // ABSENT record — the bound that keeps it out of every spawn's path — and
+    // this call site is not on that path: the launcher is resolved ONCE per run,
+    // for one fact, so the two runner spawns it may cost are paid once rather
+    // than per program of per rule.
+    //
+    // Measured, and it is why this is not left as `repaired`: with the record
+    // gone, `symbols` could not reach the analyser through the pin, the census
+    // was could-not-look, and `spawn-adapters` refused a tree with nothing wrong
+    // in it — the same finding this row's own fix had just cleared, arriving by
+    // the one route the fix did not cover.
     let read = crate::pinned::cached(root);
     let pinned = match read {
-        crate::facts::Look::CouldNotLook => crate::pinned::repaired(root),
+        crate::facts::Look::CouldNotLook => crate::pinned::re_resolved(root),
         other => other,
     };
     if matches!(pinned, crate::facts::Look::Is(_)) {

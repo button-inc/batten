@@ -387,19 +387,29 @@ fn transcript_reason(root: &Path) -> Option<Check> {
         .path?;
     Some(
         match crate::transcript::resolve(root, Some(configured.as_str())) {
-            // Never reached — an unconfigured transcript left above via `?` — and
-            // matched rather than caught by a wildcard so a fifth variant is a
-            // compile error here instead of a silent pass.
-            crate::transcript::Capability::Unconfigured => Check::passed(TRANSCRIPT),
-            // ABSENT IS ORDINARY AND HONEST, on the committed config's own terms.
-            crate::transcript::Capability::Absent => Check::passed(TRANSCRIPT),
             // POINTER-ONLY: the capability carries a `<label>:<line>` and this
             // takes none of it. The reason id says WHAT is wrong; the line is the
             // rule-4 payload a diagnostic must not republish.
             crate::transcript::Capability::Unreadable(_) => {
                 Check::failed(TRANSCRIPT, "transcript-unreadable")
             }
-            crate::transcript::Capability::Present(_) => Check::passed(TRANSCRIPT),
+            // THE THREE READINGS THAT PASS, named individually rather than caught
+            // by a wildcard so a fifth variant is a compile error here instead of
+            // a silent pass — which is the whole reason this is a `match`:
+            //
+            //   * `Unconfigured` is unreachable, since an unconfigured transcript
+            //     left above via `?`. It is spelled anyway, so the exhaustiveness
+            //     is real rather than incidental to that early return.
+            //   * `Absent` is ordinary and honest, on the committed config's own
+            //     terms — `batten.toml` says so and `receipt` agrees.
+            //   * `Present` is the healthy reading.
+            //
+            // One arm rather than three identical ones because `match_same_arms`
+            // is right that three bodies spelling `passed` are one decision, and
+            // the distinction that matters is preserved above in prose.
+            crate::transcript::Capability::Unconfigured
+            | crate::transcript::Capability::Absent
+            | crate::transcript::Capability::Present(_) => Check::passed(TRANSCRIPT),
         },
     )
 }
