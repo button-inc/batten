@@ -211,10 +211,22 @@ fn gh_pr_ready_is_not_a_lifecycle_refusal() {
 }
 
 #[test]
+fn gh_pr_create_is_not_a_lifecycle_refusal() {
+    // THE SAME SHAPE AS `gh pr ready` ABOVE, AND IT SAT ON `allowed` UNTIL
+    // CLOUD-1384. `pr-names-an-issue` is a `requires_key` row whose evidence is
+    // the command, the BRANCH NAME, and the subjects on `origin/main..HEAD` — so
+    // a full allow here asks about the developer's branch rather than about any
+    // `gh` lifecycle row. Measured: exit 2 from a landed branch carrying no key,
+    // exit 0 from a keyed one, same tree and same binary. That makes `main`
+    // itself red, and it passed in CI only because a PR branch satisfies the
+    // other row by construction.
+    assert_no_gh_lifecycle_refusal("gh pr create --draft --fill");
+}
+
+#[test]
 fn the_read_shaped_gh_calls_are_allowed() {
     allowed("gh pr view 63 --json state");
     allowed("gh pr list --state open");
-    allowed("gh pr create --draft --fill");
     allowed("gh api repos/o/r/commits/abc/check-runs");
     allowed("gh run view 12345 --log");
     allowed("gh run rerun 12345");
