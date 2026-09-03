@@ -11741,10 +11741,28 @@ fn engine_side_findings(root: &Path, config: &resolve::Resolved) -> Result<Vec<r
         .iter()
         .filter_map(budget::Report::finding)
         .collect();
-    if let Some(declared) = config.defects.as_ref() {
-        found.extend(defects::gate(root, declared)?);
-    }
+    found.extend(ledger_findings(root, config)?);
     Ok(found)
+}
+
+/// The defect-ledger gate alone, split out from its budget sibling (CLOUD-1186).
+///
+/// **Separate because the two have different standing under a narrowing.** The
+/// budget measures declared instruction files — a property of the tree that a
+/// caller asking about one rule did not ask about — so a narrowed run skips it on
+/// either surface. The ledger is a claim about THIS BRANCH's conduct, and it is
+/// engine-side rather than a `[[rule]]` row exactly so a branch cannot lower it
+/// by editing a rule table. A narrowing that dropped it on the spawning surface
+/// would restore the lowering the placement exists to prevent, in one token.
+///
+/// # Errors
+///
+/// Returns an error when the declared ledger cannot be read.
+fn ledger_findings(root: &Path, config: &resolve::Resolved) -> Result<Vec<rules::Finding>> {
+    match config.defects.as_ref() {
+        Some(declared) => defects::gate(root, declared),
+        None => Ok(Vec::new()),
+    }
 }
 
 /// The two stderr notices every rule-running verb opens with.
@@ -11899,12 +11917,32 @@ fn run_rules(
     // being an ordinary `Finding`, and all of which a private verdict path would
     // have had to re-implement. An over-budget set was previously visible only
     // to whoever thought to run `policy budget`, which is a report, not a gate.
-    // The engine-side gates are skipped entirely under a narrowing: a caller
-    // asking about one declared row is not asking about the budget or the
+    // The engine-side gates are skipped under a narrowing ON THE READ SURFACE: a
+    // caller asking about one declared row is not asking about the budget or the
     // ledger, and running them would make a narrowed read fail for a reason it
     // did not ask about.
+    //
+    // THE SPAWNING SURFACE DOES NOT GET THAT SKIP, AND THE ASYMMETRY IS THE WHOLE
+    // POINT (CLOUD-1186). The ledger gate lives engine-side precisely so a branch
+    // cannot lower it by editing a rule table — and a narrowing that dropped it
+    // here would be a one-token way to do exactly that, on the verb that runs
+    // user-declared commands. A convenience on `check` is a hole on `enforce`.
+    //
+    // MEASURED, AND SHIPPED BROKEN FOR ONE DAY: CLOUD-1358 gave `enforce` a
+    // `--rule` selector while this branch still read `only.is_empty()` alone, so
+    // between that merge and this commit `batten enforce --rule <id>` skipped the
+    // ledger. CLOUD-1186 had predicted that exact regression, in those words,
+    // before the selector landed.
+    //
+    // The BUDGET keeps the skip on both surfaces: it is a measurement over
+    // declared instruction files rather than a claim about this branch's
+    // conduct, so a narrowed run failing on it is the "reason it did not ask
+    // about" this comment already refuses. The ledger is the security property;
+    // the budget is not.
     if only.is_empty() {
         findings.extend(engine_side_findings(&root, &config)?);
+    } else if surface == Surface::Spawning {
+        findings.extend(ledger_findings(&root, &config)?);
     }
 
     // The transcript capability (CLOUD-95), resolved BESIDE the runner rather than
