@@ -66,6 +66,7 @@ mod ci_hygiene;
 mod ci_parity;
 mod ci_suite_lane;
 mod claim;
+mod claim_order;
 mod claim_receipt;
 mod cli;
 mod commit;

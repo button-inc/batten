@@ -191,6 +191,44 @@ CLOUD-1149 the match reaches how bash actually spells a sibling
 rather than only a literal repo-relative path. The module is the authority on all
 of them; read them there rather than trusting this summary.
 
+## BRANCH FIRST, THEN CLAIM ONCE
+
+The claim receipt is minted on `claim check`'s PULLABLE path and keyed by the
+branch checked out **at that moment**. That one fact makes two orderings fail, in
+opposite directions, and both are reachable by following the instructions
+correctly the first time — which is why AGENTS.md states the order and this
+section states the reason (CLOUD-1343).
+
+- **Claim, then branch.** The receipt is minted against the branch you were
+  standing on, then `git checkout -B` moves you to the branch the work belongs
+  on, and the first edit is refused: `receipt read missing claim branch
+claim-needs-receipt`. The receipt is stranded on a branch nothing will land.
+- **Claim twice.** Having branched first, the pullable message used to read as
+  go-do-this-and-come-back, so the obvious next move was to move the row and run
+  `claim-check` again. The second run arrives after the row has left Todo, reads
+  it as held, and refuses `not-todo` — where the holder is the caller, ninety
+  seconds earlier. The only route past that is `--takeover` against oneself,
+  which writes a takeover record for a row nobody else touched, and CLOUD-1139
+  needs that signal to stay rare.
+
+**There is no deadlock, and the first revision of this row assumed one.** Creating
+a branch writes only under `.git`, which `claim-needs-receipt` never judges, so
+branching before claiming costs nothing and needs no engine change. The order is
+simply: branch, `claim-check` ONCE — it mints the receipt on its pullable path —
+then move the row and assign yourself.
+
+Recognising a self-claim IN THE ENGINE is deliberately not this row's: it needs to
+tell this session from a sibling, and the row's assignee cannot, since every fleet
+session carries the same configured accountable identity. An assignee-keyed
+re-mint would let a sibling silently re-mint over a working holder, which is
+CLOUD-1139's measured harm reintroduced through the fix for this one.
+
+`policy/claim-order-is-stated.rego` is the gate, and it decides what a gate can:
+whether AGENTS.md still states the order and whether this file still carries both
+failure directions. Whether a given session actually claimed before branching is
+not a property of the tree, and a gate resolving to that would be the model
+verdict non-negotiable rule 3 forbids.
+
 ## The lifecycle tasks
 
 `mise run linear-check` (is HEAD fast-forwardable? — it fetches with an explicit

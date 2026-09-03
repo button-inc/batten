@@ -3164,9 +3164,12 @@ fn run_claim_check(
             Verbosity::Normal,
             out,
             &format!(
-                "claim check: pullable ({} issue(s)) — claim it before you write code: move Todo \
-                 -> In Progress and assign yourself. The tracker automation fires on the PR \
-                 event, which is the end of the work, not the start.",
+                "claim check: pullable ({} issue(s)) — the receipt is MINTED, for this branch. \
+                 Do not run `claim check` again: move Todo -> In Progress and assign yourself, \
+                 and stop. A second run arrives after the row has left Todo, reads it as held, \
+                 and refuses `not-todo` against your own claim ninety seconds old (CLOUD-1343). \
+                 The tracker automation fires on the PR event, which is the end of the work, \
+                 not the start.",
                 issues.len()
             ),
         )?;

@@ -5005,6 +5005,42 @@ severity = "deny"
 # SILENT UNTIL A PRODUCER WRITES. No record for HEAD means nothing has judged
 # this commit — absent from the map, not a verdict — so this row is inert on a
 # checkout nobody has recorded against, which is every checkout today.
+# The claim order survives in the instruction surface (CLOUD-1343).
+#
+# TWO ORDERINGS FAIL, IN OPPOSITE DIRECTIONS, and both are reachable by following
+# the instructions correctly the first time. The receipt is minted on `claim
+# check`'s pullable path and keyed by the branch checked out at that moment, so
+# claim-then-branch strands it on a branch nothing will land, and claiming a
+# SECOND time runs after the row has left Todo, reads it as held, and refuses
+# `not-todo` — where the holder is the caller ninety seconds earlier. The only
+# route past that is `--takeover` against oneself, and CLOUD-1139 needs that
+# signal to stay rare. Measured twice, in two sessions.
+#
+# THE OBJECT IS A TRACKED FILE'S OWN TEXT, which is what makes this a gate rather
+# than a judgement: does the always-loaded file state the order, and does the
+# triggered rules file carry both failure directions. It catches DELETION and
+# DRIFT, which is the whole failure mode when the remedy is words. Whether a given
+# session actually claimed before branching is NOT a property of the tree, and a
+# rule resolving to that would be the model verdict non-negotiable rule 3 forbids.
+#
+# `line_sources` IS LOAD-BEARING, not decoration. Without it the engine builds no
+# lines for these two paths, every clause reads undefined, and the module loads
+# clean while deciding nothing — a dead gate is byte-identical to a clean tree on
+# the decision surface.
+#
+# TWO FILES BECAUSE A BUDGET FORCED IT. `policy-budget` caps AGENTS.md at 3500
+# tokens and 199 lines and the first draft of this change blew both, so the
+# always-loaded file carries only the ORDER and the reason lives in the rules file
+# that loads at the trigger. Both arms are therefore required: either half alone
+# is a reader who learns half the trap.
+[[rule]]
+id = "claim-order-is-stated"
+kind = "policy"
+scope = "tree"
+line_sources = ["AGENTS.md", ".claude/rules/toolchain.md"]
+module = "policy/claim-order-is-stated.rego"
+severity = "deny"
+
 [[rule]]
 id = "forge-verdict-required"
 kind = "policy"
@@ -7827,6 +7863,18 @@ gloss = "declared and spent nowhere"
 [[vocabulary.condition]]
 word = "wrong"
 gloss = "does not match the declared shape"
+
+[[verdict]]
+id = "claim declare dropped"
+gloss = "the instruction surface no longer states the claim order, or no longer carries its reason"
+class = """
+The claim receipt is keyed by the branch checked out when `claim check` mints it, which makes two orderings fail in opposite directions: claiming before branching strands the receipt on a branch nothing will land, and claiming a second time refuses `not-todo` against the caller's own claim. AGENTS.md carries the ORDER — branch first, then claim ONCE — and `.claude/rules/toolchain.md` carries both failure directions; a budget forces the split, so both arms are required. The remedy is to restore the sentence that went missing in the file the finding names, never to widen the always-loaded file past its ceiling.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/claim-order-is-stated.rego"
 
 [[verdict]]
 id = "turn ask twice"

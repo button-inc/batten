@@ -82,8 +82,8 @@ predicate, not a list**: enumeration is why the previous version did not hold
 
 The board is the observability surface: **the state transition IS how others
 know**. Move the `CLOUD-*` issue in lockstep: **Todo** = the ready queue (the
-Ready block, not a status); **In Progress** = pulled — claim **by hand, before
-writing code** (`mise run claim-check`) and assign yourself, since the
+Ready block, not a status); **In Progress** = pulled — **branch first, then claim
+ONCE** (`mise run claim-check`), then assign yourself, since the
 automation fires only at the PR event; **In Review** = landed on `main`, by the
 merge **iff the body closes the key** (`closing-key-check`) —
 [trunk-based](https://trunkbaseddevelopment.com/) reviews after merge, flagged not withheld, `main` the
