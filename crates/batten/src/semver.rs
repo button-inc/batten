@@ -188,11 +188,17 @@ impl Compared {
             .any(|line| line.trim_start().starts_with("Checked") && line.contains(VACUOUS))
     }
 
-    /// Whether the run failed because the registry could not satisfy a resolve.
+    /// Whether the rev route's scratch resolve produced a tree that could not be
+    /// resolved or could not be built.
     ///
     /// This is the could-not-look that the lock route answers, and it is read
     /// from the report rather than from the exit code because the tool reports
     /// the same code for every kind of broken run.
+    ///
+    /// **Named for the resolve rather than for the registry**, because CLOUD-1399
+    /// measured the third way one fails: a resolve that succeeds and yields a
+    /// dependency the pinned toolchain cannot compile is the same defect as one
+    /// that never resolved, and the committed lock is the answer to both.
     #[must_use]
     pub fn unresolvable(&self) -> bool {
         UNRESOLVABLE.iter().any(|tell| self.report.contains(tell))
@@ -246,14 +252,28 @@ pub fn against_rustdoc(
     toolchain: &str,
     package: &str,
     rustdoc: &Path,
+    current: Option<&Path>,
     release_type: &str,
 ) -> Option<Compared> {
-    let output = std::process::Command::new(ANALYSER)
+    let mut command = std::process::Command::new(ANALYSER);
+    // `+toolchain` FIRST, always: cargo reads it as argv[1] and nowhere else, so
+    // an option pushed ahead of it silently runs the default toolchain — the
+    // failure that has no symptom until a version-dependent build breaks.
+    command
         .arg(format!("+{toolchain}"))
         .args(["semver-checks", "check-release"])
         .args(["--package", package])
         .arg("--baseline-rustdoc")
-        .arg(rustdoc)
+        .arg(rustdoc);
+    // `--current-rustdoc` only when one was built. Absent, the tool generates the
+    // head side itself through the scratch resolve — which is the path CLOUD-1399
+    // measured failing, so this is the arm that matters here; it stays optional
+    // because a caller that could not build the head side is still better served
+    // by the tool's own generation than by no comparison at all.
+    if let Some(current) = current {
+        command.arg("--current-rustdoc").arg(current);
+    }
+    let output = command
         .args(["--release-type", release_type])
         .env("CARGO_TERM_COLOR", "never")
         .current_dir(root)
@@ -412,6 +432,99 @@ pub fn baseline_rustdoc(
     } else {
         Err(format!(
             "the baseline doc build reported success but emitted no rustdoc JSON at {}: {}",
+            json.display(),
+            last_line(&built.stdout)
+        ))
+    }
+}
+
+/// Build the CURRENT tree's rustdoc JSON from the lock this repository committed.
+///
+/// # Why the lock route needs both sides, which it did not have
+///
+/// [`baseline_rustdoc`] replaced the baseline half when the rev route's scratch
+/// resolve fails. That was half a fallback, and CLOUD-1399 measured the other
+/// half failing: `cargo-semver-checks` builds the CURRENT crate the same way it
+/// builds the baseline — as a path dependency of a scratch package carrying no
+/// lock — so a registry index ahead of the committed lock breaks the head side
+/// too, and no baseline route can rescue it.
+///
+/// Measured in this container: the fresh resolve chose `tinyvec 1.13.0`, which
+/// does not compile on the pinned toolchain, so the tool aborted with
+/// `failed to build rustdoc for crate batten`. The committed lock names a version
+/// that builds, and `--locked` is what makes the resolve read it instead.
+///
+/// # The differences from the baseline twin, and there are only two
+///
+/// No tree is materialized — the working tree IS the current side, so the build
+/// runs in `root`. And the scratch directory is its own, because both halves can
+/// be in flight in one run and a shared `CARGO_TARGET_DIR` would have them
+/// overwrite each other's `{package}.json`. Every other flag is
+/// [`baseline_rustdoc`]'s and is load-bearing for the reasons stated there.
+///
+/// # Errors
+///
+/// Could-not-look, one line saying which — never a clean comparison.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: the current half of the lock route, and the same delegated doc build its baseline twin performs (CLOUD-1399)"
+)]
+pub fn current_rustdoc(
+    root: &Path,
+    toolchain: &str,
+    package: &str,
+    at: &Path,
+) -> Result<PathBuf, String> {
+    // ABSOLUTE, for the baseline twin's measured reason: a relative
+    // `CARGO_TARGET_DIR` resolves against the build's cwd, and a build that
+    // succeeds into the wrong directory is a pass nobody can find.
+    let target = at
+        .canonicalize()
+        .map_err(|err| format!("the current scratch directory could not be resolved: {err}"))?
+        .join("target");
+    let built = std::process::Command::new(ANALYSER)
+        .arg(format!("+{toolchain}"))
+        .args([
+            "doc",
+            "--locked",
+            "--no-deps",
+            "--lib",
+            "--package",
+            package,
+        ])
+        .env("RUSTC_BOOTSTRAP", "1")
+        .env(
+            "RUSTDOCFLAGS",
+            "-Z unstable-options --output-format json --document-private-items",
+        )
+        .env("CARGO_TARGET_DIR", &target)
+        .env("CARGO_TERM_COLOR", "never")
+        .env_remove("CARGO")
+        .env_remove("CARGO_MANIFEST_DIR")
+        .env_remove("CARGO_MANIFEST_PATH")
+        .env_remove("CARGO_PKG_NAME")
+        .env_remove("CARGO_PKG_VERSION")
+        .env_remove("CARGO_MAKEFLAGS")
+        .env_remove("RUSTC")
+        .env_remove("RUSTDOC")
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .current_dir(root)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|err| format!("the current doc build could not be run: {err}"))?;
+    if !built.status.success() {
+        return Err(format!(
+            "the current doc build failed: {}",
+            last_line(&built.stderr)
+        ));
+    }
+    let json = target.join("doc").join(format!("{package}.json"));
+    if json.is_file() {
+        Ok(json)
+    } else {
+        Err(format!(
+            "the current doc build reported success but emitted no rustdoc JSON at {}: {}",
             json.display(),
             last_line(&built.stdout)
         ))
@@ -725,6 +838,23 @@ mod tests {
         assert!(yanked.unresolvable());
         let ordinary = report("--- failure enum_variant_added: added ---\n");
         assert!(!ordinary.unresolvable());
+    }
+
+    #[test]
+    fn a_scratch_resolve_that_will_not_build_is_told_apart_from_a_verdict() {
+        // THE THIRD WAY THE REV ROUTE FAILS, measured on this repository in a
+        // container whose registry index was ahead of the committed lock
+        // (CLOUD-1399). The resolve SUCCEEDS and hands the scratch package a
+        // transitive dependency the pinned toolchain cannot compile, so the tool
+        // aborts at rustdoc generation with exit 101 — and neither tell above
+        // appears anywhere in its report, so the lock route never engaged and the
+        // gate reported could-not-look over a comparison the committed lock can
+        // make.
+        let unbuildable = report(
+            "error: failed to build rustdoc for crate batten v0.0.139\nnote: this is usually due \
+             to a compilation error in the crate\n",
+        );
+        assert!(unbuildable.unresolvable());
     }
 
     #[test]

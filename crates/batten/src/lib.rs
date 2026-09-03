@@ -6793,8 +6793,35 @@ fn semver_compare(
     let scratch = root.join("target").join("semver-baseline");
     drop(std::fs::remove_dir_all(&scratch));
     std::fs::create_dir_all(&scratch).ok()?;
+    // THE HEAD SIDE IS BUILT FROM THE LOCK TOO, and this is the half the fallback
+    // was missing (CLOUD-1399). The tool generates the current crate's rustdoc the
+    // same way it generates the baseline's — a scratch package with no lock — so a
+    // registry index ahead of the committed lock breaks BOTH sides, and replacing
+    // only the baseline left the run failing for the reason it already was.
+    //
+    // Its own directory beside the baseline's: both are in flight in one run, and
+    // a shared `CARGO_TARGET_DIR` would have them overwrite each other's
+    // `{package}.json`.
+    //
+    // A head side that will not build is NOT fatal here. It is handed over as
+    // `None`, and the tool falls back to generating it itself — which is the path
+    // that was failing, so this degrades to the previous behaviour rather than to
+    // no comparison. The verdict stays could-not-look either way; what changes is
+    // that the run gets a chance to succeed first.
+    let head_scratch = root.join("target").join("semver-current");
+    drop(std::fs::remove_dir_all(&head_scratch));
+    let current = std::fs::create_dir_all(&head_scratch)
+        .ok()
+        .and_then(|()| semver::current_rustdoc(root, toolchain, package, &head_scratch).ok());
     match semver::baseline_rustdoc(root, toolchain, package, baseline, &scratch) {
-        Ok(rustdoc) => semver::against_rustdoc(root, toolchain, package, &rustdoc, release_type),
+        Ok(rustdoc) => semver::against_rustdoc(
+            root,
+            toolchain,
+            package,
+            &rustdoc,
+            current.as_deref(),
+            release_type,
+        ),
         Err(why) => {
             // The caller renders could-not-look either way; this is what makes it
             // legible. A gate that cannot say WHY it could not look is the one
