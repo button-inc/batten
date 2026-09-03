@@ -1164,6 +1164,111 @@ pub fn diagnose_hooks(dir: &Path) -> WiringReport {
     }
 }
 
+/// One session's own declared-open work, as `doctor session` renders it.
+///
+/// `#[non_exhaustive]` for [`WiringReport`]'s reason.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[non_exhaustive]
+pub struct SessionReport {
+    /// The running binary's version.
+    pub version: &'static str,
+    /// How many declared tasks are not `completed`, or `None` for
+    /// could-not-look.
+    ///
+    /// **THREE-VALUED, AND THAT IS THE WHOLE ROW** (CLOUD-1376). An unreadable
+    /// store, an undeclared template and a store with nothing open are three
+    /// different answers, and collapsing the first into the third is exactly the
+    /// false clean this verb exists to refuse: "no store" must never read as
+    /// "nothing left to do".
+    pub open: Option<usize>,
+    /// How many tasks the store holds at all, or `None` for could-not-look.
+    pub total: Option<usize>,
+    /// The ids of the open tasks, sorted — a POINTER set, never a subject line.
+    ///
+    /// Non-negotiable rule 4: an id sends a reader to the task; a subject would
+    /// return the session's own prose to it, which is the mirror a restatement
+    /// can clear.
+    pub ids: Vec<String>,
+    /// Whether the session has nothing open. False for could-not-look.
+    pub ok: bool,
+}
+
+/// Read the live session's task store and count what is not finished.
+///
+/// # Why this is a verb and not only a nudge
+///
+/// The question *is this session safe to end* arrives INSIDE a turn, and a
+/// `Stop` rule answers after one. A verb is what lets the question be answered
+/// by an exit code rather than by an opinion — which is the whole defect
+/// CLOUD-1376 records, where the store held `pending` and the answer given was
+/// "safe".
+#[must_use]
+pub fn diagnose_session(dir: &Path) -> SessionReport {
+    let unreadable = SessionReport {
+        version: config::VERSION,
+        open: None,
+        total: None,
+        ids: Vec::new(),
+        ok: false,
+    };
+    let Some(link) = resolve::resolve(dir, &crate::Overrides::default())
+        .ok()
+        .and_then(|resolved| {
+            let transcript = resolved.transcript.as_ref()?;
+            // The template's ABSENCE is could-not-look rather than clean: a
+            // consumer that never declared a store has not told us it has no
+            // work.
+            transcript.tasks.as_ref()?;
+            crate::transcript::tasks_link(dir, transcript.path.as_deref()?)
+        })
+    else {
+        return unreadable;
+    };
+    let Ok(entries) = std::fs::read_dir(&link) else {
+        return unreadable;
+    };
+    let mut total = 0usize;
+    let mut ids = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read_to_string(&path) else {
+            // ONE unreadable member poisons the whole reading. A partial count
+            // is a number that looks measured and is not, and this verb's only
+            // failure mode that matters is under-reporting.
+            return unreadable;
+        };
+        let Ok(task) = serde_json::from_str::<serde_json::Value>(&bytes) else {
+            return unreadable;
+        };
+        total += 1;
+        if task.get("status").and_then(serde_json::Value::as_str) != Some("completed") {
+            if let Some(id) = task.get("id").and_then(serde_json::Value::as_str) {
+                ids.push(id.to_owned());
+            }
+        }
+    }
+    // Byte-stable output (§6): directory order is the filesystem's, and a report
+    // whose id list reorders between runs is not byte-stable.
+    ids.sort_by(|left, right| {
+        let numeric = left
+            .parse::<u64>()
+            .ok()
+            .zip(right.parse::<u64>().ok())
+            .map(|(left, right)| left.cmp(&right));
+        numeric.unwrap_or_else(|| left.cmp(right))
+    });
+    SessionReport {
+        version: config::VERSION,
+        open: Some(ids.len()),
+        total: Some(total),
+        ok: ids.is_empty(),
+        ids,
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

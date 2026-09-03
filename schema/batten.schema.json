@@ -3822,6 +3822,13 @@
             "string",
             "null"
           ]
+        },
+        "tasks": {
+          "description": "Where this host keeps the session's own task store, with `{session}`\nstanding in for the id the envelope carries (CLOUD-1376).\n\nON THIS TABLE RATHER THAN A `[session]` ONE, and the reason is this\ntable's own: the transcript's format and the host's memory layout are\nalready \"two facts about one host\", and splitting them across tables\nwould be the widening rule 6 forbids. A third fact about the same host\njoins them rather than opening a second authority over the same subject.\n\nA TEMPLATE, because the engine may not derive it. The store lives outside\nthe repository root and its layout is the HOST's — deriving it from the\ntranscript path would put a directory layout in the engine, which rule 1\nrefuses. The consumer names the shape; the engine substitutes one field it\nwas handed and opens what the substitution names.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false

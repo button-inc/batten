@@ -1133,6 +1133,11 @@ pub enum DoctorCommand {
         /// Emit the per-harness diagnosis as byte-stable JSON.
         json: bool,
     },
+    /// Whether this session has declared work it has not finished.
+    Session {
+        /// Emit the count and the open ids as byte-stable JSON.
+        json: bool,
+    },
 }
 
 /// Subcommands of `generate`.
@@ -1455,6 +1460,9 @@ fn design_of(matches: &ArgMatches) -> Option<DesignCommand> {
 fn doctor_of(matches: &ArgMatches) -> DoctorCommand {
     match matches.subcommand() {
         Some(("hooks", matches)) => DoctorCommand::Hooks {
+            json: flag(matches, "json"),
+        },
+        Some(("session", matches)) => DoctorCommand::Session {
             json: flag(matches, "json"),
         },
         // The bare verb reads `-J` from its OWN matches, which is where clap put

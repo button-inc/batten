@@ -8886,6 +8886,18 @@ fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope) -> Option<Strin
     // reading a dangling path on every fresh container — the CLOUD-990 condition,
     // reintroduced by the retirement that was supposed to preserve it.
     refresh_transcript_link(root, envelope);
+    // THE SAME SEAM FOR THE SESSION'S TASK STORE (CLOUD-1376), and it rides here
+    // for the transcript's reason rather than as a second idea: both are
+    // per-session paths outside the root that a committed key must name forever.
+    // A session that has not reached its first `Stop` therefore has no link and
+    // `doctor session` answers could-not-look — which is the honest reading, and
+    // the one the whole row exists to keep distinct from a clean.
+    //
+    // ABOVE THE MINT AND THE LADDER, on CLOUD-1372's own reasoning one step
+    // earlier: a seam WRITE must not sit behind a rule that can return, or the
+    // link goes unwritten on exactly the turns a rule fired — and an unwritten
+    // link reads as could-not-look forever after.
+    refresh_tasks_link(root, envelope);
     // MINTED BEFORE ANY RULE CAN RETURN (CLOUD-1372). The position is the fix,
     // not a tidy-up.
     //
@@ -9008,6 +9020,47 @@ fn refresh_transcript_link(root: &Path, envelope: &hook::Envelope) {
     let _ = std::fs::remove_file(&link);
     #[cfg(unix)]
     let _ = std::os::unix::fs::symlink(source, &link);
+}
+
+/// Point the derived task-store link at the session the host just named.
+///
+/// The same seam as [`refresh_transcript_link`] and for the same reason: the
+/// store is per-session and outside the root, so no committed value can name it,
+/// while the committed value must name it forever. The declared template is the
+/// consumer's; the one substitution is the engine's (CLOUD-1376).
+///
+/// NOTHING IS READ HERE — the symlink is a pointer, and `doctor session` is the
+/// only thing that opens it. Silent on every failure, like everything else at
+/// this boundary: a store that cannot be pointed at resolves to could-not-look
+/// downstream, which is an honest absence rather than a clean.
+fn refresh_tasks_link(root: &Path, envelope: &hook::Envelope) {
+    let Some(session) = envelope.session.as_deref() else {
+        return;
+    };
+    let Ok(config) = resolve::resolve(root, &Overrides::default()) else {
+        return;
+    };
+    let Some(transcript) = config.transcript.as_ref() else {
+        return;
+    };
+    let (Some(template), Some(declared)) =
+        (transcript.tasks.as_deref(), transcript.path.as_deref())
+    else {
+        return;
+    };
+    let source = crate::transcript::tasks_dir(template, session);
+    if !Path::new(&source).is_dir() {
+        return;
+    }
+    let Some(link) = crate::transcript::tasks_link(root, declared) else {
+        return;
+    };
+    if let Some(parent) = link.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::remove_file(&link);
+    #[cfg(unix)]
+    let _ = std::os::unix::fs::symlink(&source, &link);
 }
 
 /// The hatch that silences the whole end-of-turn surface.
@@ -12535,6 +12588,7 @@ fn run_doctor(command: &cli::DoctorCommand, out: &mut dyn Write) -> Result<ExitC
     match *command {
         cli::DoctorCommand::Diagnose { json } => run_diagnose(json, out),
         cli::DoctorCommand::Hooks { json } => run_doctor_hooks(json, out),
+        cli::DoctorCommand::Session { json } => run_doctor_session(json, out),
     }
 }
 
@@ -12608,6 +12662,57 @@ fn run_doctor_hooks(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
         )?;
     }
     Ok(report.code())
+}
+
+/// `doctor session` — the exit code that answers "is this session safe to end".
+///
+/// Three codes for three answers, which is the whole point of the verb
+/// (CLOUD-1376): `0` nothing open, `1` work declared and unfinished, `3`
+/// could-not-look. A caller may quote the code; it cannot quote an opinion.
+///
+/// [`ExitCode::Violation`] is unreachable, for [`doctor::WiringReport::code`]'s
+/// reason: a sub-verb of `doctor` is a diagnosis, a mediating harness reads `2`
+/// as a deny, and "you have unfinished work" is not "policy says no".
+///
+/// **Could-not-look is `3` and never `0`.** That single mapping is the row's
+/// deliverable: the defect being fixed is an absent reading reported as a clean
+/// one, so the arm with nothing to read must not share a code with the arm that
+/// read and found nothing.
+fn run_doctor_session(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
+    let report = doctor::diagnose_session(Path::new("."));
+    if json {
+        writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
+        return Ok(session_code(&report));
+    }
+    match (report.open, report.total) {
+        (Some(open), Some(total)) if open > 0 => {
+            writeln!(
+                out,
+                "doctor session: {open} of {total} declared task(s) open — {}",
+                report.ids.join(" ")
+            )?;
+        }
+        (Some(_), Some(total)) => {
+            writeln!(out, "doctor session: 0 of {total} declared task(s) open")?;
+        }
+        // Silent on stdout for the unreadable arm: §6 keeps a could-not-look off
+        // the data channel, and the exit code carries it.
+        _ => {
+            writeln!(
+                out,
+                "doctor session: no readable task store — this is could-not-look, never a clean"
+            )?;
+        }
+    }
+    Ok(session_code(&report))
+}
+
+fn session_code(report: &doctor::SessionReport) -> ExitCode {
+    match report.open {
+        None => ExitCode::Internal,
+        Some(0) => ExitCode::Success,
+        Some(_) => ExitCode::Usage,
+    }
 }
 
 fn run_spec(format: SpecFormat, out: &mut dyn Write) -> Result<ExitCode> {

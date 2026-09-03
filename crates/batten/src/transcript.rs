@@ -1130,6 +1130,48 @@ pub struct TranscriptConfig {
     /// inside the repo root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_root: Option<String>,
+    /// Where this host keeps the session's own task store, with `{session}`
+    /// standing in for the id the envelope carries (CLOUD-1376).
+    ///
+    /// ON THIS TABLE RATHER THAN A `[session]` ONE, and the reason is this
+    /// table's own: the transcript's format and the host's memory layout are
+    /// already "two facts about one host", and splitting them across tables
+    /// would be the widening rule 6 forbids. A third fact about the same host
+    /// joins them rather than opening a second authority over the same subject.
+    ///
+    /// A TEMPLATE, because the engine may not derive it. The store lives outside
+    /// the repository root and its layout is the HOST's — deriving it from the
+    /// transcript path would put a directory layout in the engine, which rule 1
+    /// refuses. The consumer names the shape; the engine substitutes one field it
+    /// was handed and opens what the substitution names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tasks: Option<String>,
+}
+
+/// Where the engine parks a pointer at the live session's task store.
+///
+/// DERIVED FROM `path` RATHER THAN DECLARED, on the same reasoning that put
+/// `tasks` on this table: a second declared key would be a second thing to keep
+/// in step for a location nobody chooses independently. The link sits beside the
+/// transcript link because it answers about the same session.
+///
+/// `None` when no transcript path is declared — there is then nowhere this
+/// engine has been told it may write, and inventing one would be the widening
+/// house-style §8 refuses.
+#[must_use]
+pub fn tasks_link(root: &std::path::Path, declared_path: &str) -> Option<std::path::PathBuf> {
+    let link = root.join(declared_path);
+    Some(link.parent()?.join(".tasks"))
+}
+
+/// Substitute the one field the envelope carries into the declared template.
+///
+/// The whole of the engine's knowledge about the host's layout: one named
+/// placeholder. Everything either side of it is the consumer's string, which is
+/// what keeps a directory layout out of `crates/batten` (rule 1).
+#[must_use]
+pub fn tasks_dir(template: &str, session: &str) -> String {
+    template.replace("{session}", session)
 }
 
 /// Validate the table at load, the way every other config table is.

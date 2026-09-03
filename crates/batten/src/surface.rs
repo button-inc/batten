@@ -2357,6 +2357,33 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[JSON],
     },
+    // THE VERB "IS THIS SESSION SAFE TO END" DID NOT HAVE (CLOUD-1376).
+    //
+    // Every other completion question resolves to a command: `verify` decides
+    // the tree, `land` the PR, `done-check` the release, `claim-check` the pull.
+    // Nothing decided the SESSION, so the one completion claim with no command
+    // behind it was answered by estimate — measured, with the store on disk
+    // reading `pending` and the answer given as "safe". Non-negotiable rule 3
+    // says gates decide and never estimate; a rule needs an instance to bind to,
+    // and this is that instance.
+    //
+    // A SUB-VERB OF `doctor` rather than a new top-level verb, for the reason
+    // `doctor hooks` already carries: §2 spells `doctor <SUB>` as the shape for a
+    // focused sub-diagnostic, and *can batten's operator stop here* is a question
+    // about whether this setup is finished, not a policy verdict over the tree.
+    //
+    // `read`, structurally: it opens the session's own task store and counts. It
+    // spawns nothing and writes nothing.
+    CommandDecl {
+        path: "doctor session",
+        id: "doctor.session",
+        about: "Diagnose whether this session has declared work it has not finished",
+        // The open ids are the pointer set a reader acts on, and `-J` is where
+        // they go — never a task's subject line (rule 4).
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
     // The scaffolding half of §12's onboarding pair, and the one verb whose
     // write target is inside the repository. `write` rather than `destructive`:
     // it creates a file and replaces nothing — an existing config is refused
