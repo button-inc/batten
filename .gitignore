@@ -27,6 +27,12 @@
 # Refreshed per turn by mise-tasks/stop-guard.sh from the Stop payload; committing
 # it would put a whole session's prose in the tree.
 /.claude/.transcript.jsonl
+# Its sibling for the session task store (CLOUD-1376), derived beside it and
+# refreshed from the same Stop payload. Committing this one leaks no prose — a
+# symlink is a path — but it names ONE container's session by id, so every other
+# checkout inherits a dangling pointer, and `doctor session` reads a dangling link
+# as could-not-look forever. The engine writes it; the tree never carries it.
+/.claude/.tasks
 
 # Per-user local Claude memory — never shared (personal overrides of CLAUDE.md).
 CLAUDE.local.md
