@@ -121,7 +121,7 @@ jobs:
           # tests/bats — the shell test runner. Without it `mise run test:bats`
           # has no bats to run.
           submodules: true
-      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0 (CLOUD-404 retry fix, now a release)
         with:
           # cross-check is `rustup target add` + `cargo check`; rust is the only
           # tool it touches. See the ci job for why these lists are narrow.
@@ -202,7 +202,7 @@ jobs:
           bash -c "$body" || exit 0
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0 (CLOUD-404 retry fix, now a release)
         with:
           # zig supplies the Darwin linker and cargo-zigbuild drives cargo
           # through it; rust is the compiler. Nothing else is invoked here —
@@ -279,7 +279,7 @@ jobs:
           # task passes `--baseline-rev origin/main`, and a shallow clone has no
           # such ref to build the baseline rustdoc from.
           fetch-depth: 0
-      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0 (CLOUD-404 retry fix, now a release)
         with:
           # cargo-semver-checks does the comparison; rust supplies the cargo and
           # the rustup that fetches the newer toolchain the tool requires — see
@@ -422,7 +422,7 @@ jobs:
           # carries a suite about that path — and it would read as a Windows
           # finding, which is the misattribution this job exists to avoid.
           submodules: true
-      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0 (CLOUD-404 retry fix, now a release)
         with:
           # NOT rust alone, which is what this job shipped with and what the
           # sixth Windows run disproved. `cargo test` is the command, but the
