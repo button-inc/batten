@@ -1249,25 +1249,35 @@ mod tests {
         parse(SAMPLE, "t.jsonl").expect("parses")
     }
 
-    fn home(path: &str) -> Option<&std::ffi::OsStr> {
-        Some(std::ffi::OsStr::new(path))
+    /// The home a host would hand over, in the shape the resolver takes it.
+    ///
+    /// Returns the value rather than an `Option` of it: every call here supplies
+    /// a home, so wrapping inside the helper would hide which cases are ABOUT an
+    /// absent home — and that is the arm `an_absent_home_leaves_the_tilde_alone`
+    /// exists to pin. `Some` at the call site keeps that visible.
+    fn home(path: &str) -> &std::ffi::OsStr {
+        std::ffi::OsStr::new(path)
     }
 
     #[test]
     fn the_session_id_is_the_only_thing_substituted() {
         assert_eq!(
-            tasks_dir("/var/tasks/{session}", "s-1", home("/home/agent")),
+            tasks_dir("/var/tasks/{session}", "s-1", Some(home("/home/agent"))),
             "/var/tasks/s-1",
             "the placeholder resolves"
         );
         // Everything either side of the placeholder is the consumer's string and
         // is returned untouched — the engine knows one field, not a layout.
         assert_eq!(
-            tasks_dir("/var/{session}/x/{session}", "s-1", home("/home/agent")),
+            tasks_dir(
+                "/var/{session}/x/{session}",
+                "s-1",
+                Some(home("/home/agent"))
+            ),
             "/var/s-1/x/s-1"
         );
         assert_eq!(
-            tasks_dir("/var/tasks/fixed", "s-1", home("/home/agent")),
+            tasks_dir("/var/tasks/fixed", "s-1", Some(home("/home/agent"))),
             "/var/tasks/fixed"
         );
     }
@@ -1278,12 +1288,16 @@ mod tests {
         // declared path reaches no directory, and a store that resolves to
         // nothing reads exactly like a consumer with no work.
         assert_eq!(
-            tasks_dir("~/.claude/tasks/{session}", "s-1", home("/home/agent")),
+            tasks_dir(
+                "~/.claude/tasks/{session}",
+                "s-1",
+                Some(home("/home/agent"))
+            ),
             "/home/agent/.claude/tasks/s-1"
         );
         // Only a LEADING `~/` is special.
         assert_eq!(
-            tasks_dir("/var/~/{session}", "s-1", home("/home/agent")),
+            tasks_dir("/var/~/{session}", "s-1", Some(home("/home/agent"))),
             "/var/~/s-1"
         );
     }
@@ -1298,7 +1312,7 @@ mod tests {
             "~/.claude/tasks/s-1"
         );
         assert_eq!(
-            tasks_dir("~/.claude/tasks/{session}", "s-1", home("")),
+            tasks_dir("~/.claude/tasks/{session}", "s-1", Some(home(""))),
             "~/.claude/tasks/s-1",
             "an empty HOME is absent, not a root"
         );
