@@ -5086,7 +5086,7 @@ severity = "deny"
 id = "denials"
 count = "hook-denials"
 
-# The measured doom-loop shape: the same call, again (CLOUD-1347, the across-turn
+# An effective bound on a suspected feedback path (CLOUD-1344, the across-turn
 # family no command-string row can reach).
 #
 # WHY NO LANDED ARM REACHES IT. `run-shape`'s refusal keys on a backgrounded
@@ -5096,14 +5096,19 @@ count = "hook-denials"
 # verb with no argv, so `input.call.segments` gives a `shape` row nothing to
 # match. Repetition across turns appears in no command string at all.
 #
-# TRAILING-RUN ADJACENCY, NOT A WINDOW, AND THAT IS WHAT MAKES IT SAFE.
-# `repeat-depth` is the run of identical (tool, arguments) calls at the END of the
-# stream, so any intervening DISTINCT call clears it and the edit-then-retest loop
-# is false by construction rather than by carve-out. `distinct-calls` beside it is
-# the progress term. A WINDOW recurrence — the maximum recurrences of any one
-# fingerprint over a declared recent window — is CLOUD-1350's separate member and
-# is permanently `warn` there for the opposite reason: recurrence in a window is
-# exactly what legitimate iteration looks like.
+# TRAILING-RUN ADJACENCY, AND THAT IS WHAT MAKES IT SAFE. `agent-turn-run` is the
+# run of assistant turns carrying no tool call at the END of the stream, so a
+# single action clears it and a session thinking between actions never reaches the
+# threshold. It is also what makes the member NON-MONOTONIC, which is the property
+# any later promotion depends on: the run clears itself the moment the session
+# acts, where a whole-stream total never resets and can only become more likely to
+# fire.
+#
+# COULD-NOT-LOOK IS PER EXTRACTION HERE, decided in the engine. A host that
+# records no turn boundaries answers nothing for this member and the key is absent
+# rather than zero — zero is a real count meaning the extractor ran, and "zero
+# repeats" over a two-hundred-call session is a false green over a session nobody
+# measured.
 #
 # IT SHIPS AT `warn`, AND THAT IS THE ROW'S MOST IMPORTANT FIELD. A
 # `mediated_call` row at `deny` refuses EVERY subsequent tool call once it fires,
@@ -5125,12 +5130,8 @@ module = "policy/repetition-without-progress.rego"
 severity = "warn"
 
 [[rule.extract]]
-id = "repeat-depth"
-count = "repeat-depth"
-
-[[rule.extract]]
-id = "distinct-calls"
-count = "distinct-calls"
+id = "agent-turn-run"
+count = "agent-turn-run"
 
 # A weaker spelling of a task this project already defines (CLOUD-856, the
 # successor shape for `run-shape-guard`'s `cargo-substitutes-for-a-task`).
@@ -7882,10 +7883,10 @@ kind = "document"
 target = "policy/claim-order-is-stated.rego"
 
 [[verdict]]
-id = "turn ask twice"
-gloss = "this session has already made this call, with these arguments, many times over"
+id = "turn run loose"
+gloss = "this session has taken several turns in a row without doing anything"
 class = """
-A call you have already made, with the same arguments and nothing in between, told you what it told you the first time. The count is the trailing run: any intervening distinct call clears it, so this is the same call three times over rather than a busy session. The remedy is not to wait and not to try again — it is to do something different, or to say why you cannot. Where the repetition is a wait, a backgrounded task re-invokes the session when it exits, so the notification IS the wake-up and a turn with something backgrounded is the designed state rather than one to fill.
+Several turns in a row with no tool call between them. The count is the trailing run, so a single action clears it and a session thinking between actions never reaches this — what it names is a session that has stopped acting. It is an effective bound on a suspected feedback path rather than a proof of one: the remedy is to act, or to end the turn and say what is blocking. Where the waiting is real, a backgrounded task re-invokes the session when it exits, so the notification IS the wake-up and a turn with something backgrounded is the designed state rather than one to fill.
 """
 
 [[verdict.route]]

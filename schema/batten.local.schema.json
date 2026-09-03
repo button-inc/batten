@@ -270,14 +270,9 @@
           "const": "hook-denials"
         },
         {
-          "description": "The trailing run of identical calls — same tool, same arguments, nothing\nbetween them — at the end of the stream (CLOUD-1347). Adjacency is what\ndoes the false-positive work: any intervening distinct call clears it.",
+          "description": "The trailing run of assistant turns carrying no tool call — the monologue\nshape (CLOUD-1344), and deliberately the first member of this family\nbecause it needs no hashing: it reduces `Event::Turn`, which is already\ntyped, so no argument or result is read even internally.",
           "type": "string",
-          "const": "repeat-depth"
-        },
-        {
-          "description": "Distinct call identities this session — the progress term a predicate over\nrepetition conditions on, never a finding on its own.",
-          "type": "string",
-          "const": "distinct-calls"
+          "const": "agent-turn-run"
         }
       ]
     },

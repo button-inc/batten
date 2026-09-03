@@ -425,35 +425,54 @@ pub struct Counts {
     pub hook_decisions: usize,
     /// Hook runs that denied — `exit_code` equal to the §7 verdict code.
     pub hook_denials: usize,
-    /// The TRAILING run of identical calls — the same tool and the same
-    /// arguments, with nothing else between them — counted at the end of the
-    /// stream (CLOUD-1347).
+}
+
+/// Which event KINDS this host records at all — the per-extraction capability
+/// (CLOUD-1344).
+///
+/// **Zero is a real answer and means the extractor ran**, which is why this
+/// exists. An extraction whose underlying event kind never appears is not a
+/// session that did none of it: it is a host that does not record it, and
+/// answering `0` there is a false green over a session nobody measured. Batten is
+/// harness-agnostic, and the right reading of that is to read whatever a host
+/// emits and carry cross-compatibility as a DECLARED capability rather than as a
+/// refusal to implement.
+///
+/// **Decided here rather than in a module.** A per-module conjunct asking "did
+/// this host record turns" is a dead gate on every harness but the one its author
+/// tested, which is the failure `.claude/rules/policy-modules.md` documents.
+///
+/// The bound, stated rather than absorbed: this cannot distinguish a host that
+/// records no hook runs from a session that genuinely triggered none. It resolves
+/// that ambiguity toward could-not-look, which is the safe direction — a missing
+/// answer is reported, where a false zero is indistinguishable from a clean
+/// session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Records {
+    /// Turn boundaries appear.
+    pub turns: bool,
+    /// Tool calls appear.
+    pub tool_calls: bool,
+    /// Tool results appear — a host may record calls and not their outcomes.
+    pub tool_results: bool,
+    /// Hook runs appear.
+    pub hook_decisions: bool,
+}
+
+/// Reductions over RUNS, beside [`Counts`]'s totals.
+///
+/// A separate document for a separate question, which is why it is not a field on
+/// [`Counts`]: that struct is the `-J` capability report's own shape, and its
+/// comments refuse members no reader of that document needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Repeats {
+    /// The TRAILING run of assistant turns carrying no tool call — the monologue
+    /// shape, and deliberately the member that needs no hashing at all.
     ///
-    /// **Adjacency is the design, not an implementation detail**, and it is what
-    /// does the false-positive work. Any intervening DISTINCT call clears the
-    /// run, so `mise run test` three times with edits between is already false
-    /// here without a carve-out, while the same call three times with nothing in
-    /// between is not a thing a productive session does. The documented
-    /// detectors converge on this shape: opencode keys on an identical
-    /// `(name, args-hash)` in the last 3 calls, OpenHands on identical
-    /// action-observation cycles.
-    ///
-    /// A WINDOW recurrence — the maximum recurrences of any one fingerprint over
-    /// a declared recent window — is a different member and a different question,
-    /// and is deliberately not this one: recurrence in a window is what
-    /// legitimate iteration looks like, so it is a sensor rather than a refusal.
-    ///
-    /// Identity is the tool name and a DIGEST of the arguments, so no argument
-    /// text is retained — the same shape [`Event::HookOutput`] uses to decide
-    /// "the same thing said twice" without keeping what was said (rule 4).
-    pub repeat_depth: usize,
-    /// Distinct call identities this session — the PROGRESS term.
-    ///
-    /// A denominator rather than a finding on its own: a session doing many
-    /// different things has a high count, and a session orbiting has a low one
-    /// against a high [`Self::tool_calls`]. It exists so a predicate over
-    /// repetition can condition on progress instead of on repetition alone.
-    pub distinct_calls: usize,
+    /// Adjacency is what does the false-positive work: a tool call breaks the
+    /// run, so a session that is thinking between actions is not a session that
+    /// has stopped acting.
+    pub agent_turn_run: usize,
 }
 
 /// Whether the transcript capability is available for this run.
@@ -504,17 +523,6 @@ impl Stream {
     )]
     pub fn counts(&self) -> Counts {
         let mut counts = Counts::default();
-        // The fingerprint of every call, in order, so the TRAILING run can be
-        // read after the walk. Keyed by an argument DIGEST, so no argument text
-        // is held — hashed and dropped in the same expression, exactly as
-        // `Event::HookOutput` does.
-        let mut fingerprints: Vec<(&str, String)> = Vec::new();
-        // A REPLAYED BLOCK IS NOT A SECOND CALL. Compaction and replay re-emit a
-        // `tool_use` under the id it already carried, and counting those inflates
-        // the maximum toward whatever the host chose to replay rather than toward
-        // what the session did. `tool_calls` above deliberately keeps its landed
-        // meaning and is not deduped here.
-        let mut seen_calls: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for record in &self.records {
             match &record.event {
                 Event::Turn(..) => counts.turns += 1,
@@ -524,16 +532,7 @@ impl Stream {
                 // report needs; adding a field would move a document four
                 // landed assertions read for no consumer's benefit.
                 Event::TurnEnd(_) => {}
-                Event::ToolCall { id, name, input } => {
-                    counts.tool_calls += 1;
-                    if seen_calls.insert(id.as_str()) {
-                        let arguments = serde_json::to_vec(input).unwrap_or_default();
-                        fingerprints.push((
-                            name.as_str(),
-                            crate::identity::context_fingerprint(&arguments).to_hex(),
-                        ));
-                    }
-                }
+                Event::ToolCall { .. } => counts.tool_calls += 1,
                 Event::ToolResult { failed, .. } => {
                     if *failed {
                         counts.tool_errors += 1;
@@ -562,23 +561,46 @@ impl Stream {
                 Event::HookOutput { .. } => {}
             }
         }
-        // THE RUN IS A COUNT OF CALLS, not of repeats: three identical calls in a
-        // row are a depth of 3, which is the threshold every documented detector
-        // is stated in. An empty stream is 0 and a single call is 1, so no
-        // session is one short of its own first call.
-        counts.repeat_depth = match fingerprints.last() {
-            None => 0,
-            Some(last) => fingerprints
-                .iter()
-                .rev()
-                .take_while(|call| *call == last)
-                .count(),
-        };
-        counts.distinct_calls = fingerprints
-            .iter()
-            .collect::<std::collections::HashSet<_>>()
-            .len();
         counts
+    }
+
+    /// Which event kinds this host records — see [`Records`] for why zero is not
+    /// an answer where the kind never appears.
+    #[must_use]
+    pub fn records(&self) -> Records {
+        let mut records = Records::default();
+        for record in &self.records {
+            match &record.event {
+                Event::Turn(..) | Event::TurnEnd(_) => records.turns = true,
+                Event::ToolCall { .. } => records.tool_calls = true,
+                Event::ToolResult { .. } => records.tool_results = true,
+                Event::HookDecision { .. } => records.hook_decisions = true,
+                Event::MemoryInjection { .. } | Event::HookOutput { .. } => {}
+            }
+        }
+        records
+    }
+
+    /// Reductions over runs — see [`Repeats`].
+    ///
+    /// Read from the END backwards, because every member here is a TRAILING run:
+    /// what the session is doing now, not what it did once.
+    #[must_use]
+    pub fn repeats(&self) -> Repeats {
+        let mut repeats = Repeats::default();
+        for record in self.records.iter().rev() {
+            match &record.event {
+                // A tool call breaks the run: the session acted.
+                Event::ToolCall { .. } => break,
+                Event::Turn(Role::Assistant, _) => repeats.agent_turn_run += 1,
+                // A user turn ends the model's own run just as an action does.
+                Event::Turn(Role::User, _) => break,
+                // Everything else is neither an action nor a turn boundary, so it
+                // neither extends nor breaks the run.
+                _ => {}
+            }
+        }
+        repeats
     }
 
     /// How many times each memory document was delivered into this session

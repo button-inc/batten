@@ -2823,31 +2823,45 @@ pub enum Extraction {
     HookDecisions,
     /// Hook runs that DENIED, by the §7 verdict exit code rather than by prose.
     HookDenials,
-    /// The trailing run of identical calls — same tool, same arguments, nothing
-    /// between them — at the end of the stream (CLOUD-1347). Adjacency is what
-    /// does the false-positive work: any intervening distinct call clears it.
-    RepeatDepth,
-    /// Distinct call identities this session — the progress term a predicate over
-    /// repetition conditions on, never a finding on its own.
-    DistinctCalls,
+    /// The trailing run of assistant turns carrying no tool call — the monologue
+    /// shape (CLOUD-1344), and deliberately the first member of this family
+    /// because it needs no hashing: it reduces `Event::Turn`, which is already
+    /// typed, so no argument or result is read even internally.
+    AgentTurnRun,
 }
 
 impl Extraction {
-    /// This extraction's answer over a parsed stream's typed counts.
+    /// This extraction's answer over a parsed stream, or `None` where this host
+    /// records none of the events it reduces.
+    ///
+    /// **`None` is COULD-NOT-LOOK and it is decided here** (CLOUD-1344). Zero is
+    /// a real answer meaning the extractor ran, so an extraction whose underlying
+    /// event kind never appears must not report one: "zero repeats" over a
+    /// two-hundred-call session is a false green over a session nobody measured.
+    /// Deciding it in the engine rather than as a per-module conjunct is what
+    /// keeps it from being a dead gate on every harness but the one its author
+    /// tested.
+    ///
+    /// Takes the whole `Stream` rather than `Counts` because the members divide:
+    /// the totals come from [`Stream::counts`] and the runs from
+    /// [`Stream::repeats`], and `Counts` is the `-J` capability report's own
+    /// shape rather than this family's.
     ///
     /// Exhaustive with no wildcard arm, like every other axis match in this
-    /// module: a member added later decides here or fails to compile, rather
-    /// than defaulting to a count of something else.
+    /// module: a member added later decides here or fails to compile, rather than
+    /// defaulting to a count of something else.
     #[must_use]
-    pub const fn of(self, counts: &crate::transcript::Counts) -> usize {
+    pub fn of(self, stream: &crate::transcript::Stream) -> Option<usize> {
+        let records = stream.records();
         match self {
-            Extraction::Turns => counts.turns,
-            Extraction::ToolCalls => counts.tool_calls,
-            Extraction::ToolErrors => counts.tool_errors,
-            Extraction::HookDecisions => counts.hook_decisions,
-            Extraction::HookDenials => counts.hook_denials,
-            Extraction::RepeatDepth => counts.repeat_depth,
-            Extraction::DistinctCalls => counts.distinct_calls,
+            Extraction::Turns => records.turns.then(|| stream.counts().turns),
+            Extraction::ToolCalls => records.tool_calls.then(|| stream.counts().tool_calls),
+            Extraction::ToolErrors => records.tool_results.then(|| stream.counts().tool_errors),
+            Extraction::HookDecisions => records
+                .hook_decisions
+                .then(|| stream.counts().hook_decisions),
+            Extraction::HookDenials => records.hook_decisions.then(|| stream.counts().hook_denials),
+            Extraction::AgentTurnRun => records.turns.then(|| stream.repeats().agent_turn_run),
         }
     }
 }

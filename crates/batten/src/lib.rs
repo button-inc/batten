@@ -8342,10 +8342,16 @@ fn session_facts(
 /// another session's record. A repository declaring no extractor opens nothing.
 ///
 /// **Could-not-look is the common case rather than the edge one** (CLOUD-388:
-/// transcripts die with their container), and all four of its spellings collapse
-/// to the same answer here — no path on the envelope, a host that keeps none, a
-/// file that will not parse, and nobody having asked. What none of them collapses
-/// into is a COUNT OF ZERO, which is a real answer and means the extractor ran.
+/// transcripts die with their container), and its spellings collapse to the same
+/// answer here — no path on the envelope, a host that keeps none, a file that
+/// will not parse, and nobody having asked. What none of them collapses into is a
+/// COUNT OF ZERO, which is a real answer and means the extractor ran.
+///
+/// **The fifth spelling is per EXTRACTION rather than per transcript**
+/// (CLOUD-1344): a transcript that parses but whose host records none of the
+/// events one extraction reduces. That key is omitted from the map, so the module
+/// reads undefined for it while every other declared extraction still answers —
+/// a granularity the whole-transcript states cannot express.
 ///
 /// Counts and nothing else leave this function. `transcript::Counts` is built
 /// from typed fields — a tool result's own `is_error`, a hook run's exit code —
@@ -8371,11 +8377,15 @@ fn extracted_facts(
     let Ok(stream) = transcript::parse(&body, path) else {
         return facts::Look::CouldNotLook;
     };
-    let counts = stream.counts();
+    // PER-EXTRACTION COULD-NOT-LOOK (CLOUD-1344). An extraction this host records
+    // none of the events for is OMITTED rather than answered zero, so a module
+    // reading it gets undefined — which Rego takes as does-not-hold, the same
+    // answer an undeclared extractor gives. Reporting a zero there would be a
+    // real count meaning the extractor ran, over a session nobody measured.
     facts::Look::Is(
         declared
             .iter()
-            .map(|row| (row.id.clone(), row.count.of(&counts)))
+            .filter_map(|row| row.count.of(&stream).map(|count| (row.id.clone(), count)))
             .collect(),
     )
 }
