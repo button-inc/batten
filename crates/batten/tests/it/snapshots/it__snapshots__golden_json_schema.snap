@@ -854,9 +854,9 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
-          "path": "doctor session",
-          "id": "doctor.session",
-          "about": "Diagnose whether this session has declared work it has not finished",
+          "path": "doctor mediator",
+          "id": "doctor.mediator",
+          "about": "Diagnose whether the engine the registrations reach was built from this tree",
           "effect": "read",
           "data_channel": true,
           "flags": [
@@ -2441,8 +2441,8 @@ expression: stdout_of(&output)
       "path": "doctor hooks"
     },
     {
-      "id": "doctor.session",
-      "path": "doctor session"
+      "id": "doctor.mediator",
+      "path": "doctor mediator"
     },
     {
       "id": "generate",
