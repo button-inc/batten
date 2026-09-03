@@ -2823,6 +2823,12 @@ pub enum Extraction {
     HookDecisions,
     /// Hook runs that DENIED, by the §7 verdict exit code rather than by prose.
     HookDenials,
+    /// How far the session's most-repeated call identity ran — a call whose tool
+    /// AND arguments it had already sent, counted per identity and reduced by
+    /// maximum. Never a sum across identities: that total is monotonic in the
+    /// length of the session, so it grows on any session long enough to repeat
+    /// anything (CLOUD-1341).
+    RepeatedCalls,
 }
 
 impl Extraction {
@@ -2839,6 +2845,7 @@ impl Extraction {
             Extraction::ToolErrors => counts.tool_errors,
             Extraction::HookDecisions => counts.hook_decisions,
             Extraction::HookDenials => counts.hook_denials,
+            Extraction::RepeatedCalls => counts.repeated_calls,
         }
     }
 }

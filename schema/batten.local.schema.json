@@ -268,6 +268,11 @@
           "description": "Hook runs that DENIED, by the §7 verdict exit code rather than by prose.",
           "type": "string",
           "const": "hook-denials"
+        },
+        {
+          "description": "How far the session's most-repeated call identity ran — a call whose tool\nAND arguments it had already sent, counted per identity and reduced by\nmaximum. Never a sum across identities: that total is monotonic in the\nlength of the session, so it grows on any session long enough to repeat\nanything (CLOUD-1341).",
+          "type": "string",
+          "const": "repeated-calls"
         }
       ]
     },

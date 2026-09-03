@@ -425,6 +425,31 @@ pub struct Counts {
     pub hook_decisions: usize,
     /// Hook runs that denied — `exit_code` equal to the §7 verdict code.
     pub hook_denials: usize,
+    /// How many times the session's MOST-REPEATED call identity recurred — a
+    /// call whose tool AND arguments it had already sent, counted per identity
+    /// and reduced by [`max`](Iterator::max), never summed across identities.
+    ///
+    /// **A maximum rather than a total, and the distinction is the whole
+    /// field.** A sum over every identity is monotonic in the length of the
+    /// session: it never resets, so it grows on any session long enough to
+    /// repeat anything and says nothing about whether one call is being asked
+    /// twice. Measured over one real transcript, the max separates — 1079 for a
+    /// poll against 38 for the next-most-repeated call — where the sum over the
+    /// same stream was 1294 and discriminated nothing (CLOUD-1341).
+    ///
+    /// **A scalar here rather than the per-key breakdown
+    /// [`Stream::memory_injections`] argues for**, because this is already a
+    /// reduction: the question is how far the worst identity ran, not which
+    /// identities exist, and a map would be the breakdown nobody asked for with
+    /// the answer still to be derived from it.
+    ///
+    /// Identity is the tool name and a DIGEST of the arguments, so no argument
+    /// text is retained — the same shape [`Event::HookOutput`] uses to decide
+    /// "the same thing said twice" without keeping what was said (rule 4). The
+    /// RESULT is deliberately not part of it: including it discriminates better
+    /// (60x against 28x) and would oblige the parser to read every result BODY,
+    /// the one payload this module exists never to touch.
+    pub repeated_calls: usize,
 }
 
 /// Whether the transcript capability is available for this run.
@@ -475,6 +500,17 @@ impl Stream {
     )]
     pub fn counts(&self) -> Counts {
         let mut counts = Counts::default();
+        // Per IDENTITY, reduced by `max` after the walk — see `repeated_calls`
+        // for why a running total over all identities is the defect this
+        // replaces. Keyed by an argument DIGEST so no argument text is held.
+        let mut per_identity: std::collections::HashMap<(&str, String), usize> =
+            std::collections::HashMap::new();
+        // A REPLAYED BLOCK IS NOT A SECOND CALL. Compaction and replay re-emit a
+        // `tool_use` under the id it already carried, and counting those inflates
+        // the maximum toward whatever the host chose to replay rather than toward
+        // what the session did. `tool_calls` above deliberately keeps its landed
+        // meaning and is not deduped here.
+        let mut seen_calls: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for record in &self.records {
             match &record.event {
                 Event::Turn(..) => counts.turns += 1,
@@ -484,7 +520,17 @@ impl Stream {
                 // report needs; adding a field would move a document four
                 // landed assertions read for no consumer's benefit.
                 Event::TurnEnd(_) => {}
-                Event::ToolCall { .. } => counts.tool_calls += 1,
+                Event::ToolCall { id, name, input } => {
+                    counts.tool_calls += 1;
+                    if seen_calls.insert(id.as_str()) {
+                        let arguments = serde_json::to_vec(input).unwrap_or_default();
+                        let identity = (
+                            name.as_str(),
+                            crate::identity::context_fingerprint(&arguments).to_hex(),
+                        );
+                        *per_identity.entry(identity).or_insert(0) += 1;
+                    }
+                }
                 Event::ToolResult { failed, .. } => {
                     if *failed {
                         counts.tool_errors += 1;
@@ -513,6 +559,14 @@ impl Stream {
                 Event::HookOutput { .. } => {}
             }
         }
+        // N occurrences of one identity are N-1 recurrences, so a session that
+        // never repeated anything answers 0 rather than 1.
+        counts.repeated_calls = per_identity
+            .values()
+            .copied()
+            .max()
+            .unwrap_or(0)
+            .saturating_sub(1);
         counts
     }
 

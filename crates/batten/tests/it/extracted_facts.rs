@@ -27,7 +27,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{StateHome as _, batten, git_in, scratch, write};
+use common::{StateHome as _, at_root, batten, git_in, scratch, write};
 
 /// Prose distinctive enough that finding it anywhere is unambiguous — standing in
 /// for everything a real transcript carries.
@@ -193,6 +193,102 @@ fn session_with(tool_calls: usize, denied: bool) -> String {
         .map(serde_json::Value::to_string)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The SHIPPED module's own registration, so a mutation of `policy/
+/// a-repeated-call-is-not-progress.rego` reddens the cases below.
+///
+/// **`deny` here where the repository ships `warn`, deliberately.** This fixture
+/// pins the PREDICATE — whether the engine builds the count the module reads —
+/// and a refusal is the unambiguous observable for that. The severity the row
+/// actually ships at is a separate decision, recorded in `batten.toml` beside the
+/// row: a `mediated_call` deny refuses every later tool call and no admission can
+/// clear it, so it is promoted only once shown silent against a real transcript.
+///
+/// **No `[[pattern]]` rows, and that is the point.** A harness declaring pattern
+/// ids supplies input no consumer supplies, and the deny cases then pass for the
+/// wrong reason (`.claude/rules/policy-modules.md`).
+fn shipped_config() -> String {
+    String::from(
+        r#"version = 1
+
+[[rule]]
+id = "a-repeated-call-is-not-progress"
+kind = "policy"
+scope = "mediated_call"
+module = "a-repeated-call-is-not-progress.rego"
+severity = "deny"
+
+[[rule.extract]]
+id = "repeats"
+count = "repeated-calls"
+
+[[verdict]]
+id = "turn ask twice"
+gloss = "this session has already made this call, with these arguments, many times over"
+class = "A call you have already made, with the same arguments, told you what it told you the first time."
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "a-repeated-call-is-not-progress.rego"
+"#,
+    )
+}
+
+/// `calls` tool calls, each carrying `arguments` for its index.
+///
+/// The id is always distinct unless `replayed` is set, which re-emits ONE id for
+/// every record — the compaction shape whose whole point is that it is not a
+/// second call.
+fn calls_session(calls: usize, replayed: bool, arguments: &dyn Fn(usize) -> String) -> String {
+    let mut lines: Vec<serde_json::Value> = Vec::new();
+    for index in 0..calls {
+        let id = if replayed {
+            String::from("t0")
+        } else {
+            format!("t{index}")
+        };
+        lines.push(serde_json::json!({
+            "type": "assistant",
+            "sessionId": "s-1",
+            "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": id, "name": "ReadNotifications",
+                 "input": {"command": arguments(index)}}
+            ]},
+        }));
+    }
+    lines
+        .iter()
+        .map(serde_json::Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Every call identical — one identity recurring `calls - 1` times.
+fn repeated_session(calls: usize) -> String {
+    calls_session(calls, false, &|_| String::from(PROSE))
+}
+
+/// A repository registering the SHIPPED module over a given transcript.
+fn shipped_fixture(name: &str, transcript: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let dir = scratch(&format!("repeats-{name}"));
+    let home = scratch(&format!("repeats-home-{name}"));
+    write(&dir, "batten.toml", &shipped_config());
+    let module = std::fs::read_to_string(at_root("policy/a-repeated-call-is-not-progress.rego"))
+        .expect("the shipped module is committed");
+    write(&dir, "a-repeated-call-is-not-progress.rego", &module);
+    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    write(&dir, "session.jsonl", transcript);
+    let path = dir.join("session.jsonl");
+    (dir, home, path)
+}
+
+/// Whether the shipped module refused this run.
+fn refused(dir: &Path, home: &Path, transcript: &Path) -> bool {
+    let outcome = hook(dir, home, Some(transcript));
+    let (answer, cause) = channels(&outcome);
+    answer.contains("turn ask twice") || cause.contains("turn ask twice")
 }
 
 /// A repository declaring two extractors, plus a scrubbed state home.
@@ -365,5 +461,68 @@ fn an_unreadable_transcript_is_could_not_look() {
         outcome.status.code(),
         Some(2),
         "and must never be a refusal\n{answer}{cause}"
+    );
+}
+
+// --- the shipped module over the engine's own count (CLOUD-1341) --------------
+
+#[test]
+fn a_session_that_re_asks_past_the_threshold_is_refused() {
+    // THE DEFECT ARM, and the case `#MUTANT repeats-may-go-unpriced` names.
+    //
+    // N CALLS ARE N-1 RECURRENCES, so clearing a threshold of 100 takes 102 calls
+    // rather than 101. That off-by-one is the whole reason this is a compiled tier
+    // and not a `with input as` case: a fabricated `{"repeats": 101}` asserts the
+    // author's arithmetic, where this asserts the engine's.
+    let (dir, home, transcript) = shipped_fixture("past", &repeated_session(102));
+    assert!(
+        refused(&dir, &home, &transcript),
+        "102 identical calls are 101 recurrences and must clear the threshold of 100"
+    );
+}
+
+#[test]
+fn the_call_that_reaches_the_threshold_does_not_cross_it() {
+    // THE BOUNDARY FROM BELOW. 101 calls are exactly 100 recurrences, which is AT
+    // the threshold and clean — the arm that would go red if the engine counted
+    // occurrences where the module reads recurrences.
+    let (dir, home, transcript) = shipped_fixture("at", &repeated_session(101));
+    assert!(
+        !refused(&dir, &home, &transcript),
+        "101 identical calls are 100 recurrences, which is at the threshold rather than past it"
+    );
+}
+
+#[test]
+fn a_busy_session_that_never_repeats_is_clean() {
+    // THE ANTI-VACUITY MIRROR (CLOUD-418). Without it a predicate firing on any
+    // long session satisfies the deny case above while deciding nothing — and this
+    // is the arm that a SUM over identities fails: 300 distinct calls sum to 0
+    // recurrences per identity but would have summed to nothing useful had the
+    // fact been a running total over the stream, which is the defect this row
+    // shipped once.
+    let (dir, home, transcript) = shipped_fixture(
+        "varied",
+        &calls_session(300, false, &|index| format!("{PROSE}-{index}")),
+    );
+    assert!(
+        !refused(&dir, &home, &transcript),
+        "a long session that repeats nothing must stay silent"
+    );
+}
+
+#[test]
+fn a_replayed_call_is_not_a_second_call() {
+    // COMPACTION RE-EMITS A `tool_use` UNDER THE ID IT ALREADY CARRIED, and
+    // counting those measures what the host chose to replay rather than what the
+    // session did. 300 records under one id are ONE call, so this is silent; an
+    // engine that did not dedupe would read 299 recurrences and refuse.
+    let (dir, home, transcript) = shipped_fixture(
+        "replay",
+        &calls_session(300, true, &|_| String::from(PROSE)),
+    );
+    assert!(
+        !refused(&dir, &home, &transcript),
+        "a replayed tool_use id is the same call, not another one"
     );
 }
