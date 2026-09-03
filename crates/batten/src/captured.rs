@@ -51,6 +51,33 @@ use std::path::Path;
 
 use crate::facts::{CaptureQuery, Format};
 
+/// The most recent captured response whose scalar at `key_at` equals `key`.
+///
+/// [`crate::capture::find`]'s question with the tool filter removed, because a
+/// `[[rule.captured]]` row names a key and a path and never a tool — see the
+/// call site for why fabricating a tool list would be worse than omitting the
+/// filter.
+///
+/// **Append order, taken from the end**, which is [`crate::capture::find_in`]'s
+/// ordering and is chosen for its reason rather than copied: `order` is monotone
+/// only WITHIN a session, so sorting by it lets a stale session outrank a live
+/// one, while the log's append order is chronological across all of them and is
+/// still a pure function of the log's bytes. So recency costs no clock and two
+/// runs over an unchanged store agree.
+///
+/// Returns the response's text, so the caller parses it through the crate's one
+/// [`crate::rules::parse_node`] call site rather than through a second mapping.
+fn find_by_key_at(root: &Path, key: &str, key_at: &str) -> Option<String> {
+    let selector = crate::capture::Selector {
+        tools: &[],
+        key,
+        key_at,
+    };
+    let resolved = crate::capture::find_any_tool(root, &selector).ok()??;
+    let bytes = crate::capture::read(root, &resolved.capture).ok()?;
+    String::from_utf8(bytes).ok()
+}
+
 /// The stream a captured RESPONSE is filed under.
 ///
 /// Responses only: a captured command line or its stdout is not a payload
@@ -60,10 +87,22 @@ const RESPONSES: &str = "response";
 
 /// Reduce each DECLARED row against the capture store.
 ///
-/// **First match in HANDLE order**, which is [`crate::capture::list`]'s own sort,
-/// so two runs over an unchanged store return the same answer — the byte
-/// stability `Surface::Check` requires and the property a time-ordered store
-/// could not offer.
+/// **How a row selects depends on whether it declared `key_at`**, and the two
+/// arms answer different questions (CLOUD-1387).
+///
+/// With a path, the row resolves through [`crate::capture::find`]: the response
+/// whose scalar at that path EQUALS the key, most recent first in the log's
+/// append order. That is the record the key is the subject OF.
+///
+/// Without one, selection is byte containment and the **first match in HANDLE
+/// order** answers — [`crate::capture::list`]'s own sort. That is every document
+/// that MENTIONS the key, with a digest deciding between them, and it is why
+/// `key_at` exists; it stays the default only so a landed row does not change
+/// verdict underneath a consumer.
+///
+/// Both arms are byte-stable, which is what `Surface::Check` requires: handle
+/// order is a sort, and append order is a pure function of the log's bytes. A
+/// time-ordered store could offer neither.
 ///
 /// **An id whose key nothing matched is ABSENT** from the result, never present
 /// with a falsy value: "nothing has been captured about this" and "the capture
@@ -116,19 +155,46 @@ pub fn reduce(
 
     let mut found = BTreeMap::new();
     for row in declared {
-        // The KEY selects the capture, by containment in the response's own
-        // bytes. Containment rather than a parsed field, because which member
-        // carries a key is a tracker's schema and non-negotiable rule 1 keeps
-        // that out of this crate — the row names the token, the engine matches
-        // it.
-        let Some(node) = parsed
-            .iter()
-            .find(|(text, node)| text.contains(&row.key) && node.is_some())
-            .and_then(|(_, node)| node.as_ref())
-        else {
-            // NOTHING HAS BEEN CAPTURED about this key, or what was captured did
-            // not parse. Absent, never a falsy answer.
-            continue;
+        // A DECLARED PATH SELECTS THE RECORD THE KEY IS THE SUBJECT OF, through
+        // the same resolver `capture find --key-at` uses. One authority on what
+        // "the capture for this key" means, rather than two that can disagree.
+        //
+        // Rule 1 is intact either way: the path is the ROW's, so no tracker field
+        // name reaches this crate — the engine reads what it was handed, exactly
+        // as it does for `node`.
+        let owned;
+        let node = if let Some(key_at) = row.key_at.as_deref() {
+            // No tool filter: a `[[rule.captured]]` row names a key and a path,
+            // never a tool, and inventing a default here would silently exclude
+            // whichever tool a consumer's response came from. `Selector`'s tools
+            // are matched with `any`, so an empty slice is "no tool matches" —
+            // hence the dedicated resolver below rather than a `find` call with
+            // a fabricated list.
+            let Some(text) = find_by_key_at(root, &row.key, key_at) else {
+                // NOTHING CAPTURED CARRIES THIS KEY AT THIS PATH. Absent, never
+                // a falsy answer — the could-not-look arm the module reads.
+                continue;
+            };
+            let Ok(parsed) = crate::rules::parse_node(Format::Json, &text) else {
+                continue;
+            };
+            owned = parsed;
+            &owned
+        } else {
+            // THE LEGACY ARM: containment over the response's own bytes, first
+            // match in handle order. Kept so a row that declared no path does
+            // not change verdict, and no longer the recommended shape — see
+            // `CaptureQuery::key_at` for what it costs (CLOUD-1387).
+            let Some(node) = parsed
+                .iter()
+                .find(|(text, node)| text.contains(&row.key) && node.is_some())
+                .and_then(|(_, node)| node.as_ref())
+            else {
+                // Nothing captured about this key, or what was captured did not
+                // parse. Absent, never a falsy answer.
+                continue;
+            };
+            node
         };
         if let Some(value) = row.reduce.apply(&node.at(&row.node)) {
             found.insert(row.id.clone(), value);
