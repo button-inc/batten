@@ -62,6 +62,19 @@ rules_path := ".claude/rules/toolchain.md"
 # over a file it never read.
 line(path) := input.tree.lines[path]
 
+# NOT APPLICABLE IS NOT A FINDING, and the guard is the triggered file rather than
+# the index. This row is about a SPLIT — the order in the always-loaded file, the
+# reason in the file that loads at the trigger — so a tree carrying an
+# instructions file and no `.claude/rules/` surface has not made that split and is
+# answering for nothing here. Measured: the committed configuration is run over a
+# fixture repository whose `AGENTS.md` is the single word `instructions`, and
+# without this conjunct every arm below fires on it.
+#
+# Keyed on the RULES file for that reason and not the index: guarding on the index
+# would be circular, since an absent index is exactly what one arm exists to
+# refuse. `hk-fix-selection`'s `governed` is the same shape over its own config.
+governed if count(line(rules_path)) > 0
+
 # THE ORDER, in the always-loaded file. The phrase is the one the file states;
 # matching a looser paraphrase would pass a rewrite that dropped the ordering,
 # which is the drift this exists to catch.
@@ -91,6 +104,7 @@ violation contains {
 	"verdict": "claim declare dropped",
 	"subjects": [{"path": index_path}],
 } if {
+	governed
 	line(index_path)
 	not index_states_the_order
 }
@@ -100,6 +114,7 @@ violation contains {
 	"verdict": "claim declare dropped",
 	"subjects": [{"path": index_path}],
 } if {
+	governed
 	line(index_path)
 	not index_asks_for_one_claim
 }
@@ -109,7 +124,7 @@ violation contains {
 	"verdict": "claim declare dropped",
 	"subjects": [{"path": rules_path}],
 } if {
-	line(rules_path)
+	governed
 	not rules_carry_both_directions
 }
 
@@ -121,6 +136,7 @@ violation contains {
 	"verdict": "claim declare dropped",
 	"subjects": [{"path": path}],
 } if {
+	governed
 	some path, _ in input.tree.missing
 }
 
@@ -181,6 +197,16 @@ test_a_source_that_would_not_parse_is_reported if {
 		{"missing": {"AGENTS.md": "unparsed"}},
 	)}
 	v.verdict == "claim declare dropped"
+}
+
+# AN INDEX WITH NO TRIGGERED RULES FILE IS THE FIXTURE SHAPE, and it is silent.
+# This is the arm the committed configuration is actually run over: a repository
+# carrying an instructions file that never made this split.
+test_an_index_without_the_rules_file_is_not_judged if {
+	count(violation) == 0 with input as {"tree": {
+		"lines": {"AGENTS.md": ["instructions"]},
+		"missing": {},
+	}}
 }
 
 # A TREE WITHOUT THESE FILES IS NOT THIS ROW'S BUSINESS, which is what keeps the

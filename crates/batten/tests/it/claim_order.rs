@@ -208,6 +208,22 @@ fn the_finding_names_the_file_that_drifted() {
 }
 
 #[test]
+fn an_index_without_the_rules_file_is_not_judged() {
+    // THE FIXTURE SHAPE, and the case that keeps the committed configuration
+    // usable over one. `cli::the_committed_repo_config_gates_a_repository` runs
+    // the whole committed ruleset over a repository whose `AGENTS.md` is the
+    // single word `instructions` and which has no `.claude/rules/` surface at
+    // all — a tree that never made the split this row is about. Without the
+    // `governed` conjunct every arm fires there, and the committed config's own
+    // output case goes red.
+    let root = tree("index-only", Some("instructions\n"), None);
+    assert!(
+        findings(&root).is_empty(),
+        "a tree with no triggered rules file has not made this split"
+    );
+}
+
+#[test]
 fn a_tree_carrying_neither_file_is_never_refused() {
     // NOT-APPLICABLE IS NOT A FINDING. This is what keeps the committed row usable
     // over a fixture repository that carries neither file — the "foreign tree"
