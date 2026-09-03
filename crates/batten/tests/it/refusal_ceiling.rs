@@ -7,6 +7,17 @@
 //! when a real row refuses a real command, and a fixture answers about a tree
 //! nobody works in.
 //!
+//! **WHAT THE CEILING IS A CEILING ON** (CLOUD-1386). It bounds the line an agent
+//! reads on EVERY firing, which is the ~300-a-session cost CLOUD-1286 measured.
+//! It is not a bound on the once-per-session sighting, where the class's own
+//! route travels so a reader meeting it for the first time can act. Those are
+//! different quantities and one budget cannot govern both — a ceiling that
+//! covered the first sighting would forbid a remedy from ever reaching a reader,
+//! which is the defect that cost a session and the reason the route came back.
+//!
+//! So every measurement here is of a REPEAT firing. `refusal` fires twice and
+//! returns the second.
+//!
 //! The discriminating pair is the whole file. The deny half is that a line over
 //! the ceiling is reported; the allow half — anti-vacuity, and the load-bearing
 //! one (CLOUD-418) — is that every refusal this repository can actually emit
@@ -35,8 +46,26 @@ fn payload(command: &str) -> String {
     )
 }
 
-/// The refusal text a mediated call produces, or `None` where it was allowed.
+/// The refusal text a mediated call produces on a REPEAT firing, which is what
+/// the ceiling governs (CLOUD-1386).
+///
+/// **The ceiling is a per-firing cost, so it is measured on the firing that
+/// repeats.** A class explains itself once per session — the route travels with
+/// the first sighting and never again — so measuring whichever firing happened to
+/// come first would measure the once-per-session line against a per-firing budget
+/// and report a ceiling breach for output that is paid once.
+///
+/// Fired twice rather than by clearing the store, and deliberately: this suite
+/// runs against the REAL repository, so forgetting its sightings would reach into
+/// the tree it is measuring. Two firings need no such reach — whatever the store
+/// held on entry, the second is a repeat by construction.
 fn refusal(command: &str) -> Option<String> {
+    let _first_sighting = refusal_once(command);
+    refusal_once(command)
+}
+
+/// One firing, whatever the store says.
+fn refusal_once(command: &str) -> Option<String> {
     let run = run_with_stdin_at_real_root(
         &root(),
         &["hook", "--harness", "exit-code"],

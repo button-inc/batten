@@ -39,6 +39,8 @@
 //! `crates/batten`, constructed at every deny site, never re-typed per harness —
 //! is what this module is.
 
+use std::path::Path;
+
 use serde::{Deserialize, Serialize, Serializer};
 
 /// The `[refusal]` table: what one emitted mediated line may cost.
@@ -213,6 +215,68 @@ pub struct Refusal {
 /// gets to declare it.
 const NO_DECLARED_FIX: &str =
     "none declared — change it through the surface that owns it, or restore it with git";
+
+/// Whether this class has already explained itself this session, marking it if
+/// not (CLOUD-1386).
+///
+/// **The repeat cost and the first-sighting value are different quantities**, and
+/// a refusal renderer that cannot tell them apart has to pick one and be wrong
+/// about the other. CLOUD-1286 removed the class's route from every declared
+/// refusal because it was paying it on every firing; the measured consequence was
+/// a reader who met `branch write unsafe` for the first time, learned nothing
+/// actionable, and reported a working gate as a design defect. Neither "always"
+/// nor "never" is right. "Once" is.
+///
+/// KEYED BY TOKEN AND SCOPED TO THE SESSION. The store lives under `$GIT_DIR`,
+/// so it dies with the container and is cleared at `SessionStart` beside the
+/// wiring record — which is the same identity `expire_wiring_record` uses, and
+/// for the reason stated there: the event IS the session.
+///
+/// **A failure to read or write answers TRUE**, which is the direction that
+/// matters: an unreadable store means the class explains itself again, costing a
+/// clause. The opposite default would silently withhold the remedy from a reader
+/// who has never seen it, which is the whole defect.
+///
+/// Compaction is invisible from here, so "per session" is the implementable
+/// approximation of "per reader" — and it errs toward repeating rather than
+/// assuming what a reader retained.
+pub fn first_sighting(root: &Path, token: &str) -> bool {
+    let Some(dir) = crate::git::git_dir(root).ok().map(|dir| dir.join(STORE)) else {
+        return true;
+    };
+    // One file per token rather than a list: two refusals firing concurrently
+    // would otherwise read-modify-write the same document and one would lose its
+    // mark, which shows up as a class explaining itself twice — cheap, but the
+    // kind of race that is easier to not have.
+    let path = dir.join(crate::provision::digest(token.as_bytes()));
+    if path.exists() {
+        return false;
+    }
+    let _ = std::fs::create_dir_all(&dir);
+    // Discarded deliberately: an unwritable store means the next firing explains
+    // itself again, which is the safe direction.
+    let _ = std::fs::write(&path, token);
+    true
+}
+
+/// Forget every class explained under the previous session (CLOUD-1386).
+///
+/// Called from the `SessionStart` arm beside the wiring record's own clear. A
+/// store that outlived its session would withhold a remedy from a reader who has
+/// not seen it, which is the failure this exists to prevent — so the clear is the
+/// load-bearing half, not the bookkeeping half.
+pub fn forget_sightings(root: &Path) {
+    if let Ok(dir) = crate::git::git_dir(root) {
+        let _ = std::fs::remove_dir_all(dir.join(STORE));
+    }
+}
+
+/// Where the per-session sightings live, under `$GIT_DIR`.
+///
+/// A FACT ABOUT THIS SESSION, NOT A RECEIPT: nothing here attests that a decision
+/// was taken, it records that a sentence has been read. Filing it beside the
+/// receipts would put a note where every reader expects a claim.
+const STORE: &str = "batten-sightings";
 
 impl Refusal {
     /// Build a refusal. The [`Fix`] is required, which is the contract.
@@ -567,5 +631,86 @@ mod tests {
         assert_eq!(Fix::declared(None), Fix::None);
         assert_eq!(Fix::declared(Some("   ")), Fix::None);
         assert_eq!(Fix::declared(Some(" x ")), Fix::Run("x".to_owned()));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod sightings {
+    use super::*;
+
+    /// A git repository to key the store against.
+    fn repo(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("batten-sighting-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the fixture directory");
+        std::process::Command::new("git")
+            .args(["init", "-q", "-b", "main", "."])
+            .current_dir(&dir)
+            .status()
+            .expect("git init");
+        dir
+    }
+
+    /// ONCE, THEN NEVER — and both halves are the assertion.
+    ///
+    /// The first half alone is satisfied by a predicate that always answers true,
+    /// which is the "always" rendering CLOUD-1286 removed for cost. The second
+    /// alone is satisfied by one that always answers false, which is the "never"
+    /// rendering that cost a session. Neither is right and only the pair says so.
+    #[test]
+    fn a_class_explains_itself_once_and_then_stops() {
+        let dir = repo("once");
+        assert!(
+            first_sighting(&dir, "branch write unsafe"),
+            "a class this session has not raised explains itself"
+        );
+        assert!(
+            !first_sighting(&dir, "branch write unsafe"),
+            "and does not explain itself a second time"
+        );
+    }
+
+    /// The store is KEYED, so one class going quiet does not silence another.
+    #[test]
+    fn each_class_is_counted_on_its_own() {
+        let dir = repo("keyed");
+        assert!(first_sighting(&dir, "branch write unsafe"));
+        assert!(
+            first_sighting(&dir, "path write refused"),
+            "a different class has still never been seen"
+        );
+    }
+
+    /// THE CLEAR IS THE LOAD-BEARING HALF. A store that outlived its session would
+    /// withhold the remedy from a reader who has never read it — the exact defect
+    /// the store exists to prevent, reintroduced by forgetting to forget.
+    #[test]
+    fn a_new_session_hears_it_again() {
+        let dir = repo("cleared");
+        assert!(first_sighting(&dir, "branch write unsafe"));
+        assert!(!first_sighting(&dir, "branch write unsafe"));
+
+        forget_sightings(&dir);
+        assert!(
+            first_sighting(&dir, "branch write unsafe"),
+            "session start forgets, so the next reader is told"
+        );
+    }
+
+    /// A TREE WITH NO GIT DIRECTORY ANSWERS TRUE, which is the safe direction:
+    /// an unreachable store costs a clause, where the opposite default costs a
+    /// reader the only actionable part of the refusal.
+    #[test]
+    fn an_unreachable_store_explains_itself_rather_than_going_quiet() {
+        let dir = std::env::temp_dir().join(format!("batten-no-git-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the fixture directory");
+        assert!(first_sighting(&dir, "branch write unsafe"));
+        assert!(
+            first_sighting(&dir, "branch write unsafe"),
+            "and keeps doing so, because nothing could record that it had"
+        );
     }
 }

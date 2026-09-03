@@ -4136,10 +4136,52 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
 /// now reaches every route including that one. Composing an
 /// `override request` command line per firing was ~40 tokens spent to save one
 /// lookup.
+/// # CLOUD-1386: the ROUTE comes back, because it was never the constant part
+///
+/// The paragraph above is right that a sentence identical on every deny is pure
+/// per-firing cost, and the hatch stays gone for exactly that reason. It was
+/// wrong to take the class's first `command` route with it. That route is not
+/// constant — it differs per class, it is the shortest thing that turns a refusal
+/// into the next action, and `Refusal::from_class` has already resolved it by the
+/// time this runs. Dropping it made every declared refusal a bare noun phrase.
+///
+/// MEASURED, and the cost was not a lookup. A session pushed with a bare
+/// `--force-with-lease`, read back `branch write unsafe leased-push`, and had no
+/// way to tell that the class refuses one SPELLING and that
+/// `--force-with-lease=<ref>:<sha>` is allowed — which the class says outright,
+/// one `explain` away. It concluded instead that the landing lease gates pushing,
+/// reported that to its reviewer as a design defect, and argued for changing a
+/// rule that was working correctly. The remedy existed, was declared, and was one
+/// clause short of arriving.
+///
+/// # ONCE PER SESSION, WHICH IS THE SHAPE BOTH EARLIER VERSIONS MISSED
+///
+/// The cost CLOUD-1286 measured is a REPEAT cost: prose that arrives on every
+/// firing of a class a reader has already read. The value is a FIRST-SIGHTING
+/// value: a reader who has never seen this class cannot act on a bare token. Both
+/// are true, and neither "always" nor "never" can hold both.
+///
+/// So the class travels the first time it fires in a session and never again.
+/// `first_sighting` is the caller's answer — the boundary consults a
+/// session-scoped record and marks it, exactly as `expire_wiring_record` treats
+/// `SessionStart` as the session identity. This function stays pure and stays the
+/// one place the two renderings are chosen between.
+///
+/// **A fresh session and a compacted one are the same reader.** Batten cannot
+/// observe compaction; what it can observe is the session-start event, and the
+/// record is cleared there. So the guarantee is per session, which is the
+/// implementable approximation of "the first time this reader sees it" — and it
+/// errs toward saying it again rather than assuming it was retained.
 #[must_use]
-pub fn deny_text(refusal: &Refusal, hatch: &str) -> String {
+pub fn deny_text(refusal: &Refusal, hatch: &str, first_sighting: bool) -> String {
     if refusal.verdict().is_some() {
-        return refusal.line();
+        return match (first_sighting, refusal.fix().declared_alternative()) {
+            // The first firing carries the way out. `explain` still holds the
+            // whole class — every alternative route, the question classes — and
+            // this is the one line that turns a refusal into the next action.
+            (true, Some(route)) => format!("{} — {route}", refusal.line()),
+            _ => refusal.line(),
+        };
     }
     format!("{} Bypass with {hatch}=1.", refusal.render())
 }
@@ -8905,7 +8947,11 @@ mod tests {
     /// fail here.
     fn denial_text(decision: Decision) -> String {
         match decision {
-            Decision::Deny(refusal) => deny_text(&refusal, BYPASS_ENV),
+            // FIRST SIGHTING, because that is the projection a reader meets when
+            // the class is new to them — the one these assertions are about. The
+            // repeat rendering has its own cases, where the difference IS the
+            // subject rather than incidental to it.
+            Decision::Deny(refusal) => deny_text(&refusal, BYPASS_ENV, true),
             // An `Ask` is not a deny, and collapsing the two here would let a
             // row that silently started escalating keep passing every assertion
             // below about what a refusal says. A `Waived` is not one either, and

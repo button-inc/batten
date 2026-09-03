@@ -7829,6 +7829,12 @@ fn expire_wiring_record(envelope: &hook::Envelope) {
         return;
     }
     let _ = wiring::clear_at_load(hook_authority_root());
+    // AND THE CLASSES THIS SESSION HAS ALREADY BEEN TOLD (CLOUD-1386), on the
+    // same event and for the same reason: the event is the session identity, and
+    // a sighting that outlived its session would withhold a remedy from a reader
+    // who has never seen it. Clearing costs a directory removal; not clearing
+    // costs the exact defect the store exists to prevent.
+    refusal::forget_sightings(hook_authority_root());
 }
 
 /// Run the declared handlers for this envelope's event (CLOUD-898).
@@ -10009,7 +10015,15 @@ fn render(
         // and the stderr line cannot disagree about what the refusal said or
         // whether it named a fix.
         hook::Decision::Deny(refusal) => {
-            let reason = hook::deny_text(&refusal, hatch);
+            // THE EFFECT IS HERE AND THE RENDERING IS NOT (CLOUD-1386).
+            // `deny_text` decides between two projections and stays pure;
+            // consulting-and-marking a store is a write, and a write belongs at
+            // the boundary with every other one. A renderer that touched the disk
+            // would also be one no test could drive twice.
+            let first_sighting = refusal
+                .verdict()
+                .is_none_or(|token| refusal::first_sighting(hook_authority_root(), token));
+            let reason = hook::deny_text(&refusal, hatch, first_sighting);
             match hook::encode_deny(harness, &envelope.raw_event, &reason)? {
                 Some(body) => {
                     writeln!(out, "{body}")?;
@@ -10028,7 +10042,12 @@ fn render(
         // degrading to "go ahead" is the one direction that inverts the policy,
         // and it is why `encode_ask`'s `None` means refuse rather than proceed.
         hook::Decision::Ask(refusal) => {
-            let reason = hook::deny_text(&refusal, hatch);
+            // AN ASK IS ALWAYS A FIRST SIGHTING, and it is not an oversight that
+            // it does not consult the store. This escalates to a HUMAN, who has
+            // read no earlier firing in this session and has no `explain` to run —
+            // so withholding the route to save a clause would be spending their
+            // attention rather than the model's.
+            let reason = hook::deny_text(&refusal, hatch, true);
             match hook::encode_ask(harness, &envelope.raw_event, &reason)? {
                 Some(body) => {
                     writeln!(out, "{body}")?;
