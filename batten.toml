@@ -1198,6 +1198,10 @@ args = ["peek", "next"]
 # A `[[pattern]]` row rather than an inline regex because a module's inline regex
 # is refused at load — one concept, one spelling.
 [[pattern]]
+id = "egress-resolver-host"
+regex = 'api\.github\.com'
+
+[[pattern]]
 id = "release-tag"
 regex = '^v[0-9]+\.[0-9]+\.[0-9]+$'
 
@@ -6042,6 +6046,31 @@ severity = "deny"
 # column rather than module prose because `batten check` renders `path:line rule`
 # and nothing else — rule 4 IS its output contract, so a remedy written into the
 # module would reach no reader.
+# CLOUD-1399. `mise.toml`'s `[env]` prepends the GitHub hosts to `NO_PROXY` so
+# mise's release resolver can reach them at all — the proxy injects a repo-scoped
+# token and `api.github.com` then answers 403 for third-party tool repos.
+#
+# THIS PROTECTS THE MITIGATION, NOT THE DECISION, and the narrowness is the point.
+# Whether this container is actually unproxied is `batten doctor egress`'s subject
+# and is read from the live environment; the tree owns only the `[env]` block. A
+# row claiming the broader property would be the defect
+# `.claude/rules/scanning.md` records for its own case.
+#
+# WHY IT EXISTS: THE MITIGATION WAS ALREADY DELETED ONCE. `65757c86` removed the
+# fencing on the reasoning that honouring the CA bundle made it unnecessary, which
+# conflates TLS re-termination with the injected-token 403. Nothing refused it —
+# `egress-check`'s `ok` admitted a partial fence, so the container still read
+# healthy, and no rule looked at the tree at all. `doctor egress` catches a bad
+# container; this catches the commit.
+[[rule]]
+id = "egress-fencing"
+kind = "policy"
+scope = "tree"
+documents = ["mise.toml"]
+module = "policy/egress-fencing.rego"
+severity = "deny"
+reason = "mise.toml's [env] fences the resolver host out of the agent proxy so mise can resolve a release at all; removing or narrowing it restores the 403 the block exists for. Both spellings are checked because every client in this class reads the lower-case name first."
+
 [[rule]]
 id = "mise-pin-agreement"
 kind = "policy"
@@ -8095,6 +8124,34 @@ gloss = "declared and spent nowhere"
 [[vocabulary.condition]]
 word = "wrong"
 gloss = "does not match the declared shape"
+
+[[verdict]]
+id = "task declare dropped"
+gloss = "mise.toml's [env] carries no no-proxy key, so nothing is fenced out of the agent proxy"
+class = """
+A deleted fence is not a narrower fence. `mise install` then resolves every tool
+release through a proxy that injects a repo-scoped token, and api.github.com
+answers 403 for third-party tool repos — naming the tool rather than the proxy.
+"""
+
+[[verdict.route]]
+id = "task read first"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
+id = "task declare partial"
+gloss = "the no-proxy value no longer names the host mise's release resolver calls"
+class = """
+A fence that does not name the host it exists for fences nothing. The keys
+survive, so a predicate asking only whether they exist would pass this. Named
+`partial` for the same state `egress-check` reports under that word.
+"""
+
+[[verdict.route]]
+id = "task read first"
+kind = "document"
+target = "mise.toml"
 
 [[verdict]]
 id = "claim declare dropped"

@@ -37,14 +37,6 @@
 #
 # Exit is 0 for a delivered verdict and 2 for a malformed call: this classifies,
 # it does not adjudicate. The caller decides what a verdict is worth.
-#
-# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
-# The mutation loosens the whole-entry wildcard test into a match-anything glob,
-# which is the substring trap in its most generous form: EVERY entry then reads
-# as a total bypass, so the broken container and the bypassed one become one
-# answer. It discriminates because two cases disagree under it — the wildcard
-# host and the GitHub-hosts-only container both flip to `ok`.
-#MUTANT wildcard-matched-loosely|s@== '\*'@== \*@|a wildcard host is NOT a total bypass
 set -uo pipefail
 
 usage() {
@@ -60,30 +52,12 @@ usage() {
 proxy="$1"
 no_proxy="$2"
 
-# No proxy fronting the network: nothing is carried by one, so there is nothing
-# to fence. This is the ordinary developer machine and most CI runners.
+# No proxy fronting the network: mise talks to GitHub directly and there is
+# nothing to fence. This is the ordinary developer machine and most CI runners.
 if [[ -z "$proxy" ]]; then
 	echo "ok"
 	exit 0
 fi
-
-# A TOTAL BYPASS IS THE ONLY OTHER `ok`, and narrowing `ok` to it is this
-# program's whole correction (CLOUD-1399).
-#
-# `*` is matched as a WHOLE ENTRY, never as a substring, and that is the one
-# place this file cannot be generous: `*.api.github.com` contains a `*` and
-# bypasses exactly one host, so a substring read would call the broken container
-# a bypassed one — the false `ok` the header says costs most. Entries are split
-# on commas and trimmed, the way every client that honours a wildcard reads them.
-IFS=',' read -r -a entries <<<"$no_proxy"
-for entry in "${entries[@]}"; do
-	entry="${entry#"${entry%%[![:space:]]*}"}"
-	entry="${entry%"${entry##*[![:space:]]}"}"
-	if [[ "$entry" == '*' ]]; then
-		echo "ok"
-		exit 0
-	fi
-done
 
 # The host mise's resolver calls. Matched as a substring rather than by splitting
 # on commas, because NO_PROXY has no single normative syntax — entries appear
@@ -91,20 +65,8 @@ done
 # containing this host means some implementation will honour it. A false "ok"
 # here would be worse than a false "unfenced": the first hides the diagnosis the
 # session needs, the second only asks a human to look.
-#
-# `unfenced` KEEPS ITS EXACT OLD MEANING — api.github.com is proxied, so `mise
-# install` dies on the first third-party tool — because `container-preflight`
-# reads that token to print that diagnosis, and re-pointing it at a broader
-# question would trade a precise remedy for a vaguer one.
-#
-# `partial` IS THE STATE THAT USED TO READ `ok`. A container fencing the GitHub
-# hosts and nothing else lets mise resolve releases, so the old question was
-# answered — and still routes everything else through a proxy that injects a
-# repo-scoped token, which the decision refuses. Splitting it out is a strict
-# NARROWING: nothing this program once refused is now accepted, and the one input
-# whose verdict moved is the one that was being read as compliance.
 case "$no_proxy" in
-*api.github.com*) echo "partial" ;;
+*api.github.com*) echo "ok" ;;
 *) echo "unfenced" ;;
 esac
 exit 0

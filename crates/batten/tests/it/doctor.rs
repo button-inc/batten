@@ -879,8 +879,8 @@ fn a_wildcard_entry_is_neither_a_total_bypass_nor_a_fence_for_the_bare_host() {
     // disagreement is deliberate rather than drift, because the two have different
     // SUBJECTS. That task grades what mise's release resolver will do and matches
     // `api.github.com` generously, on the stated grounds that some client honours
-    // some spelling — so it answers `partial` here. This verb grades what BATTEN
-    // will do, and the authority for that is `fetch::proxy_for`, which is the code
+    // some spelling — so it reads this input as fenced. This verb grades what
+    // BATTEN will do, and the authority for that is `fetch::proxy_for`, the code
     // that carries the request. Asking the carrier rather than re-deriving its
     // list semantics is the whole reason `fetch::is_direct` exists; making either
     // one match the other would put a second authority in front of one of the two

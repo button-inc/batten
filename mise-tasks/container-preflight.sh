@@ -35,9 +35,6 @@
 # missing binary is never reported as a missing permission.
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
 #MUTANT missing-claim-passes|s/^exit 1$/exit 0/|a missing read claim halts with exit 1
-# The partial arm never fires, so the verdict that used to read `ok` reads as a
-# quiet pass again — the exact false green the three-verdict split removed.
-#MUTANT partial-never-reported|s@"$egress" = partial@"$egress" = nosuchverdict@|a partially fenced proxy is reported
 
 set -uo pipefail
 
@@ -53,9 +50,6 @@ degraded=no
 # is usually broken in more than one way, and a human repairing it wants the
 # whole list, not the first item followed by another session to find the second.
 broken=()
-# Reported, never halting: a root cause a later mechanism repairs belongs on a
-# channel a reader sees rather than in the list that stops the session.
-advisory=()
 detail=""
 
 # --- egress: can mise resolve a release at all? -------------------------------
@@ -65,28 +59,6 @@ detail=""
 # debugging cargo-zigbuild. The decision itself lives in `egress-check` so it is
 # testable without a proxy — same split as doctor / doctor-check.
 egress=$("$(dirname "$0")/egress-check.sh" "${HTTPS_PROXY:-${https_proxy:-}}" "${NO_PROXY:-${no_proxy:-}}")
-
-# `partial` REPORTS AND DOES NOT HALT, and the split is this file's own contract
-# rather than a softening of it (CLOUD-1399). Everything in `broken` is there
-# because it "needs a human to change a token's scopes or a container's egress
-# policy" — not repairable from inside, which is what earns the stop sign.
-# `partial` is different in kind: the GitHub hosts ARE fenced, so the toolchain
-# resolves, and the residue is what `egress-is-unproxied` repairs at every
-# session start. Halting on it would brick every session in the container over a
-# state a later row fixes, which is the unsatisfiable gate this repository
-# refuses elsewhere.
-#
-# It is still SAID. A new verdict that fell through to the success line would
-# read as compliance, which is the false green the whole three-verdict split
-# exists to remove.
-if [[ "$egress" = partial ]]; then
-	advisory+=("EGRESS — the GitHub hosts are fenced and the proxy still carries
-     everything else. mise resolves releases, so nothing halts here; the rest is
-     against the decision that nothing in this container routes through the agent
-     proxy (CLOUD-1399). \`batten startup --repair\` corrects what batten
-     mediates at every session start, and reports the residue it cannot reach.")
-fi
-
 if [[ "$egress" = unfenced ]]; then
 	broken+=("EGRESS — api.github.com is proxied and not fenced out of NO_PROXY.
      mise resolves every tool's release through that host, so \`mise install\`
@@ -131,19 +103,8 @@ else
 	esac
 fi
 
-if [[ "${#advisory[@]}" -gt 0 ]]; then
-	for note in "${advisory[@]}"; do
-		echo "container-preflight: $note" >&2
-	done
-fi
-
 if [[ "${#broken[@]}" -eq 0 ]]; then
-	# The egress half is REPORTED rather than asserted, because it has three
-	# answers now and only one of them is "fenced". The old line said "egress
-	# fenced" unconditionally on this path, which was true while `ok` and
-	# `unfenced` were the only verdicts and became a false claim the moment
-	# `partial` could reach here.
-	echo "container-preflight: egress $egress, credential carries every probed read claim"
+	echo "container-preflight: egress fenced, credential carries every probed read claim"
 	exit 0
 fi
 

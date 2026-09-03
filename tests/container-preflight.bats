@@ -37,34 +37,12 @@ EOF
 }
 
 @test "a fenced container with every claim passes, quietly" {
-	# THE ENVIRONMENT IS PINNED, and it has to be (CLOUD-1399). This case used to
-	# run with whatever the box exported, so its verdict was a property of the
-	# machine — and under `mise exec` the guard has already prepended the GitHub
-	# hosts, which is now `partial` rather than `ok`. A case about the unproxied
-	# container must state the unproxied container, the same way the unfenced
-	# case below states its own.
 	stub_mise 0
-	run env NO_PROXY="" no_proxy="" HTTPS_PROXY="" https_proxy="" "$PREFLIGHT"
+	run "$PREFLIGHT"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"egress ok"* ]]
+	[[ "$output" == *"egress fenced"* ]]
 	# A passing preflight must not shout: the norm is passing, and a loud pass
 	# trains the reader to skip the output that matters.
-	[[ "$output" != *"CANNOT DO THE WORK"* ]]
-}
-
-@test "a partially fenced proxy is reported and does NOT halt" {
-	# The state this repository's own container is in: the GitHub hosts are
-	# fenced so the toolchain resolves, and the proxy still carries everything
-	# else. It must not halt — `egress-is-unproxied` repairs what batten mediates
-	# at every session start, and halting would brick every session over a state
-	# a later row fixes. It must also not be silent, which is the false green the
-	# three-verdict split exists to remove: before it, this input read `ok`.
-	stub_mise 0
-	run env NO_PROXY="api.github.com,pypi.org" no_proxy="api.github.com,pypi.org" \
-		HTTPS_PROXY="http://proxy:8080" "$PREFLIGHT"
-	[ "$status" -eq 0 ]
-	[[ "$output" == *"egress partial"* ]]
-	[[ "$output" == *"EGRESS"* ]]
 	[[ "$output" != *"CANNOT DO THE WORK"* ]]
 }
 

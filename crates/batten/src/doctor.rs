@@ -335,25 +335,28 @@ impl Mediator {
 /// repos and `mise install` dies naming the tool rather than the proxy. Fencing
 /// only the GitHub hosts answers that one symptom and leaves every other request
 /// carried — which is why [`Egress::Partial`] is a distinct verdict rather than a
-/// shade of ok. `mise-tasks/egress-check.sh` is the same three-way split over
-/// values passed as arguments; this one reads the live environment, which is the
-/// half a task run under `mise` cannot do honestly.
+/// shade of ok.
 ///
-/// # Where this and that task disagree, deliberately
+/// # Not a widening of `mise-tasks/egress-check.sh`, and deliberately not an edit to it
 ///
-/// The two have different SUBJECTS, and one input separates them. That task
-/// grades what **mise's release resolver** will do, and matches `api.github.com`
-/// generously — bare, dot-prefixed and wildcard-prefixed entries all read as
-/// fenced, on the stated grounds that some client honours some spelling. This
-/// grades what **batten** will do, and its authority is
-/// [`crate::fetch::is_direct`], the code that actually carries the request. So
-/// `*.api.github.com` answers `partial` there and [`Egress::Unfenced`] here,
-/// because a wildcard entry covers subdomains and not the bare host.
+/// That task asks a NARROWER question over a DIFFERENT subject: given two values
+/// passed as arguments, will **mise's release resolver** reach `api.github.com`.
+/// It answers `ok` or `unfenced`, it matches the host generously — bare,
+/// dot-prefixed and wildcard-prefixed entries all read as fenced — and it is
+/// correct about its own subject.
 ///
-/// Neither is wrong, and neither should be made to match the other: aligning
-/// them would put a second authority in front of one of the two subjects, which
-/// is the class `.claude/rules/policy-modules.md` records for the shell
-/// tokenizer one layer over.
+/// This asks whether **batten** would be proxied, reads the live environment,
+/// and defers to [`crate::fetch::is_direct`] for what a no-proxy list means. The
+/// two therefore disagree on an input like `*.api.github.com`, which fences a
+/// subdomain and not the bare host: generous there, [`Egress::Unfenced`] here.
+///
+/// Neither should be made to match the other — aligning them would put a second
+/// authority in front of one of the two subjects, the class
+/// `.claude/rules/policy-modules.md` records for the shell tokenizer one layer
+/// over. And the task is left UNTOUCHED rather than extended, because
+/// `shell edit refused` is right about it: a migration replaces a shell gate, it
+/// does not maintain one. The three-way split lives here, in the engine, which is
+/// also the only place the ambient read is possible at all.
 ///
 /// **`container-preflight` grades the REPAIRED value, and that is the defect this
 /// exists to route around.** Run under `mise`, it reads `$NO_PROXY` from inside a

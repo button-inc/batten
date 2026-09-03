@@ -31,38 +31,10 @@ setup() {
 	[ "$output" = ok ]
 }
 
-@test "a proxy with only the GitHub hosts fenced is partial — the state that used to read ok" {
-	# CLOUD-1399. mise can resolve releases, so the OLD question is answered —
-	# and everything else is still carried by a proxy that injects a repo-scoped
-	# token, which the decision refuses. This is the input whose verdict moved,
-	# and it is the one that was being read as compliance.
+@test "a proxy with api.github.com fenced is ok" {
 	run "$CHECK" "http://proxy:8080" "api.github.com,objects.githubusercontent.com"
 	[ "$status" -eq 0 ]
-	[ "$output" = partial ]
-}
-
-@test "a total bypass is the only other ok" {
-	run "$CHECK" "http://proxy:8080" "*"
-	[ "$status" -eq 0 ]
 	[ "$output" = ok ]
-}
-
-@test "a total bypass is honoured among other entries" {
-	# Written as one entry of a list, which is how a container that already
-	# exported something spells it.
-	run "$CHECK" "http://proxy:8080" "localhost,*,.internal"
-	[ "$status" -eq 0 ]
-	[ "$output" = ok ]
-}
-
-@test "a wildcard host is NOT a total bypass — the substring trap" {
-	# `*.api.github.com` contains a `*` and bypasses exactly ONE host. A
-	# substring read of the wildcard would call the broken container a bypassed
-	# one, which is the false `ok` this file's header says costs most. The whole
-	# entry is compared, so this lands on partial.
-	run "$CHECK" "http://proxy:8080" "*.api.github.com"
-	[ "$status" -eq 0 ]
-	[ "$output" = partial ]
 }
 
 @test "a proxy without the fence is unfenced — the measured broken container" {
@@ -84,9 +56,9 @@ setup() {
 	# session needs, a false "unfenced" only asks a human to look — so the match
 	# is deliberately generous in the direction that costs least.
 	run "$CHECK" "http://proxy:8080" "*.api.github.com"
-	[ "$output" = partial ]
+	[ "$output" = ok ]
 	run "$CHECK" "http://proxy:8080" ".api.github.com"
-	[ "$output" = partial ]
+	[ "$output" = ok ]
 }
 
 @test "a malformed call is exit 2, distinct from any verdict" {
