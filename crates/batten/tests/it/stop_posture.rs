@@ -185,38 +185,48 @@ fn stop_payload(message: &str, active: bool) -> String {
     .to_string()
 }
 
+/// `batten hook` against the fixture's own state home.
+///
+/// **ISOLATED FOR EVERY CASE, not only the one that asserts silence.** This
+/// delegates to [`hook_in`] rather than carrying its own ambient invocation, and
+/// the reason is a defect measured twice on 2026-09-03.
+///
+/// The first reading looked like it touched one case: `a_turn_that_strands_
+/// nothing_is_silent` went red inside a `land` lap and green on the next isolated
+/// run of the same commit, because the real session's `unlanded` finding reached
+/// the fixture. The explanation offered then was that only a silence-asserting
+/// case is exposed, since an EXTRA advisory cannot falsify a case asserting a
+/// specific one.
+///
+/// **That was wrong, and the next lap proved it**:
+/// `a_stranded_finding_is_pointed_at_and_the_turn_still_ends` failed the same
+/// way. The engine emits **at most one** nudge, ranked — two on a turn is how a
+/// channel stops being read — so an ambient finding does not add to the expected
+/// advisory, it DISPLACES it. Every case here is exposed, not just the silent
+/// one.
+///
+/// `unlanded` reports once per HEAD sha and every lap rebases to a fresh one, so
+/// the exposure is worst exactly while its author is landing: red on the lap,
+/// green on the re-run, which is the shape that gets called a flake and re-run
+/// until it passes.
 fn hook(dir: &Path, payload: &str) -> Output {
-    let mut command = batten();
-    // THE STATE HOME IS CONTAINED, for the reason the unlanded fixture's own
-    // runner already states: the Stop tier reads the out-of-tree findings store,
-    // and an ambient one lets a REAL session's findings decide a fixture's
-    // verdict. Measured 2026-09-03 — `a_clean_final_message_says_nothing` failed
-    // with `unlanded: 1 commit(s) not on the landing target`, read from the
-    // checkout the suite was running in. It passes on a tree with nothing
-    // unlanded and fails on any branch mid-development, which is every branch
-    // this suite is ever run from.
-    let home = scratch(&format!(
-        "{}-home",
-        dir.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("stop-posture")
-    ));
-    common::state_home(&mut command, &home);
-    command
-        .current_dir(dir)
-        .args(["hook", "--harness", "claude-code"])
-        .env_remove("BATTEN_HOOK_BYPASS")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command.spawn().expect("spawn batten hook");
-    child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(payload.as_bytes())
-        .expect("write payload");
-    child.wait_with_output().expect("run batten hook")
+    // Delegates rather than repeating the containment inline, and that is the
+    // resolution of a genuine collision: `main` fixed this same defect in
+    // parallel by setting the state home here directly. Both isolate the
+    // findings store; `hook_in` additionally sets `GIT_CEILING_DIRECTORIES`, so
+    // discovery cannot climb out of the fixture either — and a second inline
+    // copy of the containment is the very shape that caused this bug, where
+    // `hook` and `hook_in` disagreed about what a fixture owns.
+    //
+    // The parallel fix's measurement, kept because it is a different case than
+    // the two below: `a_clean_final_message_says_nothing` failed with
+    // `unlanded: 1 commit(s) not on the landing target`, read from the checkout
+    // the suite was running in. It passes on a tree with nothing unlanded and
+    // fails on any branch mid-development, which is every branch this suite is
+    // ever run from.
+    let home = dir.join("hook-home");
+    fs::create_dir_all(&home).expect("home dir");
+    hook_in(dir, &home, payload)
 }
 
 /// A repository whose branch carries a commit the landing target lacks, plus a
