@@ -135,12 +135,40 @@ latest[id] := stamp if {
 	stamp := stamps[count(stamps) - 1]
 }
 
+# THE COUNT IS SEPARATED BY A COLON, NOT A COMMA, AND READING IT WRONG MADE THIS
+# GATE UNSATISFIABLE (CLOUD-1402).
+#
+# `recorder.rs` renders a counted column as `<count><counted-with><joined>`, where
+# `joined` is always comma-separated. The obligations column declares
+# `counted-with = ":"`, so a row reads `1:path/to/suite.rs:slug`. This rule
+# stripped up to the first COMMA — which such a line does not contain — so
+# `substring` returned the whole string, `indexof(pair, ":")` found the count's
+# own colon, and every obligation resolved to the file `"1"`. That path is in no
+# repository's `tracked` set, so the first arm below fired on EVERY row carrying
+# an obligation and no author could ever bind one.
+#
+# It rendered as `1 obligation-unbound`, where the `1` reads as a count and is in
+# fact the whole of what the module thought the path was — a wrong answer wearing
+# a right answer's shape.
+#
+# NEITHER TIER CAUGHT IT, and that is the same defect one layer up.
+# `.claude/rules/policy-modules.md` records the class: a `with input as` block
+# writes the shape it then reads. Every case below spelled the column
+# `1,tests/a.rs:slug-one` — a comma the recorder has never written — so the
+# load-time tier passed over a parse the engine's own writer contradicts, and the
+# compiled tier inherited the same fabricated record. The cases now carry the
+# recorder's spelling, and `a_recorded_obligation_uses_the_recorders_own_spelling`
+# is the one that would have failed.
+#
+# The overlap and §1 columns are NOT affected and must not be "fixed" to match:
+# they declare no `counted-with`, so `filed-here.rego` reading them with a comma
+# is correct. `pr-closes` shares this column's colon and is already read with one.
 obligation contains entry if {
 	some row in recorded
 	row.stamp == latest[row.id]
 	packed := column(row.columns, 7)
 	packed != "-"
-	some pair in split(substring(packed, indexof(packed, ",") + 1, -1), ",")
+	some pair in split(substring(packed, indexof(packed, ":") + 1, -1), ",")
 	at := indexof(pair, ":")
 	at > 0
 	entry := {
@@ -206,7 +234,25 @@ board(record, tracked, lines_by_file) := {"tree": {
 	"lines": lines_by_file,
 }}
 
-bound := "issue CLOUD-1 2026-01-01T00:00:00Z ready - - - 1,tests/a.rs:slug-one"
+# THE RECORDER'S OWN SPELLING: `<count>:<file>:<slug>`, because the obligations
+# column declares `counted-with = ":"`. Written with a comma here for its whole
+# life, which is what let the parse above disagree with the writer and stay green.
+bound := "issue CLOUD-1 2026-01-01T00:00:00Z ready - - - 1:tests/a.rs:slug-one"
+
+# THE CASE THAT WOULD HAVE CAUGHT IT. Every other case here writes the column and
+# then reads it, so all of them stayed green while the parse and the writer
+# disagreed. This one asserts the SPELLING against `recorder.rs`'s own rendering
+# rule — `<count><counted-with><joined>`, with `counted-with = ":"` declared on
+# this column — so a future change to either side reddens here rather than turning
+# the gate off in silence.
+test_a_recorded_obligation_uses_the_recorders_own_spelling if {
+	# The count and its separator, then comma-joined entries. Read wrong, the
+	# whole line collapses to the file `"1"` and every obligation is unbindable.
+	startswith(bound, "issue CLOUD-1 2026-01-01T00:00:00Z ready - - - 1:")
+	some entry in obligation with input as board([bound], [], {})
+	entry.file == "tests/a.rs"
+	entry.slug == "slug-one"
+}
 
 test_a_bound_obligation_is_clean if {
 	count(violation) == 0 with input as board(
@@ -273,7 +319,7 @@ test_a_later_ready_line_supersedes_an_earlier_unready_one if {
 	some v in violation with input as board(
 		[
 			"issue CLOUD-1 2026-01-01T00:00:00Z unready - - - -",
-			"issue CLOUD-1 2026-01-02T00:00:00Z ready - - - 1,tests/a.rs:slug-one",
+			"issue CLOUD-1 2026-01-02T00:00:00Z ready - - - 1:tests/a.rs:slug-one",
 		],
 		[],
 		{},
@@ -287,7 +333,7 @@ test_supersession_is_per_issue_id if {
 		[
 			bound,
 			"issue CLOUD-1 2026-01-02T00:00:00Z unready - - - -",
-			"issue CLOUD-2 2026-01-03T00:00:00Z ready - - - 1,tests/b.rs:slug-two",
+			"issue CLOUD-2 2026-01-03T00:00:00Z ready - - - 1:tests/b.rs:slug-two",
 		],
 		[],
 		{},
@@ -324,7 +370,7 @@ test_an_absent_closes_record_judges_nothing if {
 
 test_a_comment_line_declares_no_obligations if {
 	count(violation) == 0 with input as board(
-		["comment CLOUD-1 2026-01-01T00:00:00Z - - - 1,tests/a.rs:slug-one"],
+		["comment CLOUD-1 2026-01-01T00:00:00Z - - - 1:tests/a.rs:slug-one"],
 		[],
 		{},
 	)
@@ -333,7 +379,7 @@ test_a_comment_line_declares_no_obligations if {
 # ONE FINDING PER OBLIGATION, and the pointer leads with the path a reader opens.
 test_every_unbound_obligation_is_named if {
 	paths := {v.subjects[0].path | some v in violation} with input as board(
-		["issue CLOUD-1 2026-01-01T00:00:00Z ready - - - 2,tests/a.rs:one,tests/b.rs:two"],
+		["issue CLOUD-1 2026-01-01T00:00:00Z ready - - - 2:tests/a.rs:one,tests/b.rs:two"],
 		[],
 		{},
 	)

@@ -15,6 +15,22 @@
 //! outside the row's `line_sources` resolves to nothing and the slug can never
 //! be found, which reads exactly like "the case has no mutation". A `with input
 //! as` case cannot distinguish either, because it fabricates the shape it wants.
+//!
+//! # AND THIS SUITE FABRICATED THE RECORD TOO, WHICH IS THE SAME DEFECT
+//!
+//! Every fixture below spelled the column `1,<file>:<slug>` — a comma the
+//! recorder has never written. `recorder.rs` renders a counted column as
+//! `<count><counted-with><joined>` and this one declares `counted-with = ":"`,
+//! so the real line is `1:<file>:<slug>`. The module parsed it with a comma, so
+//! every obligation resolved to the file `"1"`, and `obligation-unbound` fired on
+//! EVERY row carrying one. Measured 2026-09-03, on CLOUD-1402's own obligation.
+//!
+//! Reaching the engine was not enough, because this suite still hand-wrote the
+//! record instead of driving the writer — so both tiers agreed with each other
+//! and neither agreed with `recorder.rs`. The header above was already correct
+//! that the entry separator is a `:` and the fixtures still got the COUNT
+//! separator wrong, which is what makes this worth stating rather than quietly
+//! correcting: knowing the format is not the same as writing it.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -174,7 +190,7 @@ fn line(obligations: &str) -> String {
 fn a_bound_obligation_reaches_the_predicate_and_is_clean() {
     let root = repo(
         "obligations-bound-clean",
-        &[&line("1,crates/batten/tests/it/x.rs:slug-one")],
+        &[&line("1:crates/batten/tests/it/x.rs:slug-one")],
         Some((
             "crates/batten/tests/it/x.rs",
             "#MUTANT slug-one|s@a@b@|the_case\n",
@@ -191,7 +207,7 @@ fn a_bound_obligation_reaches_the_predicate_and_is_clean() {
 fn an_obligation_naming_no_tracked_file_is_refused() {
     let root = repo(
         "obligations-no-file",
-        &[&line("1,crates/batten/tests/it/missing.rs:slug-one")],
+        &[&line("1:crates/batten/tests/it/missing.rs:slug-one")],
         None,
     );
     assert_eq!(verdicts(&root), vec![UNBOUND.to_owned()]);
@@ -205,7 +221,7 @@ fn an_obligation_naming_no_tracked_file_is_refused() {
 fn an_obligation_whose_slug_no_row_declares_is_refused() {
     let root = repo(
         "obligations-no-slug",
-        &[&line("1,crates/batten/tests/it/x.rs:slug-one")],
+        &[&line("1:crates/batten/tests/it/x.rs:slug-one")],
         Some((
             "crates/batten/tests/it/x.rs",
             "#MUTANT other-slug|s@a@b@|the_case\n",
@@ -251,7 +267,7 @@ fn a_superseded_obligation_is_not_judged() {
     let root = repo(
         "obligations-superseded",
         &[
-            &line("1,crates/batten/tests/it/missing.rs:slug-one"),
+            &line("1:crates/batten/tests/it/missing.rs:slug-one"),
             "issue CLOUD-1 2026-01-02T00:00:00Z unready - - - -",
         ],
         None,
@@ -273,7 +289,7 @@ fn a_later_ready_line_supersedes_an_earlier_unready_one() {
         &[
             "issue CLOUD-1 2026-01-01T00:00:00Z unready - - - -",
             "issue CLOUD-1 2026-01-02T00:00:00Z ready - - - \
-             1,crates/batten/tests/it/missing.rs:slug-one",
+             1:crates/batten/tests/it/missing.rs:slug-one",
         ],
         None,
     );
@@ -289,7 +305,7 @@ fn a_later_ready_line_supersedes_an_earlier_unready_one() {
 fn an_obligation_from_a_row_the_pr_does_not_close_is_not_judged() {
     let root = repo_closing(
         "obligations-not-closing",
-        &[&line("1,crates/batten/tests/it/missing.rs:slug-one")],
+        &[&line("1:crates/batten/tests/it/missing.rs:slug-one")],
         None,
         &["closes 1:CLOUD-9"],
     );
@@ -308,7 +324,7 @@ fn an_obligation_from_a_row_the_pr_does_not_close_is_not_judged() {
 fn an_absent_closes_record_judges_nothing() {
     let root = repo_closing(
         "obligations-no-closes-record",
-        &[&line("1,crates/batten/tests/it/missing.rs:slug-one")],
+        &[&line("1:crates/batten/tests/it/missing.rs:slug-one")],
         None,
         &[],
     );
