@@ -73,6 +73,7 @@ mod claim_receipt;
 mod cli;
 mod commit;
 mod commit_admission;
+mod commit_arm_sequencing;
 mod commit_meta_facts;
 mod config_authority_boundary;
 mod config_base_ref_reading;

@@ -247,6 +247,119 @@ pub fn judge_pending(message: &str, staged: &std::collections::BTreeSet<String>)
     }])
 }
 
+/// One commit's two conserves-ledger sets, ready to intersect (CLOUD-1402).
+///
+/// Prepared by the caller and never resolved here, for [`judge_admissions`]'s own
+/// reason: the predicate stays a pure function of two sets, so it decides
+/// identically on a runner that cannot reach git and the whole of it is testable
+/// without a fixture repository.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ArmSequence {
+    /// The finding's pointer prefix — a short SHA, or `pending`.
+    pub label: String,
+    /// The `[rule.conserves]` arms this commit INTRODUCED, keyed by the config
+    /// path a reader would open (`<rule id>.<arm>`) and carrying the token each
+    /// arm declares.
+    ///
+    /// Introduced means absent at the parent and present here. An arm the tree
+    /// already carried is not in this map, which is what keeps every ordinary use
+    /// of the ledger silent.
+    pub introduced: std::collections::BTreeMap<String, String>,
+    /// The lines this commit ADDED under the ledger's `declared_in` glob.
+    ///
+    /// Lines rather than paths, because the spend is a line: the whole question is
+    /// whether one of the tokens above is written in a row this same commit wrote.
+    pub added_lines: Vec<String>,
+}
+
+/// Judge the sequencing clause: an escape hatch is not spent by the commit that
+/// creates it (CLOUD-1402).
+///
+/// # What this closes
+///
+/// `[rule.conserves]`'s arms are the ledger a ratchet decrease has to satisfy, and
+/// two of them are optional — `withdrawn` and `ported` (CLOUD-1080, CLOUD-1268).
+/// Adding one is a widening of what a deletion may claim, which is exactly the
+/// kind of change that wants an independent reader.
+///
+/// It did not get one. `65757c86` both added `withdrawn` to `batten.toml` and
+/// *spent* it, in the same commit, on the deletion it wanted to make. An escape
+/// hatch created and consumed at once is **self-authorizing**: the thing that
+/// would have refused the deletion was authored by the same change, so nothing
+/// independent ever judged whether that particular withdrawal was correct. That
+/// first use shipped a partly-wrong deletion — it retired the `NO_PROXY` fencing
+/// on the reasoning that honouring the environment's CA bundle made it
+/// unnecessary, conflating TLS re-termination with the proxy's injected-token 403
+/// — and the reasoning stood unrefuted in the history for a week (CLOUD-1399).
+///
+/// # The remedy is sequencing, not permission
+///
+/// Land the arm, let it be reviewed on its own, then spend it. That costs one
+/// extra commit and buys the independent judgement the hatch was supposed to have.
+/// There is deliberately no override route: an admission here would be the author
+/// authorizing their own hatch one layer up.
+///
+/// # Bound, stated
+///
+/// It catches the one-commit case. An author who lands the arm and spends it in
+/// the NEXT commit of the same PR has satisfied the letter and not obviously the
+/// spirit — but that is a review question, and a gate demanding a merge between
+/// the two would be refusing ordinary work. Narrow on purpose.
+///
+/// # No model verdict reaches the exit code
+///
+/// Both sides are sets of strings the caller read out of the diff and the config.
+/// A line counts as a spend when, trimmed, it STARTS WITH the arm's token — which
+/// is [`crate::rules`]'s own rule for reading an arm, asked rather than
+/// re-derived, so this clause cannot disagree with the ledger about what an arm
+/// row is.
+#[must_use]
+pub fn judge_arm_sequencing(sequences: &[ArmSequence]) -> Vec<Finding> {
+    let mut found = Vec::new();
+    for sequence in sequences {
+        for (key, token) in &sequence.introduced {
+            // An empty token would prefix-match every line, so an arm declared as
+            // `""` would refuse any commit that added one. `validate_conserves`
+            // refuses that at load; skipping it here means a caller that bypassed
+            // validation gets silence rather than a rule that denies everything.
+            if token.is_empty() {
+                continue;
+            }
+            if sequence
+                .added_lines
+                .iter()
+                .any(|line| line.trim_start().starts_with(token.as_str()))
+            {
+                found.push(Finding {
+                    label: sequence.label.clone(),
+                    field: "arm-self-authorized".to_owned(),
+                    subject: Some(key.clone()),
+                });
+            }
+        }
+    }
+    found
+}
+
+// THE OBLIGATION IS BOUND HERE, AND THE SWEEP CANNOT YET APPLY IT (CLOUD-1402).
+//
+// `obligations-bound` asks that a §7 obligation name a tracked file carrying its
+// slug, and CLOUD-1402's claims object names
+// `crates/batten/tests/it/commit_arm_sequencing.rs` — which is inside that rule's
+// `line_sources` where `crates/batten/src/**` is not. The row lives here, beside
+// the predicate it mutates, and the suite references the slug where the gate can
+// read it.
+//
+// **What it does NOT yet buy is the sweep, and saying so is the point.**
+// `mutate`'s `Gate::name` resolves sources from a task name, a module stem or a
+// preset name — there is no arm for a Rust source, so `mutate sweep` never
+// applies this row. Declaring it silently would be the coverage theatre
+// `#MUTANT-OWNER` exists to refuse, so the gap is named instead: CLOUD-1369 owes
+// the runner arm, and `crates/batten/src/pinned.rs` records the identical gap for
+// its own row. Until it lands the named case is proven by `verify`.
+//MUTANT-SUITE crates/batten/tests/it/commit_arm_sequencing.rs
+//MUTANT same-commit-spend-passes|s@                .any(|line| line.trim_start().starts_with(token.as_str()))@                .any(|_unread| false)@|a_commit_that_adds_an_arm_and_spends_it_is_refused
+
 /// Read every non-merge commit's subject in `base..head`.
 ///
 /// One `git log` rather than a `rev-list` followed by a `show` per commit: the
@@ -404,5 +517,124 @@ mod tests {
     fn short_shas_are_eight_characters() {
         assert_eq!(short("a1b2c3d4e5f6"), "a1b2c3d4");
         assert_eq!(short("abc"), "abc");
+    }
+
+    // --- the sequencing clause (CLOUD-1402) --------------------------------
+    //
+    // The load-time tier. It pins the PREDICATE over two sets these cases build.
+    // `crates/batten/tests/it/commit_arm_sequencing.rs` is the tier that proves
+    // the RESOLVER builds them — whether the parent's config is read at all, and
+    // whether a ledger line the commit added is told apart from one already
+    // there. Neither substitutes for the other.
+
+    fn sequence(arm: &str, token: &str, added: &[&str]) -> ArmSequence {
+        ArmSequence {
+            label: "a1b2c3d4".to_owned(),
+            introduced: std::iter::once((arm.to_owned(), token.to_owned())).collect(),
+            added_lines: added.iter().map(|line| (*line).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn an_arm_introduced_and_spent_at_once_is_refused() {
+        let found = judge_arm_sequencing(&[sequence(
+            "suites-not-gutted.withdrawn",
+            "// withdrawn:",
+            &["// withdrawn: \"one\" the subject is gone"],
+        )]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0].line(),
+            "a1b2c3d4 arm-self-authorized suites-not-gutted.withdrawn"
+        );
+    }
+
+    #[test]
+    fn an_indented_arm_row_is_still_a_spend() {
+        // The trim is `rules.rs`'s own rule for reading an arm, asked rather than
+        // re-derived: an arm row inside a function body is indented, and a clause
+        // anchoring at column zero would miss every real one.
+        let found = judge_arm_sequencing(&[sequence(
+            "suites-not-gutted.withdrawn",
+            "// withdrawn:",
+            &["    // withdrawn: \"one\" the subject is gone"],
+        )]);
+        assert_eq!(found.len(), 1);
+    }
+
+    #[test]
+    fn an_arm_introduced_and_not_spent_is_silent() {
+        // The remedy's own shape. A clause that refused this would refuse landing
+        // the arm at all, which is a wall rather than a sequencing rule.
+        let found = judge_arm_sequencing(&[sequence(
+            "suites-not-gutted.withdrawn",
+            "// withdrawn:",
+            &["// carried: \"one\" successors/beta.rs"],
+        )]);
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn an_arm_the_commit_did_not_introduce_is_never_judged() {
+        // THE DISCRIMINATING CASE, at this tier: the spend is present and the
+        // introduced set is empty, which is every honest use of the ledger. A
+        // predicate keyed only on the spend would refuse it.
+        let found = judge_arm_sequencing(&[ArmSequence {
+            label: "a1b2c3d4".to_owned(),
+            added_lines: vec!["// withdrawn: \"one\" the subject is gone".to_owned()],
+            ..ArmSequence::default()
+        }]);
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn a_blank_token_claims_nothing_rather_than_everything() {
+        // `validate_conserves` refuses a declared-but-blank arm at load, so this
+        // is the belt to that suspenders — and it fails in the safe direction. An
+        // empty token prefix-matches every line, so honouring it would refuse
+        // every commit that added one.
+        let found = judge_arm_sequencing(&[sequence(
+            "suites-not-gutted.withdrawn",
+            "",
+            &["anything at all"],
+        )]);
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn every_introduced_arm_spent_is_reported_not_just_the_first() {
+        let both = ArmSequence {
+            label: "a1b2c3d4".to_owned(),
+            introduced: [
+                (
+                    "suites-not-gutted.withdrawn".to_owned(),
+                    "// withdrawn:".to_owned(),
+                ),
+                (
+                    "suites-not-gutted.ported".to_owned(),
+                    "// ported:".to_owned(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            added_lines: vec![
+                "// withdrawn: \"one\" the subject is gone".to_owned(),
+                "// ported: \"two\" successors/beta.rs suites/beta.t".to_owned(),
+            ],
+        };
+        let found = judge_arm_sequencing(&[both]);
+        assert_eq!(found.len(), 2);
+    }
+
+    #[test]
+    fn the_ledger_row_text_is_never_carried() {
+        // Rule 4 at this clause. An arm row carries a REASON, which is prose its
+        // author typed, so a finding echoing it would republish whatever that was.
+        let found = judge_arm_sequencing(&[sequence(
+            "suites-not-gutted.withdrawn",
+            "// withdrawn:",
+            &["// withdrawn: \"one\" SECRETLEAK"],
+        )]);
+        assert!(!report(&found).contains("SECRETLEAK"));
     }
 }

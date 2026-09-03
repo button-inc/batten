@@ -6890,6 +6890,271 @@ fn commit_admissions(
     }
 }
 
+/// The `[rule.conserves]` arm tokens one revision of the config declares, keyed
+/// by the token and carrying the config path a reader would open (CLOUD-1402).
+///
+/// # Keyed by the TOKEN, never by the rule id
+///
+/// The hazard is a token becoming spendable, so that is the thing whose arrival
+/// is the event. Keying by rule id would re-introduce every arm of a rule that
+/// was merely RENAMED, and a commit that renamed a rule and added a ledger row
+/// would be refused for a widening that never happened.
+///
+/// # A config this build cannot parse contributes NOTHING
+///
+/// This clause's question is which arms are NEW, and a parent revision that will
+/// not parse is could-not-look about that comparison rather than a verdict on the
+/// commit. [`config::parse_base`] is the reader for the same reason
+/// `--config-from` uses it: a parent may legitimately declare a key this build has
+/// since retired, and refusing there would make retiring a key unlandable. The
+/// head side of every other clause in the same run parses the config strictly, so
+/// a genuinely broken config is already refused — loudly, and with the key named.
+fn conserves_arms(text: &str, source: &str) -> std::collections::BTreeMap<String, String> {
+    let mut arms = std::collections::BTreeMap::new();
+    let Ok(parsed) = config::parse_base(text, source) else {
+        return arms;
+    };
+    for rule in &parsed.rules {
+        let Some(conserves) = rule.conserves.as_ref() else {
+            continue;
+        };
+        // Every arm, not only the two optional ones. `carried`, `subsumed` and
+        // `changed` are required columns so they cannot arrive on an existing
+        // table — but they can arrive with a table, and a new ledger that spends
+        // its own arm in the same commit is the same self-authorization.
+        let declared = [
+            ("carried", Some(conserves.carried.clone())),
+            ("subsumed", Some(conserves.subsumed.clone())),
+            ("changed", Some(conserves.changed.clone())),
+            ("withdrawn", conserves.withdrawn.clone()),
+            ("ported", conserves.ported.clone()),
+        ];
+        for (arm, token) in declared {
+            let Some(token) = token else {
+                continue;
+            };
+            // First declarer wins the pointer. Two rules spelling one token is
+            // one token arriving, so which row a reader is sent to is a
+            // presentation choice; keeping it deterministic is what §6 asks for.
+            arms.entry(token)
+                .or_insert_with(|| format!("{}.{arm}", rule.id));
+        }
+    }
+    arms
+}
+
+/// The lines `rev` added to `path` relative to `parent`, as a set difference.
+///
+/// A set rather than a diff hunk walk: the question is whether a line carrying a
+/// newly-declared token exists here and did not exist before, and a token that is
+/// new to the config cannot appear in the parent's text at all — so the cheap
+/// answer is the exact one. Absent at either side is the empty text, which is the
+/// right reading in both directions: a path this commit CREATED has every line
+/// added, and one it deleted has none.
+fn lines_added(root: &Path, parent: &str, rev: &str, path: &str) -> Vec<String> {
+    let at = |reference: &str| match git::read_at(root, reference, path) {
+        Ok(git::BaseBlob::Found { text, .. }) => Some(text),
+        // Absent at a ref that resolved is a measured nothing. An unresolvable ref
+        // is could-not-look and is handled by the caller, which does not reach
+        // here for one.
+        Ok(_) => Some(String::new()),
+        Err(_) => None,
+    };
+    let (Some(before), Some(after)) = (at(parent), at(rev)) else {
+        return Vec::new();
+    };
+    let held: std::collections::BTreeSet<&str> = before.lines().collect();
+    after
+        .lines()
+        .filter(|line| !held.contains(line))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The sequencing clause over whichever mode `commit check` is running in
+/// (CLOUD-1402).
+///
+/// # Where the globs come from, and why that is not circular
+///
+/// The ledger's `declared_in` globs are read from the WORKING TREE's config, as
+/// every other clause in this run reads it, and the arm SETS are read from the
+/// config at each commit and its parent. The two are different questions: which
+/// files could carry a ledger row is a fact about this checkout's policy, and
+/// which arms are new is a fact about one commit. Reading the globs per commit
+/// would let a commit narrow the glob and hide its own spend.
+///
+/// # Could-not-look never fabricates a refusal
+///
+/// A parent that does not resolve — a root commit, or a shallow boundary — leaves
+/// the commit unjudged rather than reading every arm it declares as introduced.
+/// That is the direction a miss must fail in: the alternative refuses the first
+/// commit of every repository.
+fn commit_arm_sequencing(
+    range: Option<&str>,
+    message: Option<&str>,
+    overrides: &Overrides,
+) -> Result<Vec<commit::Finding>> {
+    let root = Path::new(".");
+    let resolved = resolve::resolve(root, overrides)?;
+    let ledgers: Vec<String> = resolved
+        .rules
+        .iter()
+        .filter_map(|rule| rule.conserves.as_ref())
+        .map(|conserves| conserves.declared_in.clone())
+        .collect();
+    // A consumer declaring no ledger has no arm to introduce, so there is nothing
+    // to judge and the honest answer is an empty finding set rather than a walk.
+    if ledgers.is_empty() {
+        return Ok(Vec::new());
+    }
+    let selectors = ledgers
+        .iter()
+        .map(|glob| rules::Selector::new(glob))
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut globs = ledgers.clone();
+    globs.push(config::CONFIG_FILE.to_owned());
+
+    match (range, message) {
+        (Some(range), None) => {
+            let Some((base, head)) = range.split_once("..") else {
+                return Ok(Vec::new());
+            };
+            let mut sequences = Vec::new();
+            for write in git::writes_in_range(root, base, head, &globs)? {
+                // A commit that did not touch the config declared no arm, so the
+                // introduced set is empty by construction and neither blob is
+                // read. This is what keeps the clause free on the overwhelming
+                // majority of commits.
+                if !write.paths.contains(config::CONFIG_FILE) {
+                    continue;
+                }
+                let parent = format!("{}^", write.commit);
+                let Ok(git::BaseBlob::Found { .. }) =
+                    git::read_at(root, &parent, config::CONFIG_FILE)
+                else {
+                    // Either the parent does not resolve, or it carried no config
+                    // at all. The first is could-not-look; the second is a
+                    // repository adopting Batten, where every arm is new and no
+                    // ledger can predate it. Both leave the commit unjudged.
+                    continue;
+                };
+                sequences.push(arm_sequence(
+                    root,
+                    &parent,
+                    &write.commit,
+                    commit_label(&write.commit),
+                    &write.paths,
+                    &selectors,
+                ));
+            }
+            Ok(commit::judge_arm_sequencing(&sequences))
+        }
+        (None, Some(_)) => {
+            // The pending twin, and the earliest computable moment: the index is
+            // the commit-to-be and `HEAD` is its parent, so a refusal here means
+            // the self-authorizing commit is never created.
+            let staged = git::staged_paths(root)?;
+            if !staged.contains(config::CONFIG_FILE) {
+                return Ok(Vec::new());
+            }
+            let index = git::staged_facts(root, &[config::CONFIG_FILE.to_owned()])?;
+            let Some(after) = index.get(config::CONFIG_FILE) else {
+                return Ok(Vec::new());
+            };
+            let Ok(git::BaseBlob::Found { text: before, .. }) =
+                git::read_at(root, "HEAD", config::CONFIG_FILE)
+            else {
+                return Ok(Vec::new());
+            };
+            let introduced = introduced_arms(&before, after);
+            if introduced.is_empty() {
+                return Ok(Vec::new());
+            }
+            let ledger_paths: Vec<String> = staged
+                .iter()
+                .filter(|path| selectors.iter().any(|selector| selector.matches(path)))
+                .cloned()
+                .collect();
+            let indexed = git::staged_facts(root, &ledger_paths)?;
+            let mut added_lines = Vec::new();
+            for path in &ledger_paths {
+                let held: std::collections::BTreeSet<String> =
+                    match git::read_at(root, "HEAD", path) {
+                        Ok(git::BaseBlob::Found { text, .. }) => {
+                            text.lines().map(str::to_owned).collect()
+                        }
+                        Ok(_) => std::collections::BTreeSet::new(),
+                        Err(_) => continue,
+                    };
+                if let Some(text) = indexed.get(path) {
+                    added_lines.extend(
+                        text.lines()
+                            .filter(|line| !held.contains(*line))
+                            .map(str::to_owned),
+                    );
+                }
+            }
+            Ok(commit::judge_arm_sequencing(&[commit::ArmSequence {
+                label: "pending".to_owned(),
+                introduced,
+                added_lines,
+            }]))
+        }
+        // Both modes and neither are refused before this is reached.
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// The arms `after` declares that `before` did not, keyed by the config pointer.
+fn introduced_arms(before: &str, after: &str) -> std::collections::BTreeMap<String, String> {
+    let held = conserves_arms(before, "the parent revision's batten.toml");
+    conserves_arms(after, config::CONFIG_FILE)
+        .into_iter()
+        .filter(|(token, _)| !held.contains_key(token))
+        .map(|(token, pointer)| (pointer, token))
+        .collect()
+}
+
+/// One commit's two sets, resolved.
+fn arm_sequence(
+    root: &Path,
+    parent: &str,
+    rev: &str,
+    label: String,
+    paths: &std::collections::BTreeSet<String>,
+    selectors: &[rules::Selector],
+) -> commit::ArmSequence {
+    let before = git::show(root, parent, config::CONFIG_FILE).unwrap_or_default();
+    let after = git::show(root, rev, config::CONFIG_FILE).unwrap_or_default();
+    let introduced = introduced_arms(&before, &after);
+    if introduced.is_empty() {
+        // No arm arrived, so no line can spend one. Returning early keeps the
+        // ledger's blobs unread on every commit that merely edited the config.
+        return commit::ArmSequence {
+            label,
+            ..commit::ArmSequence::default()
+        };
+    }
+    let mut added_lines = Vec::new();
+    for path in paths
+        .iter()
+        .filter(|path| selectors.iter().any(|selector| selector.matches(path)))
+    {
+        added_lines.extend(lines_added(root, parent, rev, path));
+    }
+    commit::ArmSequence {
+        label,
+        introduced,
+        added_lines,
+    }
+}
+
+/// A commit's short form, as every other pointer in this repository renders it.
+fn commit_label(sha: &str) -> String {
+    sha.chars().take(8).collect()
+}
+
 fn run_commit_check(
     json: bool,
     range: Option<&str>,
@@ -6926,6 +7191,7 @@ fn run_commit_check(
 
     let mut findings = commit_policy(overrides)?.judge(&subjects)?;
     findings.extend(commit_admissions(range, message, overrides)?);
+    findings.extend(commit_arm_sequencing(range, message, overrides)?);
 
     if json {
         // Emitted unconditionally, including for a clean run: JSON that is
