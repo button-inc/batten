@@ -8361,22 +8361,45 @@ mod tests {
     ///
     /// Dropped WHOLE rather than truncated: half a command is not a way out, and
     /// the class token is still on the line for `batten policy explain`.
+    /// THE FIXTURE IS PROSE BECAUSE THE DEFECT WAS PROSE, and a shorter one does
+    /// not reach the bound. Measured while writing this: the class's own two
+    /// routes compose an 82-character line — about 20 estimated tokens, UNDER the
+    /// declared 24 — so a case built on them asserts the ceiling drops something
+    /// it never had cause to drop, and fails for being wrong about its own
+    /// premise rather than about the engine.
+    ///
+    /// A consumer `[[rule]]` row's `reason` is what actually arrives here, and
+    /// `an-update-owes-a-recent-read`'s is ~700 characters ending in another
+    /// rule's id. This mirrors that shape rather than lowering the ceiling until
+    /// a short line trips it, which would have measured the fixture.
+    const PROSE_FIX: &str = "Re-read the row. That is the whole remedy: read it \
+         again with its relations, and the receipt mints itself from that result \
+         — there is no second call and no payload to pipe anywhere. Then make the \
+         write from what you just read, not from the plan you built earlier: if \
+         the row changed, that is the point, so decide again. This bounds how old \
+         the read was; it cannot prove the row is unchanged, because the tracker \
+         offers no precondition on write.";
+
     #[test]
     fn a_first_sighting_over_the_declared_ceiling_drops_its_routes() {
         let registry = two_route_class();
         let refusal = Refusal::from_class(
-            "leased-push",
+            "row-one",
             &registry,
             "branch write unsafe",
             &[],
-            crate::refusal::Fix::None,
+            crate::refusal::Fix::Run(PROSE_FIX.to_owned()),
         );
         let ceiling = crate::refusal::Ceiling { max_tokens: 24 };
         let bounded = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, Some(&ceiling));
         let unbounded = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, None);
         assert!(
-            unbounded.contains("git pull --rebase"),
-            "the premise: unbounded, this arm carries its routes — {unbounded}"
+            unbounded.contains("Re-read the row"),
+            "the premise: unbounded, this arm carries the prose — {unbounded}"
+        );
+        assert!(
+            ceiling.over(&unbounded),
+            "the premise: the unbounded line is over the ceiling — {unbounded}"
         );
         assert!(
             !ceiling.over(&bounded),
@@ -8387,6 +8410,10 @@ mod tests {
 
     /// And a SHORT route still travels, or the bound above is just the old
     /// never-render behaviour wearing a ceiling.
+    ///
+    /// The class's own two routes at the REAL declared ceiling of 24, which is the
+    /// case the row exists for: `leased-push`'s explicit lease form has to reach a
+    /// reader who has just been refused, and it does.
     #[test]
     fn a_first_sighting_inside_the_ceiling_still_carries_its_routes() {
         let registry = two_route_class();
@@ -8397,7 +8424,7 @@ mod tests {
             &[],
             crate::refusal::Fix::None,
         );
-        let ceiling = crate::refusal::Ceiling { max_tokens: 4_000 };
+        let ceiling = crate::refusal::Ceiling { max_tokens: 24 };
         let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, Some(&ceiling));
         assert!(
             text.contains("git push --force-with-lease=<ref>:<sha>"),
