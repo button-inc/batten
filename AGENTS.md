@@ -144,9 +144,9 @@ a pager (the exit status becomes the pager's) or detaching it with `nohup`/`&`
 (the wake-up is lost). Redirect to a file; put `run_in_background` on the long
 command, never on a launcher that returns at once. Gated by `verdict-not-discarded`.
 **Never** use a foreground `sleep`, spin a foreground busy-poll, or end a turn idle
-"to watch" something — background it and act on its exit, and commit first, since
-**committed-and-pushed is the only state that survives a VM reclaim**. A bounded
-background run means a real exit condition, not a wall-clock cap on the CI poll.
+"to watch" something — background it, act on its exit, and commit first, since
+**committed-and-pushed is the only state surviving a reclaim, and that is the TREE's
+half**: declared work dies too, so **"safe to end?" is `batten doctor session`**.
 
 ## Non-negotiable project rules
 
