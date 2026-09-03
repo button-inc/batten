@@ -13051,6 +13051,7 @@ fn run_doctor(command: &cli::DoctorCommand, out: &mut dyn Write) -> Result<ExitC
         cli::DoctorCommand::Hooks { json } => run_doctor_hooks(json, out),
         cli::DoctorCommand::Mediator { json } => run_doctor_mediator(json, out),
         cli::DoctorCommand::Session { json } => run_doctor_session(json, out),
+        cli::DoctorCommand::Egress { json } => run_doctor_egress(json, out),
     }
 }
 
@@ -13065,6 +13066,31 @@ fn run_doctor(command: &cli::DoctorCommand, out: &mut dyn Write) -> Result<ExitC
 /// machine, so emitting one would defeat the byte-stability §6 requires of this
 /// verb's output while telling the reader nothing they can act on. The remedy is
 /// `mise run install:local` and the verdict is what says whether to run it.
+/// Would the agent proxy carry this container's requests (CLOUD-1399)?
+///
+/// Reads THIS process's environment, which is the whole point: `container-preflight`
+/// asks the same question through `mise`, and `mise.toml`'s `[env]` has already
+/// prepended the GitHub hosts by then — so it graded the repair and reported this
+/// container as fenced while the container's own value was unfenced. `batten` is
+/// invoked directly by the setup one-liner and by every hook registration, so what
+/// it reads here is what the container actually shipped.
+///
+/// One pointer line, never the values: a `NO_PROXY` list is long, machine-specific
+/// and would defeat the byte-stability §6 requires of this verb, while telling the
+/// reader nothing they can act on. The remedy is a change to the container's
+/// Environment variables field, and the verdict is what says whether to make it.
+fn run_doctor_egress(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
+    let report = doctor::diagnose_egress();
+    if json {
+        // A data channel emits its document unconditionally, including when the
+        // container is unproxied: JSON that is sometimes absent is unparseable.
+        writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
+    } else {
+        writeln!(out, "{}", report.line())?;
+    }
+    Ok(report.code())
+}
+
 fn run_doctor_mediator(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
     let report = doctor::diagnose_mediator(Path::new("."));
     if json {

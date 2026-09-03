@@ -298,6 +298,9 @@ _batten() {
             batten__subcmd__design__subcmd__help,help)
                 cmd="batten__subcmd__design__subcmd__help__subcmd__help"
                 ;;
+            batten__subcmd__doctor,egress)
+                cmd="batten__subcmd__doctor__subcmd__egress"
+                ;;
             batten__subcmd__doctor,help)
                 cmd="batten__subcmd__doctor__subcmd__help"
                 ;;
@@ -309,6 +312,9 @@ _batten() {
                 ;;
             batten__subcmd__doctor,session)
                 cmd="batten__subcmd__doctor__subcmd__session"
+                ;;
+            batten__subcmd__doctor__subcmd__help,egress)
+                cmd="batten__subcmd__doctor__subcmd__help__subcmd__egress"
                 ;;
             batten__subcmd__doctor__subcmd__help,help)
                 cmd="batten__subcmd__doctor__subcmd__help__subcmd__help"
@@ -534,6 +540,9 @@ _batten() {
                 ;;
             batten__subcmd__help__subcmd__design,audit)
                 cmd="batten__subcmd__help__subcmd__design__subcmd__audit"
+                ;;
+            batten__subcmd__help__subcmd__doctor,egress)
+                cmd="batten__subcmd__help__subcmd__doctor__subcmd__egress"
                 ;;
             batten__subcmd__help__subcmd__doctor,hooks)
                 cmd="batten__subcmd__help__subcmd__doctor__subcmd__hooks"
@@ -2720,7 +2729,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__doctor)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help mediator hooks session help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help mediator egress hooks session help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2749,9 +2758,53 @@ _batten() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        batten__subcmd__doctor__subcmd__help)
-            opts="mediator hooks session help"
+        batten__subcmd__doctor__subcmd__egress)
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__doctor__subcmd__help)
+            opts="mediator egress hooks session help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__doctor__subcmd__help__subcmd__egress)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -3696,8 +3749,22 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__doctor)
-            opts="mediator hooks session"
+            opts="mediator egress hooks session"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__doctor__subcmd__egress)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

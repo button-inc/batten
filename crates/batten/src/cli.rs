@@ -1266,6 +1266,20 @@ pub enum DoctorCommand {
         /// Emit the count and the open ids as byte-stable JSON.
         json: bool,
     },
+    /// Whether the agent proxy would carry this container's requests.
+    ///
+    /// APPENDED LAST, for the reason [`Command::Startup`] records: this enum
+    /// carries no `repr`, so a variant placed beside its neighbours shifts every
+    /// later discriminant and `mise run semver` reads that as a break the crate
+    /// has to declare.
+    ///
+    /// A sub-verb rather than a check in the bare report, because whether a
+    /// proxy fronts the network is a property of the world and bare `doctor`
+    /// answers a property of the commit — see [`crate::doctor::Egress`].
+    Egress {
+        /// Emit the classification as byte-stable JSON.
+        json: bool,
+    },
 }
 
 /// Subcommands of `generate`.
@@ -1594,6 +1608,9 @@ fn doctor_of(matches: &ArgMatches) -> DoctorCommand {
             json: flag(matches, "json"),
         },
         Some(("session", matches)) => DoctorCommand::Session {
+            json: flag(matches, "json"),
+        },
+        Some(("egress", matches)) => DoctorCommand::Egress {
             json: flag(matches, "json"),
         },
         // The bare verb reads `-J` from its OWN matches, which is where clap put

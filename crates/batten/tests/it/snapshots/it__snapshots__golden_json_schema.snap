@@ -845,6 +845,24 @@ expression: stdout_of(&output)
       ],
       "subcommands": [
         {
+          "path": "doctor egress",
+          "id": "doctor.egress",
+          "about": "Diagnose whether the agent proxy would carry this container's requests",
+          "effect": "read",
+          "data_channel": true,
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "positional": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "doctor hooks",
           "id": "doctor.hooks",
           "about": "Diagnose whether batten is wired on every hook surface of every harness",
@@ -2728,6 +2746,10 @@ expression: stdout_of(&output)
     {
       "id": "doctor",
       "path": "doctor"
+    },
+    {
+      "id": "doctor.egress",
+      "path": "doctor egress"
     },
     {
       "id": "doctor.hooks",

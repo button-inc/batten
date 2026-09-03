@@ -468,6 +468,17 @@ mod tests {
                 // on this very allowlist, which is CLOUD-170's invariant and the
                 // reason `on_path` stats rather than executes.
                 "doctor mediator".to_owned(),
+                // WHETHER THE AGENT PROXY WOULD CARRY THIS CONTAINER'S REQUESTS
+                // (CLOUD-1399). `read`, and on the strictest reading of it: the
+                // whole verb resolves two strings against a comma list. Nothing
+                // is spawned, nothing is dialled, and no name is looked up — the
+                // reserved `.invalid` probe it asks about cannot be delegated, so
+                // it never leaves the process. It reads THIS process's own
+                // environment rather than a repository path, which is the
+                // capability being admitted: the same question asked through
+                // `mise` grades a value `mise.toml`'s `[env]` has already
+                // corrected.
+                "doctor egress".to_owned(),
                 // `read`, and structurally, for the sub-verb above's reason: it
                 // opens the session's own task store through a link the engine
                 // parked and counts what is not `completed`. It spawns nothing,
@@ -707,6 +718,7 @@ mod tests {
             "design".to_owned(),
             "design audit".to_owned(),
             "doctor".to_owned(),
+            "doctor egress".to_owned(),
             "doctor hooks".to_owned(),
             "doctor mediator".to_owned(),
             "doctor session".to_owned(),

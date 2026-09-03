@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-doctor-egress 1  batten 
+.SH NAME
+batten\-doctor\-egress \- Diagnose whether the agent proxy would carry this container\*(Aqs requests
+.SH SYNOPSIS
+\fBbatten doctor egress\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Diagnose whether the agent proxy would carry this container\*(Aqs requests
+.SH OPTIONS
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

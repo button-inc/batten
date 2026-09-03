@@ -2508,6 +2508,30 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[JSON],
     },
+    // THE CONTAINER'S PROXY VALUES ARE A PROPERTY OF THE WORLD (CLOUD-1399), so
+    // this sits beside `doctor mediator` for the same reason and not in the bare
+    // report: `.claude/rules/toolchain.md`'s rule from `lock-check`'s post-mortem
+    // — a property of the commit belongs in the gate, a property of the world
+    // belongs to its own caller.
+    //
+    // IT READS THIS PROCESS'S OWN ENVIRONMENT, and that is the capability being
+    // added rather than an implementation detail. `container-preflight` asks the
+    // same question through `mise`, by which point `mise.toml`'s `[env]` has
+    // prepended the GitHub hosts — so it graded the repair and called this
+    // container fenced while the container's own value was unfenced.
+    //
+    // `read`, and structurally: it resolves two strings against a list. Nothing
+    // is spawned, NOTHING IS DIALLED and no name is looked up — the reserved
+    // `.invalid` probe never leaves the process — so it belongs on the
+    // `filter(effect == read)` allowlist without qualification.
+    CommandDecl {
+        path: "doctor egress",
+        id: "doctor.egress",
+        about: "Diagnose whether the agent proxy would carry this container's requests",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
     CommandDecl {
         path: "doctor hooks",
         id: "doctor.hooks",

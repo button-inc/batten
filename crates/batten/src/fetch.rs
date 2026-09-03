@@ -341,6 +341,26 @@ fn proxy_for(host: &str) -> Option<hyper::Uri> {
         .and_then(|raw| raw.trim().parse().ok())
 }
 
+/// Whether a fetch to `host` would go straight out, given this process's own
+/// environment.
+///
+/// **The one authority, asked rather than re-derived** (CLOUD-1399).
+/// `doctor egress` needs to know whether the agent proxy would carry a request,
+/// and the honest way to answer that is to ask the code that will actually carry
+/// it. A second reader of `NO_PROXY` — in Rust or in Rego — is a second
+/// authority, and the two can disagree over a wildcard or a suffix neither
+/// author had in mind, which is the class `.claude/rules/policy-modules.md`
+/// records for the shell tokenizer one layer over.
+///
+/// Pure: [`bypassed`] resolves loopback and the list by string, and
+/// [`proxy_for`] parses a URI. **Nothing is looked up and nothing is dialled**,
+/// so a caller may probe a reserved name to ask "is anything at all proxied?"
+/// without a packet leaving the process.
+#[must_use]
+pub fn is_direct(host: &str) -> bool {
+    proxy_for(host).is_none()
+}
+
 /// Whether `host` is reached directly rather than through a proxy.
 ///
 /// Two rules, and the first is not read from the environment at all: a loopback

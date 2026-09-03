@@ -762,3 +762,230 @@ fn an_unconfigured_transcript_emits_no_check_at_all() {
         stdout(&output)
     );
 }
+
+// --- doctor egress: would the agent proxy carry this container? (CLOUD-1399) --
+
+/// Run `doctor egress` with a fully controlled proxy environment.
+///
+/// **Every one of the four spellings is removed before any is set**, and that is
+/// the property the suite is worthless without: this container exports
+/// `HTTPS_PROXY` and a `NO_PROXY` with no GitHub host, so a case that set only
+/// what it cared about would be answering about the machine. It is the same
+/// reasoning `mise-tasks/egress-check.sh` follows by taking both values as
+/// arguments — and the reason `container-preflight` was wrong, since it read a
+/// value `mise` had already corrected.
+fn egress(dir: &Path, proxy: Option<&str>, no_proxy: Option<&str>) -> Output {
+    let mut command = batten();
+    command.arg("doctor").arg("egress");
+    for name in ["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"] {
+        command.env_remove(name);
+    }
+    if let Some(value) = proxy {
+        command.env("HTTPS_PROXY", value);
+    }
+    if let Some(value) = no_proxy {
+        command.env("NO_PROXY", value);
+    }
+    command
+        .current_dir(dir)
+        .env_remove("BATTEN_STRICTNESS")
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .env_remove("BATTEN_CONFIG_FROM")
+        .output()
+        .expect("run batten doctor egress")
+}
+
+#[test]
+fn an_unproxied_container_is_ok() {
+    let dir = scratch("egress-none", true, Some("version = 1\n"));
+    let output = egress(&dir, None, None);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress ok");
+}
+
+#[test]
+fn an_unrelated_no_proxy_says_nothing_without_a_proxy() {
+    // A developer machine that has ever exported NO_PROXY must not be reported
+    // as fenced-or-not: with no proxy in play there is nothing to fence.
+    let dir = scratch("egress-none-list", true, Some("version = 1\n"));
+    let output = egress(&dir, None, Some("localhost,127.0.0.1,.internal"));
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress ok");
+}
+
+#[test]
+fn a_total_bypass_is_the_only_other_ok() {
+    let dir = scratch("egress-star", true, Some("version = 1\n"));
+    let output = egress(&dir, Some("http://proxy:8080"), Some("*"));
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress ok");
+}
+
+#[test]
+fn a_total_bypass_is_honoured_among_other_entries() {
+    let dir = scratch("egress-star-list", true, Some("version = 1\n"));
+    let output = egress(
+        &dir,
+        Some("http://proxy:8080"),
+        Some("localhost,*,.internal"),
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress ok");
+}
+
+#[test]
+fn fencing_only_the_github_hosts_is_partial() {
+    // The state that reads as health. The toolchain resolves, so nothing
+    // downstream fails loudly, and every other request is still carried.
+    let dir = scratch("egress-partial", true, Some("version = 1\n"));
+    let output = egress(
+        &dir,
+        Some("http://proxy:8080"),
+        Some("api.github.com,objects.githubusercontent.com"),
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress failed egress-partial");
+}
+
+#[test]
+fn this_containers_own_shape_is_partial_once_mise_has_corrected_it() {
+    // Measured 2026-09-03: `mise.toml`'s `[env]` prepends the GitHub hosts, and
+    // this is the value a task run under `mise` then grades. It answered `ok`
+    // before the split, which is what let a commit delete the rest of the fence.
+    let dir = scratch("egress-this-container", true, Some("version = 1\n"));
+    let output = egress(
+        &dir,
+        Some("http://127.0.0.1:33137"),
+        Some("api.github.com,pypi.org"),
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress failed egress-partial");
+}
+
+#[test]
+fn a_wildcard_entry_is_neither_a_total_bypass_nor_a_fence_for_the_bare_host() {
+    // TWO TRAPS IN ONE INPUT, and it is the case most likely to be "fixed" wrongly.
+    //
+    // `*.api.github.com` contains a `*`, so a wildcard matched as a SUBSTRING
+    // would read it as a total bypass. It is not: `bypassed` compares whole
+    // entries. This container's own ambient list carries `*.svc.cluster.local`,
+    // so that trap is reachable rather than theoretical.
+    //
+    // And it does not fence the BARE host either — `*.api.github.com` covers
+    // subdomains, not `api.github.com` itself, which is how curl and every client
+    // in this class read it. So the honest verdict is `unfenced`.
+    //
+    // THIS IS WHERE THIS VERB AND `mise-tasks/egress-check.sh` DISAGREE, and the
+    // disagreement is deliberate rather than drift, because the two have different
+    // SUBJECTS. That task grades what mise's release resolver will do and matches
+    // `api.github.com` generously, on the stated grounds that some client honours
+    // some spelling — so it answers `partial` here. This verb grades what BATTEN
+    // will do, and the authority for that is `fetch::proxy_for`, which is the code
+    // that carries the request. Asking the carrier rather than re-deriving its
+    // list semantics is the whole reason `fetch::is_direct` exists; making either
+    // one match the other would put a second authority in front of one of the two
+    // subjects.
+    let dir = scratch("egress-wildcard-host", true, Some("version = 1\n"));
+    let output = egress(&dir, Some("http://proxy:8080"), Some("*.api.github.com"));
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress failed egress-unfenced");
+}
+
+#[test]
+fn a_proxy_with_no_github_fence_is_unfenced() {
+    let dir = scratch("egress-unfenced", true, Some("version = 1\n"));
+    let output = egress(&dir, Some("http://proxy:8080"), Some("localhost,127.0.0.1"));
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress failed egress-unfenced");
+}
+
+#[test]
+fn a_proxy_with_an_empty_no_proxy_is_unfenced() {
+    let dir = scratch("egress-unfenced-empty", true, Some("version = 1\n"));
+    let output = egress(&dir, Some("http://proxy:8080"), Some(""));
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress failed egress-unfenced");
+}
+
+#[test]
+fn the_data_channel_emits_a_document_even_when_unproxied() {
+    // JSON that is sometimes absent is unparseable, so the document is
+    // unconditional — including on the passing arm, which is the one a caller is
+    // most likely to meet and the one an `if` would have skipped.
+    let dir = scratch("egress-json-ok", true, Some("version = 1\n"));
+    let output = egress(&dir, None, None);
+    let mut command = batten();
+    command.arg("doctor").arg("egress").arg("-J");
+    for name in ["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"] {
+        command.env_remove(name);
+    }
+    let json = command
+        .current_dir(&dir)
+        .output()
+        .expect("run batten doctor egress -J");
+    assert_eq!(json.status.code(), Some(0), "{json:?}");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout(&json)).expect("the data channel is parseable");
+    assert_eq!(parsed["state"], "unproxied", "{parsed:?}");
+    // The pointer channel and the data channel agree about the same verdict.
+    assert_eq!(stdout(&output).trim(), "egress ok");
+}
+
+#[test]
+fn the_data_channel_names_the_failing_state() {
+    let dir = scratch("egress-json-partial", true, Some("version = 1\n"));
+    let mut command = batten();
+    command.arg("doctor").arg("egress").arg("-J");
+    for name in ["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"] {
+        command.env_remove(name);
+    }
+    let json = command
+        .env("HTTPS_PROXY", "http://proxy:8080")
+        .env("NO_PROXY", "api.github.com")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten doctor egress -J");
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout(&json)).expect("the data channel is parseable");
+    assert_eq!(parsed["state"], "partial", "{parsed:?}");
+}
+
+#[test]
+fn the_lowercase_spellings_are_honoured() {
+    // Every client in this class resolves lower case first, then upper. A reader
+    // that only knew the upper-case names would report a proxied container as
+    // unproxied.
+    let dir = scratch("egress-lowercase", true, Some("version = 1\n"));
+    let mut command = batten();
+    command.arg("doctor").arg("egress");
+    for name in ["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"] {
+        command.env_remove(name);
+    }
+    let output = command
+        .env("https_proxy", "http://proxy:8080")
+        .env("no_proxy", "localhost")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten doctor egress");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress failed egress-unfenced");
+}
+
+#[test]
+fn the_verdict_never_carries_the_values_it_read() {
+    // Non-negotiable rule 4: a pointer, never the payload. A `NO_PROXY` list is
+    // long, machine-specific and would defeat the byte-stability §6 requires —
+    // and it is exactly what a reader would be tempted to dump here.
+    let dir = scratch("egress-pointer-only", true, Some("version = 1\n"));
+    let secret_looking = "api.github.com,internal.corp.example,10.0.0.0/8";
+    let output = egress(
+        &dir,
+        Some("http://proxy.internal:8080"),
+        Some(secret_looking),
+    );
+    let seen = stdout(&output);
+    assert!(!seen.contains("internal.corp.example"), "{seen}");
+    assert!(!seen.contains("proxy.internal"), "{seen}");
+    assert_eq!(seen.trim(), "egress failed egress-partial");
+}

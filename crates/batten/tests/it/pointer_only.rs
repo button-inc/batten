@@ -1015,6 +1015,20 @@ const CENSUS: &[Verb] = &[
     // CLOUD-525's `$HOME` surface reportable at all. A non-batten sibling is a
     // COUNT here for the same reason; naming one would put a consumer's disk
     // layout in a diagnostic that promises not to.
+    // POINTER-ONLY OVER AN INPUT THAT LOOKS HARMLESS AND IS NOT (CLOUD-1399).
+    // This verb's whole subject is two environment variables, and a `NO_PROXY`
+    // list is a consumer's network layout: internal hostnames, CIDR blocks, the
+    // proxy's own address. Echoing what it read would put exactly that in a
+    // diagnostic that promises not to, and it would defeat §6's byte-stability
+    // since the value differs per machine. The remedy is a change to the
+    // container's Environment variables field, and the verdict is what says
+    // whether to make it.
+    Verb {
+        path: "doctor egress",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "doctor hooks",
         args: &[],

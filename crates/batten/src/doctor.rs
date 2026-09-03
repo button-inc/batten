@@ -319,6 +319,128 @@ impl Mediator {
     }
 }
 
+/// Whether the agent proxy would carry this container's requests (CLOUD-1399).
+///
+/// # Why this is a sub-verb and not a check in the bare report
+///
+/// Bare `doctor` answers a property of the COMMIT. This is a property of the
+/// WORLD — two environment variables the hosting platform sets and no repository
+/// writes — so it belongs beside [`Mediator`] rather than in the report that has
+/// to mean the same thing on every machine.
+///
+/// # The decision this repository made, and why a partial fence is a failure
+///
+/// Nothing here may route through the agent proxy. That proxy injects a
+/// repo-scoped token, so `api.github.com` answers **403** for third-party tool
+/// repos and `mise install` dies naming the tool rather than the proxy. Fencing
+/// only the GitHub hosts answers that one symptom and leaves every other request
+/// carried — which is why [`Egress::Partial`] is a distinct verdict rather than a
+/// shade of ok. `mise-tasks/egress-check.sh` is the same three-way split over
+/// values passed as arguments; this one reads the live environment, which is the
+/// half a task run under `mise` cannot do honestly.
+///
+/// # Where this and that task disagree, deliberately
+///
+/// The two have different SUBJECTS, and one input separates them. That task
+/// grades what **mise's release resolver** will do, and matches `api.github.com`
+/// generously — bare, dot-prefixed and wildcard-prefixed entries all read as
+/// fenced, on the stated grounds that some client honours some spelling. This
+/// grades what **batten** will do, and its authority is
+/// [`crate::fetch::is_direct`], the code that actually carries the request. So
+/// `*.api.github.com` answers `partial` there and [`Egress::Unfenced`] here,
+/// because a wildcard entry covers subdomains and not the bare host.
+///
+/// Neither is wrong, and neither should be made to match the other: aligning
+/// them would put a second authority in front of one of the two subjects, which
+/// is the class `.claude/rules/policy-modules.md` records for the shell
+/// tokenizer one layer over.
+///
+/// **`container-preflight` grades the REPAIRED value, and that is the defect this
+/// exists to route around.** Run under `mise`, it reads `$NO_PROXY` from inside a
+/// process `mise.toml`'s `[env]` has already fixed, so it called this container
+/// fenced while the container's own value was unfenced. `batten` is invoked
+/// directly by the setup one-liner and by every hook registration, so this reads
+/// what the container actually shipped.
+///
+/// # Batten honouring the proxy is correct; the values are the defect
+///
+/// [`crate::fetch::proxy_for`] reading `HTTPS_PROXY` is right — a fetch that
+/// ignored it could reach nothing on a host where a proxy is mandatory. So this
+/// never proposes ignoring the environment. It reports whether the environment
+/// says what the repository declared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case", tag = "state")]
+pub enum Egress {
+    /// No proxy is set, or the no-proxy list bypasses every host.
+    Unproxied,
+    /// A proxy is set, the GitHub hosts are fenced out of it, and the rest are
+    /// not.
+    ///
+    /// The toolchain resolves, so nothing downstream fails loudly — which is
+    /// exactly why this needs a name. It is the state that reads as health.
+    Partial,
+    /// A proxy is set and the GitHub hosts are not fenced out of it.
+    ///
+    /// `mise install` fails on the first third-party tool and blames the tool.
+    Unfenced,
+}
+
+impl Egress {
+    /// The pointer line this renders as, without a trailing newline.
+    #[must_use]
+    pub const fn line(&self) -> &'static str {
+        match self {
+            Egress::Unproxied => "egress ok",
+            Egress::Partial => "egress failed egress-partial",
+            Egress::Unfenced => "egress failed egress-unfenced",
+        }
+    }
+
+    /// The exit code this maps to.
+    ///
+    /// [`ExitCode::Violation`] is unreachable, for [`Mediator::code`]'s reason:
+    /// a mediating harness reads `2` as a deny, and "this container's proxy
+    /// values are wrong" is not "policy says no". `1` rather than `3` for the
+    /// same reason that sibling gives: the invocation was well formed and the
+    /// environment is not, which is a usage answer and not an internal failure.
+    #[must_use]
+    pub const fn code(&self) -> ExitCode {
+        match self {
+            Egress::Unproxied => ExitCode::Success,
+            Egress::Partial | Egress::Unfenced => ExitCode::Usage,
+        }
+    }
+}
+
+/// The host whose reachability the toolchain depends on.
+const EGRESS_RESOLVER_HOST: &str = "api.github.com";
+
+/// A name no no-proxy list can legitimately carry, used to ask whether ANYTHING
+/// is proxied.
+///
+/// `.invalid` is reserved by RFC 2606 precisely so it can never be delegated, so
+/// a fence naming it would be a fence naming nothing. Probing it costs no packet:
+/// [`crate::fetch::is_direct`] resolves the list by string and dials nothing.
+const EGRESS_NEVER_FENCED_HOST: &str = "egress-probe.invalid";
+
+/// Read this process's own proxy environment and classify it.
+///
+/// Three questions in the order that makes each answer distinct, and the order
+/// matters: a total bypass has to be checked FIRST, because `api.github.com`
+/// being direct is true both when everything is direct and when only it is.
+/// Asking the narrower question first would report a fully bypassed container as
+/// partially fenced.
+#[must_use]
+pub fn diagnose_egress() -> Egress {
+    if crate::fetch::is_direct(EGRESS_NEVER_FENCED_HOST) {
+        return Egress::Unproxied;
+    }
+    if crate::fetch::is_direct(EGRESS_RESOLVER_HOST) {
+        return Egress::Partial;
+    }
+    Egress::Unfenced
+}
+
 /// Compare the mediator on `PATH` against the artifact `dir` builds.
 ///
 /// Reads both files and hashes them; spawns nothing. Length is compared first
