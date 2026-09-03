@@ -447,16 +447,21 @@ pub struct Counts {
 /// that ambiguity toward could-not-look, which is the safe direction — a missing
 /// answer is reported, where a false zero is indistinguishable from a clean
 /// session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Records {
-    /// Turn boundaries appear.
-    pub turns: bool,
-    /// Tool calls appear.
-    pub tool_calls: bool,
-    /// Tool results appear — a host may record calls and not their outcomes.
-    pub tool_results: bool,
-    /// Hook runs appear.
-    pub hook_decisions: bool,
+///
+/// A SET of kinds rather than a struct of flags, so the vocabulary is closed and
+/// a reader asks `contains` rather than remembering which of four booleans is
+/// which. Adding a kind adds a variant, which every exhaustive match then decides
+/// or fails to compile over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Kind {
+    /// Turn boundaries.
+    Turns,
+    /// Tool calls.
+    ToolCalls,
+    /// Tool results — a host may record calls and not their outcomes.
+    ToolResults,
+    /// Hook runs.
+    HookDecisions,
 }
 
 /// Reductions over RUNS, beside [`Counts`]'s totals.
@@ -567,18 +572,18 @@ impl Stream {
     /// Which event kinds this host records — see [`Records`] for why zero is not
     /// an answer where the kind never appears.
     #[must_use]
-    pub fn records(&self) -> Records {
-        let mut records = Records::default();
+    pub fn records(&self) -> std::collections::BTreeSet<Kind> {
+        let mut kinds = std::collections::BTreeSet::new();
         for record in &self.records {
             match &record.event {
-                Event::Turn(..) | Event::TurnEnd(_) => records.turns = true,
-                Event::ToolCall { .. } => records.tool_calls = true,
-                Event::ToolResult { .. } => records.tool_results = true,
-                Event::HookDecision { .. } => records.hook_decisions = true,
-                Event::MemoryInjection { .. } | Event::HookOutput { .. } => {}
-            }
+                Event::Turn(..) | Event::TurnEnd(_) => kinds.insert(Kind::Turns),
+                Event::ToolCall { .. } => kinds.insert(Kind::ToolCalls),
+                Event::ToolResult { .. } => kinds.insert(Kind::ToolResults),
+                Event::HookDecision { .. } => kinds.insert(Kind::HookDecisions),
+                Event::MemoryInjection { .. } | Event::HookOutput { .. } => false,
+            };
         }
-        records
+        kinds
     }
 
     /// Reductions over runs — see [`Repeats`].
@@ -590,11 +595,12 @@ impl Stream {
         let mut repeats = Repeats::default();
         for record in self.records.iter().rev() {
             match &record.event {
-                // A tool call breaks the run: the session acted.
-                Event::ToolCall { .. } => break,
                 Event::Turn(Role::Assistant, _) => repeats.agent_turn_run += 1,
-                // A user turn ends the model's own run just as an action does.
-                Event::Turn(Role::User, _) => break,
+                // BOTH END THE RUN, for one reason read two ways: the session
+                // acted, or the operator spoke. Either way what came before is no
+                // longer a trailing monologue, so they merge rather than carrying
+                // an `expect` over an arm that decides the same thing twice.
+                Event::ToolCall { .. } | Event::Turn(Role::User, _) => break,
                 // Everything else is neither an action nor a turn boundary, so it
                 // neither extends nor breaks the run.
                 _ => {}

@@ -2852,16 +2852,24 @@ impl Extraction {
     /// defaulting to a count of something else.
     #[must_use]
     pub fn of(self, stream: &crate::transcript::Stream) -> Option<usize> {
+        use crate::transcript::Kind;
         let records = stream.records();
+        let recorded = |kind: Kind| records.contains(&kind);
         match self {
-            Extraction::Turns => records.turns.then(|| stream.counts().turns),
-            Extraction::ToolCalls => records.tool_calls.then(|| stream.counts().tool_calls),
-            Extraction::ToolErrors => records.tool_results.then(|| stream.counts().tool_errors),
-            Extraction::HookDecisions => records
-                .hook_decisions
-                .then(|| stream.counts().hook_decisions),
-            Extraction::HookDenials => records.hook_decisions.then(|| stream.counts().hook_denials),
-            Extraction::AgentTurnRun => records.turns.then(|| stream.repeats().agent_turn_run),
+            Extraction::Turns => recorded(Kind::Turns).then(|| stream.counts().turns),
+            Extraction::ToolCalls => recorded(Kind::ToolCalls).then(|| stream.counts().tool_calls),
+            Extraction::ToolErrors => {
+                recorded(Kind::ToolResults).then(|| stream.counts().tool_errors)
+            }
+            Extraction::HookDecisions => {
+                recorded(Kind::HookDecisions).then(|| stream.counts().hook_decisions)
+            }
+            Extraction::HookDenials => {
+                recorded(Kind::HookDecisions).then(|| stream.counts().hook_denials)
+            }
+            Extraction::AgentTurnRun => {
+                recorded(Kind::Turns).then(|| stream.repeats().agent_turn_run)
+            }
         }
     }
 }
