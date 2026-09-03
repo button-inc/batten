@@ -94,7 +94,7 @@ use crate::common;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use common::{batten, git_in, run_with_stdin, scratch, stdout, write};
+use common::{batten, git_in, run_with_stdin, scratch, stderr, stdout, write};
 
 /// The pin the fixture row declares. Any value works — what matters is that the
 /// producer and the reader compose the key from the SAME one.
@@ -121,25 +121,47 @@ fn pattern_rows() -> String {
     )
 }
 
+/// Exactly the four classes `policy/perf-assert.rego` raises.
+///
+/// **NAMED, NEVER PREFIX-MATCHED, and that is a measured correction** (CLOUD-1321).
+/// This selected on `starts_with("path measure")`, `("prose state")` and
+/// `("source read")`, which reads as "the module's families" and is really "every
+/// class anybody ever names that way". A rebase brought in `prose state other`,
+/// raised by an unrelated `pr-partition-restated` row; the prefix swept it into a
+/// bundle that enables ONE module, nothing there raises it, and the registry's own
+/// both-directions check failed the config LOAD. The fixture cannot grow a class
+/// its module does not raise, so the list is the four ids and the coupling to
+/// somebody else's naming is gone.
+const RAISED: [&str; 4] = [
+    "path measure late",
+    "path measure partial",
+    "prose state wrong",
+    "source read missing",
+];
+
 /// The committed verdict rows this module raises, rendered back as TOML.
 ///
-/// Derived for `pattern_rows`' reason, and because a module raising a token no
-/// row declares fails to LOAD — so a restated table that fell behind would redden
-/// every case here over a module that is fine.
+/// Still DERIVED from the committed table rather than restated, for
+/// `pattern_rows`' reason and because a module raising a token no row declares
+/// fails to LOAD — so a restated table that fell behind would redden every case
+/// here over a module that is fine. What changed is only which rows are selected.
 fn verdict_rows() -> String {
+    let declared = common::verdicts_in(&common::at_root("."));
     let mut rows = String::new();
-    for verdict in common::verdicts_in(&common::at_root(".")) {
-        if !verdict.id.starts_with("path measure")
-            && !verdict.id.starts_with("prose state")
-            && !verdict.id.starts_with("source read")
-        {
-            continue;
-        }
+    for id in RAISED {
+        // A MISS IS LOUD. Selecting by name means a rename in the committed table
+        // yields a SHORT list rather than a wrong one, and a short list is a
+        // fixture whose module raises a token nothing declares — the same load
+        // failure arriving from the other side, with nothing to point at.
+        assert!(
+            declared.iter().any(|verdict| verdict.id == id),
+            "the committed table no longer declares `{id}`, which \
+             `policy/perf-assert.rego` raises — rename it in both places"
+        );
         let _ = write!(
             rows,
-            "[[verdict]]\nid = \"{}\"\ngloss = \"a fixture gloss\"\nclass = \"A fixture class.\"\n\n\
+            "[[verdict]]\nid = \"{id}\"\ngloss = \"a fixture gloss\"\nclass = \"A fixture class.\"\n\n\
              [[verdict.route]]\nid = \"module read first\"\nkind = \"document\"\ntarget = \"policy/perf-assert.rego\"\n\n",
-            verdict.id
         );
     }
     rows
@@ -220,6 +242,25 @@ fn findings(dir: &Path) -> String {
     let mut command = batten();
     command.current_dir(dir).arg("check");
     let outcome = command.output().expect("run batten check");
+
+    // A NON-VERDICT EXIT IS NOT AN EMPTY ANSWER, and reading it as one is how this
+    // file went green over a dead gate (CLOUD-1321). `check` exits 0 clean and 2
+    // on a policy verdict; every other code is a statement about the INVOCATION —
+    // a config that will not load exits 1 and says why on stderr, which this
+    // helper used to discard while returning an empty stdout. Every case asserting
+    // a finding then failed with a blank message, and the one asserting SILENCE
+    // passed, so the suite reported the dead module as a partially working one.
+    //
+    // Fails by: dropping this assertion and adding a `[[verdict]]` row the fixture
+    // bundle raises nowhere, which is precisely what a rebase brought in.
+    let code = outcome.status.code();
+    assert!(
+        matches!(code, Some(0 | 2)),
+        "`batten check` exited {code:?} rather than deciding: the fixture config \
+         did not load, so an empty answer here is a broken gate rather than a \
+         clean tree.\nstderr: {}",
+        stderr(&outcome)
+    );
     stdout(&outcome)
 }
 
