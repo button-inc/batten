@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-doctor-session 1  batten 
+.SH NAME
+batten\-doctor\-session \- Diagnose whether this session has declared work it has not finished
+.SH SYNOPSIS
+\fBbatten doctor session\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Diagnose whether this session has declared work it has not finished
+.SH OPTIONS
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

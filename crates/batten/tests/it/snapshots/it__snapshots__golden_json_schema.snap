@@ -852,6 +852,24 @@ expression: stdout_of(&output)
             }
           ],
           "subcommands": []
+        },
+        {
+          "path": "doctor session",
+          "id": "doctor.session",
+          "about": "Diagnose whether this session has declared work it has not finished",
+          "effect": "read",
+          "data_channel": true,
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "positional": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
         }
       ]
     },
@@ -2421,6 +2439,10 @@ expression: stdout_of(&output)
     {
       "id": "doctor.hooks",
       "path": "doctor hooks"
+    },
+    {
+      "id": "doctor.session",
+      "path": "doctor session"
     },
     {
       "id": "generate",

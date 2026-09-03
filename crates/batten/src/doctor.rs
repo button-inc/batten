@@ -1244,10 +1244,10 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
             return unreadable;
         };
         total += 1;
-        if task.get("status").and_then(serde_json::Value::as_str) != Some("completed") {
-            if let Some(id) = task.get("id").and_then(serde_json::Value::as_str) {
-                ids.push(id.to_owned());
-            }
+        if task.get("status").and_then(serde_json::Value::as_str) != Some("completed")
+            && let Some(id) = task.get("id").and_then(serde_json::Value::as_str)
+        {
+            ids.push(id.to_owned());
         }
     }
     // Byte-stable output (§6): directory order is the filesystem's, and a report

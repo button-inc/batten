@@ -968,6 +968,37 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(session)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__doctor__subcmd__help_commands" \
@@ -981,6 +1012,10 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:batten-doctor-help-command-$line[1]:"
         case $line[1] in
             (hooks)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(session)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -4982,6 +5017,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(session)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -6069,6 +6108,7 @@ _batten__subcmd__design__subcmd__help__subcmd__help_commands() {
 _batten__subcmd__doctor_commands() {
     local commands; commands=(
 'hooks:Diagnose whether batten is wired on every hook surface of every harness' \
+'session:Diagnose whether this session has declared work it has not finished' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten doctor commands' commands "$@"
@@ -6077,6 +6117,7 @@ _batten__subcmd__doctor_commands() {
 _batten__subcmd__doctor__subcmd__help_commands() {
     local commands; commands=(
 'hooks:Diagnose whether batten is wired on every hook surface of every harness' \
+'session:Diagnose whether this session has declared work it has not finished' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten doctor help commands' commands "$@"
@@ -6091,10 +6132,20 @@ _batten__subcmd__doctor__subcmd__help__subcmd__hooks_commands() {
     local commands; commands=()
     _describe -t commands 'batten doctor help hooks commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__doctor__subcmd__help__subcmd__session_commands] )) ||
+_batten__subcmd__doctor__subcmd__help__subcmd__session_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten doctor help session commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__doctor__subcmd__hooks_commands] )) ||
 _batten__subcmd__doctor__subcmd__hooks_commands() {
     local commands; commands=()
     _describe -t commands 'batten doctor hooks commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__doctor__subcmd__session_commands] )) ||
+_batten__subcmd__doctor__subcmd__session_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten doctor session commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__enforce_commands] )) ||
 _batten__subcmd__enforce_commands() {
@@ -6399,6 +6450,7 @@ _batten__subcmd__help__subcmd__design__subcmd__audit_commands() {
 _batten__subcmd__help__subcmd__doctor_commands() {
     local commands; commands=(
 'hooks:Diagnose whether batten is wired on every hook surface of every harness' \
+'session:Diagnose whether this session has declared work it has not finished' \
     )
     _describe -t commands 'batten help doctor commands' commands "$@"
 }
@@ -6406,6 +6458,11 @@ _batten__subcmd__help__subcmd__doctor_commands() {
 _batten__subcmd__help__subcmd__doctor__subcmd__hooks_commands() {
     local commands; commands=()
     _describe -t commands 'batten help doctor hooks commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__doctor__subcmd__session_commands] )) ||
+_batten__subcmd__help__subcmd__doctor__subcmd__session_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help doctor session commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__enforce_commands] )) ||
 _batten__subcmd__help__subcmd__enforce_commands() {

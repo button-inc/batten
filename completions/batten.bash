@@ -292,11 +292,17 @@ _batten() {
             batten__subcmd__doctor,hooks)
                 cmd="batten__subcmd__doctor__subcmd__hooks"
                 ;;
+            batten__subcmd__doctor,session)
+                cmd="batten__subcmd__doctor__subcmd__session"
+                ;;
             batten__subcmd__doctor__subcmd__help,help)
                 cmd="batten__subcmd__doctor__subcmd__help__subcmd__help"
                 ;;
             batten__subcmd__doctor__subcmd__help,hooks)
                 cmd="batten__subcmd__doctor__subcmd__help__subcmd__hooks"
+                ;;
+            batten__subcmd__doctor__subcmd__help,session)
+                cmd="batten__subcmd__doctor__subcmd__help__subcmd__session"
                 ;;
             batten__subcmd__generate,completions)
                 cmd="batten__subcmd__generate__subcmd__completions"
@@ -504,6 +510,9 @@ _batten() {
                 ;;
             batten__subcmd__help__subcmd__doctor,hooks)
                 cmd="batten__subcmd__help__subcmd__doctor__subcmd__hooks"
+                ;;
+            batten__subcmd__help__subcmd__doctor,session)
+                cmd="batten__subcmd__help__subcmd__doctor__subcmd__session"
                 ;;
             batten__subcmd__help__subcmd__generate,completions)
                 cmd="batten__subcmd__help__subcmd__generate__subcmd__completions"
@@ -2544,7 +2553,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__doctor)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help hooks help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help hooks session help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2574,7 +2583,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__doctor__subcmd__help)
-            opts="hooks help"
+            opts="hooks session help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2615,7 +2624,51 @@ _batten() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        batten__subcmd__doctor__subcmd__help__subcmd__session)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         batten__subcmd__doctor__subcmd__hooks)
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__doctor__subcmd__session)
             opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -3418,7 +3471,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__doctor)
-            opts="hooks"
+            opts="hooks session"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3432,6 +3485,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__doctor__subcmd__hooks)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__doctor__subcmd__session)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
