@@ -550,13 +550,26 @@ violation contains {
 # costs a full build every run, is invisible in the job log, and reads exactly
 # like a cache that has not been populated yet.
 #
-# THE KEY IS DELIBERATELY NOT JUDGED. An expression BELONGS in a key — that is
-# what a key is for, and a key that never moves never SAVES, since "if the
-# provided `key` matches an existing cache, a new cache is not created". The path
-# is the half that has to hold still, and a rule over both would refuse the one
-# shape that works.
+# THE KEY IS DELIBERATELY NOT JUDGED. An expression BELONGS in a key — telling
+# one entry from another is what a key is FOR — so a rule over both halves would
+# refuse the one shape that works. An earlier draft of this paragraph justified
+# that with "a key that never moves never SAVES", which is true of the action in
+# general and is NOT the reason here: this repository's own `perf` job now
+# restores and never saves, so its key carries no expression at all and is
+# correct. The path is the half that has to hold still; that is the whole claim.
+#
+# ALL THREE SPELLINGS ARE THE SAME ACTION. `actions/cache/restore` and
+# `actions/cache/save` derive an entry's version from `path` exactly as the
+# composite `actions/cache` does, so an interpolated path is the identical silent
+# total miss. Matching only the composite spelling would have left this predicate
+# live and reaching nothing the moment a job split restore from save — which is
+# precisely what CLOUD-1342 does.
 
-cache_action(step) if startswith(object.get(step, "uses", ""), "actions/cache@")
+cache_action(step) if cache_uses(object.get(step, "uses", ""))
+
+cache_uses(uses) if startswith(uses, "actions/cache@")
+
+cache_uses(uses) if startswith(uses, "actions/cache/")
 
 path_varies_between_runs(step) if contains(object.get(step, ["with", "path"], ""), "${{")
 
@@ -1032,10 +1045,9 @@ test_a_cached_path_carrying_an_expression_is_refused if {
 	sub.artifact == "perf"
 }
 
-# THE KEY IS NOT THE SUBJECT, and this is the case that says so. A key carrying
-# the same expression is the WORKING shape — it is what makes a moved base miss
-# primarily, and a miss is what buys the save — so a predicate that fired here
-# would refuse the fix along with the defect.
+# THE KEY IS NOT THE SUBJECT, and this is the case that says so. An expression in
+# a key is how one entry is told from another, so a predicate that fired here
+# would refuse a working shape along with the defect.
 test_an_expression_in_the_key_alone_is_clean if {
 	wf := object.union(sound_workflow, {"jobs": {"perf": {
 		"name": "perf",
@@ -1049,6 +1061,24 @@ test_an_expression_in_the_key_alone_is_clean if {
 	every f in found {
 		f.verdict != "path reach dead"
 	}
+}
+
+# THE SUB-ACTION SPELLING IS THE SAME DEFECT, and this is the case that keeps the
+# predicate from going dead the moment a job splits restore from save. CLOUD-1342
+# does exactly that split, so without this arm the rule would load clean and
+# reach nothing in the repository it is registered against.
+test_a_restore_only_step_carrying_an_expression_is_refused if {
+	wf := object.union(sound_workflow, {"jobs": {"perf": {
+		"name": "perf",
+		"runs-on": "ubuntu-latest",
+		"steps": [lease_first, {
+			"uses": "actions/cache/restore@v6.1.0",
+			"with": {"path": "target/perf/base-${{ steps.base.outputs.sha }}", "key": "perf-base"},
+		}],
+	}}})
+	found := violation with input as swap(".github/workflows/ci.yml", wf)
+	some f in found
+	f.verdict == "path reach dead"
 }
 
 # A STEP THAT IS NOT THIS ACTION IS NOT THIS RULE'S BUSINESS. `rust-cache` takes

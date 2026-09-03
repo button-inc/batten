@@ -109,6 +109,35 @@ jobs:
         run: mise run perf >"$RUNNER_TEMP/perf.txt"
       - name: Assert the budget
         run: mise run perf-assert <"$RUNNER_TEMP/perf.txt"
+      # THE SEED FOR EVERY PULL REQUEST'S BASE ARM, WRITTEN HERE BECAUSE ONLY
+      # `main` CAN WRITE IT (CLOUD-1342). A cache entry written from a pull
+      # request is scoped to `refs/pull/N/merge` and no other pull request can
+      # read it; an entry written from the default branch is readable by every
+      # branch. `ci.yml`'s `perf` job therefore RESTORES this entry and never
+      # saves, which is what removes ~190 MB per run of bytes nothing could
+      # restore — CLOUD-840 measured 203.7 GB of them across 1,144 entries.
+      #
+      # NO NEW TRIGGER AND NO SECOND BUILD. This job already built `--release`
+      # for the measurement above, so the seed is that closure copied aside. It
+      # is staged AFTER the assertion for the same reason the series is: a
+      # measurement that broke its budget is a defect to fix, and a seed carried
+      # forward from it would spread the defect to every pull request.
+      - name: Stage the base-arm seed
+        run: |
+          rm -rf target/perf/base-seed
+          mkdir -p target/perf/base-seed
+          cp -a target/release target/perf/base-seed/release
+      # A save collision on an existing key is the ORDINARY case — the key moves
+      # only when `mise.lock` or `Cargo.lock` does — and "if the provided `key`
+      # matches an existing cache, a new cache is not created". That is a
+      # no-op, not a failure, and it must not redden a scheduled run whose
+      # measurement already passed.
+      - name: Save the base-arm seed
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/perf/base-seed
+          key: perf-base-${{ runner.os }}-${{ hashFiles('mise.lock', 'Cargo.lock') }}
       # The series (CLOUD-172). AFTER the assertion, deliberately: a measurement
       # that broke its budget is a defect to fix, not a datum to enshrine, and a
       # series carrying known-bad readings is one nobody can read a trend from.

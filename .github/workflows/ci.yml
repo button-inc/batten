@@ -674,27 +674,41 @@ jobs:
       # requests, ZERO hits, ~190 MB written and discarded each time. No key
       # repairs that, which is why the fix is the path and not the key.
       #
-      # THE SHA STAYS IN THE KEY, AND DROPPING IT IS THE OPPOSITE DEFECT. "If the
-      # provided `key` matches an existing cache, a new cache is not created" —
-      # so a key that never moved would restore one base's closure forever and
-      # never store the current one. A moved base has to MISS on the primary key,
-      # because that miss is what buys the save.
+      # THE SHA COMES OUT OF THE KEY, BECAUSE NOTHING SAVES ON THIS SIDE. An
+      # earlier revision kept it there on the reasoning that "if the provided
+      # `key` matches an existing cache, a new cache is not created", so a key
+      # that never moved would restore one base's closure forever and never
+      # store the current one — a moved base had to MISS in order to buy the
+      # save. That is true of the action in general and false of this job: the
+      # step below is `actions/cache/restore` and writes nothing at all, so
+      # there is no save to buy and no miss to engineer. A key that never moves
+      # is exactly what is wanted here.
       #
-      # `restore-keys` IS SAFE HERE, AND ONLY HERE, BECAUSE THE PREFIX HIT LANDS
-      # IN A SEED DIRECTORY NOTHING MEASURES. A prefix hit restoring some other
-      # base's build under THIS base's name is exactly the stale arm `perf.rs`'s
-      # keyed directory exists to refuse. The seed is therefore restored beside
-      # the arm and copied in with its BINARY REMOVED, which leaves
-      # `base_arm_is_built()` false: cargo runs against the base tree that was
-      # actually materialised, and reuses the dependency closure only.
+      # THE SEED IS WRITTEN FROM `main`, IN `perf.yml`, AND THAT IS WHAT MAKES
+      # IT READABLE. An entry written from a pull request is scoped to
+      # `refs/pull/N/merge` and no other pull request can read it; an entry
+      # written from the default branch is readable by every branch. The
+      # scheduled `perf` workflow already pays a full `--release` build on
+      # `main`, so it stages that closure and saves it under this key — no new
+      # trigger and no second build. Every pull request then restores it on its
+      # FIRST run rather than its second.
       #
-      # Measured locally 2026-09-02 with `Cargo.lock` byte-identical across the
-      # pair, so the residue is the cost of the copy rather than lockfile churn:
-      # cold 239 `Compiling` in 4m42s, seeded 64 in 2m07s, same base 0. The win
-      # is ~2m35s of a 13.5 min step and is stated as that rather than as the
-      # whole problem. Cross-PR sharing stays impossible — every entry is scoped
-      # to `refs/pull/N/merge` and nothing writes from `main` — and that half is
-      # CLOUD-840's.
+      # WHAT THIS DELETES IS THE POINT. CLOUD-840 measured this repository at
+      # 225.2 GB of Actions cache, 203.7 GB of it across 1,144 PR-ref entries
+      # nothing can ever restore. The revision this replaces keyed on the merge
+      # base PRECISELY SO A MOVED BASE WOULD MISS AND THEREFORE SAVE, which is
+      # ~190 MB of unreadable bytes written per run: it optimised for a hit and
+      # never asked what a miss costs. This job now writes ZERO PR-scoped bytes.
+      #
+      # A PREFIX HIT IS NOT A STALE ARM, and that is what makes restoring some
+      # other base's closure safe. Restoring another base's build under THIS
+      # base's name is exactly the stale arm `perf.rs`'s keyed directory exists
+      # to refuse — so the seed is restored BESIDE the arm and copied in with
+      # its BINARY REMOVED, which leaves `base_arm_is_built()` false. Cargo then
+      # runs against the base tree that was actually materialised and reuses the
+      # dependency closure only. Measured locally 2026-09-02 with `Cargo.lock`
+      # byte-identical across the pair: cold 239 `Compiling` in 4m42s, seeded 64
+      # in 2m07s, same base 0.
       #
       # BARE STEPS RATHER THAN TASKS, deliberately: `ci-local-parity` requires
       # every `mise run <task>` a workflow names to be one `verify` runs, and a
@@ -702,12 +716,10 @@ jobs:
       - name: Resolve the merge base the pair will build
         id: base
         run: echo "sha=$(git merge-base origin/main HEAD)" >>"$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target/perf/base-seed
-          key: perf-base-${{ runner.os }}-${{ hashFiles('mise.lock', 'Cargo.lock') }}-${{ steps.base.outputs.sha }}
-          restore-keys: |
-            perf-base-${{ runner.os }}-${{ hashFiles('mise.lock', 'Cargo.lock') }}-
+          key: perf-base-${{ runner.os }}-${{ hashFiles('mise.lock', 'Cargo.lock') }}
       # Absent seed is a cold run, which is a pass: the gate builds what it needs.
       - name: Seed the base arm from the restored closure
         env:
@@ -720,16 +732,6 @@ jobs:
           cp -a "$seed" "$arm"
           rm -f "$arm/release/batten"
       - run: mise run perf-gate
-      # Absent arm means the gate SKIPPED — no crate source moved — so the seed
-      # stays as restored and the entry is saved unchanged under the new key.
-      - name: Carry this base's closure into the entry
-        env:
-          BASE_SHA: ${{ steps.base.outputs.sha }}
-        run: |
-          arm="target/perf/base-$BASE_SHA"
-          [ -d "$arm" ] || exit 0
-          rm -rf target/perf/base-seed
-          cp -a "$arm" target/perf/base-seed
 
   # Single fan-in status. Point branch protection at `final` instead of
   # enumerating every leg, so adding a job never requires a ruleset change.
