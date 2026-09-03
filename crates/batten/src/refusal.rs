@@ -687,8 +687,9 @@ mod sightings {
         // deleted spawn with a stale annotation goes red too (CLOUD-743).
         #[expect(
             clippy::disallowed_types,
-            reason = "a test fixture needs a real git directory: `first_sighting` keys its store \
-                      off `$GIT_DIR`, and without one every case measures the unreadable-store arm"
+            reason = "stays — a test fixture needs a real git directory: `first_sighting` keys \
+                      its store off `$GIT_DIR`, so without one every case below measures the \
+                      unreadable-store arm instead of the once-per-session one under test"
         )]
         let mut git = std::process::Command::new("git");
         git.args(["init", "-q", "-b", "main", "."])
