@@ -34,6 +34,20 @@
 //! each of ITS refusals, the exit class each lands in, and the pointer discipline
 //! over every message — including the one that matters most, that a resolved
 //! credential reaches no output on any path.
+//!
+//! # AND THE RESPONSE SIDE IS REACHED WITHOUT A SOCKET AT ALL (CLOUD-1403)
+//!
+//! "Stops at the socket" was read once as "stops at the response", and that is
+//! the sentence worth correcting rather than deleting. What needs a listener is
+//! the TRANSPORT — handshake, session header, SSE framing. What a server SAYS is
+//! a `fetch::Response`, which is `pub` with `pub` fields, so a case can build one
+//! and drive the real parsing and rendering path with no listener, no certificate
+//! and nothing fabricated except the bytes.
+//!
+//! The refusal cases below do exactly that. Reading this header as a bar on them
+//! is what sent one session looking for a loopback TLS responder for a test that
+//! never needed one — so the bound is now stated as the transport's rather than
+//! as the whole response half's.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -561,6 +575,124 @@ fn seed_write_response(dir: &Path, home: &Path, document: &serde_json::Value) {
         String::from_utf8_lossy(&recorded.stderr)
     );
 }
+
+// --- the refusal line the server's own message reaches (CLOUD-1403) ---------
+//
+// THE INTEGRATION TIER, AND IT NEEDS NO SERVER — which is the correction worth
+// recording, because the first attempt at this row concluded the opposite and
+// went looking for a loopback TLS listener.
+//
+// `envelope` is a pure function of a `fetch::Response`, and that type is `pub`
+// with `pub` fields. This target links the library, so a case can BUILD a refusal
+// envelope and drive the real rendering path: no listener, no certificate, no
+// network, and nothing fabricated except the bytes a server would have sent.
+//
+// That is a different question from the module's own cases, which pin the
+// message-shaping function alone. These pin that the shaped message reaches the
+// line a caller actually reads, through the same branch `mcp call` takes.
+
+/// A response carrying `body` with a 200 status, as the transport hands one over.
+fn answered(body: &str) -> batten::fetch::Response {
+    batten::fetch::Response {
+        status: 200,
+        body: body.as_bytes().to_vec(),
+        headers: vec![("content-type".to_owned(), "application/json".to_owned())],
+    }
+}
+
+/// The rendered refusal for a JSON-RPC error envelope.
+fn refusal(body: &str) -> String {
+    batten::mcp::envelope(&answered(body), "save_issue")
+        .expect_err("a JSON-RPC error envelope is a refusal")
+        .to_string()
+}
+
+#[test]
+fn a_refusal_carries_the_servers_own_message_and_not_only_its_code() {
+    // THE DEFECT THIS ROW IS FOR, at the seam that had it. Measured 2026-09-03:
+    // `save_issue` answered `-32003` with nothing else, and the identical call
+    // through the connector's own tool succeeded — so the one fact that could
+    // have said which path was wrong had been dropped at this branch.
+    let line = refusal(
+        r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32003,"message":"Issue state 'Todo' is not valid for this team"}}"#,
+    );
+    assert!(line.contains("-32003"), "the code still travels: {line}");
+    assert!(
+        line.contains("Issue state 'Todo' is not valid for this team"),
+        "and the server's own message travels with it: {line}"
+    );
+}
+
+#[test]
+fn a_refusal_never_carries_the_arbitrary_data_member() {
+    // THE BOUND, and the half that keeps this inside rule 4. §5.1 defines `data`
+    // as "a Primitive or Structured value" — arbitrary, unlike the one-sentence
+    // `message` — so it is the payload and stays out. Without this case the
+    // relay could widen to the whole error object and nothing would notice.
+    let line = refusal(
+        r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32003,"message":"not permitted","data":{"token":"SECRETLEAK","rows":[1,2,3]}}}"#,
+    );
+    assert!(
+        line.contains("not permitted"),
+        "the message travels: {line}"
+    );
+    assert!(
+        !line.contains("SECRETLEAK"),
+        "the arbitrary `data` member must never reach a finding: {line}"
+    );
+}
+
+#[test]
+fn a_refusal_message_a_server_wrote_as_a_trace_is_cut_to_one_line() {
+    // A server that ignores the SHOULD sends frames. Relaying the whole of one
+    // buries the line a reader needs, which is the second half of the same
+    // defect: the old output printed a backtrace for somebody else's verdict.
+    let line = refusal(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32000,\"message\":\"bad request\\n  at Foo.bar (/srv/app.js:12)\\n  at Baz\"}}",
+    );
+    assert!(
+        line.contains("bad request"),
+        "the first line travels: {line}"
+    );
+    assert!(
+        !line.contains("Foo.bar"),
+        "and the frames after it do not: {line}"
+    );
+}
+
+#[test]
+fn an_error_carrying_no_message_says_so_rather_than_rendering_a_bare_code() {
+    // COULD-NOT-LOOK, KEPT DISTINCT. `message` is REQUIRED by §5.1, so a server
+    // omitting it is malformed — and the honest line says the message was absent
+    // rather than trailing off, which is what the pre-change output looked like
+    // for every refusal.
+    let line = refusal(r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32003}}"#);
+    assert!(line.contains("-32003"), "the code still travels: {line}");
+    assert!(
+        line.contains("no message"),
+        "an absent message is stated, not elided: {line}"
+    );
+}
+
+#[test]
+fn a_successful_envelope_is_still_a_result_and_not_a_refusal() {
+    // THE PREMISE CASE. Every assertion above is about the error branch; without
+    // one proving the success branch still returns, a `envelope` that refused
+    // everything would satisfy all four.
+    let value = batten::mcp::envelope(
+        &answered(r#"{"jsonrpc":"2.0","id":1,"result":{"id":"KEY-1"}}"#),
+        "get_issue",
+    )
+    .expect("a result envelope is not a refusal");
+    assert_eq!(
+        value.get("id").and_then(serde_json::Value::as_str),
+        Some("KEY-1")
+    );
+}
+
+/*
+#MUTANT error-message-dropped|s@            .and_then(serde_json::Value::as_str)@            .and_then(|_unread| None::<\&str>)@|a_refusal_carries_the_servers_own_message_and_not_only_its_code
+*/
 
 /// Run a `capture` verb against the same state home the seed wrote into.
 fn find_in(dir: &Path, home: &Path, args: &[&str]) -> Output {

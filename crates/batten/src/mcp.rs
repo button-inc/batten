@@ -1411,10 +1411,40 @@ fn post_all(
 /// An internal error (→ exit `3`) on a non-2xx status, an unreadable envelope, or
 /// an envelope carrying `error`.
 ///
-/// **Pointer-only in every refusal.** A server's error body is content from
-/// somewhere the operator did not choose, so what travels is the status, the
-/// method and the JSON-RPC error CODE — never a message and never a body.
-fn envelope(response: &crate::fetch::Response, method: &str) -> Result<serde_json::Value> {
+/// **Pointer-only in every refusal, and the JSON-RPC `message` is inside that
+/// bound rather than outside it** (CLOUD-1403). This clause used to say the code
+/// travelled and "never a message", on the reasoning that a server's error body
+/// is content from somewhere the operator did not choose. That reasoning does not
+/// survive its own premise: a declared `[mcp.source]` is an endpoint the operator
+/// chose, and [`challenge`] below already relays what such a server says about a
+/// refusal.
+///
+/// It relays it the same way, which is the whole of why this is not a widening.
+/// `challenge` takes the SCHEME TOKEN and drops the parameters after it, because
+/// those can carry a realm and a description. Here `message` is taken and `data`
+/// is dropped, because `data` is the member JSON-RPC 2.0 §5.1 defines as
+/// arbitrary — "a Primitive or Structured value" — where `message` is REQUIRED
+/// and "SHOULD be limited to a concise single sentence". One sentence is a
+/// pointer; the structured value beside it is the payload rule 4 refuses.
+///
+/// Bounded on both axes anyway, because a SHOULD is not a guarantee: the first
+/// line only, and [`REFUSAL_MESSAGE_BOUND`] bytes of it.
+///
+/// The measured cost of the old shape: a `-32003` with no message was the entire
+/// diagnosis available for a refused write, and the identical call through the
+/// connector's own tool succeeded — so the one fact that could have told a reader
+/// which of those two paths was wrong had been discarded at this line.
+///
+/// # Public because the integration tier drives it
+///
+/// [`crate::fetch::Response`] is constructible by any caller, so
+/// `crates/batten/tests/it/mcp_dispatch.rs` builds a refusal envelope and asserts
+/// what this renders — no listener, no certificate, no network. That is the tier
+/// `.claude/rules/policy-modules.md` asks for over the ENGINE rather than over a
+/// hand-made string, and it is reachable here because the seam is a pure function
+/// of a response the test can construct. Nothing else in the crate calls it
+/// through this path.
+pub fn envelope(response: &crate::fetch::Response, method: &str) -> Result<serde_json::Value> {
     if !(200..300).contains(&response.status) {
         return Err(match challenge(response) {
             Some(scheme) => anyhow::anyhow!(
@@ -1431,14 +1461,58 @@ fn envelope(response: &crate::fetch::Response, method: &str) -> Result<serde_jso
     let document: serde_json::Value = serde_json::from_str(&frame(&text)).map_err(|_| {
         anyhow::anyhow!("mcp: {method} answered with no readable JSON-RPC envelope")
     })?;
-    if let Some(code) = document.get("error").and_then(|error| error.get("code")) {
+    if let Some(error) = document.get("error") {
+        // The CODE may be absent even though §5.1 requires it — a server that
+        // omits it is still refusing, and reading the whole `error` member as
+        // absent would turn a refusal into a missing `result`, which is a
+        // different and less accurate line.
+        let code = error
+            .get("code")
+            .map_or_else(|| "unspecified".to_owned(), ToString::to_string);
+        let message = error
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(|| "no message".to_owned(), refusal_message);
         return Err(anyhow::anyhow!(
-            "mcp: {method} was refused by the server, JSON-RPC error code {code}"
+            "mcp: {method} was refused by the server, JSON-RPC error code {code}: {message}"
         ));
     }
     document.get("result").cloned().ok_or_else(|| {
         anyhow::anyhow!("mcp: {method} answered with an envelope carrying no result")
     })
+}
+
+/// How much of a JSON-RPC `message` a refusal carries (CLOUD-1403).
+///
+/// JSON-RPC 2.0 §5.1 says the message "SHOULD be limited to a concise single
+/// sentence", and a SHOULD is not a guarantee — a server is free to answer with a
+/// stack trace, and a gate that echoed one back would be republishing whatever
+/// that was. So the relay is bounded here rather than trusted there.
+pub const REFUSAL_MESSAGE_BOUND: usize = 200;
+
+/// One line of a server's refusal message, bounded.
+///
+/// The FIRST line, because a multi-line body is the shape §5.1 asks servers not
+/// to send and the one a trace arrives as; and [`REFUSAL_MESSAGE_BOUND`] bytes of
+/// it, cut on a character boundary so the result is always renderable.
+///
+/// Truncation is MARKED. A silently cut message reads as a complete sentence that
+/// happens to end oddly, and a reader cannot tell the server's own wording from
+/// this function's edit — which is the same class of unreadable answer the whole
+/// row is about.
+fn refusal_message(text: &str) -> String {
+    let line = text.lines().next().unwrap_or_default().trim();
+    if line.is_empty() {
+        return "no message".to_owned();
+    }
+    if line.len() <= REFUSAL_MESSAGE_BOUND {
+        return line.to_owned();
+    }
+    let mut cut = REFUSAL_MESSAGE_BOUND;
+    while cut > 0 && !line.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}…", &line[..cut])
 }
 
 /// The authentication SCHEME a refusal challenges with, if it names one.
@@ -1525,6 +1599,64 @@ mod tests {
             env: env.map(str::to_owned),
             file_from: file_from.map(str::to_owned),
         }
+    }
+
+    // --- the refusal line's message relay (CLOUD-1403) --------------------
+    //
+    // The load-time tier, over the part that decides WHAT travels.
+    // `crates/batten/tests/it/mcp_dispatch.rs` drives `envelope` itself over a
+    // constructed `fetch::Response`, which is the tier that proves the rendering
+    // reaches the line a caller sees.
+
+    #[test]
+    fn a_refusal_message_travels_whole_when_it_is_one_sentence() {
+        // The shape §5.1 asks for, and the one that made this row worth landing:
+        // without it the entire diagnosis of a refused write is an integer.
+        assert_eq!(
+            refusal_message("Issue state 'Todo' is not valid for this team"),
+            "Issue state 'Todo' is not valid for this team"
+        );
+    }
+
+    #[test]
+    fn a_multi_line_message_is_cut_to_its_first_line() {
+        // A stack trace is what a server sends when it ignores the SHOULD, and
+        // relaying the whole of one is the payload rule 4 refuses.
+        assert_eq!(
+            refusal_message("bad request\n  at Foo.bar (/srv/app/foo.js:12)\n  at Baz"),
+            "bad request"
+        );
+    }
+
+    #[test]
+    fn an_over_long_message_is_cut_and_the_cut_is_marked() {
+        // MARKED, because a silently truncated sentence reads as the server's own
+        // wording and a reader cannot tell it from this function's edit.
+        let long = "x".repeat(REFUSAL_MESSAGE_BOUND + 50);
+        let cut = refusal_message(&long);
+        assert!(cut.ends_with('…'), "the cut is marked: {cut}");
+        assert_eq!(
+            cut.chars().filter(|c| *c == 'x').count(),
+            REFUSAL_MESSAGE_BOUND
+        );
+    }
+
+    #[test]
+    fn a_cut_lands_on_a_character_boundary() {
+        // Shown able to fail in the direction that would panic: a naive slice at
+        // a fixed byte offset splits a multi-byte character. The input is chosen
+        // so the cut falls mid-character.
+        let text = "é".repeat(REFUSAL_MESSAGE_BOUND);
+        let cut = refusal_message(&text);
+        assert!(cut.ends_with('…'), "the cut is marked: {cut}");
+    }
+
+    #[test]
+    fn an_absent_or_empty_message_says_so_rather_than_rendering_nothing() {
+        // Could-not-look, kept distinct from a message that was relayed. A blank
+        // tail would read as a server that said nothing about a refusal it made.
+        assert_eq!(refusal_message(""), "no message");
+        assert_eq!(refusal_message("   \n"), "no message");
     }
 
     #[test]
