@@ -478,13 +478,39 @@ fn write_payload(tool: &str, path: &str) -> String {
 }
 
 fn write_verdict(tool: &str, path: &str) -> Option<i32> {
-    run_with_stdin_at_real_root(
+    write_decision(tool, path).0
+}
+
+/// The verdict AND what the engine said reaching it.
+///
+/// **An exit code alone cannot be debugged from a CI log** (CLOUD-1388). The
+/// `windows` job reported `left: Some(0) right: Some(2)` for an absolute
+/// `batten.toml` and nothing else — no pointer, no path, no clue whether the
+/// target was relativised, matched, or never read as a write at all. Three
+/// separate hypotheses were argued from that one integer and all three were
+/// wrong, because the number is the same whichever of them holds.
+///
+/// `-vv` is the rung the engine renders its own reasoning at, so the failure
+/// message carries it. This costs nothing on a green run and is the difference
+/// between one round and three on a red one.
+fn write_decision(tool: &str, path: &str) -> (Option<i32>, String) {
+    let output = run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code"],
+        &["hook", "--harness", "exit-code", "-vv"],
         &write_payload(tool, path),
-    )
-    .status
-    .code()
+    );
+    let told = format!(
+        "sent {tool} at {path}\n  stdout: {}\n  stderr: {}",
+        common::stdout(&output).trim(),
+        common::stderr(&output).trim()
+    );
+    (output.status.code(), told)
+}
+
+/// Assert a write is refused, and say what the engine did when it is not.
+fn assert_write_refused(tool: &str, path: &str, why: &str) {
+    let (code, told) = write_decision(tool, path);
+    assert_eq!(code, Some(2), "{why}\n{told}");
 }
 
 /// THE DISCRIMINATING PAIR (CLOUD-1133). One protected target, two spellings.
@@ -503,15 +529,11 @@ fn a_protected_write_is_refused_in_both_spellings_the_host_can_send() {
         .canonicalize()
         .expect("the repository root resolves")
         .join(GUARDED);
-    assert_eq!(
-        write_verdict("Write", GUARDED),
-        Some(2),
-        "the relative spelling is refused"
-    );
-    assert_eq!(
-        write_verdict("Write", &absolute.display().to_string()),
-        Some(2),
-        "and so is the absolute one, which is what the host actually sends"
+    assert_write_refused("Write", GUARDED, "the relative spelling is refused");
+    assert_write_refused(
+        "Write",
+        &absolute.display().to_string(),
+        "and so is the absolute one, which is what the host actually sends",
     );
 }
 
@@ -525,10 +547,10 @@ fn the_absolute_spelling_is_refused_for_every_write_tool() {
         .display()
         .to_string();
     for tool in ["Write", "Edit", "MultiEdit"] {
-        assert_eq!(
-            write_verdict(tool, &absolute),
-            Some(2),
-            "{tool} at an absolute protected path is refused"
+        assert_write_refused(
+            tool,
+            &absolute,
+            &format!("{tool} at an absolute protected path is refused"),
         );
     }
 }
