@@ -1169,9 +1169,33 @@ pub fn tasks_link(root: &std::path::Path, declared_path: &str) -> Option<std::pa
 /// The whole of the engine's knowledge about the host's layout: one named
 /// placeholder. Everything either side of it is the consumer's string, which is
 /// what keeps a directory layout out of `crates/batten` (rule 1).
+///
+/// A LEADING `~/` EXPANDS, and that is a correctness requirement rather than a
+/// convenience. These stores live under the launcher's home, no committed value
+/// may name a container's absolute home path, and an unexpanded `~` resolves to
+/// nothing — a declaration that reaches no directory reads exactly like a
+/// consumer with no work, which is the false clean this whole surface exists to
+/// refuse. Only a leading `~/` is special; a `~` anywhere else is an ordinary
+/// character, and an absent `home` leaves the template alone so the caller's
+/// `is_dir` check takes the could-not-look arm.
+///
+/// `home` is a PARAMETER rather than a read of `HOME` inside, so this stays a
+/// pure function of its inputs: reading ambient state here would make the unit
+/// case set a process-wide variable to assert anything, and a test that mutates
+/// the environment is a test other tests race with.
 #[must_use]
-pub fn tasks_dir(template: &str, session: &str) -> String {
-    template.replace("{session}", session)
+pub fn tasks_dir(template: &str, session: &str, home: Option<&std::ffi::OsStr>) -> String {
+    let substituted = template.replace("{session}", session);
+    let Some(rest) = substituted.strip_prefix("~/") else {
+        return substituted;
+    };
+    match home {
+        Some(home) if !home.is_empty() => std::path::Path::new(home)
+            .join(rest)
+            .to_string_lossy()
+            .into_owned(),
+        _ => substituted,
+    }
 }
 
 /// Validate the table at load, the way every other config table is.
@@ -1223,6 +1247,61 @@ mod tests {
 
     fn sample() -> Stream {
         parse(SAMPLE, "t.jsonl").expect("parses")
+    }
+
+    fn home(path: &str) -> Option<&std::ffi::OsStr> {
+        Some(std::ffi::OsStr::new(path))
+    }
+
+    #[test]
+    fn the_session_id_is_the_only_thing_substituted() {
+        assert_eq!(
+            tasks_dir("/var/tasks/{session}", "s-1", home("/home/agent")),
+            "/var/tasks/s-1",
+            "the placeholder resolves"
+        );
+        // Everything either side of the placeholder is the consumer's string and
+        // is returned untouched — the engine knows one field, not a layout.
+        assert_eq!(
+            tasks_dir("/var/{session}/x/{session}", "s-1", home("/home/agent")),
+            "/var/s-1/x/s-1"
+        );
+        assert_eq!(
+            tasks_dir("/var/tasks/fixed", "s-1", home("/home/agent")),
+            "/var/tasks/fixed"
+        );
+    }
+
+    #[test]
+    fn a_leading_tilde_expands_and_a_bare_one_does_not() {
+        // Shown able to fail in the direction that matters: without expansion the
+        // declared path reaches no directory, and a store that resolves to
+        // nothing reads exactly like a consumer with no work.
+        assert_eq!(
+            tasks_dir("~/.claude/tasks/{session}", "s-1", home("/home/agent")),
+            "/home/agent/.claude/tasks/s-1"
+        );
+        // Only a LEADING `~/` is special.
+        assert_eq!(
+            tasks_dir("/var/~/{session}", "s-1", home("/home/agent")),
+            "/var/~/s-1"
+        );
+    }
+
+    #[test]
+    fn an_absent_home_leaves_the_template_alone() {
+        // Could-not-look rather than a guess: an unexpanded `~` names no
+        // directory, so the caller's `is_dir` check takes the honest arm instead
+        // of this function inventing a home.
+        assert_eq!(
+            tasks_dir("~/.claude/tasks/{session}", "s-1", None),
+            "~/.claude/tasks/s-1"
+        );
+        assert_eq!(
+            tasks_dir("~/.claude/tasks/{session}", "s-1", home("")),
+            "~/.claude/tasks/s-1",
+            "an empty HOME is absent, not a root"
+        );
     }
 
     /// The agent-context fields in the shape a real session writes them

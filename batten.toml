@@ -266,8 +266,28 @@ mutation = "change it in a pull request — a registered module is protected bec
 # observed zero.
 #
 # `memory_root` is omitted, so `selfwrite::DEFAULT_MEMORY_ROOT` applies.
+#
+# `tasks` NAMES THIS HOST'S SESSION TASK STORE (CLOUD-1376), and it is the
+# consumer's fact rather than the engine's: the store sits outside the repository
+# root and its layout belongs to the launcher, so deriving it in `crates/batten`
+# would be a directory layout in the core (rule 1). `{session}` is the ONLY thing
+# the engine substitutes, from the id the envelope already normalises across
+# hosts, and `batten doctor session` opens what that names.
+#
+# WHY IT IS ON THIS TABLE. The header above already carries two facts about one
+# host — the transcript's format and the memory root — and `transcript.rs` states
+# why they share a table rather than splitting: a second table over the same
+# subject is the widening rule 6 forbids. The task store is a third fact about
+# that same host.
+#
+# WHAT DECLARING IT BUYS, measured 2026-09-02: asked "safe to archive?", this
+# consumer's own agent enumerated the working tree, the stash, local branches and
+# running processes, found all four clean, and answered yes — while
+# `21.json` in that store read `"status": "pending"`. Undeclared, the verb answers
+# could-not-look, which is honest and useless. Declared, it answers `1`.
 [transcript]
 path = ".claude/.transcript.jsonl"
+tasks = "~/.claude/tasks/{session}"
 
 # ---------------------------------------------------------------------------
 # Pinned tools (CLOUD-90), fetched and cached out of tree.

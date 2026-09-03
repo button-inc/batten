@@ -9048,7 +9048,8 @@ fn refresh_tasks_link(root: &Path, envelope: &hook::Envelope) {
     else {
         return;
     };
-    let source = crate::transcript::tasks_dir(template, session);
+    let source =
+        crate::transcript::tasks_dir(template, session, std::env::var_os("HOME").as_deref());
     if !Path::new(&source).is_dir() {
         return;
     }
