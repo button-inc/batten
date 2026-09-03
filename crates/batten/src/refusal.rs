@@ -250,6 +250,7 @@ const NO_DECLARED_FIX: &str =
 /// Compaction is invisible from here, so "per session" is the implementable
 /// approximation of "per reader" — and it errs toward repeating rather than
 /// assuming what a reader retained.
+#[must_use]
 pub fn first_sighting(root: &Path, token: &str) -> bool {
     let Some(dir) = crate::git::git_dir(root).ok().map(|dir| dir.join(STORE)) else {
         return true;

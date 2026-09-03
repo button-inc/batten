@@ -7425,7 +7425,19 @@ fn run_hook(
         // later arm ever did read it.
         _ => hook::BYPASS_ENV.to_owned(),
     };
-    render(harness, &envelope, decision, &hatch, mode, out, err)
+    // Resolved here for the reason the hatch just above is, and it is the SAME
+    // ceiling `refusal_ceiling` measures — one declared authority over an emitted
+    // mediated line, governing the first sighting and the repeat alike.
+    render(
+        harness,
+        &envelope,
+        decision,
+        &hatch,
+        policy.refusal.as_ref(),
+        mode,
+        out,
+        err,
+    )
 }
 
 /// Turn a mediated refusal into an allow when a spent admission covers it.
@@ -9972,6 +9984,13 @@ fn render(
     envelope: &hook::Envelope,
     decision: hook::Decision,
     hatch: &str,
+    // THE CEILING RIDES BESIDE THE HATCH, and for the same reason it does
+    // (CLOUD-1386). Both are resolved by the caller and neither is an input to the
+    // DECISION: the hatch is a name this prints, and this is a bound on how long
+    // the printed line may be. Reaching for `policy` here to fetch it would give
+    // the renderer back the inputs the comment below says it must not have, over a
+    // value that decides nothing about the call.
+    ceiling: Option<&refusal::Ceiling>,
     mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -10023,7 +10042,7 @@ fn render(
             let first_sighting = refusal
                 .verdict()
                 .is_none_or(|token| refusal::first_sighting(hook_authority_root(), token));
-            let reason = hook::deny_text(&refusal, hatch, first_sighting);
+            let reason = hook::deny_text(&refusal, hatch, first_sighting, ceiling);
             match hook::encode_deny(harness, &envelope.raw_event, &reason)? {
                 Some(body) => {
                     writeln!(out, "{body}")?;
@@ -10047,7 +10066,7 @@ fn render(
             // read no earlier firing in this session and has no `explain` to run —
             // so withholding the route to save a clause would be spending their
             // attention rather than the model's.
-            let reason = hook::deny_text(&refusal, hatch, true);
+            let reason = hook::deny_text(&refusal, hatch, true, ceiling);
             match hook::encode_ask(harness, &envelope.raw_event, &reason)? {
                 Some(body) => {
                     writeln!(out, "{body}")?;

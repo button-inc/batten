@@ -614,6 +614,10 @@ pub struct Resolved {
     /// the committed bytes for the direction.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub advisory: Option<crate::advisory::Channel>,
+    /// What ONE emitted mediated refusal line may cost, as the authority states
+    /// it. Not layered, for `budget`'s reason exactly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<crate::refusal::Ceiling>,
     /// What this repository's hooks may cost one session (CLOUD-417), as the
     /// authority states it. Not layered, for the two ceilings above's reason.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1655,6 +1659,7 @@ fn assemble(
         waivers: tables.waivers,
         budget: repo.budget.clone(),
         advisory: repo.advisory.clone(),
+        refusal: repo.refusal.clone(),
         hook_output: repo.hook_output.clone(),
         must_land_on: repo.must_land_on.clone(),
         hook: repo.hook.clone(),

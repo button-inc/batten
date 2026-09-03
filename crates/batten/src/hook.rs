@@ -2926,6 +2926,18 @@ pub struct Policy {
     /// Engine-side plumbing on `harness`'s reading: resolved at the boundary and
     /// carried in, so the emission site can ask without reaching for config.
     pub advisory: Option<crate::advisory::Channel>,
+    /// What ONE emitted mediated refusal line may cost (CLOUD-1050, CLOUD-1386).
+    ///
+    /// Carried here for `advisory`'s reason exactly — resolved at the boundary so
+    /// the rendering site can ask without reaching for config, which is what keeps
+    /// `render` unable to see the policy (CLOUD-898).
+    ///
+    /// ONE AUTHORITY OVER BOTH ARMS. `deny_text` renders a first sighting long and
+    /// a repeat short, and before this only the repeat was bounded: the first
+    /// sighting could carry a consumer `[[rule]]` row's whole `reason`, prose and
+    /// all, because nothing measured it. A second ceiling for the other arm would
+    /// have been two thresholds that can disagree about one line.
+    pub refusal: Option<crate::refusal::Ceiling>,
     /// Programs known to only READ their operands (CLOUD-1141).
     ///
     /// The other half of the gate above, and the half that decides what an
@@ -3026,6 +3038,7 @@ impl Policy {
             verbs: Vec::new(),
             protected: PathSet::empty(),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
             facts: Vec::new(),
@@ -3104,6 +3117,7 @@ impl Policy {
                     .collect::<Vec<String>>(),
             )?,
             advisory: resolved.advisory.clone(),
+            refusal: resolved.refusal.clone(),
             protected_readers: resolved.protected_readers.clone(),
             redirects: resolved.redirects.clone(),
             facts: resolved.facts.clone(),
@@ -3678,6 +3692,7 @@ impl Policy {
             verbs: self.verbs.clone(),
             protected: self.protected.clone(),
             advisory: self.advisory.clone(),
+            refusal: self.refusal.clone(),
             protected_readers: self.protected_readers.clone(),
             redirects: self.redirects.clone(),
             facts: self.facts.clone(),
@@ -4186,8 +4201,37 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
 ///
 /// The caller's own narrower alternative still leads when it has one, because a
 /// consumer's `redirect` for a protected path knows something the class does not.
+///
+/// # AND THE CEILING GOVERNS THIS ARM TOO, WHICH IS THE HALF THAT SHIPPED WRONG
+///
+/// The once-per-session change re-pointed `refusal_ceiling` at the SECOND firing,
+/// on the sound argument that `[refusal] max_tokens` was always about repeat cost.
+/// The consequence was not sound: it left the FIRST sighting bounded by nothing at
+/// all, in the same commit that made the first sighting the long one.
+///
+/// Measured, and by a case rather than by reading. A consumer `[[rule]]` row's
+/// `reason` reaches here as the narrower [`Fix::Run`], and a `reason` is prose —
+/// `an-update-owes-a-recent-read`'s is ~700 characters and ENDS by naming a
+/// different rule. So the emitted line grew a second row's id, which is exactly
+/// what CLOUD-1286 removed it to prevent, and
+/// `board_receipts::an_update_is_not_row_ones_business` is what said so.
+///
+/// So the declared ceiling decides both arms and stays the ONE authority over an
+/// emitted mediated line. Over budget, the routes clause is dropped whole rather
+/// than truncated: half a command is not a way out, and a reader who can see the
+/// class token can still run `batten policy explain`. Under it, nothing changes.
+///
+/// **A consumer that declares no ceiling gets no bound**, which is the same answer
+/// every other budget gives an undeclared row — the ceiling is the consumer's
+/// statement about their own line, and inventing one here would be this crate
+/// deciding a consumer fact.
 #[must_use]
-pub fn deny_text(refusal: &Refusal, hatch: &str, first_sighting: bool) -> String {
+pub fn deny_text(
+    refusal: &Refusal,
+    hatch: &str,
+    first_sighting: bool,
+    ceiling: Option<&crate::refusal::Ceiling>,
+) -> String {
     if refusal.verdict().is_some() {
         if !first_sighting {
             return refusal.line();
@@ -4206,10 +4250,14 @@ pub fn deny_text(refusal: &Refusal, hatch: &str, first_sighting: bool) -> String
                 routes.push(route);
             }
         }
-        return if routes.is_empty() {
+        if routes.is_empty() {
+            return refusal.line();
+        }
+        let carried = format!("{} — {}", refusal.line(), routes.join("; "));
+        return if ceiling.is_some_and(|declared| declared.over(&carried)) {
             refusal.line()
         } else {
-            format!("{} — {}", refusal.line(), routes.join("; "))
+            carried
         };
     }
     format!("{} Bypass with {hatch}=1.", refusal.render())
@@ -8275,7 +8323,7 @@ mod tests {
             &[],
             crate::refusal::Fix::None,
         );
-        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true);
+        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, None);
         assert!(
             text.contains("git push --force-with-lease=<ref>:<sha>"),
             "the second route is the one that answers the reader: {text}"
@@ -8298,9 +8346,63 @@ mod tests {
             &[],
             crate::refusal::Fix::None,
         );
-        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", false);
+        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", false, None);
         assert!(!text.contains("git pull --rebase"), "{text}");
         assert!(!text.contains(" — "), "{text}");
+    }
+
+    /// A first sighting is bounded by the SAME declared ceiling as a repeat.
+    ///
+    /// The once-per-session change re-pointed `refusal_ceiling` at the second
+    /// firing, which left this arm bounded by nothing in the same commit that made
+    /// it the long one. Measured on a consumer `[[rule]]` row's `reason` reaching
+    /// `Fix::Run` as prose — ~700 characters ending in a DIFFERENT rule's id, which
+    /// is what `board_receipts::an_update_is_not_row_ones_business` caught.
+    ///
+    /// Dropped WHOLE rather than truncated: half a command is not a way out, and
+    /// the class token is still on the line for `batten policy explain`.
+    #[test]
+    fn a_first_sighting_over_the_declared_ceiling_drops_its_routes() {
+        let registry = two_route_class();
+        let refusal = Refusal::from_class(
+            "leased-push",
+            &registry,
+            "branch write unsafe",
+            &[],
+            crate::refusal::Fix::None,
+        );
+        let ceiling = crate::refusal::Ceiling { max_tokens: 24 };
+        let bounded = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, Some(&ceiling));
+        let unbounded = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, None);
+        assert!(
+            unbounded.contains("git pull --rebase"),
+            "the premise: unbounded, this arm carries its routes — {unbounded}"
+        );
+        assert!(
+            !ceiling.over(&bounded),
+            "the emitted line is over the declared ceiling: {bounded}"
+        );
+        assert_eq!(bounded, refusal.line(), "{bounded}");
+    }
+
+    /// And a SHORT route still travels, or the bound above is just the old
+    /// never-render behaviour wearing a ceiling.
+    #[test]
+    fn a_first_sighting_inside_the_ceiling_still_carries_its_routes() {
+        let registry = two_route_class();
+        let refusal = Refusal::from_class(
+            "leased-push",
+            &registry,
+            "branch write unsafe",
+            &[],
+            crate::refusal::Fix::None,
+        );
+        let ceiling = crate::refusal::Ceiling { max_tokens: 4_000 };
+        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, Some(&ceiling));
+        assert!(
+            text.contains("git push --force-with-lease=<ref>:<sha>"),
+            "{text}"
+        );
     }
 
     /// The caller's narrower alternative leads and is not said twice.
@@ -8318,7 +8420,7 @@ mod tests {
             &[],
             crate::refusal::Fix::Run("git pull --rebase".to_owned()),
         );
-        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true);
+        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, None);
         assert_eq!(text.matches("git pull --rebase").count(), 1, "{text}");
         let routes = text.split(" — ").nth(1).expect("the routes clause");
         assert!(routes.starts_with("git pull --rebase"), "{text}");
@@ -8532,6 +8634,7 @@ mod tests {
             // new clause reaching a shape the old gate let through, which is
             // exactly what should be visible rather than absorbed.
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects,
         }
@@ -8571,6 +8674,7 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
             shapes: rows,
@@ -8641,6 +8745,7 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
             shapes: vec![
@@ -9089,7 +9194,7 @@ mod tests {
             // the class is new to them — the one these assertions are about. The
             // repeat rendering has its own cases, where the difference IS the
             // subject rather than incidental to it.
-            Decision::Deny(refusal) => deny_text(&refusal, BYPASS_ENV, true),
+            Decision::Deny(refusal) => deny_text(&refusal, BYPASS_ENV, true, None),
             // An `Ask` is not a deny, and collapsing the two here would let a
             // row that silently started escalating keep passing every assertion
             // below about what a refusal says. A `Waived` is not one either, and
@@ -9154,6 +9259,7 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
@@ -9237,6 +9343,7 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
@@ -9736,6 +9843,7 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
@@ -9773,6 +9881,7 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
@@ -9804,6 +9913,7 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
@@ -9846,6 +9956,7 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
@@ -9894,6 +10005,7 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
@@ -9960,6 +10072,7 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
@@ -10051,6 +10164,7 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
@@ -10523,6 +10637,7 @@ deny contains "refused by themodule" if {
             verbs: Vec::new(),
             protected: PathSet::empty(),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
@@ -10821,6 +10936,7 @@ deny contains "refused by themodule" if {
             verbs: Vec::new(),
             protected: PathSet::empty(),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
@@ -11627,6 +11743,7 @@ deny contains "refused by themodule" if {
             verbs: vec![verb("rm", None)],
             protected: PathSet::empty(),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
@@ -11759,6 +11876,7 @@ deny contains "refused by themodule" if {
             protected: PathSet::includes("protected", &["guarded/**".to_owned()])
                 .expect("well formed"),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
@@ -11778,6 +11896,7 @@ deny contains "refused by themodule" if {
             protected: PathSet::includes("protected", &["other/**".to_owned()])
                 .expect("well formed"),
             advisory: None,
+            refusal: None,
             protected_readers: Vec::new(),
             redirects: Vec::new(),
         };

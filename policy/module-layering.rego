@@ -328,6 +328,25 @@ declared_modules := {
 	# and the fact model bars that from a call being adjudicated -- `lib` is the
 	# caller that runs these at session start, which is not such a call.
 	"startup",
+	# `environment` arrived with CLOUD-1383 and this rule named it, which is the
+	# coverage half working yet again: the module was written, its tier was green,
+	# clippy was clean, and this is what said nobody had placed it.
+	#
+	# It is the SMALLEST LEAF in the crate and that is the whole design. It reads
+	# one environment variable and compares it to one literal; it reaches nothing
+	# here, not even `error`, because there is no failure to report -- an
+	# unreadable environment is an absent fact, and absent is the conservative
+	# answer. A three-valued read would add a state whose only honest handling is
+	# the one absence already gets.
+	#
+	# WHAT IT MUST NEVER GROW IS A CONSUMER OF ITS OWN ANSWER. The fact states
+	# whose home directory this is; what that LICENSES is `wiring`'s and the
+	# `[[startup]]` rows', each of which already owns a surface and already
+	# decides whether to write. A module that both read the environment and acted
+	# on it would be the second authority the repair/verdict split exists to
+	# prevent one domain over -- `wiring`'s own entry above makes that argument
+	# for registrations, and this is the same argument for the posture.
+	"environment",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
