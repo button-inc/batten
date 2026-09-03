@@ -358,10 +358,10 @@ impl Mediator {
 /// does not maintain one. The three-way split lives here, in the engine, which is
 /// also the only place the ambient read is possible at all.
 ///
-/// **`container-preflight` grades the REPAIRED value, and that is the defect this
-/// exists to route around.** Run under `mise`, it reads `$NO_PROXY` from inside a
-/// process `mise.toml`'s `[env]` has already fixed, so it called this container
-/// fenced while the container's own value was unfenced. `batten` is invoked
+/// **A CHECK RUN THROUGH A TASK RUNNER GRADES THE REPAIRED VALUE, and that is the
+/// defect this exists to route around.** It reads the no-proxy variable from
+/// inside a process whose env block has already fixed it, so it calls the
+/// container fenced while the container's own value is unfenced. `batten` is invoked
 /// directly by the setup one-liner and by every hook registration, so this reads
 /// what the container actually shipped.
 ///

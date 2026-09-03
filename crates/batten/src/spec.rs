@@ -458,8 +458,8 @@ mod tests {
                 // reserved `.invalid` probe it asks about cannot be delegated, so
                 // it never leaves the process. It reads THIS process's own
                 // environment rather than a repository path, which is the
-                // capability being admitted: the same question asked through
-                // `mise` grades a value `mise.toml`'s `[env]` has already
+                // capability being admitted: the same question asked through a
+                // task runner grades a value that runner's env block has already
                 // corrected.
                 "doctor egress".to_owned(),
                 // The one row that is both a parent and a `read` verb of its own

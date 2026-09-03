@@ -2515,10 +2515,10 @@ pub const SURFACE: &[CommandDecl] = &[
     // belongs to its own caller.
     //
     // IT READS THIS PROCESS'S OWN ENVIRONMENT, and that is the capability being
-    // added rather than an implementation detail. `container-preflight` asks the
-    // same question through `mise`, by which point `mise.toml`'s `[env]` has
-    // prepended the GitHub hosts — so it graded the repair and called this
-    // container fenced while the container's own value was unfenced.
+    // added rather than an implementation detail. A consumer's own check asking
+    // the same question through its task runner reads a value that runner's env
+    // block has already corrected — so it grades the repair and calls the
+    // container fenced while the container's own value is unfenced.
     //
     // `read`, and structurally: it resolves two strings against a list. Nothing
     // is spawned, NOTHING IS DIALLED and no name is looked up — the reserved

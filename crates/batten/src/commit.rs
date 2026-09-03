@@ -341,24 +341,19 @@ pub fn judge_arm_sequencing(sequences: &[ArmSequence]) -> Vec<Finding> {
     found
 }
 
-// THE OBLIGATION IS BOUND HERE, AND THE SWEEP CANNOT YET APPLY IT (CLOUD-1402).
+// THE MUTATION FOR THIS PREDICATE IS DECLARED IN ITS SUITE, NOT HERE (CLOUD-1402).
 //
-// `obligations-bound` asks that a §7 obligation name a tracked file carrying its
-// slug, and CLOUD-1402's claims object names
-// `crates/batten/tests/it/commit_arm_sequencing.rs` — which is inside that rule's
-// `line_sources` where `crates/batten/src/**` is not. The row lives here, beside
-// the predicate it mutates, and the suite references the slug where the gate can
-// read it.
+// `obligations-bound` binds a §7 obligation by reading the declared FILE's lines
+// for a row beginning `#MUTANT <slug>|`, and its `line_sources` covers
+// `crates/batten/tests/**` where `crates/batten/src/**` is not. So the row lives
+// in `crates/batten/tests/it/commit_arm_sequencing.rs`, which is where the claims
+// object names it and the only place the gate can see it.
 //
-// **What it does NOT yet buy is the sweep, and saying so is the point.**
-// `mutate`'s `Gate::name` resolves sources from a task name, a module stem or a
-// preset name — there is no arm for a Rust source, so `mutate sweep` never
-// applies this row. Declaring it silently would be the coverage theatre
-// `#MUTANT-OWNER` exists to refuse, so the gap is named instead: CLOUD-1369 owes
-// the runner arm, and `crates/batten/src/pinned.rs` records the identical gap for
-// its own row. Until it lands the named case is proven by `verify`.
-//MUTANT-SUITE crates/batten/tests/it/commit_arm_sequencing.rs
-//MUTANT same-commit-spend-passes|s@                .any(|line| line.trim_start().starts_with(token.as_str()))@                .any(|_unread| false)@|a_commit_that_adds_an_arm_and_spends_it_is_refused
+// Measured the hard way: the row was written HERE first, with only a prose
+// mention of the slug in the suite. `declares_slug` matches a line PREFIX, a
+// mention inside a doc comment is not one, and `obligation-unbound` fired over a
+// promise that was in fact kept — which is the gate being right about the
+// binding and me being wrong about where it reads.
 
 /// Read every non-merge commit's subject in `base..head`.
 ///

@@ -13361,10 +13361,10 @@ fn run_doctor(command: &cli::DoctorCommand, out: &mut dyn Write) -> Result<ExitC
 /// `mise run install:local` and the verdict is what says whether to run it.
 /// Would the agent proxy carry this container's requests (CLOUD-1399)?
 ///
-/// Reads THIS process's environment, which is the whole point: `container-preflight`
-/// asks the same question through `mise`, and `mise.toml`'s `[env]` has already
-/// prepended the GitHub hosts by then — so it graded the repair and reported this
-/// container as fenced while the container's own value was unfenced. `batten` is
+/// Reads THIS process's environment, which is the whole point: a consumer's own
+/// check asking the same question through its task runner reads a value that
+/// runner's env block has already corrected — so it grades the repair and reports
+/// the container as fenced while the container's own value is unfenced. `batten` is
 /// invoked directly by the setup one-liner and by every hook registration, so what
 /// it reads here is what the container actually shipped.
 ///

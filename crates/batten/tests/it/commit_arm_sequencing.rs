@@ -44,16 +44,29 @@
 //! fixtures below pin the predicate; that command is the evidence it reaches the
 //! commit it was written for.
 //!
-//! # The declared mutation
+//! # The declared mutation, and why the row is in THIS file
 //!
-//! `#MUTANT same-commit-spend-passes` names the premise case above — the
-//! mutation that makes the intersection unreadable, so a commit that adds an arm
-//! and spends it passes. The row itself lives beside the predicate in
-//! `crates/batten/src/commit.rs`, and `mutate`'s `Gate::name` has no arm for a
-//! Rust source yet (CLOUD-1369), so the binding is checked by
-//! `obligations-bound` and the case is proven by `verify` rather than by a
-//! survivor. `crates/batten/src/pinned.rs` records the same gap for its own row.
+//! `obligations-bound` binds a §7 obligation by reading the declared file's lines
+//! for a row beginning `#MUTANT <slug>|`. Its `line_sources` covers
+//! `crates/batten/tests/**` and not `crates/batten/src/**`, so the row has to be
+//! here even though the expression it applies belongs to `commit.rs`'s predicate
+//! — the same split `.rego` modules already have, where `#MUTANT-SUITE` names a
+//! suite somewhere else entirely.
+//!
+//! It is a block comment because the match is on a line PREFIX and Rust has no
+//! line comment that starts with `#`. Written first as a prose mention in this
+//! header, it did not bind and `obligation-unbound` fired — correctly.
+//!
+//! **What the row does NOT yet buy is the sweep, and saying so is the point.**
+//! `mutate`'s `Gate::name` resolves sources from a task name, a module stem or a
+//! preset name; there is no arm for a Rust source, so `mutate sweep` never
+//! applies this. CLOUD-1369 owes that arm, and `crates/batten/src/pinned.rs`
+//! records the identical gap. Until it lands the named case is proven by
+//! `verify` rather than by a survivor.
 
+/*
+#MUTANT same-commit-spend-passes|s@                .any(|line| line.trim_start().starts_with(token.as_str()))@                .any(|_unread| false)@|a_commit_that_adds_an_arm_and_spends_it_is_refused
+*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
