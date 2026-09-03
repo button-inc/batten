@@ -451,6 +451,12 @@ mod tests {
                 // spawn nothing: the sub-verb compares each harness's wiring
                 // against a derivation computed in-process.
                 "doctor hooks".to_owned(),
+                // `read`, and structurally, for the sub-verb above's reason: it
+                // opens the session's own task store through a link the engine
+                // parked and counts what is not `completed`. It spawns nothing,
+                // writes nothing, and reaches no network — the store is a
+                // directory of small JSON files (CLOUD-1376).
+                "doctor session".to_owned(),
                 "generate".to_owned(),
                 "generate completions".to_owned(),
                 // §11's third derivation (CLOUD-62): the hook wiring a host
@@ -679,6 +685,7 @@ mod tests {
             "design audit".to_owned(),
             "doctor".to_owned(),
             "doctor hooks".to_owned(),
+            "doctor session".to_owned(),
             "enforce".to_owned(),
             "exec".to_owned(),
             // The schema is emitted by `generate`, not `config`: it is a
