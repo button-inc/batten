@@ -342,3 +342,196 @@ fn two_runs_over_an_unchanged_store_agree() {
         "two runs over an unchanged store must be byte-identical"
     );
 }
+
+// --- CLOUD-1387: the key is a subject, not a substring -------------------------
+
+/// The row that reads through `key_at`, and its probe's two classes.
+///
+/// One reduction, two verdict classes keyed to the two ANSWERS — `unstarted`
+/// from the record whose `id` is the key, `blocked` from the one that merely
+/// cites it. Reading the answer rather than a bare "did it fire" is what makes
+/// this discriminate: a case asserting only that something fired passes on
+/// either document.
+fn subject_config() -> String {
+    format!(
+        r#"version = 1
+
+[[rule]]
+id = "probe"
+kind = "policy"
+scope = "tree"
+module = "probe.rego"
+severity = "deny"
+
+[[rule.captured]]
+id = "state"
+key = "{DECLARED_KEY}"
+key_at = "id"
+node = "status"
+reduce = "token"
+
+[[verdict]]
+id = "captured subject probe"
+gloss = "the reduction answered from the record the key is the subject of"
+class = "A fixture class, raised only by this suite's probe module."
+
+[[verdict.route]]
+id = "probe subject probe"
+kind = "document"
+target = "probe.rego"
+
+[[verdict]]
+id = "captured mention probe"
+gloss = "the reduction answered from a record that merely cites the key"
+class = "A fixture class, raised only by this suite's probe module."
+
+[[verdict.route]]
+id = "probe mention probe"
+kind = "document"
+target = "probe.rego"
+"#
+    )
+}
+
+const SUBJECT_PROBE: &str = r#"package batten.probe
+
+import rego.v1
+
+rules contains "probe-subject"
+
+rules contains "probe-mention"
+
+violation contains {
+	"rule": "probe-subject",
+	"verdict": "captured subject probe",
+} if {
+	is_object(input.tree.captured)
+	input.tree.captured.state == "unstarted"
+}
+
+violation contains {
+	"rule": "probe-mention",
+	"verdict": "captured mention probe",
+} if {
+	is_object(input.tree.captured)
+	input.tree.captured.state == "blocked"
+}
+
+test_the_subjects_answer_fires if {
+	some v in violation with input as {"tree": {"captured": {"state": "unstarted"}}}
+	v.rule == "probe-subject"
+}
+
+test_the_mentions_answer_fires_the_other_class if {
+	some v in violation with input as {"tree": {"captured": {"state": "blocked"}}}
+	v.rule == "probe-mention"
+}
+"#;
+
+/// Store one response and record the call row that makes it findable.
+///
+/// Both halves, because they answer different questions and the selector reads
+/// the second: `store_in` writes the blob, and the call log is what carries the
+/// tool, the fidelity and the append order. A fixture writing only the blob
+/// leaves a store no `find` can resolve — which is a shape no consumer produces,
+/// since `mcp call` always writes both.
+fn store_call(store: &Path, tool: &str, body: &str) -> String {
+    let capture =
+        batten::capture::store_in(store, batten::capture::Stream::Response, body.as_bytes())
+            .expect("store the response");
+    batten::capture::record_call_in(
+        store,
+        &batten::capture::CallRow {
+            order: 0,
+            session: "fixture".to_owned(),
+            source: "mcp".to_owned(),
+            host: "claude-code".to_owned(),
+            tool: tool.to_owned(),
+            event: "PostToolUse".to_owned(),
+            fidelity: batten::capture::Fidelity::LexicalBytes.as_str().to_owned(),
+            seen_at: None,
+            class: None,
+            digest: Some(capture.digest.clone()),
+            absent: None,
+        },
+    )
+    .expect("record the call");
+    capture.digest
+}
+
+#[test]
+fn a_mentioning_document_does_not_answer_for_the_key() {
+    // THE DEFECT CLOUD-1387 RECORDS, as a case. Selection was byte containment
+    // over the whole response, first match in handle order — so any document
+    // CITING the key competed and a digest decided between them. Measured over
+    // this repository's own store: 14 captures contained `CLOUD-1188`, the one
+    // read carried no `project` node, and the record that key was the subject of
+    // sorted later and was never consulted.
+    //
+    // THE PREMISE IS ESTABLISHED, NOT ASSUMED (CLOUD-249). Handle order is
+    // digest order, so "the mentioning document sorts first" is a property of
+    // the bytes rather than of the writing order. A nonce is searched until it
+    // holds and the search is asserted, because a case that merely hoped for it
+    // would pass under the old code whenever the coin landed the other way — and
+    // a test that cannot discriminate is the thing CLOUD-418 is about.
+    let dir = scratch("captured-subject");
+    let home = scratch("captured-subject-home");
+    write(&dir, "batten.toml", &subject_config());
+    write(&dir, "probe.rego", SUBJECT_PROBE);
+    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+
+    let store = home
+        .join("data")
+        .join(env!("CARGO_PKG_NAME"))
+        .join(batten::state::derive_repo_name(&dir).expect("derive the repo state segment"))
+        .join("captures");
+    std::fs::create_dir_all(&store).expect("create the capture store");
+
+    // The record the key IS the subject of.
+    let subject = serde_json::json!({"id": DECLARED_KEY, "status": "unstarted"}).to_string();
+    let subject_digest = store_call(&store, "get_issue", &subject);
+
+    // A record that merely CITES the key, under a different id and a different
+    // status — so which document answered is readable from the verdict.
+    let mut mention = String::new();
+    let mut sorts_first = false;
+    for nonce in 0..512u32 {
+        mention = serde_json::json!({
+            "id": "OTHER-2",
+            "status": "blocked",
+            "cites": DECLARED_KEY,
+            "nonce": nonce,
+        })
+        .to_string();
+        let probe = scratch(&format!("captured-subject-probe-{nonce}"));
+        let digest = batten::capture::store_in(
+            &probe,
+            batten::capture::Stream::Response,
+            mention.as_bytes(),
+        )
+        .expect("store the probe")
+        .digest;
+        if digest < subject_digest {
+            sorts_first = true;
+            break;
+        }
+    }
+    assert!(
+        sorts_first,
+        "the case needs a citing document that sorts BEFORE the subject, or it \
+         cannot tell containment from a subject match"
+    );
+    store_call(&store, "list_issues", &mention);
+
+    let outcome = check(&dir, &home);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert!(
+        answer.contains("probe-subject"),
+        "the reduction must answer from the record the key is the subject of\n{answer}{cause}"
+    );
+    assert!(
+        !answer.contains("probe-mention"),
+        "a document that merely cites the key must not answer for it — this is \
+         the containment defect (CLOUD-1387)\n{answer}{cause}"
+    );
+}
