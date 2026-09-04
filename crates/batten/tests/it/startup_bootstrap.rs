@@ -27,6 +27,7 @@
 
 use crate::common;
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use common::{batten, init_repo, scratch, stderr, stdout, write};
@@ -188,7 +189,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    use std::fmt::Write as _;
     hasher
         .finalize()
         .iter()
