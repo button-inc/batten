@@ -388,6 +388,27 @@ fn freshness_of(entry: &Provision, cache_root: &Path) -> Result<Freshness> {
     if !binary.is_file() {
         return Ok(Freshness::Missing);
     }
+    // A DECLARED LINK IS PART OF THE QUESTION, and leaving it out made the
+    // bootstrap silently never link (CLOUD-1389). `status` is what
+    // `toolchain-runner-present` asks, so an entry reporting `fresh` while its
+    // link destination is empty means the startup check PASSES and the repair
+    // that would put the runner on PATH never runs — the row reads green over a
+    // container that cannot run a single gate.
+    //
+    // Measured: the first fixture run linked correctly and every run after it
+    // failed, because `apply` returns `AlreadyFresh` before reaching `install`
+    // once the cache is warm. So the defect needed a second run to appear at all,
+    // which is exactly how it would have reached a container — cache preserved,
+    // `~/.local/bin` not.
+    //
+    // `Missing` rather than a fourth verdict: what is missing is the binary at
+    // the place this entry declares it must be, which is the same class as
+    // nothing cached and takes the same repair.
+    if let Some(dest) = entry.link.as_deref()
+        && !expand_home(dest)?.join(&entry.binary).is_file()
+    {
+        return Ok(Freshness::Missing);
+    }
     let cached = match fs::read(dir.join(ARTIFACT)) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Freshness::Missing),
@@ -445,7 +466,18 @@ pub fn apply(entry: &Provision, cache_root: &Path, dry_run: bool) -> Result<Appl
         return Ok(Applied::Previewed);
     }
 
+    // THE CACHED ARTIFACT IS TRIED BEFORE THE NETWORK, and only when it still
+    // matches the pin. The case this serves is a stale entry whose staleness is
+    // the LINK rather than the bytes: the artifact on disk is the pinned one, so
+    // re-downloading it to copy it two directories over is a fetch that cannot
+    // change the answer. Verified against the pin here exactly as a fresh fetch
+    // is, so a tampered cache is a mismatch rather than a shortcut past the
+    // checksum.
     let artifact = entry.artifact()?;
+    if let Some(bytes) = cached_artifact_matching_pin(entry, cache_root, &artifact.sha256) {
+        install(entry, cache_root, &bytes)?;
+        return Ok(Applied::Installed);
+    }
     let bytes = fetch(&artifact.url)?;
     let found = digest(&bytes);
     if !found.eq_ignore_ascii_case(&artifact.sha256) {
@@ -487,6 +519,21 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8]) -> Result<()> {
     // reading `missing` rather than `fresh` — the direction that re-applies.
     fs::write(dir.join(ARTIFACT), bytes).context("write the cached artifact")?;
     Ok(())
+}
+
+/// The cached artifact's bytes, when they are present and still match the pin.
+///
+/// `None` for absent, unreadable, or a digest that does not match — every one of
+/// which sends the caller to the network, which is the direction a miss must fail
+/// in. It never reports an error of its own: a cache this cannot read is not a
+/// finding, it is a reason to fetch.
+fn cached_artifact_matching_pin(
+    entry: &Provision,
+    cache_root: &Path,
+    pinned: &str,
+) -> Option<Vec<u8>> {
+    let bytes = fs::read(entry_dir(cache_root, entry).join(ARTIFACT)).ok()?;
+    digest(&bytes).eq_ignore_ascii_case(pinned).then_some(bytes)
 }
 
 /// Place the verified binary in the declared directory as well as the cache.

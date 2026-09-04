@@ -88,6 +88,35 @@ fn the_runner_row_precedes_every_row_that_invokes_the_runner() {
 }
 
 #[test]
+fn the_runner_check_is_answerable_with_only_batten_present() {
+    // THE CASE THAT WOULD HAVE CAUGHT THE COMMITTED DEFECT. The first version of
+    // this row checked `["mise", "--version"]`, which cannot spawn on the one
+    // container the row is for — and `startup.rs` reports an unspawnable check as
+    // could-not-look and never repairs on one, so the row was dead exactly where
+    // it mattered while reporting `ok` on every provisioned machine.
+    //
+    // Asserted over the PROGRAM rather than the whole argv: which subcommand
+    // answers the freshness question may change, but it must stay a question
+    // batten can answer, because batten is the only thing the Setup script
+    // guarantees is installed.
+    let text = committed();
+    let row = text
+        .split("[[startup]]")
+        .find(|block| block.contains("id = \"toolchain-runner-present\""))
+        .expect("the runner bootstrap row is declared");
+    let check = row
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("check = "))
+        .expect("the row declares a check");
+    assert!(
+        check.starts_with(r#"["batten""#),
+        "the runner row's check must be answerable by batten alone — the runner it \
+         is about is what may be missing, and a check that cannot spawn is \
+         reported as could-not-look and never repaired. Was: {check}"
+    );
+}
+
+#[test]
 fn the_runner_row_repairs_through_provision_rather_than_a_shell() {
     // The discriminating assertion, not a spelling preference. `check`/`repair`
     // are argv with no shell between them and what runs, so a `curl … | sh`
@@ -197,6 +226,59 @@ fn applying_a_linked_entry_puts_the_binary_where_a_bare_name_resolves() {
         is_executable(&landed),
         "a binary on PATH that is not executable is the same dead bootstrap one \
          layer down"
+    );
+}
+
+#[test]
+fn a_warm_cache_whose_link_vanished_is_relinked_rather_than_reported_fresh() {
+    // THE DEFECT THIS FILE'S FIRST VERSION SHIPPED, and it needed two runs to
+    // show: `apply` returns `AlreadyFresh` before reaching `install`, so once the
+    // cache was warm the link was never made again. A container keeping its cache
+    // and losing `~/.local/bin` would then have `provision status` report `fresh`,
+    // `toolchain-runner-present` report `ok`, and no runner on PATH.
+    let dest = scratch("provision-relink-dest");
+    std::fs::create_dir_all(&dest).expect("the destination exists");
+    let (dir, _artifact) = linked_fixture(
+        "provision-relink",
+        dest.to_str().expect("the scratch path is UTF-8"),
+        b"#!/bin/sh\nexit 0\n",
+    );
+    let landed = dest.join("probe");
+
+    // First apply: cold cache, so this is the path that already worked.
+    let first = batten()
+        .current_dir(&dir)
+        .args(["provision", "apply"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    assert!(landed.is_file(), "the cold apply links");
+
+    // Now the link is gone and the cache is not. This is the state a second
+    // container boot arrives in.
+    std::fs::remove_file(&landed).expect("the link is removed");
+    let status = batten()
+        .current_dir(&dir)
+        .args(["provision", "status"])
+        .output()
+        .expect("the binary runs");
+    assert_ne!(
+        status.status.code(),
+        Some(0),
+        "status is the startup row's own check, so a missing link must read as \
+         stale — reporting fresh here is what makes the repair never run: {}",
+        stdout(&status)
+    );
+
+    let second = batten()
+        .current_dir(&dir)
+        .args(["provision", "apply"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(second.status.code(), Some(0), "{}", stderr(&second));
+    assert!(
+        landed.is_file(),
+        "the second apply must restore the link from the cache it already has"
     );
 }
 

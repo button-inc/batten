@@ -11389,10 +11389,34 @@ repair = ["batten", "wiring", "reclaim", "-y"]
 # recurring pass is what catches a container whose state drifted after setup. The
 # user's own requirement, stated exactly: both at setup and at session start.
 
+# THE CHECK ASKS BATTEN, NEVER THE RUNNER, AND THAT IS THE WHOLE ROW.
+#
+# `check = ["mise", "--version"]` is the obvious spelling and it is a DEAD GATE on
+# the only container this row exists for. `startup.rs` reports a check it could not
+# spawn as `check-unrunnable` — a could-not-look — and never repairs on one, in its
+# own words because that would make "an unreadable check into a licence to mutate".
+# That is the right posture and it is fatal here: on a cold container mise is not
+# installed, so the check cannot spawn, so the repair that would install it never
+# runs. `spawn_resolving` does not rescue it either — rung 0 is the pin, and a
+# container that has never run the runner has no pinned record, so it falls through
+# to PATH and finds nothing.
+#
+# So the check has to be answerable by the one program the Setup script guarantees:
+# batten itself, which `install.sh` just put there. `provision status` is already
+# that question — the freshness gate over the same manifest `apply` writes — so the
+# pair here is the check/fix duality §9 declares rather than two commands that
+# happen to agree.
+#
+# Caught by reading `startup.rs` after the row was committed, not by a gate. The
+# case that refuses it now is
+# `startup_bootstrap::the_runner_check_is_answerable_with_only_batten_present`,
+# which asserts the argv's program is `batten` — because a row whose check cannot
+# spawn reports could-not-look and a reader cannot tell that from a container
+# nobody looked at.
 [[startup]]
 id = "toolchain-runner-present"
 gloss = "the task runner every gate in this repository is invoked through resolves by bare name"
-check = ["mise", "--version"]
+check = ["batten", "provision", "status"]
 repair = ["batten", "provision", "apply"]
 
 [[startup]]
