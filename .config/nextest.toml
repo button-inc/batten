@@ -1,0 +1,36 @@
+# A WALL-CLOCK CASE MUST NOT SHARE THE BOX WITH THE SUITE (CLOUD-1444).
+#
+# `crates/batten/tests/it/shell_retirement_cost.rs` decides a step-change — is the
+# retirement ledger indexed once, or scanned once per deleted path — by timing
+# three arms and comparing their differences. Differences amplify noise, so the
+# reading is only meaningful when nothing else is competing for the machine.
+#
+# Nothing declared that, so it ran under nextest's default parallelism against
+# 2834 siblings. Measured on this container, two consecutive `mise run land` laps:
+#
+#   0.46s / 1.12s / 2.06s   second step 938ms against a first step of 663ms
+#   0.41s / 1.01s / 1.61s   second step 603ms against a first step of 600ms
+#
+# and the same case, run alone on the same tree seconds later, PASSES. The module
+# is unchanged between those readings; only the load differs. The healthy shape is
+# 0.36s / 0.85s / 0.91s — a second step ~8x smaller than the first — so a loaded
+# run lands between the healthy reading and the 2x the unflattened module produces,
+# which is the one place the assertion cannot tell them apart.
+#
+# `threads-required = "num-test-threads"` gives the case the whole budget, so
+# nextest runs it alone. THE THRESHOLDS ARE UNTOUCHED, deliberately: the file's own
+# header records `RATIO` being raised 3 -> 8 because "a bound that a green tree
+# fails on a slower box is measuring the box", and loosening the linearity term
+# instead would have to sit between a loaded reading of 1.42 and the defect's 2.0 —
+# tuned on two noisy samples, and 25% from the thing it exists to catch. Isolating
+# the measurement removes the noise rather than widening the bound to admit it.
+#
+# `.claude/rules/rust.md` says to assert this class with a counter and a repeat-run
+# comparison rather than a clock. That remains the durable fix and needs a counter
+# over Rego evaluation the engine does not expose today: `RuleCost` carries
+# `files_read` and `bytes_read`, which count acquisitions at the boundary and so
+# cannot see an O(n*m) evaluation over a document already in hand.
+
+[[profile.default.overrides]]
+filter = 'test(deleting_six_governed_paths_costs_a_flat_multiple_of_the_floor)'
+threads-required = "num-test-threads"
