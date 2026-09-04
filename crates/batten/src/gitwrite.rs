@@ -185,6 +185,42 @@ pub enum Rebase {
     },
 }
 
+/// Does `tip` already carry `candidate`?
+///
+/// # Why it lives here rather than in `git.rs`
+///
+/// [`rebase`] below asks this same question inline and says why: **CLOUD-36
+/// refuses ancestry as a MERGED-NESS answer**, because landing rebases and a
+/// branch that landed is not an ancestor of anything. That refusal stands. What
+/// is asked here is the other question — whether a tree really is built on a
+/// commit — and for that, ancestry is exactly the predicate.
+///
+/// So the primitive lives beside the one caller that had already justified it,
+/// where the misuse CLOUD-36 names cannot spread by looking like a general
+/// utility in the module a reader browses for reads.
+///
+/// It is public because `speculation` needs the same question and must not open
+/// the backend itself: `gix_is_confined_to_the_git_modules` refuses a fourth
+/// module reaching `gix`, and it caught that module's first draft doing so. The
+/// alternative — widening the confinement list for a predicate this file already
+/// contains — would have bought a second place to get ancestry wrong.
+///
+/// `false` for anything that will not resolve, which is the fail-closed
+/// direction every caller of this wants: a bet whose base cannot be read is not
+/// a bet whose base is present.
+#[must_use]
+pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
+    let Ok(repo) = crate::git::open_for_write(dir) else {
+        return false;
+    };
+    let resolve = |rev: &str| repo.rev_parse_single(rev).ok().map(gix::Id::detach);
+    let (Some(base), Some(head)) = (resolve(candidate), resolve(tip)) else {
+        return false;
+    };
+    repo.merge_base(base, head)
+        .is_ok_and(|found| found.detach() == base)
+}
+
 /// Replay `branch` onto `onto`, and update the worktree to match.
 ///
 /// The commits in `onto..branch` are replayed oldest first, each as a three-way

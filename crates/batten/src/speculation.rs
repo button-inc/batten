@@ -259,25 +259,15 @@ pub fn settle(bet: &Bet, main_now: &str, base_on_main: bool, live: Live) -> Sett
 
 /// Is `candidate` an ancestor of `tip`?
 ///
-/// Asked here rather than added to `git.rs` as a general `is_ancestor`, and for
-/// the reason `gitwrite::rebase` gives at its own call site: CLOUD-36 refuses
-/// ancestry as a MERGED-NESS answer, because landing rebases. What is asked here
-/// is narrower and ancestry is exactly the predicate for it — whether this tree
-/// really carries that commit.
-///
-/// `false` for anything that will not resolve, which is the fail-closed direction
-/// every caller here wants.
+/// **[`crate::gitwrite::carries`]'s, not this module's, and the delegation is a
+/// gate's finding rather than taste.** `gix_is_confined_to_the_git_modules`
+/// refuses a fourth module reaching the backend directly, and it caught the
+/// first draft of this file doing exactly that. Widening that list for a
+/// predicate `gitwrite::rebase` already asks inline would have bought a second
+/// place to get ancestry wrong; delegating buys none.
 #[must_use]
 pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
-    let Ok(repo) = crate::git::open_for_write(dir) else {
-        return false;
-    };
-    let resolve = |rev: &str| repo.rev_parse_single(rev).ok().map(gix::Id::detach);
-    let (Some(base), Some(head)) = (resolve(candidate), resolve(tip)) else {
-        return false;
-    };
-    repo.merge_base(base, head)
-        .is_ok_and(|found| found.detach() == base)
+    crate::gitwrite::carries(dir, candidate, tip)
 }
 
 /// Adopt a bet this process did not place.

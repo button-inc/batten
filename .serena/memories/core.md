@@ -395,7 +395,10 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   conserve it; `a_poisoned_base_is_conserved_as_pending_because_cloud_1306_owns_the_fix`
   pins the ported reading so the fix cannot arrive by accident. The settle table
   is a PURE function of readings the caller already took, which is what makes
-  "does this do what the bash did" answerable without a remote. Every failure is
+  "does this do what the bash did" answerable without a remote. It opens NO
+  backend of its own: the one ancestry read it needs is `gitwrite::carries`,
+  because `gix_is_confined_to_the_git_modules` refuses a fourth module reaching
+  `gix` and caught this file's first draft doing exactly that. Every failure is
   a fallback except one: `Live::decide` fails CLOSED, because failing open on an
   unreadable lease would make a network blip the thing that lands somebody else's
   work.
