@@ -5753,6 +5753,7 @@ fn run_land_lap(
         for step in [
             land::Step::Replay,
             land::Step::Verify,
+            land::Step::Ready,
             land::Step::Push,
             land::Step::Wait,
             land::Step::FastForward,
@@ -5760,6 +5761,7 @@ fn run_land_lap(
             let code = match step {
                 land::Step::Replay => run_land_replay(root, url, reference, branch, out)?,
                 land::Step::Verify => run_land_verify(root, branch, out, err)?,
+                land::Step::Ready => run_land_ready(root, out, err)?,
                 land::Step::Push => run_land_push(root, url, branch, out)?,
                 land::Step::Wait => run_land_wait(root, reference, branch, out, err)?,
                 land::Step::FastForward => run_land_fast_forward(branch, out, err)?,
@@ -6082,6 +6084,81 @@ fn trunk_watch(reference: &str, base: &str, repo: &str, interval: u64) -> main_w
         branch: reference.rsplit('/').next().unwrap_or(reference).to_owned(),
         base: base.to_owned(),
         interval,
+    }
+}
+
+/// The lap's READY phase: the gates that read the pull request's body.
+///
+/// # Both the body source and the gates are the consumer's
+///
+/// `LAND_BODY_SOURCE` is the argv that prints the body, and `LAND_BODY_GATES` is
+/// a `|`-separated list of gate argvs. Neither is defaulted, for
+/// `run_land_fast_forward`'s reason at its own site: a default compiled in here
+/// would be a consumer's vocabulary inside `crates/batten`, which is
+/// non-negotiable rule 1's plainest violation — and the failure a default buys is
+/// the quiet one, a fleet whose gates silently do not run.
+///
+/// **An UNDECLARED gate set is a pass, and a DECLARED one that cannot run is
+/// not.** The asymmetry is the point: a consumer that names no body gates has
+/// none, which is a legitimate configuration; a consumer that names one and
+/// cannot run it has a dead gate, which is the class this engine exists to
+/// refuse. `run_land_fast_forward` refuses an absent `LAND_WORKFLOW` instead,
+/// because a lap with no fast-forward has no way to finish at all — the two
+/// differ because one is optional and the other is the step.
+///
+/// # It buys the matrix, and the accounting lives here for that reason
+///
+/// Readying is what starts CI, so this is the ONE site that increments the
+/// ledger's paid count. `land::Ledger`'s own header records why that cannot be
+/// inferred from the lap counter instead.
+fn run_land_ready(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let declared = std::env::var("LAND_BODY_GATES").unwrap_or_default();
+    let gates = land::body_gates(&declared);
+    if gates.is_empty() {
+        writeln!(out, "land: no body gates declared; nothing to ask")?;
+        return Ok(ExitCode::Success);
+    }
+
+    // FAIL OPEN ON THE FETCH, and only on the fetch. A body this never saw is not
+    // evidence about what the author wrote, which is the predecessor's posture
+    // spelled `[[ -n "$body" ]] &&`. An unreadable source therefore yields an
+    // empty body and `land::ready` treats that as clear.
+    let source = std::env::var("LAND_BODY_SOURCE").unwrap_or_default();
+    let body = land::body_gates(&source)
+        .first()
+        .and_then(|argv| exec::piped_argv(root, argv, ""))
+        .filter(|(code, _)| *code == 0)
+        .map(|(_, body)| body)
+        .unwrap_or_default();
+
+    match land::ready(root, &gates, &body) {
+        land::Readied::Clear => {
+            writeln!(out, "land: {} body gate(s) clear", gates.len())?;
+            Ok(ExitCode::Success)
+        }
+        land::Readied::Refused { gate, detail } => {
+            writeln!(
+                err,
+                "::error:: land: {gate} refused this pull request's body"
+            )?;
+            if !detail.is_empty() {
+                writeln!(err, "{detail}")?;
+            }
+            Ok(ExitCode::Violation)
+        }
+        // INTERNAL RATHER THAN A VIOLATION, because the subject differs: a
+        // refusal is about the body and this is about the clone. `land::progress`
+        // stops on both for this step, so the lap behaves identically — what the
+        // split buys is a reader who can tell "the author must fix this" from
+        // "this checkout cannot ask".
+        land::Readied::Unrunnable { gate } => {
+            writeln!(
+                err,
+                "::error:: land: {gate} is declared in LAND_BODY_GATES and will not run, so its \
+                 verdict is unknown rather than clean"
+            )?;
+            Ok(ExitCode::Internal)
+        }
     }
 }
 

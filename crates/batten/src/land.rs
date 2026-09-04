@@ -720,6 +720,15 @@ pub enum Step {
     Replay,
     /// Run the consumer's gate over this head.
     Verify,
+    /// Ask the gates that read the pull request's BODY, then commit to review.
+    ///
+    /// **A step of its own rather than a clause inside the push**, because it is
+    /// where a lap stops being free: readying is what starts CI, so it is the one
+    /// site that buys a matrix and the last place a refusal costs nothing. The
+    /// bash ran these three gates BEFORE its own conditional ready block, for
+    /// the same reason stated the other way round: a lap that happened not to
+    /// re-ready must not be a way through.
+    Ready,
     /// Push under receive-pack's compare-and-swap.
     Push,
     /// Race green against stale and act on whichever answers.
@@ -795,7 +804,9 @@ pub const fn progress(step: Step, code: crate::exit::ExitCode) -> Progress {
     match (step, code) {
         // Four of the five steps answering cleanly only means the lap may go on;
         // the fifth is the one that ends it.
-        (Step::Replay | Step::Verify | Step::Push | Step::Wait, Success) => Progress::Proceed,
+        (Step::Replay | Step::Verify | Step::Ready | Step::Push | Step::Wait, Success) => {
+            Progress::Proceed
+        }
         (Step::FastForward, Success) => Progress::Landed,
 
         // LAPS. A raced push is the first place the base can move under a lap
@@ -813,10 +824,103 @@ pub const fn progress(step: Step, code: crate::exit::ExitCode) -> Progress {
         // not look reached a remote it cannot read, which is a clone problem
         // rather than a race. And `Usage` stops everywhere: a gate or a workflow
         // this clone never named is not a question another lap can answer.
-        (Step::Replay | Step::Verify, Violation | Internal)
+        // The ready gates read the pull request's BODY, so a refusal is a
+        // statement about what the author wrote — a deferral with no ticket, a
+        // key the merge will not close. No rebase clears prose, which puts it
+        // beside the replay and the gate rather than beside the push.
+        (Step::Replay | Step::Verify | Step::Ready, Violation | Internal)
         | (Step::Push, Internal)
         | (_, Usage) => Progress::Stop,
     }
+}
+
+/// The gate invocations a ready phase runs, decoded from one declared string.
+///
+/// `|`-separated argvs, each space-separated words. **Both the runner and the
+/// task names are the CONSUMER's** — a task name inside `crates/batten` is
+/// non-negotiable rule 1's plainest violation, and a compiled-in default would
+/// be one with extra steps. The separator is `|` rather than `,` because an argv
+/// contains spaces and a comma would make one argv per word.
+///
+/// Empty entries are dropped rather than becoming an empty argv: a trailing
+/// separator is a typo, not a gate, and [`ready`] treats an unrunnable gate as a
+/// refusal — so an empty argv would stop every lap on a stray character.
+#[must_use]
+pub fn body_gates(declared: &str) -> Vec<Vec<String>> {
+    declared
+        .split('|')
+        .map(|entry| {
+            entry
+                .split_whitespace()
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .filter(|argv| !argv.is_empty())
+        .collect()
+}
+
+/// What a ready phase decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Readied {
+    /// Every declared gate passed, or there was no body to judge.
+    Clear,
+    /// A gate refused, naming itself.
+    Refused {
+        /// The gate's own first word, which is the pointer a reader follows.
+        gate: String,
+        /// What the gate printed. Its own report, forwarded rather than
+        /// summarised — the gate is the authority on its own finding.
+        detail: String,
+    },
+    /// A declared gate could not be run at all.
+    ///
+    /// **A REFUSAL, NOT A PASS**, and that is the whole reason this variant is
+    /// distinct from [`Readied::Clear`]. A declared gate that cannot run is the
+    /// dead-gate class this engine exists to refuse, and the bash agreed by
+    /// construction: `mise run <task>` for a task that does not exist exits
+    /// non-zero, which was a stop.
+    Unrunnable {
+        /// The gate that would not run.
+        gate: String,
+    },
+}
+
+/// Run the declared body gates over `body`.
+///
+/// # An empty body is a PASS, and that is the predecessor's posture
+///
+/// The body is fetched from the forge, and a fetch that failed is not evidence
+/// about what the author wrote: these gates are about what a body SAYS, and one
+/// they never saw says nothing. The bash spelled it `[[ -n "$body" ]] && ! gate`
+/// — the gate simply does not run. Reading a failed fetch as a refusal would
+/// stop every lap on a network blip.
+///
+/// # An unrunnable gate is a REFUSAL
+///
+/// The opposite direction, and both are the predecessor's. `mise run <task>` for
+/// a task that does not exist exits non-zero, so the bash stopped — and it is the
+/// right way round: a gate that cannot run has not passed, and treating it as
+/// clean is exactly how a retired or renamed gate goes silently dead.
+#[must_use]
+pub fn ready(root: &Path, gates: &[Vec<String>], body: &str) -> Readied {
+    if body.trim().is_empty() {
+        return Readied::Clear;
+    }
+    for argv in gates {
+        let Some(gate) = argv.first().cloned() else {
+            continue;
+        };
+        let Some((code, output)) = crate::exec::piped_argv(root, argv, body) else {
+            return Readied::Unrunnable { gate };
+        };
+        if code != 0 {
+            return Readied::Refused {
+                gate,
+                detail: output.trim().to_owned(),
+            };
+        }
+    }
+    Readied::Clear
 }
 
 /// Which bound a charge ran into.
@@ -1313,6 +1417,108 @@ mod tests {
     #[test]
     fn the_two_arms_carry_different_tokens() {
         assert_ne!(Arm::Green.token(), Arm::Stale.token());
+    }
+
+    /// `|`-separated argvs, and the separator is not a comma for a reason.
+    #[test]
+    fn a_declared_gate_list_decodes_to_one_argv_per_entry() {
+        assert_eq!(
+            super::body_gates("mise run deferral-check|mise run closing-key-check"),
+            vec![
+                vec![
+                    String::from("mise"),
+                    String::from("run"),
+                    String::from("deferral-check")
+                ],
+                vec![
+                    String::from("mise"),
+                    String::from("run"),
+                    String::from("closing-key-check")
+                ],
+            ],
+            "a comma would give one argv per WORD"
+        );
+    }
+
+    /// An empty entry is dropped rather than becoming an empty argv.
+    ///
+    /// Load-bearing rather than tidy: `ready` treats an unrunnable gate as a
+    /// refusal, so an empty argv would stop every lap on a trailing separator.
+    #[test]
+    fn a_stray_separator_does_not_become_a_gate_that_cannot_run() {
+        assert!(super::body_gates("").is_empty());
+        assert!(super::body_gates("  |  ").is_empty());
+        assert_eq!(super::body_gates("one|").len(), 1);
+    }
+
+    /// **THE TWO DIRECTIONS, and they are opposite on purpose.**
+    ///
+    /// An empty body is a PASS — the body is fetched from a forge, and one this
+    /// never saw is not evidence about what the author wrote, which is the
+    /// predecessor's `[[ -n "$body" ]] &&`. A declared gate that cannot run is a
+    /// REFUSAL — `mise run <task>` for a task that does not exist exited
+    /// non-zero, and treating it as clean is how a renamed gate goes dead.
+    ///
+    /// Asserted as the pair, because a version that passed on both and a version
+    /// that refused on both each satisfy one half.
+    #[test]
+    fn an_unseen_body_passes_and_an_unrunnable_gate_refuses() {
+        let root = std::env::temp_dir();
+        let gate = vec![vec![String::from(
+            "batten-no-such-program-for-the-ready-phase",
+        )]];
+
+        assert_eq!(
+            super::ready(&root, &gate, "   \n "),
+            super::Readied::Clear,
+            "a body the fetch never produced says nothing, so there is nothing to judge"
+        );
+
+        assert_eq!(
+            super::ready(&root, &gate, "Closes CLOUD-1"),
+            super::Readied::Unrunnable {
+                gate: String::from("batten-no-such-program-for-the-ready-phase"),
+            },
+            "a declared gate that cannot run has not passed"
+        );
+    }
+
+    /// No declared gates is a clear ready, and the distinction from `Unrunnable`
+    /// is the optional-versus-dead one the driver's own header states.
+    #[test]
+    fn a_consumer_declaring_no_body_gates_is_clear_rather_than_unrunnable() {
+        assert_eq!(
+            super::ready(&std::env::temp_dir(), &[], "Closes CLOUD-1"),
+            super::Readied::Clear
+        );
+    }
+
+    /// The ready step stops rather than laps, and that is the table's claim.
+    ///
+    /// A refusal is about the BODY — a deferral with no ticket, a key the merge
+    /// will not close — and no rebase clears prose, which puts it beside the
+    /// replay and the gate rather than beside the push.
+    #[test]
+    fn a_body_gate_refusal_stops_the_lap_rather_than_lapping_it() {
+        use crate::exit::ExitCode::{Internal, Success, Violation};
+        assert_eq!(
+            super::progress(super::Step::Ready, Violation),
+            super::Progress::Stop
+        );
+        assert_eq!(
+            super::progress(super::Step::Ready, Internal),
+            super::Progress::Stop
+        );
+        assert_eq!(
+            super::progress(super::Step::Ready, Success),
+            super::Progress::Proceed
+        );
+        // And the contrast that makes it a claim rather than a default: the push
+        // laps on the same code, because a raced push IS cleared by a rebase.
+        assert_eq!(
+            super::progress(super::Step::Push, Violation),
+            super::Progress::Lap
+        );
     }
 
     /// **SPEND IS COUNTED, NOT INFERRED, and this is the case PR #651 produced.**

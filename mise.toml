@@ -359,6 +359,30 @@ _.path = ["tests/bats/bin"]
 # waiting only on `final` would strand every landing on a check that fans in from
 # eighteen. Two sets, two purposes; neither derives the other.
 CI_REQUIRED_CHECKS = "ci,batten-check,bats,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),semver,perf,windows,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+
+# ─── THE LAP'S READY PHASE (CLOUD-1148) ───────────────────────────────────────
+#
+# `batten land lap`'s ready step reads the pull request's BODY and asks the gates
+# that judge it. Both halves are declared here rather than compiled in, and that
+# is non-negotiable rule 1 rather than taste: a task name — or a forge client's
+# argv — inside `crates/batten` is that rule's plainest violation, and the engine
+# refuses to default either.
+#
+# THE ENGINE TREATS THESE TWO ASYMMETRICALLY, on purpose. An UNDECLARED gate list
+# is a legitimate configuration and passes; a DECLARED gate that cannot run is a
+# refusal, because a gate whose verdict is unknown has not said clean. So a typo
+# in a task name here stops a lap rather than quietly retiring the gate — which
+# is the failure this whole campaign is about.
+#
+# `|`-separated argvs, space-separated words. A comma would give one argv per
+# word.
+#
+# WHY THESE TWO AND NOT `filed-here-check`: that gate is already the engine's
+# (CLOUD-1051) and the lap reaches it through `batten check`, so listing it here
+# would run it twice. These two are still bash and still have `land.sh` as their
+# only caller — which is what slice 7's deletion would orphan.
+LAND_BODY_SOURCE = "gh pr view --json body --jq .body"
+LAND_BODY_GATES = "mise run deferral-check|mise run closing-key-check"
 # The subset of that roster for which ABSENCE — no check-run at all, as opposed
 # to one that graded `skipped` — is a legitimate reading rather than a name that
 # has not registered yet. Exactly two WORKFLOWS earn it, and each earns it twice

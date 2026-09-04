@@ -1452,6 +1452,68 @@ pub(crate) fn piped(
     ))
 }
 
+/// [`piped`] over an ARGV rather than a program path.
+///
+/// # Why a sibling rather than a widened `piped`
+///
+/// The two resolve differently and the difference is not cosmetic. [`piped`]
+/// takes a program AT A PATH — `root.join(program)`, guarded by `is_file`, with
+/// no resolve root because the result is already absolute. This takes a command
+/// whose first word is a NAME the ladder resolves on `PATH`, which is what a task
+/// runner's invocation is. Folding them would give one function whose first
+/// argument means two things depending on whether it happens to exist as a file,
+/// and the guard that makes `piped` safe is exactly wrong here: a task name is
+/// not a file, so `is_file` would answer could-not-look for every one of them —
+/// a gate that reads as unreachable rather than as refusing, which is the dead
+/// class this engine exists to refuse.
+///
+/// # Why it exists
+///
+/// The landing lap's ready phase runs gates that take the pull request's BODY on
+/// stdin, and nothing here could spell that shape: [`run_in`] has no stdin
+/// channel and [`piped`] has no argv. The alternative was a fifth `Command::new`
+/// in whichever module needed it, which is the second-spawn-in-an-unplaced-module
+/// shape `piped`'s own header records being added to remove.
+///
+/// **It never spells an argv.** Both the runner and the task names arrive from
+/// the consumer's own configuration, because a task name inside `crates/batten`
+/// is non-negotiable rule 1's plainest violation.
+///
+/// `None` is could-not-look, collapsed for [`piped`]'s reason: unresolvable, a
+/// broken pipe, and a child that died without a code are all "no answer", and no
+/// caller can act differently on which.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: the placed adapter's spawn, and the alternative is a fifth Command::new in an \
+              unplaced module — the shape `piped` was added to remove (CLOUD-1051, CLOUD-1148)"
+)]
+pub(crate) fn piped_argv(root: &Path, argv: &[String], stdin: &str) -> Option<(i32, String)> {
+    let (program, operands) = argv.split_first()?;
+    let mut child = crate::rules::spawn_resolving(Some(root), program, |resolved, extra| {
+        Command::new(OsString::from(resolved))
+            .args(extra.iter().map(OsString::from))
+            .args(operands)
+            .current_dir(root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+    })
+    .ok()?;
+    // TAKEN AND DROPPED EVEN WHEN EMPTY, because a gate that reads stdin blocks
+    // until it closes. A caller with nothing to say still has to say nothing and
+    // hang up, which is what an owned handle going out of scope here does.
+    {
+        let mut pipe = child.stdin.take()?;
+        pipe.write_all(stdin.as_bytes()).ok()?;
+    }
+    let finished = child.wait_with_output().ok()?;
+    Some((
+        finished.status.code()?,
+        String::from_utf8_lossy(&finished.stdout).into_owned(),
+    ))
+}
+
 /// This process's next dispatch number, for the live-capture key.
 ///
 /// The key has to name a *run*, not just a command: through the CLI there is
