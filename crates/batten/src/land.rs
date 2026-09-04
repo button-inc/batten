@@ -425,7 +425,7 @@ pub fn wait(
                     return;
                 }
                 let raw = crate::main_watch::read(trunk, poll.etag());
-                let interval = poll.absorb(&raw, trunk.interval);
+                let interval = poll.absorb(raw.as_ref(), trunk.interval);
                 if let Some(moved) = poll.moved(&trunk.base) {
                     stop.store(true, std::sync::atomic::Ordering::Relaxed);
                     drop(stale.send(Waited::Stale {
@@ -708,7 +708,10 @@ pub fn stale(root: &Path, trunk: &crate::main_watch::Config, reference: &str) ->
     // and cannot itself fail to reach anybody.
     let replayed_onto = crate::git::resolve_ref(root, &tracking).ok()??;
     let mut poll = crate::main_watch::Poll::default();
-    poll.absorb(&crate::main_watch::read(trunk, None), trunk.interval);
+    poll.absorb(
+        crate::main_watch::read(trunk, None).as_ref(),
+        trunk.interval,
+    );
     poll.moved(&replayed_onto).map(ToOwned::to_owned)
 }
 

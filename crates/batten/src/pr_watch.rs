@@ -252,14 +252,17 @@ fn string_at(row: &serde_json::Value, key: &str) -> String {
 /// **The comparison is NUMERIC.** An integer one is what CLOUD-390 removed from
 /// the predecessor, and restoring it here would drop any fractional floor the
 /// endpoint sends — the same silent hole, in a different language.
+///
+/// **LOSSLESS BY CONSTRUCTION rather than by annotation** (CLOUD-1338). This
+/// carried an `#[expect(clippy::cast_precision_loss)]` over `configured as f64`,
+/// whose reason argued the value is always small — which is a claim about
+/// callers, checked by nobody. Narrowing to `u32` first makes the conversion
+/// exact for every value that survives it, and saturating states the bound in
+/// code: `u32::MAX` seconds is 136 years, so a poll interval that reached it was
+/// never going to turn again anyway.
 #[must_use]
 pub fn interval_for(configured: u64, floor: Option<f64>) -> f64 {
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "a poll interval in seconds; f64 is exact to 2^53 and the surface \
-                  refuses anything but a small whole number"
-    )]
-    let configured = configured as f64;
+    let configured = f64::from(u32::try_from(configured).unwrap_or(u32::MAX));
     match floor {
         Some(floor) if floor > configured => floor,
         _ => configured,

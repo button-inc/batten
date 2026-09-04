@@ -240,6 +240,7 @@ mod sleep_ban;
 mod snapshots;
 mod spawn_ceilings;
 mod spawn_census;
+mod spawn_widening;
 mod staged_facts;
 mod startup;
 mod startup_bootstrap;
