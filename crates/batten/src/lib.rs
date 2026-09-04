@@ -5474,6 +5474,14 @@ fn run_lease(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let root = Path::new(".");
+    // BEFORE THE TERMS RESOLVE, because this arm asks the FORGE rather than the
+    // lease remote and so has no terms to want. `land verify` and
+    // `land fast-forward` sit outside their own remote resolution for the same
+    // reason: a clone that cannot name a remote can still answer both, and
+    // resolving one first would refuse a question that never needed it.
+    if let cli::LeaseCommand::Carries { head } = &command {
+        return run_lease_carries(root, head, out, err);
+    }
     let terms = match lease_terms(root) {
         Ok(terms) => terms,
         // A CLONE WITH NO REMOTE IS AN ANSWER FOR THE READ ARMS, and the type
@@ -5514,6 +5522,12 @@ fn run_lease(
             cli::LeaseCommand::Peek { .. } => return Ok(ExitCode::Success),
             // `held` asks whether THIS clone holds it. It does not.
             cli::LeaseCommand::Held => return Ok(ExitCode::Violation),
+            // UNREACHABLE — the arm returns before the terms resolve, above.
+            // Spelled rather than wildcarded so the next arm added here cannot
+            // be swallowed by a `_`, which is the property that forced this row.
+            cli::LeaseCommand::Carries { head } => {
+                return run_lease_carries(root, &head, out, err);
+            }
             cli::LeaseCommand::Acquire { .. }
             | cli::LeaseCommand::Renew
             | cli::LeaseCommand::Hold
@@ -5573,6 +5587,11 @@ fn run_lease(
         cli::LeaseCommand::Hold => run_lease_hold(root, &terms, out, err),
         cli::LeaseCommand::Release => run_lease_release(root, &terms, now, out, err),
         cli::LeaseCommand::Reserve { branch } => run_lease_reserve(&terms, &branch, now, out, err),
+        // UNREACHABLE, and stated rather than wildcarded: the arm returns above,
+        // before the terms this match is built on resolve. A `_` here would
+        // silently swallow the next arm somebody adds, which is what the
+        // exhaustive match exists to prevent — it is what forced this very row.
+        cli::LeaseCommand::Carries { head } => run_lease_carries(root, &head, out, err),
     }
 }
 
@@ -6066,6 +6085,74 @@ fn run_land_verify(
         land::Verified::Refused(head) => {
             writeln!(out, "land: {head} was refused by the configured gate")?;
             Ok(ExitCode::Violation)
+        }
+    }
+}
+
+/// `batten lease carries` (CLOUD-1148 §2): does this head carry the landing
+/// mechanism trunk has?
+///
+/// # THE EXIT TABLE, AND THE CALLER FAILS OPEN ON `3`
+///
+/// `0` the head carries it, `2` it does not — a verdict about this branch, whose
+/// remedy is one rebase — and `3` the reading could not be taken. The CI caller
+/// treats `3` as run, which is this gate's whole posture and the opposite of
+/// every other refusal in this repository: a reading nobody could take would
+/// cancel every job in the fleet, where waving one matrix through costs one
+/// matrix.
+///
+/// # What it replaces, and why the replacement is a path set
+///
+/// `ci-lease-precondition.sh:157` grepped the head's own `mise-tasks/land.sh`
+/// for `land-lock acquire`. That dies with the retirement and dies QUIETLY: the
+/// file goes, `from_ref` fails, the script takes its own fail-open path — "not
+/// judging this head's age" — and every stale head passes. `[lease]
+/// landing_paths` is a row a retirement edits rather than a literal a retirement
+/// invalidates.
+///
+/// # Errors
+///
+/// Only for a stream that will not accept output. Every failure to reach the
+/// forge is a could-not-look reported as `3`.
+fn run_lease_carries(
+    root: &Path,
+    head: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let paths = config::load(root)
+        .ok()
+        .and_then(|loaded| loaded.lease)
+        .map(|lease| lease.landing_paths)
+        .unwrap_or_default();
+    let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
+    let trunk = std::env::var("LEASE_TRUNK").unwrap_or_else(|_| String::from("main"));
+
+    match lease::carries(&repo, &trunk, head, &paths) {
+        lease::Carries::Current => {
+            writeln!(
+                out,
+                "lease carries: {head} carries {trunk}'s landing mechanism"
+            )?;
+            Ok(ExitCode::Success)
+        }
+        // THE REMEDY IS ONE REBASE AND THE REFUSAL SAYS SO. A stopped run is a
+        // CANCELLED run with no failed step of its own, so a reader who is not
+        // told sees a red check and no cause.
+        lease::Carries::Stale { wanted } => {
+            writeln!(
+                err,
+                "::error:: lease carries: {head} does not carry {wanted}, so it cannot be \
+                 serialised against the fleet. Rebase onto current {trunk} and land with it."
+            )?;
+            Ok(ExitCode::Violation)
+        }
+        lease::Carries::Unknown { because } => {
+            writeln!(
+                err,
+                "::error:: lease carries: {because}; not judging this head"
+            )?;
+            Ok(ExitCode::Internal)
         }
     }
 }

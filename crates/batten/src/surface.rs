@@ -1160,6 +1160,15 @@ const OVERRIDE_VERDICT: FlagDecl = FlagDecl {
 /// behalf of a checkout this process is not in.
 const LEASE_BRANCH: FlagDecl = FlagDecl::positional("branch", "The branch being asked about");
 
+/// `<head>`: the commit `lease carries` judges.
+///
+/// **Positional and required, for [`LEASE_BRANCH`]'s reason.** The caller knows
+/// which sha it means and the engine must not guess: on a `pull_request` event
+/// the obvious guess is `GITHUB_SHA`, which is the MERGE commit and therefore
+/// carries trunk's landing mechanism whenever the head did not touch it — so a
+/// default would read every stale head as current, silently.
+const LEASE_HEAD: FlagDecl = FlagDecl::positional("head", "The head commit being judged");
+
 /// `<reference>`: the remote reference `land replay` replays onto.
 ///
 /// **Positional and REQUIRED, for [`LEASE_BRANCH`]'s reason and one more.**
@@ -4283,6 +4292,28 @@ pub const SURFACE: &[CommandDecl] = &[
     // correctness hazard for the trunk — the lease decides who goes first, never
     // what may land — so on the landing path it would fail whichever PR happened
     // to be in flight over a condition that PR did not cause and cannot fix.
+    // `read`, and the staleness half of the CI-side precondition (CLOUD-1148 §2).
+    //
+    // A GATE rather than a report, like `check` below: `0` the head carries
+    // trunk's landing mechanism, `2` it does not, `3` the reading could not be
+    // taken. **The caller fails OPEN on `3`**, which is this gate's whole
+    // posture and the opposite of every other refusal here — a reading nobody
+    // could take would cancel every job in the fleet, where waving one matrix
+    // through costs one matrix.
+    //
+    // The predecessor asked this by grepping the head's own `mise-tasks/land.sh`
+    // for `land-lock acquire`. That predicate dies with the retirement and dies
+    // QUIETLY: the read fails, the script takes its own fail-open path, and every
+    // stale head passes. The path set it asks about is `[lease] landing_paths`,
+    // which a retirement edits rather than invalidates.
+    CommandDecl {
+        path: "lease carries",
+        id: "lease.carries",
+        about: "Gate: this head carries the landing mechanism trunk has, so it can be serialised",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[LEASE_HEAD],
+    },
     CommandDecl {
         path: "lease check",
         id: "lease.check",

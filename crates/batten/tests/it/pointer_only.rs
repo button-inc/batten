@@ -629,6 +629,11 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     "lease release",
     "lease renew",
     "lease reserve",
+    // `lease carries` joins them for a different reason: it reaches the FORGE
+    // rather than the lease remote, and a corpus with no credential cannot read
+    // either the trunk commit or the comparison — which is the could-not-look
+    // this gate is built to fail open on.
+    "lease carries",
     // `land replay` joins them for the same reason one hop earlier: it FETCHES
     // before it replays, so a corpus with no remote configured cannot reach the
     // replay at all and could-not-look is its honest answer here.
@@ -671,6 +676,16 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "lease status",
         args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // The staleness read renders a HEAD SHA, a wanted sha and a reason token.
+    // The forge's own bodies never reach it: `newest_landing_commit` takes a sha
+    // and a date out of the response and `head_carries` takes one status word,
+    // so there is nothing for a payload to ride on.
+    Verb {
+        path: "lease carries",
+        args: &["0000000000000000000000000000000000000000"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },

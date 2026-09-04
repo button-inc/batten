@@ -176,6 +176,15 @@ pub struct Config {
     /// could-not-look rather than as a default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready: Option<Ready>,
+    /// The landing mechanism's own paths, for the CI-side staleness read
+    /// (CLOUD-1148 §2).
+    ///
+    /// Absent is could-not-look and exempts everything, which matches the
+    /// precondition's whole posture: it fails open at every unknown, because a
+    /// reading it cannot take would stop every job in the fleet where waving one
+    /// matrix through costs one matrix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease: Option<Lease>,
     /// Accepted invocation-latency regressions (CLOUD-1163 unit 10). Absent
     /// means this file accepts none, which is the safe direction — an absent
     /// table cannot exempt a path.
@@ -679,6 +688,33 @@ impl Perf {
         }
         Ok(())
     }
+}
+
+/// The landing lease's own configuration (CLOUD-1148 §2).
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct Lease {
+    /// The paths that CONSTITUTE the landing mechanism, so a head can be asked
+    /// whether it carries what trunk has.
+    ///
+    /// # A PATH SET RATHER THAN A GREP STRING, and that is the whole point
+    ///
+    /// The predecessor asked this by grepping the head's `mise-tasks/land.sh`
+    /// for `land-lock acquire`. Both halves of that die with the retirement: the
+    /// file is deleted, so the read fails, so the script takes its own fail-open
+    /// path and reports "not judging this head's age" — and every stale head
+    /// passes, silently, which is worse than a wrong answer.
+    ///
+    /// A declared path set survives, because the thing that changes when the
+    /// mechanism moves is WHICH PATHS, and that is config a retirement edits
+    /// rather than a literal a retirement invalidates.
+    ///
+    /// Empty is could-not-look: nothing to compare means no verdict, never a
+    /// clean one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub landing_paths: Vec<String>,
 }
 
 /// The `[ready]` table: the refinement gate's consumer-set thresholds.
@@ -1697,6 +1733,10 @@ impl Config {
         Config {
             version: SUPPORTED_VERSION,
             min_batten_version: None,
+            // Declaring nothing declares no landing path set, which the reader
+            // takes as could-not-look — the same direction every other absent
+            // table here takes.
+            lease: None,
             strictness: None,
             fail_on_warning: None,
             rules: Vec::new(),

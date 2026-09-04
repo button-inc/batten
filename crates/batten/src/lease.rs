@@ -2053,6 +2053,202 @@ pub fn stop(pid: u32) {
         .status();
 }
 
+// ---------------------------------------------------------------------------
+// CLOUD-1148 §2: does this head carry the landing mechanism trunk has?
+// ---------------------------------------------------------------------------
+
+/// The client the staleness read goes through. The forge's own, because the
+/// question is asked where there is no clone yet.
+const FORGE: &str = "gh";
+
+/// What the staleness read decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Carries {
+    /// The head's history contains trunk's newest landing-mechanism commit.
+    Current,
+    /// It does not, so the head cannot be serialised against the fleet.
+    Stale {
+        /// Trunk's commit the head is missing. A pointer, never a diff.
+        wanted: String,
+    },
+    /// The reading could not be taken.
+    ///
+    /// **A distinct variant BECAUSE THE CALLER MUST FAIL OPEN ON IT.** Folding
+    /// it into `Stale` would cancel every run in the fleet on one unreachable
+    /// forge, and folding it into `Current` is how the predecessor's row went
+    /// dead. It is neither, and the caller decides — which for this gate means
+    /// run the matrix.
+    Unknown {
+        /// What could not be read. A pointer for a human, never a payload.
+        because: String,
+    },
+}
+
+/// One `gh api` read, as raw stdout.
+///
+/// Empty on any failure, which is the same could-not-look posture
+/// [`crate::pr_watch::read`] and [`crate::main_watch::read`] take: every failure
+/// to reach the forge is a reading nobody took, never a verdict.
+#[must_use]
+fn forge_read(args: &[String]) -> String {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: the staleness read runs in CI BEFORE any checkout exists, so there is no \
+                  clone to ask and this crate carries no HTTP client that resolves a forge \
+                  credential — the forge's own client IS the read (CLOUD-1143)"
+    )]
+    let output =
+        crate::rules::spawn_resolving(Some(std::path::Path::new(".")), FORGE, |program, extra| {
+            std::process::Command::new(program)
+                .args(extra)
+                .args(args)
+                .stderr(std::process::Stdio::null())
+                .output()
+        });
+    output.map_or_else(
+        |_| String::new(),
+        |output| String::from_utf8_lossy(&output.stdout).into_owned(),
+    )
+}
+
+/// The newest commit at `trunk` touching any of `paths`.
+///
+/// One request per path, and the newest sha across them wins. **`per_page=1`
+/// rather than a window**, because the question is "what is the latest" and a
+/// page of history would be bytes fetched to discard.
+///
+/// `None` when no path answered, which is could-not-look rather than "nothing
+/// has ever touched the mechanism" — the two are indistinguishable from here and
+/// the caller fails open on both.
+#[must_use]
+pub fn newest_landing_commit(
+    repo: &str,
+    trunk: &str,
+    paths: &[String],
+) -> Option<(String, String)> {
+    let mut newest: Option<(String, String, String)> = None;
+    for path in paths {
+        let raw = forge_read(&[
+            String::from("api"),
+            format!("repos/{repo}/commits?sha={trunk}&path={path}&per_page=1"),
+        ]);
+        let Ok(document) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let Some(entry) = document.as_array().and_then(|rows| rows.first()) else {
+            continue;
+        };
+        let Some(sha) = entry.get("sha").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        // ORDERED BY THE COMMITTER'S DATE, compared as fixed-width ISO-8601.
+        // `.claude/rules/policy-modules.md` records why an instant beats an
+        // ordinal for exactly this: every tracker and every forge stamps one,
+        // and a lexical compare over a fixed-width stamp needs no parser.
+        let when = entry
+            .get("commit")
+            .and_then(|commit| commit.get("committer"))
+            .and_then(|committer| committer.get("date"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if newest
+            .as_ref()
+            .is_none_or(|(_, held, _)| when > held.as_str())
+        {
+            newest = Some((sha.to_owned(), when.to_owned(), path.clone()));
+        }
+    }
+    newest.map(|(sha, _, path)| (sha, path))
+}
+
+/// Does `head` carry `wanted`?
+///
+/// # Server-side ancestry, and the reason is the predecessor's own
+///
+/// `ci-lease-precondition.sh` already records why this is an API question rather
+/// than a `merge-base --is-ancestor`: that needs a deep fetch and "answers
+/// wrongly after a rebase or a cherry-pick, both of which are the normal shape
+/// of work here". The compare endpoint answers it in one request against no
+/// clone at all, which is what lets the guard stay the genuine FIRST step.
+///
+/// `identical` and `ahead` carry it; `behind` and `diverged` do not.
+/// [`crate::gitwrite::carries`] is the LOCAL form of the same question, used
+/// where a clone exists.
+#[must_use]
+pub fn head_carries(repo: &str, wanted: &str, head: &str) -> Option<bool> {
+    let raw = forge_read(&[
+        String::from("api"),
+        format!("repos/{repo}/compare/{wanted}...{head}"),
+    ]);
+    let document = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    let status = document.get("status")?.as_str()?;
+    match status {
+        "identical" | "ahead" => Some(true),
+        "behind" | "diverged" => Some(false),
+        // A status this does not know is not a guess. The forge has only ever
+        // sent those four, so a fifth means the contract moved and a verdict
+        // taken over it would be one nobody checked.
+        _ => None,
+    }
+}
+
+/// The staleness DECISION, over readings the caller already took.
+///
+/// **Split from the reads so the predicate is testable without a forge.** The
+/// two `gh` calls are `Cost::Effect` and cannot run in a suite; this is a pure
+/// function of what they returned, which is the same split
+/// `crates/batten/src/speculation.rs` makes and for the same reason: "does this
+/// do what the bash did" has to be answerable without a network.
+#[must_use]
+pub fn decide(
+    paths: &[String],
+    head: &str,
+    wanted: Option<&str>,
+    ancestral: Option<bool>,
+) -> Carries {
+    if paths.is_empty() {
+        return Carries::Unknown {
+            because: String::from("no landing paths declared"),
+        };
+    }
+    if head.trim().is_empty() {
+        return Carries::Unknown {
+            because: String::from("no head sha in the environment"),
+        };
+    }
+    let Some(wanted) = wanted else {
+        return Carries::Unknown {
+            because: String::from("no landing commit readable at trunk"),
+        };
+    };
+    match ancestral {
+        Some(true) => Carries::Current,
+        Some(false) => Carries::Stale {
+            wanted: wanted.to_owned(),
+        },
+        None => Carries::Unknown {
+            because: format!("the forge did not compare {wanted} with {head}"),
+        },
+    }
+}
+
+/// The whole staleness read: is this head's landing mechanism current with
+/// trunk's?
+///
+/// The two reads, then [`decide`]. Nothing branches here that is not in that
+/// function, which is what keeps the suite's verdict and production's the same.
+#[must_use]
+pub fn carries(repo: &str, trunk: &str, head: &str, paths: &[String]) -> Carries {
+    if paths.is_empty() || head.trim().is_empty() {
+        return decide(paths, head, None, None);
+    }
+    let wanted = newest_landing_commit(repo, trunk, paths).map(|(sha, _)| sha);
+    let ancestral = wanted
+        .as_deref()
+        .and_then(|wanted| head_carries(repo, wanted, head));
+    decide(paths, head, wanted.as_deref(), ancestral)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -3046,5 +3242,85 @@ mod tests {
         let text = String::from_utf8_lossy(&body);
         assert!(text.contains("refs/heads/batten-land-lock"));
         assert!(text.ends_with("0000PACKFAKE"), "got: {text}");
+    }
+}
+
+#[cfg(test)]
+// Panicking on a failed assertion is how a test fails loudly.
+#[allow(clippy::expect_used)]
+mod staleness_tests {
+    use super::{Carries, decide};
+
+    fn paths() -> Vec<String> {
+        vec![String::from("mise-tasks/land.sh")]
+    }
+
+    /// **The discriminating pair: a head carrying trunk's landing commit is
+    /// current, one that does not is stale.**
+    ///
+    /// This is the predicate whose predecessor is about to go SILENTLY dead.
+    /// `ci-lease-precondition.sh:157` greps the head's `mise-tasks/land.sh` for
+    /// `land-lock acquire`; once that file is retired the read fails, the script
+    /// takes its own fail-open path — "not judging this head's age" — and every
+    /// stale head passes. A path SET survives the retirement that killed a grep
+    /// string, because what changes when the mechanism moves is which paths, and
+    /// that is config a retirement edits rather than a literal it invalidates.
+    #[test]
+    fn a_head_carrying_trunks_landing_commit_is_current_and_one_behind_is_stale() {
+        assert_eq!(
+            decide(&paths(), "headsha", Some("trunksha"), Some(true)),
+            Carries::Current
+        );
+        assert_eq!(
+            decide(&paths(), "headsha", Some("trunksha"), Some(false)),
+            Carries::Stale {
+                wanted: String::from("trunksha")
+            },
+            "the refusal names the commit the head is missing, and nothing else"
+        );
+    }
+
+    /// **EVERY UNKNOWN IS ITS OWN VARIANT, AND NEVER `Stale`.**
+    ///
+    /// This gate is the opposite of every other refusal in the repository: it
+    /// fails OPEN, because a reading it cannot take would cancel every job in
+    /// the fleet where waving one matrix through costs one matrix. Reading a
+    /// could-not-look as stale is the expensive direction; reading it as current
+    /// is how the predecessor's row died. It is neither, and the caller decides.
+    ///
+    /// Asserted as the whole set, because a version that answered `Unknown` for
+    /// everything and one that answered `Current` for everything each satisfy a
+    /// single case.
+    #[test]
+    fn every_reading_that_could_not_be_taken_is_unknown_rather_than_a_verdict() {
+        for (paths, head, wanted, ancestral) in [
+            (Vec::new(), "headsha", Some("trunksha"), Some(false)),
+            (paths(), "", Some("trunksha"), Some(false)),
+            (paths(), "   ", Some("trunksha"), Some(false)),
+            (paths(), "headsha", None, Some(false)),
+            (paths(), "headsha", Some("trunksha"), None),
+        ] {
+            let verdict = decide(&paths, head, wanted, ancestral);
+            assert!(
+                matches!(verdict, Carries::Unknown { .. }),
+                "an unreadable input must not become a verdict: {verdict:?}"
+            );
+        }
+    }
+
+    /// The unknown NAMES what could not be read.
+    ///
+    /// Pointer-only (non-negotiable rule 4): a reason a human can act on, never
+    /// a byte of the response. A stopped run is a cancelled run with no failed
+    /// step of its own, so without this the reader sees a red check and no clue.
+    #[test]
+    fn an_unknown_names_which_reading_was_missing() {
+        let no_paths = decide(&[], "headsha", None, None);
+        let no_head = decide(&paths(), "", None, None);
+        assert_ne!(
+            format!("{no_paths:?}"),
+            format!("{no_head:?}"),
+            "two different could-not-looks must not report the same reason"
+        );
     }
 }

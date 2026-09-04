@@ -7217,6 +7217,37 @@ email = "alec@wenzowski.com"
 # creation order, which this tracker gives and a slug- or UUID-keyed one does
 # not — and there it would fail silently rather than loudly. Every tracker stamps
 # a creation time.
+# ─── THE LANDING MECHANISM'S OWN PATHS (CLOUD-1148 §2) ────────────────────────
+#
+# What `batten lease carries` asks the forge about: has this head's history got
+# trunk's newest commit touching any of these? A head that has not cannot be
+# serialised against the fleet, so it must rebase before it spends a matrix.
+#
+# A PATH SET RATHER THAN A GREP STRING, and that is the whole change. The
+# predecessor asked this by grepping the head's `mise-tasks/land.sh` for
+# `land-lock acquire` (`ci-lease-precondition.sh:157`). Both halves of that die
+# with the retirement: the file goes, so the read fails, so the script takes its
+# own fail-open path — "not judging this head's age" — and every stale head
+# passes SILENTLY, which is worse than a wrong answer. What changes when the
+# landing mechanism moves is WHICH PATHS, and that is a row a retirement edits
+# rather than a literal a retirement invalidates.
+#
+# THE ENGINE PATHS ARE HERE TOO, AND THEY ARE THE POINT AFTER SLICE 7. Today the
+# mechanism is bash; when it is `crates/batten/src/land.rs`, this row is what
+# keeps the question answerable without being rewritten — the bash paths simply
+# stop appearing in trunk's history and the engine ones carry it.
+#
+# EMPTY IS COULD-NOT-LOOK, never a clean answer: this gate fails open at every
+# unknown, because a reading it cannot take would cancel every job in the fleet
+# where waving one matrix through costs one matrix.
+[lease]
+landing_paths = [
+  "mise-tasks/land.sh",
+  "mise-tasks/land-lock.sh",
+  "crates/batten/src/land.rs",
+  "crates/batten/src/lease.rs",
+]
+
 [ready]
 prose_dialect_required_from = "2026-09-02T00:00:00.000Z"
 

@@ -523,6 +523,10 @@ mod tests {
                 // flag on a reporting row would drop the reporting invocation
                 // every consumer already uses.
                 "lease authorises".to_owned(),
+                // The staleness half of the CI-side precondition (CLOUD-1148
+                // §2). Two forge reads and no write, so it belongs here beside
+                // `check` rather than with the five arms that reach `swap`.
+                "lease carries".to_owned(),
                 "lease check".to_owned(),
                 "lease held".to_owned(),
                 "lease peek".to_owned(),
@@ -821,6 +825,7 @@ mod tests {
             "lease".to_owned(),
             "lease acquire".to_owned(),
             "lease authorises".to_owned(),
+            "lease carries".to_owned(),
             "lease check".to_owned(),
             "lease held".to_owned(),
             "lease hold".to_owned(),

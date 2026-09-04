@@ -900,6 +900,17 @@ pub enum LeaseCommand {
         /// The branch asking.
         branch: String,
     },
+    /// Does this head carry the landing mechanism trunk has (CLOUD-1148 §2)?
+    ///
+    /// The staleness half of the CI-side precondition, and a READ: it asks the
+    /// forge two questions and answers, writing nothing.
+    Carries {
+        /// The head being judged. On a `pull_request` event this must be
+        /// `github.event.pull_request.head.sha` and NEVER `GITHUB_SHA` — that is
+        /// the merge commit, which carries trunk's landing mechanism whenever the
+        /// head did not touch it, so every stale head would read as current.
+        head: String,
+    },
     /// Is the lease ref free, or a live and well-formed hold?
     Check,
     /// Who holds it, for how long, and who is admitted behind them.
@@ -1758,6 +1769,15 @@ fn lease_of(matches: &ArgMatches) -> Option<LeaseCommand> {
     match matches.subcommand()? {
         ("authorises", matches) => Some(LeaseCommand::Authorises {
             branch: branch_of(matches),
+        }),
+        ("carries", matches) => Some(LeaseCommand::Carries {
+            // EMPTY RATHER THAN ABSENT, for `authorises`' reason one arm up: the
+            // verb must be able to say it cannot answer, and a missing head is
+            // exactly that rather than a usage error — this gate fails open.
+            head: matches
+                .get_one::<String>("head")
+                .cloned()
+                .unwrap_or_default(),
         }),
         ("check", _) => Some(LeaseCommand::Check),
         ("status", matches) => Some(LeaseCommand::Status {

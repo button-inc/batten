@@ -201,6 +201,17 @@
         }
       ]
     },
+    "lease": {
+      "description": "The landing mechanism's own paths, for the CI-side staleness read\n(CLOUD-1148 §2).\n\nAbsent is could-not-look and exempts everything, which matches the\nprecondition's whole posture: it fails open at every unknown, because a\nreading it cannot take would stop every job in the fleet where waving one\nmatrix through costs one matrix.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Lease"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "marker": {
       "description": "The suppression markers to count (CLOUD-36). Which comment shape waves\na rule through is a property of the repository being gated, never of\nBatten; the type and the counting are [`crate::markers`].",
       "type": "array",
@@ -1838,6 +1849,20 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Lease": {
+      "description": "The landing lease's own configuration (CLOUD-1148 §2).",
+      "type": "object",
+      "properties": {
+        "landing_paths": {
+          "description": "The paths that CONSTITUTE the landing mechanism, so a head can be asked\nwhether it carries what trunk has.\n\n# A PATH SET RATHER THAN A GREP STRING, and that is the whole point\n\nThe predecessor asked this by grepping the head's `mise-tasks/land.sh`\nfor `land-lock acquire`. Both halves of that die with the retirement: the\nfile is deleted, so the read fails, so the script takes its own fail-open\npath and reports \"not judging this head's age\" — and every stale head\npasses, silently, which is worse than a wrong answer.\n\nA declared path set survives, because the thing that changes when the\nmechanism moves is WHICH PATHS, and that is config a retirement edits\nrather than a literal a retirement invalidates.\n\nEmpty is could-not-look: nothing to compare means no verdict, never a\nclean one.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false
