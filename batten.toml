@@ -1313,28 +1313,32 @@ args = ["--list"]
 #
 # WHAT THAT COSTS, STATED RATHER THAN ABSORBED: `status` grades the lease against
 # this CLONE (`mine`) where `authorises` grades it against the BRANCH, and it does
-# not honour the admitted successor. `land-lock-peek` below is what closes that
-# gap — the module compares `peek`'s answer against `Value::Branch`, which is the
-# whole reason that variant exists.
-[program.land-lock-status]
-path = "mise-tasks/land-lock.sh"
-args = ["status"]
+# not honour the admitted successor. The `lease-successor` column below is what
+# closes that gap — the module compares its answer against `Value::Branch`, which
+# is the whole reason that variant exists.
+#
+# THE TWO ROWS THAT USED TO LIVE HERE ARE GONE, AND THAT IS THE REPOINTING RATHER
+# THAN A DELETION (CLOUD-1148). They were `[program.land-lock-status]` and
+# `[program.land-lock-peek]`, both `path = "mise-tasks/land-lock.sh"`. A
+# `[program]` row names a path resolved against the repository root, so neither
+# could ever have named the compiled verb — and the file they named is retired.
+# The columns ask `authority = { ask = "lease-status" | "lease-successor" }`
+# instead, which is CLOUD-1100's landed move for `ready-lint.sh` applied to the
+# same shape: same `read` contract, same recorded tokens, no spawn.
 
 # THE ADMITTED SUCCESSOR, AS A MACHINE FIELD (CLOUD-369). `status` renders prose
 # for a human; `peek` prints one named field alone or nothing, which is exactly why
 # it exists — "a caller parsing that sentence would turn a message into an
 # interface, and the next edit to the wording would be a silent breakage."
 #
-# THE FIELD ARGUMENT IS REQUIRED AND ITS ABSENCE IS SILENT HERE. `peek` with no
-# field is exit 2 with a usage line on STDOUT, and `render_column` folds whitespace
-# — so the record's SHAPE survives and the successor column quietly carries the
-# usage text. The module then compares that against the branch, finds them unequal,
-# and refuses: a fail-CLOSED deviation on the one row `Value::Branch` was added to
-# keep open. Probed rather than assumed: `peek` alone is exit 2 / 51 bytes, `peek
-# next` is exit 0 / 0 bytes when no reservation stands.
-[program.land-lock-peek]
-path = "mise-tasks/land-lock.sh"
-args = ["peek", "next"]
+# NO FIELD ARGUMENT TO GET WRONG, WHICH IS WHAT THE COMPILED ARM BUYS HERE. The
+# predecessor took the field on argv, so `peek` with none was exit 2 with a usage
+# line on STDOUT — `render_column` folds whitespace, the record's shape survived,
+# and the successor column quietly carried the usage text, which the module then
+# compared against the branch and refused on. A fail-CLOSED deviation on the one
+# row `Value::Branch` was added to keep open, reachable by editing one string.
+# `ask = "lease-successor"` names the field in the variant, so there is no
+# spelling to get wrong.
 
 # ─── THE OUTPUT-POSTURE SCRUB AND ITS TELL (CLOUD-97, ported under CLOUD-1051) ─
 #
@@ -2271,20 +2275,29 @@ requires-input-matching = { command = "landing-lifecycle-call" }
 name = "kind"
 value = { literal = "lease" }
 
-# THE FRESHNESS GRADE, RESOLVED BY THE PRODUCER'S OWN CLOCK. `status` exits 0 for
-# unheld, released, expired or mine; 1 for held by another clone; 2 where it could
-# not observe the lease at all.
+# THE FRESHNESS GRADE, RESOLVED BY THE PRODUCER'S OWN CLOCK — which since
+# CLOUD-1148 is the recorder boundary's single instant rather than a spawned
+# script's. `lease-status` exits 0 for unheld, released, expired or mine; 2 for
+# held by another clone; 3 where it could not observe the lease, read this
+# clone's identity, or find a remote at all.
 #
-# 2 IS DELIBERATELY UNMAPPED, AND THAT OMISSION IS THE FAIL-OPEN HALF. An unmapped
-# status records `-`, which equals neither token, so the module's refusal cannot
-# hold. `status` fails CLOSED on an unreachable remote where `authorises` fails
-# OPEN — "a lease it cannot read stops EVERY job in the fleet, where waving one
-# matrix through costs one matrix" — and this table is what restores that
-# asymmetry at the boundary rather than asserting it in prose. Adding a `"2"` row
-# here would invert the one behaviour the port exists to conserve.
+# 3 IS DELIBERATELY UNMAPPED, AND THAT OMISSION IS THE FAIL-OPEN HALF. An
+# unmapped status records `-`, which equals neither token, so the module's
+# refusal cannot hold. The producer fails CLOSED on an unreachable remote where
+# `authorises` fails OPEN — "a lease it cannot read stops EVERY job in the fleet,
+# where waving one matrix through costs one matrix" — and this table is what
+# restores that asymmetry at the boundary rather than asserting it in prose.
+# Adding a `"3"` row here would invert the one behaviour the port exists to
+# conserve.
+#
+# THE NUMBERS MOVED WITH THE PRODUCER AND THE MEANINGS DID NOT. The shell
+# answered 1 for held-elsewhere and 2 for could-not-look, because its own 1
+# already meant "held by someone else"; the engine has one table with no
+# per-verb exception (non-negotiable rule 5), so 2 is the verdict and 3 is
+# could-not-look. This map is the one place the two vocabularies meet.
 [[recorder.columns]]
 name = "verdict"
-value = { program = { run = "land-lock-status", read = { status = { "0" = "authorised", "1" = "held-elsewhere" } }, stdin = { literal = "" } } }
+value = { authority = { ask = "lease-status", read = { status = { "0" = "authorised", "2" = "held-elsewhere" } }, stdin = { literal = "" } } }
 
 # THE ADMITTED SUCCESSOR (CLOUD-369). Silent and `-` when no reservation stands,
 # which the module reads as *not this branch* — correct here and only here, because
@@ -2292,7 +2305,7 @@ value = { program = { run = "land-lock-status", read = { status = { "0" = "autho
 # somebody else.
 [[recorder.columns]]
 name = "successor"
-value = { program = { run = "land-lock-peek", read = "stdout", stdin = { literal = "" } } }
+value = { authority = { ask = "lease-successor", read = "stdout", stdin = { literal = "" } } }
 
 # THE BRANCH THE COMPARISON NEEDS, and the reason `Value::Branch` exists at all.
 # `status` grades the lease against the CLONE; only this column lets the module ask

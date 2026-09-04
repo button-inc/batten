@@ -5438,29 +5438,23 @@ fn report_comparison(
     Ok(ExitCode::Violation)
 }
 
-/// `batten mutate`: does each declared gate have a mutation its declared suite
-/// is proven to catch (CLOUD-418, CLOUD-1267)?
-///
-/// **The report is the deliverable and the exit code is the verdict**, and the
-/// two say different things on purpose. Every finding reaches stdout as a
-/// pointer — gate, mutation id, case — because the workflow that runs this cats
-/// the file into a step summary, and a run that fails without publishing what it
-/// found sends the reader back to re-run a sweep that costs the better part of
-/// an hour. The `::error::` summary on stderr carries the count and nothing else.
-///
-/// Exit follows the one table: `2` where the sweep decided against the tree, `3`
-/// where it could not look, and the split is the acceptance rather than a
-/// nicety — a gate whose declared suite cannot be resolved or run must never be
-/// reported as "every mutation caught".
 /// The landing lease's nine arms (CLOUD-1274), ported off `mise-tasks/land-lock.sh`.
 ///
-/// # The exit vocabulary is not uniform across these arms, and that is the design
+/// # The exit vocabulary is uniform, and this paragraph used to claim it was not
 ///
-/// `authorises` answers `0` run / `3` stop / `2` could not look, because `1`
-/// already means "held by someone else" — which there is a REASON to stop rather
-/// than the instruction, so a caller keying on `3` cannot mistake a refusal for an
-/// error. Every other arm keeps the ordinary pair, and `2` stays "could not look"
-/// throughout.
+/// It read: _"`authorises` answers `0` run / `3` stop / `2` could not look,
+/// because `1` already means held by someone else."_ That is
+/// `mise-tasks/land-lock.sh`'s table, transcribed rather than ported, and the
+/// landed arm never spoke it — `Authority::Stop` returns
+/// [`ExitCode::Violation`] and an unresolvable terms read returns
+/// [`ExitCode::Internal`], which is the engine's one table with no per-verb
+/// exception (non-negotiable rule 5). `surface.rs`'s `lease authorises` row
+/// states the correction at the declaration; this said the opposite two
+/// screens away, so a reader reaching either one first got a different answer.
+///
+/// The debt that made it survive is now paid too: the predecessor's numbers had
+/// sixteen CI callers, and `refactor(ci)` moved every one of them onto
+/// `lease guard`, which exits `0` unconditionally and keys on nothing.
 ///
 /// # Where the fail-open asymmetry lives
 ///
@@ -5482,7 +5476,7 @@ fn run_lease(
     if let cli::LeaseCommand::Carries { head } = &command {
         return run_lease_carries(root, head, out, err);
     }
-    let terms = match lease_terms(root) {
+    let terms = match lease::terms(root) {
         Ok(terms) => terms,
         // A CLONE WITH NO REMOTE IS AN ANSWER FOR THE READ ARMS, and the type
         // above says why. The five arms that reach `swap` still refuse below,
@@ -5499,7 +5493,7 @@ fn run_lease(
         // stopping the fleet because a clone has no remote is exactly the cost
         // that arm exists never to pay. Reaching it required this branch, because
         // the terms resolve BEFORE the arm does.
-        Err(TermsMissing::NoRemote) => match command {
+        Err(lease::TermsMissing::NoRemote) => match command {
             cli::LeaseCommand::Status { json } => {
                 return lease_report(json, "unconfigured", &[], out);
             }
@@ -5585,7 +5579,7 @@ fn run_lease(
             }
         }
         cli::LeaseCommand::Check => run_lease_check(&terms, now, out, err),
-        cli::LeaseCommand::Status { json } => run_lease_status(&terms, json, now, out, err),
+        cli::LeaseCommand::Status { json } => run_lease_status(root, &terms, json, now, out, err),
         cli::LeaseCommand::Peek { field } => run_lease_peek(&terms, &field, now, out, err),
         cli::LeaseCommand::Held => run_lease_held(root, &terms, now, out, err),
         cli::LeaseCommand::Acquire { branch } => {
@@ -5603,42 +5597,6 @@ fn run_lease(
         // silently swallow the next arm somebody adds, which is what the
         // exhaustive match exists to prevent — it is what forced this very row.
         cli::LeaseCommand::Carries { head } => run_lease_carries(root, &head, out, err),
-    }
-}
-
-/// Resolve the lease's terms from this checkout.
-///
-/// **The remote must resolve to a URL rather than a name.** The transport speaks
-/// smart-HTTP over the vendored client, which has no notion of a git remote alias,
-/// and a name reaching it would be an unresolvable host rather than a clear
-/// refusal here.
-/// Why a clone has no lease terms, and the two are not the same answer.
-///
-/// **A clone with no remote is a FACT about the clone, not a failure to look.**
-/// The could-not-look guard exists so an unreadable lease is never reported as a
-/// free one; a repository with no remote has no lease ref to misread, so folding
-/// it into that guard made `lease status` an error in every clone that has not
-/// been pushed anywhere — including the census fixture, where every other
-/// data-channel verb answers cleanly.
-///
-/// The distinction is only ever RELAXED for the reporting arms. The write arms
-/// refuse either way, because acquiring a lease that has nowhere to live is not
-/// something a missing remote makes safe.
-enum TermsMissing {
-    /// No remote is configured, so this clone cannot participate in a lease.
-    NoRemote,
-    /// A remote exists and something about reading it failed. This is the
-    /// could-not-look the guard is for.
-    Unreadable(String),
-}
-
-impl TermsMissing {
-    /// The diagnostic, for the arms that report one.
-    fn say(&self, name: &str) -> String {
-        match self {
-            TermsMissing::NoRemote => format!("no remote named {name} is configured"),
-            TermsMissing::Unreadable(reason) => reason.clone(),
-        }
     }
 }
 
@@ -6517,48 +6475,6 @@ fn run_land_wait(
     Ok(code)
 }
 
-fn lease_terms(root: &Path) -> std::result::Result<lease::Terms, TermsMissing> {
-    let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
-    let remotes = git::remotes(root)
-        .map_err(|err| TermsMissing::Unreadable(format!("cannot read this repository: {err}")))?;
-    let url = remotes
-        .iter()
-        .find(|(configured, _)| *configured == name)
-        .map(|(_, url)| url.clone())
-        .ok_or(TermsMissing::NoRemote)?;
-    let mut terms = lease::Terms {
-        remote: url,
-        ..lease::Terms::default()
-    };
-    // Overridable so a suite can drive the bounds without waiting out a real TTL.
-    // Each falls back to the shipped default rather than to zero: a TTL of zero
-    // is a lease that has already lapsed, which would report as a fleet with no
-    // lease at all rather than as a misconfiguration.
-    if let Some(ttl) = env_secs("LAND_LOCK_TTL") {
-        terms.ttl = ttl;
-    }
-    if let Some(beat) = env_secs("LAND_LOCK_HEARTBEAT") {
-        terms.beat = beat;
-    }
-    if let Ok(reference) = std::env::var("LAND_LOCK_BRANCH") {
-        terms.reference = format!("refs/heads/{reference}");
-    }
-    Ok(terms)
-}
-
-/// A positive whole number of seconds from the environment, or `None`.
-///
-/// **Zero and negative are `None`**, not values: every bound here is a duration,
-/// and a zero TTL or beat would turn a lease into a spin rather than into a
-/// tighter test.
-fn env_secs(name: &str) -> Option<i64> {
-    std::env::var(name)
-        .ok()?
-        .parse::<i64>()
-        .ok()
-        .filter(|seconds| *seconds > 0)
-}
-
 /// How many beats a holder may stop progressing before its lease is disbelieved.
 ///
 /// Neither this nor the TTL bounds how long a landing may TAKE — both reset on
@@ -6572,7 +6488,7 @@ fn env_secs(name: &str) -> Option<i64> {
 /// PRs when it was set. Deliberately generous: this exists to catch NEVER, not
 /// slow, and the cost of catching slow is a landing killed for being healthy.
 fn lease_stall_beats() -> i64 {
-    env_secs("LAND_LOCK_STALL_BEATS").unwrap_or(60)
+    lease::env_secs("LAND_LOCK_STALL_BEATS").unwrap_or(60)
 }
 
 /// `lease check`: the lease ref is free, or a live and well-formed hold.
@@ -6612,8 +6528,36 @@ fn run_lease_check(
     }
 }
 
-/// `lease status`, which is prose for a human and `-J` for everything else.
+/// `lease status`, which is prose for a human, `-J` for everything else, and a
+/// verdict for a `[[recorder]]` column.
+///
+/// # The exit code is a THIRD channel, and dropping it was the port's defect
+///
+/// `mise-tasks/land-lock.sh status` answered `0` for a lease that authorises
+/// this clone — unheld, released, expired, or held by this clone — and `1` for
+/// one held by somebody else. That is what `[program.land-lock-status]` records
+/// and what the `landing-loop` preset's `held-elsewhere` token is a mapping of.
+/// The first port rendered the document and returned `Success` on every
+/// answering path, so a lease held by a rival recorded as `authorised` and the
+/// preset allowed the overlapping spend it exists to refuse — a dead gate with a
+/// green suite, because no case drove the producer.
+///
+/// The codes are the engine's table rather than the predecessor's: a lease held
+/// elsewhere is [`ExitCode::Violation`], not `1`. The consumer's `status` map is
+/// where the two are reconciled, once, in config a reader can look up.
+///
+/// **Reporting is unchanged in both other channels.** The document still emits
+/// on every path including this one, for the reason the could-not-look arm below
+/// already states: the exit code carries the verdict and the document carries the
+/// answer, and a data channel that goes silent hands its reader a decode error.
+///
+/// A clone whose own holder id will not read answers [`ExitCode::Internal`]
+/// rather than guessing. The recorder leaves that code unmapped, the column
+/// records `-`, and the preset allows — which is the lease's whole asymmetry:
+/// waving one matrix through costs one matrix, and stopping the fleet over a
+/// question about THIS clone costs every branch in it.
 fn run_lease_status(
+    root: &Path,
     terms: &lease::Terms,
     json: bool,
     now: i64,
@@ -6694,7 +6638,31 @@ fn run_lease_status(
             fields.push(("stalled", stalled.to_string()));
         }
     }
-    lease_report(json, "held", &fields, out)
+    // THE ONE ARM THAT CARRIES A VERDICT, and the identity read happens HERE
+    // rather than at the top of the verb on purpose: every arm above is
+    // authorising regardless of who this clone is, so resolving an identity to
+    // answer them would make a clone with no readable holder id fail to report a
+    // free lease.
+    //
+    // `lease::authorises_this_clone` rather than a comparison written here, for
+    // the reason its own header gives: the `lease-status` recorder column asks
+    // the identical question, and two spellings of it are how the shell and the
+    // engine came to disagree about one lease.
+    let holder = match lease_identity(root) {
+        Ok((_, holder)) => holder,
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            lease_report(json, "held", &fields, out)?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let mine = lease::authorises_this_clone(&observed, &holder, now);
+    lease_report(json, "held", &fields, out)?;
+    if mine {
+        Ok(ExitCode::Success)
+    } else {
+        Ok(ExitCode::Violation)
+    }
 }
 
 /// One status line, in either channel, from one set of fields.
@@ -7056,7 +7024,7 @@ fn run_lease_hold(
             progress,
             terms,
             lease_stall_beats(),
-            env_secs("LAND_LOCK_HANG_BEATS").unwrap_or(3),
+            lease::env_secs("LAND_LOCK_HANG_BEATS").unwrap_or(3),
             now,
         ) {
             // RELEASE FIRST, SIGNAL SECOND. The release is the half that frees the
@@ -7348,6 +7316,20 @@ fn lease_receipt_path(root: &Path, branch: &str) -> Option<std::path::PathBuf> {
     )
 }
 
+/// `batten mutate`: does each declared gate have a mutation its declared suite
+/// is proven to catch (CLOUD-418, CLOUD-1267)?
+///
+/// **The report is the deliverable and the exit code is the verdict**, and the
+/// two say different things on purpose. Every finding reaches stdout as a
+/// pointer — gate, mutation id, case — because the workflow that runs this cats
+/// the file into a step summary, and a run that fails without publishing what it
+/// found sends the reader back to re-run a sweep that costs the better part of
+/// an hour. The `::error::` summary on stderr carries the count and nothing else.
+///
+/// Exit follows the one table: `2` where the sweep decided against the tree, `3`
+/// where it could not look, and the split is the acceptance rather than a
+/// nicety — a gate whose declared suite cannot be resolved or run must never be
+/// reported as "every mutation caught".
 fn run_mutate(
     command: cli::MutateCommand,
     out: &mut dyn Write,
@@ -10865,6 +10847,11 @@ fn write_records(overrides: &Overrides, envelope: &hook::Envelope) {
         grammar: grammar.as_ref(),
         root,
         branch: Some(&branch),
+        // Read HERE, at the boundary, for the reason every other clock read in
+        // this crate is: `evaluate` stays a pure function of its inputs, and one
+        // instant per invocation is what makes two columns grading the same
+        // lease agree with each other.
+        now: i64::try_from(now_unix()).unwrap_or(i64::MAX),
     };
     crate::recorder::append_all(
         recorders,

@@ -537,6 +537,16 @@ pub enum WeakeningKind {
     /// A path is gone from `epoch.tracked`, so the `config_epoch` attributes
     /// less than it did (CLOUD-32).
     EpochPathRemoved,
+    /// A path is gone from `lease.landing_paths`, so the staleness read asks
+    /// about less of the landing mechanism than it did (CLOUD-1148 §2).
+    ///
+    /// Monotone in the direction that matters: [`crate::lease::decide`] resolves
+    /// the newest commit touching ANY declared path, so dropping one can only
+    /// move that answer backwards or leave it put — and a head stale in a way
+    /// the shrunken set no longer reaches passes clean. Emptying the table
+    /// altogether is that move at its limit, where the reader takes
+    /// could-not-look and the guard fails open on every head.
+    LandingPathRemoved,
     /// The prose-dialect cutover moved LATER, or stopped being declared, so
     /// Ready blocks that owed the claims object no longer do (CLOUD-472).
     ///
@@ -867,6 +877,7 @@ impl WeakeningKind {
         WeakeningKind::RulePredicateChanged,
         WeakeningKind::MinVersionLowered,
         WeakeningKind::EpochPathRemoved,
+        WeakeningKind::LandingPathRemoved,
         WeakeningKind::ReadyCutoverRelaxed,
         WeakeningKind::VerbRemoved,
         WeakeningKind::PatternRemoved,
@@ -926,6 +937,7 @@ impl WeakeningKind {
             WeakeningKind::RulePredicateChanged => "rule-predicate-changed",
             WeakeningKind::MinVersionLowered => "min-version-lowered",
             WeakeningKind::EpochPathRemoved => "epoch-path-removed",
+            WeakeningKind::LandingPathRemoved => "landing-path-removed",
             WeakeningKind::ReadyCutoverRelaxed => "ready-cutover-relaxed",
             WeakeningKind::PerfExemptionAdded => "perf-exemption-added",
             WeakeningKind::VerbRemoved => "verb-removed",
@@ -1064,6 +1076,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "epoch",
         coverage: Coverage::Compared(&[WeakeningKind::EpochPathRemoved]),
+    },
+    FieldCoverage {
+        field: "lease",
+        coverage: Coverage::Compared(&[WeakeningKind::LandingPathRemoved]),
     },
     FieldCoverage {
         field: "contract",
@@ -1840,6 +1856,18 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         "epoch.tracked",
     ));
 
+    // The landing mechanism's own path set (CLOUD-1148 §2). Removed-direction
+    // only, and for the reason `epoch.tracked` is: the staleness read resolves
+    // the newest commit touching ANY declared path, so a shorter list can only
+    // reach back less far. ADDING a path narrows nothing — it can only make more
+    // heads read as stale — so the other direction is silent by design.
+    found.extend(removed_entries(
+        WeakeningKind::LandingPathRemoved,
+        &landing_paths(base),
+        &landing_paths(working),
+        "lease.landing_paths",
+    ));
+
     // The refinement gate's prose-dialect cutover (CLOUD-472). A ratchet, so
     // LATER is weaker: it exempts more rows from owing the claims object, and
     // dropping the key altogether is that move taken to its limit, since absent
@@ -2137,6 +2165,18 @@ fn tracked_paths(config: &Config) -> Vec<String> {
         .epoch
         .as_ref()
         .map_or_else(Vec::new, |epoch| epoch.tracked.clone())
+}
+
+/// The `lease.landing_paths` set, or an empty one when the table is absent.
+///
+/// Absent and empty reach the same value on purpose: both are could-not-look to
+/// [`crate::lease::decide`], so a comparison that told them apart would report a
+/// weakening where the reader sees no change in posture.
+fn landing_paths(config: &Config) -> Vec<String> {
+    config
+        .lease
+        .as_ref()
+        .map_or_else(Vec::new, |lease| lease.landing_paths.clone())
 }
 
 /// Each `[[verb]]` row as the entry a weakening keys on.
@@ -3548,6 +3588,56 @@ mod tests {
             )
         );
         assert!(weakenings(&working, &base).is_empty());
+    }
+
+    /// Dropping a landing path shrinks what the staleness read can reach.
+    ///
+    /// The direction is the assertion: adding one can only make MORE heads read
+    /// as stale, so the reverse comparison must stay silent — a symmetric
+    /// implementation would price the retirement that widens this set.
+    #[test]
+    fn dropping_a_landing_path_is_a_weakening() {
+        let base = config("[lease]\nlanding_paths = [\"a.sh\", \"b.rs\"]\n");
+        let working = config("[lease]\nlanding_paths = [\"a.sh\"]\n");
+        assert_eq!(
+            only(&base, &working),
+            Weakening::new(
+                WeakeningKind::LandingPathRemoved,
+                "lease.landing_paths[b.rs]",
+                "present",
+                "absent",
+            )
+        );
+        assert!(weakenings(&working, &base).is_empty());
+    }
+
+    /// Dropping the whole table is that move at its limit, not a silent one.
+    ///
+    /// `landing_paths` reads absent and empty alike as could-not-look, so this
+    /// is the case that proves the *table's* removal still names every path it
+    /// used to declare rather than collapsing to no finding at all.
+    #[test]
+    fn dropping_the_lease_table_reports_every_path_it_declared() {
+        let base = config("[lease]\nlanding_paths = [\"a.sh\", \"b.rs\"]\n");
+        let working = config("");
+        let found = weakenings(&base, &working);
+        assert_eq!(
+            found,
+            vec![
+                Weakening::new(
+                    WeakeningKind::LandingPathRemoved,
+                    "lease.landing_paths[a.sh]",
+                    "present",
+                    "absent",
+                ),
+                Weakening::new(
+                    WeakeningKind::LandingPathRemoved,
+                    "lease.landing_paths[b.rs]",
+                    "present",
+                    "absent",
+                ),
+            ]
+        );
     }
 
     /// CLOUD-472. The direction is the whole of it, so all four arms are here:

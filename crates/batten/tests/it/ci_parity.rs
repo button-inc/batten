@@ -300,7 +300,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Landing lease precondition
-        run: bash -c "$body" || exit 0
+        run: |
+          "$RUNNER_TEMP/batten-bin/batten" lease guard \
+            "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
       - run: mise run lint
       - run: mise exec -- cargo nextest run --workspace
   final:
@@ -763,7 +765,7 @@ fn a_job_that_starts_without_asking_the_lease_is_refused() {
         &root,
         ".github/workflows/ci.yml",
         &WORKFLOW.replace(
-            "      - name: Landing lease precondition\n        run: bash -c \"$body\" || exit 0\n",
+            "      - name: Landing lease precondition\n        run: |\n          \"$RUNNER_TEMP/batten-bin/batten\" lease guard \\\n            \"$LEASE_HEAD_SHA\" \"$LEASE_HEAD_REF\" \"$LEASE_RUN_ID\" || exit 0\n",
             "",
         ),
     );
@@ -782,7 +784,7 @@ fn a_precondition_invoked_without_the_tolerant_suffix_is_refused() {
     common::write(
         &root,
         ".github/workflows/ci.yml",
-        &WORKFLOW.replace("run: bash -c \"$body\" || exit 0", "run: bash -c \"$body\""),
+        &WORKFLOW.replace("\"$LEASE_RUN_ID\" || exit 0", "\"$LEASE_RUN_ID\""),
     );
     assert!(
         !findings(&root).is_empty(),

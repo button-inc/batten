@@ -86,10 +86,11 @@ jobs:
       # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT.
       # First step, before any checkout or toolchain install, because a run this
       # branch is not authorised to make should cost the rounding rather than a
-      # matrix. The body is `mise-tasks/ci-lease-precondition.sh` and every
-      # justification lives there; it is fetched from `main` rather than from
-      # this head, so a clone carrying stale rules cannot dodge the predicate by
-      # carrying a stale copy of it. An unreadable body runs — fail open, which
+      # matrix. The body runs `batten lease guard`, installed from `main` and
+      # pinned to trunk's version rather than to this head's, so a clone
+      # carrying stale rules cannot dodge the predicate by carrying a stale copy
+      # of it. Every justification lives on `run_lease_guard`. An unreadable
+      # body runs — fail open, which
       # is the whole posture: waving one matrix through costs one matrix, while
       # a predicate that cannot read itself would stop the fleet.
       - name: Landing lease precondition
@@ -98,8 +99,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           LEASE_HEAD_REF: ${{ github.head_ref }}
           # The HEAD sha, never `github.sha`: on a pull_request event that is the
-          # merge commit, which carries trunk's `mise-tasks/land.sh` whenever this
-          # head did not touch it — and the staleness row reads exactly that file.
+          # merge commit, whose tree is trunk's wherever this head did not touch
+          # it — and the staleness read asks about the head's own landing paths.
           LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LEASE_RUN_ID: ${{ github.run_id }}
         run: |
@@ -179,10 +180,11 @@ jobs:
       # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT.
       # First step, before any checkout or toolchain install, because a run this
       # branch is not authorised to make should cost the rounding rather than a
-      # matrix. The body is `mise-tasks/ci-lease-precondition.sh` and every
-      # justification lives there; it is fetched from `main` rather than from
-      # this head, so a clone carrying stale rules cannot dodge the predicate by
-      # carrying a stale copy of it. An unreadable body runs — fail open, which
+      # matrix. The body runs `batten lease guard`, installed from `main` and
+      # pinned to trunk's version rather than to this head's, so a clone
+      # carrying stale rules cannot dodge the predicate by carrying a stale copy
+      # of it. Every justification lives on `run_lease_guard`. An unreadable
+      # body runs — fail open, which
       # is the whole posture: waving one matrix through costs one matrix, while
       # a predicate that cannot read itself would stop the fleet.
       - name: Landing lease precondition
@@ -191,8 +193,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           LEASE_HEAD_REF: ${{ github.head_ref }}
           # The HEAD sha, never `github.sha`: on a pull_request event that is the
-          # merge commit, which carries trunk's `mise-tasks/land.sh` whenever this
-          # head did not touch it — and the staleness row reads exactly that file.
+          # merge commit, whose tree is trunk's wherever this head did not touch
+          # it — and the staleness read asks about the head's own landing paths.
           LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LEASE_RUN_ID: ${{ github.run_id }}
         run: |
@@ -254,10 +256,11 @@ jobs:
       # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT.
       # First step, before any checkout or toolchain install, because a run this
       # branch is not authorised to make should cost the rounding rather than a
-      # matrix. The body is `mise-tasks/ci-lease-precondition.sh` and every
-      # justification lives there; it is fetched from `main` rather than from
-      # this head, so a clone carrying stale rules cannot dodge the predicate by
-      # carrying a stale copy of it. An unreadable body runs — fail open, which
+      # matrix. The body runs `batten lease guard`, installed from `main` and
+      # pinned to trunk's version rather than to this head's, so a clone
+      # carrying stale rules cannot dodge the predicate by carrying a stale copy
+      # of it. Every justification lives on `run_lease_guard`. An unreadable
+      # body runs — fail open, which
       # is the whole posture: waving one matrix through costs one matrix, while
       # a predicate that cannot read itself would stop the fleet.
       #
@@ -271,8 +274,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           LEASE_HEAD_REF: ${{ github.head_ref }}
           # The HEAD sha, never `github.sha`: on a pull_request event that is the
-          # merge commit, which carries trunk's `mise-tasks/land.sh` whenever this
-          # head did not touch it — and the staleness row reads exactly that file.
+          # merge commit, whose tree is trunk's wherever this head did not touch
+          # it — and the staleness read asks about the head's own landing paths.
           LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LEASE_RUN_ID: ${{ github.run_id }}
         run: |
@@ -415,7 +418,7 @@ jobs:
       # branch is not authorised to make should cost the rounding rather than a
       # matrix. Body fetched from `main`, never from this head, and `|| exit 0`
       # on both lines so a body that will not parse cannot red the first step of
-      # every job. Every justification lives in `mise-tasks/ci-lease-precondition.sh`.
+      # every job. Every justification lives on `run_lease_guard`.
       - name: Landing lease precondition
         # EXPLICIT, for the reason test.yml states at its own Windows legs: a
         # `run:` step with no `shell:` takes the runner's default, which is
@@ -429,8 +432,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           LEASE_HEAD_REF: ${{ github.head_ref }}
           # The HEAD sha, never `github.sha`: on a pull_request event that is the
-          # merge commit, which carries trunk's `mise-tasks/land.sh` whenever this
-          # head did not touch it — and the staleness row reads exactly that file.
+          # merge commit, whose tree is trunk's wherever this head did not touch
+          # it — and the staleness read asks about the head's own landing paths.
           LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LEASE_RUN_ID: ${{ github.run_id }}
         run: |

@@ -515,6 +515,16 @@
           "description": "[`crate::ready`] — the Ready-block grammar over a tracker payload.",
           "type": "string",
           "const": "ready"
+        },
+        {
+          "description": "[`crate::lease::Asked::Status`] — does the landing lease authorise this\nclone right now? Answers in the engine's exit table, so the consumer's\n`status` map reads `0` authorising / `2` held elsewhere and leaves `3`\nunmapped, which is where the lease's fail-open asymmetry lives.\n\n**Named for the practice rather than for a program** (non-negotiable rule\n1): \"a landing lease\" is a word about trunk-based landing, where\n`land-lock` was one repository's file name.",
+          "type": "string",
+          "const": "lease-status"
+        },
+        {
+          "description": "[`crate::lease::Asked::Successor`] — which branch the live holder\nadmitted behind it, on stdout, or nothing where no reservation stands.",
+          "type": "string",
+          "const": "lease-successor"
         }
       ]
     },

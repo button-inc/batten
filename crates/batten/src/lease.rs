@@ -46,6 +46,7 @@
 //! what CLOUD-689's ceiling and CLOUD-747's no-runtime assertion both refuse.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use crate::Result;
 use crate::fetch::{self, Call};
@@ -1239,6 +1240,207 @@ impl Default for Terms {
             // than either number is the property.
             ttl: 120,
             beat: 30,
+        }
+    }
+}
+
+/// Why a clone has no lease terms, and the two are not the same answer.
+///
+/// **A clone with no remote is a FACT about the clone, not a failure to look.**
+/// The could-not-look guard exists so an unreadable lease is never reported as a
+/// free one; a repository with no remote has no lease ref to misread, so folding
+/// it into that guard made `lease status` an error in every clone that has not
+/// been pushed anywhere — including the census fixture, where every other
+/// data-channel verb answers cleanly.
+///
+/// The distinction is only ever RELAXED for the reporting arms. The write arms
+/// refuse either way, because acquiring a lease that has nowhere to live is not
+/// something a missing remote makes safe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TermsMissing {
+    /// No remote is configured, so this clone cannot participate in a lease.
+    NoRemote,
+    /// A remote exists and something about reading it failed. This is the
+    /// could-not-look the guard is for.
+    Unreadable(String),
+}
+
+impl TermsMissing {
+    /// The diagnostic, for the arms that report one.
+    #[must_use]
+    pub fn say(&self, name: &str) -> String {
+        match self {
+            TermsMissing::NoRemote => format!("no remote named {name} is configured"),
+            TermsMissing::Unreadable(reason) => reason.clone(),
+        }
+    }
+}
+
+/// The remote the lease lives on, by configured name.
+///
+/// Named here rather than at each reader because [`terms`] and every diagnostic
+/// that reports a missing remote must agree on which name went missing.
+#[must_use]
+pub fn remote_name() -> String {
+    std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"))
+}
+
+/// A positive whole number of seconds from the environment, or `None`.
+///
+/// **Zero and negative are `None`**, not values: every bound the lease carries is
+/// a duration, and a zero TTL or beat would turn a lease into a spin rather than
+/// into a tighter test.
+#[must_use]
+pub fn env_secs(name: &str) -> Option<i64> {
+    std::env::var(name)
+        .ok()?
+        .trim()
+        .parse::<i64>()
+        .ok()
+        .filter(|seconds| *seconds > 0)
+}
+
+/// Resolve the lease's terms from this checkout.
+///
+/// **The remote must resolve to a URL rather than a name.** The transport speaks
+/// smart-HTTP over the vendored client, which has no notion of a git remote
+/// alias, and a name reaching it would be an unresolvable host rather than a
+/// clear refusal here.
+///
+/// **It lives in this module rather than beside the verb dispatch**, and that is
+/// CLOUD-1148's move rather than tidying: a `[[recorder]]` column now asks the
+/// lease for a grade ([`adjudicate`]), and a resolver reachable only from `lib`
+/// would have had to be written a second time to serve it — which is the second
+/// authority every other duplicated reading in this repository was.
+///
+/// # Errors
+///
+/// [`TermsMissing`], whose two variants are a fact about the clone and a
+/// could-not-look respectively. The distinction is the whole point; see its docs.
+pub fn terms(root: &Path) -> std::result::Result<Terms, TermsMissing> {
+    let name = remote_name();
+    let remotes = crate::git::remotes(root)
+        .map_err(|err| TermsMissing::Unreadable(format!("cannot read this repository: {err}")))?;
+    let url = remotes
+        .iter()
+        .find(|(configured, _)| *configured == name)
+        .map(|(_, url)| url.clone())
+        .ok_or(TermsMissing::NoRemote)?;
+    let mut resolved = Terms {
+        remote: url,
+        ..Terms::default()
+    };
+    // Overridable so a suite can drive the bounds without waiting out a real TTL.
+    // Each falls back to the shipped default rather than to zero: a TTL of zero
+    // is a lease that has already lapsed, which would report as a fleet with no
+    // lease at all rather than as a misconfiguration.
+    if let Some(ttl) = env_secs("LAND_LOCK_TTL") {
+        resolved.ttl = ttl;
+    }
+    if let Some(beat) = env_secs("LAND_LOCK_HEARTBEAT") {
+        resolved.beat = beat;
+    }
+    if let Ok(reference) = std::env::var("LAND_LOCK_BRANCH") {
+        resolved.reference = format!("refs/heads/{reference}");
+    }
+    Ok(resolved)
+}
+
+/// Whether an observed lease leaves the clone reading it free to spend.
+///
+/// **The decision, extracted from both of its callers, and that is `rust.md`'s
+/// rule rather than tidying**: the failing condition is a lease held by a rival
+/// on a real remote, which no fixture in this sandbox can produce, so the
+/// predicate is tested directly instead of asserting a conclusion over a
+/// precondition nothing created. `batten lease status`'s verdict and
+/// [`adjudicate`]'s `lease-status` answer are the two callers, and a second copy
+/// of this comparison is exactly the drift that made the shell and the engine
+/// disagree about the same lease.
+///
+/// **Absent, released, expired and garbage are one answer here.** The next
+/// `acquire` wins, so nothing is authorised away from this clone. `Garbage` is
+/// deliberately in that set for [`observe`]'s reason — a lease nothing can parse
+/// stays held to every DECISION, and the decision this feeds is the
+/// `landing-loop` preset's, which reads a could-not-look column rather than this
+/// one.
+#[must_use]
+pub fn authorises_this_clone(observed: &Observed, holder: &str, now: i64) -> bool {
+    let Observed::Held { body, .. } = observed else {
+        return true;
+    };
+    if body.released() || body.expired(now) {
+        return true;
+    }
+    body.holder == holder
+}
+
+/// What a `[[recorder]]` column may ask the landing lease for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Asked {
+    /// Does the lease authorise THIS CLONE right now?
+    Status,
+    /// Which branch, if any, the live holder admitted behind it.
+    Successor,
+}
+
+/// One recorder answer, in the exit-status-and-stdout contract a spawned program
+/// would have produced (CLOUD-1148 §2).
+///
+/// # It answers in the ENGINE'S table, and the consumer's `status` map reconciles
+///
+/// `mise-tasks/land-lock.sh status` answered `0` authorising / `1` held
+/// elsewhere / `2` could-not-look, and `[program.land-lock-status]` mapped the
+/// first two and deliberately left the third unmapped — which is where the
+/// lease's fail-open asymmetry is enforced, because an unmapped status records
+/// could-not-look and the `landing-loop` preset's refusal cannot hold over it.
+///
+/// This returns the engine's one table instead: `0` authorising, `2` held
+/// elsewhere, `3` could-not-look. The consumer's map moves with it, once. Every
+/// other spelling of the reconciliation — a per-verb exception here, a second
+/// table in the recorder — would put the same decision in two places.
+///
+/// # `None` is could-not-look and reaches the column as `-`
+///
+/// A clone with no remote, an unreadable identity and an unreachable lease all
+/// answer `3` rather than `None`, because each is a reading the recorder should
+/// store as *could not look* rather than an evaluation that failed. `None` is
+/// reserved for the shape [`crate::recorder::evaluate`] already uses it for.
+#[must_use]
+pub fn adjudicate(asked: Asked, root: &Path, now: i64) -> Option<(i32, String)> {
+    let unknown = Some((crate::exit::ExitCode::Internal.code(), String::new()));
+    let Ok(resolved) = terms(root) else {
+        return unknown;
+    };
+    let Ok(observed) = observe(&resolved) else {
+        return unknown;
+    };
+    match asked {
+        // THE SUCCESSOR IS SILENT WHERE THERE IS NONE, and silent-and-`0` rather
+        // than could-not-look: "no reservation stands" is a reading, and the
+        // preset compares the empty token against a branch name and finds them
+        // unequal, which is the refusal standing rather than being waved.
+        Asked::Successor => {
+            let next = match &observed {
+                Observed::Held { body, .. } if !body.released() && !body.expired(now) => {
+                    body.next.clone()
+                }
+                _ => String::new(),
+            };
+            Some((0, format!("{next}\n")))
+        }
+        Asked::Status => {
+            let Ok(git_dir) = crate::git::git_dir(root) else {
+                return unknown;
+            };
+            let Ok(holder) = Local::under(&git_dir).holder() else {
+                return unknown;
+            };
+            if authorises_this_clone(&observed, &holder, now) {
+                Some((0, String::new()))
+            } else {
+                Some((crate::exit::ExitCode::Violation.code(), String::new()))
+            }
         }
     }
 }
@@ -2639,6 +2841,67 @@ mod tests {
         assert_eq!(
             bail(Some(ticking), &terms, 60, 3, 1001 + 3 * terms.beat),
             Bail::Stop(String::from("stopped turning 3 beats ago"))
+        );
+    }
+
+    /// **The verdict `lease status` and the `lease-status` column both carry.**
+    ///
+    /// Shown able to fail on the arm that matters: a live lease held by a rival
+    /// authorises nobody, and the same lease held by this clone authorises it.
+    /// Tested here rather than over the binary because the failing condition is
+    /// a lease on a real remote, which no fixture in this sandbox produces —
+    /// `.claude/rules/rust.md`'s rule for exactly that case.
+    ///
+    /// The regression it pins is measured rather than imagined: the first port
+    /// of `land-lock.sh status` returned `Success` on every answering path, so
+    /// `[program.land-lock-status]`'s `held-elsewhere` mapping became
+    /// unreachable, the recorder wrote `authorised` over a rival's lease, and
+    /// the `landing-loop` preset allowed the overlapping spend it exists to
+    /// refuse — a dead gate with a green suite, because no case drove the
+    /// producer.
+    #[test]
+    fn a_live_lease_authorises_its_holder_and_nobody_else() {
+        let now = 1000;
+        let live = body("mine", now + 60, "");
+        assert!(
+            authorises_this_clone(&live, "mine", now),
+            "the holder may spend"
+        );
+        assert!(
+            !authorises_this_clone(&live, "theirs", now),
+            "AND A RIVAL MAY NOT — the arm the whole verdict exists for"
+        );
+    }
+
+    /// Absent, released and expired are one answer, because the next `acquire`
+    /// wins and nothing is authorised away from anybody.
+    ///
+    /// The anti-vacuity mirror for the pair above: without it a predicate that
+    /// answered *not authorised* for every clone but the holder would pass,
+    /// which would stop a fleet standing on a free lease.
+    #[test]
+    fn a_lease_that_holds_nothing_authorises_every_clone() {
+        let now = 1000;
+        assert!(authorises_this_clone(&Observed::Absent, "anyone", now));
+        assert!(
+            authorises_this_clone(&body("theirs", 0, ""), "anyone", now),
+            "a tombstone is a DECLARATION, and `0` is its sentinel rather than an instant"
+        );
+        assert!(
+            authorises_this_clone(&body("theirs", now, ""), "anyone", now),
+            "zero seconds left is none left — the `>=` the expiry comparison uses"
+        );
+        assert!(
+            authorises_this_clone(
+                &Observed::Garbage {
+                    sha: String::from("1111111111111111111111111111111111111111"),
+                    why: String::from("the ref carries no lease body"),
+                },
+                "anyone",
+                now
+            ),
+            "a lease nothing can parse reaches the preset as could-not-look on the \
+             COLUMN, so answering it here as a refusal would fail closed twice"
         );
     }
 
