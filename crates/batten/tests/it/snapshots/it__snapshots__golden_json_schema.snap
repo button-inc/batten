@@ -1210,6 +1210,58 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "landed",
+      "id": "landed",
+      "about": "Whether a board column is honest about what git and the forge already did",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "landed check",
+          "id": "landed.check",
+          "about": "Refuse a board column that contradicts main's history or a declined key",
+          "effect": "read",
+          "data_channel": true,
+          "flags": [
+            {
+              "name": "declined",
+              "short": null,
+              "long": "declined",
+              "takes_value": true,
+              "positional": false,
+              "help": "`<CLOUD-id>` lines a pull request body declined with DO-NOT-CLOSE"
+            },
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "positional": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "landed_by",
+              "short": null,
+              "long": "landed-by",
+              "takes_value": true,
+              "positional": false,
+              "help": "`<CLOUD-id><TAB><ref>` lines the caller asserts carry the work"
+            },
+            {
+              "name": "merged_prs",
+              "short": null,
+              "long": "merged-prs",
+              "takes_value": true,
+              "positional": false,
+              "help": "`<CLOUD-id><TAB><pr-number>` lines, one per closing key in a MERGED pull request"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "lease",
       "id": "lease",
       "about": "The landing lease: one branch spends a matrix at a time",
@@ -2786,6 +2838,10 @@ expression: stdout_of(&output)
     {
       "id": "generate.schema",
       "path": "generate schema"
+    },
+    {
+      "id": "landed.check",
+      "path": "landed check"
     },
     {
       "id": "lease.authorises",

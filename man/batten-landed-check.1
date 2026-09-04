@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-landed-check 1  batten 
+.SH NAME
+batten\-landed\-check \- Refuse a board column that contradicts main\*(Aqs history or a declined key
+.SH SYNOPSIS
+\fBbatten landed check\fR [\fB\-\-merged\-prs\fR] [\fB\-\-landed\-by\fR] [\fB\-\-declined\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Refuse a board column that contradicts main\*(Aqs history or a declined key
+.SH OPTIONS
+.TP
+\fB\-\-merged\-prs\fR
+`<CLOUD\-id><TAB><pr\-number>` lines, one per closing key in a MERGED pull request
+.TP
+\fB\-\-landed\-by\fR
+`<CLOUD\-id><TAB><ref>` lines the caller asserts carry the work
+.TP
+\fB\-\-declined\fR
+`<CLOUD\-id>` lines a pull request body declined with DO\-NOT\-CLOSE
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

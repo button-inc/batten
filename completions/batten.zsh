@@ -2123,6 +2123,105 @@ esac
     ;;
 esac
 ;;
+(landed)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__landed_commands" \
+"*::: :->landed" \
+&& ret=0
+
+    case $state in
+    (landed)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-landed-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+'--merged-prs=[\`<CLOUD-id><TAB><pr-number>\` lines, one per closing key in a MERGED pull request]: :_default' \
+'--landed-by=[\`<CLOUD-id><TAB><ref>\` lines the caller asserts carry the work]: :_default' \
+'--declined=[\`<CLOUD-id>\` lines a pull request body declined with DO-NOT-CLOSE]: :_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__landed__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-landed-help-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (checks)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -5746,6 +5845,26 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(landed)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__landed_commands" \
+"*::: :->landed" \
+&& ret=0
+
+    case $state in
+    (landed)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-landed-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (checks)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__checks_commands" \
@@ -6324,6 +6443,7 @@ _batten_commands() {
 'policy:Inspect the thresholds and path sets this repository holds itself to' \
 'commit:The shape a commit must take here\: what its subject may say' \
 'ready:Whether an issue'\''s Ready block satisfies the checkable clauses of the gate' \
+'landed:Whether a board column is honest about what git and the forge already did' \
 'checks:Whether a commit'\''s check runs answer the question a landing depends on' \
 'pr:The pull request a landing drives, and the answers it waits on' \
 'task:What long-running tasks are doing, recorded where it can be read without a log' \
@@ -6916,6 +7036,7 @@ _batten__subcmd__help_commands() {
 'policy:Inspect the thresholds and path sets this repository holds itself to' \
 'commit:The shape a commit must take here\: what its subject may say' \
 'ready:Whether an issue'\''s Ready block satisfies the checkable clauses of the gate' \
+'landed:Whether a board column is honest about what git and the forge already did' \
 'checks:Whether a commit'\''s check runs answer the question a landing depends on' \
 'pr:The pull request a landing drives, and the answers it waits on' \
 'task:What long-running tasks are doing, recorded where it can be read without a log' \
@@ -7233,6 +7354,18 @@ _batten__subcmd__help__subcmd__land__subcmd__verify_commands() {
 _batten__subcmd__help__subcmd__land__subcmd__wait_commands() {
     local commands; commands=()
     _describe -t commands 'batten help land wait commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__landed_commands] )) ||
+_batten__subcmd__help__subcmd__landed_commands() {
+    local commands; commands=(
+'check:Refuse a board column that contradicts main'\''s history or a declined key' \
+    )
+    _describe -t commands 'batten help landed commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__landed__subcmd__check_commands] )) ||
+_batten__subcmd__help__subcmd__landed__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help landed check commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__lease_commands] )) ||
 _batten__subcmd__help__subcmd__lease_commands() {
@@ -7788,6 +7921,37 @@ _batten__subcmd__land__subcmd__verify_commands() {
 _batten__subcmd__land__subcmd__wait_commands() {
     local commands; commands=()
     _describe -t commands 'batten land wait commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__landed_commands] )) ||
+_batten__subcmd__landed_commands() {
+    local commands; commands=(
+'check:Refuse a board column that contradicts main'\''s history or a declined key' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten landed commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__landed__subcmd__check_commands] )) ||
+_batten__subcmd__landed__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten landed check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__landed__subcmd__help_commands] )) ||
+_batten__subcmd__landed__subcmd__help_commands() {
+    local commands; commands=(
+'check:Refuse a board column that contradicts main'\''s history or a declined key' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten landed help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__landed__subcmd__help__subcmd__check_commands] )) ||
+_batten__subcmd__landed__subcmd__help__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten landed help check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__landed__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__landed__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten landed help help commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__lease_commands] )) ||
 _batten__subcmd__lease_commands() {
