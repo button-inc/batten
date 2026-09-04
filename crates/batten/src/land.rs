@@ -1088,6 +1088,123 @@ pub fn absorbed(records: &[String]) -> Option<Vec<String>> {
     )
 }
 
+// ---------------------------------------------------------------------------
+// CLOUD-900 / CLOUD-1338: abandoning the matrix a red check made worthless.
+// ---------------------------------------------------------------------------
+
+/// One run still spending on a head, as the pair the decision needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Spending {
+    /// The run id, for the cancel endpoint.
+    pub id: String,
+    /// The workflow file it came from — what the fan-in is recognised by.
+    pub path: String,
+}
+
+/// What one abandon pass did. Counts, never a log line from a cancelled run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Abandoned {
+    /// Runs this pass asked the forge to stop.
+    pub cancelled: u32,
+    /// Runs deliberately left alone.
+    pub spared: u32,
+    /// Cancellations the forge refused. Not a stop: those minutes bill out.
+    pub refused: u32,
+}
+
+/// Which runs on a head a red verdict makes worthless, sparing the fan-in's.
+///
+/// **THE FAN-IN'S RUN IS NEVER CANCELLED, and that is the whole safety
+/// property.** `final` is the one context branch protection requires; it is
+/// `always()` over a `needs:` assertion, so cancelling its run leaves that
+/// context `cancelled` — which is not an answer, and buys a branch that can
+/// never grade and never land. The predecessor states it at length and this
+/// conserves it exactly.
+///
+/// Split from the forge calls so the decision is testable without a network,
+/// which is the same split [`crate::lease::decide`] makes for the staleness
+/// read.
+#[must_use]
+pub fn worthless(spending: &[Spending], fanin: &str) -> (Vec<Spending>, u32) {
+    let mut spared = 0;
+    let doomed = spending
+        .iter()
+        .filter(|run| {
+            if run.path == fanin {
+                spared += 1;
+                return false;
+            }
+            true
+        })
+        .cloned()
+        .collect();
+    (doomed, spared)
+}
+
+/// The runs still in flight on `sha`, read from the forge.
+///
+/// **`status != "completed"` is the whole filter**, and it is the
+/// predecessor's: a run that has already finished bills nothing further, so
+/// asking to cancel it is a call that buys nothing.
+///
+/// `None` is could-not-look. Every failure here is best-effort by contract —
+/// the caller is on its way to reporting the real failure, and a cleanup step
+/// that could not reach the forge must not replace that message with its own.
+#[must_use]
+pub fn spending(repo: &str, sha: &str) -> Option<Vec<Spending>> {
+    let answer = crate::rest::get(
+        &format!("repos/{repo}/actions/runs?head_sha={sha}&per_page=100"),
+        None,
+    )?;
+    let document = serde_json::from_str::<serde_json::Value>(&answer.body).ok()?;
+    let runs = document.get("workflow_runs")?.as_array()?;
+    Some(
+        runs.iter()
+            .filter(|run| {
+                run.get("status").and_then(serde_json::Value::as_str) != Some("completed")
+            })
+            .filter_map(|run| {
+                let id = run.get("id")?;
+                let id = id
+                    .as_u64()
+                    .map(|found| found.to_string())
+                    .or_else(|| id.as_str().map(str::to_owned))?;
+                let path = run.get("path")?.as_str()?.to_owned();
+                Some(Spending { id, path })
+            })
+            .collect(),
+    )
+}
+
+/// Cancel every run a red verdict made worthless, sparing the fan-in's.
+///
+/// **BEST-EFFORT THROUGHOUT AND NEVER A VERDICT.** A refused cancellation costs
+/// the minutes it would have saved and changes no conclusion, so nothing here
+/// stops and the count is reported rather than raised.
+///
+/// **NOT "cancelling somebody else's runs".** A head sha is one no other branch
+/// has, so the blast radius is one push's worth of runs by construction rather
+/// than by filtering — the same argument the lease guard's own cancel carries.
+#[must_use]
+pub fn abandon(repo: &str, sha: &str, fanin: &str) -> Abandoned {
+    let Some(in_flight) = spending(repo, sha) else {
+        return Abandoned::default();
+    };
+    let (doomed, spared) = worthless(&in_flight, fanin);
+    let mut report = Abandoned {
+        spared,
+        ..Abandoned::default()
+    };
+    for run in doomed {
+        if crate::rest::post(&format!("repos/{repo}/actions/runs/{}/cancel", run.id)) {
+            report.cancelled += 1;
+        } else {
+            report.refused += 1;
+        }
+    }
+    report
+}
+
 #[cfg(test)]
 mod lap_tests {
     use super::{Progress, Step, progress};
@@ -1638,5 +1755,81 @@ mod tests {
         assert_eq!(absorbed(&[]), None);
         assert_eq!(absorbed(&[String::new()]), None);
         assert_eq!(absorbed(&[String::from("   \n\n")]), None);
+    }
+
+    fn run(id: &str, path: &str) -> Spending {
+        Spending {
+            id: String::from(id),
+            path: String::from(path),
+        }
+    }
+
+    /// **THE ROW THAT MATTERS: the run carrying the fan-in is never cancelled.**
+    ///
+    /// `final` is the one context branch protection requires, and it is
+    /// `always()` over a `needs:` assertion — so cancelling its run leaves that
+    /// context `cancelled`, which is not an answer. The saving would buy a
+    /// branch that can never grade and never land, which is strictly worse than
+    /// paying for the matrix.
+    #[test]
+    fn the_run_carrying_the_fan_in_is_spared_and_the_rest_are_not() {
+        let (doomed, spared) = worthless(
+            &[
+                run("1", ".github/workflows/rust.yml"),
+                run("2", ".github/workflows/ci.yml"),
+                run("3", ".github/workflows/test.yml"),
+            ],
+            ".github/workflows/ci.yml",
+        );
+        assert_eq!(spared, 1, "exactly the fan-in's run");
+        assert_eq!(
+            doomed.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["1", "3"],
+            "and every sibling is still doomed: {doomed:?}"
+        );
+    }
+
+    /// A fan-in declared for a file no run carries spares nothing — and still
+    /// cancels the rest.
+    ///
+    /// The anti-vacuity mirror for the pair above: a predicate that spared
+    /// everything would satisfy the sparing half and save nothing at all.
+    #[test]
+    fn a_fan_in_no_run_carries_spares_nothing_and_still_cancels() {
+        let (doomed, spared) = worthless(
+            &[
+                run("1", ".github/workflows/rust.yml"),
+                run("2", ".github/workflows/test.yml"),
+            ],
+            ".github/workflows/absent.yml",
+        );
+        assert_eq!(spared, 0);
+        assert_eq!(doomed.len(), 2, "nothing is spared by accident");
+    }
+
+    /// **AN UNSET FAN-IN CANCELS NOTHING RATHER THAN GUESSING.**
+    ///
+    /// The predecessor refuses to run at all without `$CI_FANIN_WORKFLOW`,
+    /// because without it the task cannot tell which run carries the fan-in and
+    /// cancelling that one wedges the branch. Conserved here as the caller's
+    /// guard: an empty name matches no path, so this arm is what makes the
+    /// caller's refusal the only safe reading.
+    #[test]
+    fn an_empty_fan_in_name_matches_no_run() {
+        let (doomed, spared) = worthless(&[run("1", ".github/workflows/ci.yml")], "");
+        assert_eq!(spared, 0);
+        assert_eq!(
+            doomed.len(),
+            1,
+            "so the CALLER must refuse rather than let this decide"
+        );
+    }
+
+    /// Nothing in flight is a clean no-op.
+    #[test]
+    fn nothing_in_flight_cancels_nothing() {
+        let (doomed, spared) = worthless(&[], ".github/workflows/ci.yml");
+        assert!(doomed.is_empty());
+        assert_eq!(spared, 0);
     }
 }
