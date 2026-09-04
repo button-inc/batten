@@ -9847,9 +9847,25 @@ fn refresh_tasks_link(root: &Path, envelope: &hook::Envelope) {
     };
     let source =
         crate::transcript::tasks_dir(template, session, std::env::var_os("HOME").as_deref());
-    if !Path::new(&source).is_dir() {
-        return;
-    }
+    // PARKED ON SUBSTITUTION, NEVER ON THE TARGET EXISTING (CLOUD-1435). This
+    // guard used to read `if !Path::new(&source).is_dir() { return }`, and it
+    // withheld the pointer at exactly the moment the pointer was informative.
+    //
+    // The host creates the per-session store LAZILY, on the first task write. So
+    // a session that declares no task has no directory, got no link, and
+    // `doctor session` answered could-not-look for its whole life — measured on
+    // this container, where `0` was unreachable for any session. A verb that
+    // abstains on the common case is a dead gate: its answer stops carrying
+    // information and nothing reports that it has.
+    //
+    // A DANGLING LINK IS THE HONEST POINTER, and the discrimination belongs to
+    // the reader. This boundary knows where the store WOULD be; whether an absent
+    // one means "no tasks written yet" or "the template does not describe this
+    // host" has two answers, and `doctor::diagnose_session` is the one place that
+    // decides between them. Withholding the link collapsed both into one silence.
+    //
+    // THE DIRECTORY IS NOT CREATED HERE. That would be this engine writing into
+    // the host's own store to make its own reading succeed.
     let Some(link) = crate::transcript::tasks_link(root, declared) else {
         return;
     };

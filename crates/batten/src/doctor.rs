@@ -1570,6 +1570,37 @@ pub struct SessionReport {
     pub ok: bool,
 }
 
+/// Whether an unreadable store is one the host has simply not written yet.
+///
+/// The link is a pointer the mediated boundary parks on substitution, so it
+/// exists whenever the engine was told where to look. Following it answers the
+/// question the boundary deliberately did not: a target whose PARENT is present
+/// is a declaration that describes this machine with only the per-session leaf
+/// missing, which is what a session with no declared work looks like on a host
+/// that creates the store lazily.
+///
+/// **The link must be resolvable for this to mean anything.** `read_link` fails
+/// when nothing is parked at all, and that is could-not-look rather than zero —
+/// no pointer is not the same fact as a pointer at nothing.
+///
+/// Deliberately NOT a check that the target is absent-versus-unreadable: a
+/// present directory the process may not open is a real failure to look, and it
+/// takes the `read_dir` error arm above with the parent test then answering
+/// `false` only if the parent is unreadable too. Where both are readable and the
+/// leaf is a permission-denied directory this returns `true`, which is the one
+/// case worth naming as a bound; this sandbox runs as root, so it is not a
+/// condition the suite can create (`.claude/rules/rust.md`), and inventing an
+/// assertion over a premise nothing produced is what that rule forbids.
+fn store_is_merely_unwritten(link: &Path) -> bool {
+    let Ok(target) = std::fs::read_link(link) else {
+        return false;
+    };
+    if target.exists() {
+        return false;
+    }
+    target.parent().is_some_and(Path::is_dir)
+}
+
 /// Read the live session's task store and count what is not finished.
 ///
 /// # Why this is a verb and not only a nudge
@@ -1601,8 +1632,37 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
     else {
         return unreadable;
     };
-    let Ok(entries) = std::fs::read_dir(&link) else {
-        return unreadable;
+    // AN ABSENT STORE WITH A PRESENT PARENT IS ZERO, NOT COULD-NOT-LOOK
+    // (CLOUD-1435). Every host that keeps a per-session store creates it LAZILY,
+    // on the first task write — so "the directory is not there" is the ordinary
+    // state of a session that has declared no work, and reporting it as a failure
+    // to look made `0` unreachable. Measured on one container: the verb answered
+    // `3` for every session, including its own, which is a verb nobody can quote.
+    //
+    // THE PARENT IS THE DISCRIMINATOR, and it is the consumer's own string rather
+    // than anything this crate knows about a host: the substituted template's
+    // parent existing says the declaration describes THIS machine, so only the
+    // per-session leaf is missing. `transcript::tasks_link` already takes exactly
+    // this much structure from the declared path (rule 1).
+    //
+    // THE REMAINING MISS IS STATED AND FAILS SAFE. Where the store root has
+    // itself never existed — no session on this machine has ever written a task —
+    // the parent is absent too and the answer stays could-not-look. That is
+    // narrower than refusing every session, and it is the right direction: a
+    // template that does not describe the host must never read as zero, which is
+    // the false clean CLOUD-1376 exists to refuse.
+    let entries = match std::fs::read_dir(&link) {
+        Ok(entries) => entries,
+        Err(_) if store_is_merely_unwritten(&link) => {
+            return SessionReport {
+                version: config::VERSION,
+                open: Some(0),
+                total: Some(0),
+                ids: Vec::new(),
+                ok: true,
+            };
+        }
+        Err(_) => return unreadable,
     };
     let mut total = 0usize;
     let mut ids = Vec::new();

@@ -28,10 +28,19 @@
 //! refuses unconditionally, which is a gate that decides nothing while reading
 //! green.
 //!
-//! The fixture writes a real directory where the engine parks a symlink.
+//! Most fixtures write a real directory where the engine parks a symlink.
 //! `read_dir` follows a link, so the reading under test is identical, and a real
 //! directory keeps the fixture from asserting a property of `symlink` on a
 //! platform that spells it differently.
+//!
+//! **Two cases must use a real symlink, and that is not a departure from the
+//! paragraph above** (CLOUD-1435). `a_pointer_at_an_unwritten_store_is_zero…`
+//! and its mirror turn on the pointer DANGLING, a condition a real directory
+//! cannot express and `read_dir` cannot distinguish — an absent directory and an
+//! absent link fail it identically, which is how `0` stayed unreachable for
+//! every session on this host. Those two are `#[cfg(unix)]` for exactly the
+//! reason the paragraph gives: the boundary's own write is too, so on a platform
+//! that spells linking differently there is no pointer to have this property.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -131,6 +140,81 @@ fn an_absent_store_is_could_not_look_and_never_clean() {
     // about whether work remains, and `0` here would be the original defect with
     // a command in front of it.
     let dir = scratch("absent-store", DECLARED);
+
+    let output = session(&dir, &[]);
+    assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
+    assert!(
+        stdout(&output).contains("could-not-look"),
+        "got: {}",
+        stdout(&output)
+    );
+}
+
+/// A store the host has not written yet reads as ZERO, not as a failure to look.
+///
+/// # The defect, and why the case above does not cover it
+///
+/// `an_absent_store_is_could_not_look_and_never_clean` is about no POINTER: the
+/// engine was never told where to look, so it cannot answer. This is about a
+/// pointer at nothing, which is a different fact and had the same answer.
+///
+/// Every host that keeps a per-session task store creates it LAZILY, on the first
+/// task write. So a session that declares no work has a parked link and no
+/// directory behind it — and that made `0` unreachable. Measured 2026-09-04 on
+/// one container: with a task file already on disk the verb still answered `3`,
+/// and one real `Stop` envelope driven through the hook was what finally made it
+/// answer at all. A verb that abstains on the common case is a dead gate; its
+/// answer stops carrying information and nothing reports that it has.
+///
+/// # Fails by
+///
+/// Restoring `refresh_tasks_link`'s `is_dir` early return, or dropping
+/// `store_is_merely_unwritten`'s parent test — either sends this back to `3`.
+///
+/// A REAL SYMLINK rather than the real directory the other cases use, because the
+/// pointer's danglingness IS the condition. `read_dir` cannot tell the two apart,
+/// which is exactly why the reader follows the link instead.
+#[cfg(unix)]
+#[test]
+fn a_pointer_at_an_unwritten_store_is_zero_and_never_could_not_look() {
+    let dir = scratch("unwritten-store", DECLARED);
+    // The parent exists — the declaration describes this machine — and only the
+    // per-session leaf is missing, which is what "no tasks written yet" looks
+    // like on every host that creates the store on demand.
+    let root = dir.join("store-root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(dir.join(".claude")).unwrap();
+    std::os::unix::fs::symlink(root.join("s-1"), dir.join(".claude/.tasks")).unwrap();
+
+    let output = session(&dir, &[]);
+    assert_eq!(output.status.code(), Some(0), "got: {}", stdout(&output));
+    assert!(
+        stdout(&output).contains("0 of 0 declared task(s) open"),
+        "got: {}",
+        stdout(&output)
+    );
+}
+
+/// And a pointer whose PARENT is absent too stays could-not-look.
+///
+/// THE DISCRIMINATING MIRROR of the case above, and the reason that one cannot be
+/// satisfied by reading every absence as zero. A parent that is not there means
+/// the declaration may not describe this machine at all — a template naming a
+/// path this host has never had must never read as "no work left", which is the
+/// false clean CLOUD-1376 exists to refuse.
+///
+/// This is also the bound the fix does not close: on a machine where the store
+/// root has itself never existed, a genuinely empty session still reads `3`. That
+/// is narrower than refusing every session and it fails in the safe direction.
+///
+/// Fails by: dropping the `parent().is_some_and(Path::is_dir)` conjunct, which
+/// turns every dangling pointer into a clean answer.
+#[cfg(unix)]
+#[test]
+fn a_pointer_whose_parent_is_absent_too_stays_could_not_look() {
+    let dir = scratch("no-store-root", DECLARED);
+    std::fs::create_dir_all(dir.join(".claude")).unwrap();
+    std::os::unix::fs::symlink(dir.join("never-existed/s-1"), dir.join(".claude/.tasks")).unwrap();
 
     let output = session(&dir, &[]);
     assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
