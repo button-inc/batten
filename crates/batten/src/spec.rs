@@ -576,6 +576,11 @@ mod tests {
                 // claiming otherwise would advertise a writing verb as read-only.
                 "ready lint".to_owned(),
                 "receipt status".to_owned(),
+                // The composed receipt read that retired `mise-tasks/verified.sh`
+                // (CLOUD-1148). Three `receipt::validity` reads and no write, so
+                // it belongs here beside `receipt status` rather than with
+                // `receipt record`.
+                "receipt verified".to_owned(),
                 // CLOUD-1180's recovered `agent` slice. BOTH the noun and its
                 // leaf are read, and that is the row's §2 predicate rather than
                 // an accident: `show` is the read band under CLOUD-1184's
@@ -787,6 +792,12 @@ mod tests {
             // this crate that moves something the fleet can see, `lease` being
             // the first, and is the sharpest reason the noun cannot be `read`.
             "land".to_owned(),
+            // `fast-forward` ASKS THE BOT AND READS ITS ANSWER, which is a write
+            // by the same reading `push` is: the comment it leaves is a request
+            // the fleet can see, and the bot acts on it. `lap` is the driver, so
+            // it inherits the widest effect of the steps it sequences.
+            "land fast-forward".to_owned(),
+            "land lap".to_owned(),
             "land push".to_owned(),
             "land replay".to_owned(),
             "land verify".to_owned(),
@@ -916,6 +927,7 @@ mod tests {
             "receipt".to_owned(),
             "receipt record".to_owned(),
             "receipt status".to_owned(),
+            "receipt verified".to_owned(),
             // The out-of-tree verdict stores' write half (CLOUD-1265). §2
             // gains the noun and its two leaves in the same change, which is
             // what this assertion exists to prompt.

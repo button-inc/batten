@@ -3015,11 +3015,24 @@ description = "Gate: is HEAD verified? Answers from the receipts, so no shell id
 shell = "bash -c"
 run = '''
 set -uo pipefail
+# THE REMEDY IS THE CONSUMER'S, and that is rule 1 rather than a layering
+# preference. The predecessor's refusal named `mise run verify` and told the
+# reader to read its status directly, never through a pipe — task names, which
+# `crates/batten` may not carry. So the verb states WHAT is unverified and this
+# wrapper states what to do about it.
 rc=0
 cargo run --quiet -p batten -- receipt verified || rc=$?
+# The exit table inverts once, here. The predecessor answered `1` unverified and
+# `2` could-not-look; the engine has one table with no per-verb exception, so `2`
+# is the policy verdict and `1` the usage error. Every caller reads what it
+# always read.
 case "$rc" in
 0) exit 0 ;;
-2) exit 1 ;;
+2)
+  echo "::error:: HEAD is NOT verified — a receipt is missing or stale, most often because a verify exit status was swallowed by a pipe." >&2
+  echo "  Run \`mise run verify\` and read its exit status directly; never through a pipe, which reports the pipe's status. Then re-run \`mise run verified\`." >&2
+  exit 1
+  ;;
 1) exit 2 ;;
 *) exit "$rc" ;;
 esac
