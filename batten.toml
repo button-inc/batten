@@ -5811,6 +5811,40 @@ line_sources = [
 module = "policy/ci-parity.rego"
 severity = "deny"
 
+# ---------------------------------------------------------------------------
+# CLOUD-1410 and CLOUD-1408. Three cache failures landed in this tree and every
+# gate was green over all three: a required check with no cache step at all, a
+# content hash inside the restore prefix of all 12 keys, and a job reading a
+# family nothing on the trunk ever wrote. Each is SILENT — a cache that misses is
+# a green run that took longer — which is the asymmetry `ci-suite-lane` is also
+# stated over and the reason this is a deny rather than a report.
+#
+# NOT `ci-parity`'s BUSINESS AND NOT `ci-tools-check`'s, checked rather than
+# assumed. `ci-parity.rego` names `rust-cache` once, to EXCLUDE it — "A STEP THAT
+# IS NOT THIS ACTION IS NOT THIS RULE'S BUSINESS" — and `ci-tools-check` judges
+# `mise-action` tool narrowing, which has nothing to say about caching. So this
+# is a new module rather than a clause added to either.
+#
+# `sources` CARRIES `mise.toml` BECAUSE PREDICATE 2 CANNOT BE DECIDED WITHOUT IT.
+# "Reaches cargo" is a question about the TASK GRAPH: a job runs `mise run
+# <task>`, and that task's own body — or one reached through its `depends` —
+# forks cargo. mise owns that graph and the module reads it as a parsed document
+# rather than re-parsing text, which is the second-authority refusal
+# `ci-parity`'s header records.
+#
+# `line_sources` IS THE WORKFLOWS ONLY, and the asymmetry is deliberate. Every
+# pointer this module emits is into a workflow file; nothing it decides needs a
+# line in `mise.toml`, and declaring one would acquire a document for a pointer
+# no finding carries.
+[[rule]]
+id = "ci-cache-declared"
+kind = "policy"
+scope = "tree"
+sources = [".github/workflows/*.yml", "mise.toml"]
+line_sources = [".github/workflows/*.yml"]
+module = "policy/ci-cache-declared.rego"
+severity = "deny"
+
 [[rule]]
 id = "bats-invocation"
 kind = "policy"
@@ -10861,6 +10895,55 @@ target = "mise run rules-drift"
 # So the check is the whole load: `config show` exits 0 only if the committed
 # authority resolves under the binary PATH actually finds. It names no field and
 # no version, which is what keeps it true as the config grows.
+
+[[verdict]]
+id = "step key dead"
+gloss = "a rust-cache shared-key carries a content hash, so no restore can match it"
+class = """
+`Swatinem/rust-cache` composes its key in `src/config.ts`: `prefix-key` at `:73`, `shared-key` at `:77`, the `key` input at `:81`, the job id at `:86`, `runnerOS-runnerArch` at `:93`, `rustEnvHash` at `:130` -- and only THEN assigns `self.restoreKey` at `:133`, appending `lockHash` at `:260`. So `restoreKey` drops exactly one component and every author-supplied input is inside the restore prefix. A `hashFiles(...)` in `shared-key` therefore does not merely invalidate the exact key on a content change; it moves the fallback prefix, and no entry in the store matches at all. Measured here at 12 of 12 steps: every `[workspace.dependencies]` bump went cold across 343 locked crates in every job simultaneously. The remedy is to delete the hash, not to relocate it -- no author-controlled input lands in the dropped suffix, and cargo's own per-unit fingerprint already carries the profile, so a partial rebuild is both correct and strictly cheaper. Bump `prefix-key` when a target directory is genuinely poisoned; that is the one eviction event this key shape has.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/ci-cache-declared.rego"
+
+[[verdict]]
+id = "job declare missing"
+gloss = "a pull-request job forks cargo and its workflow declares no rust-cache step"
+class = """
+The job runs a `mise run <task>` whose own body, or one reached through its `depends`, invokes `cargo` -- and no step in that job declares `Swatinem/rust-cache`, so its target directory is empty on every run. Measured on `commit-lint` before this row existed: `commit-attribution` and `commit-check` both at ~341.9s, blocked on one cold debug build, against a lint body of 758.6ms. The absence direction is the one with teeth and the one that fails silently; a job declaring a cache it does not need is not this rule's business. The remedy is a rust-cache step keyed to a family a trunk-side job already warms, because only an entry written from the default branch is readable by every pull request -- a key unique to one job is warmed by nothing and relocates the cost rather than removing it.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/ci-cache-declared.rego"
+
+[[verdict]]
+id = "job write unsafe"
+gloss = "a pull-request job writes to a cache family a trunk-side job already warms"
+class = """
+A GitHub Actions cache entry is IMMUTABLE once written and a read is scoped to the run's own ref plus the base branch. Two consequences, and the row is about both: a pull-request write is unreadable by every other pull request, so it is upload time for a multi-gigabyte entry with no reader; and on a fresh key the FIRST job to finish becomes the entry every later reader inherits, which hands the family the thinnest of the trees that read it. Measured here, the readers of one family do not build the same amount -- one builds a single binary and finishes roughly eleven minutes before the job that builds the workspace and its test targets. The remedy is one designated writer on the trunk and `save-if: false` on every pull-request consumer; a pure consumer cannot lose that race because it does not enter it. A family no trunk-side job writes is NOT warmed and is deliberately outside this row: making those read-only would leave them with nothing at all.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/ci-cache-declared.rego"
+
+[[verdict]]
+id = "task resolve missing"
+gloss = "the task graph this rule walks could not be resolved, so cargo reachability was not decided"
+class = """
+Could-not-look, never a verdict about the tree, and it covers the two ways the walk can fail to answer. Either the manifest that owns the task graph would not parse -- distinct from absent, which means the question does not apply here -- or a `depends` chain runs past the depth the module walks without resolving. The bound is explicit rather than silent for the reason a dead gate and a clean tree are byte-identical on the decision surface: a self-referential rule is not expressible in Rego and `graph.reachable` is outside this build's evaluator feature set, so the walk is written out to a stated depth and a chain longer than that is REPORTED rather than read as "reaches no cargo". Nothing about the job's caching is being claimed; fix the manifest, or flatten the chain, and the predicate answers.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/ci-cache-declared.rego"
+
 [[startup]]
 id = "engine-reads-the-authority"
 gloss = "the engine that hook registrations invoke by bare name can read this repository's committed config"

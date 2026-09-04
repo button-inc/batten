@@ -62,6 +62,7 @@ mod call_ceiling;
 mod capture_fidelity;
 mod captured_facts;
 mod checks_green;
+mod ci_cache_declared;
 mod ci_hygiene;
 mod ci_parity;
 mod ci_suite_lane;
