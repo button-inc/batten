@@ -305,6 +305,24 @@ declared_modules := {
 	# `check` edges are forbidden below for `pr_watch`'s reason — it spawns, and
 	# a gate declared `read` must not.
 	"main_watch",
+	# `rest` is the forge's REST tier read IN PROCESS, over `fetch` (CLOUD-1338).
+	# It sits BELOW every caller and reaches `fetch` alone: one client, one
+	# credential reader, and a typed answer carrying the status, the `ETag` and
+	# the poll floor.
+	#
+	# IT REPLACED FOUR SPAWNS RATHER THAN JOINING THEM, which is why the three
+	# modules above no longer appear on `spawn-adapters`' placement table. Each of
+	# the four carried the same `#[expect(clippy::disallowed_types)]` reason —
+	# that this crate carries no HTTP client resolving a forge credential — and
+	# the client had been in the crate since CLOUD-745, with `lease` already using
+	# it.
+	#
+	# IT DECIDES NOTHING, which is what keeps it at the bottom: it resolves a
+	# response and hands it back, and every verdict over that reading belongs to
+	# the module that asked. Its `hook` edge is forbidden below for `fetch`'s
+	# reason rather than for the spawning modules' — a network round trip cannot
+	# fit the mediated path's budget whether or not it forks.
+	"rest",
 	# `speculation` is the bet a waiter places on the base that is about to exist
 	# (CLOUD-748, CLOUD-862). It sits BELOW `land` for the reason `fast_forward`
 	# does: it resolves readings and returns a verdict token, and whether a lap
