@@ -379,6 +379,61 @@ fn an_unconfigured_gate_refuses_rather_than_guessing_and_writes_no_record() {
     );
 }
 
+/// `batten land lap`, with the lap bound named in the environment.
+///
+/// `$LAND_VERIFY` is a gate that always REFUSES, which is what makes the stop
+/// arm reachable without a real gate; the mirror below passes one that succeeds.
+fn land_lap(repo: &Path, laps: &str, gate: &str) -> (i32, String, String) {
+    let output = batten()
+        .args(["land", "lap", "refs/heads/main"])
+        .env("LAND_MAX_LAPS", laps)
+        .env("LAND_VERIFY", gate)
+        .env("LAND_WORKFLOW", "fast-forward.yml")
+        .current_dir(repo)
+        .output()
+        .expect("run batten land lap");
+    (
+        output.status.code().expect("exit code"),
+        stdout(&output),
+        stderr(&output),
+    )
+}
+
+/// **The loop reaches a clone it cannot read and stops carrying that step's own
+/// code**, rather than lapping toward an answer no lap can produce.
+///
+/// # What this tier can and cannot assert, stated rather than implied
+///
+/// A lap begins with `replay`, which fetches over smart-HTTP — so driving the
+/// whole loop in-tree needs a live git server, which this suite does not stand
+/// up. What IS assertable here is the wiring and the failure posture: the verb
+/// parses, resolves its branch, reaches the first step, and reports the clone's
+/// own could-not-look instead of spinning.
+///
+/// **The decision the loop encodes is tested where it lives** — `land::progress`
+/// is a pure table with its own exhaustive cases in `crates/batten/src/land.rs`,
+/// including the discriminating pair (a refusal a rebase would clear laps; one
+/// it would not stops) and both anti-vacuity mirrors. Asserting that here would
+/// need the server; asserting it there needs nothing, and it is the same claim.
+#[test]
+fn a_lap_over_a_clone_with_no_remote_stops_rather_than_lapping_toward_nothing() {
+    let repo = repo("land-lap-no-remote");
+
+    let (code, out, err) = land_lap(&repo, "3", "true");
+    assert_eq!(
+        code, 3,
+        "a clone with no remote is could-not-look: {out} {err}"
+    );
+    assert_ne!(
+        code, 2,
+        "exit 2 would be a verdict about the branch, and nothing here judged one"
+    );
+    assert!(
+        out.matches("land: lap ").count() <= 1,
+        "it must not spend its whole count on a remote that will not resolve: {out}"
+    );
+}
+
 /// `batten land fast-forward`, with the workflow named in the environment.
 fn land_fast_forward(repo: &Path, workflow: &str) -> (i32, String, String) {
     let output = batten()

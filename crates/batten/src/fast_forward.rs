@@ -269,7 +269,9 @@ fn concluded(runs: &[serde_json::Value], since: &str, wanted: &str) -> Option<St
         if created < since {
             return None;
         }
-        let title = run.get("display_title").and_then(serde_json::Value::as_str)?;
+        let title = run
+            .get("display_title")
+            .and_then(serde_json::Value::as_str)?;
         if title != wanted {
             return None;
         }
