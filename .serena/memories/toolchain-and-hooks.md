@@ -199,6 +199,30 @@ were never tried** — both worked first time. Auto mode's standing instruction 
 prefer `bash` for edits is what made the dedicated tools invisible, so read a
 classifier refusal as being about the CALL SHAPE and not about the capability.
 
+**AND THE SHAPE UNDERNEATH ALL THREE IS ONE ERROR: TREATING A FAILURE AS A
+MISSING CAPABILITY INSTEAD OF READING WHY IT FAILED.** Measured three times in
+the session that wrote this, each time costing more than the check would have.
+The classifier refused a `bash` heredoc and the conclusion drawn was that the
+grant could not be written. Serena reported `CONNECTION_CLOSED` and the
+conclusion drawn was that its tools did not exist here — so the memory guard's
+declared redirect was called unreachable and an override was spent against a
+precondition that said "the only route left is writing the protected path
+directly". **That precondition was FALSE.** The server's own log named the cause
+in the first seven seconds (`pipx:serena-agent` needs `uv@0.12.5`, which the
+incomplete provisioning had not installed), `mise install` had since fixed it,
+and the server starts and answers `initialize` with 21 tools — `write_memory`,
+`edit_memory` and `rename_memory` among them. **A stdio MCP server is drivable
+from the shell**: pipe `initialize`, `notifications/initialized` and a
+`tools/call` at it and the redirect's own tool runs, enforcing the ceiling and
+the cross-reference rewrite that a direct file write skips. That is the route,
+and it was available the whole time.
+
+So the rule is: **read the server's log before calling a connector unreachable,
+and probe it before calling its tools absent.** `mcp-logs-<server>/*.jsonl`
+under `~/.cache/claude-cli-nodejs/<slug>/` carries the cause and usually the
+remedy. An unbound tool is a fact about this session's STARTUP, never about
+whether the thing behind it can be reached.
+
 **A `$HOME` REPAIR IN A DISPOSABLE CONTAINER IS A YES AND DOES NOT NEED ASKING.**
 This environment clones the repository fresh and is reclaimed after inactivity,
 so `~/.claude/launcher-settings.json` is launcher-generated per-session config the
