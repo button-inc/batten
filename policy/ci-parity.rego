@@ -471,14 +471,31 @@ violation contains {
 #
 # COUNTED rather than grepped for absence, because the two forms differ only by a
 # suffix and a search for the bare spelling would pass a file carrying both.
+# THE COUNTED SPELLING MOVED WITH THE STEP (CLOUD-1148). It was
+# `bash -c "$body"`, the fetched-script invocation — and when that step became
+# `batten lease guard`, both comprehensions counted a string no workflow
+# contains. Zero invocations means the clause below cannot fire, so the predicate
+# would have gone DEAD WHILE LOADING CLEAN, which is the class this repository
+# exists to refuse and the reason these two move in the same change as the YAML.
+#
+# What is counted is unchanged in kind: the guard's own invocation, and the same
+# invocation carrying its tolerance. The property is still "every invocation
+# carries its `|| exit 0`", because the harm is still the one the clause below
+# names — a step that reds makes the RUN `failure` rather than `cancelled`,
+# `final` fails its `needs:` under `!cancelled()`, and the lander re-drafts the
+# fleet.
+#
+# COUNTED rather than grepped for absence, for the reason the predecessor gave:
+# the two forms differ only by a suffix, so a search for the bare spelling would
+# pass a file carrying both.
 lease_invocations(path) := count([line |
 	some line in input.tree.lines[path]
-	contains(line, "bash -c \"$body\"")
+	contains(line, "lease guard \\")
 ])
 
 lease_tolerant(path) := count([line |
 	some line in input.tree.lines[path]
-	contains(line, "bash -c \"$body\" || exit 0")
+	contains(line, "\"$LEASE_RUN_ID\" || exit 0")
 ])
 
 violation contains {
@@ -1158,10 +1175,26 @@ test_a_job_that_waits_on_another_is_not_asked_for_the_lease if {
 # COUNTED, NOT SEARCHED FOR ABSENCE: the two forms differ only by a suffix, so a
 # file carrying both would pass a bare search.
 test_a_precondition_invoked_without_the_tolerant_suffix_is_refused if {
-	lines := object.union(sound_input.tree.lines, {".github/workflows/ci.yml": ["        bash -c \"$body\""]})
+	lines := object.union(sound_input.tree.lines, {".github/workflows/ci.yml": [
+		"          \"$RUNNER_TEMP/batten-bin/batten\" lease guard \\",
+		"            \"$LEASE_HEAD_SHA\" \"$LEASE_HEAD_REF\" \"$LEASE_RUN_ID\"",
+	]})
 	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
 	some f in found
 	f.verdict == "lease guard unsafe"
+}
+
+# THE MIRROR, and it is what keeps the case above from passing over a clause that
+# refuses everything: the same invocation WITH its tolerance is silent.
+test_a_precondition_carrying_the_tolerant_suffix_is_admitted if {
+	lines := object.union(sound_input.tree.lines, {".github/workflows/ci.yml": [
+		"          \"$RUNNER_TEMP/batten-bin/batten\" lease guard \\",
+		"            \"$LEASE_HEAD_SHA\" \"$LEASE_HEAD_REF\" \"$LEASE_RUN_ID\" || exit 0",
+	]})
+	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
+	every f in found {
+		f.verdict != "lease guard unsafe"
+	}
 }
 
 test_a_workflow_reading_check_runs_without_the_one_predicate_is_refused if {

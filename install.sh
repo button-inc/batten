@@ -73,6 +73,11 @@ usage() {
 
 		Environment:
 		  BATTEN_VERSION       tag to install (e.g. v0.0.61); default: latest
+		  BATTEN_VERSION_FROM_REF
+		                       read the version from this ref's Cargo.toml and
+		                       install that tag, falling back to the latest
+		                       release when the tag has none. Ignored when
+		                       BATTEN_VERSION is set.
 		  BATTEN_TARGET        override target detection
 		  BATTEN_INSTALL_DIR   destination; default \${XDG_BIN_HOME:-\$HOME/.local/bin}
 		  BATTEN_GITHUB_TOKEN  token for the release API (also GH_TOKEN,
@@ -353,13 +358,49 @@ main() {
 	# An unreadable release is "could not look" (2), never "this release is
 	# broken" (1): a network blip and an unauthorized token are both environment,
 	# and reporting them as a bad release points the reader at the wrong thing.
-	if [ -n "${BATTEN_VERSION:-}" ]; then
-		rel_url="$API/repos/$REPO/releases/tags/${BATTEN_VERSION}"
+	# THE PIN MAY COME FROM A REF, AND THAT IS THE CI GUARD'S WHOLE PROPERTY
+	# (CLOUD-420). `batten lease guard` runs as the FIRST step of every
+	# `pull_request` job, before any checkout — so the version it runs must be
+	# decided by TRUNK and not by the head's own workflow file, which is what the
+	# fetched-script design it replaces protected by reading its logic from trunk.
+	# `BATTEN_VERSION_FROM_REF` names that ref; an explicit `BATTEN_VERSION` still
+	# wins, because a caller naming a version means it.
+	pinned="${BATTEN_VERSION:-}"
+	from_ref=""
+	if [ -z "$pinned" ] && [ -n "${BATTEN_VERSION_FROM_REF:-}" ]; then
+		if api_get "$API/repos/$REPO/contents/Cargo.toml?ref=${BATTEN_VERSION_FROM_REF}" \
+			"application/vnd.github.raw" "$tmp/manifest.toml"; then
+			# The workspace root's `version`, first match: the anchored form cannot
+			# pick up a dependency's version, which is never at column 0.
+			pinned=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$tmp/manifest.toml" | head -n 1)
+			[ -z "$pinned" ] || from_ref="v$pinned"
+			[ -z "$from_ref" ] || pinned="$from_ref"
+		fi
+		[ -n "$pinned" ] ||
+			echo "install.sh: could not read a version from ${BATTEN_VERSION_FROM_REF}; using the latest release" >&2
+	fi
+
+	if [ -n "$pinned" ]; then
+		rel_url="$API/repos/$REPO/releases/tags/${pinned}"
 	else
 		rel_url="$API/repos/$REPO/releases/latest"
 	fi
-	api_get "$rel_url" "application/vnd.github+json" "$tmp/release.json" ||
-		die 2 "cannot read the release list from $REPO. If you are being rate-limited, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN."
+	if ! api_get "$rel_url" "application/vnd.github+json" "$tmp/release.json"; then
+		# THE PIN CAN NAME A TAG THAT DOES NOT EXIST YET, and falling back is the
+		# difference between a guard that runs an older batten and a fleet that
+		# runs unguarded. release-plz bumps the manifest BEFORE the tag is
+		# published, so trunk's version routinely names an unreleased tag — and
+		# the CI step swallows a failure here by design (it must never exit
+		# non-zero), so a hard failure would be silent.
+		#
+		# An explicitly named `BATTEN_VERSION` never falls back: a caller who
+		# named a version wants that version or an error.
+		[ -n "$from_ref" ] ||
+			die 2 "cannot read the release list from $REPO. If you are being rate-limited, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN."
+		echo "install.sh: ${from_ref} has no published release yet; using the latest instead" >&2
+		api_get "$API/repos/$REPO/releases/latest" "application/vnd.github+json" "$tmp/release.json" ||
+			die 2 "cannot read the release list from $REPO. If you are being rate-limited, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN."
+	fi
 
 	flatten "$tmp/release.json" >"$tmp/release.line"
 	tag=$(json_string "$tmp/release.line" tag_name)
