@@ -2206,6 +2206,21 @@ reclaim_at_session_start`, a boolean about one harness-shaped repair in a table
   fails on `ring`'s `links` key). curl IS the host's default TLS stack, which is
   the acceptance's proxy-CA property in its strongest reading, and §9's own
   posture. Debt tracked in CLOUD-320, not absorbed.
+- `race.rs` — which OTHER open pull request already claims this branch's key
+  (CLOUD-446's duplicate-claim half, ported off `mise-tasks/claim-race-check.sh`
+  by CLOUD-1422). **The port IS the fix, and the defect is worth the sentence**:
+  the shell excluded the branch's own pull request by resolving it with `gh pr
+view` and no argument, which reads the CURRENT BRANCH — so under a detached
+  `pull_request` checkout the lookup failed, `|| true` swallowed it, the self
+  number was empty, and every pull request raced ITSELF. `identify` resolves it
+  by HEAD SHA instead, out of the same listing that supplies the competitors, so
+  the failing arm is unreachable rather than handled. `claimed` carries
+  `claimed-keys.sh`'s three-source precedence unchanged, because applying the
+  narrowing to one side of the comparison only is what made a PR citing a key
+  read as racing it. The key pattern is a PARAMETER from the consumer's
+  `[[pattern]]` registry — no tracker vocabulary in the crate (rule 1) — and an
+  empty `races` means looked-and-found-none, never could-not-look, which is the
+  fail-open that read as a pass through three reproductions of the bug.
 - `ready.rs` — the Definition-of-Ready grammar as a predicate over a tracker
   payload (CLOUD-179, ported off `mise-tasks/ready-lint.sh` by CLOUD-1121 when
   `shell-retirement` made editing a shell rule refusable). **Rust rather than

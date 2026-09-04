@@ -81,6 +81,7 @@ pub mod pr_watch;
 pub mod preset;
 pub mod provision;
 pub mod prune;
+pub mod race;
 pub mod ready;
 pub mod receipt;
 pub mod record;
