@@ -2485,6 +2485,7 @@ fn run_receipt(
     match command {
         ReceiptCommand::Record { check } => receipt::run_record(&check, mode, err),
         ReceiptCommand::Status { check, key, json } => receipt::run_status(&check, key, json, out),
+        ReceiptCommand::Verified => receipt::run_verified(out),
     }
 }
 

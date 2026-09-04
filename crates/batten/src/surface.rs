@@ -3849,6 +3849,22 @@ pub const SURFACE: &[CommandDecl] = &[
             JSON,
         ],
     },
+    // NO POSITIONAL, and the absence is the verb's whole content: it asks about
+    // the DECLARED SET rather than about a check the caller names. A `--check`
+    // here would make it `status` with extra steps, and would restore exactly the
+    // half-asked shape the predecessor existed to remove — one call, one green,
+    // and a head reported verified on half its evidence.
+    //
+    // `read`, and it joins the derived read-only allowlist: it opens receipts and
+    // resolves two refs, and writes nothing.
+    CommandDecl {
+        path: "receipt verified",
+        id: "receipt.verified",
+        about: "Is HEAD verified — every declared check's receipt valid against this commit?",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[],
+    },
     // The noun only dispatches; its subtree carries a write verb, so the parent
     // stays unclassified rather than advertising a write-bearing `read` prefix
     // on the derived allowlist (CLOUD-170) — the posture `receipt` and `state`

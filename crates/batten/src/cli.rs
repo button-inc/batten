@@ -1265,6 +1265,17 @@ pub enum ReceiptCommand {
         /// Emit the verdict as byte-stable JSON instead of a pointer line.
         json: bool,
     },
+    /// Is HEAD verified — every declared check's receipt valid against this
+    /// exact commit and the trunk it was taken against?
+    ///
+    /// **The composition is the point, and it is why this is a verb rather than
+    /// two calls.** A caller asking `status` twice has to remember both names
+    /// and to AND the answers, and the failure that shape produces is silent:
+    /// one call, one green, and a head reported verified on half the evidence.
+    /// The predecessor existed because that had happened — a `verify` piped into
+    /// `tail` exits with the pipe's status, so a branch `linear-check` had
+    /// rejected reported success and the zero was acted on.
+    Verified,
 }
 
 /// Subcommands of `config`.
@@ -1842,19 +1853,25 @@ fn generate_of(matches: &ArgMatches) -> Option<GenerateCommand> {
 
 fn receipt_of(matches: &ArgMatches) -> Option<ReceiptCommand> {
     let (name, matches) = matches.subcommand()?;
-    let check = matches.get_one::<String>("check")?.clone();
+    // THE CHECK IS READ PER ARM, not once above the match. `verified` names no
+    // check — it asks about the declared SET — so hoisting the positional would
+    // make this whole function answer `None` for it, and a sub-verb that parses
+    // to nothing is a verb that silently does not exist.
     match name {
-        "record" => Some(ReceiptCommand::Record { check }),
+        "record" => Some(ReceiptCommand::Record {
+            check: matches.get_one::<String>("check")?.clone(),
+        }),
         // `unwrap_or_default` rather than `?`: the flag is declared with a
         // default, so an absent value is the ordinary case, not a parse failure.
         "status" => Some(ReceiptCommand::Status {
-            check,
+            check: matches.get_one::<String>("check")?.clone(),
             key: matches
                 .get_one::<ReceiptKey>("key")
                 .copied()
                 .unwrap_or_default(),
             json: flag(matches, "json"),
         }),
+        "verified" => Some(ReceiptCommand::Verified),
         _ => None,
     }
 }

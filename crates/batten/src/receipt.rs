@@ -1546,6 +1546,78 @@ pub fn run_status(
     })
 }
 
+/// The checks a head must carry a valid receipt for to be called verified.
+///
+/// **Two, and the second is what the predecessor existed for.** `verify` says
+/// the tree passed its gate; `linear-check` says the branch was linear on the
+/// trunk it was measured against, and records WHICH trunk — so a moved
+/// `origin/main` expires it. A head carrying only the first has been proven
+/// against a base that may no longer exist.
+const VERIFIED_BY: [&str; 2] = ["verify", "linear-check"];
+
+/// Is HEAD verified — every check in [`VERIFIED_BY`] valid against this commit?
+///
+/// # Why the composition is a verb rather than two calls
+///
+/// The predecessor was a shell gate, and it existed because a caller had read
+/// the wrong thing: `mise run verify 2>&1 | tail -60` exits with the PIPE's
+/// status, so a branch `linear-check` had rejected reported success and the zero
+/// was acted on. A verb that answers about the SET cannot be half-asked, where
+/// two [`run_status`] calls can be — one of them forgotten, and a head reported
+/// verified on half its evidence.
+///
+/// # Exits
+///
+/// `0` verified. `2` not verified — a receipt is missing or expired, which is a
+/// verdict about this repository's state. `1` the checkout cannot be judged at
+/// all (not a repository, unresolvable HEAD or `origin/main`), which is a
+/// statement about the clone and never about the work.
+///
+/// **The predecessor spelled those `1` and `2` the other way round**, and the
+/// engine's table wins (non-negotiable rule 5): `2` is the policy verdict
+/// everywhere, and `1`/`3` are the only codes a Batten failure produces. The
+/// `mise` task that keeps the old name translates, so every caller reads what it
+/// always read — the shape CLOUD-1170's shims already took.
+///
+/// # Errors
+///
+/// As [`run_status`]: a checkout that cannot be judged is a [`UsageError`], and
+/// an unwritable stream is an internal error.
+pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
+    let facts = repo_facts()?;
+    let mut unverified = Vec::new();
+    for check in VERIFIED_BY {
+        let statement = load_statement(&receipt_path(&facts.repo_root, check)?);
+        let verdict = validity(statement.as_ref(), &facts.head, &facts.main, &facts.git_dir);
+        if verdict != Validity::Valid {
+            unverified.push((check, verdict));
+        }
+    }
+    if unverified.is_empty() {
+        writeln!(
+            out,
+            "verified: HEAD {} carries every receipt, linear on {}",
+            facts.head, facts.main
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    // POINTER-ONLY: the check's name and its verdict token, never a receipt's
+    // contents. And "NOT verified" is the predecessor's own wording, kept rather
+    // than improved because a SURVIVING suite reads for it —
+    // `tests/tree-clean.bats` proves a dirty tree leaves HEAD unverified by
+    // looking for exactly this string, and that suite's subject does not retire
+    // here, so the string is part of the contract this port must conserve.
+    for (check, verdict) in &unverified {
+        writeln!(
+            out,
+            "NOT verified: {} {check} {}",
+            facts.head,
+            verdict.as_str()
+        )?;
+    }
+    Ok(ExitCode::Violation)
+}
+
 /// Whether the receipt at `path` records something other than what `bound`
 /// requires (CLOUD-1100).
 ///

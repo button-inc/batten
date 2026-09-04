@@ -2020,6 +2020,37 @@ regex = 'gh[[:space:]]+pr[[:space:]]+view\b[^|;&]*--jq[[:space:]]+\.body\b'
 id = "shell-script-directory"
 regex = '^\$\(dirname([[:space:]]+--)?[[:space:]]+"[^"]*"\)$|^\$\(cd([[:space:]]+--)?[[:space:]]+"\$\(dirname([[:space:]]+--)?[[:space:]]+"[^"]*"\)"[[:space:]]*&&[[:space:]]*pwd\)$|^\$\{(BASH_SOURCE\[0\]|0)%/\*\}$'
 
+# HOW A BATS SUITE SPELLS THE SAME CONCEPT, and it is a second row rather than a
+# fourth alternation in the one above because the two decide different questions.
+#
+# The row above is a SIBLING directory — a shell program resolving the file next
+# to it, which is why its own comment excludes the parent form by construction. A
+# `.bats` suite does not live next to its subject: every suite in `tests/` names a
+# program in `mise-tasks/`, so the traversal is inherent to the shape rather than
+# a widening of it. And `$(dirname "$0")` is unavailable there at all — `$0` is
+# the bats runner, so bats hands the suite its own directory as
+# `$BATS_TEST_DIRNAME` instead.
+#
+# THE GAP THIS CLOSES WAS NAMED BEFORE IT WAS MEASURED. `shell-retirement`'s
+# `case_earns_removal` already records that "a suite spells it relative to its own
+# directory (`$BATS_TEST_DIRNAME/../.claude/hooks/…`)" and routes the REMOVAL side
+# around the missing spelling — which left the REPOINTING side unreachable, so a
+# suite that BINDS a retired program's path and spends the variable later had no
+# landable edit in either direction. Measured on `tests/tree-clean.bats`: the
+# binding line is removable (the bare stem matches `naming_forms`) while the spend
+# line `run "$VERIFIED"` is neither an admitted removal nor an admitted
+# repointing, so retiring `mise-tasks/verified.sh` broke a surviving suite with no
+# way to repair it. CLOUD-843 retires ~130 programs and most carry such a suite.
+#
+# ANCHORED AT BOTH ENDS for the reason the row above is, and the traversal is
+# bounded to path segments: no command substitution, no quote, no space, so the
+# span this admits can only ever be a literal path rooted at the suite's own
+# directory. The module removes the `/<name>` tail before matching, exactly as it
+# does for the row above.
+[[pattern]]
+id = "bats-suite-directory"
+regex = '^\$\{?BATS_TEST_DIRNAME\}?(/[A-Za-z0-9._-]+)*$'
+
 # THE SUBCOMMAND TAIL of a task-name invocation (CLOUD-1299).
 #
 # `shell-retirement`'s repointing arm could only recognise a span that named its

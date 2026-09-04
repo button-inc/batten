@@ -180,6 +180,7 @@ mod ratchet;
 mod raw_tracker_read;
 mod ready;
 mod rebase;
+mod receipt_verified;
 mod reclaim_report_once;
 mod record_closes;
 mod redirect_resolves;

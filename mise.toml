@@ -2996,6 +2996,35 @@ run = "hk check --all"
 # "could not look", which every reader treats as "do not strand the head" rather
 # than as a verdict — so a future code cannot be read as green, and cannot be
 # read as red either.
+# CLOUD-1148's first retirement, and the shim is the whole of why the task name
+# survives. `mise-tasks/verified.sh` is gone; `batten receipt verified` composes
+# the same three reads — a `verify` receipt for this exact HEAD, a
+# `linear-check` receipt, and the `origin/main` it was taken against still being
+# current — through `receipt::validity`, which is the one implementation of that
+# predicate rather than a second reader of the same files.
+#
+# THE EXIT CODES ARE TRANSLATED, AND THAT IS NOT A WORKAROUND. The engine has one
+# table with no per-verb exception (non-negotiable rule 5): `2` is the policy
+# verdict everywhere, and `1`/`3` are the only codes a Batten failure produces.
+# The predecessor spelled an unverified head `1` and an unusable checkout `2` —
+# the table inverted. Callers read the old numbers, so this maps them back, which
+# is the shim shape CLOUD-1170 established and the reason `land.sh` and
+# `tests/tree-clean.bats` need no edit to keep working.
+[tasks."verified"]
+description = "Gate: is HEAD verified? Answers from the receipts, so no shell idiom can mask the verdict"
+shell = "bash -c"
+run = '''
+set -uo pipefail
+rc=0
+cargo run --quiet -p batten -- receipt verified || rc=$?
+case "$rc" in
+0) exit 0 ;;
+2) exit 1 ;;
+1) exit 2 ;;
+*) exit "$rc" ;;
+esac
+'''
+
 [tasks."checks-green"]
 description = "Is this SHA green over the required check set? (0 green / 1 red / 2 could not look / 3 no answer yet)"
 shell = "bash -c"

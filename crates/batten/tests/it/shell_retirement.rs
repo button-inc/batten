@@ -472,6 +472,90 @@ fn an_edit_repointing_a_task_name_at_the_declared_invocation_is_admitted() {
     );
 }
 
+/// **A `.bats` suite binding its subject through `$BATS_TEST_DIRNAME`**, which is
+/// the one spelling of "this file's own directory" the module could not resolve.
+///
+/// Arm 2b. The suite binds the retired path in `setup()` and spends `"$GATE"` in
+/// a case, so the spend line carries no path, no naming form and no variable the
+/// module could resolve — the binding was removable and the spend was not, in
+/// either direction. Measured on `tests/tree-clean.bats` while retiring
+/// `mise-tasks/verified.sh`: a SURVIVING suite broken by a retirement with no
+/// landable repair.
+///
+/// The second tier rather than a `with input as` case for the reason this file
+/// exists: the arm reads a `[[pattern]]` row, so a fixture supplying the pattern
+/// vocabulary itself would pass over a row `batten.toml` does not carry.
+#[test]
+fn a_bats_suite_binding_its_subject_by_test_dirname_can_be_repointed() {
+    let root = repo(
+        "bats-dirname-repointed",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "tests/pinned.bats",
+                "setup() {\n  GATE=\"$BATS_TEST_DIRNAME/../mise-tasks/old-gate.sh\"\n  cd /tmp\n}\n@test \"it holds\" {\n  run \"$GATE\"\n}\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "tests/pinned.bats",
+                    "setup() {\n  cd /tmp\n}\n@test \"it holds\" {\n  run batten claim bot\n}\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger_running("mise-tasks/old-gate.sh", "batten claim bot"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "a suite spelling its subject relative to its own directory may be \
+         repointed at the declared invocation: {:?}",
+        findings(&root)
+    );
+}
+
+/// ANTI-VACUITY for arm 2b: the head must be the SUITE'S OWN directory.
+///
+/// Without the anchored pattern the arm resolves a variable bound to anywhere at
+/// all, and repointing a reference into somebody else's tree — which no
+/// retirement here owns — becomes admissible. Same edit as the case above, one
+/// variable different.
+#[test]
+fn a_bats_binding_outside_the_suite_directory_is_refused() {
+    let root = repo(
+        "bats-dirname-foreign",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "tests/pinned.bats",
+                "setup() {\n  GATE=\"$OTHER_TREE/../mise-tasks/old-gate.sh\"\n  cd /tmp\n}\n@test \"it holds\" {\n  run \"$GATE\"\n}\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "tests/pinned.bats",
+                    "setup() {\n  cd /tmp\n}\n@test \"it holds\" {\n  run batten claim bot\n}\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger_running("mise-tasks/old-gate.sh", "batten claim bot"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        !findings(&root).is_empty(),
+        "a binding that names somebody else's tree is not a reference this \
+         retirement owns, so repointing it is a rewrite"
+    );
+}
+
 /// ANTI-VACUITY for the case above, and the one CLOUD-1299 names by hand: an arm
 /// that admitted any span merely CONTAINING a naming form would be the licence
 /// the module refuses in as many words. This edit repoints the same span AND
