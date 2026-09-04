@@ -251,6 +251,7 @@ violation contains {
 	release_config
 	object.get(release_config, ["pr", "pr_draft"], false) != true
 	object.get(release_config, ["pr_draft"], false) != true
+
 	# `[workspace]` IS WHERE release-plz ACTUALLY READS IT, and its absence here
 	# was a false positive this clause could not report because the module was
 	# silent (measured 2026-09-04, found by repairing the `manifest` binding

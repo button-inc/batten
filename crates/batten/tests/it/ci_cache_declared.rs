@@ -86,8 +86,7 @@ fn install_module(root: &Path) {
         .canonicalize()
         .expect("the committed module is where the row says it is");
     fs::create_dir_all(root.join("policy")).expect("scratch policy dir");
-    fs::copy(source, root.join("policy/ci-cache-declared.rego"))
-        .expect("install committed module");
+    fs::copy(source, root.join("policy/ci-cache-declared.rego")).expect("install committed module");
 }
 
 fn findings(root: &Path) -> Vec<(String, Option<usize>)> {
@@ -212,7 +211,10 @@ fn the_fixture_shape_is_clean_too() {
     // one that discriminates, until something is supposed to pass.
     let root = tree("clean", MANIFEST, &[("warm.yml", WARM), ("pr.yml", READER)]);
     let found = findings(&root);
-    assert!(found.is_empty(), "the paired fixture should be clean: {found:?}");
+    assert!(
+        found.is_empty(),
+        "the paired fixture should be clean: {found:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -229,7 +231,11 @@ fn a_shared_key_carrying_a_content_hash_is_refused() {
         "shared-key: ci-",
         "shared-key: ci-${{ hashFiles('Cargo.toml') }}",
     );
-    let root = tree("hashed", MANIFEST, &[("warm.yml", WARM), ("pr.yml", &hashed)]);
+    let root = tree(
+        "hashed",
+        MANIFEST,
+        &[("warm.yml", WARM), ("pr.yml", &hashed)],
+    );
     let found = findings(&root);
     assert!(
         found
@@ -249,7 +255,11 @@ fn the_offending_key_is_pointed_at_by_line() {
         "shared-key: ci-",
         "shared-key: ci-${{ hashFiles('Cargo.toml') }}",
     );
-    let root = tree("pointed", MANIFEST, &[("warm.yml", WARM), ("pr.yml", &hashed)]);
+    let root = tree(
+        "pointed",
+        MANIFEST,
+        &[("warm.yml", WARM), ("pr.yml", &hashed)],
+    );
     let found = findings(&root);
     assert!(
         found.iter().any(|(_, line)| line.is_some()),
@@ -360,7 +370,11 @@ fn a_pull_request_writer_of_a_warmed_family_is_refused() {
     // to finish becomes the entry every later reader inherits — and a
     // pull-request write is unreadable by every other pull request regardless.
     let writes = READER.replace("          save-if: false\n", "");
-    let root = tree("writer", MANIFEST, &[("warm.yml", WARM), ("pr.yml", &writes)]);
+    let root = tree(
+        "writer",
+        MANIFEST,
+        &[("warm.yml", WARM), ("pr.yml", &writes)],
+    );
     let found = findings(&root);
     assert!(
         !found.is_empty(),
@@ -378,7 +392,11 @@ fn an_unwarmed_family_may_still_be_written() {
     let writes = READER
         .replace("          save-if: false\n", "")
         .replace("shared-key: ci-", "shared-key: cross-");
-    let root = tree("unwarmed", MANIFEST, &[("warm.yml", WARM), ("pr.yml", &writes)]);
+    let root = tree(
+        "unwarmed",
+        MANIFEST,
+        &[("warm.yml", WARM), ("pr.yml", &writes)],
+    );
     let found = findings(&root);
     assert!(
         found.is_empty(),
@@ -394,7 +412,11 @@ fn the_engine_reads_a_quoted_save_if_as_read_only() {
     // tier can settle which the engine hands over, because a `with input as`
     // case picks the type itself.
     let quoted = READER.replace("save-if: false", "save-if: 'false'");
-    let root = tree("quoted", MANIFEST, &[("warm.yml", WARM), ("pr.yml", &quoted)]);
+    let root = tree(
+        "quoted",
+        MANIFEST,
+        &[("warm.yml", WARM), ("pr.yml", &quoted)],
+    );
     let found = findings(&root);
     assert!(
         found.is_empty(),
@@ -412,7 +434,11 @@ fn an_unparsed_workflow_is_could_not_look() {
     // the engine rather than with `with input as` because that fabricates
     // `input.tree.missing` — the exact channel CLOUD-1049 found dead while every
     // module's own suite was green over it.
-    let root = tree("unparsed", MANIFEST, &[("warm.yml", WARM), ("pr.yml", READER)]);
+    let root = tree(
+        "unparsed",
+        MANIFEST,
+        &[("warm.yml", WARM), ("pr.yml", READER)],
+    );
     common::write(
         &root,
         ".github/workflows/broken.yml",
