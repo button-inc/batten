@@ -46,7 +46,14 @@ jobs:
   commit-lint:
     name: commit-lint
     if: ${{ github.event.pull_request.draft == false }}
-    runs-on: ubuntu-latest
+    # ARM64, AS ONE SET WITH THE REST OF THE `ci-` FAMILY (CLOUD-1416). This job
+    # became a reader of that family in the step below, and rust-cache puts
+    # `runnerOS-runnerArch` inside the restore prefix (`config.ts:93`, before
+    # `:133`) — so moving it while `cache-warm-linux` stayed on x64 would hand it
+    # no warm entry at all, which is worse than the cold build it is replacing.
+    # `ci.yml`'s `ci` job carries the reasoning and the list of jobs that
+    # deliberately do NOT move.
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 10 # budget: grandfathered measured=2026-08-10
     # `actions: write` is here for one call and one only: cancelling THIS run
     # when the landing lease does not authorise this branch (CLOUD-420). A job

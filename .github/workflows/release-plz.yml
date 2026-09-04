@@ -137,7 +137,15 @@ jobs:
   # AGENTS.md actually forbids.
   cache-warm-linux:
     name: cache-warm-linux
-    runs-on: ubuntu-latest
+    # ARM64, AND THIS IS THE JOB THAT MAKES THE OTHERS' MOVE SAFE (CLOUD-1416).
+    # `runnerOS-runnerArch` lands at `config.ts:93`, INSIDE the prefix assigned to
+    # `restoreKey` at `:133`, so the `ci-` family's readers and its one writer are
+    # a single set: move any of them alone and the readers restore nothing. The
+    # readers are `ci` and `bats` (ci.yml) and `commit-lint` (commit-lint.yml),
+    # all now `ubuntu-24.04-arm`.
+    #
+    # `cache-warm-windows` below is a DIFFERENT family and stays where it is.
+    runs-on: ubuntu-24.04-arm
     # No measured p95 exists for a job that has never run. Written
     # `grandfathered` deliberately rather than guessing a number this file would
     # then present as measured; CLOUD-352 owns replacing it once the runs exist.

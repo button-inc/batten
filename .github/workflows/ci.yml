@@ -54,7 +54,35 @@ jobs:
   ci:
     name: ci
     if: ${{ github.event.pull_request.draft == false }}
-    runs-on: ubuntu-latest
+    # ARM64, AND THE WRITER MOVES WITH THE READERS (CLOUD-1416). rust-cache puts
+    # `runnerOS-runnerArch` at `config.ts:93`, BEFORE the restore prefix is
+    # assigned at `:133` — so a reader on arm64 whose family's writer is still on
+    # x64 has no warm entry at all and is dramatically worse off than before.
+    # `ci`, `bats`, `commit-lint` and `cache-warm-linux` are the whole `ci-`
+    # family and move as one set.
+    #
+    # WHAT DELIBERATELY DOES NOT MOVE. `perf` builds both arms and compares them,
+    # so an architecture change invalidates comparability and its base entry.
+    # `cross`, `semver` and `darwin-link` stay on x64 because `cargo-zigbuild` is
+    # the one tool pinned through the unchecksummed `ubi:` backend (CLOUD-281),
+    # making it the least verified on this architecture, and this change is
+    # already dense. Windows is unaffected.
+    #
+    # THE USUAL OBJECTION DOES NOT APPLY: `lock-complete` already requires every
+    # locked tool to install on linux-arm64 as one of its three mandatory
+    # platforms, so the tool surface is proven here by a standing gate and a
+    # failure would be a `lock-complete` finding rather than a surprise.
+    # `darwin-link` additionally proves the cross-compilation path works from a
+    # Linux host. The runners are free and unlimited on public repositories,
+    # which this became on 2026-09-03, and carry identical specifications to
+    # their x64 counterparts — 4 CPUs, 16 GB RAM, 14 GB storage.
+    #
+    # THE BUDGET BELOW IS STILL AN x64 READING and is owed a re-derivation from
+    # the first arm64 runs, recorded on CLOUD-1420. It is carried rather than
+    # guessed because the expected direction is faster, which makes an x64-derived
+    # ceiling a weaker backstop rather than a tighter one — the safe direction to
+    # be wrong in, and still the wrong number.
+    runs-on: ubuntu-24.04-arm
     # RE-MEASURED IN THE SAME PASS AS THE POLE (CLOUD-386). The 2026-08-14 reading
     # declared `p95=701s`; `mise run timeout-drift` over the last 25 successful runs
     # now reports 1730s — stale by 2.4x, with only the x3 multiplier keeping the
@@ -510,7 +538,13 @@ jobs:
   bats:
     name: bats
     if: ${{ github.event.pull_request.draft == false }}
-    runs-on: ubuntu-latest
+    # ARM64, AS ONE SET WITH THE REST OF THE `ci-` FAMILY (CLOUD-1416). rust-cache
+    # puts `runnerOS-runnerArch` inside the restore prefix (`config.ts:93`,
+    # before `:133`), so a reader that moves while its family's writer stays put
+    # has no warm entry at all. The `ci` job's header carries the reasoning, the
+    # list of jobs that deliberately do NOT move, and the note that every budget
+    # here is still an x64 reading owed a re-derivation.
+    runs-on: ubuntu-24.04-arm
     # DERIVED FROM THE STEP IT INHERITS, and stated because it is not yet this
     # job's own p95. `test:bats` is 1435.7s of the `ci` job's 1670.9s hk gate on
     # a runner (CLOUD-1084), and CLOUD-386's point D measured 623s for the suite
