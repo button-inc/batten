@@ -266,3 +266,115 @@ fn a_conflict_with_no_path_still_refuses() {
         "the finding names its own predicate, got {out}{err}"
     );
 }
+
+/// A gate program in the fixture that exits `code`, and the argv naming it.
+///
+/// A path rather than a bare name, because `$LAND_VERIFY` is split on whitespace
+/// and run as argv with no shell: `sh -c 'exit 0'` cannot survive that split, and
+/// a bare `true` would resolve against whatever the runner's `PATH` happens to
+/// carry — which is the harness answering a question about the engine.
+fn gate(repo: &Path, name: &str, code: i32) -> String {
+    let path = repo.join(name);
+    std::fs::write(&path, format!("#!/bin/sh\nexit {code}\n")).expect("write the gate");
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("make the gate executable");
+    }
+    path.display().to_string()
+}
+
+/// The lap record this branch has accumulated, or an empty string where the
+/// writer never reached it.
+fn lap_record(repo: &Path, branch: &str) -> String {
+    let dir = common::git_in(repo, &["rev-parse", "--git-dir"]);
+    let path = repo
+        .join(dir.trim())
+        .join("batten-receipts")
+        .join(format!("lap.{}", branch.replace('/', "-")));
+    std::fs::read_to_string(path).unwrap_or_default()
+}
+
+/// `batten land verify`, with the consumer's gate named in the environment.
+fn land_verify(repo: &Path, command: &str) -> (i32, String, String) {
+    let output = batten()
+        .args(["land", "verify"])
+        .env("LAND_VERIFY", command)
+        .current_dir(repo)
+        .output()
+        .expect("run batten land verify");
+    (
+        output.status.code().expect("exit code"),
+        stdout(&output),
+        stderr(&output),
+    )
+}
+
+/// **The verb was unreachable in every clone, and this is the pair that shows it.**
+///
+/// `land::verify` handed `exec::run_in` the caller's anchor — a literal `.` — and
+/// `exec`'s capture store is keyed by the repository's own directory NAME, which
+/// `state::derive_repo_name` cannot read off `.`. So the boundary refused before
+/// starting anything, on EVERY invocation, and the `None` arm wrapped that
+/// `UsageError` in a context naming the gate. Measured against the shipped
+/// binary: a passing gate and a refusing gate produced byte-identical output and
+/// the same exit `1`.
+///
+/// **The pair is what discriminates, and neither half alone does.** Asserting only
+/// the clean arm passes over an engine that reports success without running
+/// anything; asserting only the refusal passes over one that cannot run anything
+/// at all — which is precisely the state this repairs. The record is asserted
+/// too, because an exit code alone cannot tell "the gate ran and passed" from
+/// "nothing ran and nobody wrote it down".
+#[test]
+fn a_configured_gate_is_actually_run_and_its_two_answers_are_told_apart() {
+    let repo = repo("land-verify-runs");
+    let branch = branch_of(&repo);
+
+    let (code, out, err) = land_verify(&repo, &gate(&repo, "passes.sh", 0));
+    assert_eq!(code, 0, "a gate that passed is exit 0: {err}{out}");
+    let record = lap_record(&repo, &branch);
+    assert!(
+        record.contains("verify clean "),
+        "the clean answer reaches the record, got {record:?}"
+    );
+
+    // THE MIRROR, on the SAME branch, so the record is a history rather than a
+    // replacement — and so the two answers are told apart by their own column
+    // rather than by which fixture produced them.
+    let (code, out, err) = land_verify(&repo, &gate(&repo, "refuses.sh", 1));
+    assert_eq!(
+        code, 2,
+        "a gate that refused is the policy verdict, not an error: {err}{out}"
+    );
+    let record = lap_record(&repo, &branch);
+    assert!(
+        record.contains("verify refused "),
+        "the refusal reaches the record as its own token, got {record:?}"
+    );
+}
+
+/// The anti-vacuity half of the pair above, and a different failure.
+///
+/// An unconfigured gate is a USAGE error — exit `1` — and it must stay
+/// distinguishable from both answers above. Without this, the repair could be
+/// "always report clean", which the pair above would not catch: `$LAND_VERIFY`
+/// naming nothing is the one case where refusing to guess is the whole behaviour,
+/// since a default compiled into this crate would be non-negotiable rule 1's
+/// plainest violation.
+#[test]
+fn an_unconfigured_gate_refuses_rather_than_guessing_and_writes_no_record() {
+    let repo = repo("land-verify-unconfigured");
+    let branch = branch_of(&repo);
+
+    let (code, _out, err) = land_verify(&repo, "");
+    assert_eq!(code, 1, "an unconfigured gate is a usage error: {err}");
+    assert!(
+        err.contains("LAND_VERIFY"),
+        "the refusal names the variable the caller must set, got {err}"
+    );
+    assert!(
+        lap_record(&repo, &branch).is_empty(),
+        "a lap that never ran a gate records no verdict about one"
+    );
+}
