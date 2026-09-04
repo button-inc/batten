@@ -1,7 +1,18 @@
 #MUTANT-SUITE crates/batten/tests/it/lock_complete.rs
 #MUTANT residue-unread|s@not platform in known_platforms@false@|a_platform_key_mise_does_not_emit_is_reported
 #MUTANT required-platform-unread|s@count(names) > 0@false@|a_required_platform_missing_entirely_is_reported
-#MUTANT stale-pin-prefix-not-boundary|s@sprintf("%s.", \[pin\])@pin@|a_pin_its_entry_does_not_name_is_reported
+# THE CASE HAS TO BE DECIDED OPPOSITELY BY THE TWO SPELLINGS (CLOUD-1444). This
+# row turns the component-boundary test into a plain prefix test, and it used to
+# name `a_pin_its_entry_does_not_name_is_reported` — a case pinning `2.0.0`
+# against an unrelated locked version, which is stale either way. Every other
+# case in the suite locks `1.0.0` and pins an exact match or a clean extension,
+# so all of them agree under both spellings too, and the row survived every
+# sweep over a suite that could not observe it.
+#
+# The case below is the module's own example made runnable: `1.97.1` locked
+# against pin `1.9`. Under the boundary test `1.9.` is not a prefix and the pin
+# is reported; under a plain prefix test it is silently satisfied.
+#MUTANT stale-pin-prefix-not-boundary|s@sprintf("%s.", \[pin\])@pin@|a_pin_the_lock_extends_only_across_a_boundary_is_reported
 #
 # THE PREDECESSOR'S ROW, CARRIED RATHER THAN RETIRED.
 # `policy/lock-entry-complete.rego` declared this mutation against

@@ -7,7 +7,14 @@
 # from it.
 #MUTANT-SUITE crates/batten/tests/it/release_provision_parity.rs
 #MUTANT gap-may-go-undeclared|s@not declared_gap\[key\]@false@|an_undeclared_platform_gap_is_refused
-#MUTANT musl-may-not-map|s@"aarch64-unknown-linux-musl": "linux-aarch64",@@|a_musl_triple_maps_to_the_same_platform_key_as_gnu
+# THE ARCHITECTURE MUST BE THE ONE THE CASE PINS (CLOUD-1444). This row deleted
+# the `aarch64` musl mapping while `a_musl_triple_maps_to_the_same_platform_key_as_gnu`
+# pins `x86_64-unknown-linux-musl`, so the mutation removed a row that case never
+# resolves and its verdict could not move — `SURVIVED` on every sweep, over a
+# suite that was never given anything to see. The suite's own comment states the
+# intent correctly ("deleting the musl row from the map"); only the triple was
+# wrong, which is why this is a one-token repair and not a new case.
+#MUTANT musl-may-not-map|s@"x86_64-unknown-linux-musl": "linux-x86_64",@@|a_musl_triple_maps_to_the_same_platform_key_as_gnu
 
 # METADATA
 # description: |

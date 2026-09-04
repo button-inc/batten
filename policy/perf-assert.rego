@@ -49,8 +49,18 @@
 # expected to be stale between `perf` runs, so gating them would fail the repo for
 # the passage of time.
 #MUTANT-SUITE crates/batten/tests/it/perf_assert.rs
-#MUTANT over-budget-passes|s@to_number(measured) > budgets[id]@false@|an_over_budget_path_is_refused
-#MUTANT readme-budget-disagreement-passes|s@published[id] != budgets[id]@false@|a_readme_publishing_a_different_budget_is_refused
+# A `[` IS A BRACKET EXPRESSION UNTIL IT IS ESCAPED (CLOUD-1445). Both rows below
+# read `budgets[id]` as `budgets` followed by one character from {i,d}, which
+# occurs nowhere in this file — so `sed` matched nothing, the staged copy came out
+# byte-identical, and the first sweep reported `inert-mutation`: a gate listed in
+# `$MUTANT_GATES`, reading as covered, that had never tested one byte of behaviour.
+#
+# THE THIRD ROW IS THE CONTROL and is deliberately left as it is. It names no
+# bracket, it applies, and it was the only one of the three the sweep did not
+# report — which is what identifies the cause as the escaping rather than the
+# predicate.
+#MUTANT over-budget-passes|s@to_number(measured) > budgets\[id\]@false@|an_over_budget_path_is_refused
+#MUTANT readme-budget-disagreement-passes|s@published\[id\] != budgets\[id\]@false@|a_readme_publishing_a_different_budget_is_refused
 #MUTANT absent-budgeted-path-passes|s@not id in object.keys(judged)@false@|a_budgeted_path_absent_from_a_present_record_is_refused
 
 # METADATA

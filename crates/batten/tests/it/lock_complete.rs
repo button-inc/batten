@@ -94,7 +94,19 @@ const RULE: &str = "lock-complete";
 
 /// A lockfile entry for one tool, complete for whichever platforms are named.
 fn tool_with(name: &str, platforms: &[&str]) -> String {
-    let mut out = format!("[[tools.\"{name}\"]]\nversion = \"1.0.0\"\nbackend = \"aqua:x/t\"\n\n");
+    tool_with_version(name, "1.0.0", platforms)
+}
+
+/// The same, with the locked version chosen by the caller.
+///
+/// Split out for the component-boundary case (CLOUD-1444): every other case here
+/// locks `1.0.0`, and against that version a boundary test and a plain prefix
+/// test reach the same verdict for every pin the suite uses. A case that can tell
+/// them apart has to lock a version whose next component starts with the pin's
+/// last one, which no fixed version can supply.
+fn tool_with_version(name: &str, version: &str, platforms: &[&str]) -> String {
+    let mut out =
+        format!("[[tools.\"{name}\"]]\nversion = \"{version}\"\nbackend = \"aqua:x/t\"\n\n");
     for platform in platforms {
         // Bound to a local first: `push_str` of a `format!` is
         // `clippy::format_push_string`, which the workspace denies.
@@ -290,6 +302,35 @@ fn a_pin_its_entry_does_not_name_is_reported() {
         &[],
     );
     assert_eq!(code, Some(2), "a stale pin is a finding\n{said}");
+    assert!(
+        said.contains("lock-pin-stale"),
+        "the finding names its rule\n{said}"
+    );
+}
+
+#[test]
+fn a_pin_the_lock_extends_only_across_a_boundary_is_reported() {
+    // THE CASE `stale-pin-prefix-not-boundary` NEVER HAD (CLOUD-1444). That row
+    // rewrites `sprintf("%s.", [pin])` to `pin`, turning the component-boundary
+    // test into a plain prefix test — and every other case in this file is
+    // decided identically either way, so it survived every sweep over a suite
+    // structurally unable to observe it.
+    //
+    // The pair is the module's own: `1.9` must not be satisfied by `1.97.1`.
+    // Under the boundary test `1.9.` is not a prefix of `1.97.1`, so the pin is
+    // stale and reported; under a plain prefix test `1.9` IS a prefix, so the
+    // gate falls silent on exactly the pin the installer would reject.
+    let (code, said) = judge_repo(
+        "lock-complete-boundary",
+        &tool_with_version("t", "1.97.1", &["linux-x64", "linux-arm64", "macos-arm64"]),
+        &manifest("\"t\" = \"1.9\"\n"),
+        &[],
+    );
+    assert_eq!(
+        code,
+        Some(2),
+        "an extension that is not at a component boundary is stale\n{said}"
+    );
     assert!(
         said.contains("lock-pin-stale"),
         "the finding names its rule\n{said}"

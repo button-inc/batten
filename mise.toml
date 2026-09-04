@@ -3091,7 +3091,11 @@ description = "Record what a long-running task is doing, so its liveness and pha
 # translation written inline after the command, put every argument after `esac`
 # and every call died with `Syntax error: word unexpected`. Naming the body and
 # calling it last is what gives the appended arguments a call to land in.
-run = "translate() { batten task \"$@\" || case $? in 2) exit 1 ;; 3) exit 2 ;; *) exit $? ;; esac; }; translate"
+# The same two codes, for `singleton`'s reason (CLOUD-1442): an absent binary is
+# could-not-look, never a verdict about a registry entry. Every caller here is
+# `|| true`, so this one never stops a land — which is exactly why it would
+# otherwise go unnoticed, and why the diagnosis is worth printing.
+run = "translate() { batten task \"$@\" || case $? in 2) exit 1 ;; 3) exit 2 ;; 126 | 127) echo '::error:: task-registry: batten is not on PATH, so nothing could look. Run `mise run install:local`.' >&2; exit 2 ;; *) exit $? ;; esac; }; translate"
 
 [tasks.singleton]
 description = "Refuse to start a task that is already running in this clone, naming the process that holds it"
@@ -3114,7 +3118,16 @@ description = "Refuse to start a task that is already running in this clone, nam
 # comment records: mise appends a task's arguments to the end of the `run`
 # string, so a body ending in `esac` puts them after it and every call is a
 # syntax error.
-run = "translate() { batten singleton \"$@\" || case $? in 2) exit 1 ;; 3) exit 2 ;; *) exit $? ;; esac; }; translate"
+# 126 AND 127 ARE NOT VERDICTS, and passing them through made an absent binary
+# indistinguishable from a held lock (CLOUD-1442). `land.sh:892` reads ANY
+# non-zero as held and says "refusing to start a second land in this clone — the
+# live one is named above", so a container whose provisioning never installed
+# `batten` sent the reader hunting a process that does not exist; measured
+# 2026-09-04, with `pgrep` finding no land at all. The exit code cannot fix it —
+# `land.sh` is a governed program and every non-zero reaches the same `die` — so
+# the diagnosis is printed HERE, above the line that misreads it. Distinguishing
+# the two in the CALLER needs the retirement CLOUD-1338 owns.
+run = "translate() { batten singleton \"$@\" || case $? in 2) exit 1 ;; 3) exit 2 ;; 126 | 127) echo '::error:: singleton: batten is not on PATH, so nothing could look. Run `mise run install:local`. Any refusal printed below this line is NOT a second land.' >&2; exit 2 ;; *) exit $? ;; esac; }; translate"
 
 [tasks.alive]
 description = "What batten tasks are running right now, and what phase each is in — one call, no log reading"

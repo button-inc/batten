@@ -42,7 +42,13 @@
 # themselves mediated calls — so promotion is a step taken once, on purpose, with
 # a measurement behind it.
 #MUTANT-SUITE crates/batten/tests/it/repetition.rs
-#MUTANT run-may-go-unbounded|s@^	input.facts.extracted["agent-turn-run"] >= threshold$@	false@|a_monologue_run_is_reported
+# THE BRACKETS ARE ESCAPED, and were not (CLOUD-1445). `sed` read
+# `["agent-turn-run"]` as a bracket expression — one character from the set those
+# letters spell — so the pattern matched nothing, the staged copy was
+# byte-identical, and the first sweep reported `inert-mutation`. The row below it
+# names no bracket, applies, and was not reported: that pair is what located the
+# cause in the escaping rather than in the predicate.
+#MUTANT run-may-go-unbounded|s@^	input.facts.extracted\["agent-turn-run"\] >= threshold$@	false@|a_monologue_run_is_reported
 #MUTANT threshold-may-slip|s@^threshold := 3$@threshold := 2@|two_turns_in_a_row_is_not_a_run
 
 # METADATA

@@ -1,6 +1,16 @@
 #MUTANT-SUITE crates/batten/tests/it/hook_skip_local.rs
 #MUTANT skip-assignment-unread|s@^\tsome word in segment.words$@\tsome word in []@|a_local_step_skip_is_refused
-#MUTANT ci-carve-unread|s@^\tnot ci_lane$@\tfalse@|the_declared_ci_carve_is_not_judged_here
+# INVERTED RATHER THAN FALSIFIED, and the difference is the whole row (CLOUD-1444).
+# This mutation used to substitute `false`, which removes the last conjunct and so
+# removes EVERY violation — and the case it names asserts the carve is ALLOWED. A
+# mutation that denies nothing cannot be observed by a case asserting nothing is
+# denied, so it reported `SURVIVED` on every sweep and blamed a suite that was
+# structurally unable to see it.
+#
+# `ci_lane` inverts the exemption instead: under mutation the carve is the one
+# thing REFUSED, which is exactly what `the_declared_ci_carve_is_not_judged_here`
+# checks. Same conjunct, same case, and now falsifiable.
+#MUTANT ci-carve-unread|s@^\tnot ci_lane$@\tci_lane@|the_declared_ci_carve_is_not_judged_here
 # Switching a gate off for a local commit is a decision, not a flag (CLOUD-1340).
 #
 # MEASURED ON THE BRANCH THAT FILED IT, and the incident is the whole reason this

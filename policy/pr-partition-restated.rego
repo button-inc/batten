@@ -191,5 +191,12 @@ test_an_absent_source_answers_nothing if {
 }
 
 #MUTANT-SUITE crates/batten/tests/it/pr_partition_restated.rs
-#MUTANT partition-unread|s@\tregex.match\(data.batten.patterns\["pr-partition-prose"\], line\)@\tfalse@|a_matching_line_is_refused
+# THE CASE NAME, NOT THE EXPRESSION (CLOUD-1445). This row's brackets were always
+# escaped correctly, so the mutation applied — and the first sweep still reported
+# `names-no-case`, because `a_matching_line_is_refused` is a case this suite does
+# not carry and never did. The filter selected nothing, so the row proved nothing
+# while the gate read as covered. `a_unit_landing_separately_is_refused` is a real
+# case asserting exactly the refusal this mutation destroys, which is what makes
+# it discriminating rather than merely resolvable.
+#MUTANT partition-unread|s@\tregex.match\(data.batten.patterns\["pr-partition-prose"\], line\)@\tfalse@|a_unit_landing_separately_is_refused
 #MUTANT missing-channel-silent|s@\tcause == "unreadable"@\tfalse@|an_unreadable_source_is_reported_rather_than_passed
