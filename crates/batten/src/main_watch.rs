@@ -212,6 +212,7 @@ mod tests {
             status: 200,
             etag: Some(String::from("W/\"a\"")),
             poll_floor: None,
+            backoff: None,
             body: format!("{{\"object\":{{\"sha\":\"{sha}\"}}}}"),
         }
     }
@@ -221,6 +222,7 @@ mod tests {
             status,
             etag: Some(String::from("W/\"a\"")),
             poll_floor: floor,
+            backoff: None,
             body: body.to_owned(),
         }
     }

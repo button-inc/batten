@@ -3825,7 +3825,7 @@ const RECEIPT_DIR: &str = "batten-receipts";
 
 /// Seconds since the epoch, or zero where the clock will not read — a timestamp
 /// nobody can produce is recorded as one rather than refusing the claim.
-fn now_unix() -> u64 {
+pub(crate) fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs())
