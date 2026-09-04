@@ -139,18 +139,26 @@ jobs:
           LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LEASE_RUN_ID: ${{ github.run_id }}
         run: |
-          body=$(gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition.sh?ref=main") || exit 0
-          # `|| exit 0` on BOTH lines, and the second is the one that was missing
-          # (CLOUD-420). A fetch that fails is handled; a fetch that SUCCEEDS with
-          # something that is not shell was not — a truncated body, a proxy error
-          # page returned 200, or a bad edit to the trunk copy makes this a syntax
-          # error in the FIRST step of every job. The step reds under the runner's
-          # default `bash -e {0}`, `final` fails its `needs:` assertion under
-          # `always()`, and `land` re-drafts a healthy PR — fleet-wide, from one bad
-          # response. The precondition's own header promises it never exits
-          # non-zero; this is what makes that true at the call site too.
-          bash -c "$body" || exit 0
+          # `|| exit 0` ON EVERY LINE, and the reason outlives the shell it was
+          # written for (CLOUD-420). A step that reds makes the RUN's conclusion
+          # `failure` rather than `cancelled`; `final` then runs under
+          # `!cancelled()`, fails its `needs:` assertion, and `land` re-drafts a
+          # healthy PR — fleet-wide, from one bad response. `batten lease guard`
+          # promises it never exits non-zero; these are what make that true at the
+          # call site too, for the cases the promise cannot cover: a binary that
+          # will not download and one that will not run are different failures
+          # from one that ran and decided.
+          #
+          # THE VERSION IS TRUNK'S, NEVER THIS HEAD'S. The installer comes from
+          # trunk and resolves the version from trunk's own manifest, which is the
+          # property the fetched-script design protected by reading its logic from
+          # trunk — a head cannot pin an older guard for itself.
+          installer=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
+          printf '%s\n' "$installer" | \
+            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" sh || exit 0
+          "$RUNNER_TEMP/batten-bin/batten" lease guard \
+            "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
 
       # RECLAIM RUNNER DISK, BEFORE ANYTHING WRITES ITS OWN GIGABYTES.
       #
@@ -641,9 +649,12 @@ jobs:
           LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LEASE_RUN_ID: ${{ github.run_id }}
         run: |
-          body=$(gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition.sh?ref=main") || exit 0
-          bash -c "$body" || exit 0
+          installer=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
+          printf '%s\n' "$installer" | \
+            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" sh || exit 0
+          "$RUNNER_TEMP/batten-bin/batten" lease guard \
+            "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -774,9 +785,12 @@ jobs:
           LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LEASE_RUN_ID: ${{ github.run_id }}
         run: |
-          body=$(gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition.sh?ref=main") || exit 0
-          bash -c "$body" || exit 0
+          installer=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
+          printf '%s\n' "$installer" | \
+            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" sh || exit 0
+          "$RUNNER_TEMP/batten-bin/batten" lease guard \
+            "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -927,9 +941,12 @@ jobs:
           LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LEASE_RUN_ID: ${{ github.run_id }}
         run: |
-          body=$(gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition.sh?ref=main") || exit 0
-          bash -c "$body" || exit 0
+          installer=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
+          printf '%s\n' "$installer" | \
+            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" sh || exit 0
+          "$RUNNER_TEMP/batten-bin/batten" lease guard \
+            "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

@@ -105,6 +105,11 @@ usage() {
 
 		Environment:
 		  BATTEN_VERSION       tag to install (e.g. v0.0.61); default: latest
+		  BATTEN_VERSION_FROM_REF
+		                       read the version from this ref's Cargo.toml and
+		                       install that tag, falling back to the latest
+		                       release when the tag has none. Ignored when
+		                       BATTEN_VERSION is set.
 		  BATTEN_TARGET        override target detection
 		  BATTEN_INSTALL_DIR   destination; default \${XDG_BIN_HOME:-\$HOME/.local/bin}
 		  BATTEN_GITHUB_TOKEN  token for the release API (also GH_TOKEN,
@@ -543,30 +548,75 @@ main() {
 	# An unreadable release is "could not look" (2), never "this release is
 	# broken" (1): a network blip and an unauthorized token are both environment,
 	# and reporting them as a bad release points the reader at the wrong thing.
-	# BOTH RESOLVERS GUARD THEIR OWN BODIES, because calling one as a condition
-	# SUSPENDS `set -e` inside it — and so does `f || x=$?`, which is why the
-	# first attempt at this fix was no fix. A local fault (`flatten` unable to
-	# write, `awk` missing) would otherwise stop aborting and fall through to
-	# the "release carries no asset" refusal: exit 1 blaming the release for a
-	# problem on this machine, where 2 (could not look) is the honest answer.
-	# The remedy is `|| die 2` on every internal command, never a call shape.
-	if ! resolve_via_api; then
-		[ -n "$WEB_FALLBACK" ] ||
-			die 2 "cannot read the release list from $REPO at $API. If you are being rate-limited, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN."
-		resolve_via_web || case $? in
-		3)
-			# Both absences reach here and the message names neither
-			# specifically, because the remedy is one: no `SHA256SUMS` at all,
-			# and a `SHA256SUMS` with no row for this asset, are the same
-			# statement about the release — it does not publish the digest this
-			# script refuses to install without.
-			die 1 "release $tag publishes no sha256 for $asset, and this script does not install unverified bytes. Re-run release-artifacts.yml against that tag; uploads are idempotent."
-			;;
-		*)
-			die 2 "cannot read release metadata for $REPO from either $API or $WEB. If the API is rate-limiting this address, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN; if the repository is private, a token is required."
-			;;
-		esac
+	# THE PIN MAY COME FROM A REF, AND THAT IS THE CI GUARD'S WHOLE PROPERTY
+	# (CLOUD-420). `batten lease guard` runs as the FIRST step of every
+	# `pull_request` job, before any checkout — so the version it runs must be
+	# decided by TRUNK and not by the head's own workflow file, which is what the
+	# fetched-script design it replaces protected by reading its logic from trunk.
+	# `BATTEN_VERSION_FROM_REF` names that ref; an explicit `BATTEN_VERSION` still
+	# wins, because a caller naming a version means it.
+	from_ref=""
+	if [ -z "${BATTEN_VERSION:-}" ] && [ -n "${BATTEN_VERSION_FROM_REF:-}" ]; then
+		if api_get "$API/repos/$REPO/contents/Cargo.toml?ref=${BATTEN_VERSION_FROM_REF}" \
+			"application/vnd.github.raw" "$tmp/manifest.toml"; then
+			# The workspace root's `version`, first match: the anchored form cannot
+			# pick up a dependency's version, which is never at column 0.
+			pinned=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$tmp/manifest.toml" | head -n 1)
+			[ -z "$pinned" ] || from_ref="v$pinned"
+			[ -z "$from_ref" ] || BATTEN_VERSION="$from_ref"
+		fi
+		[ -n "${BATTEN_VERSION:-}" ] ||
+			echo "install.sh: could not read a version from ${BATTEN_VERSION_FROM_REF}; using the latest release" >&2
 	fi
+
+	# THE REF-DERIVED PIN MAY NAME A TAG THAT DOES NOT EXIST YET, and one retry
+	# with it cleared is what keeps the CI guard running a batten at all.
+	# release-plz bumps the manifest BEFORE publishing the tag, so trunk's version
+	# routinely names an unreleased release — and the step-0 guard swallows a
+	# failure by design, so a hard stop here would be silent. An explicitly named
+	# `BATTEN_VERSION` never falls back: a caller who named a version wants that
+	# version or an error, which is why only `from_ref` reaches this arm.
+	if ! resolve_via_api; then
+		# THE REF-DERIVED PIN MAY NAME A TAG THAT DOES NOT EXIST YET, and one
+		# retry with it cleared is what keeps the CI guard running a batten at
+		# all. release-plz bumps the manifest BEFORE publishing the tag, so
+		# trunk's version routinely names an unreleased release — and the step-0
+		# guard swallows a failure by design, so a hard stop here would be
+		# silent. An explicitly named `BATTEN_VERSION` never falls back: a caller
+		# who named a version wants that version or an error, which is why only a
+		# `from_ref` pin reaches this arm.
+		#
+		# Cleared by assignment rather than by an env prefix on the call: for a
+		# shell FUNCTION that prefix persists afterwards in POSIX sh, so the two
+		# spellings differ in what they leave behind and only this one says which
+		# it means. `resolve_via_web` reads the same variable, so clearing it is
+		# also what makes the fallback below ask for the latest.
+		retried=""
+		if [ -n "$from_ref" ]; then
+			echo "install.sh: ${from_ref} has no published release yet; using the latest instead" >&2
+			BATTEN_VERSION=""
+			from_ref=""
+			! resolve_via_api || retried=yes
+		fi
+		if [ -z "$retried" ]; then
+			[ -n "$WEB_FALLBACK" ] ||
+				die 2 "cannot read the release list from $REPO at $API. If you are being rate-limited, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN."
+			resolve_via_web || case $? in
+			3)
+				# Both absences reach here and the message names neither
+				# specifically, because the remedy is one: no `SHA256SUMS` at all,
+				# and a `SHA256SUMS` with no row for this asset, are the same
+				# statement about the release — it does not publish the digest this
+				# script refuses to install without.
+				die 1 "release $tag publishes no sha256 for $asset, and this script does not install unverified bytes. Re-run release-artifacts.yml against that tag; uploads are idempotent."
+				;;
+			*)
+				die 2 "cannot read release metadata for $REPO from either $API or $WEB. If the API is rate-limiting this address, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN; if the repository is private, a token is required."
+				;;
+			esac
+		fi
+	fi
+
 
 	api_get "$asset_url" "application/octet-stream" "$tmp/$asset" "$asset_anon" ||
 		die 2 "could not download $asset from $tag."
