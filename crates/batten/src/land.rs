@@ -627,6 +627,45 @@ pub fn verify(root: &Path, branch: &str, command: &[String]) -> Result<Verified>
     Ok(verified)
 }
 
+/// Has the base moved since this lap replayed onto it?
+///
+/// # Why this exists between the gate and the push
+///
+/// A gate runs for minutes, and on a busy trunk that is long enough for the base
+/// this lap replayed onto to move. The lap then pushes a head that can no longer
+/// fast-forward, CI grades it, and the whole matrix is spent learning what one
+/// ref read already knew. The predecessor measured the steady state at ~45% of
+/// laps paying a full gate to discover trunk had moved (CLOUD-423), and answered
+/// it by RACING the gate against a watcher so the gate could be aborted early.
+///
+/// **This is the cheaper half of that, and the difference is stated rather than
+/// absorbed.** It does not abort the gate — the gate runs to completion and its
+/// result is then discarded if the base moved. So the gate's minutes are still
+/// spent where the predecessor could reclaim them; what is saved is the CI matrix
+/// and the fast-forward round trip behind it, which is the metered half. Aborting
+/// early needs a stoppable poller racing a spawn, and `land::wait`'s own header
+/// records why that shape is not available without a second authority: a poller
+/// asked to stop mid-question has nobody to stop it.
+///
+/// # It fails OPEN, unlike every gate in this module
+///
+/// A ref read that did not answer is not evidence the base moved, and this is an
+/// ECONOMY rather than a gate: refusing to push because ref discovery hiccuped
+/// would stop a landing to save a matrix, which is the wrong trade in the wrong
+/// direction. `None` therefore means "carry on" for both *unmoved* and *could not
+/// look*, and the two are deliberately one reading here.
+#[must_use]
+pub fn stale(root: &Path, remote: &str, reference: &str) -> Option<String> {
+    let tracking = tracking_ref(reference);
+    // The base this lap actually replayed onto, read from the ref `advance` set
+    // rather than passed down through five signatures. Local, so it costs nothing
+    // and cannot itself fail to reach anybody.
+    let replayed_onto = crate::git::resolve_ref(root, &tracking).ok()??;
+    let advertisement = crate::lease::advertise(remote, crate::lease::Service::UploadPack).ok()?;
+    let now = advertisement.head_of(reference);
+    (now != replayed_onto).then(|| now.to_owned())
+}
+
 /// One step of the lap, named so the table below reads as a table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -786,6 +825,31 @@ mod lap_tests {
         assert_eq!(progress(Step::Replay, Internal), Progress::Stop);
         assert_eq!(progress(Step::Verify, Internal), Progress::Stop);
         assert_eq!(progress(Step::Push, Internal), Progress::Stop);
+    }
+
+    /// **The freshness probe fails OPEN, which is the opposite of every gate in
+    /// this module and is the whole of its correctness.**
+    ///
+    /// It is an economy, not a gate: it exists to avoid spending a CI matrix on
+    /// a head whose base moved. A ref read that did not answer is not evidence
+    /// the base moved, so reading could-not-look as "stale" would stop a landing
+    /// to save a matrix — the wrong trade in the wrong direction, and the one a
+    /// fail-closed reading makes by default.
+    ///
+    /// Driven over a clone with no remote, which is the could-not-look this
+    /// suite can actually produce: `advertise` cannot reach anybody, and the
+    /// answer must still be "carry on".
+    #[test]
+    fn the_freshness_probe_reads_could_not_look_as_carry_on_rather_than_as_stale() {
+        let dir = std::env::temp_dir().join("batten-land-stale-no-remote");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the scratch clone");
+
+        assert_eq!(
+            super::stale(&dir, "http://127.0.0.1:1/nothing", "refs/heads/main"),
+            None,
+            "a probe that could not look must not report the base as moved"
+        );
     }
 
     /// Anti-vacuity: a misconfiguration stops everywhere, and success never does.
