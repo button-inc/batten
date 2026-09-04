@@ -9861,8 +9861,17 @@ fn refresh_tasks_link(root: &Path, envelope: &hook::Envelope) {
     // resolving where the store would be, and a platform that cannot park a
     // pointer should still fail on a template it cannot substitute rather than
     // skip the question entirely.
-    let _source =
+    let source =
         crate::transcript::tasks_dir(template, session, std::env::var_os("HOME").as_deref());
+    // CONSUMED ON A PLATFORM THAT CANNOT LINK, because the only real reader below
+    // is `#[cfg(unix)]`. An `is_dir` check used to consume it unconditionally
+    // until CLOUD-1435 removed that guard, so its removal made this
+    // `unused_variables` on Windows, where `cross-check` denies warnings
+    // (CLOUD-397). Renaming it `_source` traded that for
+    // `clippy::used_underscore_binding` — a binding may be underscore-named or
+    // used, never both — so the discard is explicit and cfg'd instead.
+    #[cfg(not(unix))]
+    let _ = &source;
     // PARKED ON SUBSTITUTION, NEVER ON THE TARGET EXISTING (CLOUD-1435). This
     // guard used to read `if !Path::new(&source).is_dir() { return }`, and it
     // withheld the pointer at exactly the moment the pointer was informative.
@@ -9890,7 +9899,7 @@ fn refresh_tasks_link(root: &Path, envelope: &hook::Envelope) {
     }
     let _ = std::fs::remove_file(&link);
     #[cfg(unix)]
-    let _ = std::os::unix::fs::symlink(&_source, &link);
+    let _ = std::os::unix::fs::symlink(&source, &link);
 }
 
 /// The hatch that silences the whole end-of-turn surface.
