@@ -841,9 +841,10 @@ mod lap_tests {
     /// answer must still be "carry on".
     #[test]
     fn the_freshness_probe_reads_could_not_look_as_carry_on_rather_than_as_stale() {
+        // A path that is not a repository at all, which is the strongest form of
+        // could-not-look this suite can produce without a network: `resolve_ref`
+        // cannot answer and `advertise` cannot reach anybody.
         let dir = std::env::temp_dir().join("batten-land-stale-no-remote");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create the scratch clone");
 
         assert_eq!(
             super::stale(&dir, "http://127.0.0.1:1/nothing", "refs/heads/main"),
