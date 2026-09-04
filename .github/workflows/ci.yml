@@ -558,14 +558,46 @@ jobs:
         with:
           path: ~/.pkl/cache
           key: pkl-${{ runner.os }}-${{ hashFiles('hk.pkl') }}
-      # A DISTINCT CACHE KEY. This job builds the same debug binary the `ci` job
-      # does, but the two now run concurrently — sharing `shared-key: ci` would
-      # have them racing to save the same entry, and the loser's work is
-      # discarded. Its own key costs one more entry and no contention.
+      # THE WARMED `ci-` FAMILY, READ-ONLY — the `bats-` family is retired
+      # (CLOUD-1410, CLOUD-1420).
+      #
+      # WHAT THE RETIRED COMMENT GOT RIGHT AND WHAT IT MISSED. It said a
+      # distinct key avoids racing the `ci` job to save one entry, and that is
+      # true. What it never asked is whether anything WRITES `bats-` on `main`.
+      # Nothing does: `release-plz.yml`'s `cache-warm-linux` writes `ci-` and
+      # `cache-warm-windows` writes `windows-`, and GitHub scopes a cache read
+      # to the run's own ref plus the base branch — so a `bats-` entry written
+      # on `refs/pull/N/merge` is unreadable by every other pull request,
+      # including the next push to the same branch under a new merge ref.
+      # `bats` has therefore been COLD ON EVERY PULL REQUEST since the job
+      # existed, and the manifest hash was never its binding constraint.
+      #
+      # `cache-warm-linux` runs `cargo nextest run --no-run --workspace`, which
+      # builds the workspace and every test target on the linux dev profile —
+      # a strict superset of what `test:bats` needs, since the suites invoke
+      # `cargo run -p batten` and nothing this job runs is outside that build.
+      # So this job is a pure consumer of an entry another job already paid for.
+      #
+      # `save-if: false` IS WHAT MAKES THE SHARING SAFE, and it is the retired
+      # comment's race answered rather than ignored. A pure consumer cannot race
+      # `ci` to save, because it does not enter the race — and a cache entry is
+      # immutable once written, so the first finisher on a fresh key would
+      # otherwise become the entry every later reader inherits. One designated
+      # writer on `main`, every pull-request job read-only.
+      #
+      # THE CONSEQUENCE, stated rather than discovered: a key
+      # `cache-warm-linux` has not yet written stays empty for the whole pull
+      # request. That is the correct direction — a cold PR beats a poisoned
+      # cache — but it makes the warm job's cadence load-bearing.
+      #
+      # NOT DONE FOR `cross-`, `semver-` OR `${{ matrix.target }}`: those build
+      # different things and cannot share this entry. They need warm jobs of
+      # their own, which is a follow-up rather than this change, so they keep
+      # writing.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          # The profile is part of the key — see the `ci` job above.
-          shared-key: bats-
+          shared-key: ci-
+          save-if: false
       # THE SAME QUESTION THE `ci` JOB ASKS, and it must stay in-job rather than
       # becoming a `paths:` filter or a job `if:` — see this job's header and
       # `final`'s. `test:bats` is one of the six `slow`-tagged steps, so a diff
