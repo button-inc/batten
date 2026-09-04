@@ -53,7 +53,7 @@
 #MUTANT-SUITE crates/batten/tests/it/test_targets.rs
 #MUTANT depth-may-invert|s@count(segments) == 4@count(segments) == 5@|a_module_inside_the_group_is_not_a_target
 #MUTANT extension-may-widen|s@endswith(path, ".rs")@true@|a_four_segment_non_rust_file_is_not_a_target
-#MUTANT grouped-main-unread|s@segments[4] == "main.rs"@true@|a_five_segment_module_that_is_not_main_rs_is_still_not_a_target
+#MUTANT grouped-main-unread|s@segments\[4\] == "main.rs"@true@|a_five_segment_module_that_is_not_main_rs_is_still_not_a_target
 #
 # ALL THREE ROWS NAMED PROSE UNTIL THE ENROLMENT EXPOSED IT. The third field is
 # the test function that must redden, and the two pre-existing rows carried a
@@ -61,6 +61,14 @@
 # nothing ever resolved them. The first sweep after the enrolment reported all
 # three as `names-no-case`, which is the census vacuity arriving by a different
 # route than the exemption it replaced.
+#
+# AND THE BRACKETS IN A SCRIPT MUST BE ESCAPED, which cost this row a second
+# revision. `s@segments[4] == "main.rs"@...@` reads `[4]` as a sed CHARACTER
+# CLASS, so the pattern matches the literal `segments4`, never applies, and the
+# sweep reports `inert-mutation` — a row that looks like coverage and proves
+# nothing. `filed-here.rego`'s `latest\[id\].verdict` is the spelling that works,
+# and `fixture-forks.rego`'s own `input.tree.lines\[path\]` is why that gate's
+# rows were caught on the first sweep while this one was not.
 #
 # `extension-may-widen` also had NO CASE THAT COULD OBSERVE IT, which is the
 # sharper half: it replaces the suffix test with `true`, and every case in the
