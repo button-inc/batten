@@ -133,6 +133,15 @@ const CONTENT: &[Canary] = &[
         // written the leak yet.
         source: "a line of a file a `policy` row declared under `lines`",
     },
+    Canary {
+        tag: "boardrow",
+        // The board sweep reads a tracker payload, and a tracker row's body is
+        // where a consumer's own detail lives — an account number, a client name,
+        // an entity path. The sweep's finding is a key, two column names and a
+        // reason class, and this is the byte that decides it rather than the doc
+        // comment above `run_landed_check` claiming it.
+        source: "the description of a tracker row read by `landed check`",
+    },
 ];
 
 /// Bytes the caller wrote **as policy**. Only an `Echoes` verb may emit one.
@@ -378,6 +387,18 @@ impl Corpus {
                     canary("logged"),
                 ),
             )
+            // The merged-pull-request evidence `landed check` reads. It carries
+            // no canary because it structurally cannot: the file is a key and a
+            // pull request number per line, which are pointers by construction.
+            // What it buys is the LIVE READING — without it the verb refuses on
+            // absent evidence and the census would be asserting over a run that
+            // never reached the finding renderer, which is where a leak would
+            // actually happen.
+            //
+            // `.tsv` is outside every glob `authority` declares (`**/*.txt` and
+            // `**/*.md`) and outside the budget's named file list, so seeding it
+            // adds subject matter for exactly one verb.
+            .file("landed-merged.tsv", "CLOUD-1120\t726\n")
             .file(
                 "transcript.jsonl",
                 &format!(
@@ -506,6 +527,20 @@ fn incoming_record() -> String {
     )
 }
 
+/// The tracker payload `landed check` sweeps, carrying a body field beside the
+/// two fields the sweep is entitled to.
+///
+/// The row is `In Progress` and `landed-merged.tsv` says a merged pull request
+/// closed it, so the verb reaches its FINDING renderer rather than its clean
+/// line — which is the only arm where a leak could happen, and therefore the
+/// only arm worth asserting over.
+fn board_payload() -> String {
+    format!(
+        "[{{\"id\":\"CLOUD-1120\",\"status\":\"In Progress\",\"description\":\"{}\"}}]",
+        canary("boardrow"),
+    )
+}
+
 // -- The census --------------------------------------------------------------
 
 /// What a verb is allowed to put on its channels.
@@ -536,6 +571,7 @@ enum Stdin {
     PlanEntries,
     PrBody,
     PairedRecords,
+    Board,
 }
 
 struct Verb {
@@ -718,6 +754,19 @@ const CENSUS: &[Verb] = &[
         path: "land verify",
         args: &[],
         stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `landed check` (CLOUD-186, CLOUD-1127) reads a tracker payload, which is
+    // the widest body on any read surface: a row carries a description an agent
+    // wrote and a consumer's own facts sit in it. What it renders is a key, two
+    // column names, a reason token and — on the asserted arm — the caller's own
+    // ref. `landed::Finding` has no field prose could occupy, the same way
+    // `commit-meta` has no body field, and this is what decides that from the
+    // outside rather than from the type's doc comment.
+    Verb {
+        path: "landed check",
+        args: &["--merged-prs", "landed-merged.tsv"],
+        stdin: Stdin::Board,
         disposition: Disposition::PointerOnly,
     },
     Verb {
@@ -1725,6 +1774,7 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
         Stdin::PlanEntries => plan_entries(),
         Stdin::PrBody => pr_body(),
         Stdin::PairedRecords => paired_records(),
+        Stdin::Board => board_payload(),
     };
     // A BROKEN PIPE HERE IS THE CHILD BEING FAST, NOT A FAILURE. This corpus runs
     // every verb, and a verb that reads no stdin may exit before the write lands —
