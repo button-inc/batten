@@ -631,6 +631,46 @@ jobs:
           fetch-depth: 0
       - name: Fetch the comparison base refs
         run: git fetch origin main:refs/remotes/origin/main
+      # NAME THE CHECKOUT, BECAUSE ONE RULE'S SUBJECT IS A BRANCH (CLOUD-1422).
+      # `actions/checkout` leaves a `pull_request` run on a DETACHED merge
+      # commit, and `claim-not-raced` — the only rule in the set whose subject is
+      # this branch rather than a file — identifies itself by asking `gh pr view`
+      # with no argument, which `gh` resolves from the checked-out branch. Measured
+      # detached: `could not determine current branch: failed to run git: not on
+      # any branch`, so the gate's own PR is not excluded from the competitor list
+      # and the branch is reported as racing itself (job 100910411899).
+      #
+      # THE FIX IS TO SUPPLY THE INPUT, NOT TO SWITCH THE GATE OFF. `gh` resolves
+      # a PR by branch NAME alone — measured, independent of what the branch
+      # points at — so a local branch named `github.head_ref` at the merge commit
+      # makes `self` resolve and the exclusion fire, and the gate then answers in
+      # CI instead of abstaining. That is the difference between a gate that can
+      # see and a gate that is disabled: `BATTEN_CLAIM_RACE_BYPASS` here would
+      # have made every future PR's duplicate-claim check silently vacuous.
+      #
+      # `-C` rather than `-c`: `fetch-depth: 0` brings the branch ref down, so the
+      # name can already exist locally. Pointing it at the merge commit is
+      # deliberate — HEAD's content is unchanged, and `origin/main..HEAD` still
+      # enumerates this PR's own commits.
+      #
+      # THE VALUE GOES THROUGH `env`, never inline. `github.head_ref` is a branch
+      # name an outside contributor chooses, so interpolating it into a `run:`
+      # body is the template-injection `zizmor` refuses; an env binding read as a
+      # quoted variable is the mitigation it asks for.
+      #
+      # WHAT MADE THIS URGENT RATHER THAN LATENT is worth the line, because it is
+      # not this PR. `gh pr list` needs `pull-requests: read` on a PRIVATE
+      # repository, and no job here grants it — so for this gate's whole life in
+      # CI the call 403'd and it fail-opened, exactly as its header says it
+      # should. This repository went public on 2026-09-03, which handed the job
+      # token PR-read access through `metadata: read`, and the gate started
+      # actually running in CI for the first time. The first thing it did was
+      # refuse. Same class as CLOUD-867: going public changed what the default
+      # token can reach, and a check that had been silently abstaining woke up.
+      - name: Name the checkout's branch
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: git switch -C "$HEAD_REF"
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
           # THE `ci` JOB'S LIST, NOT A NARROWER ONE, and the width is decided by
