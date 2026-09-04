@@ -45,11 +45,12 @@ Three behaviours matter wherever that line runs unattended — a CI runner, a
 container's setup step, an agent sandbox:
 
 - **A token is read if one is set**, from `BATTEN_GITHUB_TOKEN`, `GH_TOKEN`,
-  `GITHUB_TOKEN` or `GITHUB_PERSONAL_ACCESS_TOKEN`, in that order. A public
-  release needs none of them. **This repository is private today**, so a fetch
-  needs a token with release-read scope until that changes; a host carrying
-  several tokens that are not equivalent names the working one through
-  `BATTEN_GITHUB_TOKEN`, which wins.
+  `GITHUB_TOKEN` or `GITHUB_PERSONAL_ACCESS_TOKEN`, in that order. **This
+  repository and its releases are public, so a fetch needs none of them** — an
+  unauthenticated install works. Setting one still raises the API rate limit,
+  which matters on a shared CI egress address; a host carrying several tokens
+  that are not equivalent names the working one through `BATTEN_GITHUB_TOKEN`,
+  which wins.
 - **A proxy that re-terminates TLS is handled** by honouring the CA bundle the
   environment already declares — `CURL_CA_BUNDLE`, else `SSL_CERT_FILE`. Nothing
   is disabled and an unproxied host is untouched. Set one of those rather than

@@ -2,14 +2,18 @@
 
 ## Reporting a vulnerability
 
-**Use GitHub's private vulnerability reporting** — open
+**Prefer GitHub's private vulnerability reporting** — open
 <https://github.com/button-inc/batten/security/advisories/new>, or the _Report a
 vulnerability_ button under the repository's **Security** tab. That channel is
-private between you and the maintainers until an advisory is published, and it is
-the only reporting route this project operates.
+private between you and the maintainers until an advisory is published, and it
+keeps the report, the fix and the advisory in one place.
 
-**Do not open a public issue for a suspected vulnerability.** The issue tracker is
-world-readable once this repository is public, so filing there discloses the
+**If you cannot use that form, email <security@button.is>.** Some reporters have
+no GitHub account, and a reporting route that assumes one is a route those
+reporters do not have. Both channels reach the same maintainers.
+
+**Do not open a public issue for a suspected vulnerability.** This repository is
+public and its issue tracker is world-readable, so filing there discloses the
 problem before there is a fix.
 
 A report is most useful with the version or commit SHA, the platform, the commands
