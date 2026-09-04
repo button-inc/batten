@@ -82,41 +82,28 @@ fn bash_payload(command: &str) -> String {
 /// "`batten.toml` registers this module" — a different claim, and a registry
 /// assertion's to make rather than four advisory cases'.
 ///
-/// Shared and built once: every case wants the identical config, and a fixture
-/// per case would be four directories asserting one thing.
-static BENCH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-
-fn bench() -> &'static Path {
-    BENCH.get_or_init(|| {
-        let module = std::fs::read_to_string(root().join("policy/shell-write-advisory.rego"))
-            .expect("the advisory module is readable");
-        Fixture::new("swa-advisory-only")
-            .config(
-                "version = 1\n\n\
-                 [[rule]]\nid = \"shell-write-advisory\"\nkind = \"policy\"\n\
-                 scope = \"mediated_call\"\nmodule = \"policy/shell-write-advisory.rego\"\n\
-                 severity = \"warn\"\n",
-            )
-            .file("policy/shell-write-advisory.rego", &module)
-            // A REPOSITORY, because one case's subject is CLOUD-1133's
-            // ABSOLUTE-path normalisation and that resolves against the
-            // repository root. Without `.git()` the bench is an ordinary
-            // directory, `repo_root` walks up to the real checkout, and an
-            // absolute path under the bench normalises to
-            // `target/tmp/<bench>/mise-tasks/...` — not a governed path, so the
-            // advisory is correctly silent and the case fails for a reason that
-            // has nothing to do with normalisation. Measured: it passed locally
-            // and failed on the runner, which is the same
-            // environment-dependence this bench exists to remove, reintroduced
-            // one layer down.
-            //
-            // It costs nothing here: the bench's config declares the advisory
-            // row and NOTHING else, so giving it a branch cannot wake
-            // `claim-needs-receipt` — that row is not in this rule set.
-            .git()
-            .base_commit()
-            .build()
-    })
+/// ONE FIXTURE PER CASE, and the shared-and-built-once version this replaced is
+/// worth a sentence because it failed in a way a standalone run cannot show. A
+/// `OnceLock` at a fixed path is not safe here: `Fixture::new` WIPES its
+/// directory, and if the init closure panics the cell stays empty, so the next
+/// thread re-enters it and wipes the tree the first one is still `git init`-ing.
+/// Measured — the suite passed 10/10 run alone, twice, and lost two cases to
+/// `update-ref ... not a git repository` under the full parallel run. Per case is
+/// also what every other fixture in this suite already does.
+fn bench(name: &str) -> PathBuf {
+    let module = std::fs::read_to_string(root().join("policy/shell-write-advisory.rego"))
+        .expect("the advisory module is readable");
+    Fixture::new(name)
+        .config(
+            "version = 1\n\n\
+             [[rule]]\nid = \"shell-write-advisory\"\nkind = \"policy\"\n\
+             scope = \"mediated_call\"\nmodule = \"policy/shell-write-advisory.rego\"\n\
+             severity = \"warn\"\n",
+        )
+        .file("policy/shell-write-advisory.rego", &module)
+        .git()
+        .base_commit()
+        .build()
 }
 
 /// Everything the door said, on either stream.
@@ -126,14 +113,13 @@ fn bench() -> &'static Path {
 /// is reachable and the operator's stream only as the unreachable fallback. A
 /// case reading one stream would pass against a build that silently stopped
 /// delivering, which is the thing this file is here to catch.
-fn reported(payload: &str) -> String {
-    let answer =
-        run_with_stdin_at_real_root(bench(), &["hook", "--harness", "claude-code"], payload);
+fn reported(dir: &Path, payload: &str) -> String {
+    let answer = run_with_stdin_at_real_root(dir, &["hook", "--harness", "claude-code"], payload);
     format!("{}{}", stdout(&answer), stderr(&answer))
 }
 
-fn signals(payload: &str) -> bool {
-    reported(payload).contains("shell edit early")
+fn signals(dir: &Path, payload: &str) -> bool {
+    reported(dir, payload).contains("shell edit early")
 }
 
 /// A write to an authored shell gate is told at the write.
@@ -143,15 +129,15 @@ fn signals(payload: &str) -> bool {
 /// disposition `shell-retirement` admits.
 #[test]
 fn a_write_to_a_governed_shell_path_signals_without_refusing() {
+    let dir = bench("swa-a_write_to_a_governed_shell_path_s");
     let payload = write_payload("Write", "mise-tasks/ready-lint.sh");
-    let answer =
-        run_with_stdin_at_real_root(bench(), &["hook", "--harness", "exit-code"], &payload);
+    let answer = run_with_stdin_at_real_root(&dir, &["hook", "--harness", "exit-code"], &payload);
     assert_eq!(
         answer.status.code(),
         Some(0),
         "an advisory must not move the exit code"
     );
-    assert!(signals(&payload), "{}", reported(&payload));
+    assert!(signals(&dir, &payload), "{}", reported(&dir, &payload));
 }
 
 /// And in the spelling the host actually sends.
@@ -162,21 +148,23 @@ fn a_write_to_a_governed_shell_path_signals_without_refusing() {
 /// silently — no advisory looks exactly like a clean path.
 #[test]
 fn the_absolute_spelling_the_host_sends_signals_too() {
-    let absolute = bench()
+    let dir = bench("swa-the_absolute_spelling_the_host_sen");
+    let absolute = dir
         .canonicalize()
         .expect("the bench root resolves")
         .join("mise-tasks/ready-lint.sh")
         .display()
         .to_string();
     let payload = write_payload("Write", &absolute);
-    assert!(signals(&payload), "{}", reported(&payload));
+    assert!(signals(&dir, &payload), "{}", reported(&dir, &payload));
 }
 
 /// A bats suite is governed too.
 #[test]
 fn a_write_to_a_bats_suite_signals() {
+    let dir = bench("swa-a_write_to_a_bats_suite_signals");
     let payload = write_payload("Write", "tests/land.bats");
-    assert!(signals(&payload), "{}", reported(&payload));
+    assert!(signals(&dir, &payload), "{}", reported(&dir, &payload));
 }
 
 /// THE DISCRIMINATING CASE, asserted over the REAL deletion shape.
@@ -188,23 +176,26 @@ fn a_write_to_a_bats_suite_signals() {
 /// case above and impedes every retirement; this is what tells the two apart.
 #[test]
 fn the_deletion_a_retirement_performs_is_not_impeded() {
+    let dir = bench("swa-the_deletion_a_retirement_performs");
     let payload = bash_payload("git rm mise-tasks/ready-lint.sh");
-    assert!(!signals(&payload), "{}", reported(&payload));
+    assert!(!signals(&dir, &payload), "{}", reported(&dir, &payload));
 }
 
 /// The compound deletion, which is what a retirement actually looks like: a
 /// program and its suite are two paths, so the real shape is one list.
 #[test]
 fn a_compound_retirement_deletion_is_not_impeded() {
+    let dir = bench("swa-a_compound_retirement_deletion_is_");
     let payload = bash_payload("git rm mise-tasks/ready-lint.sh && git rm tests/ready-lint.bats");
-    assert!(!signals(&payload), "{}", reported(&payload));
+    assert!(!signals(&dir, &payload), "{}", reported(&dir, &payload));
 }
 
 /// An ungoverned write is silent, which keeps the governed set a SET.
 #[test]
 fn an_ungoverned_write_is_silent() {
+    let dir = bench("swa-an_ungoverned_write_is_silent");
     let payload = write_payload("Write", "crates/batten/src/hook.rs");
-    assert!(!signals(&payload), "{}", reported(&payload));
+    assert!(!signals(&dir, &payload), "{}", reported(&dir, &payload));
 }
 
 /// The vacuity case the surface makes easy to get wrong.
@@ -216,8 +207,9 @@ fn an_ungoverned_write_is_silent() {
 /// as `null` or absent is the engine's business and not the module's.
 #[test]
 fn a_call_carrying_no_write_target_is_silent() {
+    let dir = bench("swa-a_call_carrying_no_write_target_is");
     let payload = bash_payload("ls -la");
-    assert!(!signals(&payload), "{}", reported(&payload));
+    assert!(!signals(&dir, &payload), "{}", reported(&dir, &payload));
 }
 
 /// THE DRIFT GATE. The two authorities agree about what is governed.
@@ -344,9 +336,9 @@ fn an_advised_and_denied_call_emits_only_the_refusal() {
 /// thing on stdout.
 #[test]
 fn an_advised_and_allowed_call_still_speaks() {
+    let dir = bench("swa-an_advised_and_allowed_call_still_");
     let payload = write_payload("Write", "mise-tasks/ready-lint.sh");
-    let answer =
-        run_with_stdin_at_real_root(bench(), &["hook", "--harness", "exit-code"], &payload);
+    let answer = run_with_stdin_at_real_root(&dir, &["hook", "--harness", "exit-code"], &payload);
     let reported = format!(
         "{}{}",
         String::from_utf8_lossy(&answer.stdout),
