@@ -1,0 +1,463 @@
+//! Betting on the base that is about to exist (CLOUD-748, CLOUD-862, CLOUD-369).
+//!
+//! # What a speculation is
+//!
+//! The landing lease names one branch as the next thing to land. A waiter behind
+//! it can either sit on today's `main` — and rebase onto the holder's work the
+//! moment it lands, spending a lap — or linearize onto the holder's head NOW and
+//! be already correct when it lands. The second is the bet, and the whole of the
+//! machinery below exists because a bet can be wrong.
+//!
+//! # THIS IS A CONSERVING PORT, AND ONE KNOWN DEFECT TRAVELS WITH IT
+//!
+//! `settle` has THREE outcomes — the holder landed, the bet is still open, the
+//! bet lost — and **no arm for a base whose tree is poisoned**: one that will
+//! not pass `verify`. CLOUD-1306 is that gap, and it is deliberately NOT fixed
+//! here. A port that improved behaviour could not be shown to conserve it, and
+//! being able to say "this does what the bash did" is the whole discipline that
+//! makes a 4,700-line retirement reviewable.
+//!
+//! What the gap costs, so nobody reads its absence as completeness: a waiter
+//! linearizes onto a head that cannot go green, `settle` reads the bet as still
+//! open every lap (the holder is still there and `main` has not moved, which is
+//! exactly what "pending" looks like), and [`Bet::would_rebet`] bets on the same
+//! holder again. Every waiter behind that holder stalls together. The fix is
+//! CLOUD-1306's and belongs in one change that can be reviewed as a behaviour
+//! change rather than smuggled into a port.
+//!
+//! # Every failure is a FALLBACK, never a stop
+//!
+//! The holder may never land, so a conflict against its head is information
+//! about a base that may not happen — not the `die`-worthy conflict a rebase
+//! onto `origin/main` reports. Reading an unreachable remote, an unresolvable ref
+//! or an unknown ancestry all mean "do not bet" or "the bet is stale", never
+//! "stop the landing".
+//!
+//! **Except in one direction, and the asymmetry is the correctness property.**
+//! [`Live::decide`] fails CLOSED: an unreadable lease, an unfetchable branch and
+//! an unknown ancestry are all *stale*, because failing open there would make a
+//! network blip the thing that lands somebody else's work.
+
+use std::path::Path;
+
+use anyhow::Result;
+
+/// The ref a live bet's BASE is recorded under.
+///
+/// A ref rather than a process variable because a bet outlives the process that
+/// placed it: a `land` that was killed mid-lap leaves the tree linearized on
+/// somebody else's commits, and the next one has to be able to find that out.
+/// CLOUD-862 is that reading — measured, a stopped `land` left seven of another
+/// branch's commits in the tree and the next run took them all the way to a push.
+pub const BASE_REF: &str = "refs/batten-spec/base";
+
+/// The ref the holder's CURRENT head is fetched into when re-confirming a bet.
+///
+/// A SECOND ref, deliberately. The bet's base and the tip it is checked against
+/// are two different commits, and reusing [`BASE_REF`] would overwrite the base
+/// while answering a question about it.
+pub const LIVE_REF: &str = "refs/batten-spec/live";
+
+/// The variable a bet is published to the child process under.
+///
+/// `verify` runs `claim-race-check`, which reads `claimed-keys`, which cannot
+/// otherwise tell a commit this branch authored from one this speculation
+/// adopted — so it reported the waiter as racing the very PR the bet was placed
+/// on, twice in one session (CLOUD-748). The name is the CONSUMER's and reaches
+/// the child through the environment; nothing in this crate reads it.
+pub const PUBLISHED_AS: &str = "BATTEN_SPEC_BASE";
+
+/// What a settle decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Settle {
+    /// No bet is outstanding, so there is nothing to settle.
+    Nothing,
+    /// The base is an ancestor of `origin/main`: the holder landed, and this
+    /// branch is already linearized on it. Nothing to undo.
+    Landed,
+    /// Undecided. The holder is still landing and this branch is already behind
+    /// it, so the tree is kept.
+    ///
+    /// **This is the arm CLOUD-1306's poisoned base hides in.** A base that will
+    /// never go green is indistinguishable here from one that simply has not
+    /// landed yet, and the module header says why that is conserved rather than
+    /// fixed.
+    Pending,
+    /// The bet cannot come true: the holder is gone, or `main` moved and took
+    /// something else. The borrowed range is dropped.
+    Lost,
+}
+
+/// Whether the bet is still on the branch that is about to land.
+///
+/// A three-valued reading rather than a bool, because "could not look" and "no"
+/// take the same action here and must still be distinguishable to a reader —
+/// the bash collapsed them into one non-zero exit and the collapse is what made
+/// the fail-closed posture invisible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Live {
+    /// Somebody else holds the lease and the base is still on their branch.
+    Yes,
+    /// The lease is free, held by US, or the base is no longer on the holder's
+    /// branch.
+    No,
+    /// The lease would not read, the branch would not fetch, or the ancestry is
+    /// unknown. **Decides as [`Live::No`]** — see [`Live::decide`].
+    Unreadable,
+}
+
+impl Live {
+    /// The fail-CLOSED reading: anything but a confirmed yes is stale.
+    ///
+    /// Failing open here would make a network blip the thing that lands somebody
+    /// else's work, which is the one place in this module where a could-not-look
+    /// must not be permissive.
+    #[must_use]
+    pub const fn decide(self) -> bool {
+        matches!(self, Self::Yes)
+    }
+}
+
+/// One outstanding bet.
+///
+/// **AT MOST ONE.** A waiter laps repeatedly while the same holder lands, and
+/// re-betting each lap would overwrite [`Bet::undo`] with a HEAD that is itself
+/// speculative — so unwinding would restore a tree that still carried somebody
+/// else's commits, which is the exact hazard the undo exists to remove. It would
+/// also mint a new sha every lap and throw away a `verify` receipt for no gain.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Bet {
+    /// The holder's head this branch was replayed onto.
+    pub base: Option<String>,
+    /// This branch's own last NON-speculative HEAD, and the exact unwind point.
+    ///
+    /// `None` on a bet this process ADOPTED rather than placed: the undo point
+    /// died with the process that recorded it, and such a bet unwinds by
+    /// replaying onto `origin/main` from the base instead (CLOUD-862).
+    pub undo: Option<String>,
+    /// The `origin/main` this bet was placed against.
+    ///
+    /// Without it, "not landed yet" and "landed something else" are the same
+    /// reading and the bet would be unwound every lap while the holder was
+    /// perfectly on course.
+    pub main_at_bet: Option<String>,
+    /// Set when this process adopted a bet it did not place.
+    pub recovered: bool,
+    /// Set once the bet has been PUSHED. An unwind then owes the remote a
+    /// correction too: without one, a stop or a spent lap budget leaves origin
+    /// holding another branch's commits under an open PR — the measured
+    /// two-PRs-at-one-sha state.
+    pub pushed: bool,
+    /// The holder's base is known to conflict with this branch.
+    ///
+    /// Kept rather than discarded (CLOUD-369): a successor whose base is known
+    /// to conflict is guaranteed to be voided, so its run grades a head the
+    /// fast-forward will refuse and the rebase that follows still has to resolve
+    /// the same conflict. Measured for one such admission: a full CI run burned,
+    /// a ~200s `verify` discarded, a hand-resolved conflict, and a second run.
+    pub conflicts: bool,
+}
+
+impl Bet {
+    /// Is a bet outstanding?
+    #[must_use]
+    pub const fn live(&self) -> bool {
+        self.base.is_some()
+    }
+
+    /// The value [`PUBLISHED_AS`] should carry, or `None` to unset it.
+    ///
+    /// A function rather than a side effect so the two states cannot disagree:
+    /// the bash called `publish_speculation` at every point the bet was placed or
+    /// cleared precisely because they could.
+    #[must_use]
+    pub fn published(&self) -> Option<&str> {
+        self.base.as_deref()
+    }
+
+    /// **Would `speculate` place a bet on this candidate?**
+    ///
+    /// `false` for the same candidate twice — the one-outstanding-bet rule above.
+    ///
+    /// **AND `true` AGAIN ONCE THE BET IS FORGOTTEN, WHICH IS CLOUD-1306's OTHER
+    /// HALF.** A poisoned base settles as [`Settle::Pending`] and is never
+    /// forgotten, so this correctly answers `false` and the waiter sits. Where
+    /// the bet IS dropped, nothing here remembers that this candidate was already
+    /// tried, so the next lap bets on the same holder again. Conserved; the fix
+    /// is CLOUD-1306's.
+    #[must_use]
+    pub fn would_rebet(&self, candidate: &str) -> bool {
+        self.base.as_deref() != Some(candidate)
+    }
+
+    /// Drop the bet's own bookkeeping. The REF is the caller's to delete.
+    pub fn forget(&mut self) {
+        self.base = None;
+        self.undo = None;
+        self.main_at_bet = None;
+        self.recovered = false;
+    }
+}
+
+/// **The settle table, and it is a pure function on purpose.**
+///
+/// Every input is a reading the caller already took, so the decision can be
+/// exercised over all of its arms without a remote, a clock or a fixture — which
+/// is what makes "does the port conserve the bash's behaviour" an answerable
+/// question rather than a claim.
+///
+/// The argument order follows the bash's own arms, and the FIRST arm is load-
+/// bearing: `settle_speculation` used to open on "did this process place a bet",
+/// so a `land` that had merely inherited one returned on its first line while the
+/// ref holding the answer sat on disk beside it (CLOUD-862). Ask git before
+/// asking the process — the caller does that by handing an adopted bet in here
+/// exactly as it would one of its own.
+#[must_use]
+pub fn settle(bet: &Bet, main_now: &str, base_on_main: bool, live: Live) -> Settle {
+    let Some(_) = bet.base.as_deref() else {
+        return Settle::Nothing;
+    };
+
+    // WON. Checked first and unconditionally, because it is true whoever placed
+    // the bet and because the two arms below would both misread it: an adopted
+    // bet has no `main_at_bet` to compare, and a placed one would see `main`
+    // moved and call it lost.
+    if base_on_main {
+        return Settle::Landed;
+    }
+
+    // An ADOPTED bet has no `main_at_bet` — the process that recorded it is gone
+    // — so the "has main moved" arm cannot judge it. The lease can: it reads who
+    // holds it NOW and whether the base is still on the branch about to land,
+    // which is the question either way.
+    if bet.recovered {
+        return if live.decide() {
+            Settle::Pending
+        } else {
+            Settle::Lost
+        };
+    }
+
+    // `main` has not moved, which USED TO END THE QUESTION. It does not: the
+    // holder can go away without `main` moving at all, and that reading is
+    // indistinguishable from "still landing" unless the lease is re-read.
+    //
+    // The measured incident: a holder whose CI died in a provider incident held
+    // the lease going nowhere, a sibling linearized onto its published head, and
+    // the two branches ended at the identical sha with neither able to land.
+    if bet.main_at_bet.as_deref() == Some(main_now) {
+        return if live.decide() {
+            Settle::Pending
+        } else {
+            Settle::Lost
+        };
+    }
+
+    // `main` moved and took something else.
+    Settle::Lost
+}
+
+/// Is `candidate` an ancestor of `tip`?
+///
+/// Asked here rather than added to `git.rs` as a general `is_ancestor`, and for
+/// the reason `gitwrite::rebase` gives at its own call site: CLOUD-36 refuses
+/// ancestry as a MERGED-NESS answer, because landing rebases. What is asked here
+/// is narrower and ancestry is exactly the predicate for it — whether this tree
+/// really carries that commit.
+///
+/// `false` for anything that will not resolve, which is the fail-closed direction
+/// every caller here wants.
+#[must_use]
+pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
+    let Ok(repo) = crate::git::open_for_write(dir) else {
+        return false;
+    };
+    let resolve = |rev: &str| repo.rev_parse_single(rev).ok().map(gix::Id::detach);
+    let (Some(base), Some(head)) = (resolve(candidate), resolve(tip)) else {
+        return false;
+    };
+    repo.merge_base(base, head)
+        .is_ok_and(|found| found.detach() == base)
+}
+
+/// Adopt a bet this process did not place.
+///
+/// Runs BEFORE the ordinary settle, so the settle that follows is the ordinary
+/// one — there is no second settle path to keep in agreement with the first.
+///
+/// **The ancestry pair is the whole predicate** and both halves are load-bearing:
+/// the base must be an ancestor of HEAD (this tree really is linearized on it,
+/// rather than the ref being left over from a clone that reset). It deliberately
+/// does NOT decide "did it land" — [`settle`]'s first arm already answers that,
+/// and answers it out loud; an arm here would be a second place deciding one
+/// thing, and the one that stayed silent is how this whole class went unnoticed.
+///
+/// # Errors
+///
+/// Only a ref store that will not answer at all. A ref that is simply absent is
+/// `Ok(false)` — no bet to adopt is the ordinary state.
+pub fn recover(dir: &Path, bet: &mut Bet) -> Result<bool> {
+    if bet.live() {
+        return Ok(false);
+    }
+    let Some(recorded) = crate::git::resolve_ref(dir, BASE_REF)? else {
+        return Ok(false);
+    };
+    if !carries(dir, &recorded, "HEAD") {
+        // The ref names a commit this tree is not built on, so whatever it was
+        // recording is not true of this HEAD.
+        bet.forget();
+        return Ok(false);
+    }
+    bet.base = Some(recorded);
+    bet.recovered = true;
+    Ok(true)
+}
+
+#[cfg(test)]
+// Panicking on a failed assertion is how a test fails loudly; these are the
+// module's own cases, not a reachable path.
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    const HOLDER: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const MAIN: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const MOVED: &str = "cccccccccccccccccccccccccccccccccccccccc";
+
+    fn placed() -> Bet {
+        Bet {
+            base: Some(String::from(HOLDER)),
+            undo: Some(String::from("dddddddddddddddddddddddddddddddddddddddd")),
+            main_at_bet: Some(String::from(MAIN)),
+            ..Bet::default()
+        }
+    }
+
+    /// No bet is not a lost bet, and the distinction is the first arm.
+    #[test]
+    fn a_tree_with_no_bet_settles_to_nothing() {
+        assert_eq!(
+            settle(&Bet::default(), MAIN, false, Live::No),
+            Settle::Nothing
+        );
+    }
+
+    /// **WON is checked first, and unconditionally.**
+    ///
+    /// Both arms below would misread it: an adopted bet has no `main_at_bet` to
+    /// compare against, and a placed one would see `main` moved and call it lost
+    /// — unwinding a linearization that is already correct.
+    #[test]
+    fn a_base_that_reached_main_is_landed_however_the_bet_arrived() {
+        assert_eq!(settle(&placed(), MOVED, true, Live::No), Settle::Landed);
+
+        let adopted = Bet {
+            recovered: true,
+            main_at_bet: None,
+            undo: None,
+            ..placed()
+        };
+        assert_eq!(settle(&adopted, MOVED, true, Live::No), Settle::Landed);
+    }
+
+    /// **THE THREE OUTCOMES, and the middle one is the whole reason there are
+    /// three.**
+    ///
+    /// A bet is usually still PENDING at the next lap — the holder takes minutes
+    /// to land, so "not on main yet" is the normal reading. Unwinding on it would
+    /// undo the linearization every single lap and leave the mechanism running
+    /// while achieving nothing: warm, then cold, then warm again.
+    #[test]
+    fn an_unmoved_main_with_a_live_holder_is_pending_and_a_dead_one_is_lost() {
+        assert_eq!(settle(&placed(), MAIN, false, Live::Yes), Settle::Pending);
+        assert_eq!(settle(&placed(), MAIN, false, Live::No), Settle::Lost);
+    }
+
+    /// An unmoved `main` used to END the question, and that was the defect.
+    ///
+    /// A holder can go away without `main` moving at all, and that reading is
+    /// indistinguishable from "still landing" unless the lease is re-read.
+    /// Measured: a holder whose CI died in a provider incident held the lease
+    /// going nowhere, a sibling linearized onto its published head, and the two
+    /// branches ended at the identical sha with neither able to land.
+    #[test]
+    fn a_could_not_look_on_the_lease_is_stale_rather_than_still_landing() {
+        assert_eq!(
+            settle(&placed(), MAIN, false, Live::Unreadable),
+            Settle::Lost,
+            "failing open here would make a network blip land somebody else's work"
+        );
+        assert!(!Live::Unreadable.decide());
+        assert!(!Live::No.decide());
+        assert!(Live::Yes.decide());
+    }
+
+    /// A `main` that moved without taking the base is a lost bet, whoever placed
+    /// it.
+    #[test]
+    fn a_moved_main_that_did_not_take_the_base_is_lost() {
+        assert_eq!(settle(&placed(), MOVED, false, Live::Yes), Settle::Lost);
+    }
+
+    /// An adopted bet is judged by the LEASE, because it has no `main_at_bet`.
+    #[test]
+    fn an_adopted_bet_is_judged_by_the_lease_rather_than_by_a_main_it_never_saw() {
+        let adopted = Bet {
+            recovered: true,
+            main_at_bet: None,
+            undo: None,
+            ..placed()
+        };
+        assert_eq!(settle(&adopted, MOVED, false, Live::Yes), Settle::Pending);
+        assert_eq!(settle(&adopted, MOVED, false, Live::No), Settle::Lost);
+    }
+
+    /// **CLOUD-1306, PORTED AS-IS AND PINNED SO IT CANNOT BE FIXED BY ACCIDENT.**
+    ///
+    /// A poisoned base — one whose tree will never pass `verify` — is
+    /// byte-identical here to a holder that is simply slow: the lease is held,
+    /// `main` has not moved, so `settle` says pending and the waiter sits. This
+    /// case asserts that reading rather than the one a fixed version would give,
+    /// because a port that quietly improved behaviour could not be shown to
+    /// conserve it.
+    ///
+    /// When CLOUD-1306 lands, this case is the one that must change, and its
+    /// changing is the review's cue that behaviour moved.
+    #[test]
+    fn a_poisoned_base_is_conserved_as_pending_because_cloud_1306_owns_the_fix() {
+        assert_eq!(
+            settle(&placed(), MAIN, false, Live::Yes),
+            Settle::Pending,
+            "the holder is there and main has not moved — which is what a poisoned \
+             base looks like from here, and there is no fourth arm"
+        );
+    }
+
+    /// One outstanding bet at a time.
+    #[test]
+    fn the_same_candidate_is_not_bet_on_twice() {
+        let bet = placed();
+        assert!(!bet.would_rebet(HOLDER), "already the outstanding bet");
+        assert!(bet.would_rebet(MOVED), "a different candidate is a new bet");
+        assert!(
+            Bet::default().would_rebet(HOLDER),
+            "and a forgotten bet re-bets on the same holder — CLOUD-1306's other half"
+        );
+    }
+
+    /// Forgetting clears the bookkeeping AND what the child would read.
+    #[test]
+    fn forgetting_a_bet_unpublishes_it() {
+        let mut bet = placed();
+        assert_eq!(bet.published(), Some(HOLDER));
+        bet.forget();
+        assert_eq!(
+            bet.published(),
+            None,
+            "a child that still read a base would report this branch as racing the \
+             PR the bet was placed on"
+        );
+        assert!(!bet.live());
+    }
+}

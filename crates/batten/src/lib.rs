@@ -111,6 +111,7 @@ pub mod session;
 pub mod severity;
 pub mod sink;
 pub mod spec;
+pub mod speculation;
 /// Resolved-symbol facts, from a delegated analyser's structured output
 /// (CLOUD-760). The first occupant of `Cost::Effect`: resolving it runs a
 /// program, which is the classification rather than an accident of it.

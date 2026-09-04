@@ -384,6 +384,21 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   than guessed: it runs two programs the caller named. "Not yet" never reaches
   the caller — that is the state the loop exists to sit in, and it is the whole
   difference between this verb and `checks green`.
+- `speculation.rs` — betting on the base that is about to exist (CLOUD-748,
+  CLOUD-862, CLOUD-369). A waiter behind the lease holder linearizes onto the
+  holder's head NOW rather than rebasing after it lands. **A CONSERVING PORT
+  CARRYING ONE KNOWN DEFECT:** `settle` has three outcomes — landed, pending,
+  lost — and no arm for a POISONED base, one whose tree will never pass `verify`.
+  That reads as `pending` every lap and the waiter re-bets on the same holder,
+  stalling every waiter behind it. CLOUD-1306 owns the fix and it is deliberately
+  not made here, because a port that improved behaviour could not be shown to
+  conserve it; `a_poisoned_base_is_conserved_as_pending_because_cloud_1306_owns_the_fix`
+  pins the ported reading so the fix cannot arrive by accident. The settle table
+  is a PURE function of readings the caller already took, which is what makes
+  "does this do what the bash did" answerable without a remote. Every failure is
+  a fallback except one: `Live::decide` fails CLOSED, because failing open on an
+  unreadable lease would make a network blip the thing that lands somebody else's
+  work.
 - `main_watch.rs` — the STALENESS half of a lap's wait: has the trunk moved past
   the base this branch was replayed onto (CLOUD-390, ported off
   `mise-tasks/main-watch.sh`)? A CONDITIONAL forge read of

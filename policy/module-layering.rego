@@ -305,6 +305,18 @@ declared_modules := {
 	# `check` edges are forbidden below for `pr_watch`'s reason — it spawns, and
 	# a gate declared `read` must not.
 	"main_watch",
+	# `speculation` is the bet a waiter places on the base that is about to exist
+	# (CLOUD-748, CLOUD-862). It sits BELOW `land` for the reason `fast_forward`
+	# does: it resolves readings and returns a verdict token, and whether a lap
+	# acts on that token is `land`'s. Its settle table is a pure function of
+	# readings the caller already took, which is what lets the conserved
+	# CLOUD-1306 gap be pinned by a case rather than described in prose.
+	#
+	# NO SPAWN EDGE, and that is why it is absent from `spawn-adapters`: every
+	# read it makes is `git.rs`/`gix` in process. The lease reading it needs is
+	# handed IN as a `Live`, so the module never reaches the remote itself — which
+	# is also what keeps its whole decision testable without one.
+	"speculation",
 	# `record` arrived with CLOUD-1265 and this rule named it a ninth time — the
 	# module was written, both tiers were green, and this is what said nobody had
 	# placed it.
