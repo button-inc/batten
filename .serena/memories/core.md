@@ -2224,6 +2224,27 @@ view` and no argument, which reads the CURRENT BRANCH — so under a detached
   `[[pattern]]` registry — no tracker vocabulary in the crate (rule 1) — and an
   empty `races` means looked-and-found-none, never could-not-look, which is the
   fail-open that read as a pass through three reproductions of the bug.
+- `landed.rs` — whether a board column is honest about what git and the forge
+  already did (CLOUD-186, CLOUD-1127, ported off `mise-tasks/landed-check.sh`).
+  The tracker's automation moves a column on a MENTION, not on the work landing,
+  which produces two dishonest columns in OPPOSITE directions: a row **behind
+  git**, sitting In Progress while its work is on `main`, and a row **ahead of
+  nothing**, advanced by the same merge whose body explicitly declined it with
+  `DO-NOT-CLOSE`. Only the first was ever swept. The second is the worse one —
+  a stranded row sits behind its work and something looks for it, while an
+  over-advanced row leaves the ready queue, stops being pullable, and reads to
+  every other session as work already done. **Rust rather than Rego for
+  `ready.rs`'s reason plus one more**: the predicate reads a tracker payload AND
+  `main`'s commit messages, and `input.tree["commit-meta"]` carries no message
+  body (CLOUD-1187), so a module would load clean, read undefined and decide
+  nothing. `decide` is pure — no clock, no filesystem, no process — so the
+  predicate is testable without a tracker or a forge, the split `speculation.rs`
+  makes for the same reason. **One arm of CLOUD-1127 §2 is deliberately not
+  built**: refusing a started row that no commit names as its first `Refs:` key
+  contradicts this repository's own measurement, that only 3% of its commits
+  carry a closing keyword because fast-forward landing puts it in the PR body —
+  so it would fire on honestly-closed rows, which is the gate whose first firing
+  is a false positive and whose exception rots.
 - `ready.rs` — the Definition-of-Ready grammar as a predicate over a tracker
   payload (CLOUD-179, ported off `mise-tasks/ready-lint.sh` by CLOUD-1121 when
   `shell-retirement` made editing a shell rule refusable). **Rust rather than

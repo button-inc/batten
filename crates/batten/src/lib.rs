@@ -59,6 +59,10 @@ pub mod judge;
 /// The landing lap's replay half: advance the base, replay the branch onto it,
 /// and record what happened for a module to decide over (CLOUD-1335).
 pub mod land;
+/// Whether a board column is honest about what git and the forge already did —
+/// behind git in one direction, ahead of a declined key in the other
+/// (CLOUD-186, CLOUD-1127).
+pub mod landed;
 /// The landing lease's wire half: ref discovery and a compare-and-swap over a
 /// remote ref, spoken as git smart-HTTP over [`fetch`] (CLOUD-1274).
 pub mod lease;
