@@ -866,6 +866,19 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The duplicate-claim half (CLOUD-1422), and pointer-only STRUCTURALLY rather
+    // than by careful rendering: `race::Race` is a key, a pull request number and
+    // a head ref, so a title, a body or a commit message has no field to travel
+    // in. That matters more here than for most rows, because everything this verb
+    // reads is prose somebody else wrote on a pull request that is not ours — the
+    // retired shell had to promise the same thing about its own `echo` lines, and
+    // a promise is what a type makes unnecessary.
+    Verb {
+        path: "claim race",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The green verdict (CLOUD-1143), pointer-only on the same structural terms.
     // `checks_green::Finding` carries a check name and a conclusion and has
     // nowhere to put anything else, so a run's log cannot travel even when the
