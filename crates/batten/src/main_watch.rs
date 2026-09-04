@@ -181,8 +181,19 @@ impl Poll {
     /// three of them deliberately indistinguishable to the lap, because each
     /// means the same thing to it: keep going. Reporting a could-not-look as
     /// movement would cost a whole CI run per unreachable forge.
+    ///
+    /// **AND AN EMPTY BASE IS NOT A BASE**, which is the arm the first port of
+    /// this dropped. `mise-tasks/main-watch.bats` refuses one outright — *"no
+    /// base to compare against is a refusal, not a silent block"* — because an
+    /// empty base compares unequal to every sha, so the first poll reports
+    /// movement and the lap laps forever. Answering `None` here is the same
+    /// refusal in the shape this type has: there is nothing to have moved FROM,
+    /// so nothing has moved.
     #[must_use]
     pub fn moved(&self, base: &str) -> Option<&str> {
+        if base.is_empty() {
+            return None;
+        }
         let head = self.head.as_deref()?;
         (head != base).then_some(head)
     }
@@ -340,5 +351,31 @@ mod tests {
                 "a could-not-look would cost a whole CI run if read as movement: {raw:?}"
             );
         }
+    }
+
+    /// **AN EMPTY BASE IS NOT A BASE, and the first port of this dropped the
+    /// arm.**
+    ///
+    /// `mise-tasks/main-watch.bats` refuses one outright: *"no base to compare
+    /// against is a refusal, not a silent block"*, because an empty base
+    /// compares unequal to every sha — so the first poll reports movement, the
+    /// lap abandons a run it never needed to, and it does that every lap
+    /// forever. Found by reading the dying suite's titles for the retirement
+    /// ledger rather than by any test here, which is the argument for reading
+    /// them.
+    #[test]
+    fn an_empty_base_is_never_reported_as_movement() {
+        let mut poll = Poll::default();
+        poll.absorb(Some(&ref_body(MOVED)), 1);
+        assert_eq!(
+            poll.moved(""),
+            None,
+            "there is nothing to have moved FROM, so nothing has moved"
+        );
+        assert_eq!(
+            poll.moved(BASE),
+            Some(MOVED),
+            "and a real base still reports movement, so the guard is not a mute"
+        );
     }
 }
