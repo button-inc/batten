@@ -104,7 +104,7 @@ jobs:
           # A release profile, which no other job builds, so a shared cache entry
           # would thrash.
           # The profile is part of the key too — see `ci.yml`'s `ci` job.
-          shared-key: perf-${{ hashFiles('Cargo.toml') }}
+          shared-key: perf-
       # Redirected into a file and read back, never piped into the gate. A
       # pipeline hands its exit status to the LAST stage, so `perf |
       # perf-assert` would discard exactly the measurement failure that must

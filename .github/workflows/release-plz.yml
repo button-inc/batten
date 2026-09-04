@@ -167,7 +167,7 @@ jobs:
           # cannot read. One spelling now, not two: `key` is an if/else
           # fallback rust-cache ignores whenever `shared-key` is set, so the
           # pair could drift while looking deliberate.
-          shared-key: ci-${{ hashFiles('Cargo.toml') }}
+          shared-key: ci-
       # Compile only when there is nothing to restore. The evidence and the
       # failure directions are recorded on the Windows job below; the same
       # reasoning applies unchanged, and the same property refuses an unguarded
@@ -201,7 +201,7 @@ jobs:
           # entry that job cannot read. One spelling now, not two — and that
           # job carried `key` where this one carried both, an asymmetry that
           # happened to match and could not be explained from the source.
-          shared-key: windows-${{ hashFiles('Cargo.toml') }}
+          shared-key: windows-
       # COMPILE ONLY WHEN THERE IS NOTHING TO RESTORE, and the evidence for this
       # is that every warm cycle after the first was pure waste (CLOUD-840).
       #

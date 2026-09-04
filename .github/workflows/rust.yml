@@ -129,7 +129,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # The profile is part of the key — see `ci.yml`'s `ci` job.
-          shared-key: cross-${{ hashFiles('Cargo.toml') }}
+          shared-key: cross-
       - run: mise run cross-check
         env:
           # Only the triple cross-check type-checks. doctor's default pair would
@@ -214,7 +214,7 @@ jobs:
           # A per-target key: a leg's artifacts are target-specific and would
           # otherwise thrash a shared entry if the second leg is restored.
           # The profile is part of the key too — see `ci.yml`'s `ci` job.
-          shared-key: ${{ matrix.target }}-${{ hashFiles('Cargo.toml') }}
+          shared-key: ${{ matrix.target }}
       - run: mise run darwin-link ${{ matrix.target }}
         env:
           # Exactly the target being linked; doctor's default would also fetch
@@ -293,7 +293,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # The profile is part of the key — see `ci.yml`'s `ci` job.
-          shared-key: semver-${{ hashFiles('Cargo.toml') }}
+          shared-key: semver-
       - run: mise run semver
 
   # THE OS MATRIX, and the only job here that EXECUTES rather than type-checks
@@ -463,20 +463,32 @@ jobs:
           # inference drawn from those strings and it was wrong; the strings
           # themselves were right.
           #
-          # THE PROFILE IS PART OF THE KEY (2026-09-01). `[profile.*]` lives in
-          # the root `Cargo.toml`, which rust-cache does NOT consider — it reads
-          # `Cargo.lock` and `crates/batten/Cargo.toml` only. So `f54a9c05`
-          # changed the dev profile, left the key untouched, and every restore
-          # since has reported `full match: true` while handing back artifacts
-          # built under the old profile: this job went from 1 `Compiling` line to
-          # 288, and `ci` from 0 to 121. The warm jobs could not repair it
-          # either, since they compile only on `cache-hit != 'true'` and the key
-          # still hit.
+          # NO CONTENT HASH, AND THE 288 `Compiling` LINES ARE WHY (CLOUD-1410).
+          # This block carried `-${{ hashFiles('Cargo.toml') }}`, argued for by
+          # `f54a9c05` changing the dev profile while the key stayed put and the
+          # restore reported `full match: true`. The premise is true — the root
+          # `Cargo.toml` is a VIRTUAL manifest, so `getWorkspaceMembers()` never
+          # returns it and neither `rustEnvHash` nor `lockHash` covers its
+          # `[profile.*]` — and the conclusion drawn from it is false. Those 288
+          # lines (and `ci`'s 121) are cargo's per-unit fingerprint correctly
+          # invalidating on the profile change: opt-level, debuginfo,
+          # debug-assertions, overflow-checks, lto, codegen-units, panic,
+          # incremental and strip are all in it, and an edit moves each unit's
+          # `-C metadata` / `-C extra-filename` hash, so rebuilt units land at
+          # different filenames and linking resolves through the fresh dep-info.
+          # No stale artifact was ever linked.
+          #
+          # What the hash bought was position `config.ts:77`, INSIDE the prefix
+          # assigned to `restoreKey` at `:133` — so it did not merely miss the
+          # exact key, it moved the fallback and nothing in the store matched.
+          # A 288-unit incremental rebuild became a cold build of 343 crates plus
+          # a discarded restore. `prefix-key` (`:73`) is the manual escape hatch
+          # if a target dir is ever genuinely poisoned.
           #
           # The warm side is `cache-warm-windows` in `release-plz.yml`. Both
           # must agree; that they are two places is the cost of the only trigger
           # this repository is allowed to hang a warm job on.
-          shared-key: windows-${{ hashFiles('Cargo.toml') }}
+          shared-key: windows-
       # A JOB THAT DECLARES A TOOL MUST BE ABLE TO REACH IT, asserted before the
       # suite rather than discovered inside it. `ci-tools-check` holds these
       # names against `mise.toml`, which is a different question: it cannot know

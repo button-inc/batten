@@ -66,7 +66,7 @@ jobs:
           # Instrumented builds are a different profile from every other job's,
           # so a shared cache entry would thrash.
           # The profile is part of the key too — see `ci.yml`'s `ci` job.
-          shared-key: coverage-${{ hashFiles('Cargo.toml') }}
+          shared-key: coverage-
       # Redirected, never piped. A pipeline hands the exit status to its LAST
       # stage, so `mise run coverage | tee ...` would report success whenever
       # `tee` succeeded — the false-green shape `mise run run-shape-guard`

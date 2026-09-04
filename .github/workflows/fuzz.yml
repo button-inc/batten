@@ -78,7 +78,7 @@ jobs:
           # Sanitizer-instrumented nightly builds share no artifacts with any
           # other job's profile, so a shared cache entry would only thrash.
           # The profile is part of the key too — see `ci.yml`'s `ci` job.
-          shared-key: fuzz-${{ hashFiles('Cargo.toml') }}
+          shared-key: fuzz-
       # The working corpus, carried between runs rather than committed. A fuzzer
       # that restarts from the seeds every week re-derives the same shallow
       # coverage every week and never gets past it; accumulating it in git

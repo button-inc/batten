@@ -321,15 +321,47 @@ jobs:
           # Must match `release-plz.yml`'s `cache-warm-linux` exactly or that job
           # writes an entry this one cannot read, which is the current failure
           # with extra steps.
-          # The profile is part of the key: `[profile.*]` lives in the root
-          # `Cargo.toml`, which rust-cache does NOT consider (it reads
-          # `Cargo.lock` and `crates/batten/Cargo.toml` only). Without it a
-          # profile change leaves the key untouched, the restore reports
-          # `full match: true`, and every artifact it hands back was built
-          # under the old profile — measured 2026-09-01: 0 -> 121 `Compiling`
-          # lines. In `shared-key` rather than `key` because `key` is an
-          # if/else fallback rust-cache ignores whenever `shared-key` is set.
-          shared-key: ci-${{ hashFiles('Cargo.toml') }}
+          # NO CONTENT HASH IN THIS VALUE, AND THE MEASUREMENT THAT USED TO
+          # ARGUE FOR ONE IS THE EVIDENCE AGAINST IT (CLOUD-1410).
+          #
+          # The true half of the retired comment: `[profile.*]` lives in the
+          # root `Cargo.toml`, which is a VIRTUAL manifest and therefore not a
+          # workspace member, so `getWorkspaceMembers()` never returns it and
+          # neither `rustEnvHash` nor `lockHash` covers it. That gap in the key
+          # is real. What does not follow is that the gap is a CORRECTNESS
+          # problem, and the retired comment asserted exactly that: that a
+          # restore without the hash hands back artifacts "built under the old
+          # profile", citing "0 -> 121 `Compiling` lines".
+          #
+          # Those 121 lines ARE cargo correctly invalidating. A per-unit
+          # fingerprint already carries opt-level, debuginfo, debug-assertions,
+          # overflow-checks, lto, codegen-units, panic, incremental and strip,
+          # and a profile edit moves each unit's `-C metadata` /
+          # `-C extra-filename` hash with it — so rebuilt units land at
+          # DIFFERENT filenames and linking resolves through the fresh
+          # fingerprint's dep-info rather than by name lookup in
+          # `target/debug/deps`. There is no path by which a stale artifact is
+          # linked. The measurement is the strongest evidence FOR dropping the
+          # hash, not against it.
+          #
+          # WHERE THE HASH LANDED IS WHAT MADE IT EXPENSIVE. `shared-key` is
+          # applied at `config.ts:77`, INSIDE the prefix assigned to
+          # `restoreKey` at `:133` — only `lockHash` (`:260`) falls outside it.
+          # So a hash here does not merely miss the exact key; it changes the
+          # fallback prefix, and no entry in the store matches. Every
+          # `[workspace.dependencies]` bump therefore went cold across all 343
+          # locked crates in every job at once. What the hash bought was a
+          # 121-unit incremental rebuild converted into a cold build plus a
+          # discarded multi-gigabyte restore, for identical correctness.
+          #
+          # THE ESCAPE HATCH, since a long-lived key has no natural eviction
+          # event: if a target directory is ever genuinely poisoned, bump
+          # `prefix-key` (`config.ts:73`) — one input, every family at once,
+          # separately revertable. That bump is deliberately NOT bundled here.
+          #
+          # In `shared-key` rather than `key` because `key` is an if/else
+          # fallback rust-cache ignores whenever `shared-key` is set.
+          shared-key: ci-
       # ASK WHETHER THIS DIFF CAN MOVE THE SLOW TIER (CLOUD-398). Measured
       # 2026-08-21: this job is ~13 of the ~14.7 billed minutes a non-Rust pull
       # request costs, `test:bats` is ~81% of it, and a one-file change to
@@ -533,7 +565,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # The profile is part of the key — see the `ci` job above.
-          shared-key: bats-${{ hashFiles('Cargo.toml') }}
+          shared-key: bats-
       # THE SAME QUESTION THE `ci` JOB ASKS, and it must stay in-job rather than
       # becoming a `paths:` filter or a job `if:` — see this job's header and
       # `final`'s. `test:bats` is one of the six `slow`-tagged steps, so a diff
@@ -640,7 +672,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # The profile is part of the key — see the `ci` job above.
-          shared-key: perf-${{ hashFiles('Cargo.toml') }}
+          shared-key: perf-
       # CLOUD-1331, corrected by CLOUD-1342. The BASE arm is a pure function of
       # the merge-base SHA, the pinned toolchain and `[profile.release]`, and
       # `main` advances only by fast-forward to already-judged SHAs — so
