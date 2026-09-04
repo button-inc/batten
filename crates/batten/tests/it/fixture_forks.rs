@@ -54,6 +54,10 @@ const FORKING_LONG: &str = r#"    git_in(&dir, &["init", "--quiet"]);"#;
 /// `origin/main` is a local ref pointed at the base commit: `base_delta`
 /// resolves a rev, and configuring a remote would make every case here depend on
 /// the network for an entirely local question. Same shape as `test_targets.rs`.
+// needs-real-fixture: CLOUD-1419 these fixtures need a real base ref for the
+// engine to resolve `base-delta` against, so `repo` builds history with real
+// git. A template copy carries no commits and this tier's whole point is driving
+// the engine over a branch that has some.
 fn repo(name: &str, base: &[(&str, &str)], head: &[(&str, &str)]) -> PathBuf {
     let root = common::scratch(name);
     common::git_in(&root, &["init", "--quiet"]);

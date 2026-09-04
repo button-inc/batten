@@ -4200,47 +4200,34 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bash: <issue> <why>` in the new program and own the increase; which of the two is the whole question"
 
-# CLOUD-1419's aggregate half. The module `policy/fixture-forks.rego` refuses a
-# NEW hand-rolled `git init` at the line that writes it; this refuses the total
-# sliding back up.
+# CLOUD-1419 HAS NO AGGREGATE RATCHET, AND THAT IS A MEASURED DECISION RATHER
+# THAN AN OMISSION.
 #
-# THE TWO ARE NOT DUPLICATION AND THE SPLIT IS FORCED. Rego is handed paths and
-# the base side of an edited path's LINES — never a base-side COUNT — so a module
-# can say "this file grew one" and cannot say "the suite grew twelve across
-# forty files". A ratchet counts a literal across a glob at the merge base and
-# compares two totals, which is the only instrument for the aggregate and the
-# wrong one for a pointer. `test-targets.rego`'s header argues the same split
-# from the module side.
+# A `kind = "ratchet"` row over `git_in(` was written here, in this branch, and
+# withdrawn in it. It counted CALL SITES, and the measurement this row's own
+# issue produced is that call sites do not track the cost: 79 hand-rolled `git
+# init` sites produced **1,819 git processes** over one traced run, roughly
+# twenty executions per site. So the fix — a template every fixture copies —
+# removed 1,008 processes while ADDING 17 call sites, and the row refused it at
+# `580->597`, naming the three files that had to grow for the reshaping to exist
+# at all.
 #
-# `git_in(` RATHER THAN THE `init` SPELLINGS, because those are the module's
-# subject and a second sensor over them would be two authorities on one fact.
-# What this owns is the whole fork surface: measured over one traced run, the
-# suite spends 9,476 git processes, and the reshaping's win is that a fixture
-# stops reaching for `git_in` at all rather than reaching for a different verb.
+# Its first firing was therefore on the change that improves the thing it
+# guards, which is the shape the preamble to `bash-surface-not-growing` already
+# refuses in as many words: "a volume ratchet fires on ordinary editing, so its
+# first firing would be a false positive — and a gate whose first firing is a
+# false positive gets an exception written for it, and the exception is what
+# rots." Spending `// needs-real-fixture:` on the three growing files would have
+# bought that exception immediately, to silence a premise rather than to own an
+# increase.
 #
-# NO CEILING IS WRITTEN DOWN — the row computes it, for the reason
-# `bash-surface-not-growing`'s preamble gives. A number here would be a second
-# authority over a count the engine takes at the merge base.
-#
-# `admits_with` IS STRUCTURALLY WEAKER THAN ITS SIBLING and must not be described
-# as the same guarantee. It is read from the WORKING tree, because a new file is
-# absent from base and there is nowhere else to read it, so a change CAN write
-# its own permission. What it buys is a silent regrowth becoming a visible,
-# attributed one. The glob is a directory rather than a single file, which is the
-# cardinality the column was designed for.
-[[rule]]
-id = "fixture-git-forks-not-growing"
-kind = "ratchet"
-glob = "crates/batten/tests/**/*.rs"
-pattern = "git_in("
-direction = "non_increasing"
-base = "origin/main"
-admits_with = "// needs-real-fixture:"
-severity = "deny"
-scope = "tree"
-no_fix_reason = "build the repository from the template `Fixture::git` copies, or declare `// needs-real-fixture: <issue> <why>` in the fixture and own the fork; which of the two is the whole question"
+# `policy/fixture-forks.rego` is the whole gate instead. It refuses a NEW
+# hand-rolled `git init` at the line that writes it, which is the reversal that
+# matters, and it fired correctly on the one case that legitimately needed the
+# admission in the same run. Nothing is left uncovered: the aggregate can only
+# grow through a new fork, and a new fork is what the module reads.
 
-# CLOUD-1419's pointer half. See the ratchet above for why both exist.
+# CLOUD-1419's gate. See the block above for why it is the only one.
 #
 # `delta_sources` is the integration suite rather than the whole tree: the module
 # decides over a path's CONTENT, so unlike `test-targets` it needs the lines, and

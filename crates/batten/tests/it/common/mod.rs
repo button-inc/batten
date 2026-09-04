@@ -743,6 +743,196 @@ pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
     command
 }
 
+/// The one `git init` this suite pays: an empty repository under
+/// `CARGO_TARGET_TMPDIR` that every in-tree fixture copies instead of forking.
+///
+/// # Per FILESYSTEM, not per process, and that is what makes it work at all
+///
+/// nextest runs each of the ~2,800 cases in its own process, so a `OnceLock`
+/// here is a `OnceLock` per CASE and would fork `git init` once per case —
+/// exactly the cost it exists to remove. The shared artefact has to live on the
+/// filesystem; the `OnceLock` below memoizes only the resolved PATH within one
+/// process.
+///
+/// # Published by rename, which cannot land on a non-empty directory
+///
+/// The build goes into a pid-unique staging directory and is published with one
+/// `fs::rename`. `rename(2)` of a directory onto a non-empty one fails with
+/// `ENOTEMPTY`, so the publish is exclusive by construction: two racing
+/// processes each build a COMPLETE repository, exactly one wins, and the loser
+/// deletes its own copy and reads the winner's. A partial template is
+/// unreachable because nothing is ever written *into* the published path.
+///
+/// No `fs4` lock: serialising a handful of concurrent builders to save a handful
+/// of redundant `git init`s is the wrong trade for a once-per-filesystem cost,
+/// and a lock file is one more thing to leak.
+///
+/// # The stamp is the `git` binary's own metadata
+///
+/// A hand-bumped version constant would leave a stale template behind whenever
+/// the builder or the local git changed, and the failure would be silent — every
+/// fixture inheriting a repository built by a different git. The path carries the
+/// resolved binary's length and mtime instead, so a git upgrade mints a new
+/// template rather than reusing the old one. Resolved by scanning `PATH` rather
+/// than by asking `git --version`, because a fork per process is the thing being
+/// removed.
+///
+/// # The identity lives in the template's own config
+///
+/// 53 sites spend two extra forks on `git config user.email`/`user.name` after
+/// `init`, and those are NOT redundant with [`git_command`]'s `-c` pins: the
+/// binary under test reads the value through `git::config_value`, and a `-c`
+/// flag on the harness's own git never reaches it. Baking it into the template's
+/// `.git/config` is the same values by a cheaper route. A fixture that wants a
+/// DIFFERENT identity still sets it after the copy, and one whose subject is an
+/// UNSET identity unsets it — `attribution.rs` already does exactly that.
+fn git_init_template() -> &'static Path {
+    static TEMPLATE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    TEMPLATE.get_or_init(|| {
+        let published = target_tmp().join(format!("git-init-template-{}", git_stamp()));
+        if published.join("HEAD").is_file() && published.join("config").is_file() {
+            return published;
+        }
+        let staging = target_tmp().join(format!(
+            "git-init-template-{}.staging-{}",
+            git_stamp(),
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&staging);
+        fs::create_dir_all(&staging).expect("create the template staging directory");
+        git_in(&staging, &["init", "-q"]);
+        git_in(&staging, &["config", "user.email", "t@example.com"]);
+        git_in(&staging, &["config", "user.name", "t"]);
+        // Publish the `.git` itself rather than the work tree around it: what a
+        // fixture copies is a repository directory, and lifting it here keeps
+        // `init_repo` from having to know the template's internal layout.
+        if fs::rename(staging.join(".git"), &published).is_err() {
+            // Another process published first, which is the whole point of the
+            // rename. Its copy is complete; ours is not needed.
+            let _ = fs::remove_dir_all(&staging);
+            return published;
+        }
+        let _ = fs::remove_dir_all(&staging);
+        published
+    })
+}
+
+/// The resolved `git` binary's length and mtime, as one path-safe token.
+///
+/// Falls back to a literal when `PATH` carries no `git` this can stat — the
+/// template is then shared across git versions, which is the pre-existing
+/// behaviour rather than a new hazard, and a machine with no `git` on `PATH`
+/// fails at the first [`git_in`] regardless.
+fn git_stamp() -> String {
+    static STAMP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let Some(path) = std::env::var_os("PATH") else {
+            return "unresolved".to_owned();
+        };
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join("git");
+            let Ok(meta) = fs::metadata(&candidate) else {
+                continue;
+            };
+            if !meta.is_file() {
+                continue;
+            }
+            let secs = meta
+                .modified()
+                .ok()
+                .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |since| since.as_secs());
+            return format!("{}-{secs}", meta.len());
+        }
+        "unresolved".to_owned()
+    });
+    STAMP.clone()
+}
+
+/// Copy `from` into `to` recursively — directories, including empty ones, and
+/// Unix permission bits.
+///
+/// Hand-rolled rather than reaching for the walker the engine uses: that one
+/// skips `.git` by default, which is the entire subject here. Files-only would
+/// be wrong too — `objects/info`, `objects/pack`, `refs/heads`, `refs/tags` and
+/// `branches` are all empty in a fresh `init`, and dropping them silently would
+/// hand every fixture a repository git has to repair.
+fn copy_tree(from: &Path, to: &Path) {
+    fs::create_dir_all(to).expect("create the copy destination");
+    for entry in fs::read_dir(from).expect("read the template directory") {
+        let entry = entry.expect("a template entry");
+        let target = to.join(entry.file_name());
+        let kind = entry.file_type().expect("a template entry's type");
+        if kind.is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).expect("copy a template file");
+        }
+    }
+}
+
+/// Make `dir` a git repository.
+///
+/// Under `CARGO_TARGET_TMPDIR` this copies [`git_init_template`], at zero forks.
+/// Anywhere else it forks a real `git init -q`, and the split is a correctness
+/// requirement rather than a shortcut: a template published on one filesystem
+/// carries THAT filesystem's answers for `core.filemode` and `core.ignorecase`
+/// in its `config`, and the fixtures built by [`scratch_outside_tree`] live
+/// under the system temp dir for reasons this module's header records.
+///
+/// # Panics
+///
+/// When `dir` is already a repository. `git init` over one is a silent re-init,
+/// so the fork tolerated a double call; a copy would merge into the existing
+/// `.git` instead and leave a fixture whose state neither caller intended.
+pub(crate) fn init_repo(dir: &Path) {
+    assert!(
+        !dir.join(".git").exists(),
+        "{} is already a repository: `git init` was a silent re-init and a \
+         template copy is not, so a second initialisation has to be deliberate",
+        dir.display()
+    );
+    if dir.starts_with(target_tmp()) {
+        copy_tree(git_init_template(), &dir.join(".git"));
+    } else {
+        git_in(dir, &["init", "-q"]);
+    }
+}
+
+/// Point `refs/remotes/origin/main` at `refs/heads/main` by writing the loose
+/// ref.
+///
+/// That is the whole of what `git update-ref` does on a repository this young,
+/// minus a reflog nothing in this workspace reads: all of `crates/batten/src`
+/// mentions reflogs twice, to switch one off and to say there are none, and no
+/// `<ref>@{n}` revision suffix exists in src or tests outside a policy string.
+///
+/// # Panics
+///
+/// When the branch ref is not loose, or is not 40 hex characters. Both are
+/// ASSERTED rather than assumed: `packed-refs` is written by `pack-refs`, `gc`
+/// and `clone`, none of which a [`Fixture`] runs — and [`git_command`]'s
+/// `gc.auto=0` closes the auto path — so a fixture that ever packs its refs
+/// should fail here by name rather than pin nothing and pass.
+pub(crate) fn pin_origin_main(dir: &Path) {
+    let git = dir.join(".git");
+    assert!(
+        !git.join("packed-refs").exists(),
+        "{} has packed refs, so a loose-ref write would pin nothing",
+        dir.display()
+    );
+    let head = fs::read_to_string(git.join("refs/heads/main"))
+        .expect("the fixture's own branch ref, written by the commit above");
+    let sha = head.trim();
+    assert!(
+        sha.len() == 40 && sha.chars().all(|it| it.is_ascii_hexdigit()),
+        "{} does not hold one object id",
+        git.join("refs/heads/main").display()
+    );
+    let remote = git.join("refs/remotes/origin");
+    fs::create_dir_all(&remote).expect("create the remote ref directory");
+    fs::write(remote.join("main"), format!("{sha}\n")).expect("write the base ref");
+}
+
 /// A scratch repository: a wiped directory, optionally a git repository,
 /// carrying a `batten.toml` and any extra files.
 ///
@@ -804,22 +994,30 @@ impl Fixture {
         self
     }
 
-    /// `git init` the fixture.
+    /// Make the fixture a git repository.
     ///
-    /// ONE PROCESS, and the `branch -M main` that used to follow it is deleted
-    /// rather than replaced by `-b main` (CLOUD-1290). [`git_command`] pins
+    /// ZERO PROCESSES since CLOUD-1419: [`init_repo`] copies the template
+    /// [`git_init_template`] publishes once per filesystem. The trace that
+    /// motivated it counted **1,819 `init` processes, 4.49s** over one run, from
+    /// 79 hand-rolled call sites plus this one — a call site spent roughly twenty
+    /// times per run, which is why nothing here counts call sites.
+    ///
+    /// **THE NAME AND EVERY ONE OF ITS 176 CALL SITES ARE UNCHANGED**, and that
+    /// is the point rather than a convenience: the cost moves and the coverage
+    /// does not. Every case that built a repository still builds one, asserting
+    /// exactly what it asserted before.
+    ///
+    /// The `branch -M main` that used to follow the fork is deleted rather than
+    /// replaced by `-b main` (CLOUD-1290). [`git_command`] pins
     /// `-c init.defaultBranch=main` on every invocation, so the default already
     /// IS `main` and both the rename and the flag restate it. Measured on git
     /// 2.43.0 through those same pinned flags: `init -q` alone leaves `main`, and
-    /// it is still `main` after the first commit.
-    ///
-    /// Deleting rather than replacing is what keeps this free of a version floor.
-    /// `-b` arrived in git 2.28 and there is no `[tools]` entry pinning git, so
-    /// the flag would have put a requirement on the developer's machine that the
-    /// lockfile cannot hold — for a default this harness already controls.
+    /// it is still `main` after the first commit — and the template is built
+    /// through the same pinned invocation, so the copy inherits that default
+    /// rather than re-deriving it.
     #[must_use]
     pub(crate) fn git(self) -> Self {
-        git_in(&self.dir, &["init", "-q"]);
+        init_repo(&self.dir);
         self
     }
 
@@ -831,14 +1029,24 @@ impl Fixture {
     /// `base_commit()` chain in the suite is preceded by `.git()`, checked with
     /// zero counterexamples, so there is no fixture arriving here through some
     /// other initialisation whose branch the rename was normalising.
+    /// TWO PROCESSES, down from three: the `update-ref` is a loose-ref write now
+    /// ([`pin_origin_main`], CLOUD-1419), which the trace counted at **1,020
+    /// processes** over one run.
+    ///
+    /// `add -A` and `commit` STAY, and the reasons are checked rather than
+    /// assumed. `commit -a` stages modifications and deletions of TRACKED files
+    /// only, and a `base_commit()` runs over a tree whose files are all
+    /// untracked, so it would commit nothing. `commit -- <pathspec>` is `--only`
+    /// semantics and errors on a pathspec matching no known file. The one
+    /// remaining single-fork route is writing the blob, tree and commit objects
+    /// here, which is a third git implementation — and [`git_command`]'s own
+    /// annotation forbids exactly that: fixtures are built by the reference
+    /// implementation on purpose.
     #[must_use]
     pub(crate) fn base_commit(self) -> Self {
         git_in(&self.dir, &["add", "-A"]);
         git_in(&self.dir, &["commit", "-q", "-m", "base policy"]);
-        git_in(
-            &self.dir,
-            &["update-ref", "refs/remotes/origin/main", "HEAD"],
-        );
+        pin_origin_main(&self.dir);
         self
     }
 

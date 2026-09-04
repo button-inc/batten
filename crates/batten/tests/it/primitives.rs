@@ -1726,3 +1726,177 @@ fn a_nested_change_is_recognised_when_it_lands_on_a_moved_base() {
         "a replayed change under a subdirectory is still the same change"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The fixture template (CLOUD-1419).
+//
+// `Fixture::git` copies a repository the harness publishes once per filesystem
+// instead of forking `git init` per case. What makes that sound is that a fresh
+// `git init` writes no absolute path anywhere — `HEAD` is `ref: refs/heads/main`,
+// `config` carries only `[core]` booleans, and there is no `objects/info/
+// alternates`, no `.git` FILE and no `core.worktree`. These cases pin it,
+// because the failure mode of getting it wrong is every fixture in the run
+// inheriting a repository built for somewhere else.
+// ---------------------------------------------------------------------------
+
+/// The copy is what `git init` would have produced, compared as SETS OF PATHS
+/// rather than as file bytes alone.
+///
+/// One case pins four things that would otherwise need four: the copy is
+/// complete, empty directories survive it (`objects/info`, `objects/pack`,
+/// `refs/heads`, `refs/tags`, `branches` are all empty in a fresh init and a
+/// files-only copy would drop them silently), the template is not stale, and the
+/// hooks samples plus `description` and `info/exclude` are carried — the last
+/// mattering because the engine reads `.git/info/exclude` as git's
+/// lowest-precedence repository source, so a fixture missing it is a different
+/// input to the code under test.
+// needs-real-fixture: CLOUD-1419 this case's whole subject is whether the copy
+// equals the fork, so one arm has to BE a real `git init`. Declaring it is the
+// admission `policy/fixture-forks.rego` reserves for a case whose assertion is
+// initialisation itself, and this is the first thing that gate fired on.
+#[test]
+fn a_copied_repository_is_what_a_fresh_init_would_have_written() {
+    let forked = common::scratch("template/forked");
+    common::git_in(&forked, &["init", "-q"]);
+    common::git_in(&forked, &["config", "user.email", "t@example.com"]);
+    common::git_in(&forked, &["config", "user.name", "t"]);
+
+    let copied = common::scratch("template/copied");
+    common::init_repo(&copied);
+
+    let mut expected = entries(&forked.join(".git"));
+    let mut found = entries(&copied.join(".git"));
+    expected.sort();
+    found.sort();
+    assert_eq!(
+        found, expected,
+        "the copy has to be path-for-path what the fork writes, directories \
+         included — a dropped empty directory is a repository git repairs"
+    );
+    // ANTI-VACUITY: both sides being empty would satisfy the equality above.
+    assert!(
+        expected.len() > 10,
+        "a fresh `git init` writes the default template; {} entries means this \
+         case is comparing the wrong thing",
+        expected.len()
+    );
+
+    for (relative, kind) in &found {
+        if *kind != "file" {
+            continue;
+        }
+        assert_eq!(
+            fs::read(copied.join(".git").join(relative)).expect("the copied file"),
+            fs::read(forked.join(".git").join(relative)).expect("the forked file"),
+            "{relative} differs between the copy and the fork"
+        );
+    }
+}
+
+/// Every path under `root`, relative, tagged by kind so a directory replaced by
+/// a file of the same name is a difference rather than a match.
+fn entries(root: &Path) -> Vec<(String, &'static str)> {
+    let mut found = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(read) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read {
+            let entry = entry.expect("a repository entry");
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(root)
+                .expect("a path under the root")
+                .to_string_lossy()
+                .into_owned();
+            if entry.file_type().expect("an entry's type").is_dir() {
+                found.push((relative, "dir"));
+                pending.push(path);
+            } else {
+                found.push((relative, "file"));
+            }
+        }
+    }
+    found
+}
+
+/// The identity the template bakes in is the one the BINARY UNDER TEST reads.
+///
+/// This is the half a `-c` flag cannot cover and the reason the two `git config`
+/// forks moved into the template rather than being deleted: `git::config_value`
+/// reads `.git/config`, and a `-c` on the harness's own git never reaches it.
+#[test]
+fn the_template_carries_the_identity_the_engine_reads() {
+    let dir = common::scratch("template/identity");
+    common::init_repo(&dir);
+    assert_eq!(
+        common::git_in(&dir, &["config", "--local", "user.email"]),
+        "t@example.com",
+        "a fixture's own `.git/config` is where the engine looks for an identity"
+    );
+}
+
+/// The base ref a pull request is judged against resolves exactly as `git`
+/// resolves it, having been written as a loose ref rather than through
+/// `update-ref`.
+#[test]
+fn the_pinned_base_ref_reads_back_as_git_resolves_it() {
+    let dir = common::Fixture::new("template/pinned")
+        .config("version = 1\n")
+        .git()
+        .base_commit()
+        .build();
+    assert_eq!(
+        common::git_in(&dir, &["rev-parse", "refs/remotes/origin/main"]),
+        common::git_in(&dir, &["rev-parse", "HEAD"]),
+        "the loose-ref write has to be what `update-ref` would have left"
+    );
+    assert!(
+        common::git_in(&dir, &["for-each-ref", "refs/remotes"])
+            .contains("refs/remotes/origin/main"),
+        "and it has to be enumerable, not merely readable by name"
+    );
+}
+
+/// A fixture outside `CARGO_TARGET_TMPDIR` still forks a real `git init`.
+///
+/// The template's `config` carries its own filesystem's answers for
+/// `core.filemode` and `core.ignorecase`, so copying it across a filesystem
+/// boundary would hand a fixture the wrong ones.
+#[test]
+fn an_outside_tree_repository_still_forks_git() {
+    let dir = common::scratch_outside_tree("batten-template", "outside");
+    common::init_repo(&dir);
+    assert_eq!(
+        common::git_in(&dir, &["rev-parse", "--is-inside-work-tree"]),
+        "true",
+        "the fork has to produce a repository git accepts"
+    );
+}
+
+/// The template's directory name is reserved: no case may `scratch` it.
+///
+/// `make_empty` wipes whatever it is handed, so a case naming the template would
+/// delete it out from under every concurrent case in the run — and the next one
+/// would rebuild it, which makes the symptom intermittent rather than loud.
+#[test]
+fn no_case_names_the_template_directory() {
+    let named: Vec<(usize, String)> = common::rust_sources()
+        .into_iter()
+        .filter(|path| path.starts_with(common::at_root("crates/batten/tests/it")))
+        .flat_map(|path| {
+            let text = fs::read_to_string(&path).unwrap_or_default();
+            text.lines()
+                .enumerate()
+                .filter(|(_, line)| line.contains("scratch(\"git-init-template"))
+                .map(|(index, _)| (index + 1, path.display().to_string()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(
+        named.is_empty(),
+        "the template directory is shared across every case in the run and \
+         `make_empty` would wipe it: {named:?}"
+    );
+}

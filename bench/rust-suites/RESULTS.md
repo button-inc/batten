@@ -226,6 +226,54 @@ vendored preset corpus" — is **withdrawn rather than filed**: `check` minus
 `--version` is 2.3 ms, which is config load, trust resolution and a one-rule tree
 walk together. There is no preset-compile cost per fork to remove.
 
+## Step 3, measured: the template and the loose-ref write
+
+`Fixture::git` copies a repository published once per filesystem;
+`base_commit`'s `update-ref` becomes a loose-ref write.
+
+|               | baseline | step 1 | step 3    |
+| ------------- | -------- | ------ | --------- |
+| git processes | 9,476    | 7,829  | **6,035** |
+| git seconds   | 25.17    | 18.18  | **15.42** |
+| `init`        | 1,819    | 1,821  | **813**   |
+| `update-ref`  | 1,018    | 1,020  | **0**     |
+| `maintenance` | 1,745    | 0      | 0         |
+
+Cumulative: **−3,441 git processes (−36%) and −9.75s (−39%)**, which is 1.86% of
+the 523.3s serial total.
+
+The 813 `init` processes that remain are the 79 hand-rolled call sites, at
+roughly ten executions each. Converting them is worth **1.46s, 0.28% of
+serial**, against a diff across 59 modules — so they are left alone, and
+`policy/fixture-forks.rego` is what stops a new one being written.
+
+## The ratchet this branch wrote and withdrew
+
+A `kind = "ratchet"` row over `git_in(` was landed here and removed here, and
+the reason is the table above.
+
+The row counted CALL SITES. The measurement is that call sites do not track the
+cost — 79 `git init` sites produce 1,819 processes — so the template removed
+1,008 processes while ADDING 17 call sites, and the row refused its own enabling
+change at `580->597`, naming `common/mod.rs`, `fixture_forks.rs` and
+`primitives.rs`: the three files that had to grow for the reshaping to exist.
+
+**Its first firing was on the change that improves the thing it guards.** That
+is the shape `batten.toml`'s preamble for the volume ratchet it declined to
+write already refuses: _"a gate whose first firing is a false positive gets an
+exception written for it, and the exception is what rots."_ Spending
+`// needs-real-fixture:` on those three files would have bought that exception
+immediately — to silence a premise rather than to own an increase.
+
+`policy/fixture-forks.rego` is the gate instead, and in the same run it fired
+correctly on `primitives.rs:48`, the one case whose subject genuinely IS a real
+`git init`: the arm that compares the copy against the fork. That is the
+admission being used for what it is for.
+
+Nothing is left uncovered. The aggregate can only grow through a new fork, and a
+new fork is what the module reads — at a `path:line` a reader opens, rather than
+as a total they have to reconstruct.
+
 ## The honest headline
 
 The fixture is not what the suite spends its time on. Making it cheap is worth
