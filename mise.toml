@@ -383,6 +383,14 @@ CI_REQUIRED_CHECKS = "ci,batten-check,bats,cross,commit-lint,zizmor,darwin-link 
 # only caller — which is what slice 7's deletion would orphan.
 LAND_BODY_SOURCE = "gh pr view --json body --jq .body"
 LAND_BODY_GATES = "mise run deferral-check|mise run closing-key-check"
+# THE RECLAIM CENSUS'S STOP NOTE (CLOUD-451), declared here because the program
+# is this consumer's and a census name inside `crates/batten` is non-negotiable
+# rule 1's plainest violation. `batten lease release` spawns it when a release
+# applies — which is the engine recording that IT chose to stop its heartbeat,
+# and never the heartbeat's own exit path (CLOUD-491): an exit path runs on the
+# container kill too, and a note from one would erase the only distinction the
+# census draws.
+LEASE_STOP_NOTE = "mise-tasks/reclaim-census.sh note x land-stopped"
 # The subset of that roster for which ABSENCE — no check-run at all, as opposed
 # to one that graded `skipped` — is a legitimate reading rather than a name that
 # has not registered yet. Exactly two WORKFLOWS earn it, and each earns it twice

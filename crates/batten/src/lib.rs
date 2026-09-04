@@ -7168,6 +7168,38 @@ fn lease_bail_reason(git_dir: &Path, why: &str) {
     }
 }
 
+/// Tell a consumer's reclaim census that THIS process chose to stop.
+///
+/// **The distinction the census draws, and the one thing that keeps it honest**
+/// (CLOUD-451, conserving `land.sh`'s `drop_lease`). A heartbeat records a beat
+/// per interval and a stop-note only where IT decides to stop — but the
+/// commonest stop is not one of those: a lap that finishes normally KILLS the
+/// heartbeat, so the loop never runs another statement and its last record stays
+/// a beat. Left that way, every successful landing afterwards reads as *the
+/// container died under active work* — the false positive that would wrongly
+/// license the mechanism CLOUD-515 removed for want of evidence.
+///
+/// **Written HERE and never from the heartbeat's own exit path** (CLOUD-491): an
+/// exit path runs on the container kill too, and a note from one would erase the
+/// only distinction the census draws. This is the release recording that it
+/// chose to stop its own child.
+///
+/// **The argv is the CONSUMER'S, read from `$LEASE_STOP_NOTE`.** A census
+/// program's name inside `crates/batten` is non-negotiable rule 1's plainest
+/// violation, and this is the same shape `LAND_BODY_GATES` already takes: the
+/// engine spawns what the consumer declared, through the sanctioned boundary,
+/// and a consumer that declares nothing gets nothing spawned.
+///
+/// Silent and best-effort in every direction. A census note that could not be
+/// written is not a reason to fail a release that already succeeded.
+fn note_release(root: &Path) {
+    let declared = std::env::var("LEASE_STOP_NOTE").unwrap_or_default();
+    let Some(argv) = land::body_gates(&declared).into_iter().next() else {
+        return;
+    };
+    let _ = exec::piped_argv(root, &argv, "");
+}
+
 /// `lease release`: a tombstone, never a delete.
 ///
 /// Releasing a lease this clone does not hold is NOT an error: the trap that calls
@@ -7214,6 +7246,7 @@ fn run_lease_release(
             // that this clone no longer holds it, and leaving one would let the
             // offline reader honour a lease its holder had already handed on.
             lease_receipt_clear(root, &body.branch);
+            note_release(root);
             writeln!(out, "lease: released")?;
             Ok(ExitCode::Success)
         }
