@@ -343,6 +343,17 @@ run = "mise run lint"
 run = """
 if ! cargo nextest run --workspace; then exit 1; fi
 """
+
+# `deny` BY NAME, AND IT IS THE REGRESSION TERM RATHER THAN A FILLER TASK
+# (measured 2026-09-04). This module was silent over the real tree for as long as
+# it bound the manifest to a top-level rule: a top-level rule whose value carries
+# a `deny` key at any depth silences the whole module under the engine's
+# evaluator, and `mise.toml` declares `[tasks.deny]` for cargo-deny. This fixture
+# declared no such task, so every case below was green over a shape that cannot
+# trigger it — the suite agreed with the module and neither agreed with the tree.
+# Removing this block makes the suite blind again.
+[tasks.deny]
+run = "cargo deny check"
 "#;
 
 const RENOVATE: &str = r#"{

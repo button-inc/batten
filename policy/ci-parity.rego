@@ -71,13 +71,40 @@ rules contains "cache-path-is-rebase-stable"
 
 # --- the manifest, and the guard ----------------------------------------------
 
-manifest := input.tree.documents["mise.toml"]
+# THE MANIFEST IS NOT BOUND TO A TOP-LEVEL RULE, AND THAT IS A MEASURED REPAIR
+# RATHER THAN A STYLE CHOICE.
+#
+# This read was `manifest := input.tree.documents["mise.toml"]` and **this module
+# was silent over this repository's own tree for as long as that line stood** —
+# every predicate, including one whose body is `true`. Measured 2026-09-04 over
+# the compiled engine: a top-level rule whose VALUE carries a `deny` key at any
+# depth silences the whole module, and `mise.toml` declares `[tasks.deny]`
+# (cargo-deny). Confirmed with an UNCONDITIONAL arm, which is the only probe that
+# can tell a silent module from a clean tree: with `[tasks.deny]` present the arm
+# said nothing, and with that one block removed it spoke and a real finding
+# appeared beside it. `opa eval` over the identical input returns the expected
+# findings, so the divergence is the engine's evaluator rather than the policy.
+#
+# `.env` IS SAFE AND `.tasks` IS NOT, which is why this is two reads rather than
+# one: the env table carries no `deny` key and the task table carries it
+# directly. So the env half stays bound and every task read is inlined at its
+# use site. Do not re-collapse them.
+#
+# WHAT THIS COST, because it is the whole reason the comment is this long. The
+# properties in this module are `ci-task-parity`, the required-check roster in
+# both directions, the fan-in wiring, and the lease-before-spending precondition
+# — and a gate that passes because it is dead is byte-identical, on the decision
+# surface, to a gate that passed. The suite could not see it either: the fixture
+# manifest in `crates/batten/tests/it/ci_parity.rs` declared no `deny` task, so
+# every case was green over a shape that cannot trigger it. That fixture now
+# declares one, which is the regression term.
+manifest_env := input.tree.documents["mise.toml"].env
 
 # A repository with no `verify` task is answering for nothing here. The guard
 # matters for `hk-fix-selection`'s measured reason: an unguarded module reported
 # seven findings against a fixture carrying a copy of the config and none of its
 # subjects.
-governed if manifest.tasks.verify
+governed if input.tree.documents["mise.toml"].tasks.verify
 
 # WHAT `mise run verify` ACTUALLY RUNS, and it is TWO blocks rather than one.
 # `verify` is a dependency-free exit-code mapper since CLOUD-407 and the gate set
@@ -90,10 +117,10 @@ governed if manifest.tasks.verify
 # third link would break this loudly, and an evaluator that followed `mise run`
 # calls transitively would be a second authority on the task graph mise owns.
 verify_text := concat("\n", [
-	object.get(manifest.tasks, ["verify", "run"], ""),
-	concat(" ", object.get(manifest.tasks, ["verify", "depends"], [])),
-	object.get(manifest.tasks, ["verify:gated", "run"], ""),
-	concat(" ", object.get(manifest.tasks, ["verify:gated", "depends"], [])),
+	object.get(input.tree.documents["mise.toml"].tasks, ["verify", "run"], ""),
+	concat(" ", object.get(input.tree.documents["mise.toml"].tasks, ["verify", "depends"], [])),
+	object.get(input.tree.documents["mise.toml"].tasks, ["verify:gated", "run"], ""),
+	concat(" ", object.get(input.tree.documents["mise.toml"].tasks, ["verify:gated", "depends"], [])),
 ])
 
 # --- the workflows ------------------------------------------------------------
@@ -170,7 +197,7 @@ violation contains {
 # name matching no job waits forever for a run nothing will ever create.
 
 roster_names contains base_name(trim_space(part)) if {
-	some part in split(manifest.env.CI_REQUIRED_CHECKS, ",")
+	some part in split(manifest_env.CI_REQUIRED_CHECKS, ",")
 	trim_space(part) != ""
 }
 
@@ -224,6 +251,15 @@ violation contains {
 	release_config
 	object.get(release_config, ["pr", "pr_draft"], false) != true
 	object.get(release_config, ["pr_draft"], false) != true
+	# `[workspace]` IS WHERE release-plz ACTUALLY READS IT, and its absence here
+	# was a false positive this clause could not report because the module was
+	# silent (measured 2026-09-04, found by repairing the `manifest` binding
+	# above). This repository sets `pr_draft = true` under `[workspace]`, which is
+	# the documented home for a workspace-wide default; the two spellings above
+	# are the top-level and `[pr]` forms, and neither is what release-plz reads
+	# for a workspace. All three are checked because a consumer may set it at any
+	# of them and the mechanism is satisfied by any one.
+	object.get(release_config, ["workspace", "pr_draft"], false) != true
 }
 
 # --- one bot serves every ecosystem this tree maintains (properties 12-14) ----
@@ -325,9 +361,9 @@ violation contains {
 # the declared workflow declares a job of that name, the abandon reads the
 # declaration rather than a literal, and the lander actually calls it.
 
-fanin_check := manifest.env.CI_FANIN_CHECK
+fanin_check := manifest_env.CI_FANIN_CHECK
 
-fanin_workflow := manifest.env.CI_FANIN_WORKFLOW
+fanin_workflow := manifest_env.CI_FANIN_WORKFLOW
 
 violation contains {
 	"rule": "fan-in-is-wired",
@@ -638,7 +674,7 @@ violation contains {
 # guard the body wraps it in. A partial rule rather than a function: a body with
 # no such line yields nothing, which is what the could-not-look clause reads.
 task_cargo contains cmd if {
-	body := object.get(manifest.tasks, ["test:cargo", "run"], "")
+	body := object.get(input.tree.documents["mise.toml"].tasks, ["test:cargo", "run"], "")
 	some raw in split(body, "\n")
 	trimmed := trim_space(raw)
 	startswith(trimmed, "if ! cargo ")
@@ -683,7 +719,7 @@ violation contains {
 	"subjects": [{"count": 0}],
 } if {
 	governed
-	manifest.tasks["test:cargo"]
+	input.tree.documents["mise.toml"].tasks["test:cargo"]
 	count(task_cargo) > 0
 	count(foreign_cargo) == 0
 }
@@ -694,7 +730,7 @@ violation contains {
 	"subjects": [{"artifact": "test:cargo"}],
 } if {
 	governed
-	manifest.tasks["test:cargo"]
+	input.tree.documents["mise.toml"].tasks["test:cargo"]
 	count(task_cargo) == 0
 }
 
