@@ -109,19 +109,13 @@ impl Advertisement {
 
 /// The bearer token this repository's remote needs, or `None`.
 ///
-/// **Resolved here and returned to nobody.** It is deliberately not a field of
-/// [`Terms`] or of any other value: a token in a struct is a token in that
-/// struct's `Debug`, and non-negotiable rule 4 makes every report here a pointer.
-/// Keeping it inside the two functions that build a request means there is no
-/// value a caller could print by accident.
-///
-/// `GH_TOKEN` first, matching the forge CLI's own precedence, so a session that
-/// set one for that tool does not have to set a second.
+/// **Delegated to [`crate::rest::credential`]**, which is this function
+/// promoted rather than a second reader. The four spawns CLOUD-1338 removed all
+/// justified themselves with *"this crate carries no HTTP client that resolves a
+/// forge credential"*, and one of them was written in this file — so the reader
+/// has one home now and the sentence has nowhere left to be true.
 fn credential() -> Option<String> {
-    ["GH_TOKEN", "GITHUB_TOKEN"]
-        .into_iter()
-        .find_map(|name| std::env::var(name).ok())
-        .filter(|token| !token.is_empty())
+    crate::rest::credential()
 }
 
 /// The request headers for one exchange, with the credential attached when there
@@ -2329,36 +2323,12 @@ pub fn guard(carries: &Carries, authority: Option<&Authority>) -> Guarded {
 /// is standing in.
 #[must_use]
 pub fn cancel_run(repo: &str, run: &str) -> bool {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: cancelling the run this guard is standing in is a forge WRITE, and this \
-                  crate carries no HTTP client that resolves a forge credential — the forge's own \
-                  client IS the call (CLOUD-1143, CLOUD-420)"
-    )]
-    let output =
-        crate::rules::spawn_resolving(Some(std::path::Path::new(".")), FORGE, |program, extra| {
-            std::process::Command::new(program)
-                .args(extra)
-                .args([
-                    String::from("api"),
-                    String::from("-X"),
-                    String::from("POST"),
-                    format!("repos/{repo}/actions/runs/{run}/cancel"),
-                ])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-        });
-    output.is_ok_and(|status| status.success())
+    crate::rest::post(&format!("repos/{repo}/actions/runs/{run}/cancel"))
 }
 
 // ---------------------------------------------------------------------------
 // CLOUD-1148 §2: does this head carry the landing mechanism trunk has?
 // ---------------------------------------------------------------------------
-
-/// The client the staleness read goes through. The forge's own, because the
-/// question is asked where there is no clone yet.
-const FORGE: &str = "gh";
 
 /// What the staleness read decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2383,31 +2353,21 @@ pub enum Carries {
     },
 }
 
-/// One `gh api` read, as raw stdout.
+/// One REST read, as the body text.
+///
+/// **IN PROCESS, over [`crate::rest`].** This was a `gh` spawn whose
+/// `#[expect(clippy::disallowed_types)]` reason claimed the crate carries no
+/// HTTP client that resolves a forge credential — eighty lines from
+/// [`credential`]'s predecessor in this same file, which reads `GH_TOKEN` and
+/// attaches a bearer header to a [`crate::fetch`] call. The claim was false where
+/// it was easiest to check.
 ///
 /// Empty on any failure, which is the same could-not-look posture
-/// [`crate::pr_watch::read`] and [`crate::main_watch::read`] take: every failure
-/// to reach the forge is a reading nobody took, never a verdict.
+/// [`crate::main_watch::read`] takes: every failure to reach the forge is a
+/// reading nobody took, never a verdict.
 #[must_use]
-fn forge_read(args: &[String]) -> String {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: the staleness read runs in CI BEFORE any checkout exists, so there is no \
-                  clone to ask and this crate carries no HTTP client that resolves a forge \
-                  credential — the forge's own client IS the read (CLOUD-1143)"
-    )]
-    let output =
-        crate::rules::spawn_resolving(Some(std::path::Path::new(".")), FORGE, |program, extra| {
-            std::process::Command::new(program)
-                .args(extra)
-                .args(args)
-                .stderr(std::process::Stdio::null())
-                .output()
-        });
-    output.map_or_else(
-        |_| String::new(),
-        |output| String::from_utf8_lossy(&output.stdout).into_owned(),
-    )
+fn forge_read(path: &str) -> String {
+    crate::rest::get(path, None).map_or_else(String::new, |answer| answer.body)
 }
 
 /// The newest commit at `trunk` touching any of `paths`.
@@ -2427,10 +2387,9 @@ pub fn newest_landing_commit(
 ) -> Option<(String, String)> {
     let mut newest: Option<(String, String, String)> = None;
     for path in paths {
-        let raw = forge_read(&[
-            String::from("api"),
-            format!("repos/{repo}/commits?sha={trunk}&path={path}&per_page=1"),
-        ]);
+        let raw = forge_read(&format!(
+            "repos/{repo}/commits?sha={trunk}&path={path}&per_page=1"
+        ));
         let Ok(document) = serde_json::from_str::<serde_json::Value>(&raw) else {
             continue;
         };
@@ -2475,10 +2434,7 @@ pub fn newest_landing_commit(
 /// where a clone exists.
 #[must_use]
 pub fn head_carries(repo: &str, wanted: &str, head: &str) -> Option<bool> {
-    let raw = forge_read(&[
-        String::from("api"),
-        format!("repos/{repo}/compare/{wanted}...{head}"),
-    ]);
+    let raw = forge_read(&format!("repos/{repo}/compare/{wanted}...{head}"));
     let document = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
     let status = document.get("status")?.as_str()?;
     match status {
@@ -2494,7 +2450,7 @@ pub fn head_carries(repo: &str, wanted: &str, head: &str) -> Option<bool> {
 /// The staleness DECISION, over readings the caller already took.
 ///
 /// **Split from the reads so the predicate is testable without a forge.** The
-/// two `gh` calls are `Cost::Effect` and cannot run in a suite; this is a pure
+/// two forge calls are `Cost::Effect` and cannot run in a suite; this is a pure
 /// function of what they returned, which is the same split
 /// `crates/batten/src/speculation.rs` makes and for the same reason: "does this
 /// do what the bash did" has to be answerable without a network.

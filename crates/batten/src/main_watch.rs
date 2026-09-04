@@ -49,11 +49,7 @@
 //! raced without becoming a second authority over when to stop asking, which is
 //! the mistake `pr_watch::read` was made public to avoid (CLOUD-1338).
 
-use crate::pr_watch::{Response, interval_for, parse_response};
-
-/// The client this poll reads through. The forge's own, because this crate
-/// carries no HTTP client for the metered tier.
-const CLIENT: &str = "gh";
+use crate::pr_watch::interval_for;
 
 /// What the staleness poll needs.
 #[derive(Debug, Clone)]
@@ -100,31 +96,25 @@ pub fn head_from_body(body: &str) -> Option<String> {
     (!sha.is_empty()).then(|| sha.to_owned())
 }
 
-/// One conditional read of the trunk ref, as raw response bytes.
+/// One conditional read of the trunk ref.
 ///
-/// An unreadable answer is the empty string, never an error: every failure to
-/// reach the forge is a could-not-look the caller's own poll must survive. A lap
-/// that concluded "main moved" from an unreachable forge would decide about the
-/// network rather than about the work.
+/// **IN PROCESS, over [`crate::rest`].** This was a `gh` spawn, annotated
+/// `#[expect(clippy::disallowed_types)]` with the reason *"this crate carries no
+/// HTTP client that resolves a forge credential"* — which was false when it was
+/// written: `fetch.rs` is a vendored hyper client and `lease.rs` was already
+/// reading `GH_TOKEN` through it. The spawn bought nothing and cost three
+/// things: a child process per poll, a `spawn-adapters` placement to admit it,
+/// and a hand-rolled response parser to undo the framing.
+///
+/// `None` is could-not-look, never an error: every failure to reach the forge is
+/// a reading the caller's own poll must survive. A lap that concluded "main
+/// moved" from an unreachable forge would decide about the network rather than
+/// about the work, at a cost of one CI run each time.
 #[must_use]
-pub fn read(config: &Config, etag: Option<&str>) -> String {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: reading the trunk ref through the CONDITIONAL forge endpoint is a network \
-                  call and this crate carries no HTTP client for the metered tier, so the forge's \
-                  own client IS the read — the same row `pr_watch::read` carries (CLOUD-1143)"
-    )]
-    let output =
-        crate::rules::spawn_resolving(Some(std::path::Path::new(".")), CLIENT, |program, extra| {
-            std::process::Command::new(program)
-                .args(extra)
-                .args(request(config, etag))
-                .stderr(std::process::Stdio::null())
-                .output()
-        });
-    output.map_or_else(
-        |_| String::new(),
-        |output| String::from_utf8_lossy(&output.stdout).into_owned(),
+pub fn read(config: &Config, etag: Option<&str>) -> Option<crate::rest::Answer> {
+    crate::rest::get(
+        &format!("repos/{}/git/ref/heads/{}", config.repo, config.branch),
+        etag,
     )
 }
 
@@ -140,30 +130,30 @@ pub struct Poll {
 }
 
 impl Poll {
-    /// Fold one raw response in, returning how long to wait before the next
-    /// request.
+    /// Fold one answer in, returning how long to wait before the next request.
     ///
     /// A `304` is the server saying the ref is byte-identical to the last
-    /// reading, so there is nothing to compare and the body is not parsed — the
-    /// predecessor skips straight to the sleep for the same reason.
-    pub fn absorb(&mut self, raw: &str, configured: u64) -> f64 {
+    /// reading, so there is nothing to compare and the body is not parsed.
+    ///
+    /// **`None` is a poll that could not look**, and it is folded rather than
+    /// skipped: the count still advances, the previous reading still stands, and
+    /// the caller waits its configured interval. Dropping it would let an
+    /// unreachable forge make a bounded loop unbounded.
+    pub fn absorb(&mut self, answer: Option<&crate::rest::Answer>, configured: u64) -> f64 {
         self.polls += 1;
-        let Response {
-            status,
-            etag,
-            poll_floor,
-            body,
-        } = parse_response(raw);
+        let Some(answer) = answer else {
+            return interval_for(configured, None);
+        };
         // AN ETAG SURVIVES A RESPONSE THAT CARRIES NONE, which is what keeps a
         // single unvalidated answer from turning every later request
         // unconditional.
-        if let Some(etag) = etag {
-            self.etag = Some(etag);
+        if let Some(etag) = &answer.etag {
+            self.etag = Some(etag.clone());
         }
-        if status != 304 {
-            self.head = head_from_body(&body);
+        if answer.status != 304 {
+            self.head = head_from_body(&answer.body);
         }
-        interval_for(configured, poll_floor)
+        interval_for(configured, answer.poll_floor)
     }
 
     /// The validator for the next request.
@@ -217,8 +207,22 @@ mod tests {
         }
     }
 
-    fn ref_body(sha: &str) -> String {
-        format!("HTTP/2.0 200 OK\nETag: W/\"a\"\n\n{{\"object\":{{\"sha\":\"{sha}\"}}}}\n")
+    fn ref_body(sha: &str) -> crate::rest::Answer {
+        crate::rest::Answer {
+            status: 200,
+            etag: Some(String::from("W/\"a\"")),
+            poll_floor: None,
+            body: format!("{{\"object\":{{\"sha\":\"{sha}\"}}}}"),
+        }
+    }
+
+    fn answer(status: u16, floor: Option<f64>, body: &str) -> crate::rest::Answer {
+        crate::rest::Answer {
+            status,
+            etag: Some(String::from("W/\"a\"")),
+            poll_floor: floor,
+            body: body.to_owned(),
+        }
     }
 
     /// **The discriminating pair: an unmoved trunk is not movement and a moved
@@ -226,11 +230,11 @@ mod tests {
     #[test]
     fn a_trunk_at_the_base_is_not_movement_and_one_past_it_is() {
         let mut poll = Poll::default();
-        poll.absorb(&ref_body(BASE), 1);
+        poll.absorb(Some(&ref_body(BASE)), 1);
         assert_eq!(poll.moved(BASE), None, "the base is where it was");
 
         let mut poll = Poll::default();
-        poll.absorb(&ref_body(MOVED), 1);
+        poll.absorb(Some(&ref_body(MOVED)), 1);
         assert_eq!(
             poll.moved(BASE),
             Some(MOVED),
@@ -256,7 +260,7 @@ mod tests {
         );
 
         let mut poll = Poll::default();
-        poll.absorb(&ref_body(BASE), 1);
+        poll.absorb(Some(&ref_body(BASE)), 1);
         let second = request(&config, poll.etag());
         assert!(
             second.contains(&String::from("If-None-Match: W/\"a\"")),
@@ -269,27 +273,27 @@ mod tests {
     #[test]
     fn a_not_modified_response_leaves_the_previous_reading_standing() {
         let mut poll = Poll::default();
-        poll.absorb(&ref_body(BASE), 1);
-        poll.absorb("HTTP/2.0 304 Not Modified\nETag: W/\"a\"\n\n", 1);
+        poll.absorb(Some(&ref_body(BASE)), 1);
+        poll.absorb(Some(&answer(304, None, "")), 1);
 
         assert_eq!(poll.head(), Some(BASE), "the body was not re-read");
         assert_eq!(poll.moved(BASE), None);
         assert_eq!(poll.polls(), 2, "the loop turned twice");
     }
 
-    /// **CLOUD-390, and it is the reason this arm is a port rather than a
-    /// rewrite.**
+    /// **CLOUD-390, and it is why the floor is an `f64` at the boundary.**
     ///
     /// The predecessor compared with `-gt`, which is integer-only, so a
     /// fractional `X-Poll-Interval` read as "the server asked for no floor". The
     /// first Rust port reproduced it exactly: `poll_floor` was `Option<u64>` and
-    /// `"0.5".parse()` yields `None`, which is byte-identical to an absent
-    /// header.
+    /// `"0.5".parse()` yields `None`, byte-identical to an absent header. It is
+    /// [`crate::rest::Answer`]'s field now, parsed once where the header is read
+    /// rather than at each caller.
     #[test]
     fn a_fractional_server_floor_is_honoured_rather_than_silently_dropped() {
         let mut poll = Poll::default();
         let waited = poll.absorb(
-            "HTTP/2.0 200 OK\nETag: W/\"a\"\nX-Poll-Interval: 2.5\n\n{\"object\":{\"sha\":\"a\"}}\n",
+            Some(&answer(200, Some(2.5), "{\"object\":{\"sha\":\"a\"}}")),
             1,
         );
         assert!(
@@ -301,7 +305,7 @@ mod tests {
         // FASTER than configured does not get to turn this into a spin.
         let mut poll = Poll::default();
         let waited = poll.absorb(
-            "HTTP/2.0 200 OK\nX-Poll-Interval: 0.1\n\n{\"object\":{\"sha\":\"a\"}}\n",
+            Some(&answer(200, Some(0.1), "{\"object\":{\"sha\":\"a\"}}")),
             5,
         );
         assert!(
@@ -311,17 +315,23 @@ mod tests {
     }
 
     /// Every failure to look reports "not moved", because the lap must survive it.
+    ///
+    /// **`None` is the shape a request that never completed now takes**, and it
+    /// heads the list deliberately: with the read in process it is the only way a
+    /// transport failure reaches here, where the spawn used to deliver it as
+    /// empty bytes indistinguishable from a body.
     #[test]
     fn an_unreadable_answer_is_never_read_as_movement() {
-        for raw in [
-            "",
-            "HTTP/2.0 500 Internal Server Error\n\n",
-            "HTTP/2.0 200 OK\n\nnot json at all\n",
-            "HTTP/2.0 200 OK\n\n{\"object\":{}}\n",
-            "HTTP/2.0 200 OK\n\n{\"object\":{\"sha\":\"\"}}\n",
-        ] {
+        let unreadable: [Option<crate::rest::Answer>; 5] = [
+            None,
+            Some(answer(500, None, "")),
+            Some(answer(200, None, "not json at all")),
+            Some(answer(200, None, "{\"object\":{}}")),
+            Some(answer(200, None, "{\"object\":{\"sha\":\"\"}}")),
+        ];
+        for raw in &unreadable {
             let mut poll = Poll::default();
-            poll.absorb(raw, 1);
+            poll.absorb(raw.as_ref(), 1);
             assert_eq!(
                 poll.moved(BASE),
                 None,

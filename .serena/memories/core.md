@@ -809,6 +809,21 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   asked. A root commit or remote URL is identity-bearing and auto-adopts; a
   matching common dir ALONE is not (a path can be reused by a stranger) and
   yields `Candidate`, bound only by `batten state adopt`.
+- `rest.rs` — the forge's REST tier, IN PROCESS, over `fetch.rs` (CLOUD-1338).
+  One client, one credential reader (`GH_TOKEN` then `GITHUB_TOKEN`, the forge
+  CLI's own precedence), and a typed `Answer` carrying the status, the `ETag`
+  and the `X-Poll-Interval` floor as an `f64` — so no caller re-parses a status
+  line out of `gh api -i` bytes. **It exists because four spawns claimed a
+  client that was already in the crate**: each carried
+  `#[expect(clippy::disallowed_types)]` reading _"this crate carries no HTTP
+  client that resolves a forge credential"_, and one of the four was written in
+  `lease.rs` eighty lines from the credential reader promoted here. `main_watch`,
+  `fast_forward` and `lease`'s cancel and staleness reads go through it, and
+  `spawn-adapters` lost the two placements those spawns had needed. Named `rest`
+  rather than `forge` because `forge.rs` is a different subject — a verdict
+  RECORD read off disk — and drafting this under that name overwrote it. What is
+  NOT here is git smart-HTTP: `lease.rs` speaks that directly, and folding the
+  two would put a ref-advertisement parser behind a REST helper.
 - `fetch.rs` — one HTTPS request, in process (CLOUD-745). The client is **hyper
   plus hyper-rustls, not `reqwest`**, and that substitution is a measurement
   rather than a preference: every reqwest configuration hits one of the two

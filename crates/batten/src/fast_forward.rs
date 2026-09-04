@@ -45,11 +45,6 @@ use anyhow::Result;
 
 use crate::error::UsageError;
 
-/// The client every call here goes through, for [`crate::pr_watch`]'s reason:
-/// this crate carries no HTTP client that resolves a forge credential, so the
-/// forge's own client IS the call.
-const CLIENT: &str = "gh";
-
 /// Runs per page when reading for the answer.
 ///
 /// The maximum the endpoint offers, because the page size is not a fence — the
@@ -69,34 +64,30 @@ const MAX_PAGES: u32 = 20;
 /// The open pull request for `branch`, where the forge names one.
 ///
 /// HERE RATHER THAN IN THE LAP, for the reason [`crate::pr_watch::read`] states
-/// about its own read: a lap that spawned the forge client itself would be a
-/// second authority over the argv and the failure posture. `land` reaches this
+/// about its own read: a lap that built the request itself would be a second
+/// authority over the endpoint and the failure posture. `land` reaches this
 /// module and no other, which is also what keeps `land -> bot` off the layering
 /// table for one number.
 ///
-/// `// empty` rather than a null in the filter, because the client prints the
-/// STRING `null` for a missing field — which is not empty, and would sail past a
-/// caller's guard as a pull request number.
+/// **The `--jq` filter is gone with the spawn, and the guard it needed with it.**
+/// The predecessor wrote `.[0].number // empty` because the client prints the
+/// STRING `null` for a missing field — not empty, and it would sail past a
+/// caller's guard as a pull request number. Reading the document here, an absent
+/// entry is `None` by construction and there is no rendering to be fooled by.
 #[must_use]
-pub fn open_pull_request(branch: &str) -> Option<String> {
-    let args = vec![
-        String::from("pr"),
-        String::from("list"),
-        String::from("--head"),
-        branch.to_owned(),
-        String::from("--state"),
-        String::from("open"),
-        String::from("--json"),
-        String::from("number"),
-        String::from("--jq"),
-        String::from(".[0].number // empty"),
-    ];
-    let found = run(&args)?;
-    let trimmed = found.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    Some(trimmed.to_owned())
+pub fn open_pull_request(repo: &str, branch: &str) -> Option<String> {
+    let raw = run(&format!(
+        "repos/{repo}/pulls?head={branch}&state=open&per_page=1"
+    ))?;
+    let document = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    let number = document.as_array()?.first()?.get("number")?;
+    // A NUMBER OR A STRING, for `comment_id`'s reason one function down: the
+    // forge sends a number, and a string-only read would answer `None` over a
+    // good response.
+    number
+        .as_u64()
+        .map(|found| found.to_string())
+        .or_else(|| number.as_str().map(str::to_owned))
 }
 
 /// What the lap needs to ask, and to recognise the answer.
@@ -155,18 +146,19 @@ pub fn ask(ask: &Ask) -> Result<Asked> {
     // style: this returns the created comment OBJECT, so `.id` — the key the read
     // below needs — comes back on stdout, and a non-2xx gives both a real
     // non-zero exit and a status worth naming.
+    // THE API RATHER THAN THE CLIENT'S COMMENT PORCELAIN, and the predecessor's
+    // reason survives the transport change: this returns the created comment
+    // OBJECT, so `.id` — the key the read below needs — comes back in the body.
+    //
+    // The response headers used to need `-i` so a refusal's reason and delay
+    // arrived with the body. They arrive typed now: `crate::rest::Answer`
+    // carries the status the transport read, so there is no header block to
+    // parse and no second request to ask for one.
     let endpoint = format!("repos/{}/issues/{}/comments", ask.repo, ask.pr);
-    let args = vec![
-        String::from("api"),
-        String::from("-i"),
-        endpoint,
-        String::from("-f"),
-        String::from("body=/fast-forward"),
-    ];
-    let Some(raw) = run(&args) else {
+    let body = serde_json::json!({ "body": "/fast-forward" });
+    let Some(answer) = crate::rest::post_json(&endpoint, &body) else {
         return Ok(Asked::Refused(0));
     };
-    let answer = crate::pr_watch::parse_response(&raw);
     let Some(id) = comment_id(&answer.body) else {
         return Ok(Asked::Refused(answer.status));
     };
@@ -210,19 +202,20 @@ pub enum Answer {
     Unknown(String),
 }
 
-/// The request one page of the answer read makes, as argv.
+/// The API-relative path one page of the answer read asks for.
 ///
 /// Built rather than formatted at the call site so the window, the page size and
 /// the event filter are one object a test can read.
+///
+/// **A PATH RATHER THAN AN ARGV**, which is the shape change the in-process
+/// transport buys: there is no `api` subcommand word to prepend and no client to
+/// resolve, so what a case reads here is the endpoint itself.
 #[must_use]
-pub fn answer_request(ask: &Ask, since: &str, page: u32) -> Vec<String> {
-    vec![
-        String::from("api"),
-        format!(
-            "repos/{}/actions/workflows/{}/runs?event=issue_comment&per_page={PER_PAGE}&page={page}&created=%3E%3D{since}",
-            ask.repo, ask.workflow
-        ),
-    ]
+pub fn answer_request(ask: &Ask, since: &str, page: u32) -> String {
+    format!(
+        "repos/{}/actions/workflows/{}/runs?event=issue_comment&per_page={PER_PAGE}&page={page}&created=%3E%3D{since}",
+        ask.repo, ask.workflow
+    )
 }
 
 /// Read whether the run keyed to `comment` has concluded.
@@ -302,27 +295,19 @@ fn grade(conclusion: &str) -> Answer {
     }
 }
 
-/// One call through the forge's client, or `None` where it could not be reached.
+/// One REST call, or `None` where the forge could not be reached.
 ///
-/// A client that will not answer yields `None` rather than an error, for
-/// [`crate::pr_watch::read`]'s reason: every failure to reach the forge is a
-/// could-not-look that the caller's own loop must survive.
-fn run(args: &[String]) -> Option<String> {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: asking for a fast-forward and reading the answer are network calls, and this crate carries no HTTP client that resolves a forge credential — so the forge's own client IS the call (CLOUD-1143, the standing pr_watch::read and bot::forge already take)"
-    )]
-    let output =
-        crate::rules::spawn_resolving(Some(std::path::Path::new(".")), CLIENT, |program, extra| {
-            std::process::Command::new(program)
-                .args(extra)
-                .args(args)
-                .stderr(std::process::Stdio::null())
-                .output()
-        });
-    output
-        .ok()
-        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+/// **IN PROCESS, over [`crate::rest`].** This was a `gh` spawn annotated
+/// `#[expect(clippy::disallowed_types)]` on the claim that the crate carries no
+/// HTTP client that resolves a forge credential. It does — `fetch.rs`, vendored
+/// under CLOUD-745 — and `lease.rs` was already using it with a bearer header.
+/// Every one of the four spawns CLOUD-1338 removed carried that same sentence.
+///
+/// `None` rather than an error, for [`crate::main_watch::read`]'s reason: every
+/// failure to reach the forge is a could-not-look the caller's own loop must
+/// survive.
+fn run(path: &str) -> Option<String> {
+    crate::rest::get(path, None).map(|answer| answer.body)
 }
 
 #[cfg(test)]
@@ -420,8 +405,12 @@ mod tests {
             pr: String::from("42"),
             workflow: String::from("land.yml"),
         };
-        let args = answer_request(&ask, "2026-09-04T01:00:00Z", 3);
-        let url = args.last().map(String::as_str).unwrap_or_default();
+        let url = answer_request(&ask, "2026-09-04T01:00:00Z", 3);
+        assert!(
+            !url.starts_with('/'),
+            "API-relative, never rooted — a leading slash is a 404 that reads as \
+             could-not-look: {url}"
+        );
         assert!(url.contains("event=issue_comment"), "got {url}");
         assert!(url.contains("page=3"), "got {url}");
         assert!(url.contains("created=%3E%3D2026-09-04T01"), "got {url}");

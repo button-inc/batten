@@ -99,6 +99,7 @@ pub mod redirect;
 pub mod refusal;
 pub mod render;
 pub mod resolve;
+pub mod rest;
 pub mod review;
 pub mod rules;
 pub mod secrets;
@@ -5510,7 +5511,12 @@ fn run_lease(
             // here would skip a reading that was available. `guard` takes `None`
             // for the authority, which it reads as fail-open.
             cli::LeaseCommand::Guard { head, branch, run } => {
-                return run_lease_guard_unleased(root, &head, &branch, &run, out, err);
+                let asking = Standing {
+                    head: &head,
+                    branch: &branch,
+                    run: &run,
+                };
+                return run_lease_guard_unleased(root, &asking, out, err);
             }
             cli::LeaseCommand::Check => {
                 writeln!(
@@ -5590,7 +5596,12 @@ fn run_lease(
         cli::LeaseCommand::Release => run_lease_release(root, &terms, now, out, err),
         cli::LeaseCommand::Reserve { branch } => run_lease_reserve(&terms, &branch, now, out, err),
         cli::LeaseCommand::Guard { head, branch, run } => {
-            run_lease_guard(root, &terms, &head, &branch, &run, now, out, err)
+            let asking = Standing {
+                head: &head,
+                branch: &branch,
+                run: &run,
+            };
+            run_lease_guard(root, &terms, &asking, now, out, err)
         }
         // UNREACHABLE, and stated rather than wildcarded: the arm returns above,
         // before the terms this match is built on resolve. A `_` here would
@@ -5879,18 +5890,19 @@ fn run_land_fast_forward(
         )?;
         return Ok(ExitCode::Usage);
     }
-    let Some(pr) = fast_forward::open_pull_request(branch) else {
+    // THE PLACEHOLDER, resolved by the client that used to be spawned and now by
+    // the endpoint itself: `pr_watch::REPO_PLACEHOLDER` is what every request in
+    // this family already carries, so naming it once here keeps the lookup and
+    // the ask asking about one repository.
+    let repo = String::from(pr_watch::REPO_PLACEHOLDER);
+    let Some(pr) = fast_forward::open_pull_request(&repo, branch) else {
         writeln!(
             err,
             "::error:: land fast-forward: no open pull request for {branch}, so there is nothing to ask"
         )?;
         return Ok(ExitCode::Internal);
     };
-    let ask = fast_forward::Ask {
-        repo: String::from(pr_watch::REPO_PLACEHOLDER),
-        pr,
-        workflow,
-    };
+    let ask = fast_forward::Ask { repo, pr, workflow };
 
     // STAMPED BEFORE THE COMMENT, never after, and that ordering is the whole of
     // the anti-livelock property: a run created by an EARLIER lap of this same
@@ -6136,25 +6148,42 @@ fn report_guard(
     Ok(ExitCode::Success)
 }
 
+/// What the runner's step-0 guard is standing in and asking about.
+///
+/// **A struct rather than three operands**, and the reason is the gate this
+/// change also ships (CLOUD-1338). The two guard arms carried an
+/// `#[expect(clippy::too_many_arguments)]` whose reason argued the arity was
+/// necessary — *"three operands the caller must supply because the engine must
+/// not GUESS any of them"* — which is true of the operands and says nothing
+/// about the signature. They are one subject: the run this guard is standing in,
+/// on the head and branch it was started for. Naming it removes the escape
+/// rather than justifying it.
+#[derive(Debug, Clone, Copy)]
+struct Standing<'a> {
+    /// The head commit being judged. Never guessed: on a `pull_request` event
+    /// `github.sha` is the merge commit, which is a different tree.
+    head: &'a str,
+    /// The branch the lease is asked about.
+    branch: &'a str,
+    /// The run to cancel on a stop. Never guessed: cancelling the wrong one
+    /// stops somebody else's matrix.
+    run: &'a str,
+}
+
 /// `batten lease guard` (CLOUD-420): the runner's step-0 precondition.
 ///
 /// # Errors
 ///
 /// Only for a stream that will not accept output.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "stays: three operands the caller must supply because the engine must not GUESS any               of them — a guessed head reads a merge commit and a guessed run cancels somebody               else's — plus the terms, the instant and two streams every lease arm here takes"
-)]
 fn run_lease_guard(
     root: &Path,
     terms: &lease::Terms,
-    head: &str,
-    branch: &str,
-    run: &str,
+    asking: &Standing<'_>,
     now: i64,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    let Standing { head, branch, run } = *asking;
     let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
     let carries = lease_staleness(root, &repo, head);
 
@@ -6179,12 +6208,11 @@ fn run_lease_guard(
 /// fail-open.
 fn run_lease_guard_unleased(
     root: &Path,
-    head: &str,
-    _branch: &str,
-    run: &str,
+    asking: &Standing<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    let Standing { head, run, .. } = *asking;
     let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
     let carries = lease_staleness(root, &repo, head);
     let guarded = lease::guard(&carries, None);

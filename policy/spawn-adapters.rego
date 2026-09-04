@@ -152,25 +152,22 @@ adapters := {
 	"judge", "handler", "action", "rules", "semver",
 	"pinned", "perf", "prune", "pr_watch", "mutate", "bot",
 	"lease",
-	# `fast_forward` takes `pr_watch`'s argument rather than `perf`'s: asking the
-	# bot to land a head and reading the answer keyed to that request are network
-	# calls, and this crate carries no HTTP client that resolves a forge
-	# credential — so the forge's own client IS the call (CLOUD-1143). It is here
-	# rather than folded into `pr_watch` because the two ask about different
-	# objects, and `module-layering` records that placement.
-	"fast_forward",
-	# `main_watch` takes `pr_watch`'s argument verbatim, and takes it for the
-	# same endpoint family: the trunk ref read is a CONDITIONAL forge call —
-	# `If-None-Match`, a `304`, an `X-Poll-Interval` floor — and this crate
-	# carries no HTTP client that resolves a forge credential, so the forge's own
-	# client IS the call (CLOUD-1143).
+	# `fast_forward` AND `main_watch` WERE HERE AND ARE NOT ANY MORE (CLOUD-1338).
 	#
-	# It is a row rather than a fold into `pr_watch` because the two ask about
-	# different objects, which is `module-layering`'s reason and is recorded
-	# there. What is NOT duplicated is the response parser: the header block is
-	# read through `pr_watch::parse_response`, so the two arms cannot disagree
-	# about what a `304` or a floor said.
-	"main_watch",
+	# Both were added by a branch whose stated subject was retiring shell, and both
+	# carried the same justification: *"this crate carries no HTTP client that
+	# resolves a forge credential — so the forge's own client IS the call."* The
+	# sentence was false. `crates/batten/src/fetch.rs` is a vendored hyper client,
+	# and `lease.rs` was already reading `GH_TOKEN` through it eighty lines from
+	# one of the spawns that claimed otherwise. Both modules read
+	# `crate::rest` now, spawn nothing, and need no placement.
+	#
+	# THE REMOVAL IS THE POINT AND SO IS THIS COMMENT. The table is deny-by-
+	# omission, so widening it is a two-word edit whose reasoning lives in a
+	# comment nothing reads — which is exactly how those two rows arrived, with
+	# every sensor green over them. `policy/spawn-widening.rego` reads the DIFF
+	# now and refuses an added entry here, so the next row costs an argument to a
+	# human rather than a keystroke.
 	"startup",
 }
 

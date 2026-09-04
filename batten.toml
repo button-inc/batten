@@ -2055,6 +2055,55 @@ regex = '^\$\(dirname([[:space:]]+--)?[[:space:]]+"[^"]*"\)$|^\$\(cd([[:space:]]
 id = "bats-suite-directory"
 regex = '^\$\{?BATS_TEST_DIRNAME\}?(/[A-Za-z0-9._-]+)*$'
 
+# A CLIPPY LINT ESCAPE, in either spelling (CLOUD-1338). `spawn-widening` reads
+# it over the lines a change ADDED to engine source.
+#
+# ANCHORED ON THE ATTRIBUTE OR THE BARE LINT PATH, and both arms are needed
+# because this crate writes it both ways: `#[expect(clippy::disallowed_types)]`
+# on one line, and the multi-line form whose second line is the lint alone. A
+# pattern matching only one of them misses every site written the other way.
+#
+# A DOC COMMENT NAMING A LINT IS NOT AN ESCAPE, which the leading anchor gets for
+# free: a `///` or `//` line does not begin with the attribute or the path, and
+# the modules that discuss `clippy::disallowed_types` at length — including the
+# ones this row was written for — would otherwise refuse every commit that
+# explains itself.
+[[pattern]]
+id = "clippy-lint-escape"
+regex = '^\s*(?:#!?\[\s*(?:expect|allow)\(\s*)?clippy::[a-z_]+'
+
+# THE THREE LINTS A `mod tests` WAIVES, and the exemption is narrow on purpose.
+#
+# Every `#[cfg(test)] mod tests` in this crate opens with
+# `#[allow(clippy::expect_used)]` or its siblings, because the workspace forbids
+# `unwrap`/`expect`/`panic` on REACHABLE paths and panicking loudly is how a test
+# fails. Those modules live inside `crates/batten/src/**`, so the path exclusion
+# that keeps `crates/batten/tests/**` out cannot reach them.
+#
+# Measured: without this row `spawn-widening` refused three modules for using the
+# idiom the whole codebase uses. A rule that fires on the universal case is one
+# somebody switches off, which is the failure mode that ends gates.
+#
+# A CLOSED LIST OF THREE, never a general "test lints" carve-out. Everything else
+# — `too_many_arguments`, `cast_precision_loss`, and `disallowed_types` above all
+# — stays refused, because those are claims about the code rather than about how
+# a test reports failure.
+[[pattern]]
+id = "clippy-test-idiom"
+regex = '^\s*(?:#!?\[\s*(?:expect|allow)\(\s*)?clippy::(?:expect_used|unwrap_used|panic)\b'
+
+# ONE MEMBER OF THE SPAWN PLACEMENT SET (CLOUD-1338).
+#
+# `policy/spawn-adapters.rego`'s `adapters` is a Rego set of bare module names,
+# one per line, tab-indented. The row is deliberately narrow: it matches a quoted
+# lower-snake word alone on its line, which is that set's shape and nothing
+# else's in the file. Widening it to any quoted string would catch the module's
+# own test fixtures and its prose, and a rule refusing those is a rule somebody
+# switches off.
+[[pattern]]
+id = "spawn-placement-entry"
+regex = '^\s*"[a-z_]+",\s*$'
+
 # THE SUBCOMMAND TAIL of a task-name invocation (CLOUD-1299).
 #
 # `shell-retirement`'s repointing arm could only recognise a span that named its
@@ -6382,6 +6431,53 @@ scope = "tree"
 symbols = true
 module = "policy/spawn-adapters.rego"
 severity = "deny"
+
+# THE INVENTORY MAY NOT BE SELF-SERVICE (CLOUD-1338), and this row is the reader
+# its two siblings never had. `.claude/rules/rust.md` makes a spawn an inventory
+# row; `spawn-adapters` above says which modules may hold one. Both are answered
+# by the author, in the same commit, with nothing reading the answer: the
+# annotation's `reason` is an unchecked string and a placement is a word added to
+# a Rego set.
+#
+# Measured, and on the worst possible branch: one whose entire subject was
+# RETIRING SHELL added five `#[expect(clippy::disallowed_types)]` spawns and
+# widened the placement table twice, with every sensor green and every reason
+# repeating a claim — *"this crate carries no HTTP client that resolves a forge
+# credential"* — that `crates/batten/src/fetch.rs` had already falsified.
+#
+# `base = "origin/main"` because the subject is a CHANGE rather than a state
+# (CLOUD-1059): a tree holding N escapes is the inventory, and this decides
+# whether N grew. `sources` names the two surfaces it reads lines from, because
+# the module compares the working side against the delta's base side and needs
+# both files acquired.
+#
+# NO `bypass_env`, and its verdicts declare no override route. That follows
+# `shell edit refused`'s precedent rather than inventing a posture: the answer to
+# this refusal is not a token to spend, it is that the change has the wrong
+# shape. A spawn that genuinely belongs is a decision for a groomed row and a
+# human, never an annotation an agent writes about its own work.
+[[rule]]
+id = "spawn-widening"
+kind = "policy"
+scope = "tree"
+module = "policy/spawn-widening.rego"
+base = "origin/main"
+severity = "deny"
+# `delta_sources`, NOT `sources`, and the difference is the whole reading. It is
+# what makes the engine acquire the BASE side of each glob, which is where
+# `base-lines` comes from; `sources` alone builds the working side and leaves the
+# delta null, so the module reports could-not-look on every run and decides
+# nothing. Measured here against a seeded escape it did not catch, which is why
+# the seeding was the acceptance step rather than reading a clean exit as proof.
+delta_sources = ["crates/batten/src/*.rs", "policy/spawn-adapters.rego"]
+# AND `line_sources` FOR THE WORKING SIDE, because the two keys fill different
+# halves and the module subtracts one from the other. `delta_sources` alone gave
+# a base with nothing to compare against it: `input.tree.lines` was filled by
+# nothing, both refusing clauses ran over an empty map, and the gate reported
+# clean. That is the second time in ten minutes this row read as passing while
+# deciding nothing — which is why the acceptance step is a SEEDED escape and not
+# a clean exit.
+line_sources = ["crates/batten/src/*.rs", "policy/spawn-adapters.rego"]
 
 # CLOUD-316's gate, ported off `mise-tasks/mise-pin-agreement.sh` under CLOUD-910
 # — the wave's first gate, and the one whose end-to-end cost sizes the rest.
@@ -11165,6 +11261,79 @@ target = "crates/batten/src/exec.rs"
 id = "module read first"
 kind = "document"
 target = "policy/spawn-adapters.rego"
+
+# CLOUD-1338's four. Separate tokens rather than one, for the reason the three
+# above are separate: a reader meeting an added escape and a reader meeting a
+# widened placement table have nothing to learn from each other.
+#
+# NONE OF THE FOUR DECLARES AN OVERRIDE ROUTE, and that omission is the rule's
+# whole posture. `shell edit refused` is the precedent — one route, no override,
+# no `bypass_env` — and the argument carries: an agent articulating why its own
+# new spawn is fine is the mechanism that already failed, five times in one
+# branch. The routes below point at what to READ, never at what to spend.
+[[verdict]]
+id = "spawn write refused"
+gloss = "this change adds a clippy escape in engine source"
+class = """
+A spawn is an inventory row and the inventory may not grow by annotation. Reach \
+for the in-process form first — `crate::rest` for the forge's REST tier, \
+`crate::fetch` for an ordinary HTTPS call, `crate::exec::piped_through` for a \
+child process that genuinely has to be one. Where a new spawn really is the \
+answer, it is a decision for a groomed row and a human rather than a `reason` \
+string the author writes about their own change.
+"""
+
+[[verdict.route]]
+id = "source read first"
+kind = "document"
+target = "crates/batten/src/rest.rs"
+
+[[verdict.route]]
+id = "prose read first"
+kind = "document"
+target = ".claude/rules/rust.md"
+
+[[verdict]]
+id = "adapter add refused"
+gloss = "this change adds an entry to the spawn placement table"
+class = """
+The placement table is deny-by-omission, so widening it is a two-word edit whose \
+justification lives in a comment nothing reads. That is how two placements landed \
+on a branch whose subject was removing shell. Remove the spawn instead, or take \
+the widening to a groomed row where a human decides it.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/spawn-adapters.rego"
+
+[[verdict]]
+id = "diff read absent"
+gloss = "the base rev did not resolve, so no change could be read"
+class = """
+Could-not-look is not clean. With no delta every clause of this rule is undefined, \
+which is byte-identical to a tree that added no spawn — the dead-gate class this \
+repository exists to refuse. Fetch the base ref and run it again.
+"""
+
+[[verdict.route]]
+id = "patch run first"
+kind = "command"
+target = "git fetch origin main, so the declared base rev resolves and the change can be read"
+
+[[verdict]]
+id = "source parse dead"
+gloss = "a declared engine source would not parse, so it was never judged"
+class = """
+A module that iterates only the documents it could read reports green over a file \
+it never opened. This names the file instead.
+"""
+
+[[verdict.route]]
+id = "source read first"
+kind = "document"
+target = "crates/batten/src/rest.rs"
 
 [[verdict]]
 id = "symbol count absent"

@@ -1408,10 +1408,6 @@ pub fn run_in_with(
 /// pipe and a child that died without a code are all "no answer", and no caller
 /// can act differently on which. A caller that needs clean-versus-unreadable
 /// apart must not infer it from here.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays: this is the placed adapter's spawn, and the two callers that used to hold their own now hold none (CLOUD-1051)"
-)]
 pub(crate) fn piped(
     root: &Path,
     program: &Path,
@@ -1422,19 +1418,46 @@ pub(crate) fn piped(
     if !path.is_file() {
         return None;
     }
-    // THROUGH THE RESOLUTION LADDER, not `Command::new` directly, and Windows CI
-    // is what said so: a `#!/usr/bin/env bash` program has no extension and no
-    // executable image, so `CreateProcess` refuses it and the caller read the
-    // refusal as could-not-look — a recorder column that said `-` where it should
-    // have said `ready`. `spawn_resolving`'s third rung reads the shebang and
-    // runs the interpreter, which is the same ladder this module's own verb uses
-    // and the reason it exists.
-    //
     // `None` for the resolve root: the program is already absolute here, so a
     // relative name cannot arise and handing a directory would only be a guess at
     // one.
-    let mut child = crate::rules::spawn_resolving(None, path.to_str()?, |program, extra| {
-        Command::new(OsString::from(program))
+    piped_through(root, None, path.to_str()?, args, stdin)
+}
+
+/// The one spawn both piped entry points share.
+///
+/// **Extracted rather than duplicated, and the reason is the gate this branch
+/// owes** (CLOUD-1338). [`piped_argv`] was written with its own `Command::new`
+/// and its own `#[expect(clippy::disallowed_types)]`, which is the inventory
+/// growing by one for a body byte-identical to this one — an annotation is meant
+/// to record a spawn somebody decided on, not to be the cheap way past the lint.
+/// `policy/spawn-widening.rego` refuses an added escape now, and this is what
+/// that refusal asks for: one site, two callers.
+///
+/// The two callers differ in exactly one thing and it is the argument they pass:
+/// how the first word RESOLVES. See [`piped_argv`]'s header for why that
+/// difference may not be folded away.
+///
+/// THROUGH THE RESOLUTION LADDER, never `Command::new` directly, and Windows CI
+/// is what said so: a `#!/usr/bin/env bash` program has no extension and no
+/// executable image, so `CreateProcess` refuses it and the caller read the
+/// refusal as could-not-look — a recorder column that said `-` where it should
+/// have said `ready`. `spawn_resolving`'s third rung reads the shebang and runs
+/// the interpreter.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: this is the placed adapter's ONE spawn, shared by both piped entry points so \
+              the inventory does not grow per calling shape (CLOUD-1051, CLOUD-1338)"
+)]
+fn piped_through(
+    root: &Path,
+    resolve_root: Option<&Path>,
+    program: &str,
+    args: &[String],
+    stdin: &str,
+) -> Option<(i32, String)> {
+    let mut child = crate::rules::spawn_resolving(resolve_root, program, |resolved, extra| {
+        Command::new(OsString::from(resolved))
             .args(extra.iter().map(OsString::from))
             .args(args)
             .current_dir(root)
@@ -1444,7 +1467,13 @@ pub(crate) fn piped(
             .spawn()
     })
     .ok()?;
-    child.stdin.take()?.write_all(stdin.as_bytes()).ok()?;
+    // TAKEN AND DROPPED EVEN WHEN EMPTY, because a gate that reads stdin blocks
+    // until it closes. A caller with nothing to say still has to say nothing and
+    // hang up, which is what an owned handle going out of scope here does.
+    {
+        let mut pipe = child.stdin.take()?;
+        pipe.write_all(stdin.as_bytes()).ok()?;
+    }
     let finished = child.wait_with_output().ok()?;
     Some((
         finished.status.code()?,
@@ -1482,36 +1511,13 @@ pub(crate) fn piped(
 /// `None` is could-not-look, collapsed for [`piped`]'s reason: unresolvable, a
 /// broken pipe, and a child that died without a code are all "no answer", and no
 /// caller can act differently on which.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays: the placed adapter's spawn, and the alternative is a fifth Command::new in an \
-              unplaced module — the shape `piped` was added to remove (CLOUD-1051, CLOUD-1148)"
-)]
 pub(crate) fn piped_argv(root: &Path, argv: &[String], stdin: &str) -> Option<(i32, String)> {
     let (program, operands) = argv.split_first()?;
-    let mut child = crate::rules::spawn_resolving(Some(root), program, |resolved, extra| {
-        Command::new(OsString::from(resolved))
-            .args(extra.iter().map(OsString::from))
-            .args(operands)
-            .current_dir(root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-    })
-    .ok()?;
-    // TAKEN AND DROPPED EVEN WHEN EMPTY, because a gate that reads stdin blocks
-    // until it closes. A caller with nothing to say still has to say nothing and
-    // hang up, which is what an owned handle going out of scope here does.
-    {
-        let mut pipe = child.stdin.take()?;
-        pipe.write_all(stdin.as_bytes()).ok()?;
-    }
-    let finished = child.wait_with_output().ok()?;
-    Some((
-        finished.status.code()?,
-        String::from_utf8_lossy(&finished.stdout).into_owned(),
-    ))
+    // `Some(root)`, where [`piped`] passes `None`: the first word here is a NAME
+    // the ladder resolves, so rung 3 needs a directory to read a shebang out of.
+    // That one argument IS the difference between the two entry points, which is
+    // why they share [`piped_through`] and not a signature.
+    piped_through(root, Some(root), program, operands, stdin)
 }
 
 /// This process's next dispatch number, for the live-capture key.
