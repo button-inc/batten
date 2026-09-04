@@ -275,22 +275,25 @@ pub fn record_is_stale(root: &Path) -> bool {
     record_exists(root) && matches!(cached(root), Look::CouldNotLook)
 }
 
-// THE OBLIGATION IS BOUND HERE, AND THE SWEEP CANNOT YET APPLY IT (CLOUD-1371).
+// THE OBLIGATION IS BOUND HERE, AND THE SWEEP NOW APPLIES IT (CLOUD-1371, then
+// CLOUD-1369).
 //
 // `obligations-bound` asks that a §7 obligation name a tracked file carrying its
 // slug as a `#MUTANT` row, and this is that file: `record_is_stale` above is what
 // CLOUD-1371 changed, so mutating it is what a case must catch.
 //
-// **What it does NOT yet buy is the sweep, and saying so is the point.**
-// `mutate`'s `Gate::name` resolves sources from "a task name, a module stem, or a
-// preset name" — there is no arm for a Rust source, so `mutate census` counts 112
-// gates with or without this row and `mutate sweep` never applies it. Declaring it
-// silently would be the coverage theatre `#MUTANT-OWNER` exists to refuse, so the
-// gap is named instead: CLOUD-1369 owes the runner arm, and states the same
-// finding in its own title — every "shown able to fail" over `crates/**` is a
-// model verdict until it lands. Until then, the
-// binding is checked by `obligations-bound` and the named case is proven by
-// `verify` rather than by a survivor.
+// **This paragraph used to say the sweep could not reach it, and that is now
+// false rather than merely stale.** It read: `mutate`'s source resolution offers
+// "a task name, a module stem, or a preset name", with no arm for a Rust source,
+// so the row was declared and never applied — named as a gap instead of hidden,
+// which was the right call and is what made the gap findable. CLOUD-1369 landed
+// the arm it named. The subject is `engine-pinned`, registered in
+// `$MUTANT_GATES`, and a survivor here is a finding like any other.
+//
+// Worth keeping rather than deleting: this declaration is what proved the route
+// on a predicate nobody wrote for it. The census reported it `uncovered` the
+// moment the opener widened — a row declared, swept by nothing — which is the
+// arm that would otherwise have read as coverage.
 //MUTANT-SUITE crates/batten/tests/it/pinned_programs.rs
 //MUTANT absent-record-unrepaired|s@^    record_exists(root) && matches!(cached(root), Look::CouldNotLook)$@    false@|an_absent_record_is_not_stale_and_says_so_separately
 

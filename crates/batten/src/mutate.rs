@@ -92,16 +92,83 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 
-/// The declaration markers, each a `#` comment in both bash and Rego so a
-/// declaration can live beside the code it describes in either language.
+/// The declaration markers, bare — the comment opener is [`OPENERS`]'s business.
 ///
 /// Beside the code rather than in a manifest, for the reason `step-receipt`'s
 /// spec table lives in `step-receipt`: a declaration in a second file is a
 /// second authority that drifts.
-const ROW: &str = "#MUTANT ";
-const SUITE: &str = "#MUTANT-SUITE ";
-const OWNER: &str = "#MUTANT-OWNER ";
-const EXEMPT: &str = "#MUTANT-EXEMPT ";
+///
+/// **THE OPENER USED TO BE PART OF THE MARKER, AND THAT EXCLUDED AN ENTIRE
+/// IMPLEMENTATION LANGUAGE** (CLOUD-1369). These read `#MUTANT `, matched with
+/// `strip_prefix` and no trim, so a declaration could only live in a `#`-comment
+/// file — bash or Rego. `#MUTANT` is not valid Rust, so no predicate in
+/// `crates/batten/src/**` could carry one, while `obligations-bound` demands the
+/// declared obligation file carry exactly that row. The pair was unsatisfiable
+/// for every Rust change, and `.bats` is no escape because `V-SHELL-RULE-ADDED`
+/// refuses adding one.
+///
+/// The measured cost was not the gap itself: CLOUD-1349's "shown able to fail"
+/// was performed BY HAND — predicate edited to a constant, suite re-run, result
+/// read by eye, edit reverted — which is a model verdict standing where
+/// non-negotiable rule 3 wants a command and an exit code. The revert then took
+/// the uncommitted implementation with it.
+///
+/// **The trailing space is still load-bearing and is what keeps the four apart**:
+/// `MUTANT ` can never match `MUTANT-EXEMPT`, whatever opener precedes it.
+const ROW: &str = "MUTANT ";
+const SUITE: &str = "MUTANT-SUITE ";
+const OWNER: &str = "MUTANT-OWNER ";
+const EXEMPT: &str = "MUTANT-EXEMPT ";
+
+/// The comment openers a declaration may follow, longest first.
+///
+/// **Longest first is correctness, not tidiness.** Neither of these is a prefix
+/// of the other today, so the order is inert — but a future opener that shares a
+/// lead character with another (`#` and `#!`, say) would resolve to whichever
+/// matched first, and a marker read against the shorter one keeps the remainder
+/// in its slug. Sorting by length removes the class rather than relying on
+/// today's set.
+///
+/// **An opener is required, and a bare marker is NOT a declaration.** A row must
+/// be a comment in its own language or it is source the compiler will reject, and
+/// accepting a bare `MUTANT ` would read a line of prose in any file as a
+/// declaration.
+const OPENERS: &[&str] = &["//", "#"];
+
+/// Where a Rust source lives, relative to the repository root.
+///
+/// A gate name is kebab and a Rust module is snake, so the name is transliterated
+/// rather than matched: `sources_for` is the one place that mapping happens.
+const ENGINE: &str = "crates/batten/src";
+
+/// The namespace an engine subject's name carries.
+///
+/// **A PREFIX RATHER THAN THE BARE MODULE NAME, BECAUSE THE NAMES COLLIDE.**
+/// `mise-tasks/doctor.sh` is a gate called `doctor` and `crates/batten/src/
+/// doctor.rs` transliterates to `doctor` too — so a bare name would have made
+/// `subjects` overwrite the shell gate's row with the module's, and left
+/// `sources_for` still resolving the shell task, which means the module's
+/// declared mutations would never be applied while reading as declared. A
+/// coverage-shaped nothing, from a name clash, in the verb whose whole job is
+/// refusing exactly that.
+///
+/// Caught while landing CLOUD-1369, whose own worked example is `doctor.rs`, so
+/// the collision was the first thing the route hit rather than a hypothetical.
+const ENGINE_PREFIX: &str = "engine-";
+
+/// Strip a marker from a line, whatever comment opener introduced it.
+///
+/// Returns the row's body, or `None` where this line is not that declaration.
+/// Leading whitespace is deliberately NOT trimmed: a declaration is a top-level
+/// statement about the file, and permitting an indented one would let a marker
+/// inside a nested block or a doc example read as a declaration of the whole
+/// source.
+fn strip_marker(line: &str, marker: &str) -> Option<String> {
+    OPENERS
+        .iter()
+        .find_map(|opener| line.strip_prefix(opener)?.strip_prefix(marker))
+        .map(str::to_owned)
+}
 
 /// The vendored bats runner, relative to the repository root.
 const BATS: &str = "tests/bats/bin/bats";
@@ -388,11 +455,16 @@ fn lines_of(root: &Path, path: &str) -> Option<Vec<String>> {
 }
 
 /// The value after a marker on the first line that carries it.
+///
+/// Goes through [`strip_marker`] rather than `strip_prefix`, and that is the half
+/// of CLOUD-1369 a compiler cannot catch: dropping the `#` from the marker
+/// constants left this function matching a BARE `MUTANT-SUITE ` at column zero,
+/// which no file in the tree carries. It compiled clean and would have silently
+/// stopped resolving every landed `.rego` declaration — a suite falling back to
+/// `tests/<gate>.bats`, an owner and an exemption reading as absent. Compile-clean
+/// and gate-dead is the same shape `.claude/rules/policy-modules.md` opens with.
 fn declared(lines: &[String], marker: &str) -> Option<String> {
-    lines
-        .iter()
-        .find_map(|line| line.strip_prefix(marker))
-        .map(str::to_owned)
+    lines.iter().find_map(|line| strip_marker(line, marker))
 }
 
 /// The `#MUTANT` rows in one source, refusing a row that is not three fields.
@@ -402,7 +474,7 @@ fn declared(lines: &[String], marker: &str) -> Option<String> {
 fn rows_in(lines: &[String], source: &str) -> Vec<std::result::Result<Row, (String, usize)>> {
     lines
         .iter()
-        .filter_map(|line| line.strip_prefix(ROW))
+        .filter_map(|line| strip_marker(line, ROW))
         .map(|body| {
             let fields: Vec<&str> = body.split('|').collect();
             let [slug, script, want] = fields.as_slice() else {
@@ -436,6 +508,22 @@ pub fn sources_for(root: &Path, name: &str) -> Vec<String> {
     let module = format!("policy/{name}.rego");
     if root.join(&module).is_file() {
         return vec![module];
+    }
+    // THE ENGINE ARM (CLOUD-1369), and its POSITION is what keeps it additive: a
+    // name that resolved to a shell task or a module before still resolves to
+    // exactly that, so no landed gate changes meaning by growing a same-named
+    // Rust neighbour.
+    //
+    // A gate name is kebab and a Rust module is snake, so the name is
+    // transliterated here — the one place that mapping lives, because a second
+    // spelling of it is the second authority this file already refuses for argv.
+    // The `engine-` prefix is what keeps `doctor` (the shell gate) and
+    // `engine-doctor` (the module) from being one name; see `ENGINE_PREFIX`.
+    if let Some(module) = name.strip_prefix(ENGINE_PREFIX) {
+        let engine = format!("{ENGINE}/{}.rs", module.replace('-', "_"));
+        if root.join(&engine).is_file() {
+            return vec![engine];
+        }
     }
     let dir = root.join(PRESETS).join(name);
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -1134,12 +1222,26 @@ impl fmt::Display for CensusVerdict {
 }
 
 /// What a census run answered.
+///
+/// `#[non_exhaustive]` for [`crate::doctor::SessionReport`]'s reason, and adding
+/// it is CLOUD-1369's own bill coming due: this struct was constructible, so the
+/// `engine_undeclared` field below is `constructible_struct_adds_field` and
+/// `semver` refused the branch until a commit declared the break. Its two sibling
+/// report types already carry the attribute; this one did not, which is why a
+/// report type gaining a field — the most ordinary change such a type has — was a
+/// breaking one. Marking it now is what stops the next field costing the same.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Census {
     /// Pointer and verdict, in subject order.
     pub findings: Vec<(String, CensusVerdict)>,
     /// How many subjects were censused.
     pub subjects: usize,
+    /// How many engine modules carry no declaration at all (CLOUD-1369).
+    ///
+    /// The population `subjects` deliberately does not admit, reported so the
+    /// retrofit backlog has a size. Never a finding — see [`engine_undeclared`].
+    pub engine_undeclared: usize,
 }
 
 /// Whether a `mise-tasks/` program describes itself as a gate.
@@ -1187,6 +1289,45 @@ pub fn subjects(root: &Path) -> BTreeMap<String, String> {
             let file = entry.file_name().to_string_lossy().into_owned();
             if let Some(name) = file.strip_suffix(".rego") {
                 found.insert(name.to_owned(), format!("policy/{file}"));
+            }
+        }
+    }
+    // THE ENGINE, OPT-IN BY DECLARATION (CLOUD-1369) — and the opt-in is the
+    // design rather than a softer version of it.
+    //
+    // `mise-tasks/` is already opt-in by the same shape: a program is censused
+    // only if its own `#MISE description` calls it a gate, because that directory
+    // holds programs that refuse and programs that measure, and only the first
+    // kind owes a mutation. `crates/batten/src` is the same population problem
+    // one language over — most modules are plumbing, and a census that demanded a
+    // mutation from every one of them would report ~50 uncovered subjects on the
+    // day the route landed. CLOUD-1369 puts that retrofit out of scope in its own
+    // words: this row buys the ROUTE.
+    //
+    // SO A DECLARING MODULE IS A SUBJECT AND IS HELD TO THE SET. That is what
+    // stops the opt-in being a way out: a module that declares rows and is not in
+    // `$MUTANT_GATES` reads `uncovered`, because rows nobody sweeps are the
+    // coverage-shaped nothing this whole verb exists to refuse.
+    //
+    // What sizes the backlog is `engine_undeclared` below — a COUNT, not a
+    // finding, because a number is a sensor and a finding is a gate. Reporting
+    // the population without refusing it is how the next author learns the size
+    // without this change having to close it.
+    if let Ok(entries) = std::fs::read_dir(root.join(ENGINE)) {
+        for entry in entries.filter_map(std::result::Result::ok) {
+            let file = entry.file_name().to_string_lossy().into_owned();
+            let Some(stem) = file.strip_suffix(".rs") else {
+                continue;
+            };
+            let path = format!("{ENGINE}/{file}");
+            let declares = lines_of(root, &path).is_some_and(|lines| {
+                !rows_in(&lines, &path).is_empty()
+                    || [SUITE, OWNER, EXEMPT]
+                        .iter()
+                        .any(|marker| declared(&lines, marker).is_some())
+            });
+            if declares {
+                found.insert(format!("{ENGINE_PREFIX}{}", stem.replace('_', "-")), path);
             }
         }
     }
@@ -1263,7 +1404,40 @@ pub fn census(root: &Path, names: &[String]) -> Census {
     Census {
         findings,
         subjects: subjects.len(),
+        engine_undeclared: engine_undeclared(root, &subjects),
     }
+}
+
+/// How many engine modules carry no declaration at all.
+///
+/// **A COUNT, AND DELIBERATELY NOT A FINDING** (CLOUD-1369). `subjects` admits an
+/// engine module only once it declares something, so an un-declared one produces
+/// no verdict — which would leave the population invisible and make "the backlog
+/// is what the census will then report" untrue. This is that report.
+///
+/// A number is a sensor and a finding is a gate, and the split is what lets the
+/// route land green while still saying how much is uncovered. Whoever retrofits
+/// the declarations gets the size from here; nothing here refuses anything.
+///
+/// Pointer-only by construction (rule 4): a count names no module.
+///
+/// The censused set is passed in rather than re-derived, because `subjects` walks
+/// three directories and reads every candidate: computing it per entry would make
+/// this quadratic in the size of the engine for a number nobody decides on.
+#[must_use]
+fn engine_undeclared(root: &Path, censused: &BTreeMap<String, String>) -> usize {
+    let Ok(entries) = std::fs::read_dir(root.join(ENGINE)) else {
+        return 0;
+    };
+    entries
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| {
+            let file = entry.file_name().to_string_lossy().into_owned();
+            file.strip_suffix(".rs").is_some_and(|stem| {
+                !censused.contains_key(&format!("{ENGINE_PREFIX}{}", stem.replace('_', "-")))
+            })
+        })
+        .count()
 }
 
 #[cfg(test)]

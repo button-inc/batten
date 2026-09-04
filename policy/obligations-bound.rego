@@ -184,9 +184,27 @@ obligation contains entry if {
 # matching the PREFIX rather than the whole row is deliberate: the expression and
 # the case name are the sweep's business, and a module re-parsing them would be a
 # second authority over a format the runner already owns.
+# EITHER COMMENT OPENER, BECAUSE ONE OF THEM EXCLUDED AN IMPLEMENTATION LANGUAGE
+# (CLOUD-1369). This read `#MUTANT` alone, and `#MUTANT` is not valid Rust — so
+# this gate demanded, of every obligation on a Rust change, a row the declared
+# file could not legally contain. `.bats` was no escape either
+# (`V-SHELL-RULE-ADDED` refuses adding one), which made the pair unsatisfiable
+# rather than merely awkward: `REQUIRED_CLAIMS` makes `tests` mandatory in every
+# post-cutover Ready block, so a Rust change had to promise what it could not
+# bind.
+#
+# THIS IS A SECOND READER OF `mutate.rs`'s `OPENERS` AND THE DUPLICATION IS
+# NAMED RATHER THAN HIDDEN. The alternative was projecting the engine's resolved
+# rows onto the tree surface as a fact, which is the right end state and a wider
+# change than this row buys; a `[[pattern]]` row was rejected in this write's own
+# admission, because a comment opener is a fact about a LANGUAGE and not about
+# this consumer's repository. Nothing currently holds the two spellings together,
+# and that gap is real: a third opener added to `mutate.rs` will silently not be
+# honoured here.
 declares_slug(entry) if {
 	some line in input.tree.lines[entry.file]
-	startswith(line, sprintf("#MUTANT %v|", [entry.slug]))
+	some opener in ["//", "#"]
+	startswith(line, sprintf("%vMUTANT %v|", [opener, entry.slug]))
 }
 
 # An obligation whose file this repository does not track.

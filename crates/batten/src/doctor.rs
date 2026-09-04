@@ -1591,6 +1591,9 @@ pub struct SessionReport {
 /// case worth naming as a bound; this sandbox runs as root, so it is not a
 /// condition the suite can create (`.claude/rules/rust.md`), and inventing an
 /// assertion over a premise nothing produced is what that rule forbids.
+//MUTANT-SUITE crates/batten/tests/it/session_drain.rs
+//MUTANT store-absence-reads-unreadable|s@    target.parent().is_some_and(Path::is_dir)@    false@|a_pointer_at_an_unwritten_store_is_zero_and_never_could_not_look
+//MUTANT parent-conjunct-dropped|s@    target.parent().is_some_and(Path::is_dir)@    true@|a_pointer_whose_parent_is_absent_too_stays_could_not_look
 fn store_is_merely_unwritten(link: &Path) -> bool {
     let Ok(target) = std::fs::read_link(link) else {
         return false;

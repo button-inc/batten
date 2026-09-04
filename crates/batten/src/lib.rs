@@ -6757,10 +6757,16 @@ fn run_mutate(
                 writeln!(out, "{subject} {verdict}")?;
             }
             if census.findings.is_empty() {
+                // THE UNDECLARED ENGINE COUNT RIDES THE CLEAN LINE (CLOUD-1369),
+                // because a route that landed with nothing reporting its
+                // population would make "the backlog is what the census will
+                // then report" false. A count is a sensor: it names no module
+                // (rule 4) and it refuses nothing, so the exit code is unmoved.
                 writeln!(
                     out,
-                    "mutate census: {} gate(s), every one enforced or exempt by a filed row",
-                    census.subjects
+                    "mutate census: {} gate(s), every one enforced or exempt by a filed row; {} \
+                     engine module(s) declare nothing and are outside the censused set",
+                    census.subjects, census.engine_undeclared
                 )?;
                 return Ok(ExitCode::Success);
             }
@@ -9845,7 +9851,17 @@ fn refresh_tasks_link(root: &Path, envelope: &hook::Envelope) {
     else {
         return;
     };
-    let source =
+    // `_source` on a platform with no symlink, because the only reader below is
+    // `#[cfg(unix)]`. It was consumed unconditionally by an `is_dir` check until
+    // CLOUD-1435 removed that guard, so dropping the guard made this
+    // `unused_variables` on Windows — and `cross-check` denies warnings
+    // (CLOUD-397), so it is an error there and clean on the host that builds it.
+    //
+    // The substitution stays OUTSIDE the `cfg`, deliberately: it is the boundary
+    // resolving where the store would be, and a platform that cannot park a
+    // pointer should still fail on a template it cannot substitute rather than
+    // skip the question entirely.
+    let _source =
         crate::transcript::tasks_dir(template, session, std::env::var_os("HOME").as_deref());
     // PARKED ON SUBSTITUTION, NEVER ON THE TARGET EXISTING (CLOUD-1435). This
     // guard used to read `if !Path::new(&source).is_dir() { return }`, and it
@@ -9874,7 +9890,7 @@ fn refresh_tasks_link(root: &Path, envelope: &hook::Envelope) {
     }
     let _ = std::fs::remove_file(&link);
     #[cfg(unix)]
-    let _ = std::os::unix::fs::symlink(&source, &link);
+    let _ = std::os::unix::fs::symlink(&_source, &link);
 }
 
 /// The hatch that silences the whole end-of-turn surface.
