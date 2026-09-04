@@ -117,6 +117,20 @@ pub struct Answer {
     /// fractional value read as *the server asked for no floor* — byte-identical
     /// to an absent header, and silently faster than the endpoint allows.
     pub poll_floor: Option<f64>,
+    /// How long the forge asked the caller to back off for, in seconds.
+    ///
+    /// **A DIFFERENT HEADER ANSWERING A DIFFERENT QUESTION from
+    /// [`Answer::poll_floor`]**, and conflating them is what made the
+    /// predecessor's loop respond to being rate-limited by generating more of
+    /// the request that had just been refused. `X-Poll-Interval` is *how often
+    /// to ask*; this is *stop asking until*. A poll honouring only the first
+    /// keeps its polite cadence straight into a secondary limit.
+    ///
+    /// Resolved from `Retry-After` where the forge states one, and otherwise
+    /// from `X-RateLimit-Reset` — but only once `X-RateLimit-Remaining` is `0`,
+    /// because a reset instant is always present and reading it as a backoff
+    /// would pause on every successful call.
+    pub backoff: Option<u64>,
     /// The response body, as text.
     pub body: String,
 }
@@ -161,6 +175,7 @@ pub fn post_json(path: &str, body: &serde_json::Value) -> Option<Answer> {
 }
 
 fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>) -> Option<Answer> {
+    let now = crate::now_unix();
     let url = format!("{API}/{path}");
     let headers = headers(etag, body.is_some_and(|bytes| !bytes.is_empty()));
     let mut answers = fetch::spend(&[Call {
@@ -183,8 +198,41 @@ fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>) -> Option<Answe
             .header("x-poll-interval")
             .and_then(|raw| raw.trim().parse::<f64>().ok())
             .filter(|seconds| seconds.is_finite() && *seconds > 0.0),
+        backoff: backoff_from(&response, now),
         body: String::from_utf8_lossy(&response.body).into_owned(),
     })
+}
+
+/// The backoff a response asks for, in seconds, or `None`.
+///
+/// **`now` is the CALLER'S instant rather than a clock read here**, which is the
+/// rule `.claude/rules/policy-modules.md` states for every other comparison in
+/// this crate: the clock belongs to the boundary, so one exchange yields one
+/// answer whoever asks and whenever they ask again.
+fn backoff_from(response: &fetch::Response, now: u64) -> Option<u64> {
+    // `Retry-After` FIRST, because a forge that states one has stated it about
+    // this exact refusal. The reset instant below is a property of the window.
+    if let Some(seconds) = response
+        .header("retry-after")
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+    {
+        return Some(seconds);
+    }
+    // ONLY AT ZERO REMAINING. The reset instant rides every response, so reading
+    // it unconditionally would back off after each successful call.
+    if response
+        .header("x-ratelimit-remaining")
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        != Some(0)
+    {
+        return None;
+    }
+    response
+        .header("x-ratelimit-reset")
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|reset| *reset > now)
+        .map(|reset| reset - now)
 }
 
 #[cfg(test)]
@@ -266,12 +314,81 @@ mod tests {
             status: 200,
             etag: Some(String::from("W/\"a\"")),
             poll_floor: Some(2.5),
+            backoff: Some(60),
             body: String::from("{}"),
         };
         let rendered = format!("{answer:?}");
         assert!(
             !rendered.contains("Bearer"),
             "the token is not a field and cannot be one: {rendered}"
+        );
+    }
+
+    fn answered(headers: &[(&str, &str)]) -> fetch::Response {
+        fetch::Response {
+            status: 200,
+            body: Vec::new(),
+            headers: headers
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect(),
+        }
+    }
+
+    /// **THE HEADER THE POLL FLOOR IS NOT.** `X-Poll-Interval` says how often to
+    /// ask; `Retry-After` says stop asking. The predecessor's loop honoured only
+    /// the first, so being rate-limited made it generate more of exactly the
+    /// request that had just been refused.
+    #[test]
+    fn a_stated_retry_after_is_the_backoff_and_wins_over_the_reset() {
+        let response = answered(&[
+            ("retry-after", "45"),
+            ("x-ratelimit-remaining", "0"),
+            ("x-ratelimit-reset", "9000"),
+        ]);
+        assert_eq!(
+            backoff_from(&response, 1000),
+            Some(45),
+            "a forge stating one has stated it about THIS refusal"
+        );
+    }
+
+    /// The reset instant answers only once the window is actually spent.
+    ///
+    /// **The anti-vacuity half is the load-bearing one**: the reset rides every
+    /// response, so a reader that did not check `remaining` would back off after
+    /// each successful call and turn a healthy poll into a stall.
+    #[test]
+    fn the_reset_answers_at_zero_remaining_and_never_otherwise() {
+        let spent = answered(&[
+            ("x-ratelimit-remaining", "0"),
+            ("x-ratelimit-reset", "1060"),
+        ]);
+        assert_eq!(backoff_from(&spent, 1000), Some(60));
+
+        let healthy = answered(&[
+            ("x-ratelimit-remaining", "4999"),
+            ("x-ratelimit-reset", "1060"),
+        ]);
+        assert_eq!(
+            backoff_from(&healthy, 1000),
+            None,
+            "a reset instant is not a backoff while requests remain"
+        );
+    }
+
+    /// A response stating nothing asks for nothing, and a reset already past is
+    /// not a wait.
+    #[test]
+    fn a_silent_response_and_a_lapsed_reset_both_ask_for_no_backoff() {
+        assert_eq!(backoff_from(&answered(&[]), 1000), None);
+        assert_eq!(
+            backoff_from(
+                &answered(&[("x-ratelimit-remaining", "0"), ("x-ratelimit-reset", "900")]),
+                1000
+            ),
+            None,
+            "the window already reopened"
         );
     }
 }

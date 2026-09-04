@@ -1205,6 +1205,189 @@ pub fn abandon(repo: &str, sha: &str, fanin: &str) -> Abandoned {
     report
 }
 
+// ---------------------------------------------------------------------------
+// CLOUD-1338: the tap. `mise-tasks/land.sh`'s `redraft` / `close_the_tap`.
+// ---------------------------------------------------------------------------
+
+/// Whether a lap that stopped without merging should re-draft its pull request.
+///
+/// **THE TAP, AND IT IS THE PROPERTY THAT MAKES THE DELETION SAFE.** AGENTS.md
+/// states it: *"a red run re-drafts the PR — CI skips drafts, so that is the
+/// only thing that stops the next push buying another run while you fix it
+/// locally."* The predecessor's own header is blunter — *"stopping on a red run
+/// without closing the tap is a leak this exists to plug."* Retiring `land.sh`
+/// without this removes the tap and leaves every later push spending a runner
+/// on a failure nobody has fixed.
+///
+/// Split from the forge calls so the decision is testable without a network,
+/// the same split [`worthless`] and [`crate::lease::decide`] make.
+///
+/// **The verdict mapping is the predecessor's, arm for arm**, and the two arms
+/// that do NOT re-draft are the load-bearing ones:
+///
+/// * `Green` — leave it ready. A resume costs nothing from here.
+/// * a reading that could not be taken — **never strand a head on a failure to
+///   look**. This is the arm a collapsed three-valued read would lose.
+/// * `Red` and `Pending` — both mean the resume needs a fresh run whatever
+///   happens, so the draft costs nothing and stops every push until one starts.
+#[must_use]
+pub fn closes_the_tap(state: &Tap) -> bool {
+    // A LAND THAT MERGED OWNS NOTHING TO CLOSE, and one that never took the
+    // singleton owns neither the lease nor the pull request — which is why a
+    // REFUSED second land must not touch the live one's work.
+    if state.landed || !state.singleton_held {
+        return false;
+    }
+    // Already a draft is already closed. Asked rather than assumed, because
+    // re-drafting one would fail and the failure is swallowed — a silent no-op
+    // reads exactly like a tap that closed.
+    if state.is_draft != Some(false) {
+        return false;
+    }
+    match state.verdict {
+        // COULD NOT LOOK IS NOT RED. `None` is a reading nobody took, and
+        // draft-ing on it would punish a network blip with a stopped branch.
+        None | Some(TapVerdict::Green) => false,
+        Some(TapVerdict::Red | TapVerdict::Pending) => true,
+    }
+}
+
+/// What the tap decision reads. Every field is a reading the caller already
+/// took, so the decision itself opens nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tap {
+    /// Whether this lap merged. A merge closes nothing.
+    pub landed: bool,
+    /// Whether this lap holds the singleton, and so owns the pull request.
+    pub singleton_held: bool,
+    /// The pull request's draft state, or `None` where it could not be read.
+    pub is_draft: Option<bool>,
+    /// What the checks said, or `None` where the reading could not be taken.
+    pub verdict: Option<TapVerdict>,
+}
+
+/// The checks reading, narrowed to what the tap turns on.
+///
+/// **Three values rather than [`crate::checks_green::Verdict`] itself**, because
+/// the tap does not care WHICH check failed or why a pending one is pending —
+/// and a decision that carried the findings would invite a predicate over them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TapVerdict {
+    /// Every required check terminal and green.
+    Green,
+    /// A required check failed.
+    Red,
+    /// Not an answer yet.
+    Pending,
+}
+
+impl TapVerdict {
+    /// Narrow a full verdict to the three the tap reads.
+    #[must_use]
+    pub fn of(verdict: &crate::checks_green::Verdict) -> Self {
+        match verdict {
+            crate::checks_green::Verdict::Green => Self::Green,
+            crate::checks_green::Verdict::Red(_) => Self::Red,
+            crate::checks_green::Verdict::Pending(_) => Self::Pending,
+        }
+    }
+}
+
+/// A pull request's draft state and its node id, in one read.
+///
+/// Both come from the same response deliberately: two calls could disagree about
+/// which state they described, and the node id is only ever wanted in order to
+/// change the state this same read reported.
+#[must_use]
+pub fn draft_state(repo: &str, pr: &str) -> Option<(bool, String)> {
+    let answer = crate::rest::get(&format!("repos/{repo}/pulls/{pr}"), None)?;
+    let document = serde_json::from_str::<serde_json::Value>(&answer.body).ok()?;
+    let draft = document.get("draft")?.as_bool()?;
+    let node = document.get("node_id")?.as_str()?.to_owned();
+    Some((draft, node))
+}
+
+/// Convert a pull request back to a draft.
+///
+/// **GraphQL rather than REST, and that is the endpoint's shape rather than a
+/// preference.** The REST pulls endpoint will not move a ready pull request back
+/// to draft — `convertPullRequestToDraft` is the only mutation that does, which
+/// is why the predecessor shelled to a client that speaks it. It is still one
+/// POST through [`crate::rest`], to the same host, with the same credential.
+///
+/// `false` where it did not happen, swallowed rather than raised: the caller is
+/// on an exit path, and a tap that could not close must not replace the real
+/// diagnosis with its own.
+#[must_use]
+pub fn redraft(node: &str) -> bool {
+    let body = serde_json::json!({
+        "query": "mutation($id:ID!){convertPullRequestToDraft(input:{pullRequestId:$id}){clientMutationId}}",
+        "variables": { "id": node },
+    });
+    let Some(answer) = crate::rest::post_json("graphql", &body) else {
+        return false;
+    };
+    if !(200..300).contains(&answer.status) {
+        return false;
+    }
+    // A GRAPHQL ERROR IS A 200, which is the whole reason the status alone is
+    // not the answer here: the endpoint reports a refused mutation in an
+    // `errors` array with an OK status, so a caller reading the code would
+    // report a tap it never closed.
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(&answer.body) else {
+        return false;
+    };
+    document.get("errors").is_none()
+}
+
+/// The runs on a head that failed, as ids.
+///
+/// **NO PAGE SIZE, deliberately, and the predecessor says why in a sentence
+/// worth carrying:** `tests/land.bats`'s keyed-verdict sensor asserts the lander
+/// carries no windowed page size, because the fast-forward verdict must be found
+/// by its KEY rather than by a window. This is a different endpoint that needs
+/// none — a head sha's failed runs are a handful — so the sensor stays exact
+/// instead of being spelled past.
+///
+/// `None` is could-not-look, and the caller reads it as *not absorbed*: a
+/// transient is a claim about the runs, and a claim over a list nobody could
+/// read is not one.
+#[must_use]
+pub fn failed_runs(repo: &str, sha: &str) -> Option<Vec<String>> {
+    let answer = crate::rest::get(
+        &format!("repos/{repo}/actions/runs?head_sha={sha}&status=failure"),
+        None,
+    )?;
+    let document = serde_json::from_str::<serde_json::Value>(&answer.body).ok()?;
+    let runs = document.get("workflow_runs")?.as_array()?;
+    let ids: Vec<String> = runs
+        .iter()
+        .filter_map(|run| {
+            let id = run.get("id")?;
+            id.as_u64()
+                .map(|found| found.to_string())
+                .or_else(|| id.as_str().map(str::to_owned))
+        })
+        .collect();
+    // AN EMPTY LIST IS NOT AN ANSWER HERE. The predecessor returns non-zero on
+    // one, and it is right to: "no failed runs" cannot support "the failure was
+    // a transient", because there is no failure to have been one.
+    (!ids.is_empty()).then_some(ids)
+}
+
+/// Ask the forge to re-run one run's failed jobs.
+///
+/// `false` where the forge refused. **Reported rather than swallowed**, unlike
+/// the tap: the predecessor dies here with a remedy naming the exact command,
+/// because a lap that believed it re-ran and did not would wait forever for a
+/// run nobody started.
+#[must_use]
+pub fn rerun_failed(repo: &str, run: &str) -> bool {
+    crate::rest::post(&format!(
+        "repos/{repo}/actions/runs/{run}/rerun-failed-jobs"
+    ))
+}
+
 #[cfg(test)]
 mod lap_tests {
     use super::{Progress, Step, progress};
@@ -1846,5 +2029,105 @@ mod tests {
         let (doomed, spared) = worthless(&[], "the-fan-in.yml");
         assert!(doomed.is_empty());
         assert_eq!(spared, 0);
+    }
+
+    fn tap(landed: bool, held: bool, draft: Option<bool>, v: Option<TapVerdict>) -> Tap {
+        Tap {
+            landed,
+            singleton_held: held,
+            is_draft: draft,
+            verdict: v,
+        }
+    }
+
+    /// **THE PAIR THE TAP EXISTS FOR: red closes it, green leaves it open.**
+    ///
+    /// The predecessor's header states the leak — "stopping on a red run without
+    /// closing the tap is a leak this exists to plug: CI skips drafts, so
+    /// re-drafting is what stops the next push, from any source, spending
+    /// another runner on a failure nobody has fixed yet."
+    #[test]
+    fn a_red_head_is_redrafted_and_a_green_one_is_left_ready() {
+        assert!(
+            closes_the_tap(&tap(false, true, Some(false), Some(TapVerdict::Red))),
+            "a red run must stop the next push"
+        );
+        assert!(
+            !closes_the_tap(&tap(false, true, Some(false), Some(TapVerdict::Green))),
+            "AND A GREEN ONE IS LEFT READY — the resume costs nothing from here"
+        );
+    }
+
+    /// **COULD NOT LOOK IS NOT RED, and this is the arm a collapsed read loses.**
+    ///
+    /// Drafting on a reading nobody took punishes a network blip with a stopped
+    /// branch. The predecessor spells it as an exit code it declines to act on;
+    /// here it is `None`, which is the same three-valued reading typed.
+    #[test]
+    fn a_reading_that_could_not_be_taken_never_strands_the_head() {
+        assert!(
+            !closes_the_tap(&tap(false, true, Some(false), None)),
+            "no checks verdict is not a red one"
+        );
+        assert!(
+            !closes_the_tap(&tap(false, true, None, Some(TapVerdict::Red))),
+            "and neither is a draft state that would not read"
+        );
+    }
+
+    /// Pending closes the tap too: the resume needs a fresh run whatever
+    /// happens, so the draft costs nothing and stops every push until one starts.
+    #[test]
+    fn a_pending_head_closes_the_tap_because_the_resume_needs_a_fresh_run() {
+        assert!(closes_the_tap(&tap(
+            false,
+            true,
+            Some(false),
+            Some(TapVerdict::Pending)
+        )));
+    }
+
+    /// **A LAND THAT MERGED OWNS NOTHING TO CLOSE, and one holding no singleton
+    /// owns neither the lease nor the pull request.**
+    ///
+    /// The second is why a REFUSED second land must not touch the live one's
+    /// work: without it, a session that lost the singleton would re-draft the
+    /// pull request the winner is actively landing.
+    #[test]
+    fn a_merged_lap_and_an_unheld_singleton_both_close_nothing() {
+        assert!(
+            !closes_the_tap(&tap(true, true, Some(false), Some(TapVerdict::Red))),
+            "a merge closes nothing"
+        );
+        assert!(
+            !closes_the_tap(&tap(false, false, Some(false), Some(TapVerdict::Red))),
+            "and a lap that never took the singleton owns nothing to close"
+        );
+    }
+
+    /// An already-drafted pull request is already closed, and asking is what
+    /// keeps a silent no-op from reading like a tap that closed.
+    #[test]
+    fn an_already_drafted_pull_request_is_left_alone() {
+        assert!(!closes_the_tap(&tap(
+            false,
+            true,
+            Some(true),
+            Some(TapVerdict::Red)
+        )));
+    }
+
+    /// The narrowing keeps every verdict's arm and drops only the findings, so a
+    /// predicate over them cannot grow here later.
+    #[test]
+    fn every_checks_verdict_narrows_to_exactly_one_tap_arm() {
+        use crate::checks_green::{Pending, Verdict};
+
+        assert_eq!(TapVerdict::of(&Verdict::Green), TapVerdict::Green);
+        assert_eq!(TapVerdict::of(&Verdict::Red(Vec::new())), TapVerdict::Red);
+        assert_eq!(
+            TapVerdict::of(&Verdict::Pending(Pending::Unregistered(Vec::new()))),
+            TapVerdict::Pending
+        );
     }
 }
