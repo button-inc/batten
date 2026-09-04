@@ -102,7 +102,11 @@ pub struct Progress {
 }
 
 /// One response, split into the three things a conditional poll reads.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `PartialEq` without `Eq` since the floor became numeric: a header carrying
+/// `NaN` has no reflexive equality, and claiming one would be a lie the compiler
+/// is right to refuse rather than a derive to force.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Response {
     /// The status line's code. `0` where there was no status line at all, which
     /// is what a client that could not answer looks like.
@@ -110,7 +114,19 @@ pub struct Response {
     /// The validator to send back on the next request.
     pub etag: Option<String>,
     /// A floor the server asked for, in seconds.
-    pub poll_floor: Option<u64>,
+    ///
+    /// **NUMERIC, NEVER AN INTEGER, AND THAT IS CLOUD-390 ONE LAYER OVER.** This
+    /// field was `Option<u64>`, so `value.parse()` over a fractional
+    /// `X-Poll-Interval` yielded `None` — which is byte-identical to "the server
+    /// asked for no floor at all". A floor the endpoint is entitled to set was
+    /// therefore dropped silently, on exactly the responses where it matters most.
+    ///
+    /// The predecessor had the same defect and fixed it: `main-watch.sh` compared
+    /// with `-gt`, which is integer-only, and the `2>/dev/null` beside it turned
+    /// "this interval is not an integer" into "no floor was asked for". CLOUD-390
+    /// found it by setting the suite's interval to `0.2`. The port reproduced the
+    /// bug the port was supposed to carry the fix for.
+    pub poll_floor: Option<f64>,
     /// Everything past the header block.
     pub body: String,
 }
@@ -150,7 +166,15 @@ pub fn parse_response(raw: &str) -> Response {
         if let Some(value) = header(line, "etag") {
             etag = Some(value.to_owned());
         } else if let Some(value) = header(line, "x-poll-interval") {
-            poll_floor = value.parse().ok();
+            // A NON-FINITE READING IS NO FLOOR, which is the fail-open direction
+            // the predecessor's `+0` coercion took: a header nobody can compare
+            // must not become a floor nobody can satisfy. `NaN` would lose every
+            // comparison in `interval_for` and read as "no floor" anyway; an
+            // infinity would win every one and hang the lap.
+            poll_floor = value
+                .parse::<f64>()
+                .ok()
+                .filter(|seconds| seconds.is_finite() && *seconds >= 0.0);
         }
     }
 
@@ -225,8 +249,17 @@ fn string_at(row: &serde_json::Value, key: &str) -> String {
 /// A server-sent floor is the endpoint asking to be polled less often, so it
 /// wins over the configured interval — but only upward. Reading it as an
 /// absolute would let a server that asks for `0` turn this into a spin.
+/// **The comparison is NUMERIC.** An integer one is what CLOUD-390 removed from
+/// the predecessor, and restoring it here would drop any fractional floor the
+/// endpoint sends — the same silent hole, in a different language.
 #[must_use]
-pub fn interval_for(configured: u64, floor: Option<u64>) -> u64 {
+pub fn interval_for(configured: u64, floor: Option<f64>) -> f64 {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a poll interval in seconds; f64 is exact to 2^53 and the surface \
+                  refuses anything but a small whole number"
+    )]
+    let configured = configured as f64;
     match floor {
         Some(floor) if floor > configured => floor,
         _ => configured,
@@ -270,7 +303,7 @@ impl Poll {
     /// A `304` is the server saying nothing moved: the previous reading stands
     /// and the signature is not recomputed, because re-hashing an unchanged
     /// string per poll is a cost spent to learn what the status line said.
-    pub fn absorb(&mut self, raw: &str, configured: u64) -> u64 {
+    pub fn absorb(&mut self, raw: &str, configured: u64) -> f64 {
         self.polls += 1;
         let response = parse_response(raw);
         if let Some(etag) = response.etag {
@@ -553,12 +586,12 @@ fn record(progress: &Progress, signal: &str, value: &str) {
 /// `clippy.toml`'s timer ban exists to keep out. Named `pause` rather than
 /// `sleep` on the public surface because what a caller is asking for is the
 /// interval BETWEEN asks, not a duration of its own choosing.
-pub fn pause(seconds: u64) {
+pub fn pause(seconds: f64) {
     sleep(seconds);
 }
 
-fn sleep(seconds: u64) {
-    if seconds > 0 {
+fn sleep(seconds: f64) {
+    if seconds > 0.0 && seconds.is_finite() {
         #[expect(
             clippy::disallowed_methods,
             reason = "the interval between conditional requests, and the interval is the SERVER'S: \
@@ -567,7 +600,7 @@ fn sleep(seconds: u64) {
                       `Verdict::Green` or `Verdict::Red` both return — never on a clock \
                       (CLOUD-1177)"
         )]
-        std::thread::sleep(std::time::Duration::from_secs(seconds));
+        std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
     }
 }
 
@@ -602,7 +635,7 @@ mod tests {
             parse_response("HTTP/2.0 200 OK\r\nETag: W/\"a\"\r\nX-Poll-Interval: 4\r\n\r\n{}\n");
         assert_eq!(parsed.status, 200);
         assert_eq!(parsed.etag.as_deref(), Some("W/\"a\""));
-        assert_eq!(parsed.poll_floor, Some(4));
+        assert_eq!(parsed.poll_floor, Some(4.0));
         assert_eq!(parsed.body.trim(), "{}");
     }
 
@@ -610,7 +643,7 @@ mod tests {
     fn a_header_name_is_matched_whatever_its_case() {
         let parsed = parse_response("HTTP/2.0 200 OK\netag: W/\"b\"\nx-poll-interval: 2\n\n{}\n");
         assert_eq!(parsed.etag.as_deref(), Some("W/\"b\""));
-        assert_eq!(parsed.poll_floor, Some(2));
+        assert_eq!(parsed.poll_floor, Some(2.0));
     }
 
     #[test]
@@ -693,18 +726,55 @@ mod tests {
         assert_eq!(poll.etag.as_deref(), Some("W/\"a\""));
     }
 
+    /// Seconds, compared to a tolerance rather than for bit equality — the
+    /// interval became numeric with CLOUD-390's fix and a strict `==` over `f64`
+    /// is a lint this crate denies for the ordinary reason.
+    fn is(seconds: f64, expected: f64) -> bool {
+        (seconds - expected).abs() < f64::EPSILON
+    }
+
     #[test]
     fn a_server_requested_floor_is_honoured_over_a_shorter_interval() {
-        assert_eq!(interval_for(1, Some(3)), 3);
+        assert!(is(interval_for(1, Some(3.0)), 3.0));
+    }
+
+    /// **A FRACTIONAL FLOOR IS A FLOOR, and this is CLOUD-390 held at its own
+    /// layer.** The predecessor compared with `-gt`, which is integer-only, so a
+    /// fractional `X-Poll-Interval` read as "no floor asked for". The first Rust
+    /// port reproduced it: `poll_floor` was `Option<u64>`, and `"2.5".parse()`
+    /// yields `None` — byte-identical to an absent header.
+    #[test]
+    fn a_fractional_server_floor_is_not_silently_dropped() {
+        assert!(is(interval_for(1, Some(2.5)), 2.5));
+        let parsed = parse_response("HTTP/2.0 200 OK\nX-Poll-Interval: 0.5\n\n{}\n");
+        assert_eq!(
+            parsed.poll_floor,
+            Some(0.5),
+            "the header parses as the number it is"
+        );
     }
 
     // ...and only upward. A floor read as an absolute would let a server asking
     // for `0` turn an affordable poll into a spin.
     #[test]
     fn a_server_floor_below_the_configured_interval_does_not_lower_it() {
-        assert_eq!(interval_for(5, Some(1)), 5);
-        assert_eq!(interval_for(5, Some(0)), 5);
-        assert_eq!(interval_for(5, None), 5);
+        assert!(is(interval_for(5, Some(1.0)), 5.0));
+        assert!(is(interval_for(5, Some(0.0)), 5.0));
+        assert!(is(interval_for(5, None), 5.0));
+    }
+
+    /// A header nobody can compare must not become a floor nobody can satisfy:
+    /// `NaN` loses every comparison and an infinity wins every one, so both read
+    /// as no floor at all — the fail-open direction the predecessor's `+0`
+    /// coercion took.
+    #[test]
+    fn a_non_finite_floor_reads_as_no_floor_rather_than_as_a_hang() {
+        for raw in ["nan", "inf", "-1", "not-a-number", ""] {
+            let parsed = parse_response(&format!(
+                "HTTP/2.0 200 OK\nX-Poll-Interval: {raw}\n\n{{}}\n"
+            ));
+            assert_eq!(parsed.poll_floor, None, "unusable floor {raw:?}");
+        }
     }
 
     // The request IS part of the predicate (CLOUD-337): this endpoint returns a
