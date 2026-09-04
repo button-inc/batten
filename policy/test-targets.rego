@@ -51,9 +51,25 @@
 # The first is not hypothetical: the depth test shipped as `== 5` in this file's
 # first revision, which is exactly inverted, and the compiled tier caught it.
 #MUTANT-SUITE crates/batten/tests/it/test_targets.rs
-#MUTANT depth-may-invert|s@count(segments) == 4@count(segments) == 5@|a module inside the group is not a target, and a new top-level file is
-#MUTANT extension-may-widen|s@endswith(path, ".rs")@true@|a fixture file under tests/ is not a target
-#MUTANT grouped-main-unread|s@segments[4] == "main.rs"@true@|a five segment module that is not main rs is still not a target
+#MUTANT depth-may-invert|s@count(segments) == 4@count(segments) == 5@|a_module_inside_the_group_is_not_a_target
+#MUTANT extension-may-widen|s@endswith(path, ".rs")@true@|a_four_segment_non_rust_file_is_not_a_target
+#MUTANT grouped-main-unread|s@segments[4] == "main.rs"@true@|a_five_segment_module_that_is_not_main_rs_is_still_not_a_target
+#
+# ALL THREE ROWS NAMED PROSE UNTIL THE ENROLMENT EXPOSED IT. The third field is
+# the test function that must redden, and the two pre-existing rows carried a
+# sentence for their whole life — invisibly, because `#MUTANT-EXEMPT` meant
+# nothing ever resolved them. The first sweep after the enrolment reported all
+# three as `names-no-case`, which is the census vacuity arriving by a different
+# route than the exemption it replaced.
+#
+# `extension-may-widen` also had NO CASE THAT COULD OBSERVE IT, which is the
+# sharper half: it replaces the suffix test with `true`, and every case in the
+# tier sat at a depth the four-segment body already excludes —
+# `tests/fixtures/hooks/new.json` is six segments. A four-segment non-`.rs` path
+# is the only shape the widening reaches, so
+# `a_four_segment_non_rust_file_is_not_a_target` was added for it. A declared
+# mutation whose named case cannot see the change is a declaration defect, not a
+# suite one.
 #
 # THE THIRD ROW NEUTERS THE `main.rs` CLAUSE RATHER THAN THE DEPTH, and that is
 # what makes it discriminate. Flipping the depth would collide with

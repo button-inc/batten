@@ -241,6 +241,27 @@ fn another_crates_test_file_is_not_this_rules_business() {
     );
 }
 
+/// A NON-RUST FILE DIRECTLY UNDER `tests/`, which is the case
+/// `#MUTANT extension-may-widen` needs and which nothing had.
+///
+/// That row replaces `endswith(path, ".rs")` with `true`, and every existing
+/// case sits at a depth the four-segment body excludes — `tests/fixtures/hooks/
+/// new.json` is six segments — so the mutation had no case that could observe
+/// it and the sweep reported `names-no-case` rather than a kill. A four-segment
+/// path that is not `.rs` is the only shape the widening reaches.
+#[test]
+fn a_four_segment_non_rust_file_is_not_a_target() {
+    let root = repo(
+        "test-targets-four-segment-doc",
+        &["crates/batten/tests/README.md"],
+    );
+    assert!(
+        verdicts(&root).is_empty(),
+        "cargo autodiscovers a target from a .rs file; a document beside them \
+         mints nothing"
+    );
+}
+
 /// Fixture data under `tests/` is not a target, however deep it sits.
 #[test]
 fn a_fixture_file_is_not_a_target() {
