@@ -8,7 +8,42 @@ rather than trust it.
 counts to a share — _"2,728 cases at that shape is the 295.8s; the arithmetic
 lands within a few percent of the measurement"_ — and the arithmetic is wrong by
 an order of magnitude. Every git process the suite spawns, all 9,476 of them,
-is **4.8% of the serial total**. Three cases in one module are **21.8%**.
+is **4.8% of the serial total**. Three cases in one module are **21.8%** of it.
+
+**And that 21.8% is itself an artifact — CLOUD-1439 corrects it, and the
+correction is this file's own method turned on this file.** A per-module serial
+total is a SUM OF PER-CASE DURATIONS, and nextest bills a case for the whole time
+it was in flight, including time spent blocked. Those three `symbols` cases each
+spawn `cargo clippy` over the workspace on a target directory they share, so
+under parallelism one builds and the other two wait on cargo's lock — and all
+three are billed the build. Measured on this container, stale clippy cache:
+
+| arm                 | wall      | sum of per-case durations             |
+| ------------------- | --------- | ------------------------------------- |
+| `--test-threads 1`  | **28.1s** | 28.07s (26.848 + 0.418 + 0.805)       |
+| default parallelism | **62.4s** | **186.1s** (61.823 + 61.860 + 62.427) |
+
+One resolution costs **~0.5s** — `two_runs_agree…` performs two of them inside
+1.147s warm. The 38s is one cold `cargo clippy` build, paid once. It cannot reuse
+`lint:clippy`'s: that runs `--all-targets --all-features -- -D warnings`
+(`mise.toml:627`) and the analyser runs
+`--quiet --message-format=json -- --force-warn clippy::disallowed_types`
+(`symbols.rs:99`), so the fingerprints differ and so do the caches.
+
+**There is nothing to recover, and CI is where that was settled rather than
+argued.** Run `33895220128`, the `ci` job: the three cases report 21.688s,
+21.695s and 21.339s — finishing together, which is one build and two waits —
+inside a suite whose whole wall is **106.951s** over 4,535 cases. Because they
+overlap, the group's contribution to WALL is ~21.5s whether or not the contention
+exists; serialising them would give 21.5 + 0.5 + 0.5 and be strictly worse, and
+sharing one resolution across them recovers nothing for the same reason. The cost
+is one cold analyser build, already fully overlapped with the other 4,532 cases,
+and irreducible while the fact is resolved by a real analyser (CLOUD-760).
+
+So the module table below reads as a cost table and is not one wherever a
+module's cases contend on a shared resource. It is kept, with this correction
+above it, because the reasoning that produced the 21.8% is exactly what this file
+exists to record.
 
 ## The run
 
@@ -129,6 +164,14 @@ Three cases in `symbols` cost 38.3s, 38.3s and 37.6s. They drive a delegated
 analyser — the `Cost::Effect` fact — and are not fixture cost in any sense: no
 change to `common/mod.rs` moves them. Together with `shell_retirement`'s 54
 cases they are **31.3% of the suite**, against **4.8%** for every git fork in it.
+
+**`symbols`' row is a lock wait billed three times, not three costs** — see the
+correction at the head of this file. The three durations are one cold
+`cargo clippy` build plus two waits on cargo's target-dir lock, and the group's
+marginal contribution to WALL is one build (~21.5s on CI), not their sum. Read
+this table as _where a case was blocked_ rather than _what it cost_, for any
+module whose cases contend; `shell_retirement`'s 54 cases across 54 processes do
+not share that shape, so its row is unaffected.
 
 `process_group`'s 21.79s over 12 cases is deliberate: those cases wait on real
 signals and real process groups, and the waiting is the assertion.

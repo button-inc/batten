@@ -1,8 +1,22 @@
 //! CLOUD-760 §7: the first `Cost::Effect` fact, and what its first occupant owes.
 //!
-//! Its own integration binary because resolving the fact SPAWNS THE ANALYSER over
-//! this crate, which takes real time and must not be paid by every unit-test
-//! binary that happens to link `batten`.
+//! Resolving the fact SPAWNS THE ANALYSER over this crate, which takes real time
+//! and must not be paid by every unit-test binary that happens to link `batten`.
+//!
+//! **This module is NOT its own integration binary, and said it was for its whole
+//! life** (CLOUD-1439). CLOUD-1210 grouped 144 targets into 2, so these cases are
+//! a module inside `it` — which is why `-E 'binary(symbols)'` matches nothing and
+//! the filter is `binary(it) & test(/^symbols::/)`. Same defect class as
+//! CLOUD-1417: a header asserting a shape the tree contradicts.
+//!
+//! What the grouping costs here, measured rather than assumed: the three
+//! analyser-spawning cases share one target directory, so under parallelism one
+//! runs `cargo clippy` and the other two block on cargo's lock. All three are
+//! then billed the build by nextest, which is what made them read as 21.8% of the
+//! suite in `bench/rust-suites/RESULTS.md`. The marginal wall is one build. Do
+//! not "fix" it by serialising them or by sharing a resolution — both were
+//! measured and both recover zero, because the build already overlaps the other
+//! 4,532 cases.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::expect_used)]
