@@ -133,10 +133,24 @@ fn the_network_callers_are_the_declared_ones_and_nothing_else() {
         // keeps `lease.rs` off the gate paths is not this row but
         // `policy/module-layering.rego`, where `hook -> lease` and
         // `check -> lease` are forbidden over the resolved use graph.
+        //
+        // `rest.rs` is the fourth (CLOUD-1338), and it arrived by REMOVING call
+        // sites rather than adding one. Four modules were reaching the forge's
+        // REST tier by spawning its client, each with an
+        // `#[expect(clippy::disallowed_types)]` whose reason said this crate
+        // carries no HTTP client that resolves a forge credential — which was
+        // false, and `lease.rs` two entries up was already disproving it. Those
+        // four now read one door here, so the count of modules touching the
+        // network went from seven to four and this list grew by one.
+        //
+        // It is a MODULE rather than four call sites for the reason `lease.rs`
+        // is one: the credential belongs to whoever builds the request, and a
+        // token resolved in four places is four places it can be printed.
         vec![
             "lease.rs".to_owned(),
             "mcp.rs".to_owned(),
             "provision.rs".to_owned(),
+            "rest.rs".to_owned(),
         ],
         "exactly these modules may call the network adapter"
     );
