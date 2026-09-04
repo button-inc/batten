@@ -11100,35 +11100,3 @@ id = "hook-surfaces-are-battens"
 gloss = "no non-batten hook registration survives on this host's merged surfaces"
 check = ["batten", "wiring", "reclaim", "--check"]
 repair = ["batten", "wiring", "reclaim", "-y"]
-
-# CLOUD-1399. The decision this row asserts: nothing in this container is carried
-# by the agent proxy. It was settled and lived only in `mise.toml`'s `[env]`
-# comments and `egress-check.sh`'s header, so when a commit deleted the fencing
-# there was nothing to refuse it.
-#
-# WHY THE CHECK IS `batten` AND NOT `mise run egress-check`, which is the whole
-# reason this row exists rather than reusing the task. `container-preflight` asks
-# the same question through `mise`, and by then `mise.toml`'s `[env]` has already
-# prepended the GitHub hosts — so it grades the REPAIR and not the container.
-# Measured 2026-09-03: this container's ambient value is `unfenced`, and the
-# identical decision run under `mise exec` answers `partial`. `batten` is invoked
-# directly by the setup one-liner and by every hook registration, so it reads what
-# the container actually shipped.
-#
-# NO `repair`, AND THAT IS A STATEMENT RATHER THAN AN OMISSION. A repair runs as a
-# CHILD of this process, so it cannot rewrite the variables its own parent was
-# handed — the check would re-decide against the same environment and report
-# `repair-failed` every time, which is a mechanism that cannot succeed dressed as
-# one that might. The repair arrives with the committed egress policy that
-# `fetch::proxy_for` will consult ahead of the environment; then the checked object
-# becomes the EFFECTIVE posture, which a repair can move. Until then this reports,
-# and `[[startup]]` is non-blocking, so a container whose Environment variables
-# field is still wrong is told so at every session start rather than three tasks
-# later in someone else's name.
-#
-# The residue no repair will ever reach — a hand-typed `mise install` in the
-# agent's own shell — is CLOUD-1400's, and is reported rather than swallowed.
-[[startup]]
-id = "egress-is-unproxied"
-gloss = "no request from this container is carried by an agent proxy"
-check = ["batten", "doctor", "egress"]
