@@ -358,7 +358,7 @@ _.path = ["tests/bats/bin"]
 # alone — the fan-in. This roster is what `ci-wait` WAITS ON before landing, and
 # waiting only on `final` would strand every landing on a check that fans in from
 # eighteen. Two sets, two purposes; neither derives the other.
-CI_REQUIRED_CHECKS = "ci,bats,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),semver,perf,windows,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+CI_REQUIRED_CHECKS = "ci,batten-check,bats,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),semver,perf,windows,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
 # The subset of that roster for which ABSENCE — no check-run at all, as opposed
 # to one that graded `skipped` — is a legitimate reading rather than a name that
 # has not registered yet. Exactly two WORKFLOWS earn it, and each earns it twice
