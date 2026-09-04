@@ -3108,13 +3108,26 @@ pub const SURFACE: &[CommandDecl] = &[
     // column it holds, the column it should hold, and a reason class — never a
     // line of any body. A PR body and an issue body both carry consumer detail,
     // and a sweep that echoed them would leak it through CI logs.
+    // NO DATA CHANNEL, and that is a withdrawal rather than an omission. It was
+    // declared `true` first, and `every_data_channel_verb_emits_one_pure_json_document`
+    // refused it: the contract is that a data channel emits its document
+    // UNCONDITIONALLY, "including when the answer is empty — JSON that is
+    // sometimes absent is unparseable", and the census invokes each such verb
+    // with its declared arguments and no stdin.
+    //
+    // This verb's payload IS stdin. The two honest ways to satisfy the contract
+    // were to emit `{"findings": []}` on the could-not-look arm — which is the
+    // false green this whole gate exists to refuse — or to grow a
+    // `ready lint --issue` affordance resolving the board from the capture
+    // store, which nothing has asked for. The program being retired emits no
+    // JSON either, so the port is faithful without one.
     CommandDecl {
         path: "landed check",
         id: "landed.check",
         about: "Refuse a board column that contradicts main's history or a declined key",
-        data_channel: true,
+        data_channel: false,
         effect: Effect::Read,
-        flags: &[MERGED_PRS, LANDED_BY, DECLINED, JSON],
+        flags: &[MERGED_PRS, LANDED_BY, DECLINED],
     },
     CommandDecl {
         path: "ready lint",

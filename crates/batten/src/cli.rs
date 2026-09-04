@@ -640,8 +640,6 @@ pub enum LandedCommand {
         landed_by: Option<String>,
         /// `<CLOUD-id>` lines a PR body declined with `DO-NOT-CLOSE`.
         declined: Option<String>,
-        /// Emit the findings on the structured channel.
-        json: bool,
     },
 }
 
@@ -1830,7 +1828,6 @@ fn landed_of(matches: &ArgMatches) -> Option<LandedCommand> {
             merged_prs: matches.get_one::<String>("merged_prs").cloned(),
             landed_by: matches.get_one::<String>("landed_by").cloned(),
             declined: matches.get_one::<String>("declined").cloned(),
-            json: flag(matches, "json"),
         }),
         _ => None,
     }

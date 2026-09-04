@@ -1339,7 +1339,6 @@ normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
-complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -s J -l json -d 'Emit byte-stable JSON instead of pointer lines'
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l silent -d 'Say nothing but a verdict or a usage error'
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'

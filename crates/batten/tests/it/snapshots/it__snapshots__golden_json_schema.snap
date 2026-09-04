@@ -1222,7 +1222,7 @@ expression: stdout_of(&output)
           "id": "landed.check",
           "about": "Refuse a board column that contradicts main's history or a declined key",
           "effect": "read",
-          "data_channel": true,
+          "data_channel": false,
           "flags": [
             {
               "name": "declined",
@@ -1231,14 +1231,6 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": false,
               "help": "`<CLOUD-id>` lines a pull request body declined with DO-NOT-CLOSE"
-            },
-            {
-              "name": "json",
-              "short": "J",
-              "long": "json",
-              "takes_value": false,
-              "positional": false,
-              "help": "Emit byte-stable JSON instead of pointer lines"
             },
             {
               "name": "landed_by",

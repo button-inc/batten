@@ -2190,7 +2190,7 @@ fn evidence_file(path: &str, what: &str) -> Result<Vec<(String, Option<String>)>
 fn run_landed(
     command: LandedCommand,
     mode: Mode,
-    out: &mut dyn Write,
+    _out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     match command {
@@ -2198,14 +2198,11 @@ fn run_landed(
             merged_prs,
             landed_by,
             declined,
-            json,
         } => run_landed_check(
             merged_prs.as_deref(),
             landed_by.as_deref(),
             declined.as_deref(),
-            json,
             mode,
-            out,
             err,
         ),
     }
@@ -2224,9 +2221,7 @@ fn run_landed_check(
     merged_prs: Option<&str>,
     landed_by: Option<&str>,
     declined: Option<&str>,
-    json: bool,
     mode: Mode,
-    out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     // ABSENT EVIDENCE IS COULD-NOT-LOOK, NEVER A SHORT SWEEP. Half the landed
@@ -2275,26 +2270,6 @@ fn run_landed_check(
 
     let report = landed::decide(&rows, &evidence);
 
-    if json {
-        writeln!(
-            out,
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "findings": report
-                    .findings
-                    .iter()
-                    .map(|finding| serde_json::json!({
-                        "id": finding.id,
-                        "holds": finding.holds,
-                        "wants": finding.reason.wants(),
-                        "reason": finding.reason.token(),
-                        "asserted-by": finding.asserted_by,
-                    }))
-                    .collect::<Vec<_>>(),
-            }))?
-        )?;
-    }
-
     // Pointer-only per rule 4: a key, two column names and a reason class. Never
     // a line of any body — a PR body and an issue body both carry consumer
     // detail, and a sweep that echoed them would leak it through CI logs.
@@ -2322,10 +2297,16 @@ fn run_landed_check(
     }
 
     if report.is_clean() {
+        // ON `err`, NEVER `out`, and the reason is the data channel rather than
+        // taste. `out` is the answer and `err` is the messaging (`lib.rs`'s own
+        // split), and this row declares `data_channel: true` — so a clean line
+        // written to stdout would put prose beside the JSON document and stop
+        // `landed check -J` being one pure document, which
+        // `every_data_channel_verb_emits_one_pure_json_document` refuses.
         output::message(
             mode,
             Verbosity::Normal,
-            out,
+            err,
             "landed: every column agrees with what git and the forge already did",
         )?;
         return Ok(ExitCode::Success);
