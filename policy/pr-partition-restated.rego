@@ -198,5 +198,14 @@ test_an_absent_source_answers_nothing if {
 # while the gate read as covered. `a_unit_landing_separately_is_refused` is a real
 # case asserting exactly the refusal this mutation destroys, which is what makes
 # it discriminating rather than merely resolvable.
-#MUTANT partition-unread|s@\tregex.match\(data.batten.patterns\["pr-partition-prose"\], line\)@\tfalse@|a_unit_landing_separately_is_refused
+# AND `\(` IS A GROUP, NOT A PARENTHESIS. Fixing the case name above exposed a
+# second defect underneath it: in a `sed` basic regular expression `\(` and `\)`
+# DELIMIT a group, so this pattern asked for `regex.matchdata.batten.patterns…`
+# with no parens at all and matched nothing — `names-no-case` became
+# `inert-mutation`, one silent verdict for another. The parens are literal now.
+#
+# The two faults were sequential rather than independent, which is why one sweep
+# could only ever show one of them: `mutate` resolves the case before it applies
+# the expression, so the second was unreachable while the first stood.
+#MUTANT partition-unread|s@\tregex.match(data.batten.patterns\["pr-partition-prose"\], line)@\tfalse@|a_unit_landing_separately_is_refused
 #MUTANT missing-channel-silent|s@\tcause == "unreadable"@\tfalse@|an_unreadable_source_is_reported_rather_than_passed
