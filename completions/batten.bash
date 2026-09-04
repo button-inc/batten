@@ -625,6 +625,9 @@ _batten() {
             batten__subcmd__help__subcmd__lease,authorises)
                 cmd="batten__subcmd__help__subcmd__lease__subcmd__authorises"
                 ;;
+            batten__subcmd__help__subcmd__lease,carries)
+                cmd="batten__subcmd__help__subcmd__lease__subcmd__carries"
+                ;;
             batten__subcmd__help__subcmd__lease,check)
                 cmd="batten__subcmd__help__subcmd__lease__subcmd__check"
                 ;;
@@ -889,6 +892,9 @@ _batten() {
             batten__subcmd__lease,authorises)
                 cmd="batten__subcmd__lease__subcmd__authorises"
                 ;;
+            batten__subcmd__lease,carries)
+                cmd="batten__subcmd__lease__subcmd__carries"
+                ;;
             batten__subcmd__lease,check)
                 cmd="batten__subcmd__lease__subcmd__check"
                 ;;
@@ -921,6 +927,9 @@ _batten() {
                 ;;
             batten__subcmd__lease__subcmd__help,authorises)
                 cmd="batten__subcmd__lease__subcmd__help__subcmd__authorises"
+                ;;
+            batten__subcmd__lease__subcmd__help,carries)
+                cmd="batten__subcmd__lease__subcmd__help__subcmd__carries"
                 ;;
             batten__subcmd__lease__subcmd__help,check)
                 cmd="batten__subcmd__lease__subcmd__help__subcmd__check"
@@ -4324,7 +4333,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__lease)
-            opts="authorises check status peek held acquire renew hold release reserve"
+            opts="authorises carries check status peek held acquire renew hold release reserve"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4352,6 +4361,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__lease__subcmd__authorises)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__lease__subcmd__carries)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -6218,7 +6241,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__lease)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help authorises check status peek held acquire renew hold release reserve help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help authorises carries check status peek held acquire renew hold release reserve help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -6278,6 +6301,36 @@ _batten() {
             return 0
             ;;
         batten__subcmd__lease__subcmd__authorises)
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__lease__subcmd__carries)
             opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -6368,7 +6421,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__lease__subcmd__help)
-            opts="authorises check status peek held acquire renew hold release reserve help"
+            opts="authorises carries check status peek held acquire renew hold release reserve help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -6396,6 +6449,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__lease__subcmd__help__subcmd__authorises)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__lease__subcmd__help__subcmd__carries)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
