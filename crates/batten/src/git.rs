@@ -2572,6 +2572,22 @@ fn without_comments(path: &str, text: &str) -> String {
         Some("md") => return String::new(),
         Some("rs") => "//",
         Some("sh" | "bash" | "bats") => "#",
+        // THE DECLARATION LANGUAGES — policy modules, config, workflow and
+        // pipeline documents. Absent from CLOUD-827's original table, which
+        // named only the languages a consumer writes PROGRAMS in. A declarative
+        // consumer keeps most of its prose here instead, and every one of these
+        // took the fall-through below, so a comment-only change to one read as a
+        // code change and the whole prose-only class could not fire over them.
+        //
+        // The fall-through's direction is still right for a genuinely unknown
+        // extension — it admits rather than blocks, and only blocking is
+        // unrecoverable by waiting. What was wrong is calling these unknown.
+        //
+        // `pkl` is `//` and NOT `#`: it is Java-family, and `#` is not a comment
+        // marker there at all. One table for everything `#`-ish is how a
+        // remainder silently keeps its real code.
+        Some("rego" | "toml" | "yml" | "yaml") => "#",
+        Some("pkl") => "//",
         // `mise-tasks/` programs carry no extension (CLOUD-865 renamed most to
         // `.sh`, but the pattern stays so a re-added extensionless task is still
         // read). The check is on the DIRECTORY, so it cannot claim a file
@@ -4090,6 +4106,57 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    /// The declaration languages have their comments stripped, so a rule over
+    /// the remainder can see a comment-only change to one of them.
+    ///
+    /// This is the case CLOUD-827's table was missing: `.rego`, `.toml`,
+    /// `.yml`/`.yaml` and `.pkl` all took the unrecognised-extension
+    /// fall-through, whose remainder is the whole file, so every prose change to
+    /// a policy module, a config document or a workflow read as a code change.
+    ///
+    /// Fails by: removing an arm from `without_comments`'s table. Each assertion
+    /// below reddens for exactly the extension whose arm went, which is what
+    /// stops one arm's presence standing in for the others'.
+    #[test]
+    fn a_declaration_language_has_its_comments_stripped() {
+        for path in ["a/x.rego", "x.toml", "a/x.yml", "a/x.yaml"] {
+            assert_eq!(
+                without_comments(path, "# a comment\nreal = 1\n"),
+                "real = 1",
+                "`#` is the comment marker for {path}, so a comment-only change \
+                 must leave the remainder identical"
+            );
+        }
+        // pkl is Java-family: `//`, and `#` is not a comment marker there at all.
+        // Reading it with the `#` table would keep a commented line in the
+        // remainder and drop a real one.
+        assert_eq!(
+            without_comments("x.pkl", "// a comment\nreal = 1\n"),
+            "real = 1",
+            "pkl comments are `//`, so the `#` table would misread every line"
+        );
+    }
+
+    /// And a genuinely unknown extension still takes the admitting direction.
+    ///
+    /// The paired half of the case above: widening the table must not turn the
+    /// fall-through into a guess. An extension nobody has classified has no
+    /// comments, so its whole content is the remainder and any change to it is a
+    /// code change — which ADMITS the branch rather than blocking it, and only
+    /// blocking is unrecoverable by waiting.
+    ///
+    /// Fails by: making the fall-through strip `#`, which would read a `.conf`
+    /// or `.ini` prose change as prose-only on a guess.
+    #[test]
+    fn an_unclassified_extension_still_reads_as_code() {
+        assert_eq!(
+            without_comments("thing.conf", "# a comment\nreal = 1\n"),
+            "# a comment\nreal = 1\n",
+            "an unrecognised extension has no comments, so the remainder is the \
+             whole file and the gate admits rather than blocks"
+        );
+    }
 
     /// THE WINDOWS REGRESSION, TESTED AS A DECISION RATHER THAN A CONDITION.
     ///

@@ -370,6 +370,72 @@ fn an_unresolvable_base_says_nothing_rather_than_refusing() {
     admitted(&root);
 }
 
+/// A comment-only change to a DECLARATION language is refused.
+///
+/// The case this suite was missing for its whole life, and the reason it went
+/// unnoticed is worth the paragraph. Every arm above is a `.rs`, a `.md`, a
+/// `.bats` or an extensionless shell program — the languages a consumer writes
+/// PROGRAMS in, which is the set the shell predecessor classified. This
+/// repository writes most of its prose somewhere else entirely: `.rego` policy
+/// modules, the config authority, `hk.pkl`, and the workflows. All four took
+/// `without_comments`'s unrecognised-extension arm, whose remainder is the WHOLE
+/// file, so a comment-only change to any of them read as a code change and this
+/// gate could not fire over it.
+///
+/// Measured 2026-09-04: a 121→71-comment trim of a policy module, no other
+/// change in the branch, `batten check --rule prose-only` exit 0, a full
+/// required matrix spent. That is exactly the instance CLOUD-827 exists to
+/// price, and it walked past because the classifier had never been told what a
+/// `.rego` comment looks like.
+///
+/// One case per extension rather than one representative, because the arms are
+/// independent table entries and `.pkl` in particular is `//` where the other
+/// three are `#` — a single case would let one arm's presence stand in for the
+/// rest.
+///
+/// Fails by: removing the matching arm from `without_comments`'s table, which
+/// returns each file's whole text as its remainder and admits the branch.
+#[test]
+fn a_comment_only_change_to_a_declaration_language_is_refused() {
+    for (path, before, after) in [
+        (
+            "policy/a.rego",
+            "# a note\nviolation contains 1 if { true }\n",
+            "# a different note\nviolation contains 1 if { true }\n",
+        ),
+        (
+            "conf.toml",
+            "# a note\nversion = 1\n",
+            "# a different note\nversion = 1\n",
+        ),
+        (
+            ".github/workflows/w.yml",
+            "# a note\non: push\n",
+            "# a different note\non: push\n",
+        ),
+        (
+            "gate.pkl",
+            "// a note\nx = 1\n",
+            "// a different note\nx = 1\n",
+        ),
+    ] {
+        let stem = path.rsplit('/').next().unwrap_or(path);
+        let root = repo(
+            &format!("declaration-{stem}"),
+            &[(path, before)],
+            &Head {
+                written: &[(path, after)],
+                removed: &[],
+            },
+        );
+        assert_eq!(
+            findings(&root),
+            vec!["prose-only".to_owned()],
+            "a comment-only change to {path} must be priced as prose-only"
+        );
+    }
+}
+
 // subsumed: "a Rust block comment is NOT read as prose" crates/batten/tests/it/prose_only.rs
 #[test]
 fn a_shell_program_carrying_no_extension_is_read_as_shell() {
