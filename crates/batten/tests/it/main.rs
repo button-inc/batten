@@ -37,6 +37,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod claim_carry;
+mod claim_race;
 mod common;
 
 mod acceptance_corpus;

@@ -3333,6 +3333,25 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[],
     },
+    // `read`, and it is the honest column rather than a convenience: this verb
+    // mints nothing and writes nothing. It asks the forge which OTHER open pull
+    // request already claims a key this branch claims, and prints the answer.
+    // Its two siblings above are `write` because they mint a receipt; there is
+    // no receipt here, so a row claiming `write` would put a pure read on the
+    // wrong side of the derived allowlist.
+    //
+    // NO `-J`, for `claim bot`'s reason one row up: what this verb can say
+    // depends on what the forge answers about the open pull requests, so the
+    // `-J` census's byte-stability term would be a claim about the forge rather
+    // than about this binary.
+    CommandDecl {
+        path: "claim race",
+        id: "claim.race",
+        about: "Refuse a claim a different open pull request already carries, judged by head SHA",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[],
+    },
     CommandDecl {
         path: "claim carry",
         id: "claim.carry",

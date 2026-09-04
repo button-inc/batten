@@ -30,11 +30,23 @@
 //! rather than being handled. That is the whole reason this is a retirement and
 //! not a patch: the shell had no spelling for the question.
 //!
-//! # No tracker vocabulary lives here (non-negotiable rule 1)
+//! # What a key is, and what CLOSES one, is asked and never re-derived
 //!
-//! The issue-key pattern arrives as a parameter, from the consumer's own
-//! `[[pattern]]` registry. A grep of `crates/` for a specific tracker's key
-//! shape returns nothing, which `no-tracker-key-in-core` gates.
+//! Both questions are [`ready::Grammar`]'s, reached here through [`Keys`]. That
+//! is not tidiness: this module's first draft carried its own closing-verb
+//! regex, which would have been a SECOND authority over the one distinction
+//! that has already misfired in this repository — a pull request citing a key as
+//! evidence, read as claiming it. Two authorities that can disagree about what
+//! closes a key is the same defect one level up from the one being retired.
+//!
+//! The grammar resolves every token from the consumer's own `[[pattern]]`
+//! registry, so no tracker vocabulary enters the crate (non-negotiable rule 1)
+//! and `no-tracker-key-in-core` stays silent.
+//!
+//! [`Keys`] is a trait rather than a bare `&Grammar` so the predicate can be
+//! driven by a double in a unit test. A grammar is resolved from ~18 declared
+//! patterns, and a test that had to build one would be asserting the registry's
+//! shape on the way to asserting this module's.
 //!
 //! # Pointer-only (non-negotiable rule 4)
 //!
@@ -43,6 +55,38 @@
 //! else wrote.
 
 use regex::Regex;
+
+use crate::ready::Grammar;
+
+/// What a key is, and what closes one — the two questions this predicate asks
+/// of somebody else.
+///
+/// Implemented for [`Grammar`], which resolves both from the consumer's
+/// `[[pattern]]` registry. A caller may not answer either itself: that is what
+/// keeps one concept to one spelling, and what stopped this module shipping a
+/// closing-verb regex of its own.
+pub trait Keys {
+    /// Every key the text names, however it names it.
+    fn named(&self, text: &str) -> Vec<String>;
+    /// Every key the text names in CLOSING form — the ones a merge will move.
+    fn closed(&self, text: &str) -> Vec<String>;
+}
+
+impl Keys for Grammar {
+    fn named(&self, text: &str) -> Vec<String> {
+        self.keys_in(text)
+            .into_iter()
+            .map(|key| key.to_string())
+            .collect()
+    }
+
+    fn closed(&self, text: &str) -> Vec<String> {
+        self.keys_closed_in(text)
+            .into_iter()
+            .map(|key| key.to_string())
+            .collect()
+    }
+}
 
 /// One open pull request, as the forge lists it.
 ///
@@ -89,52 +133,57 @@ pub struct Race {
 /// citing a key read as racing it. Both sides of the comparison go through this
 /// one function for exactly that reason.
 #[must_use]
-pub fn claimed(branch: &str, title: &str, log: &str, body: &str, key: &Regex) -> Vec<String> {
-    let closing = closing_keys(&format!("{body}\n{log}"), key);
+pub fn claimed(branch: &str, title: &str, log: &str, body: &str, keys: &dyn Keys) -> Vec<String> {
+    let closing = dedup(keys.closed(&folded(&format!("{body}\n{log}"))));
     if !closing.is_empty() {
         return closing;
     }
-    let declared = keys_in(&format!("{branch} {title}"), key);
+    let declared = dedup(keys.named(&folded(&format!("{branch} {title}"))));
     if !declared.is_empty() {
         return declared;
     }
-    refs_first(log, key)
+    refs_first(log, keys)
 }
 
-/// Every key a closing keyword names, uppercased and deduplicated.
-fn closing_keys(text: &str, key: &Regex) -> Vec<String> {
-    let mut found = Vec::new();
-    for line in text.lines() {
-        for capture in CLOSING.find_iter(line) {
-            found.extend(keys_in(capture.as_str(), key));
-        }
-    }
-    dedup(found)
+/// Upper-cased, because a key pattern is not obliged to be case-insensitive and
+/// a BRANCH NAME is routinely not upper case.
+///
+/// **This is a fidelity requirement, not a nicety, and leaving it out is a
+/// silent dead gate.** The retired shell extracted with `grep -oiE` and
+/// upper-cased the result; this repository's own `ready-issue-key` row is
+/// `CLOUD-[0-9]+` with no `(?i)`, and its branches are spelled
+/// `claude/cloud-843-…`. So a port that handed the branch to the grammar as
+/// written would resolve NO key from source 2 on every branch this repository
+/// makes — the claim would silently fall through to a `Refs:` trailer, or to
+/// nothing, and a gate that finds nothing looks exactly like a gate that passed.
+///
+/// Folding the INPUT rather than relaxing the pattern is deliberate: the row is
+/// consumer config read by other gates too, and widening it here would change
+/// their answers to buy this one.
+fn folded(text: &str) -> String {
+    text.to_uppercase()
 }
 
 /// The FIRST key of each `Refs:` trailer, which is source 3.
 ///
-/// Only whitespace is allowed between the trailer and the key, so the citations
-/// that may follow it on the same line are not claims. That is a property of
-/// this pattern rather than a filter applied afterwards, which is what keeps a
-/// caller from reintroducing the conflation by forgetting the filter.
-fn refs_first(log: &str, key: &Regex) -> Vec<String> {
+/// The trailer itself is a commit-message convention rather than a tracker's
+/// vocabulary, so the pattern for it belongs to this module. WHAT FOLLOWS it is
+/// still the grammar's to recognise, which is why only the trailer and its
+/// immediate neighbourhood is matched here and the key is read out of that span
+/// by [`Keys::named`].
+///
+/// Only the first key counts. A trailer may go on to cite others, and citing is
+/// not claiming — a property of taking the head of the span rather than a filter
+/// applied afterwards, so a caller cannot reintroduce the conflation by
+/// forgetting a step.
+fn refs_first(log: &str, keys: &dyn Keys) -> Vec<String> {
     let mut found = Vec::new();
     for line in log.lines() {
         if let Some(hit) = TRAILER.find(line) {
-            found.extend(keys_in(hit.as_str(), key).into_iter().take(1));
+            found.extend(keys.named(&folded(hit.as_str())).into_iter().take(1));
         }
     }
     dedup(found)
-}
-
-/// Every key the pattern matches in `text`, uppercased and deduplicated.
-fn keys_in(text: &str, key: &Regex) -> Vec<String> {
-    dedup(
-        key.find_iter(text)
-            .map(|hit| hit.as_str().to_uppercase())
-            .collect(),
-    )
 }
 
 /// Sorted and deduplicated, so the output is byte-stable for one input (§6).
@@ -142,6 +191,31 @@ fn dedup(mut keys: Vec<String>) -> Vec<String> {
     keys.sort();
     keys.dedup();
     keys
+}
+
+/// The `owner/name` slug a remote URL points at, or `None` where it points at
+/// something this cannot read.
+///
+/// Both spellings the forge hands out — `https://host/owner/name(.git)` and
+/// `git@host:owner/name(.git)` — reduce to the same two segments. `None` rather
+/// than a guess: a slug derived wrongly would ask the forge about a DIFFERENT
+/// repository and get a confident answer about it, which is worse here than not
+/// looking, because the verdict would read as this repository's.
+#[must_use]
+pub fn slug_of(url: &str) -> Option<String> {
+    // The scp form puts the path after a colon; the URL form puts it after the
+    // host. Reduce both to the path, then require exactly the two segments a
+    // slug has — a URL naming only one is not a repository this can ask about,
+    // and `None` is the honest answer rather than a slug built from the host.
+    let path = url.split_once("://").map_or_else(
+        || url.rsplit_once(':').map_or(url, |(_, tail)| tail),
+        |(_, rest)| rest.split_once('/').map_or("", |(_, path)| path),
+    );
+    let path = path.strip_suffix(".git").unwrap_or(path).trim_matches('/');
+    let mut segments = path.split('/');
+    let owner = segments.next().filter(|part| !part.is_empty())?;
+    let name = segments.next().filter(|part| !part.is_empty())?;
+    segments.next().is_none().then(|| format!("{owner}/{name}"))
 }
 
 /// This branch's own pull request, resolved by HEAD SHA.
@@ -168,13 +242,18 @@ pub fn identify<'a>(pulls: &'a [Pull], head_sha: &str) -> Option<&'a Pull> {
 /// an empty list here means *looked and found none*, and conflating that with
 /// *could not look* is the dead gate this whole module is a correction for.
 #[must_use]
-pub fn races(mine: &[String], pulls: &[Pull], self_number: Option<&str>, key: &Regex) -> Vec<Race> {
+pub fn races(
+    mine: &[String],
+    pulls: &[Pull],
+    self_number: Option<&str>,
+    keys: &dyn Keys,
+) -> Vec<Race> {
     let mut found = Vec::new();
     for pull in pulls {
         if Some(pull.number.as_str()) == self_number {
             continue;
         }
-        let theirs = claimed(&pull.head_ref, &pull.title, &pull.log, &pull.body, key);
+        let theirs = claimed(&pull.head_ref, &pull.title, &pull.log, &pull.body, keys);
         for contested in mine.iter().filter(|key| theirs.contains(key)) {
             found.push(Race {
                 key: contested.clone(),
@@ -185,19 +264,6 @@ pub fn races(mine: &[String], pulls: &[Pull], self_number: Option<&str>, key: &R
     }
     found
 }
-
-/// A closing keyword in any of its inflections, with the key that follows it.
-///
-/// The verbs are the forge's, not the tracker's, so they are engine vocabulary
-/// rather than a consumer fact — what a closing keyword CLOSES is decided by the
-/// forge for every repository alike.
-static CLOSING: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    #[expect(
-        clippy::unwrap_used,
-        reason = "a literal pattern with no input: it compiles or the binary does not"
-    )]
-    Regex::new(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+\S+").unwrap()
-});
 
 /// A `Refs:` trailer and the one key that may follow it.
 static TRAILER: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
@@ -212,12 +278,41 @@ static TRAILER: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
 mod tests {
     use super::*;
 
-    /// The consumer's pattern, supplied the way the verb supplies it — never a
-    /// literal in the module under test.
-    fn key() -> Regex {
-        #[expect(clippy::unwrap_used, reason = "a fixture pattern")]
-        Regex::new("[A-Z]+-[0-9]+").unwrap()
+    /// A [`Keys`] double, so this suite asserts THIS module's predicate rather
+    /// than the pattern registry's shape on the way to it.
+    ///
+    /// It is deliberately dumber than the real grammar — a key is two uppercase
+    /// runs around a dash, and a close is one of the forge's verbs immediately
+    /// before one. Anything subtler is `ready::Grammar`'s to get right and
+    /// `ready`'s own suite to pin; re-asserting it here would be the second
+    /// authority this module exists to avoid.
+    struct Fake;
+
+    impl Keys for Fake {
+        fn named(&self, text: &str) -> Vec<String> {
+            KEY.find_iter(text)
+                .map(|hit| hit.as_str().to_owned())
+                .collect()
+        }
+
+        fn closed(&self, text: &str) -> Vec<String> {
+            CLOSED
+                .captures_iter(text)
+                .filter_map(|hit| hit.get(1))
+                .map(|hit| hit.as_str().to_owned())
+                .collect()
+        }
     }
+
+    static KEY: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        #[expect(clippy::unwrap_used, reason = "a fixture pattern with no input")]
+        Regex::new("[A-Z]+-[0-9]+").unwrap()
+    });
+
+    static CLOSED: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        #[expect(clippy::unwrap_used, reason = "a fixture pattern with no input")]
+        Regex::new(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+([A-Z]+-[0-9]+)").unwrap()
+    });
 
     fn pull(number: &str, head_ref: &str, head_sha: &str) -> Pull {
         Pull {
@@ -233,13 +328,7 @@ mod tests {
     #[test]
     fn a_closing_keyword_overrides_the_branch_name() {
         assert_eq!(
-            claimed(
-                "user/proj-843-campaign",
-                "",
-                "",
-                "Closes PROJ-1170.",
-                &key()
-            ),
+            claimed("user/proj-843-campaign", "", "", "Closes PROJ-1170.", &Fake),
             vec!["PROJ-1170".to_owned()]
         );
     }
@@ -247,13 +336,7 @@ mod tests {
     #[test]
     fn a_bare_mention_in_a_body_is_a_citation_and_not_a_claim() {
         assert_eq!(
-            claimed(
-                "",
-                "",
-                "",
-                "Supersedes the measurement in PROJ-133.",
-                &key()
-            ),
+            claimed("", "", "", "Supersedes the measurement in PROJ-133.", &Fake),
             Vec::<String>::new()
         );
     }
@@ -261,11 +344,11 @@ mod tests {
     #[test]
     fn a_refs_trailer_answers_only_when_nothing_more_explicit_does() {
         assert_eq!(
-            claimed("", "", "Refs: PROJ-1170\n", "", &key()),
+            claimed("", "", "Refs: PROJ-1170\n", "", &Fake),
             vec!["PROJ-1170".to_owned()]
         );
         assert_eq!(
-            claimed("", "", "Refs: PROJ-1170\n", "Closes PROJ-9.", &key()),
+            claimed("", "", "Refs: PROJ-1170\n", "Closes PROJ-9.", &Fake),
             vec!["PROJ-9".to_owned()]
         );
     }
@@ -273,7 +356,7 @@ mod tests {
     #[test]
     fn a_trailer_claims_its_first_key_and_cites_the_rest() {
         assert_eq!(
-            claimed("", "", "Refs: PROJ-1170, PROJ-843\n", "", &key()),
+            claimed("", "", "Refs: PROJ-1170, PROJ-843\n", "", &Fake),
             vec!["PROJ-1170".to_owned()]
         );
     }
@@ -293,7 +376,7 @@ mod tests {
         let me = identify(&pulls, "e97703b2").map(|pull| pull.number.clone());
         assert_eq!(me.as_deref(), Some("793"));
         assert!(
-            races(&mine, &pulls, me.as_deref(), &key()).is_empty(),
+            races(&mine, &pulls, me.as_deref(), &Fake).is_empty(),
             "a branch may not race its own pull request"
         );
     }
@@ -310,7 +393,7 @@ mod tests {
             log: String::new(),
             ..pull("793", "user/proj-843-campaign", "e97703b2")
         }];
-        assert_eq!(races(&mine, &pulls, None, &key()).len(), 1);
+        assert_eq!(races(&mine, &pulls, None, &Fake).len(), 1);
     }
 
     #[test]
@@ -323,7 +406,7 @@ mod tests {
             },
             pull("793", "mine", "bbbb"),
         ];
-        let races = races(&mine, &pulls, Some("793"), &key());
+        let races = races(&mine, &pulls, Some("793"), &Fake);
         assert_eq!(races.len(), 1);
         assert_eq!(races[0].key, "PROJ-49");
         assert_eq!(races[0].number, "400");
@@ -337,7 +420,29 @@ mod tests {
             body: "| PROJ-133 | measured 2026-08-08 |".to_owned(),
             ..pull("306", "user/proj-268-sweep", "aaaa")
         }];
-        assert!(races(&mine, &pulls, Some("793"), &key()).is_empty());
+        assert!(races(&mine, &pulls, Some("793"), &Fake).is_empty());
+    }
+
+    #[test]
+    fn both_remote_spellings_reduce_to_one_slug() {
+        assert_eq!(
+            slug_of("https://github.com/owner/name").as_deref(),
+            Some("owner/name")
+        );
+        assert_eq!(
+            slug_of("https://github.com/owner/name.git").as_deref(),
+            Some("owner/name")
+        );
+        assert_eq!(
+            slug_of("git@github.com:owner/name.git").as_deref(),
+            Some("owner/name")
+        );
+    }
+
+    #[test]
+    fn a_url_naming_no_owner_is_none_rather_than_a_guess() {
+        assert_eq!(slug_of("https://github.com/name"), None);
+        assert_eq!(slug_of("name"), None);
     }
 
     #[test]

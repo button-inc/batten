@@ -685,6 +685,7 @@ mod tests {
             "claim bot".to_owned(),
             "claim carry".to_owned(),
             "claim check".to_owned(),
+            "claim race".to_owned(),
             "commit".to_owned(),
             "commit check".to_owned(),
             "config".to_owned(),

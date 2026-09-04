@@ -571,6 +571,73 @@ pub mod forge {
         )?;
         Ok((!found.is_empty()).then_some(found))
     }
+
+    /// Every open pull request, as the fields a claim is derived from.
+    ///
+    /// **`head.sha` is why this exists beside [`open_for`] rather than reusing
+    /// it** (CLOUD-1422). That function answers "which pull request has THIS
+    /// branch as its head", which is unanswerable from a detached checkout —
+    /// the question the retired `claim-race-check.sh` asked and could not get an
+    /// answer to. This returns the whole listing with each head's commit, so the
+    /// caller identifies itself by SHA and needs no branch name at all.
+    ///
+    /// ONE PAGE, and the cap is deliberate rather than an oversight: a
+    /// repository with more than a hundred open pull requests would have the
+    /// surplus fall outside this listing, and an unseen competitor reads as no
+    /// competitor — a false green in the one direction the gate exists to
+    /// prevent. [`open_pulls_are_complete`] is what turns that into a refusal;
+    /// this function reports the truncation rather than deciding on it.
+    ///
+    /// # Errors
+    ///
+    /// As [`run`].
+    pub fn open_pulls(repo: &str) -> Result<Vec<crate::race::Pull>> {
+        let raw = read(
+            &format!("repos/{repo}/pulls?state=open&per_page=100"),
+            ".[] | [(.number | tostring), .head.ref, .head.sha, .title, (.body // \"\" | \
+             gsub(\"\\t\"; \" \") | gsub(\"\\n\"; \" \"))] | @tsv",
+        )?;
+        Ok(raw
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                let mut fields = line.split('\t');
+                crate::race::Pull {
+                    number: fields.next().unwrap_or_default().to_owned(),
+                    head_ref: fields.next().unwrap_or_default().to_owned(),
+                    head_sha: fields.next().unwrap_or_default().to_owned(),
+                    title: fields.next().unwrap_or_default().to_owned(),
+                    body: fields.next().unwrap_or_default().to_owned(),
+                    log: String::new(),
+                }
+            })
+            .collect())
+    }
+
+    /// Whether the listing [`open_pulls`] returned is the whole of it.
+    ///
+    /// One page holds a hundred, so a listing OF a hundred may be truncated and
+    /// anything shorter cannot be. Read conservatively: at the cap the caller
+    /// must refuse rather than report a clean verdict it could not have reached.
+    #[must_use]
+    pub fn open_pulls_are_complete(pulls: &[crate::race::Pull]) -> bool {
+        pulls.len() < PAGE
+    }
+
+    /// The forge's page size for a listing, which bounds what one read can see.
+    const PAGE: usize = 100;
+
+    /// One pull request's commit messages, joined — sources 1 and 3.
+    ///
+    /// # Errors
+    ///
+    /// As [`run`].
+    pub fn commit_messages(repo: &str, number: &str) -> Result<String> {
+        read(
+            &format!("repos/{repo}/pulls/{number}/commits?per_page=100"),
+            ".[].commit.message",
+        )
+    }
 }
 
 #[cfg(test)]

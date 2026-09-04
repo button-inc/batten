@@ -649,6 +649,15 @@ pub enum ClaimCommand {
     /// the branch this checkout is on and the pull request the forge says is open
     /// for it, so there is nothing for a caller to supply.
     Bot,
+    /// Refuse a claim a different open pull request already carries.
+    ///
+    /// No flags, for `Bot`'s reason above: the subject is this checkout's HEAD
+    /// and the pull requests the forge says are open, so there is nothing for a
+    /// caller to supply. That is load-bearing here rather than merely tidy — the
+    /// program this replaces let the SUBJECT go unresolved (`gh pr view` with no
+    /// branch to read) and carried on with an empty self, which is how a branch
+    /// came to race its own pull request.
+    Race,
     /// Attest that this branch only carries licence rows forward.
     ///
     /// No payload and no flags but `--json`: the subject is the branch's own diff
@@ -1787,6 +1796,7 @@ fn claim_of(matches: &ArgMatches) -> Option<ClaimCommand> {
             json: flag(matches, "json"),
         }),
         ("bot", _) => Some(ClaimCommand::Bot),
+        ("race", _) => Some(ClaimCommand::Race),
         ("carry", matches) => Some(ClaimCommand::Carry {
             json: flag(matches, "json"),
         }),

@@ -2966,6 +2966,103 @@ fn run_claim_bot(
     Ok(ExitCode::Success)
 }
 
+/// `batten claim race`: refuse a claim a different open pull request carries.
+///
+/// The IO half of `mise-tasks/claim-race-check.sh`'s retirement (CLOUD-1422).
+/// [`race`] holds the decision and this holds the reads, which is the split the
+/// shell could not make — and the split is what makes the defect testable, since
+/// the failing case was never about the network.
+///
+/// **THE ORDER OF THE TWO REFUSALS IS THE WHOLE CORRECTION.** The retired
+/// program could not always resolve its own pull request, and its answer to that
+/// was to carry on with an empty self — so a branch raced itself. Here an
+/// unresolvable self is a *refusal to decide*, not an input to the decision:
+/// nothing reaches [`race::races`] until this checkout has been identified in
+/// the listing.
+///
+/// # Everything it cannot establish ALLOWS, and that is unchanged
+///
+/// No remote, no slug, no forge answer, a truncated listing: each is
+/// could-not-look and exits clean with a line saying so. A gate that cannot
+/// reach the forge must never become the reason a branch cannot be verified —
+/// this runs inside `verify`, where a false red costs the whole pre-flight. What
+/// is NOT could-not-look is a listing that came back whole and carries no entry
+/// for this head: that is a branch with no open pull request, which has nothing
+/// to race.
+fn run_claim_race(
+    repo: &Path,
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let clean = |out: &mut dyn Write, text: &str| -> Result<ExitCode> {
+        output::message(mode, Verbosity::Normal, out, text)?;
+        Ok(ExitCode::Success)
+    };
+    let remotes = git::remote_fact(repo)?.remotes;
+    let Some(slug) = remotes.get("origin").and_then(|url| race::slug_of(url)) else {
+        return clean(
+            out,
+            "claim race: no origin remote this can derive a repository from — could not look, \
+             which is not a verdict",
+        );
+    };
+    let Ok(pulls) = bot::forge::open_pulls(&slug) else {
+        return clean(
+            out,
+            "claim race: the forge did not answer — could not look, which is not a verdict",
+        );
+    };
+    if !bot::forge::open_pulls_are_complete(&pulls) {
+        return clean(
+            out,
+            "claim race: the open pull requests fill a whole page, so a competitor may lie \
+             outside it — could not look, which is not a verdict",
+        );
+    }
+    let head = git::head_commit(repo)?;
+    let Some(me) = race::identify(&pulls, &head) else {
+        return clean(
+            out,
+            "claim race: no open pull request has this commit as its head, so there is nothing \
+             claiming anything yet",
+        );
+    };
+    let grammar = board_grammar(overrides)?;
+    let log = bot::forge::commit_messages(&slug, &me.number).unwrap_or_default();
+    let mine = race::claimed(&me.head_ref, &me.title, &log, &me.body, &grammar);
+    if mine.is_empty() {
+        return clean(
+            out,
+            "claim race: this branch claims no issue — nothing to race",
+        );
+    }
+    let races = race::races(&mine, &pulls, Some(&me.number), &grammar);
+    if races.is_empty() {
+        return clean(
+            out,
+            "claim race: no open pull request races this branch's claim",
+        );
+    }
+    for race in &races {
+        writeln!(
+            err,
+            "claim race: {} is already claimed by open pull request #{} ({})",
+            race.key, race.number, race.head_ref
+        )?;
+    }
+    writeln!(
+        err,
+        "claim race: {} claim(s) raced. Two agents on one issue is work that gets thrown away — \
+         it has happened here, and the discarded side was already written and verified. Take the \
+         frontier from the board rather than a snapshot read at session start; if the competing \
+         pull request is stale, say so on the issue and close it rather than racing it.",
+        races.len()
+    )?;
+    Ok(ExitCode::Violation)
+}
+
 /// Render findings as the pointer coordinate the predecessor emitted.
 fn render_findings(findings: &[checks_green::Finding]) -> String {
     findings
@@ -3053,6 +3150,7 @@ fn run_claim(
             )
         }
         ClaimCommand::Bot => run_claim_bot(Path::new("."), mode, overrides, out, err),
+        ClaimCommand::Race => run_claim_race(Path::new("."), mode, overrides, out, err),
         ClaimCommand::Carry { json } => run_claim_carry(Path::new("."), mode, json, out, err),
     }
 }
