@@ -173,6 +173,58 @@ fn a_module_inside_the_group_is_not_a_target() {
     );
 }
 
+/// THE SECOND SHAPE CARGO AUTODISCOVERS (CLOUD-1417), over the compiled engine.
+///
+/// `tests/<dir>/main.rs` is a target as surely as `tests/<name>.rs` is, and the
+/// predicate missed it for its whole life: five segments against a rule that
+/// required exactly four. That is the construct THIS repository uses for
+/// `tests/it/main.rs`, so the gate protecting CLOUD-1210's consolidation could
+/// be walked past by the thing it was written to protect.
+///
+/// Neither `#MUTANT` row on the module could have found it — both vary the
+/// arithmetic, and this path is excluded by the segment count under either
+/// spelling — which is why the pair below exists rather than a third mutation
+/// alone.
+#[test]
+fn a_grouped_main_rs_is_a_target() {
+    let root = repo(
+        "test-targets-grouped-main",
+        &["crates/batten/tests/grouped/main.rs"],
+    );
+    assert_eq!(
+        verdicts(&root),
+        vec![TARGET_ADDED.to_owned()],
+        "cargo autodiscovers tests/<dir>/main.rs as a test target, and the \
+         engine's own base-delta is what has to surface it"
+    );
+    assert_eq!(
+        pointers(&root),
+        vec!["crates/batten/tests/grouped/main.rs".to_owned()],
+        "the finding points at the file that mints the target"
+    );
+}
+
+/// THE OTHER HALF OF THE PAIR, and without it the fix above is satisfied by a
+/// rule that refuses every five-segment path — which refuses every retirement's
+/// own tier and takes CLOUD-843's campaign down with it.
+///
+/// So this is not a duplicate of `a_module_inside_the_group_is_not_a_target`:
+/// that case pins the shape a retirement lands, this one pins that the NEW body
+/// reaches `main.rs` and nothing else beside it. `#MUTANT grouped-main-unread`
+/// reddens exactly here.
+#[test]
+fn a_five_segment_module_that_is_not_main_rs_is_still_not_a_target() {
+    let root = repo(
+        "test-targets-grouped-sibling",
+        &["crates/batten/tests/it/other.rs"],
+    );
+    assert!(
+        verdicts(&root).is_empty(),
+        "only `main.rs` mints a target one segment deep; a sibling module in the \
+         same directory is compiled into the target that already exists"
+    );
+}
+
 /// ANTI-VACUITY on the depth test. `crates/other/tests/x.rs` has the same shape
 /// and the same segment count, so a rule anchored only on depth would refuse a
 /// sibling crate's targets — and one anchored wrongly would refuse nothing at all

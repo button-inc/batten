@@ -1256,6 +1256,19 @@ regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’
 # concept must have one spelling: the retired shell program spelled this
 # `mise run [a-z][a-z0-9:_-]*` in an `awk` pipeline and the same idea again in
 # its own prose, which is the duplication the registry makes unwritable.
+# CLOUD-1419. A hand-rolled `git init` inside an integration fixture.
+#
+# TWO SPELLINGS, ONE CONCEPT, and that is why this is a row rather than a literal
+# inside `policy/fixture-forks.rego`. The tree carries `&["init", "-q"]` 68 times
+# and `&["init", "--quiet"]` 10 times; a module spelling one of them would leave
+# the other invisible, and a module spelling both would be the duplication this
+# registry exists to make unwritable. `--?q` covers the pair and nothing else,
+# because no batten verb declares a `-q`/`--quiet` flag — so neither form can
+# match an invocation of the binary under test.
+[[pattern]]
+id = "fixture-git-init"
+regex = '\["init", "--?q'
+
 [[pattern]]
 id = "mise-run-task"
 regex = 'mise run [a-z][a-z0-9:_-]*'
@@ -4186,6 +4199,62 @@ admits_with = "# stays-bash:"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bash: <issue> <why>` in the new program and own the increase; which of the two is the whole question"
+
+# CLOUD-1419's aggregate half. The module `policy/fixture-forks.rego` refuses a
+# NEW hand-rolled `git init` at the line that writes it; this refuses the total
+# sliding back up.
+#
+# THE TWO ARE NOT DUPLICATION AND THE SPLIT IS FORCED. Rego is handed paths and
+# the base side of an edited path's LINES — never a base-side COUNT — so a module
+# can say "this file grew one" and cannot say "the suite grew twelve across
+# forty files". A ratchet counts a literal across a glob at the merge base and
+# compares two totals, which is the only instrument for the aggregate and the
+# wrong one for a pointer. `test-targets.rego`'s header argues the same split
+# from the module side.
+#
+# `git_in(` RATHER THAN THE `init` SPELLINGS, because those are the module's
+# subject and a second sensor over them would be two authorities on one fact.
+# What this owns is the whole fork surface: measured over one traced run, the
+# suite spends 9,476 git processes, and the reshaping's win is that a fixture
+# stops reaching for `git_in` at all rather than reaching for a different verb.
+#
+# NO CEILING IS WRITTEN DOWN — the row computes it, for the reason
+# `bash-surface-not-growing`'s preamble gives. A number here would be a second
+# authority over a count the engine takes at the merge base.
+#
+# `admits_with` IS STRUCTURALLY WEAKER THAN ITS SIBLING and must not be described
+# as the same guarantee. It is read from the WORKING tree, because a new file is
+# absent from base and there is nowhere else to read it, so a change CAN write
+# its own permission. What it buys is a silent regrowth becoming a visible,
+# attributed one. The glob is a directory rather than a single file, which is the
+# cardinality the column was designed for.
+[[rule]]
+id = "fixture-git-forks-not-growing"
+kind = "ratchet"
+glob = "crates/batten/tests/**/*.rs"
+pattern = "git_in("
+direction = "non_increasing"
+base = "origin/main"
+admits_with = "// needs-real-fixture:"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "build the repository from the template `Fixture::git` copies, or declare `// needs-real-fixture: <issue> <why>` in the fixture and own the fork; which of the two is the whole question"
+
+# CLOUD-1419's pointer half. See the ratchet above for why both exist.
+#
+# `delta_sources` is the integration suite rather than the whole tree: the module
+# decides over a path's CONTENT, so unlike `test-targets` it needs the lines, and
+# handing it every path in the repository would make it read the engine's own
+# source to answer a question about fixtures.
+[[rule]]
+id = "fixture-forks"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["crates/batten/tests/it/**/*.rs"]
+line_sources = ["crates/batten/tests/it/**/*.rs"]
+module = "policy/fixture-forks.rego"
+severity = "deny"
 
 # Advisory rather than blocking: assertions thinning out while the `#[test]`
 # count holds is the gutting shape, and it is worth saying without blocking —
@@ -8913,20 +8982,71 @@ precondition = "the prose IS the deliverable and cannot wait for the next change
 
 [[verdict]]
 id = "test add refused"
-gloss = "a new top-level crates/batten/tests/*.rs mints a second cargo test target"
+gloss = "an added path cargo autodiscovers as a test target mints a second one"
 class = """
-Cargo autodiscovers one test target per top-level `crates/batten/tests/*.rs`, and \
-rustc relinks the whole dependency closure into each one. Measured before \
-CLOUD-1210 grouped them: 144 targets, 147 linked artifacts, and roughly 36s of \
-the 48s a developer pays to rebuild after touching one `src/*.rs`. A file one \
-segment deeper — inside the group directory carrying `main.rs` — is a module and \
-mints no target, which is where a retirement's tier belongs.
+Cargo autodiscovers a test target from TWO shapes under `crates/batten/tests/`: a \
+top-level `*.rs`, and a directory carrying `main.rs`. rustc relinks the whole \
+dependency closure into each one. Measured before CLOUD-1210 grouped them: 144 \
+targets, 147 linked artifacts, and roughly 36s of the 48s a developer pays to \
+rebuild after touching one `src/*.rs`. A file one segment deeper that is NOT \
+`main.rs` — a sibling module inside the group directory — mints no target, and \
+that is where a retirement's tier belongs.
+
+The second shape was missing from the predicate and this class asserted its \
+absence (CLOUD-1417): it read that a file one segment deeper "is a module and \
+mints no target", which is false of the one file that makes the directory a \
+target, and which is the exact construct this repository uses for \
+`tests/it/main.rs`.
 """
 
 [[verdict.route]]
 id = "patch run first"
 kind = "command"
 target = "git mv the file under crates/batten/tests/it/ and declare it in that group's main.rs"
+
+# CLOUD-1419's classes. `policy/fixture-forks.rego` raises both.
+[[verdict]]
+id = "spawn add refused"
+gloss = "an integration fixture forks `git init` for itself instead of copying the template"
+class = """
+Measured over one traced run of the suite — `GIT_TRACE2_EVENT`, one trace file \
+per git process — the fixture path spends 9,476 git processes and 25.17s, of \
+which `init` is 1,819 processes and 4.49s. The tree holds 79 hand-rolled `git \
+init` call sites, so each is spent roughly twenty times a run. `Fixture::git` \
+copies a template published once per filesystem and forks nothing; a fixture \
+that calls `git init` itself pays a process for a repository the template \
+already has. Where the fork IS the subject — a case whose assertion is about \
+initialisation itself — say so in the file with `// needs-real-fixture: <issue> \
+<why>` and own it.
+"""
+
+[[verdict.route]]
+id = "patch run first"
+kind = "command"
+target = "build the repository with Fixture::git, which copies the template instead of forking"
+
+[[verdict.route]]
+id = "source read first"
+kind = "document"
+target = "crates/batten/tests/it/common/mod.rs"
+
+[[verdict]]
+id = "source read unread"
+gloss = "a fixture module in the declared set could not be read, so the gate could not look"
+class = """
+`input.tree.missing` is the could-not-look channel, and a module that iterates \
+only its delta reports green over a file it never read — the shape a dead gate \
+and a clean tree share. A path that never entered the acquisition set is \
+`Absent` and one that was read and would not parse is `Unparsed`; the engine \
+keeps them apart deliberately so a policy cannot mistake "could not parse" for \
+"not there". Either way this is the engine recording that it could not look, \
+never a verdict about the fixture.
+"""
+
+[[verdict.route]]
+id = "source read first"
+kind = "document"
+target = "crates/batten/tests/it"
 
 [[verdict]]
 id = "issue file unclear"

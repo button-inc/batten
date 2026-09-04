@@ -109,6 +109,7 @@ mod fact_record_keying;
 mod facts;
 mod fail_on_warning;
 mod filed_here;
+mod fixture_forks;
 mod fixture_repos;
 mod forced_push;
 mod forge_facts;

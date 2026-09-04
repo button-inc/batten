@@ -654,6 +654,47 @@ pub(crate) fn git_in(dir: &Path, args: &[&str]) -> String {
 }
 
 /// The fenced, identity-pinned `git` invocation [`git_in`] runs.
+///
+/// # Two of the pins are about COST, and they reach every fork rather than a
+/// subset
+///
+/// Measured over one traced run (`GIT_TRACE2_EVENT`, one trace file per git
+/// process): the suite spends **9,476 git processes and 25.17s**, and the two
+/// flags below are the only change that touches all of them.
+///
+/// `core.fsync=none` — git 2.36+ defaults to `core.fsync=committed`, so each of
+/// the run's **1,741 `commit` processes (12.23s, the single largest git line)**
+/// fsyncs its loose objects and its ref update. A fixture under
+/// `CARGO_TARGET_TMPDIR` does not outlive the run and has nothing to be durable
+/// against; the durability is bought for a directory the next `make_empty`
+/// deletes.
+///
+/// `gc.auto=0` and `maintenance.auto=false` — git runs `maintenance run --auto`
+/// after a commit, and the trace counts **1,745 `maintenance` processes against
+/// 1,741 commits**, tracking to within four.
+///
+/// **BOTH KEYS, AND THE FIRST ONE ALONE DOES NOT WORK.** `gc.auto=0` was landed
+/// first, on the reasoning that it is the documented way to switch auto-gc off.
+/// Measured on git 2.43.0 with only that flag: the count moved 1,745 → **1,747**
+/// and the time 0.95s → 0.89s, which is the spawn still happening and finding
+/// nothing to do. Modern git gates the auto-maintenance run on
+/// `maintenance.auto`, and `gc.auto` reaches only the legacy `gc --auto` path
+/// underneath it. A flag that looks right and removes no process is worse than
+/// none, because the count is what a later reader checks.
+///
+/// `gc.auto=0` stays beside it rather than being replaced: it is what guarantees
+/// no fixture ever writes `packed-refs`, which is the precondition
+/// [`Fixture::base_commit`]'s loose-ref write asserts rather than assumes.
+///
+/// # `GIT_TEMPLATE_DIR` is scrubbed, and the reason is the template
+///
+/// The four `GIT_*` names below were always the hermeticity set. `GIT_TEMPLATE_DIR`
+/// was not among them, and today an exported one corrupts a single fixture. That
+/// stops being true once [`git_init_template`] exists: the first process to build
+/// the template bakes the developer's template into a repository every other
+/// fixture in the run then copies, so a per-fixture defect becomes a per-run one.
+/// The other three are the same class reached by different keys — an inherited
+/// index file, object directory or namespace would be shared the same way.
 #[must_use]
 #[expect(
     clippy::disallowed_types,
@@ -675,6 +716,12 @@ pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
             "advice.detachedHead=false",
             "-c",
             "core.autocrlf=false",
+            "-c",
+            "core.fsync=none",
+            "-c",
+            "gc.auto=0",
+            "-c",
+            "maintenance.auto=false",
         ])
         .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -685,6 +732,11 @@ pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
         "GIT_COMMON_DIR",
         "GIT_WORK_TREE",
         "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+        "GIT_TEMPLATE_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_NAMESPACE",
     ] {
         command.env_remove(var);
     }

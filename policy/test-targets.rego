@@ -8,10 +8,27 @@
 # computes it. So the ratchet is spelled as a predicate over paths.
 #
 # WHY THE PATH SPELLING IS SOUND HERE WHEN A FILE COUNT WAS NOT. Cargo
-# autodiscovers one test target per TOP-LEVEL `crates/batten/tests/*.rs`, and a
-# file one segment deeper — inside a group directory carrying `main.rs` — is not a
-# target at all. So "no new top-level `crates/batten/tests/*.rs`" IS "the target
-# count does not grow", exactly, rather than approximately.
+# autodiscovers a test target from TWO shapes under `crates/batten/tests/`, and
+# both are refused below: a TOP-LEVEL `*.rs`, and a directory carrying `main.rs`.
+# So "no new autodiscovered target" IS "the target count does not grow", exactly,
+# rather than approximately.
+#
+# THE SECOND SHAPE WAS MISSING AND THIS HEADER ASSERTED ITS ABSENCE (CLOUD-1417).
+# The paragraph above used to read "a file one segment deeper — inside a group
+# directory carrying `main.rs` — is not a target at all", which is false of the
+# one file that makes it a target. `tests/<dir>/main.rs` is five segments,
+# `added_target` required exactly four, and the grouped directory the whole
+# consolidation rests on was therefore invisible to the gate protecting it:
+# adding `crates/batten/tests/anything/main.rs` minted a third target linking the
+# full closure — roughly 116 MB — while the ratchet reported clean.
+#
+# NEITHER `#MUTANT` ROW BELOW COULD HAVE FOUND IT, and that is the finding worth
+# carrying past this row. Both vary the predicate's ARITHMETIC — one flips the
+# depth, one widens the extension — and `tests/<dir>/main.rs` is excluded by the
+# segment count under either spelling. A mutation tests whether a predicate's
+# terms are load-bearing, never whether the predicate is the RIGHT predicate. The
+# compiled tier is the only thing that could have caught it, and it did not,
+# because its fixtures exercised the shapes the author already had in mind.
 #
 # THAT DISTINCTION IS WHAT KEEPS CLOUD-843'S CAMPAIGN RUNNING, and it is the whole
 # reason this is not a `[[ratchet]]` over files. `.claude/rules/toolchain.md`
@@ -33,10 +50,28 @@
 #
 # The first is not hypothetical: the depth test shipped as `== 5` in this file's
 # first revision, which is exactly inverted, and the compiled tier caught it.
+#MUTANT-SUITE crates/batten/tests/it/test_targets.rs
 #MUTANT depth-may-invert|s@count(segments) == 4@count(segments) == 5@|a module inside the group is not a target, and a new top-level file is
 #MUTANT extension-may-widen|s@endswith(path, ".rs")@true@|a fixture file under tests/ is not a target
+#MUTANT grouped-main-unread|s@segments[4] == "main.rs"@true@|a five segment module that is not main rs is still not a target
 #
-#MUTANT-EXEMPT CLOUD-1210|no `tests/test-targets.bats` exists and none may: `.claude/rules/toolchain.md`'s two-shapes rule and `shell add refused` refuse adding an authored bats suite, and `mutant` resolves a gate's suite as `tests/$gate.bats`, so there is no named case a mutation could turn red. The second tier is `crates/batten/tests/it/test_targets.rs`, which drives the compiled engine over a real fixture repository with a real base ref — and is what caught the inverted depth test the first `#MUTANT` row above records
+# THE THIRD ROW NEUTERS THE `main.rs` CLAUSE RATHER THAN THE DEPTH, and that is
+# what makes it discriminate. Flipping the depth would collide with
+# `depth-may-invert`; making the clause `true` instead widens the second body to
+# every five-segment path under `tests/`, which refuses `tests/it/<name>.rs` — so
+# the case that must redden is the PASS-side one, the retirement tier the
+# campaign depends on being able to land.
+#
+# THE EXEMPTION THAT STOOD HERE IS WITHDRAWN, NOT RENEWED (CLOUD-1267). It read
+# that `mutant` resolves a gate's suite as `tests/$gate.bats`, that no such bats
+# suite exists or may, and that there was therefore no named case a mutation
+# could turn red. That was true when written and the tree now contradicts it:
+# `batten mutate` resolves the DECLARED path from `#MUTANT-SUITE` above, so this
+# module names the compiled tier that actually drives the engine, and
+# `test-targets` is enrolled in `MUTANT_GATES`. Keeping both would be a finding
+# in its own right — `mutate::census` reports `DeclaredAndExempt` — so the
+# exemption and the enrolment cannot coexist, and the enrolment is the honest
+# half.
 package batten
 
 import rego.v1
@@ -75,6 +110,28 @@ added_target contains path if {
 	endswith(path, ".rs")
 }
 
+# THE SECOND AUTODISCOVERED SHAPE (CLOUD-1417): `tests/<dir>/main.rs`.
+#
+# A SECOND BODY RATHER THAN A DISJUNCTION, because `contains … if` is a partial
+# SET and two bodies are its union — so each shape stays readable on its own and
+# a mutation can neuter one without touching the other. A widened single body
+# would have made the two indistinguishable to the sweep.
+#
+# `count(segments) == 5` with the last segment EXACTLY `main.rs` is what keeps
+# the campaign's tier landable: `crates/batten/tests/it/foo.rs` is also five
+# segments and is not `main.rs`, so it stays invisible here, which is the
+# property `.claude/rules/toolchain.md`'s two-shapes rule depends on. Widening
+# this to "any five-segment .rs" would refuse every retirement's own tier.
+added_target contains path if {
+	some path in delta.added
+	segments := split(path, "/")
+	count(segments) == 5
+	segments[0] == "crates"
+	segments[1] == "batten"
+	segments[2] == "tests"
+	segments[4] == "main.rs"
+}
+
 violation contains {
 	"rule": "test-target-added",
 	"verdict": "test add refused",
@@ -108,6 +165,27 @@ test_a_new_top_level_test_file_is_refused if {
 test_a_module_inside_the_group_is_not_a_target if {
 	count(violation) == 0 with input as {"tree": {"base-delta": {
 		"added": ["crates/batten/tests/it/new_gate.rs"],
+		"edited": [],
+		"deleted": [],
+	}}}
+}
+
+# THE SHAPE CLOUD-1417 ADDS: a grouped `main.rs` IS a cargo test target.
+test_a_grouped_main_rs_is_a_target if {
+	count(violation) == 1 with input as {"tree": {"base-delta": {
+		"added": ["crates/batten/tests/grouped/main.rs"],
+		"edited": [],
+		"deleted": [],
+	}}}
+}
+
+# AND ITS DISCRIMINATING PARTNER. Without this the fix is satisfied by refusing
+# every five-segment path, which refuses the retirement tier above — so the pair
+# is what says the new body reaches `main.rs` and nothing else. `#MUTANT
+# grouped-main-unread` is the row that reddens exactly here.
+test_a_five_segment_module_that_is_not_main_rs_is_still_not_a_target if {
+	count(violation) == 0 with input as {"tree": {"base-delta": {
+		"added": ["crates/batten/tests/it/other.rs"],
 		"edited": [],
 		"deleted": [],
 	}}}
