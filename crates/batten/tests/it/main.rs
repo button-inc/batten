@@ -133,6 +133,7 @@ mod inverted_board_cases;
 mod issue_key;
 mod judge_kind;
 mod land;
+mod landed_check;
 mod lease_record;
 mod lock_complete;
 mod mcp_dispatch;
