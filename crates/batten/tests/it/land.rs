@@ -378,3 +378,66 @@ fn an_unconfigured_gate_refuses_rather_than_guessing_and_writes_no_record() {
         "a lap that never ran a gate records no verdict about one"
     );
 }
+
+/// `batten land fast-forward`, with the workflow named in the environment.
+fn land_fast_forward(repo: &Path, workflow: &str) -> (i32, String, String) {
+    let output = batten()
+        .args(["land", "fast-forward"])
+        .env("LAND_WORKFLOW", workflow)
+        // NO FORGE, deliberately. Both arms below resolve before any request is
+        // made, which is what makes them assertable at all — a case that needed a
+        // live pull request would be a test of the forge's availability.
+        .env("PATH", "/nonexistent")
+        .current_dir(repo)
+        .output()
+        .expect("run batten land fast-forward");
+    (
+        output.status.code().expect("exit code"),
+        stdout(&output),
+        stderr(&output),
+    )
+}
+
+/// **An unconfigured workflow refuses rather than guessing, and that is rule 1.**
+///
+/// The bash lander defaults `$LAND_WORKFLOW` to `fast-forward.yml`. That filename
+/// is THIS consumer's, so compiling it in here would put a consumer's vocabulary
+/// inside `crates/batten` — and the failure it would buy is the quiet one: a
+/// repository whose bot lives in a differently-named workflow reads an empty runs
+/// list on every lap and reports a silent bot forever, which is exactly the
+/// diagnosis CLOUD-413 spent 24 laps reaching wrongly.
+///
+/// The mirror is the case below: unconfigured is `1`, and a configured workflow
+/// with nothing to ask is `3`. Without the pair, "always refuse" passes.
+#[test]
+fn an_unconfigured_workflow_refuses_rather_than_guessing_a_filename() {
+    let repo = repo("land-ff-unconfigured");
+
+    let (code, _out, err) = land_fast_forward(&repo, "");
+    assert_eq!(code, 1, "an unconfigured workflow is a usage error: {err}");
+    assert!(
+        err.contains("LAND_WORKFLOW"),
+        "the refusal names the variable the caller must set, got {err}"
+    );
+}
+
+/// The anti-vacuity mirror: configured, but there is nothing to ask.
+///
+/// `3` and never `2`. A lap that could not find a pull request has not been
+/// REFUSED by anybody — reading it as a refusal would tell the caller its head is
+/// no longer a direct descendant, which is a claim about the branch that nothing
+/// here established. Exit `2` is reserved for the bot actually saying no.
+#[test]
+fn no_pull_request_to_ask_is_could_not_look_and_never_a_refusal() {
+    let repo = repo("land-ff-no-pr");
+
+    let (code, _out, err) = land_fast_forward(&repo, "fast-forward.yml");
+    assert_eq!(
+        code, 3,
+        "no pull request is a could-not-look, not a refusal: {err}"
+    );
+    assert_ne!(
+        code, 2,
+        "exit 2 would claim the bot refused this head, which nothing established"
+    );
+}

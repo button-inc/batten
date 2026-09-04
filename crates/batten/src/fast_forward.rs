@@ -66,6 +66,39 @@ const PER_PAGE: u32 = 100;
 /// runs is ~2.5 hours, far outside any lap's stamp.
 const MAX_PAGES: u32 = 20;
 
+/// The open pull request for `branch`, where the forge names one.
+///
+/// HERE RATHER THAN IN THE LAP, for the reason [`crate::pr_watch::read`] states
+/// about its own read: a lap that spawned the forge client itself would be a
+/// second authority over the argv and the failure posture. `land` reaches this
+/// module and no other, which is also what keeps `land -> bot` off the layering
+/// table for one number.
+///
+/// `// empty` rather than a null in the filter, because the client prints the
+/// STRING `null` for a missing field — which is not empty, and would sail past a
+/// caller's guard as a pull request number.
+#[must_use]
+pub fn open_pull_request(branch: &str) -> Option<String> {
+    let args = vec![
+        String::from("pr"),
+        String::from("list"),
+        String::from("--head"),
+        branch.to_owned(),
+        String::from("--state"),
+        String::from("open"),
+        String::from("--json"),
+        String::from("number"),
+        String::from("--jq"),
+        String::from(".[0].number // empty"),
+    ];
+    let found = run(&args)?;
+    let trimmed = found.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_owned())
+}
+
 /// What the lap needs to ask, and to recognise the answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ask {

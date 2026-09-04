@@ -227,10 +227,28 @@ fn committed_pages() -> Vec<(PathBuf, String)> {
                 .to_owned();
             // The filename is the hyphen-joined command path prefixed by the
             // program name; the argv the page is emitted from is the spaced form.
-            let command = stem
-                .strip_prefix("batten-")
-                .map(|rest| rest.replace('-', " "))
-                .unwrap_or_default();
+            // RESOLVED AGAINST THE DECLARATION, never guessed back out of the
+            // filename. The page name hyphen-joins a command PATH, and `-` is
+            // also legal INSIDE a segment — `land fast-forward` commits as
+            // `batten-land-fast-forward.1` — so `replace('-', " ")` recovers
+            // `land fast forward`, which is no command at all. That spelling was
+            // correct for as long as no verb carried a hyphen, and it fails
+            // closed rather than silently: the argv does not resolve, the page
+            // "did not render", and three cases here name it.
+            //
+            // The fallback keeps an ORPHAN reaching a failure: a committed page
+            // the surface never declared resolves to nothing here, renders
+            // nothing, and reddens — which is the direction
+            // `the_committed_artifacts_are_exactly_the_ones_the_surface_declares`
+            // owns, and this must not quietly pass it.
+            let command = declared_commands()
+                .get(&stem)
+                .cloned()
+                .unwrap_or_else(|| {
+                    stem.strip_prefix("batten-")
+                        .map(|rest| rest.replace('-', " "))
+                        .unwrap_or_default()
+                });
             (path, command)
         })
         .collect();
@@ -267,6 +285,48 @@ fn declared_pages() -> BTreeSet<String> {
     let mut pages = BTreeSet::from([format!("man/{program}.1")]);
     collect_pages(&spec, program, &mut pages);
     pages
+}
+
+/// Every declared page STEM, mapped to the argv that renders it.
+///
+/// The inverse of the filename rule, taken from the declaration rather than
+/// reconstructed from the name — because the rule is not invertible. Hyphen-
+/// joining a command path is lossy the moment a segment contains a hyphen, and
+/// two different paths can produce one filename: `land fast-forward` and a
+/// hypothetical `land fast forward` both commit as `batten-land-fast-forward.1`.
+/// That collision is currently unreachable — no two declared paths collide, and
+/// `the_committed_artifacts_are_exactly_the_ones_the_surface_declares` compares
+/// the sets — but the ambiguity is in the scheme rather than in this test.
+fn declared_commands() -> std::collections::BTreeMap<String, String> {
+    let output = batten().arg("spec").output().expect("run batten spec");
+    assert_eq!(output.status.code(), Some(0), "batten spec did not emit");
+    let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("the spec is JSON");
+    let program = spec["path"]
+        .as_str()
+        .expect("the spec's root carries the program name");
+    let mut commands = std::collections::BTreeMap::new();
+    collect_commands(&spec, program, &mut commands);
+    commands
+}
+
+/// Walk every `subcommands` level, recording stem → argv.
+fn collect_commands(
+    node: &serde_json::Value,
+    program: &str,
+    into: &mut std::collections::BTreeMap<String, String>,
+) {
+    let Some(children) = node["subcommands"].as_array() else {
+        return;
+    };
+    for child in children {
+        if let Some(path) = child["path"].as_str() {
+            into.insert(
+                format!("{program}-{}", path.replace(' ', "-")),
+                path.to_owned(),
+            );
+        }
+        collect_commands(child, program, into);
+    }
 }
 
 /// Walk every `subcommands` level, adding one page path per command path.
