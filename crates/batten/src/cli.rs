@@ -393,6 +393,16 @@ pub enum Command {
         /// The chosen sub-verb.
         command: SingletonCommand,
     },
+    /// The board sweep (CLOUD-186, CLOUD-1127), ported off
+    /// `mise-tasks/landed-check.sh`.
+    ///
+    /// Appended for the same reason `Checks` is: a shifted discriminant is a
+    /// break the crate has to declare, and every variant above is already on
+    /// the landing target.
+    Landed {
+        /// The chosen sub-verb.
+        command: LandedCommand,
+    },
 }
 
 /// Subcommands of `singleton`.
@@ -604,6 +614,33 @@ pub enum ChecksCommand {
         /// leaves every failure manufacturable, which is the safe default.
         fanin: Option<String>,
         /// Emit the verdict on the structured channel.
+        json: bool,
+    },
+}
+
+/// Subcommands of `landed`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LandedCommand {
+    /// Sweep a board for columns that contradict git and the forge.
+    Check {
+        /// `<CLOUD-id><TAB><pr-number>` lines for MERGED pull requests.
+        ///
+        /// Absent is exit 2 rather than an empty set, and the direction is the
+        /// whole reliability of the gate: only 3% of this repository's commits
+        /// carry a closing keyword, because fast-forward landing puts it in the
+        /// PR body — so deciding on commits alone would report a clean column
+        /// it never checked.
+        merged_prs: Option<String>,
+        /// `<CLOUD-id><TAB><ref>` lines the caller ASSERTS carry the work.
+        ///
+        /// Optional and absent-is-empty, unlike `merged_prs`: absent there
+        /// silently halves a disjunction, absent here is "no assertions", which
+        /// is the ordinary case and cannot manufacture a false green.
+        landed_by: Option<String>,
+        /// `<CLOUD-id>` lines a PR body declined with `DO-NOT-CLOSE`.
+        declined: Option<String>,
+        /// Emit the findings on the structured channel.
         json: bool,
     },
 }
@@ -1787,6 +1824,18 @@ fn receipt_of(matches: &ArgMatches) -> Option<ReceiptCommand> {
     }
 }
 
+fn landed_of(matches: &ArgMatches) -> Option<LandedCommand> {
+    match matches.subcommand()? {
+        ("check", matches) => Some(LandedCommand::Check {
+            merged_prs: matches.get_one::<String>("merged_prs").cloned(),
+            landed_by: matches.get_one::<String>("landed_by").cloned(),
+            declined: matches.get_one::<String>("declined").cloned(),
+            json: flag(matches, "json"),
+        }),
+        _ => None,
+    }
+}
+
 /// The positionals and selectors differ per sub-verb, so each is read inside its
 /// own arm — the shape [`state_of`] uses.
 fn ready_of(matches: &ArgMatches) -> Option<ReadyCommand> {
@@ -2097,6 +2146,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "perf" => perf_of(matches).map(|command| Command::Perf { command }),
         "mutate" => mutate_of(matches).map(|command| Command::Mutate { command }),
         "ready" => ready_of(matches).map(|command| Command::Ready { command }),
+        "landed" => landed_of(matches).map(|command| Command::Landed { command }),
         "claim" => claim_of(matches).map(|command| Command::Claim { command }),
         "checks" => checks_of(matches).map(|command| Command::Checks { command }),
         "pr" => pr_of(matches).map(|command| Command::Pr { command }),

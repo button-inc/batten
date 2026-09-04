@@ -260,6 +260,23 @@ pub fn decide(rows: &[Row], evidence: &Evidence) -> Report {
     Report { findings }
 }
 
+/// Whether a token is a tracker key this sweep can decide over.
+///
+/// **The shape is the CONSUMER's and lives in `[[pattern]]`, not here** — rule 1
+/// keeps a tracker's vocabulary out of `crates/batten`. What this decides is the
+/// weaker, generic property the evidence readers actually need: a non-empty
+/// token carrying no whitespace, so a stray header line or a blank field in a
+/// caller-assembled TSV is skipped rather than read as a key.
+///
+/// Skipping rather than refusing is deliberate. These files are assembled from
+/// forge output by whatever fetched it, and a gate that refused a run because
+/// somebody's export carried a header would be unrunnable for a reason that has
+/// nothing to do with the board.
+#[must_use]
+pub fn is_key(token: &str) -> bool {
+    !token.is_empty() && !token.chars().any(char::is_whitespace)
+}
+
 /// Parse the board out of a `get_issue` payload set.
 ///
 /// # Errors

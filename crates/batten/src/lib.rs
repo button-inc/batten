@@ -140,9 +140,9 @@ use anyhow::Result;
 
 pub use cli::{
     AttributionCommand, ChecksCommand, ClaimCommand, Cli, Command, CommitCommand, ConfigCommand,
-    DefectsCommand, DesignCommand, GenerateCommand, LintCommand, OverrideCommand, PolicyCommand,
-    PrCommand, ProvisionCommand, ReadyCommand, ReceiptCommand, SemverCommand, SingletonCommand,
-    SpecFormat, StateCommand, TaskCommand, WiringCommand, WorktreeCommand,
+    DefectsCommand, DesignCommand, GenerateCommand, LandedCommand, LintCommand, OverrideCommand,
+    PolicyCommand, PrCommand, ProvisionCommand, ReadyCommand, ReceiptCommand, SemverCommand,
+    SingletonCommand, SpecFormat, StateCommand, TaskCommand, WiringCommand, WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -304,6 +304,10 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // the payload the caller supplies — or, under `--issue`, the one the
         // engine already captured, which is the whole point of the row.
         Some(Command::Ready { command }) => run_ready(command, mode, &overrides, out, err),
+        // The board sweep (CLOUD-186, CLOUD-1127). Judges a payload rather than
+        // a tree, so it takes no config chain and no root: the evidence is what
+        // the caller supplies, and the verdict is the predicate's alone.
+        Some(Command::Landed { command }) => run_landed(command, mode, out, err),
         Some(Command::Claim { command }) => run_claim(command, mode, &overrides, out, err),
         // The green verdict (CLOUD-1143). Reads a reading, never the network:
         // the fetch stays with the poller that already holds the body.
@@ -2150,6 +2154,183 @@ struct ClaimAsk<'a> {
 /// root is not a refusal — it only means the side effects have nowhere to land.
 fn board_root() -> PathBuf {
     git::repo_root(Path::new(".")).unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Read a caller-supplied evidence file into a key set.
+///
+/// The first tab-separated field is the key and the second, where present, is
+/// whatever the file carries alongside it — a PR number or a ref. A line whose
+/// first field is not a key is SKIPPED rather than refused: these files are
+/// assembled by callers from forge output, and refusing a stray header would
+/// make the gate unrunnable for a reason unrelated to the board.
+///
+/// Unreadable is [`UsageError`], never an empty set. A caller who named a file
+/// this cannot open has not supplied empty evidence, they have supplied evidence
+/// nobody read.
+fn evidence_file(path: &str, what: &str) -> Result<Vec<(String, Option<String>)>> {
+    let raw = std::fs::read_to_string(path).map_err(|_| {
+        UsageError::raise(format!(
+            "landed: {what} names a file that cannot be read: {path}. That is a caller problem, not a clean board."
+        ))
+    })?;
+    Ok(raw
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            let key = fields.next()?.trim();
+            if !landed::is_key(key) {
+                return None;
+            }
+            let rest = fields.next().map(|value| value.trim().to_owned());
+            Some((key.to_owned(), rest.filter(|value| !value.is_empty())))
+        })
+        .collect())
+}
+
+fn run_landed(
+    command: LandedCommand,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    match command {
+        LandedCommand::Check {
+            merged_prs,
+            landed_by,
+            declined,
+            json,
+        } => run_landed_check(
+            merged_prs.as_deref(),
+            landed_by.as_deref(),
+            declined.as_deref(),
+            json,
+            mode,
+            out,
+            err,
+        ),
+    }
+}
+
+/// Sweep a board for columns that contradict git and the forge.
+///
+/// # Errors
+///
+/// [`UsageError`] on every input this cannot read — an unparseable payload, a
+/// named file that will not open, and absent `--merged-prs`. That direction is
+/// the whole reliability of the gate: a sweep that reported a clean board it
+/// never looked at has shipped here twice, and both times the silence was
+/// byte-identical to a pass.
+fn run_landed_check(
+    merged_prs: Option<&str>,
+    landed_by: Option<&str>,
+    declined: Option<&str>,
+    json: bool,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    // ABSENT EVIDENCE IS COULD-NOT-LOOK, NEVER A SHORT SWEEP. Half the landed
+    // disjunction is what merged pull requests closed, and without it the gate
+    // would decide on commit trailers alone — which this repository has measured
+    // at 3% of its own commits, because fast-forward landing puts the closing
+    // key in the PR body.
+    let Some(merged_prs) = merged_prs else {
+        return Err(UsageError::raise(
+            "landed: no --merged-prs evidence, so landedness cannot be decided. Only 3% of this \
+             repository's commits carry a closing keyword — fast-forward landing puts it in the PR \
+             body — so deciding on commits alone would report a clean column it never checked. \
+             Supply `<CLOUD-id><TAB><pr-number>` lines for merged pull requests."
+                .to_owned(),
+        ));
+    };
+
+    let mut payload = String::new();
+    std::io::stdin().read_to_string(&mut payload)?;
+    if payload.trim().is_empty() {
+        return Err(UsageError::raise(
+            "landed: stdin is empty; expected get_issue payloads".to_owned(),
+        ));
+    }
+    let value: serde_json::Value = serde_json::from_str(&payload).map_err(|_| {
+        UsageError::raise("landed: stdin is not JSON; expected get_issue payloads".to_owned())
+    })?;
+    let rows = landed::rows_from(&value)?;
+
+    let mut evidence = landed::Evidence::default();
+    for (key, _) in evidence_file(merged_prs, "--merged-prs")? {
+        evidence.merged.insert(key);
+    }
+    if let Some(path) = landed_by {
+        for (key, reference) in evidence_file(path, "--landed-by")? {
+            evidence
+                .asserted
+                .insert(key, reference.unwrap_or_else(|| "no ref given".to_owned()));
+        }
+    }
+    if let Some(path) = declined {
+        for (key, _) in evidence_file(path, "--declined")? {
+            evidence.declined.insert(key);
+        }
+    }
+
+    let report = landed::decide(&rows, &evidence);
+
+    if json {
+        writeln!(
+            out,
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "findings": report
+                    .findings
+                    .iter()
+                    .map(|finding| serde_json::json!({
+                        "id": finding.id,
+                        "holds": finding.holds,
+                        "wants": finding.reason.wants(),
+                        "reason": finding.reason.token(),
+                        "asserted-by": finding.asserted_by,
+                    }))
+                    .collect::<Vec<_>>(),
+            }))?
+        )?;
+    }
+
+    // Pointer-only per rule 4: a key, two column names and a reason class. Never
+    // a line of any body — a PR body and an issue body both carry consumer
+    // detail, and a sweep that echoed them would leak it through CI logs.
+    for finding in &report.findings {
+        // WHICH ARM DRAINED IT IS PART OF THE FINDING. A derived landing is
+        // evidence; an asserted one is the caller's word, and a reader who
+        // cannot tell them apart has to trust the union.
+        let suffix = finding
+            .asserted_by
+            .as_ref()
+            .map(|reference| format!("  (asserted by --landed-by: {reference})"))
+            .unwrap_or_default();
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!(
+                "  {}  {} -> {}  {}{suffix}",
+                finding.id,
+                finding.holds,
+                finding.reason.wants(),
+                finding.reason.token(),
+            ),
+        )?;
+    }
+
+    if report.is_clean() {
+        output::message(
+            mode,
+            Verbosity::Normal,
+            out,
+            "landed: every column agrees with what git and the forge already did",
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    Ok(ExitCode::Violation)
 }
 
 fn run_ready(

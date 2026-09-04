@@ -1545,6 +1545,71 @@ const KEY_AT: FlagDecl = FlagDecl {
 /// because falling through on an empty stdin would report a refined issue as
 /// carrying no Ready block — a verdict about the store wearing the costume of a
 /// verdict about the issue.
+/// `--merged-prs <file>` on `landed check`, and it is REQUIRED in effect
+/// (CLOUD-186).
+///
+/// Not `required: true`, because a missing file and a missing flag are different
+/// refusals and the verb says which. What makes it load-bearing is the
+/// direction: absent is exit 2 rather than an empty set, since only 3% of this
+/// repository's commits carry a closing keyword — fast-forward landing puts it
+/// in the PR body — so deciding on commits alone reports a clean column it never
+/// checked.
+const MERGED_PRS: FlagDecl = FlagDecl {
+    id: "merged_prs",
+    long: Some("merged-prs"),
+    short: None,
+    help: "`<CLOUD-id><TAB><pr-number>` lines, one per closing key in a MERGED pull request",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--landed-by <file>` on `landed check` (CLOUD-903).
+///
+/// The caller's WORD, for rows the derived halves are structurally unable to
+/// reach. Absent-is-empty rather than could-not-look, and the asymmetry with
+/// `--merged-prs` is deliberate: absent evidence there silently halves a
+/// disjunction, absent assertion here is the ordinary case and cannot
+/// manufacture a false green. A row drained by it is REPORTED as asserted and
+/// names its ref, so a reader can tell the caller's word from evidence.
+const LANDED_BY: FlagDecl = FlagDecl {
+    id: "landed_by",
+    long: Some("landed-by"),
+    short: None,
+    help: "`<CLOUD-id><TAB><ref>` lines the caller asserts carry the work",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--declined <file>` on `landed check` (CLOUD-1127).
+///
+/// The keys a pull request body declined with `DO-NOT-CLOSE`. That marker is
+/// honoured by `closing-key-check`, which is this repository's, and ignored by
+/// whatever writes the board transition, which is not — so a row can be declined
+/// and advanced by the same merge, and this is the evidence that says so.
+const DECLINED: FlagDecl = FlagDecl {
+    id: "declined",
+    long: Some("declined"),
+    short: None,
+    help: "`<CLOUD-id>` lines a pull request body declined with DO-NOT-CLOSE",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const ISSUE: FlagDecl = FlagDecl {
     id: "issue",
     long: Some("issue"),
@@ -3023,6 +3088,34 @@ pub const SURFACE: &[CommandDecl] = &[
     // POINTER-ONLY IS THE WHOLE OUTPUT (rule 4). Findings are `<id>:<line> <rule>`
     // and never the prose that matched: issue bodies carry consumer detail, and a
     // lint that echoed them would leak it through CI logs.
+    // The `landed` noun (CLOUD-186, CLOUD-1127), ported off
+    // `mise-tasks/landed-check.sh` when `shell-retirement` made editing a shell
+    // rule refusable.
+    CommandDecl {
+        path: "landed",
+        id: "landed",
+        about: "Whether a board column is honest about what git and the forge already did",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `read`, structurally: it reads a payload on stdin and three caller-supplied
+    // files, and starts no program. The `claimed-keys` half its predecessor
+    // spawned is supplied as `--merged-prs` evidence instead, which is what keeps
+    // this on the read surface.
+    //
+    // POINTER-ONLY IS THE WHOLE OUTPUT (rule 4). A finding is an issue key, the
+    // column it holds, the column it should hold, and a reason class — never a
+    // line of any body. A PR body and an issue body both carry consumer detail,
+    // and a sweep that echoed them would leak it through CI logs.
+    CommandDecl {
+        path: "landed check",
+        id: "landed.check",
+        about: "Refuse a board column that contradicts main's history or a declined key",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[MERGED_PRS, LANDED_BY, DECLINED, JSON],
+    },
     CommandDecl {
         path: "ready lint",
         id: "ready.lint",
