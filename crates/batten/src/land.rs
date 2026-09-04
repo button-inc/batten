@@ -594,11 +594,28 @@ pub fn verify(root: &Path, branch: &str, command: &[String]) -> Result<Verified>
         )));
     }
     let head = crate::git::head_commit(root).context("land: read this clone's HEAD")?;
+    // THE RESOLVED ROOT, NEVER THE ANCHOR — and this is the only call
+    // `exec::run_in` has, so getting it wrong made the verb unreachable rather
+    // than merely awkward. `exec`'s capture store is keyed by the repository's
+    // own directory NAME, which `state::derive_repo_name` cannot read off `.`;
+    // every caller above anchors at `.`, so handing that straight through raised
+    // "cannot derive a repository name from ." on EVERY invocation in every
+    // clone. `exec::run_with` resolves at its own site for exactly this reason,
+    // as do `admission::store_dir` and `lib::run_board`. This was the fourth
+    // site and the only one that did not.
+    //
+    // IT WAS INVISIBLE TWICE OVER, which is why the fix is a resolution here
+    // rather than a message: the refusal is a `UsageError`, so `main`'s reporter
+    // prints one clean line and drops the chain, and the `None` arm below then
+    // wrapped it in a context naming the gate — so a boundary that never started
+    // the program read as the program having run and failed. `LAND_VERIFY=true`
+    // and `LAND_VERIFY=false` were byte-identical.
+    let started = crate::git::repo_root(root).context("land: resolve this clone's root")?;
     // A REFUSAL TRAVELS AS AN ERROR THROUGH THIS BOUNDARY, because `exec` exists
     // to pass a child's status through to the caller. Here it is an ANSWER, so
     // the two are told apart rather than collapsed: a code that came back at all
     // is the gate speaking, and only a failure to START is this lap's problem.
-    let verified = match crate::exec::run_in(root, command) {
+    let verified = match crate::exec::run_in(&started, command) {
         Ok(crate::exit::ExitCode::Success) => Verified::Clean(head),
         Ok(_) => Verified::Refused(head),
         Err(problem) => match problem.downcast_ref::<crate::error::Passthrough>() {
