@@ -1440,6 +1440,23 @@ description = "Gate: every row this branch put on the board was refined at creat
 # module, so there is still exactly one implementation of the intersection.
 run = "cargo run --quiet -p batten -- check --rule filed-here"
 
+[tasks.claim-race]
+description = "Gate: no other OPEN pull request already claims a key this branch claims (asks the forge; pointer-only)"
+# CLOUD-446's duplicate-claim half, ported off `mise-tasks/claim-race-check.sh`
+# under CLOUD-1422.
+#
+# THROUGH THE TASK RUNNER RATHER THAN A BARE `batten`, and that is the defect
+# this row was FIRST written with. `check = "batten claim race"` resolves the
+# INSTALLED binary from PATH, so a checkout whose source has moved ahead of its
+# last `install:local` is judged by an older program — measured here: the row
+# reported a finding against `crates/batten/src/race.rs` because the installed
+# batten had no `claim race` verb at all and exited on usage. A gate answered by
+# a stale binary is a gate that decides about a tree nobody has.
+#
+# Every other `command` row in `batten.toml` names a `mise run` task for the same
+# reason; this one being the exception was an oversight rather than a choice.
+run = "cargo run --quiet -p batten -- claim race"
+
 [tasks.policy-test]
 description = "Gate: run every registered policy module's and enabled preset's own `test_` rules"
 # CLOUD-931. `batten policy test` shipped with CLOUD-835 so the retirement

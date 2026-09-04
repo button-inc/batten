@@ -157,7 +157,13 @@ declared_modules := {
 	# reach it — a runtime on the mediated path is what CLOUD-689's ceiling and
 	# CLOUD-747's no-runtime assertion both forbid — so that edge is forbidden
 	# below rather than left to whoever remembers it.
-	"ready", "fetch",
+	# `race` arrived with CLOUD-1422 and sits BESIDE `ready` for the same reason:
+	# it renders a verdict about pull requests the forge listed rather than about
+	# the tree, so it mints no `Finding` and joins no store. It reaches `ready`
+	# alone, and that edge is the point rather than an accident — what a key is
+	# and what CLOSES one are `ready`'s to answer, so a second spelling of either
+	# is unwritable here rather than merely discouraged.
+	"ready", "race", "fetch",
 	# `lease` arrived with CLOUD-1274 and is placed BESIDE `fetch` rather than
 	# below it: it is the second adapter at the edge, and the only one that
 	# WRITES to shared state the whole fleet reads. It speaks git smart-HTTP —

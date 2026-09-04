@@ -23,7 +23,7 @@
 
 use batten::race::{self, Keys, Pull};
 
-use crate::common::{Fixture, run, scratch, stderr, stdout};
+use crate::common::{Fixture, batten, run, scratch, stderr, stdout};
 
 /// A [`Keys`] double, for `race.rs`'s own reason: `ready::Grammar` resolves ~18
 /// declared patterns, and a tier that had to build one would assert the
@@ -237,10 +237,10 @@ fn a_forge_that_cannot_be_reached_is_could_not_look_and_allows() {
 
 /// The dead gate the port nearly shipped, pinned as its own case.
 ///
-/// `ready-issue-key` is `CLOUD-[0-9]+` with no `(?i)`, and this repository's
-/// branches are spelled `claude/cloud-843-…`. The retired shell extracted with
-/// `grep -oiE` and upper-cased; a port that handed the branch to the grammar as
-/// written resolves NO key from source 2 on every branch this repository makes.
+/// The declared key row carries no `(?i)` flag, and a tracker's own branch
+/// names are lower case. The retired shell extracted case-insensitively and
+/// upper-cased; a port that handed the branch to the grammar as written
+/// resolves NO key from source 2 on any such branch.
 ///
 /// The double below is case-SENSITIVE for exactly that reason — a permissive
 /// one would pass whether or not `claimed` folds, which is a test that cannot
@@ -250,5 +250,40 @@ fn a_lower_case_branch_name_still_resolves_its_key() {
     assert_eq!(
         race::claimed("user/proj-843-campaign", "", "", "", &Fake),
         vec!["PROJ-843".to_owned()]
+    );
+}
+
+// carried: "the bypass is honoured and is a decision, not a shortcut" crates/batten/tests/it/claim_race.rs
+/// The obligation the retired case pinned, at the layer that now carries it.
+///
+/// `BATTEN_CLAIM_RACE_BYPASS` was the shell program's own hatch, read by the
+/// program before it did anything. The successor is a `command` row, so a
+/// deliberate second pull request against one issue takes the row's declared
+/// bypass through the engine like every other rule — one hatch for the set
+/// rather than one per gate.
+///
+/// So this asserts the obligation rather than the old spelling: the verb itself
+/// holds no private escape, and a reader looking for one finds the engine's.
+/// A case pinning the retired variable would pin a mechanism that no longer
+/// decides anything, which is worse than no case — it would read as coverage.
+#[test]
+fn the_retired_variable_no_longer_decides_anything() {
+    let dir = Fixture::new("claim-race-no-private-hatch")
+        .config("version = 1\n")
+        .git()
+        .base_commit()
+        .build();
+    let plain = run(&dir, &["claim", "race"]);
+    let spent = batten()
+        .args(["claim", "race"])
+        .current_dir(&dir)
+        .env("BATTEN_CLAIM_RACE_BYPASS", "1")
+        .output()
+        .expect("run batten");
+    assert_eq!(
+        (plain.status.code(), stdout(&plain)),
+        (spent.status.code(), stdout(&spent)),
+        "the retired variable must not steer the verb: {}",
+        stderr(&spent)
     );
 }

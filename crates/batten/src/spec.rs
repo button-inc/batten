@@ -425,6 +425,14 @@ mod tests {
                 // stdin and cannot start a program, because the FETCH stays with
                 // the poller that already holds the body.
                 "checks green".to_owned(),
+                // `claim race` is read where its two siblings are not, and the
+                // difference is the receipt: `claim check` and `claim bot` mint
+                // one, this asks the forge a question and prints the answer. A
+                // row claiming `write` would keep a pure read off the allowlist,
+                // which is the harmless direction — but it would also be false,
+                // and this list is read as a statement about what the binary
+                // does.
+                "claim race".to_owned(),
                 // Both `commit` rows, unlike attribution's. The noun IS `read`
                 // here because its whole subtree is — nothing under it writes —
                 // so it can make the claim `attribution` cannot (CLOUD-701).

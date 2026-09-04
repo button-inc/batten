@@ -149,13 +149,13 @@ pub fn claimed(branch: &str, title: &str, log: &str, body: &str, keys: &dyn Keys
 /// a BRANCH NAME is routinely not upper case.
 ///
 /// **This is a fidelity requirement, not a nicety, and leaving it out is a
-/// silent dead gate.** The retired shell extracted with `grep -oiE` and
-/// upper-cased the result; this repository's own `ready-issue-key` row is
-/// `CLOUD-[0-9]+` with no `(?i)`, and its branches are spelled
-/// `claude/cloud-843-…`. So a port that handed the branch to the grammar as
-/// written would resolve NO key from source 2 on every branch this repository
-/// makes — the claim would silently fall through to a `Refs:` trailer, or to
-/// nothing, and a gate that finds nothing looks exactly like a gate that passed.
+/// silent dead gate.** The retired shell extracted case-insensitively and
+/// upper-cased the result. A consumer's key row need not carry an `(?i)` flag —
+/// this one does not — while a tracker's own branch names are routinely lower
+/// case. So a port that handed the branch to the grammar as written would
+/// resolve NO key from source 2 on every branch such a consumer makes: the
+/// claim would silently fall through to a `Refs:` trailer, or to nothing, and a
+/// gate that finds nothing looks exactly like a gate that passed.
 ///
 /// Folding the INPUT rather than relaxing the pattern is deliberate: the row is
 /// consumer config read by other gates too, and widening it here would change
