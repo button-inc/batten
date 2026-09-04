@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.140](https://github.com/button-inc/batten/compare/v0.0.139...v0.0.140) - 2026-09-04
+
+### Added
+
+- *(check)* a worktree registration that outlives its checkout is a finding
+- *(commit)* an escape hatch is not spent by the commit that creates it
+- *(doctor)* [**breaking**] read the container's own proxy values, not the ones mise fixed
+- *(policy)* compare what we publish against what a provision row can serve
+- *(claim)* [**breaking**] retire claim-race-check onto `batten claim race`
+- *(race)* decide a claim race by head SHA, not by a branch name
+- *(facts)* [**breaking**] supply the instant a declared max_age is read against
+- *(facts)* a supplied instant, so a lease predicate is expressible
+- *(policy)* refuse an unreadable cache key and an uncached cargo job
+
+### Fixed
+
+- *(policy)* correct two stale predictions and drive the missing channel for real
+- *(policy)* name a real case in every test-targets mutation row
+- *(policy)* refuse the second shape cargo autodiscovers, and ratchet fixture forks
+- *(test)* give each advisory case its own bench
+- *(test)* make the advisory bench its own repository root
+- *(test)* own the premise these advisory cases were inheriting from the session
+- *(check)* spell the worktree verdicts from a word the dictionary declares
+- *(mcp)* a JSON-RPC refusal carries the message the server is required to send
+- *(policy)* obligations-bound reads the separator its own recorder writes
+- *(commit)* the mutation row goes where the gate reads it, and no consumer artifact reaches the core
+- *(semver)* the lock route replaces both sides, so a moved registry cannot silence the gate
+- *(policy)* the module pins its own predicate, and the allowlist literal sorts
+- *(policy)* the commit that deletes the fence is refused, and the shell gate is left alone
+- *(policy)* demand a cache guard only where a cache exists
+- *(capture)* carry `project` through the get_issue projection
+- *(claim)* answer claim-not-raced from the tree, not the installed binary
+- *(ci)* five land-blocking defects CI could see and no local gate could
+- *(hook)* drop the line-count expectation main's move made unfulfilled
+- *(task)* assert the Windows reclaim contract instead of the unix one
+- *(cli)* regenerate the completions and corpus the rebases deferred
+- *(spec)* declare the eleven new rows, and move the fact census count
+- *(rules)* merge the rebase's three list regions instead of concatenating them
+- *(rules)* hand the boundary's clock in, rather than reading one in the projection
+- *(cli)* give the task and singleton rows the stable id main now requires
+- *(ci)* qualify the one case title two retiring suites shared
+- *(policy)* name the renamed verdict token, and move the arm count's third authority
+- *(ci)* keep batten-check on x64, and key the warmed family by architecture
+- *(policy)* revive ci-parity, which was silent over this repository's own tree
+
+### Other
+
+- *(suite)* copy a git template per fixture instead of forking init
+- *(pointer-only)* classify `claim race` in the verb census
+- *(ci)* [**breaking**] retire singleton onto the task noun's lock verbs
+- *(ci)* [**breaking**] retire task-registry onto the task noun's writer verbs
+- *(ci)* [**breaking**] retire alive onto the task noun, and record why its writer cannot follow
+- *(ci)* [**breaking**] retire ready-guard onto the ready-needs-receipts row
+- apply the formatters to this branch's own new and changed files
+
 ## [0.0.139](https://github.com/button-inc/batten/compare/v0.0.138...v0.0.139) - 2026-09-03
 
 ### Added
