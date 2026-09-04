@@ -1993,22 +1993,49 @@ pub fn health(observed: &Observed, terms: &Terms, now: i64) -> Health {
             "a lease with no holder cannot be released by anyone",
         ));
     }
+    // THE ADMITTED SUCCESSOR (CLOUD-369), rendered ONCE and appended by every arm
+    // below. The lease bounds confirming runs at two — the holder plus one branch
+    // `reserve` admitted — and this report is what a human reads on a wedged
+    // lease. Naming only the holder shows half the occupancy, so the one view
+    // meant to explain who is spending CI could not name the second spender.
+    //
+    // Rendered here rather than at each arm so the four cannot drift into
+    // describing the same field differently, which is the predecessor's own
+    // reason for hoisting it.
+    let behind = successor_clause(body);
     // The release sentinel, reported as a declaration rather than as an expiry
     // fifty-odd years in the past.
     if body.released() {
-        return Health::Free(format!("free — released by {}", body.holder));
+        return Health::Free(format!("free — released by {}{behind}", body.holder));
     }
     let left = body.expires - now;
     if left <= 0 {
-        return Health::Free(format!("free — lapsed by {} {}s ago", body.holder, -left));
+        return Health::Free(format!(
+            "free — lapsed by {} {}s ago{behind}",
+            body.holder, -left
+        ));
     }
     if left > terms.ttl {
         return Health::Wedged(format!(
-            "held by {} for another {left}s, beyond the {}s any lease may claim",
+            "held by {}{behind} for another {left}s, beyond the {}s any lease may claim",
             body.holder, terms.ttl
         ));
     }
-    Health::Held(format!("held by {}, {left}s left", body.holder))
+    Health::Held(format!("held by {}{behind}, {left}s left", body.holder))
+}
+
+/// The admitted successor as a clause, or the empty string.
+///
+/// **Advisory exactly like `branch:` and `head:`** — read for the report, never
+/// for a verdict. It is absent on every lease minted before CLOUD-369 and on
+/// every lease nobody has reserved behind, so an empty reading is the ORDINARY
+/// case and the output stays byte-identical whenever it is empty. That
+/// byte-identity is asserted by a case of its own in the suite this conserves.
+fn successor_clause(body: &Body) -> String {
+    if body.next.is_empty() {
+        return String::new();
+    }
+    format!(", {} admitted behind it", body.next)
 }
 
 /// Delete `reference` on `remote`, from whatever it currently reads.
@@ -2653,6 +2680,116 @@ mod tests {
                 ..Body::default()
             },
         }
+    }
+
+    fn with_successor(holder: &str, expires: i64, next: &str) -> Observed {
+        Observed::Held {
+            sha: String::from("1111111111111111111111111111111111111111"),
+            body: Body {
+                holder: holder.to_owned(),
+                expires,
+                next: next.to_owned(),
+                ..Body::default()
+            },
+        }
+    }
+
+    /// **CLOUD-369 CLAUSE F: every state names the successor admitted behind
+    /// the holder, and the first port of `health` named it in none of them.**
+    ///
+    /// The lease bounds confirming runs at two — the holder plus one branch
+    /// `reserve` admitted — and this report is what a human reads on a wedged
+    /// lease. Naming only the holder shows half the occupancy, so the one view
+    /// meant to explain who is spending CI could not name the second spender.
+    ///
+    /// Five cases in `tests/land-lock-check.bats` assert it, one per state.
+    #[test]
+    fn every_health_state_names_the_admitted_successor() {
+        let terms = Terms::default();
+        let now = 1000;
+
+        let held = health(&with_successor("mine", now + 60, "theirs"), &terms, now);
+        assert!(
+            format!("{held:?}").contains("theirs admitted behind it"),
+            "a held lease names who is behind it: {held:?}"
+        );
+
+        let released = health(&with_successor("mine", 0, "theirs"), &terms, now);
+        assert!(
+            format!("{released:?}").contains("theirs admitted behind it"),
+            "a RELEASED lease still names who was admitted: {released:?}"
+        );
+
+        let lapsed = health(&with_successor("mine", now - 5, "theirs"), &terms, now);
+        assert!(
+            format!("{lapsed:?}").contains("theirs admitted behind it"),
+            "a LAPSED lease names the successor it left behind: {lapsed:?}"
+        );
+
+        let wedged = health(
+            &with_successor("mine", now + terms.ttl + 60, "theirs"),
+            &terms,
+            now,
+        );
+        assert!(
+            format!("{wedged:?}").contains("theirs admitted behind it"),
+            "a WEDGED lease names the successor too, and still fails: {wedged:?}"
+        );
+        assert!(
+            matches!(wedged, Health::Wedged(_)),
+            "and naming it does not soften the verdict: {wedged:?}"
+        );
+    }
+
+    /// **BYTE-IDENTICAL WHEN NO SUCCESSOR IS ADMITTED**, which is the ordinary
+    /// case: the field is absent on every lease minted before CLOUD-369 and on
+    /// every lease nobody has reserved behind.
+    ///
+    /// The anti-vacuity mirror for the case above — without it, a clause that
+    /// rendered `, admitted behind it` over an empty name would satisfy every
+    /// assertion there and corrupt every report that has no successor.
+    #[test]
+    fn a_lease_with_no_successor_renders_byte_identically() {
+        let terms = Terms::default();
+        let now = 1000;
+        for (expires, what) in [
+            (now + 60, "held"),
+            (0, "released"),
+            (now - 5, "lapsed"),
+            (now + terms.ttl + 60, "wedged"),
+        ] {
+            let rendered = format!(
+                "{:?}",
+                health(&with_successor("mine", expires, ""), &terms, now)
+            );
+            assert!(
+                !rendered.contains("admitted behind it"),
+                "{what} with no successor must read exactly as it did before: {rendered}"
+            );
+        }
+    }
+
+    /// A lease at exactly one TTL is the longest legitimate hold, not wedged.
+    ///
+    /// `>` rather than `>=`, and the boundary is the whole of it: the protocol
+    /// mints exactly `now + ttl`, so the maximum legitimate horizon IS one TTL
+    /// and refusing it would refuse every freshly-acquired lease.
+    #[test]
+    fn a_lease_at_exactly_one_ttl_is_the_longest_legitimate_hold() {
+        let terms = Terms::default();
+        let now = 1000;
+        assert!(matches!(
+            health(&with_successor("mine", now + terms.ttl, ""), &terms, now),
+            Health::Held(_)
+        ));
+        assert!(matches!(
+            health(
+                &with_successor("mine", now + terms.ttl + 1, ""),
+                &terms,
+                now
+            ),
+            Health::Wedged(_)
+        ));
     }
 
     fn at(expires: i64, holder: &str) -> Observed {
