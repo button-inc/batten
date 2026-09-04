@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-lease-guard 1  batten 
+.SH NAME
+batten\-lease\-guard \- The runner\*(Aqs step\-0 guard: may this branch spend a matrix right now?
+.SH SYNOPSIS
+\fBbatten lease guard\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIhead\fR> <\fIbranch\fR> <\fIrun\fR> 
+.SH DESCRIPTION
+The runner\*(Aqs step\-0 guard: may this branch spend a matrix right now?
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIhead\fR>
+The head commit being judged
+.TP
+<\fIbranch\fR>
+The branch being asked about
+.TP
+<\fIrun\fR>
+The run to cancel on a stop
