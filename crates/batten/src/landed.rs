@@ -70,7 +70,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 
-use crate::UsageError;
+use crate::error::UsageError;
 
 /// Which way a column is wrong, and therefore which remedy applies.
 ///
