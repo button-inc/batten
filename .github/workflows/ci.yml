@@ -85,11 +85,23 @@ jobs:
     # which this became on 2026-09-03, and carry identical specifications to
     # their x64 counterparts — 4 CPUs, 16 GB RAM, 14 GB storage.
     #
+    # AND THE SPEED CLAIM IS UNMEASURED — CORRECTED RATHER THAN QUIETLY DROPPED.
+    # This comment used to justify the stale budget below with "the expected
+    # direction is faster." Nothing in this repository has ever measured that.
+    # CLOUD-1416's title carries "up to 40% faster", a figure imported from
+    # outside and never reproduced here, and every number PR #847 took afterwards
+    # measures the CACHE-KEY fix instead: `mise run ci` went 498s cold to 315s
+    # warm on the SAME architecture, which is build-versus-no-build and swamps
+    # any per-core difference. Two lines above say these runners "carry identical
+    # specifications to their x64 counterparts", which is not a reason to expect
+    # a speedup either. `arch-probe.yml` is the matched cold pair that decides
+    # it; until it has run, arm64's benefit here is UNKNOWN rather than expected.
+    #
     # THE BUDGET BELOW IS STILL AN x64 READING and is owed a re-derivation from
-    # the first arm64 runs, recorded on CLOUD-1420. It is carried rather than
-    # guessed because the expected direction is faster, which makes an x64-derived
-    # ceiling a weaker backstop rather than a tighter one — the safe direction to
-    # be wrong in, and still the wrong number.
+    # the first arm64 runs, recorded on CLOUD-1420. It is carried because an
+    # x64-derived ceiling over an unknown direction is a backstop of unknown
+    # tightness — which is a reason to re-derive it, never a reason to relax
+    # about it.
     runs-on: ubuntu-24.04-arm
     # RE-MEASURED IN THE SAME PASS AS THE POLE (CLOUD-386). The 2026-08-14 reading
     # declared `p95=701s`; `mise run timeout-drift` over the last 25 successful runs
@@ -586,13 +598,24 @@ jobs:
     # that was supposed to make this a finding rather than a surprise does not
     # reach it. That asymmetry is the row's to close, not this job's.
     #
-    # COLD, AND DELIBERATELY SO. `cache-warm-linux` writes `ci-` on arm64 now, so
-    # no warm x64 entry exists for this job and it pays a full build. That costs
-    # nothing: splitting this job out (CLOUD-1413) was to take 189.6s off `ci`'s
-    # SERIAL chain, and a job running in parallel with a 1730s pole has ~1200s of
-    # slack. Buying it a warm entry would need a second warm writer, doubling the
-    # cache families against a store measured at 10.72 GiB over a 10 GiB ceiling
-    # — a worse trade, and one this change deliberately declines.
+    # COLD, AND THE JUSTIFICATION FOR THAT IS NOW FALSE. `cache-warm-linux`
+    # writes `ci-` on arm64, so no warm x64 entry exists for this job and it pays
+    # a full build every run.
+    #
+    # This comment used to price that as free: "a job running in parallel with a
+    # 1730s pole has ~1200s of slack." The premise was true when it was written
+    # and this repository's own change falsified it. Measured on run 33845451921,
+    # the first warm arm64 run of a real `crates/**` change: `ci` 364s, `bats`
+    # 271s, and THIS JOB 683s — 1.9x the next longest, and the critical path of
+    # the whole workflow. There is no 1730s pole to hide behind any more, because
+    # CLOUD-1410 removed it. The slack is gone and this job is the pole.
+    #
+    # What has not changed is the trade that was declined: buying a warm x64
+    # entry needs a second warm writer, doubling the cache families against a
+    # store measured at 10.72 GiB over a 10 GiB ceiling. So the answer is not a
+    # second writer — it is CLOUD-1431, which removes the reason this job is
+    # stranded here at all, or a revert of the family to x64 if `arch-probe.yml`
+    # shows arm64 buys nothing.
     runs-on: ubuntu-latest
     # DERIVED RATHER THAN OBSERVED, because this job has no history yet. The
     # terms: 189.6s for the step itself (job 100792703868), plus this job's own
@@ -631,46 +654,26 @@ jobs:
           fetch-depth: 0
       - name: Fetch the comparison base refs
         run: git fetch origin main:refs/remotes/origin/main
-      # NAME THE CHECKOUT, BECAUSE ONE RULE'S SUBJECT IS A BRANCH (CLOUD-1422).
-      # `actions/checkout` leaves a `pull_request` run on a DETACHED merge
-      # commit, and `claim-not-raced` — the only rule in the set whose subject is
-      # this branch rather than a file — identifies itself by asking `gh pr view`
-      # with no argument, which `gh` resolves from the checked-out branch. Measured
-      # detached: `could not determine current branch: failed to run git: not on
-      # any branch`, so the gate's own PR is not excluded from the competitor list
-      # and the branch is reported as racing itself (job 100910411899).
+      # A "Name the checkout's branch" STEP STOOD HERE AND IS DELETED, because
+      # the thing it fed retired out from under it (CLOUD-1422). It created a
+      # local branch from `github.head_ref` so that `claim-not-raced` — then a
+      # shell gate that identified its own PR with `gh pr view` and no argument —
+      # could resolve `self` on a checkout `actions/checkout` leaves detached.
       #
-      # THE FIX IS TO SUPPLY THE INPUT, NOT TO SWITCH THE GATE OFF. `gh` resolves
-      # a PR by branch NAME alone — measured, independent of what the branch
-      # points at — so a local branch named `github.head_ref` at the merge commit
-      # makes `self` resolve and the exclusion fire, and the gate then answers in
-      # CI instead of abstaining. That is the difference between a gate that can
-      # see and a gate that is disabled: `BATTEN_CLAIM_RACE_BYPASS` here would
-      # have made every future PR's duplicate-claim check silently vacuous.
+      # `mise-tasks/claim-race-check.sh` is now `batten claim race`, and
+      # `race::identify` matches the head COMMIT against the pull-request listing
+      # rather than reading a branch name. The step changed no commit, so it fed
+      # nothing: dead the moment that landed.
       #
-      # `-C` rather than `-c`: `fetch-depth: 0` brings the branch ref down, so the
-      # name can already exist locally. Pointing it at the merge commit is
-      # deliberate — HEAD's content is unchanged, and `origin/main..HEAD` still
-      # enumerates this PR's own commits.
-      #
-      # THE VALUE GOES THROUGH `env`, never inline. `github.head_ref` is a branch
-      # name an outside contributor chooses, so interpolating it into a `run:`
-      # body is the template-injection `zizmor` refuses; an env binding read as a
-      # quoted variable is the mitigation it asks for.
-      #
-      # WHAT MADE THIS URGENT RATHER THAN LATENT is worth the line, because it is
-      # not this PR. `gh pr list` needs `pull-requests: read` on a PRIVATE
-      # repository, and no job here grants it — so for this gate's whole life in
-      # CI the call 403'd and it fail-opened, exactly as its header says it
-      # should. This repository went public on 2026-09-03, which handed the job
-      # token PR-read access through `metadata: read`, and the gate started
-      # actually running in CI for the first time. The first thing it did was
-      # refuse. Same class as CLOUD-867: going public changed what the default
-      # token can reach, and a check that had been silently abstaining woke up.
-      - name: Name the checkout's branch
-        env:
-          HEAD_REF: ${{ github.head_ref }}
-        run: git switch -C "$HEAD_REF"
+      # AND THE SUCCESSOR ABSTAINS HERE, WHICH IS THE FINDING THE STEP WAS
+      # HIDING. `race.rs` says "a SHA survives a detached checkout" — true of a
+      # checkout at the PR's HEAD sha, false of one at the MERGE commit, which is
+      # the only kind a `pull_request` event produces. Measured: PR #848's merge
+      # ref is `a31c22b3` and its head sha is `54789fe9`, and from that checkout
+      # the verb exits 0 with "no open pull request has this commit as its head,
+      # so there is nothing claiming anything yet". A clean pass, byte-identical
+      # to a real one. That is CLOUD-1433's class in freshly landed code, and it
+      # is recorded there rather than papered over with a step that never fixed it.
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
           # THE `ci` JOB'S LIST, NOT A NARROWER ONE, and the width is decided by

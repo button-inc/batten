@@ -1,0 +1,92 @@
+name: arch-probe
+
+# THE MATCHED PAIR CLOUD-1416 OWED AND NEVER TOOK.
+#
+# CLOUD-1416 moved `ci`, `bats`, `commit-lint` and `cache-warm-linux` to arm64 on
+# the strength of its own title — "measured at up to 40% faster" — a figure
+# imported from outside this repository and never reproduced in it. Everything
+# PR #847 measured afterwards was the CACHE-KEY fix (CLOUD-1410): a cold build
+# became a warm restore, which is build-versus-no-build and swamps any per-core
+# difference. `mise run ci` went 498s cold to 315s warm on the SAME
+# architecture, so not one landed number varies the arch.
+#
+# This is the experiment that does. Two jobs, one run, one commit, same steps,
+# same minute, differing ONLY in `runs-on`.
+#
+# COLD ON BOTH ARMS, DELIBERATELY, and that is what makes it a pair. There is no
+# `Swatinem/rust-cache` step here at all. A warm comparison is not available even
+# in principle: `runnerOS-runnerArch` lands at rust-cache's `config.ts:93`, inside
+# the prefix assigned to `restoreKey` at `:133`, so each architecture is its own
+# cache family and `cache-warm-linux` writes exactly one of them. A warm arm64
+# reader has no warm x64 counterpart to be compared against, which is the same
+# fact that made the family move together or not at all.
+#
+# `cargo nextest run --no-run --workspace` and nothing else: a pure build, which
+# is the term an architecture could plausibly move, with no test flakiness and no
+# network in the measurement. It is the same command `cache-warm-linux` uses, so
+# the work is already known to be representative of the pole's dominant term.
+#
+# `workflow_dispatch` ONLY. It is not a `pull_request` workflow, so it is not in
+# `$CI_REQUIRED_CHECKS`, `ci-local-parity` does not reach it, and it costs
+# nothing until somebody asks it a question. It answers a property of the WORLD —
+# how fast a runner class is — which `.claude/rules/toolchain.md` puts on a
+# schedule or a trigger rather than in the gate, exactly as `lock-currency.yml`
+# is split from `lock-complete`.
+#
+# HOW TO READ THE RESULT: compare the two `build` step durations, not the job
+# durations. A job carries lease, checkout and mise install, and those are
+# network-bound and vary between runners for reasons that are not the CPU.
+on:
+  workflow_dispatch:
+
+# Least privilege: this reads the repo and measures. Nothing else.
+permissions:
+  contents: read
+
+concurrency:
+  group: arch-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MISE_TASK_RUN_AUTO_INSTALL: false
+  MISE_EXEC_AUTO_INSTALL: false
+  MISE_LOCKFILE: true
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  probe:
+    name: probe (${{ matrix.arch }})
+    strategy:
+      # `fail-fast: false` so one arm dying still leaves the other's number
+      # readable. A pair with one half missing is not a pair, but a single
+      # reading beats none and says which arm to re-run.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    # DERIVED FROM THE ARM WE HAVE, WHICH IS THE ONLY HONEST BASIS. `mise run ci`
+    # cold on arm64 measured 498s (run 33834442988), of which 194s was the 133
+    # `Compiling` lines; a build-only arm is that term plus the crates a test
+    # binary adds. 900s is that rounded well up, and x3 is the multiplier every
+    # job in this repository carries — so 45 minutes. A probe that times out has
+    # produced no reading, which is the one outcome worth spending headroom to
+    # avoid.
+    timeout-minutes: 45 # budget: p95=900s x3 measured=2026-09-04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+        with:
+          # Only what the build needs. This job runs no gate, so the `ci` job's
+          # wide list would be paying install time on both arms for tools
+          # nothing here invokes — and install time is exactly the term the
+          # reading has to exclude.
+          install_args: rust github:nextest-rs/nextest
+      # THE MEASUREMENT. Named `build` so both arms' durations sit under one
+      # step name in the run summary and the pair is read without arithmetic.
+      - name: build
+        run: mise exec -- cargo nextest run --no-run --workspace
