@@ -135,6 +135,47 @@ fn advance(root: &Path, remote: &str, reference: &str, tracking: &str) -> Result
     Ok(fetched.head)
 }
 
+/// The remote-tracking refs this clone holds that the remote no longer
+/// advertises.
+///
+/// **THE PRUNE, and it is load-bearing for a reason the predecessor measured
+/// rather than assumed** (CLOUD-1338, conserving `fetch_main`'s `--prune`). A
+/// stale `origin/<branch>` left behind after a merge makes `--force-with-lease`
+/// reject **permanently**: the lease compares against this clone's tracking ref,
+/// and a ref naming a commit the remote deleted can never match what the remote
+/// now has.
+///
+/// Measured 2026-08-11, and it misled three readers at once: the push ("someone
+/// else moved the branch" — nobody had), the harness stop hook ("20 unpushed
+/// commits" on a branch whose true unlanded set was 1), and the lander's own
+/// post-merge delete ("already gone, or the remote refused" — both halves were
+/// live).
+///
+/// It belongs on the landing path rather than in each reader, and the
+/// predecessor says why: the readers are not all ours, and only the loop knows
+/// when the ref went stale.
+///
+/// **Pure, over two listings the caller already took.** The decision is a set
+/// difference; taking it here means it tests without a remote, which is the same
+/// split [`worthless`] and [`closes_the_tap`] make.
+#[must_use]
+pub fn stale_tracking(local: &[String], advertised: &[String], prefix: &str) -> Vec<String> {
+    local
+        .iter()
+        .filter(|reference| reference.starts_with(prefix))
+        .filter(|reference| {
+            // THE BRANCH NAME, not the tracking name: the remote advertises
+            // `refs/heads/x` where this clone holds `refs/remotes/origin/x`, and
+            // comparing the two spellings directly prunes everything.
+            let branch = reference.trim_start_matches(prefix);
+            !advertised
+                .iter()
+                .any(|head| head.trim_start_matches("refs/heads/") == branch)
+        })
+        .cloned()
+        .collect()
+}
+
 /// One lap's replay: advance the base, replay the branch onto it, record it.
 ///
 /// # Errors
@@ -2128,6 +2169,79 @@ mod tests {
         assert_eq!(
             TapVerdict::of(&Verdict::Pending(Pending::Unregistered(Vec::new()))),
             TapVerdict::Pending
+        );
+    }
+
+    /// **THE PRUNE'S DISCRIMINATING PAIR.** A tracking ref the remote no longer
+    /// advertises is stale; one it still advertises is not.
+    ///
+    /// The anti-vacuity half is the one that matters: a predicate pruning
+    /// everything would satisfy the first assertion and delete the base this
+    /// clone lands onto.
+    #[test]
+    fn a_tracking_ref_the_remote_dropped_is_stale_and_a_live_one_is_not() {
+        let local = vec![
+            String::from("refs/remotes/origin/main"),
+            String::from("refs/remotes/origin/merged-and-gone"),
+        ];
+        let advertised = vec![String::from("refs/heads/main")];
+        assert_eq!(
+            stale_tracking(&local, &advertised, "refs/remotes/origin/"),
+            vec![String::from("refs/remotes/origin/merged-and-gone")],
+            "exactly the ref the remote dropped"
+        );
+    }
+
+    /// **THE SPELLINGS DIFFER ON THE TWO SIDES**, and comparing them raw prunes
+    /// everything: the remote advertises `refs/heads/x` where this clone holds
+    /// `refs/remotes/origin/x`.
+    #[test]
+    fn the_branch_name_is_compared_rather_than_the_ref_name() {
+        let local = vec![String::from("refs/remotes/origin/main")];
+        assert!(
+            stale_tracking(
+                &local,
+                &[String::from("refs/heads/main")],
+                "refs/remotes/origin/"
+            )
+            .is_empty(),
+            "a live branch must survive the spelling difference"
+        );
+    }
+
+    /// A local branch is not a tracking ref, so the prefix filter is what keeps
+    /// this from deleting the work it is landing.
+    #[test]
+    fn a_local_branch_is_never_pruned() {
+        let local = vec![
+            String::from("refs/heads/my-work"),
+            String::from("refs/remotes/origin/main"),
+        ];
+        assert!(
+            stale_tracking(
+                &local,
+                &[String::from("refs/heads/main")],
+                "refs/remotes/origin/"
+            )
+            .is_empty(),
+            "refs/heads is out of scope whatever the remote says"
+        );
+    }
+
+    /// **AN EMPTY ADVERTISEMENT PRUNES EVERYTHING, which is why the caller must
+    /// never hand one over from a failed read.**
+    ///
+    /// Stated as a case rather than guarded here: the function is a set
+    /// difference and cannot tell "the remote has no branches" from "the read
+    /// failed". The caller owns that distinction, and this is the case that says
+    /// so out loud.
+    #[test]
+    fn an_empty_advertisement_prunes_every_tracking_ref() {
+        let local = vec![String::from("refs/remotes/origin/main")];
+        assert_eq!(
+            stale_tracking(&local, &[], "refs/remotes/origin/").len(),
+            1,
+            "so a caller that could not read the remote must not call this"
         );
     }
 }
