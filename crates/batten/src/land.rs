@@ -1228,6 +1228,15 @@ pub fn spending(repo: &str, sha: &str) -> Option<Vec<Spending>> {
 /// than by filtering — the same argument the lease guard's own cancel carries.
 #[must_use]
 pub fn abandon(repo: &str, sha: &str, fanin: &str) -> Abandoned {
+    // AN UNSET FAN-IN CANCELS NOTHING RATHER THAN GUESSING, and this is the
+    // guard whose absence would have been worst: with no name to spare, EVERY
+    // run is doomed — including the one carrying the fan-in, whose cancelled
+    // context is not an answer and wedges the branch. `abandon-matrix.bats`
+    // refuses to run at all without the declaration for exactly this reason, and
+    // the first port of this dropped the arm.
+    if fanin.is_empty() {
+        return Abandoned::default();
+    }
     let Some(in_flight) = spending(repo, sha) else {
         return Abandoned::default();
     };
@@ -2046,21 +2055,28 @@ mod tests {
         assert_eq!(doomed.len(), 2, "nothing is spared by accident");
     }
 
-    /// **AN UNSET FAN-IN CANCELS NOTHING RATHER THAN GUESSING.**
+    /// **AN UNSET FAN-IN CANCELS NOTHING RATHER THAN GUESSING, and the split
+    /// between the two halves of that is where the first port went wrong.**
     ///
-    /// The predecessor refuses to run at all without `$CI_FANIN_WORKFLOW`,
-    /// because without it the task cannot tell which run carries the fan-in and
-    /// cancelling that one wedges the branch. Conserved here as the caller's
-    /// guard: an empty name matches no path, so this arm is what makes the
-    /// caller's refusal the only safe reading.
+    /// `worthless` is a set difference and cannot refuse — with no name to
+    /// spare, every run is doomed, and that is the honest answer for a pure
+    /// function. The first draft stopped there and wrote "so the CALLER must
+    /// refuse", which was a note rather than a guard: `abandon` had no such
+    /// check, so an unset declaration would have cancelled EVERY run including
+    /// the fan-in's, whose cancelled context is not an answer and wedges the
+    /// branch.
+    ///
+    /// `abandon-matrix.bats` refuses to run at all without the declaration.
+    /// The refusal lives in `abandon` now; this case pins the pure half's shape
+    /// so the guard cannot quietly move back down here and stop refusing.
     #[test]
-    fn an_empty_fan_in_name_matches_no_run() {
+    fn an_empty_fan_in_name_matches_no_run_so_the_refusal_lives_in_abandon() {
         let (doomed, spared) = worthless(&[run("1", "the-fan-in.yml")], "");
-        assert_eq!(spared, 0);
+        assert_eq!(spared, 0, "a set difference cannot spare an unnamed file");
         assert_eq!(
             doomed.len(),
             1,
-            "so the CALLER must refuse rather than let this decide"
+            "which is why `abandon` refuses before ever calling this"
         );
     }
 
