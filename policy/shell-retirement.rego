@@ -2328,6 +2328,10 @@ test_a_declaration_losing_a_variable_this_delta_unbinds_is_admitted if {
 		},
 		"lines": {
 			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "\tlocal pid phase advance", "printf x | mise run old-gate 2>/dev/null"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:mise+run+old-gate"],
+		},
+	}}
+}
 
 # THE SAME SHAPE AS A `.bats` SUITE WRITES IT (arm 2b). Identical to the case
 # above in every respect but the spelling of the directory: a suite cannot write
@@ -2368,6 +2372,7 @@ test_a_declaration_losing_an_unrelated_variable_is_refused if {
 		},
 	}}
 	v.verdict == "shell edit refused"
+}
 
 # ANTI-VACUITY FOR THE BATS SPELLING: the head must be the SUITE'S OWN directory.
 # Without the anchored pattern the arm resolves a variable bound to anywhere at
