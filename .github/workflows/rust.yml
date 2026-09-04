@@ -485,10 +485,19 @@ jobs:
           # a discarded restore. `prefix-key` (`:73`) is the manual escape hatch
           # if a target dir is ever genuinely poisoned.
           #
+          # A DISTINCT FAMILY, unlike `bats`, which now reads `ci-`: this job's
+          # target dir is built by a different host toolchain, so an entry shared
+          # with a linux job would thrash rather than warm. It stays a writer on
+          # `main` for the same reason `cross` and `semver` do.
+          #
           # The warm side is `cache-warm-windows` in `release-plz.yml`. Both
           # must agree; that they are two places is the cost of the only trigger
           # this repository is allowed to hang a warm job on.
           shared-key: windows-
+          # READ-ONLY: `cache-warm-windows` on `main` is this family's one
+          # writer, and a write from a `pull_request` run lands under
+          # `refs/pull/N/merge` where no other pull request can read it.
+          save-if: false
       # A JOB THAT DECLARES A TOOL MUST BE ABLE TO REACH IT, asserted before the
       # suite rather than discovered inside it. `ci-tools-check` holds these
       # names against `mise.toml`, which is a different question: it cannot know

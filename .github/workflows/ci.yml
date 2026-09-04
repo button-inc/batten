@@ -362,6 +362,14 @@ jobs:
           # In `shared-key` rather than `key` because `key` is an if/else
           # fallback rust-cache ignores whenever `shared-key` is set.
           shared-key: ci-
+          # READ-ONLY, because a write from here reaches nobody. GitHub scopes a
+          # cache read to the run's own ref plus the base branch, so the six
+          # live `refs/pull/N/merge` copies this job used to write were
+          # unreadable by every other pull request — pure upload time for a
+          # multi-gigabyte entry with no reader. `cache-warm-linux` on `main` is
+          # the family's one writer, which is also what stops this job and
+          # `bats` racing to fill a fresh key with the thinner of two trees.
+          save-if: false
       # ASK WHETHER THIS DIFF CAN MOVE THE SLOW TIER (CLOUD-398). Measured
       # 2026-08-21: this job is ~13 of the ~14.7 billed minutes a non-Rust pull
       # request costs, `test:bats` is ~81% of it, and a one-file change to
