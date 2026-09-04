@@ -430,6 +430,17 @@ mod tests {
     fn a_single_payload_and_a_wrapped_array_read_alike() {
         let bare = serde_json::json!({ "id": "CLOUD-1", "status": "Todo" });
         let wrapped = serde_json::json!([[{ "id": "CLOUD-1", "status": "Todo" }]]);
-        assert_eq!(rows_from(&bare).unwrap(), rows_from(&wrapped).unwrap());
+        // Compared through `ok()` rather than unwrapped: the workspace denies
+        // `unwrap`/`expect` on every reachable path, this one included.
+        //
+        // THE SECOND ASSERTION IS THE ANTI-VACUITY GUARD. Two `Err`s both map to
+        // `None`, so the equality alone would pass over a verb that rejected
+        // both shapes — agreement about nothing, which is the class this
+        // repository's own `neither_reading_is_empty` cases exist to refuse.
+        assert!(
+            rows_from(&bare).is_ok(),
+            "the equality below is only meaningful if the payload parsed at all"
+        );
+        assert_eq!(rows_from(&bare).ok(), rows_from(&wrapped).ok());
     }
 }

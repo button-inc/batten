@@ -500,6 +500,16 @@ mod tests {
                 "generate man".to_owned(),
                 "generate markdown".to_owned(),
                 "generate schema".to_owned(),
+                // The board sweep (CLOUD-186, CLOUD-1127). It reads a payload on
+                // stdin and three caller-supplied evidence files and starts no
+                // program — the `claimed-keys` spawn its shell predecessor made
+                // is supplied AS evidence instead, which is exactly what keeps
+                // this on the read surface rather than needing `enforce`.
+                //
+                // The noun above it is unclassified, for `capture`'s reason: a
+                // consumer treating an entry as a prefix must be handed only what
+                // is actually read-only, and a noun is not a command.
+                "landed check".to_owned(),
                 // FIVE OF THE TEN LEASE ARMS, and the noun is NOT among them
                 // (CLOUD-1274). `lease acquire|renew|hold|release|reserve` each
                 // reach `swap`, which is a compare-and-swap against a REMOTE ref
@@ -768,6 +778,10 @@ mod tests {
             "land replay".to_owned(),
             "land verify".to_owned(),
             "land wait".to_owned(),
+            // The board sweep and its noun (CLOUD-186, CLOUD-1127), ported off
+            // `mise-tasks/landed-check.sh`.
+            "landed".to_owned(),
+            "landed check".to_owned(),
             // THE LANDING LEASE, ten arms and a noun (CLOUD-1274, CLOUD-393).
             // The noun is UNCLASSIFIED rather than read, because half the
             // subtree writes: `acquire|renew|hold|release|reserve` each reach

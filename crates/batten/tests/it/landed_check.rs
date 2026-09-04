@@ -26,26 +26,36 @@ fn evidence(
     asserted: &[(&str, &str)],
 ) -> std::path::PathBuf {
     let dir = common::scratch(name);
-    let merged_body: String = merged
-        .iter()
-        .map(|(key, pr)| format!("{key}\t{pr}\n"))
-        .collect();
-    std::fs::write(dir.join("merged.tsv"), merged_body).expect("write merged evidence");
-    let declined_body: String = declined.iter().map(|key| format!("{key}\n")).collect();
+    std::fs::write(dir.join("merged.tsv"), tsv(merged)).expect("write merged evidence");
+    let declined_body = declined.iter().fold(String::new(), |mut acc, key| {
+        acc.push_str(key);
+        acc.push('\n');
+        acc
+    });
     std::fs::write(dir.join("declined.tsv"), declined_body).expect("write declined evidence");
-    let asserted_body: String = asserted
-        .iter()
-        .map(|(key, reference)| format!("{key}\t{reference}\n"))
-        .collect();
-    std::fs::write(dir.join("asserted.tsv"), asserted_body).expect("write asserted evidence");
+    std::fs::write(dir.join("asserted.tsv"), tsv(asserted)).expect("write asserted evidence");
     dir
 }
 
+/// Two tab-separated columns per row.
+///
+/// Folded rather than `map(format!).collect()`, which `clippy::format_collect`
+/// refuses: each `format!` allocates a `String` the collect immediately drops.
+fn tsv(rows: &[(&str, &str)]) -> String {
+    rows.iter().fold(String::new(), |mut acc, (left, right)| {
+        acc.push_str(left);
+        acc.push('\t');
+        acc.push_str(right);
+        acc.push('\n');
+        acc
+    })
+}
+
 fn board(rows: &[(&str, &str)]) -> String {
-    let entries: Vec<String> = rows
-        .iter()
-        .map(|(id, status)| format!(r#"{{"id":"{id}","status":"{status}"}}"#))
-        .collect();
+    let entries = rows.iter().fold(Vec::new(), |mut acc, (id, status)| {
+        acc.push(format!(r#"{{"id":"{id}","status":"{status}"}}"#));
+        acc
+    });
     format!("[{}]", entries.join(","))
 }
 
