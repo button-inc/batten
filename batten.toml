@@ -6379,16 +6379,16 @@ root = "target"
 keep = 2
 
 [prune.warm]
-mb = 8470
-worst_mb = 8470
+mb = 8971
+worst_mb = 8971
 multiplier = 1
-measured = "2026-09-02"
+measured = "2026-09-04"
 
 [prune.cold]
-mb = 20257
-worst_mb = 20257
+mb = 21455
+worst_mb = 21455
 multiplier = 1
-measured = "2026-09-02"
+measured = "2026-09-04"
 
 # THE BASIS EACH FLOOR WAS MEASURED AGAINST (CLOUD-1158), because `measured` is a
 # pointer to a basis and not the basis itself.
@@ -6587,14 +6587,37 @@ measured = "2026-09-02"
 # The refusal names neither: it names a STEM COUNT, and free space was 1.8GB
 # clear. An operator who reads the caller rather than the callee deletes files and
 # gets nowhere.
+# THE 2026-09-04 MOVE, 186 -> 197, DERIVED like the three before it (CLOUD-1424).
+# The worktree-registration gate's compiled-binary tier took the live count 11
+# past the basis, one outside the tolerance — `main` sat at 194, comfortably
+# inside it, so this branch is what tipped it and this is the gate working exactly
+# as the paragraph above describes rather than a refusal to argue with.
+#
+# Both floors scale by the stem model this block already states rather than by a
+# fresh `du`: warm 8470 at 186 stems is 45.54 per stem and 45.54 x 197 is 8971;
+# cold 20257 at 186 is 108.91 and 108.91 x 197 is 21455.
+#
+# NEITHER IS AN INDEPENDENT MEASUREMENT, said plainly for the reason the two moves
+# above say it: a reader who needs an exact floor should take one — a build from an
+# empty `target` for cold, a minimal post-prune tree for warm — and stating the
+# derivation is what leaves that choice open instead of quietly foreclosing it.
+#
+# ONE READING WORTH LEAVING BEHIND, because it is the first time the derived cold
+# floor has exceeded what this container can offer: 21455 MB against 21065 MB free
+# at the time of the move. That is latent rather than blocking — cold is judged
+# only at the moment the escalation drops the cache, and it is reached only after
+# warm is breached, which 8971 against the same 21065 is not. But the margin is now
+# negative, so the next move that raises cold should take the exact measurement
+# rather than scale again: the model's own warning is that a floor nothing can
+# satisfy refuses every lap and gets switched off.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 186
+count = 197
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 186
+count = 197
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
