@@ -58,8 +58,16 @@ jobs:
     # `runnerOS-runnerArch` at `config.ts:93`, BEFORE the restore prefix is
     # assigned at `:133` — so a reader on arm64 whose family's writer is still on
     # x64 has no warm entry at all and is dramatically worse off than before.
-    # `ci`, `bats`, `batten-check`, `commit-lint` and `cache-warm-linux` are the
-    # whole `ci-` family and move as one set.
+    # `ci`, `bats`, `commit-lint` and `cache-warm-linux` are the family's arm64
+    # set and move together.
+    #
+    # `batten-check` IS THE ONE READER LEFT BEHIND, and it is left behind by a
+    # measurement rather than by preference: it is the only job here that runs
+    # `batten enforce`, whose `no-secrets` rule needs the pinned `ripsecrets`
+    # scanner, and no ripsecrets release has ever published a linux-aarch64
+    # artifact. Its own header carries the failing run and the reasoning. It pays
+    # a cold build for that and it costs nothing, because it runs in parallel
+    # with this job rather than in series with it.
     #
     # WHAT DELIBERATELY DOES NOT MOVE. `perf` builds both arms and compares them,
     # so an architecture change invalidates comparability and its base entry.
@@ -555,19 +563,43 @@ jobs:
   batten-check:
     name: batten-check
     if: ${{ github.event.pull_request.draft == false }}
-    # ARM64, AS ONE SET WITH THE REST OF THE `ci-` FAMILY (CLOUD-1416). rust-cache
-    # puts `runnerOS-runnerArch` inside the restore prefix (`config.ts:93`,
-    # before `:133`), so a reader that moves while its family's writer stays put
-    # has no warm entry at all. The `ci` job's header carries the reasoning and
-    # the list of jobs that deliberately do NOT move.
-    runs-on: ubuntu-24.04-arm
+    # x64, AND THIS IS THE ONE JOB OF THE `ci-` FAMILY THAT CANNOT MOVE.
+    # Measured on job 100903936005, the first arm64 run of this job:
+    #
+    #   batten: provision ripsecrets: no artifact for linux-aarch64;
+    #           the entry pins linux-x86_64, macos-aarch64, macos-x86_64
+    #
+    # `batten enforce` carries `no-secrets`, whose scanner is the pinned
+    # `[[provision]]` row for `ripsecrets` — and NO ripsecrets release has ever
+    # published a linux-aarch64 artifact. Every tag from v0.1.2 to v0.1.11 ships
+    # `x86_64-unknown-linux-gnu` and the two darwin arches and nothing else;
+    # `no-source-built-tool` forbids compiling one. So this job is x64 for as
+    # long as that holds, and every OTHER job in the family stays arm64: nothing
+    # else in this workflow runs `enforce`, and the `ci` job carves this step out
+    # with `HK_SKIP_STEPS`.
+    #
+    # WHY THE GAP EXISTED TO BE FOUND HERE. CLOUD-1416 asked whether every tool
+    # resolves on arm64 and answered from `lock-complete`, which requires each
+    # `[tools]` entry to install on linux-arm64 as one of three mandatory
+    # platforms. `ripsecrets` is not a `[tools]` entry — it is a `[[provision]]`
+    # row, a separate surface carrying no such requirement — so the standing gate
+    # that was supposed to make this a finding rather than a surprise does not
+    # reach it. That asymmetry is the row's to close, not this job's.
+    #
+    # COLD, AND DELIBERATELY SO. `cache-warm-linux` writes `ci-` on arm64 now, so
+    # no warm x64 entry exists for this job and it pays a full build. That costs
+    # nothing: splitting this job out (CLOUD-1413) was to take 189.6s off `ci`'s
+    # SERIAL chain, and a job running in parallel with a 1730s pole has ~1200s of
+    # slack. Buying it a warm entry would need a second warm writer, doubling the
+    # cache families against a store measured at 10.72 GiB over a 10 GiB ceiling
+    # — a worse trade, and one this change deliberately declines.
+    runs-on: ubuntu-latest
     # DERIVED RATHER THAN OBSERVED, because this job has no history yet. The
     # terms: 189.6s for the step itself (job 100792703868), plus this job's own
-    # preamble — checkout, the mise install, a cache restore — and headroom for
-    # a restore that misses and pays a partial rebuild. 600s is that sum rounded
-    # up; x3 is the multiplier every job here carries. Re-derive from `mise run
-    # timeout-drift` once this job has 25 runs of its own, and note that the
-    # 189.6s term is an x64 reading like every other budget in this file.
+    # preamble — checkout, the mise install — and a COLD build, for the reason
+    # above. 600s is that sum rounded up; x3 is the multiplier every job here
+    # carries. Re-derive from `mise run timeout-drift` once this job has 25 runs
+    # of its own.
     timeout-minutes: 30 # budget: p95=600s x3 measured=2026-09-04
     # `actions: write` is here for one call and one only: cancelling THIS run
     # when the landing lease does not authorise this branch (CLOUD-420).
@@ -619,15 +651,22 @@ jobs:
         with:
           path: ~/.pkl/cache
           key: pkl-${{ runner.os }}-${{ hashFiles('hk.pkl') }}
-      # THE WARMED `ci-` FAMILY, READ-ONLY, for the reason the `ci` and `bats`
-      # jobs state: `cache-warm-linux` on `main` is this family's one writer, and
-      # a pull-request write lands under `refs/pull/N/merge` where no other pull
-      # request can read it. This job needs the binary and no test target, so it
-      # is a strict subset of what that warm entry carries.
+      # THE `ci-` FAMILY, AND THE ONLY STEP IN THIS WORKFLOW THAT STILL WRITES
+      # ONE. That is the rule the `ci`, `bats` and `windows` steps are stated
+      # over, applied rather than excepted: `save-if: false` belongs on a reader
+      # of a family a trunk-side job WARMS, and is wrong where no warm writer
+      # exists, because a pure consumer of an empty family has nothing at all.
+      # `cache-warm-linux` writes `ci-` on arm64 (see this job's `runs-on` for
+      # why this one cannot follow it), so on x64 that family has no writer.
+      #
+      # It is not useless. A cache read is scoped to the run's own ref plus the
+      # base branch, so what this cannot do is serve ANOTHER pull request — but
+      # it does serve the next lap of THIS one, and `land` re-runs CI once per
+      # lap on a fresh SHA under the same `refs/pull/N/merge` ref. A landing loop
+      # is exactly where the repeat reads are.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-
-          save-if: false
       - run: mise run batten-check
         env:
           # `batten-check` reaches `doctor` through the same chain the `ci` job

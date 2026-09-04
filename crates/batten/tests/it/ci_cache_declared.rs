@@ -405,6 +405,51 @@ fn an_unwarmed_family_may_still_be_written() {
 }
 
 #[test]
+fn the_same_key_on_another_architecture_is_not_the_same_family() {
+    // THE PAIR THE PREDICATE USED TO CONFUSE, asserted over the engine because
+    // the discriminator is a `runs-on` label the boundary has to project out of
+    // the parsed job — the module's own case supplies that mapping itself.
+    //
+    // rust-cache composes `runnerOS-runnerArch` into the key at `config.ts:93`,
+    // so `ci-` written by an arm64 job and `ci-` written by an x64 one are
+    // different entries: no contention, no overwrite, no reader handed the
+    // other's tree. Comparing the `shared-key` string alone refused exactly this
+    // shape, measured against this repository's own tree the first time one job
+    // of a family stayed on x64 while the rest moved.
+    // `WARM` writes `ci-` on `ubuntu-24.04-arm`; this reader writes the same key
+    // on x64, which is a different composed key.
+    let writes = READER
+        .replace("          save-if: false\n", "")
+        .replace("runs-on: ubuntu-24.04-arm", "runs-on: ubuntu-latest");
+    let root = tree(
+        "cross-arch",
+        MANIFEST,
+        &[("warm.yml", WARM), ("pr.yml", &writes)],
+    );
+    let found = findings(&root);
+    assert!(
+        found.is_empty(),
+        "the same key on another architecture is another entry: {found:?}"
+    );
+}
+
+#[test]
+fn the_same_key_on_the_same_architecture_is_still_refused() {
+    // The other direction, so the widened key cannot pass by never matching.
+    // Both sides are `ubuntu-24.04-arm`, which is one family.
+    let writes = READER.replace("          save-if: false\n", "");
+    let root = tree(
+        "same-arch",
+        MANIFEST,
+        &[("warm.yml", WARM), ("pr.yml", &writes)],
+    );
+    assert!(
+        !findings(&root).is_empty(),
+        "same key and same architecture is one family, and a PR-side write of it is refused"
+    );
+}
+
+#[test]
 fn the_engine_reads_a_quoted_save_if_as_read_only() {
     // YAML SPELLS `false` TWO WAYS AND THE BOUNDARY DECIDES WHICH ARRIVES. A
     // bare `false` is a boolean and a quoted one is a string; a module comparing

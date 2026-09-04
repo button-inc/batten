@@ -406,10 +406,36 @@ violation contains {
 # every other pull request, so it is upload time for an entry with no reader.
 # One designated writer on the trunk, every pull-request consumer read-only.
 
-warmed contains key if {
+# A FAMILY IS THE (KEY, ARCHITECTURE) PAIR AND NOT THE KEY ALONE, which this
+# predicate got wrong until this repository's own tree exercised it. rust-cache
+# composes `runnerOS-runnerArch` into the key at `config.ts:93`, so `ci-` written
+# by an arm64 job and `ci-` written by an x64 one are DIFFERENT entries: they
+# cannot contend, cannot overwrite one another, and cannot hand a reader the
+# other's tree. Comparing the `shared-key` string alone reported exactly that
+# pair as a contested write — measured the first time one job of a family stayed
+# on x64 while the rest moved, which an architecture migration produces by
+# construction rather than by accident.
+#
+# THE LABEL IS THE DISCRIMINATOR AND THE `-arm` SUFFIX IS THE WHOLE OF IT.
+# GitHub spells its arm64 runners `ubuntu-24.04-arm` and `ubuntu-22.04-arm`, and
+# everything else reaching this rule is x64. The reading is deliberately narrow:
+# a fuller architecture table would be a consumer fact living inside a module,
+# which non-negotiable rule 1 refuses, and the pair this rule has to tell apart
+# is exactly the one that suffix separates.
+arch(label) := "arm64" if endswith(label, "-arm")
+
+arch(label) := "x64" if not endswith(label, "-arm")
+
+runner(path, name) := label if {
+	label := object.get(workflow[path].jobs[name], "runs-on", "")
+	label != ""
+}
+
+warmed contains [key, where] if {
 	some entry in job_step
 	on_push(entry[0])
 	key := shared_key(entry[2])
+	where := arch(runner(entry[0], entry[1]))
 }
 
 contested(path, name) if {
@@ -418,7 +444,7 @@ contested(path, name) if {
 	entry[0] == path
 	entry[1] == name
 	step := entry[2]
-	shared_key(step) in warmed
+	[shared_key(step), arch(runner(path, name))] in warmed
 	not reads_only(step)
 }
 
@@ -513,6 +539,29 @@ test_an_unwarmed_family_may_still_be_written if {
 	count(violation) == 0 with input as tree(no_writer, pr_reader("cross-", true))
 }
 
+# THE PAIR THIS PREDICATE USED TO CONFUSE, and the reason the warmed set is
+# keyed by (key, architecture). Same `shared-key` on both sides, different
+# runner architecture, so rust-cache composes two different keys at
+# `config.ts:93` and neither job can touch the other's entry. Without this case
+# the rule refuses the first architecture split anybody makes — measured against
+# this repository's own tree before the key was widened.
+test_the_same_key_on_another_architecture_is_not_the_same_family if {
+	count(violation) == 0 with input as tree(
+		warm_writer_on("ubuntu-24.04-arm"),
+		pr_reader_on("ci-", true, "ubuntu-latest"),
+	)
+}
+
+# The other direction, so the widened key cannot pass by simply never matching:
+# same key AND same architecture is still one family, and still refused.
+test_the_same_key_on_the_same_architecture_is_still_refused if {
+	some finding in violation with input as tree(
+		warm_writer_on("ubuntu-24.04-arm"),
+		pr_reader_on("ci-", true, "ubuntu-24.04-arm"),
+	)
+	finding.rule == "warmed-family-is-read-only"
+}
+
 test_a_job_reaching_no_cargo_needs_no_cache if {
 	count(violation) == 0 with input as tree(warm_writer, inert_reader)
 }
@@ -539,20 +588,33 @@ tasks := {
 	"inert": {"run": "echo nothing"},
 }
 
-warm_writer := {"on": {"push": {"branches": ["main"]}}, "jobs": {"cache-warm-linux": {"steps": [{
-	"uses": "Swatinem/rust-cache@6323deb1",
-	"with": {"shared-key": "ci-"},
-}]}}}
+warm_writer := warm_writer_on("ubuntu-latest")
 
-no_writer := {"on": {"push": {"branches": ["main"]}}, "jobs": {"noop": {"steps": [{"run": "echo nothing"}]}}}
-
-pr_reader(key, writes) := {"on": {"pull_request": {"types": ["opened"]}}, "jobs": {"reader": {"steps": [
-	{"run": "mise run build"},
-	{
+warm_writer_on(label) := {"on": {"push": {"branches": ["main"]}}, "jobs": {"cache-warm-linux": {
+	"runs-on": label,
+	"steps": [{
 		"uses": "Swatinem/rust-cache@6323deb1",
-		"with": with_save(key, writes),
-	},
-]}}}
+		"with": {"shared-key": "ci-"},
+	}],
+}}}
+
+no_writer := {"on": {"push": {"branches": ["main"]}}, "jobs": {"noop": {
+	"runs-on": "ubuntu-latest",
+	"steps": [{"run": "echo nothing"}],
+}}}
+
+pr_reader(key, writes) := pr_reader_on(key, writes, "ubuntu-latest")
+
+pr_reader_on(key, writes, label) := {"on": {"pull_request": {"types": ["opened"]}}, "jobs": {"reader": {
+	"runs-on": label,
+	"steps": [
+		{"run": "mise run build"},
+		{
+			"uses": "Swatinem/rust-cache@6323deb1",
+			"with": with_save(key, writes),
+		},
+	],
+}}}
 
 with_save(key, true) := {"shared-key": key}
 
