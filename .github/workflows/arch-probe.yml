@@ -26,6 +26,38 @@ name: arch-probe
 # network in the measurement. It is the same command `cache-warm-linux` uses, so
 # the work is already known to be representative of the pole's dominant term.
 #
+# `--no-run` IS LOAD-BEARING IN TWO DIRECTIONS AT ONCE, and finding that out is
+# what fixed a rule rather than this file. Two committed predicates read the same
+# five characters and want opposite things:
+#
+#   `ci-parity`'s `foreign-cargo-is-the-declared-spelling` EXEMPTS a line
+#     containing ` --no-run`, on reasoning that applies here exactly — "a build
+#     that compiles and executes nothing cannot go green on work it no longer
+#     covers, because it covers none." Drop `--no-run` and this step is refused
+#     for not being `test:cargo`'s declared argv, which it must not be: this
+#     measures a build and runs no suite.
+#
+#   `ci-hygiene`'s `cache-warm-compile-is-guarded` TRIGGERS on the same string as
+#     its proxy for "a compile that fills a cache", and demands an `if:` guarding
+#     on a `cache-hit` output. Measured: it fired on this file.
+#
+# The second demand is unsatisfiable here, not merely unmet. This job has NO
+# cache step by design, so `steps.<id>.outputs.cache-hit` resolves to empty, the
+# guard admits everything, and naming an id no step carries is that rule's OTHER
+# arm. Its measured harm ("two cache entries carrying the SAME key across five
+# merges... the restore skips saving when the key already exists") is a statement
+# about a restore, and there is no restore here to skip.
+#
+# So the preset was narrowed instead: its primary arm now requires the job to
+# actually carry a cache action before it demands a cache guard. Writing this
+# step in some third spelling to slip between the two rules was the first attempt
+# and it was a dodge — it satisfied neither predicate's intent and traded a
+# false positive for a differently-shaped one.
+#
+# Comparability is unaffected either way, because the pair is compared to ITSELF:
+# both arms run the identical command in the same run, and what the reading has
+# to support is arm-versus-arm, never probe-versus-`cache-warm-linux`.
+#
 # `workflow_dispatch` ONLY. It is not a `pull_request` workflow, so it is not in
 # `$CI_REQUIRED_CHECKS`, `ci-local-parity` does not reach it, and it costs
 # nothing until somebody asks it a question. It answers a property of the WORLD —

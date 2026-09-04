@@ -264,6 +264,34 @@ guarded_on_cache_hit(path, name, index) if {
 	contains(workflow[path].jobs[name].steps[index]["if"], "cache-hit")
 }
 
+# A CACHE MUST BE PRESENT BEFORE A CACHE GUARD CAN BE DEMANDED.
+#
+# `warm_step` reads `--no-run` as its proxy for "a compile that fills a cache",
+# and that proxy is one-sided: `--no-run` says the step compiles and runs
+# nothing, never that a cache is involved. A job that compiles to MEASURE — a
+# runner benchmark, a build-throughput probe — matches identically and has no
+# cache at all, so the demanded guard is unsatisfiable rather than merely
+# missing: `steps.<id>.outputs.cache-hit` resolves to empty with no cache action
+# in the job, the guard then admits everything, and naming an id no step carries
+# is this rule's OTHER arm. Both routes out are worse than the finding.
+#
+# The measured harm this rule exists for needs the cache to exist — "two cache
+# entries carrying the SAME key across five merges... the restore skips saving
+# when the key already exists" is a statement about a restore. With no restore
+# there is nothing to skip and nothing wasted beyond the compile somebody asked
+# for on purpose.
+#
+# THE DIRECTION OF THE MISS, stated because it is real: keyed on `uses`
+# containing `cache`, which is the ecosystem's own spelling and names no
+# consumer. A caching action whose name omits it would now go unjudged — but
+# such a job could not express the guard either, since the guard references a
+# `cache-hit` output only a cache action emits, so the rule was unenforceable
+# there before this conjunct rather than after it.
+job_caches(path, name) if {
+	some step in workflow[path].jobs[name].steps
+	contains(object.get(step, "uses", ""), "cache")
+}
+
 violation contains {
 	"rule": "cache-warm-compile-is-guarded",
 	"verdict": "cache build loose",
@@ -273,6 +301,7 @@ violation contains {
 	some name, _ in workflow[path].jobs
 	some index, _ in workflow[path].jobs[name].steps
 	warm_step(path, name, index)
+	job_caches(path, name)
 	not guarded_on_cache_hit(path, name, index)
 }
 

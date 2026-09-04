@@ -558,6 +558,71 @@ jobs:
     );
 }
 
+/// The primary arm, which had no case of its own until now: a job that caches
+/// AND compiles with `--no-run` behind no guard is the waste the rule exists for.
+///
+/// It is the anti-vacuity mirror for the case below. Narrowing the rule to jobs
+/// that actually carry a cache could have switched the whole arm off, and the two
+/// clean-side cases above would both still have passed — a rule that refuses
+/// nothing satisfies every green assertion ever written about it.
+#[test]
+fn an_unguarded_cache_warm_compile_is_still_refused() {
+    let unguarded = r"
+name: Warm
+on:
+  push:
+concurrency:
+  group: warm
+jobs:
+  warm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Swatinem/rust-cache@v2
+        id: cache
+      - run: cargo test --no-run
+";
+    let root = tree("warm-unguarded", unguarded);
+    assert!(
+        !findings(&root).is_empty(),
+        "a cache-warm compile behind no guard is the measured waste this rule owns"
+    );
+}
+
+/// A compile that MEASURES is not a compile that fills a cache, and the proxy
+/// cannot tell them apart on its own.
+///
+/// `warm_step` reads `--no-run`, which says the step compiles and runs nothing —
+/// never that a cache is involved. A build-throughput probe matches identically
+/// and carries no cache action, so the guard the rule demands is unsatisfiable
+/// rather than missing: with no cache step, `steps.<id>.outputs.cache-hit`
+/// resolves to empty, the guard admits everything, and naming an id no step
+/// carries is this rule's other arm. Both routes out are worse than the finding,
+/// which is why the conjunct is a cache being PRESENT.
+///
+/// Measured on `.github/workflows/arch-probe.yml`: the rule fired on a job whose
+/// only purpose was to time a cold build on two runner architectures.
+#[test]
+fn a_build_only_job_with_no_cache_is_not_asked_to_guard_on_a_cache_hit() {
+    let probe = r"
+name: Probe
+on:
+  workflow_dispatch:
+concurrency:
+  group: probe
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: cargo test --no-run
+";
+    let root = tree("probe-no-cache", probe);
+    assert!(
+        findings(&root).is_empty(),
+        "a job with no cache action has no cache-hit to guard on: {:?}",
+        findings(&root)
+    );
+}
+
 #[test]
 fn a_tree_with_no_workflow_is_not_this_presets_business() {
     let root = common::scratch("ci-hygiene-absent");
