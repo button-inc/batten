@@ -29,7 +29,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{batten, git_in, scratch, stderr, stdout, write};
+use common::{batten, init_repo, scratch, stderr, stdout, write};
 
 /// The repository root, whose committed `batten.toml` is under test.
 fn root() -> PathBuf {
@@ -177,7 +177,10 @@ fn linked_fixture(name: &str, dest: &str, body: &[u8]) -> (PathBuf, PathBuf) {
         ),
     );
     write(&dir, "a.txt", "x\n");
-    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    // `init_repo`, never a `git init` fork: main's fixture-fork ratchet
+    // (`fixture-fork-added`) refuses the fork, and under `CARGO_TARGET_TMPDIR`
+    // this copies the published template at zero forks instead.
+    init_repo(&dir);
     (dir, artifact)
 }
 
@@ -185,11 +188,17 @@ fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(bytes);
+    use std::fmt::Write as _;
     hasher
         .finalize()
         .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+        .fold(String::new(), |mut hex, byte| {
+            // `write!` into one buffer rather than a `format!` per byte, which
+            // `clippy::format_collect` refuses: 32 allocations for a 64-character
+            // string.
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
 }
 
 #[test]
@@ -304,9 +313,7 @@ fn a_relative_link_destination_is_refused_rather_than_resolved() {
 #[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .map(|meta| meta.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+    std::fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
 }
 
 #[cfg(not(unix))]
