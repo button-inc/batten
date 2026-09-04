@@ -159,6 +159,18 @@ adapters := {
 	# rather than folded into `pr_watch` because the two ask about different
 	# objects, and `module-layering` records that placement.
 	"fast_forward",
+	# `main_watch` takes `pr_watch`'s argument verbatim, and takes it for the
+	# same endpoint family: the trunk ref read is a CONDITIONAL forge call —
+	# `If-None-Match`, a `304`, an `X-Poll-Interval` floor — and this crate
+	# carries no HTTP client that resolves a forge credential, so the forge's own
+	# client IS the call (CLOUD-1143).
+	#
+	# It is a row rather than a fold into `pr_watch` because the two ask about
+	# different objects, which is `module-layering`'s reason and is recorded
+	# there. What is NOT duplicated is the response parser: the header block is
+	# read through `pr_watch::parse_response`, so the two arms cannot disagree
+	# about what a `304` or a floor said.
+	"main_watch",
 	"startup",
 }
 

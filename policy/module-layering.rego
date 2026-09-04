@@ -290,6 +290,21 @@ declared_modules := {
 	# forbidden below for `pr_watch`'s reason — it spawns, and a gate declared
 	# `read` must not.
 	"fast_forward",
+	# `main_watch` is the staleness half of a lap's wait, and it is placed beside
+	# `pr_watch` rather than inside it because the two ask about DIFFERENT
+	# OBJECTS: one reads a head's check runs, the other reads the trunk ref. What
+	# they share is the conditional-request machinery, and that is imported —
+	# `parse_response`, `interval_for` and the `Response` shape are `pr_watch`'s,
+	# read here rather than re-derived, which is the single-parser rule
+	# `.claude/rules/policy-modules.md` states for an argv and which holds for a
+	# response header block for the same reason.
+	#
+	# IT DECIDES NOTHING ABOUT THE BRANCH, the same edge `fast_forward` carries
+	# above: it resolves a sha and reports whether it differs from a base handed
+	# in. Whether a lap may continue on that reading is `land`'s. Its `hook` and
+	# `check` edges are forbidden below for `pr_watch`'s reason — it spawns, and
+	# a gate declared `read` must not.
+	"main_watch",
 	# `record` arrived with CLOUD-1265 and this rule named it a ninth time — the
 	# module was written, both tiers were green, and this is what said nobody had
 	# placed it.

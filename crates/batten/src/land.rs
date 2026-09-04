@@ -330,49 +330,50 @@ pub enum Waited {
     Unanswered,
 }
 
-/// Ask both questions until one answers.
+/// Ask both questions concurrently and take whichever answers first.
 ///
-/// # The race, and why this alternates rather than forking
+/// # The race is a race
 ///
-/// The two questions are asked in ONE loop, one after the other, and the first
-/// to answer returns. That is not a weaker form of the concurrent race it
-/// replaces — it is a stronger form of the property that race exists for.
+/// Two arms, each its own conditional poll, run in a [`std::thread::scope`] and
+/// report through one channel; the first message decides the lap. `ci-wait ∥
+/// main-watch` is what the predecessor did and the reason is economic: the
+/// moment `main` advances, the run in flight is already waste — its verdict
+/// cannot be used, the fast-forward bot will refuse, and every remaining second
+/// of that run is billed. Learning that only after the green arm's round trip
+/// costs a lap.
 ///
-/// **The loser's answer is voided by construction here.** Two pollers running
-/// concurrently both produce answers, and voiding the loser's is then something
-/// the caller has to remember to do; alternating means the loser is simply never
-/// asked again once the winner has spoken. A lap physically cannot read both.
+/// **AN EARLIER REVISION OF THIS FUNCTION ALTERNATED THE ARMS IN ONE LOOP AND
+/// ARGUED THAT WAS STRICTLY BETTER. IT WAS NOT.** The argument ran: a scoped join
+/// would hang on the loser and a detached one would keep spending rate limit, so
+/// alternating is the only shape available without a second authority. Both
+/// halves are answered by the shape below rather than by taste. The loser is not
+/// joined-while-blocked: it checks [`std::sync::atomic::AtomicBool`] at its own
+/// interval boundary, which is a bounded wait it was already taking, so the scope
+/// closes without hanging. And it spends nothing after the winner speaks,
+/// because it stops asking — the flag is read before the request, never after.
 ///
-/// It is also the only shape available without a second authority. `pr_watch`'s
-/// own loop polls until ITS question answers, so racing it in a thread would
-/// leave the loser running with nobody able to stop it — a scoped join would
-/// hang on it, and a detached one would keep spending the forge's rate limit
-/// after the lap had moved on.
-///
-/// The cost is one extra round trip per cycle, and the staleness arm is free of
-/// the metered tier entirely: it is ref discovery over the engine's own client,
-/// so it spawns nothing and asks the forge's API for nothing.
+/// The alternating loop also serialised the two round trips, so the staleness
+/// answer was always at least one green-arm round trip late. That is the latency
+/// the race exists to remove.
 ///
 /// # The bound is a COUNT
 ///
-/// `asks` is how many times the pair is asked, never a deadline. A wall clock
-/// would reintroduce the VM-reap gap `mem:workflow/landing-loop` records, and
-/// `clippy.toml`'s timer ban is the mechanism that refuses one in this crate.
-/// The delay between asks is the server's own interval — a derived delay bounded
-/// by a real exit condition, which is the shape `run-shape-guard` admits.
+/// `asks` is how many times each arm asks, never a deadline. A wall clock would
+/// reintroduce the VM-reap gap `mem:workflow/landing-loop` records, and
+/// `clippy.toml`'s timer ban is the mechanism that refuses one in this crate. The
+/// delay between asks is the server's own interval — a derived delay bounded by a
+/// real exit condition, which is the shape `run-shape-guard` admits.
 ///
 /// # Errors
 ///
-/// Only for a stream that will not accept output. **Every failure to reach
-/// either the forge or the remote is a could-not-look**: the arm reports nothing
-/// that cycle and the pair is asked again, because a lap that concluded from an
-/// unreachable forge would decide about the network rather than about the work.
+/// Only for a stream that will not accept output. **Every failure to reach the
+/// forge is a could-not-look**: the arm reports nothing that cycle and asks
+/// again, because a lap that concluded from an unreachable forge would decide
+/// about the network rather than about the work.
 pub fn wait(
     config: &crate::pr_watch::Config,
     roster: &crate::checks_green::Roster,
-    remote: &str,
-    reference: &str,
-    base: &str,
+    trunk: &crate::main_watch::Config,
     asks: u32,
     out: &mut dyn std::io::Write,
 ) -> Result<Waited> {
@@ -381,38 +382,72 @@ pub fn wait(
         "land: waiting on {} — green or stale, whichever answers first",
         config.sha
     )?;
-    let mut poll = crate::pr_watch::Poll::default();
-    for _ in 0..asks {
-        // ARM ONE: is this commit green? The conditional read is `pr_watch`'s,
-        // so the argv, the client and the empty-string-on-failure posture stay
-        // its business and this loop only decides when to ask.
-        let raw = crate::pr_watch::read(config, poll.etag());
-        let interval = poll.absorb(&raw, config.interval);
-        if let Ok(crate::checks_green::Verdict::Green) =
-            crate::checks_green::decide(poll.runs(), roster)
-        {
-            return Ok(Waited::Green {
-                verdict: String::from("green"),
-            });
-        }
 
-        // ARM TWO: has the base moved out from under it? Ref discovery over the
-        // engine's own client — no forge API, no `gh`, no `git`, and nothing
-        // against the metered tier.
-        if let Ok(advertisement) =
-            crate::lease::advertise(remote, crate::lease::Service::UploadPack)
-        {
-            let now = advertisement.head_of(reference);
-            if now != base {
-                return Ok(Waited::Stale {
-                    base: now.to_owned(),
-                });
+    // ONE CHANNEL, NOT TWO RETURN VALUES. The first message IS the verdict, so
+    // the loser's answer is voided by construction rather than by the caller
+    // remembering to drop it — the property the alternating loop was defending,
+    // kept.
+    let (tx, rx) = std::sync::mpsc::channel::<Waited>();
+    let decided = std::sync::atomic::AtomicBool::new(false);
+
+    let waited = std::thread::scope(|scope| {
+        let green = tx.clone();
+        let stop = &decided;
+        drop(scope.spawn(move || {
+            let mut poll = crate::pr_watch::Poll::default();
+            for _ in 0..asks {
+                if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                // The conditional read is `pr_watch`'s, so the argv, the client
+                // and the empty-string-on-failure posture stay its business and
+                // this arm only decides when to ask.
+                let raw = crate::pr_watch::read(config, poll.etag());
+                let interval = poll.absorb(&raw, config.interval);
+                if let Ok(crate::checks_green::Verdict::Green) =
+                    crate::checks_green::decide(poll.runs(), roster)
+                {
+                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    drop(green.send(Waited::Green {
+                        verdict: String::from("green"),
+                    }));
+                    return;
+                }
+                crate::pr_watch::pause(interval);
             }
-        }
+        }));
 
-        crate::pr_watch::pause(interval);
-    }
-    Ok(Waited::Unanswered)
+        let stale = tx.clone();
+        drop(scope.spawn(move || {
+            let mut poll = crate::main_watch::Poll::default();
+            for _ in 0..asks {
+                if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                let raw = crate::main_watch::read(trunk, poll.etag());
+                let interval = poll.absorb(&raw, trunk.interval);
+                if let Some(moved) = poll.moved(&trunk.base) {
+                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    drop(stale.send(Waited::Stale {
+                        base: moved.to_owned(),
+                    }));
+                    return;
+                }
+                // `pr_watch`'s pause deliberately, not a second one: there is one
+                // sleep in this crate and it carries the one `disallowed_methods`
+                // exemption, so a second arm cannot grow a timer of its own.
+                crate::pr_watch::pause(interval);
+            }
+        }));
+
+        // THE LAST LIVE SENDER MUST BE DROPPED OR THE RECV BELOW NEVER RETURNS.
+        // Both arms exhausting `asks` without answering closes their clones; this
+        // one is the outer handle and would keep the channel open forever.
+        drop(tx);
+        rx.recv().ok()
+    });
+
+    Ok(waited.unwrap_or(Waited::Unanswered))
 }
 
 /// Both arms of one wait, from whichever of them answered.
@@ -643,27 +678,38 @@ pub fn verify(root: &Path, branch: &str, command: &[String]) -> Result<Verified>
 /// result is then discarded if the base moved. So the gate's minutes are still
 /// spent where the predecessor could reclaim them; what is saved is the CI matrix
 /// and the fast-forward round trip behind it, which is the metered half. Aborting
-/// early needs a stoppable poller racing a spawn, and `land::wait`'s own header
-/// records why that shape is not available without a second authority: a poller
-/// asked to stop mid-question has nobody to stop it.
+/// early needs a poller that can be stopped mid-wait; [`wait`] now has that shape
+/// (a scoped pair over a stop flag), and applying it to the GATE is a different
+/// problem — the gate is a spawn, not a poll — so CLOUD-423's other half stays
+/// open rather than being claimed here.
+///
+/// # ONE ASK, THROUGH THE CONDITIONAL ENDPOINT
+///
+/// This is [`crate::main_watch`]'s poll asked exactly once, not ref discovery. A
+/// single unconditional ref advertisement is affordable in isolation — that is
+/// what made an earlier revision of this function look fine — but it is the same
+/// question [`wait`] asks in a loop, and answering one question two ways is how
+/// the two readings drift. The first ask carries no validator and costs a full
+/// body; every later lap's does, because the [`crate::main_watch::Poll`] is the
+/// lap's.
 ///
 /// # It fails OPEN, unlike every gate in this module
 ///
-/// A ref read that did not answer is not evidence the base moved, and this is an
-/// ECONOMY rather than a gate: refusing to push because ref discovery hiccuped
-/// would stop a landing to save a matrix, which is the wrong trade in the wrong
+/// A read that did not answer is not evidence the base moved, and this is an
+/// ECONOMY rather than a gate: refusing to push because the forge hiccuped would
+/// stop a landing to save a matrix, which is the wrong trade in the wrong
 /// direction. `None` therefore means "carry on" for both *unmoved* and *could not
 /// look*, and the two are deliberately one reading here.
 #[must_use]
-pub fn stale(root: &Path, remote: &str, reference: &str) -> Option<String> {
+pub fn stale(root: &Path, trunk: &crate::main_watch::Config, reference: &str) -> Option<String> {
     let tracking = tracking_ref(reference);
     // The base this lap actually replayed onto, read from the ref `advance` set
     // rather than passed down through five signatures. Local, so it costs nothing
     // and cannot itself fail to reach anybody.
     let replayed_onto = crate::git::resolve_ref(root, &tracking).ok()??;
-    let advertisement = crate::lease::advertise(remote, crate::lease::Service::UploadPack).ok()?;
-    let now = advertisement.head_of(reference);
-    (now != replayed_onto).then(|| now.to_owned())
+    let mut poll = crate::main_watch::Poll::default();
+    poll.absorb(&crate::main_watch::read(trunk, None), trunk.interval);
+    poll.moved(&replayed_onto).map(ToOwned::to_owned)
 }
 
 /// One step of the lap, named so the table below reads as a table.
@@ -836,20 +882,70 @@ mod lap_tests {
     /// to save a matrix — the wrong trade in the wrong direction, and the one a
     /// fail-closed reading makes by default.
     ///
-    /// Driven over a clone with no remote, which is the could-not-look this
-    /// suite can actually produce: `advertise` cannot reach anybody, and the
-    /// answer must still be "carry on".
+    /// Driven over a path that is not a repository, which is the strongest form
+    /// of could-not-look this suite can produce without a network: `resolve_ref`
+    /// cannot answer and the conditional read reaches no forge.
     #[test]
     fn the_freshness_probe_reads_could_not_look_as_carry_on_rather_than_as_stale() {
-        // A path that is not a repository at all, which is the strongest form of
-        // could-not-look this suite can produce without a network: `resolve_ref`
-        // cannot answer and `advertise` cannot reach anybody.
         let dir = std::env::temp_dir().join("batten-land-stale-no-remote");
+        let trunk = crate::main_watch::Config {
+            repo: String::from("nobody/nothing"),
+            branch: String::from("main"),
+            base: String::new(),
+            interval: 1,
+        };
 
         assert_eq!(
-            super::stale(&dir, "http://127.0.0.1:1/nothing", "refs/heads/main"),
+            super::stale(&dir, &trunk, "refs/heads/main"),
             None,
             "a probe that could not look must not report the base as moved"
+        );
+    }
+
+    /// **The raced wait TERMINATES when neither arm answers, and this case is
+    /// here because the failure it pins is a HANG rather than a wrong verdict.**
+    ///
+    /// Both arms send on clones of one channel and the outer handle stays live
+    /// in this function's frame. Forget to drop it and `recv()` waits on a
+    /// sender that will never send — for ever, inside a `thread::scope` that has
+    /// already joined both arms. No assertion catches that; only the suite not
+    /// coming back does. So the case is written to reach exactly that state:
+    /// `asks: 1`, a forge nothing can reach, so both arms exhaust their count
+    /// and close their clones without answering.
+    ///
+    /// It also pins the direction of an unanswered race. `Unanswered` is a
+    /// could-not-look and never a verdict — a lap that read an unreachable forge
+    /// as "green" would fast-forward on nothing, and one that read it as "stale"
+    /// would burn a lap per network hiccup.
+    #[test]
+    fn a_race_neither_arm_answers_returns_rather_than_waiting_on_a_sender() {
+        let config = crate::pr_watch::Config {
+            sha: String::from("0000000000000000000000000000000000000000"),
+            repo: String::from("nobody/nothing"),
+            interval: 1,
+            progress: None,
+        };
+        let roster = crate::checks_green::Roster {
+            required: vec![String::from("ci")],
+            absent_ok: Vec::new(),
+            answered: vec![String::from("success")],
+            fanin: None,
+        };
+        let trunk = crate::main_watch::Config {
+            repo: String::from("nobody/nothing"),
+            branch: String::from("main"),
+            base: String::from("1111111111111111111111111111111111111111"),
+            interval: 1,
+        };
+
+        let mut out = Vec::new();
+        // `Ok(_)` matched rather than unwrapped: the only `Err` here is a stream
+        // that will not accept output, and a `Vec` always accepts, so a panic
+        // would be reporting the impossible case as the interesting one.
+        assert_eq!(
+            super::wait(&config, &roster, &trunk, 1, &mut out).ok(),
+            Some(super::Waited::Unanswered),
+            "an unreachable forge is a could-not-look, never a verdict about the work"
         );
     }
 

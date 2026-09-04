@@ -71,6 +71,7 @@ pub mod landed;
 /// remote ref, spoken as git smart-HTTP over [`fetch`] (CLOUD-1274).
 pub mod lease;
 pub mod lint;
+pub mod main_watch;
 pub mod markers;
 pub mod mcp;
 pub mod mint;
@@ -5667,12 +5668,11 @@ fn run_land(
             };
             run_land_replay(root, &url, reference, &branch, out)
         }
-        cli::LandCommand::Wait { reference } => {
-            let Some(url) = land_remote(root, err)? else {
-                return Ok(ExitCode::Internal);
-            };
-            run_land_wait(root, &url, reference, &branch, out, err)
-        }
+        // NO REMOTE RESOLVED HERE ANY MORE. The staleness arm asks the FORGE
+        // through its conditional endpoint rather than the git remote, so this
+        // arm stopped being ref-shaped when CLOUD-390's poll landed — and a
+        // resolution nothing reads would refuse a clone that can still answer.
+        cli::LandCommand::Wait { reference } => run_land_wait(root, reference, &branch, out, err),
         cli::LandCommand::Push => {
             let Some(url) = land_remote(root, err)? else {
                 return Ok(ExitCode::Internal);
@@ -5760,7 +5760,7 @@ fn run_land_lap(
                 land::Step::Replay => run_land_replay(root, url, reference, branch, out)?,
                 land::Step::Verify => run_land_verify(root, branch, out, err)?,
                 land::Step::Push => run_land_push(root, url, branch, out)?,
-                land::Step::Wait => run_land_wait(root, url, reference, branch, out, err)?,
+                land::Step::Wait => run_land_wait(root, reference, branch, out, err)?,
                 land::Step::FastForward => run_land_fast_forward(branch, out, err)?,
             };
             match land::progress(step, code) {
@@ -5770,7 +5770,14 @@ fn run_land_lap(
                 // the push a matrix spent to learn what one ref read already
                 // knows. Fails open — see `land::stale`.
                 land::Progress::Proceed if step == land::Step::Verify => {
-                    if let Some(moved) = land::stale(root, url, reference) {
+                    let trunk = trunk_watch(
+                        reference,
+                        "",
+                        &std::env::var("GH_REPO")
+                            .unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned()),
+                        1,
+                    );
+                    if let Some(moved) = land::stale(root, &trunk, reference) {
                         writeln!(
                             out,
                             "land: lap {lap} — {reference} moved to {moved} while the gate ran; lapping before a matrix is spent"
@@ -6060,6 +6067,23 @@ fn run_land_verify(
     }
 }
 
+/// The staleness arm's config, assembled in one place so both readers of it —
+/// the raced wait and the between-gate-and-push probe — cannot disagree about
+/// which ref, which repository or which interval they are asking about.
+///
+/// The branch is the reference's LAST segment, because the endpoint path spells
+/// a ref by short name (`git/ref/heads/main`) where the caller carries a full
+/// one. Same derivation the tracking ref above takes, and deliberately the same
+/// line: two spellings of "which trunk" is how the two arms drift apart.
+fn trunk_watch(reference: &str, base: &str, repo: &str, interval: u64) -> main_watch::Config {
+    main_watch::Config {
+        repo: repo.to_owned(),
+        branch: reference.rsplit('/').next().unwrap_or(reference).to_owned(),
+        base: base.to_owned(),
+        interval,
+    }
+}
+
 /// `batten land wait` (CLOUD-1338): the lap's raced wait, and the record it
 /// leaves for a module to decide over.
 ///
@@ -6080,7 +6104,6 @@ fn run_land_verify(
 /// nothing to tell them apart.
 fn run_land_wait(
     root: &Path,
-    remote: &str,
     reference: &str,
     branch: &str,
     out: &mut dyn Write,
@@ -6139,7 +6162,8 @@ fn run_land_wait(
         .filter(|asks| *asks > 0)
         .unwrap_or(3600);
 
-    let waited = land::wait(&config, &roster, remote, reference, &base, asks, out)?;
+    let trunk = trunk_watch(reference, &base, &config.repo, config.interval);
+    let waited = land::wait(&config, &roster, &trunk, asks, out)?;
     let (answers, code) = match &waited {
         land::Waited::Green { verdict } => (
             land::answers(&sha, Some(verdict.as_str()), None),

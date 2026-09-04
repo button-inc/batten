@@ -384,6 +384,23 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   than guessed: it runs two programs the caller named. "Not yet" never reaches
   the caller — that is the state the loop exists to sit in, and it is the whole
   difference between this verb and `checks green`.
+- `main_watch.rs` — the STALENESS half of a lap's wait: has the trunk moved past
+  the base this branch was replayed onto (CLOUD-390, ported off
+  `mise-tasks/main-watch.sh`)? A CONDITIONAL forge read of
+  `git/ref/heads/<trunk>` — the smallest body that answers the question —
+  carrying the previous `ETag` as `If-None-Match` and honouring
+  `X-Poll-Interval` as a floor. **The floor comparison is NUMERIC**, which is
+  the whole of CLOUD-390: the predecessor compared with `-gt`, integer-only, so
+  a fractional interval read as "no floor asked for", and the first Rust port
+  reproduced it exactly by typing the field `Option<u64>`. Beside `pr_watch.rs`
+  rather than inside it because the two ask about different objects — a head's
+  check runs versus a ref — while sharing its response parser rather than
+  growing a second one. **An earlier revision of `land::wait` answered this arm
+  with `lease::advertise` instead and argued the conditional poll was a
+  regression; it was not.** Conditionality buys the PACE, not the meter — a ref
+  advertisement has no `304`, so it must be slow or wasteful — a git
+  advertisement carries no server-directed backoff at all, and the green arm's
+  `ETag` conditionality is over check-runs and is not shared with this arm.
 - `fast_forward.rs` — asking the bot to land a head, and reading the answer keyed
   to THAT request (CLOUD-1338). Beside `pr_watch.rs` rather than inside it: both
   spawn the forge client and both are read by a lap, but `pr_watch` asks whether a
