@@ -24,6 +24,9 @@ Read on demand, never all of them.
   session; before probing a session API or credential.
 - `mem:github-access` — any GitHub op; before claiming the toolchain or CI
   "can't reach GitHub".
+- `mem:gate-could-not-look` — a gate is green locally and red in CI on the same
+  SHA; before re-running a gate, calling a CI failure a flake, or reading exit 0
+  as a pass.
 - `mem:github-rest-etiquette` — writing a task that calls the GitHub API;
   diagnosing a 403/429/abuse response.
 - `mem:toolchain-and-hooks` — pinning a tool, adding a task, touching `hk.pkl`
