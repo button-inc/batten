@@ -118,6 +118,7 @@ const CANDIDATES: &[&str] = &[
     "red",
     "redirect",
     "refused",
+    "registry",
     "release",
     "remedy",
     "report",

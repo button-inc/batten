@@ -2318,6 +2318,39 @@ impl Fact {
         })
     }
 
+    /// The schema fragment for the worktree registry (CLOUD-1424).
+    ///
+    /// Its own function rather than a [`Fact::git_schema_fragment`] arm, for that
+    /// function's own reason one iteration later: it hit the line ceiling when
+    /// this fact arrived. The seam is the one that function's doc already draws —
+    /// its family answers questions about the repository's HISTORY, and this one
+    /// answers a question about the checkout's own registry, which is neither
+    /// history nor a file.
+    ///
+    /// Takes no `self`: it describes exactly one fact, so a parameter would be a
+    /// value it never reads and an arm nobody can reach.
+    fn worktree_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::GitWorktrees (CLOUD-1424). `linked` is every LINKED worktree registration, ordered by id: `id` is the entry under the common dir's `worktrees/` directory, `present` whether the directory it records still exists, `locked` whether it is deliberately unavailable. There is no path field -- a linked worktree may live anywhere on the machine, so the base is read to decide `present` and dropped, which is non-negotiable rule 4 held at the boundary. An EMPTY `linked` is an answer (the main checkout keeps no registration, so there is genuinely nothing to report); could-not-look is the whole fact being null, and a registration whose own record will not read is dropped rather than reported as a directory that is gone.",
+            "properties": {
+                "linked": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "present": {"type": "boolean"},
+                            "locked": {"type": "boolean"},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
+            },
+            "additionalProperties": false,
+        })
+    }
+
     /// The schema fragment for the git and landing families (CLOUD-880).
     ///
     /// Split out of [`Fact::schema_fragment`] when `Landing` pushed it past the
@@ -2360,25 +2393,7 @@ impl Fact {
                 },
                 "additionalProperties": false,
             }),
-            Fact::GitWorktrees => serde_json::json!({
-                "type": ["object", "null"],
-                "description": "Fact::GitWorktrees (CLOUD-1424). `linked` is every LINKED worktree registration, ordered by id: `id` is the entry under the common dir's `worktrees/` directory, `present` whether the directory it records still exists, `locked` whether it is deliberately unavailable. There is no path field -- a linked worktree may live anywhere on the machine, so the base is read to decide `present` and dropped, which is non-negotiable rule 4 held at the boundary. An EMPTY `linked` is an answer (the main checkout keeps no registration, so there is genuinely nothing to report); could-not-look is the whole fact being null, and a registration whose own record will not read is dropped rather than reported as a directory that is gone.",
-                "properties": {
-                    "linked": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "id": {"type": "string"},
-                                "present": {"type": "boolean"},
-                                "locked": {"type": "boolean"},
-                            },
-                            "additionalProperties": false,
-                        },
-                    },
-                },
-                "additionalProperties": false,
-            }),
+            Fact::GitWorktrees => Self::worktree_schema_fragment(),
             Fact::GitRef => serde_json::json!({
                 "type": ["object", "null"],
                 "description": "Fact::GitRef (CLOUD-907). Declared ref -> the commit it names. A ref that does not resolve is ABSENT from this map rather than present with a null: `origin/main` missing in a shallow clone is not an answer about that ref. Reachability is deliberately not here -- CLOUD-36 decides merged-ness by patch identity, because a rebased landing is invisible to ancestry.",

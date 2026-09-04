@@ -70,7 +70,7 @@ fn config() -> String {
      severity = \"deny\"\n\
      \n\
      [[verdict]]\n\
-     id = \"worktree name absent\"\n\
+     id = \"registry name absent\"\n\
      gloss = \"a worktree registration names a directory that is no longer there\"\n\
      class = \"The registry keeps a row nothing on disk answers for, and it \
      refuses in a later command over a path no reader recognises.\"\n\
@@ -81,7 +81,7 @@ fn config() -> String {
      target = \"git worktree prune\"\n\
      \n\
      [[verdict]]\n\
-     id = \"worktree list unread\"\n\
+     id = \"registry list unread\"\n\
      gloss = \"the worktree registry could not be read, so nothing about it was established\"\n\
      class = \"The row declares the read, so a null fact is the engine having \
      asked and failed rather than nobody having asked.\"\n\
@@ -112,6 +112,7 @@ fn repo(name: &str) -> PathBuf {
 /// registry — and the whole subject here is a registration that outlives its
 /// directory, which is much easier to reason about when the directory was never
 /// part of the tree being judged.
+///
 /// Cleared first, because a sibling is outside what `Fixture` resets and a run
 /// that fails between creating this directory and removing it leaves one behind —
 /// after which every later run of the case fails at `worktree add` with `already

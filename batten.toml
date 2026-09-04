@@ -7735,6 +7735,10 @@ word = "redirect"
 gloss = "a declared per-path remedy row"
 
 [[vocabulary.subject]]
+word = "registry"
+gloss = "a store of records the engine reads rather than owns"
+
+[[vocabulary.subject]]
 word = "release"
 gloss = "a cut release"
 
@@ -7833,10 +7837,6 @@ gloss = "a CI workflow"
 [[vocabulary.subject]]
 word = "workspace"
 gloss = "the cargo workspace"
-
-[[vocabulary.subject]]
-word = "worktree"
-gloss = "a linked worktree's registration under the common dir"
 
 # --- action ---
 [[vocabulary.action]]
@@ -10071,7 +10071,7 @@ kind = "command"
 target = "git cherry"
 
 [[verdict]]
-id = "worktree name absent"
+id = "registry name absent"
 gloss = "a worktree registration names a directory that is no longer there"
 class = """
 `git worktree add` writes a registration under the common dir's `worktrees/` \
@@ -10093,7 +10093,7 @@ target = "git worktree prune"
 # here it could not be read at all, and reporting that as a clean registry is the
 # defect `mem:gate-could-not-look` records.
 [[verdict]]
-id = "worktree list unread"
+id = "registry list unread"
 gloss = "the worktree registry could not be read, so nothing about it was established"
 class = """
 The row declares `git = ["worktrees"]`, so a null fact is not `nobody asked` — \

@@ -54,7 +54,7 @@ rules contains "worktree-registration-live"
 # denying everything is how a guard gets switched off.
 violation contains {
 	"rule": "worktree-registration-live",
-	"verdict": "worktree name absent",
+	"verdict": "registry name absent",
 	# `artifact` rather than `path`, because the registration's id is not a
 	# repository path and the fact deliberately carries no path at all: a linked
 	# worktree may live anywhere on the machine, so its base is read to decide
@@ -93,7 +93,7 @@ violation contains {
 # `not` is false and a repository with only its main checkout stays clean.
 violation contains {
 	"rule": "worktree-registration-live",
-	"verdict": "worktree list unread",
+	"verdict": "registry list unread",
 	"subjects": [{"count": 0}],
 } if {
 	not input.tree["git-worktrees"].linked
@@ -105,7 +105,7 @@ test_a_registration_whose_directory_is_gone_is_refused if {
 		"present": false,
 		"locked": false,
 	}]}}}
-	v.verdict == "worktree name absent"
+	v.verdict == "registry name absent"
 	v.subjects[0].artifact == "mainwt"
 }
 
@@ -141,7 +141,7 @@ test_no_linked_worktrees_is_not_a_finding if {
 
 test_a_registry_that_could_not_be_read_is_refused if {
 	some v in violation with input as {"tree": {"git-worktrees": null}}
-	v.verdict == "worktree list unread"
+	v.verdict == "registry list unread"
 }
 
 # ONE REGISTRATION, ONE FINDING, and the mixed input is what proves the predicate
