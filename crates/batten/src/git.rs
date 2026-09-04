@@ -2570,24 +2570,28 @@ fn without_comments(path: &str, text: &str) -> String {
     let prefix = match path.rsplit_once('.').map(|(_, ext)| ext) {
         // Markdown is prose end to end; there is no non-comment remainder.
         Some("md") => return String::new(),
-        Some("rs") => "//",
-        Some("sh" | "bash" | "bats") => "#",
-        // THE DECLARATION LANGUAGES — policy modules, config, workflow and
-        // pipeline documents. Absent from CLOUD-827's original table, which
-        // named only the languages a consumer writes PROGRAMS in. A declarative
-        // consumer keeps most of its prose here instead, and every one of these
-        // took the fall-through below, so a comment-only change to one read as a
-        // code change and the whole prose-only class could not fire over them.
+        // `pkl` SITS WITH RUST RATHER THAN WITH THE OTHER DECLARATION
+        // LANGUAGES: it is Java-family, and `#` is not a comment marker there at
+        // all. One table for everything that merely looks `#`-ish is how a
+        // remainder silently keeps its real code and drops a commented line.
+        //
+        // The two `//` and the four `#` groups are one arm each because
+        // `clippy::match_same_arms` refuses a table that repeats a body, so the
+        // grouping a reader wants lives in these comments rather than in the
+        // arms.
+        Some("rs" | "pkl") => "//",
+        // The shell family, and THE DECLARATION LANGUAGES beside it — policy
+        // modules, config, pipeline and workflow documents. Only the shell half
+        // was in CLOUD-827's original table, which named the languages a
+        // consumer writes PROGRAMS in. A declarative consumer keeps most of its
+        // prose in the other half, and every one of those took the fall-through
+        // below, so a comment-only change to one read as a code change and the
+        // whole prose-only class could not fire over them.
         //
         // The fall-through's direction is still right for a genuinely unknown
         // extension — it admits rather than blocks, and only blocking is
         // unrecoverable by waiting. What was wrong is calling these unknown.
-        //
-        // `pkl` is `//` and NOT `#`: it is Java-family, and `#` is not a comment
-        // marker there at all. One table for everything `#`-ish is how a
-        // remainder silently keeps its real code.
-        Some("rego" | "toml" | "yml" | "yaml") => "#",
-        Some("pkl") => "//",
+        Some("sh" | "bash" | "bats" | "rego" | "toml" | "yml" | "yaml") => "#",
         // `mise-tasks/` programs carry no extension (CLOUD-865 renamed most to
         // `.sh`, but the pattern stays so a re-added extensionless task is still
         // read). The check is on the DIRECTORY, so it cannot claim a file
@@ -4115,9 +4119,11 @@ mod tests {
     /// fall-through, whose remainder is the whole file, so every prose change to
     /// a policy module, a config document or a workflow read as a code change.
     ///
-    /// Fails by: removing an arm from `without_comments`'s table. Each assertion
-    /// below reddens for exactly the extension whose arm went, which is what
-    /// stops one arm's presence standing in for the others'.
+    /// Fails by: removing an extension token from `without_comments`'s table.
+    /// Each assertion below reddens for exactly the token that went, which is
+    /// what stops one extension's presence standing in for its neighbours' —
+    /// they share two arms, so a per-extension case is the only granularity the
+    /// table itself does not provide.
     #[test]
     fn a_declaration_language_has_its_comments_stripped() {
         for path in ["a/x.rego", "x.toml", "a/x.yml", "a/x.yaml"] {

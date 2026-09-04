@@ -393,8 +393,9 @@ fn an_unresolvable_base_says_nothing_rather_than_refusing() {
 /// three are `#` — a single case would let one arm's presence stand in for the
 /// rest.
 ///
-/// Fails by: removing the matching arm from `without_comments`'s table, which
-/// returns each file's whole text as its remainder and admits the branch.
+/// Fails by: removing the matching extension token from `without_comments`'s
+/// table, which returns that file's whole text as its remainder and admits the
+/// branch.
 #[test]
 fn a_comment_only_change_to_a_declaration_language_is_refused() {
     for (path, before, after) in [
