@@ -98,6 +98,23 @@ fn bench() -> &'static Path {
                  severity = \"warn\"\n",
             )
             .file("policy/shell-write-advisory.rego", &module)
+            // A REPOSITORY, because one case's subject is CLOUD-1133's
+            // ABSOLUTE-path normalisation and that resolves against the
+            // repository root. Without `.git()` the bench is an ordinary
+            // directory, `repo_root` walks up to the real checkout, and an
+            // absolute path under the bench normalises to
+            // `target/tmp/<bench>/mise-tasks/...` — not a governed path, so the
+            // advisory is correctly silent and the case fails for a reason that
+            // has nothing to do with normalisation. Measured: it passed locally
+            // and failed on the runner, which is the same
+            // environment-dependence this bench exists to remove, reintroduced
+            // one layer down.
+            //
+            // It costs nothing here: the bench's config declares the advisory
+            // row and NOTHING else, so giving it a branch cannot wake
+            // `claim-needs-receipt` — that row is not in this rule set.
+            .git()
+            .base_commit()
             .build()
     })
 }
