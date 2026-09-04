@@ -167,13 +167,24 @@ fn linked_fixture(name: &str, dest: &str, body: &[u8]) -> (PathBuf, PathBuf) {
     std::fs::create_dir_all(&dir).expect("the scratch directory exists");
     std::fs::write(&artifact, body).expect("the artifact is written");
     let digest = sha256_hex(body);
+    // TOML LITERAL STRINGS for the two path-bearing fields, and on Windows that
+    // is a correctness requirement rather than a style. A native path is
+    // `D:\a\...`, and a backslash inside a BASIC string is an escape — so
+    // `url = "file://D:\a\..."` is `missing escaped value, expected b, e, f, n,
+    // r, \, ", x, u, U` and the config does not load. Measured on the windows
+    // runner, both link cases, while every unix arm passed.
+    //
+    // Literal rather than escaped: `provision::fetch` strips `file://` and reads
+    // the remainder as a path verbatim, so a native Windows path is what it
+    // wants — doubling the separators would build a path nothing can open, and
+    // rewriting them to `/` would test a spelling no consumer writes.
     write(
         &dir,
         "batten.toml",
         &format!(
             "version = 1\n\n[[provision]]\nname = \"probe\"\nversion = \"1\"\n\
-             url = \"file://{}\"\nsha256 = \"{digest}\"\nunpack = \"none\"\n\
-             binary = \"probe\"\nlink = \"{dest}\"\n",
+             url = 'file://{}'\nsha256 = \"{digest}\"\nunpack = \"none\"\n\
+             binary = \"probe\"\nlink = '{dest}'\n",
             artifact.display()
         ),
     );
