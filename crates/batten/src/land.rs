@@ -819,6 +819,168 @@ pub const fn progress(step: Step, code: crate::exit::ExitCode) -> Progress {
     }
 }
 
+/// Which bound a charge ran into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bound {
+    /// Never won the lease. The fleet is saturated — and this is the ONE
+    /// exhaustion that has spent no CI at all, which is why a caller reports it
+    /// differently: a `land-lock-check` tells a saturated fleet apart from a
+    /// wedged lease, and they look identical from inside the loop.
+    LeaseWaits,
+    /// The fast-forward bot gave no readable answer. Nothing about the branch is
+    /// wrong and `main` has not moved under it.
+    Unknowns,
+    /// CI failed before reaching a verdict, repeatedly. Past this bound it is not
+    /// a flake any more: the provisioning path is broken, and re-running would
+    /// spend jobs to learn the same thing.
+    Transients,
+}
+
+/// What a charge decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Charge {
+    /// Inside the bound; the lap goes round again.
+    Lap,
+    /// The bound is spent.
+    Stop(Bound),
+}
+
+/// A lap's accounting.
+///
+/// # SPEND IS COUNTED, NEVER INFERRED FROM THE ATTEMPT COUNTER
+///
+/// [`Ledger::laps`] and [`Ledger::paid`] look interchangeable and are not, and
+/// the difference was measured rather than reasoned. The inference — "every lap
+/// that bought no CI is refunded, so the lap counter IS the spend" — fails in
+/// both directions.
+///
+/// There are FIVE refund sites, not the three CLOUD-904 named: the two in the
+/// lease wait, bot silence, an absorbed transient, and the admitted-successor
+/// push. And they still miss the ordinary case: a lap where `main` moves while
+/// the gate runs aborts before the ready, buys nothing, and is charged anyway.
+///
+/// Measured on PR #651 while landing the change that fixed it — two laps, both
+/// lost to `main` moving under the gate, the ready never reached, ZERO check-runs
+/// on the head — and the refusal announced "having spent 2 CI matrices". So
+/// `laps` is an attempt counter and nothing more; `paid` is the spend,
+/// incremented at the ONE site that buys one.
+///
+/// # Counts, never clocks
+///
+/// Every bound here is a count. `clippy.toml` bans the sleeps that would let one
+/// become a deadline, and `tests/sleep_ban.rs` holds each `reason` to a named
+/// bound — a wall clock would reintroduce the VM-reap gap
+/// `mem:workflow/landing-loop` records.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Ledger {
+    /// Attempts. Bounded by the caller's lap maximum as a runaway backstop.
+    pub laps: u32,
+    /// CI matrices actually bought.
+    pub paid: u32,
+    /// Passes that never won the lease.
+    pub lease_waits: u32,
+    /// Passes that got no readable answer from the bot.
+    pub unknowns: u32,
+    /// Runs that failed before reaching a verdict.
+    pub transients: u32,
+}
+
+impl Ledger {
+    /// Open a lap.
+    pub const fn attempt(&mut self) {
+        self.laps = self.laps.saturating_add(1);
+    }
+
+    /// A matrix was bought. **The one site that increments this.**
+    pub const fn bought_a_matrix(&mut self) {
+        self.paid = self.paid.saturating_add(1);
+    }
+
+    /// A pass that never won the lease: refund the lap, charge the wait.
+    ///
+    /// The refund is what keeps a saturated fleet from exhausting a budget that
+    /// exists to catch "main moves faster than a lap takes" — and from reporting
+    /// THAT diagnosis, which CLOUD-413 measured being wrong twice over across 24
+    /// laps.
+    pub const fn waited(&mut self, max: u32) -> Charge {
+        self.laps = self.laps.saturating_sub(1);
+        self.lease_waits = self.lease_waits.saturating_add(1);
+        if self.lease_waits > max {
+            Charge::Stop(Bound::LeaseWaits)
+        } else {
+            Charge::Lap
+        }
+    }
+
+    /// A pass the bot gave no readable answer to.
+    ///
+    /// The same shape as [`Ledger::waited`] for the same reason: the pass spent
+    /// nothing. An unknown re-ask laps, and on an unmoved `main` that lap is free
+    /// by construction — the receipt short-circuits on the unchanged HEAD, the
+    /// head already graded so neither re-fire can fire, and a force-push that
+    /// moves nothing emits no event and buys no run.
+    pub const fn unknown(&mut self, max: u32) -> Charge {
+        self.laps = self.laps.saturating_sub(1);
+        self.unknowns = self.unknowns.saturating_add(1);
+        if self.unknowns > max {
+            Charge::Stop(Bound::Unknowns)
+        } else {
+            Charge::Lap
+        }
+    }
+
+    /// A run that failed before reaching a verdict.
+    pub const fn transient(&mut self, max: u32) -> Charge {
+        self.laps = self.laps.saturating_sub(1);
+        self.transients = self.transients.saturating_add(1);
+        if self.transients > max {
+            Charge::Stop(Bound::Transients)
+        } else {
+            Charge::Lap
+        }
+    }
+
+    /// What a refusal may honestly say was spent.
+    #[must_use]
+    pub const fn spent(&self) -> u32 {
+        self.paid
+    }
+}
+
+/// Was this head's CI failure a provisioning transient rather than a verdict?
+///
+/// `records` is one line per failed run, as the non-verdict scanner reported them.
+/// **A run is absorbed only if EVERY record is a non-verdict**: one line naming a
+/// verdict means the branch was judged, and re-running would spend jobs to
+/// re-learn a real refusal.
+///
+/// `None` for could-not-look, and the three causes are deliberately one reading:
+/// no failed runs, a scan that produced nothing, and a scan that answered. A
+/// caller cannot act differently on which, and inventing a distinction would
+/// invite one to.
+#[must_use]
+pub fn absorbed(records: &[String]) -> Option<Vec<String>> {
+    let lines: Vec<&str> = records
+        .iter()
+        .flat_map(|record| record.lines())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    if lines.iter().any(|line| line.starts_with("verdict")) {
+        return None;
+    }
+    Some(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("nonverdict"))
+            .map(|line| (*line).to_owned())
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod lap_tests {
     use super::{Progress, Step, progress};
@@ -1151,5 +1313,121 @@ mod tests {
     #[test]
     fn the_two_arms_carry_different_tokens() {
         assert_ne!(Arm::Green.token(), Arm::Stale.token());
+    }
+
+    /// **SPEND IS COUNTED, NOT INFERRED, and this is the case PR #651 produced.**
+    ///
+    /// Two laps, both lost to `main` moving under the gate, the ready never
+    /// reached, zero check-runs on the head — and the refusal announced "having
+    /// spent 2 CI matrices". The attempt counter is not the spend, and the
+    /// inference that they agree fails in both directions.
+    #[test]
+    fn a_lap_that_bought_nothing_is_not_reported_as_a_spend() {
+        let mut ledger = Ledger::default();
+        ledger.attempt();
+        ledger.attempt();
+        assert_eq!(ledger.laps, 2, "two attempts were made");
+        assert_eq!(
+            ledger.spent(),
+            0,
+            "and neither bought a matrix, so nothing was spent"
+        );
+
+        ledger.attempt();
+        ledger.bought_a_matrix();
+        assert_eq!(ledger.spent(), 1, "the one site that buys one, counted");
+    }
+
+    /// **A pass that spent nothing is refunded, and the refund is the point.**
+    ///
+    /// Without it a saturated fleet exhausts the lap budget — a budget that
+    /// exists to catch "main moves faster than a lap takes" — and then reports
+    /// THAT diagnosis, which CLOUD-413 measured being wrong twice over across 24
+    /// laps.
+    #[test]
+    fn a_pass_that_never_won_the_lease_refunds_its_lap() {
+        let mut ledger = Ledger::default();
+        ledger.attempt();
+        assert_eq!(ledger.waited(3), Charge::Lap);
+        assert_eq!(ledger.laps, 0, "the attempt was refunded");
+        assert_eq!(ledger.lease_waits, 1, "and charged to its own bound");
+    }
+
+    /// The three bounds are separate, and exhausting one names it.
+    ///
+    /// Asserted as the whole set rather than one arm: a version with one shared
+    /// counter satisfies any single case here, and only the three together rule
+    /// it out. The bounds must stay distinct because the refusals differ — a
+    /// saturated fleet has spent no CI at all, which is the one exhaustion a
+    /// caller can honestly describe as costless.
+    #[test]
+    fn each_bound_is_charged_and_named_separately() {
+        let mut ledger = Ledger::default();
+        assert_eq!(ledger.waited(0), Charge::Stop(Bound::LeaseWaits));
+
+        let mut ledger = Ledger::default();
+        assert_eq!(ledger.unknown(0), Charge::Stop(Bound::Unknowns));
+
+        let mut ledger = Ledger::default();
+        assert_eq!(ledger.transient(0), Charge::Stop(Bound::Transients));
+
+        // And a bound not yet reached laps rather than stopping, on each.
+        let mut ledger = Ledger::default();
+        assert_eq!(ledger.waited(1), Charge::Lap);
+        assert_eq!(ledger.unknown(1), Charge::Lap);
+        assert_eq!(ledger.transient(1), Charge::Lap);
+    }
+
+    /// A refund cannot take the attempt counter below zero.
+    ///
+    /// Reachable rather than defensive: a bot-silence refund can fire on a pass
+    /// that never opened a lap, and an underflow there would panic in a loop
+    /// whose whole purpose is to keep running.
+    #[test]
+    fn a_refund_with_no_attempt_to_refund_does_not_underflow() {
+        let mut ledger = Ledger::default();
+        assert_eq!(ledger.unknown(5), Charge::Lap);
+        assert_eq!(ledger.laps, 0);
+    }
+
+    /// **The discriminating pair: every record a non-verdict is absorbed, one
+    /// verdict is not.**
+    ///
+    /// A run that reached a verdict was a judgement on this branch, and
+    /// re-running it would spend jobs to re-learn a real refusal.
+    #[test]
+    fn a_failure_before_any_verdict_is_absorbed_and_one_after_is_not() {
+        let absorbed_runs = absorbed(&[
+            String::from("nonverdict 111 provision\n"),
+            String::from("nonverdict 222 checkout\n"),
+        ]);
+        assert_eq!(
+            absorbed_runs,
+            Some(vec![
+                String::from("nonverdict 111 provision"),
+                String::from("nonverdict 222 checkout"),
+            ]),
+            "neither run reached a verdict, so neither judged the branch"
+        );
+
+        assert_eq!(
+            absorbed(&[
+                String::from("nonverdict 111 provision\n"),
+                String::from("verdict 222 test-failed\n"),
+            ]),
+            None,
+            "ONE verdict means the branch was judged; absorbing the pair would \
+             re-run a real refusal"
+        );
+    }
+
+    /// Could-not-look is one reading, and its three causes are deliberately
+    /// indistinguishable: no failed runs, an empty scan, and a scan that
+    /// answered nothing. No caller can act differently on which.
+    #[test]
+    fn an_empty_scan_is_could_not_look_rather_than_an_absorbed_transient() {
+        assert_eq!(absorbed(&[]), None);
+        assert_eq!(absorbed(&[String::new()]), None);
+        assert_eq!(absorbed(&[String::from("   \n\n")]), None);
     }
 }
