@@ -384,6 +384,26 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   than guessed: it runs two programs the caller named. "Not yet" never reaches
   the caller — that is the state the loop exists to sit in, and it is the whole
   difference between this verb and `checks green`.
+- `fast_forward.rs` — asking the bot to land a head, and reading the answer keyed
+  to THAT request (CLOUD-1338). Beside `pr_watch.rs` rather than inside it: both
+  spawn the forge client and both are read by a lap, but `pr_watch` asks whether a
+  SHA is green and this asks whether the bot answered US. **The join key is the
+  whole correctness argument**: an `issue_comment` run attaches to the DEFAULT
+  BRANCH's tip, so `head_branch` and `head_sha` name trunk on every one of them and
+  no field records which PR asked — measured at ~400 runs in thirty minutes, 243 of
+  them refusals, which makes finding a stranger's inside any lap's window a
+  near-certainty. The comment id comes back from the POST that created it, the
+  workflow mints the same string as its `run-name`, and `display_title` carries it.
+  **Two fences, and the client-side one is the correctness half**: `created>=since`
+  bounds the page server-side so paging terminates, but a query parameter is an
+  optimisation and an endpoint ignoring it would drop the fence silently, so the
+  `created_at >= since` comparison is what holds the line — and what stops an
+  EARLIER lap of this same PR being re-read as this one's verdict. Reaches
+  `pr_watch` for `parse_response` alone, the sanctioned edge onto a parser rather
+  than onto a decider. The conclusion vocabulary is closed and only `failure` is a
+  verdict about the branch; `cancelled`, `timed_out`, `startup_failure` and `stale`
+  are the bot not deciding, and none of them is ever read as "main moved" — that is
+  a fact about a ref and only the staleness arm may assert it.
 - `ci.rs` — the merge contract derived from the host ruleset (CLOUD-54). The HOST
   is the authority; `[ci]` in `batten.toml` is a projection a gate polices, never
   the reverse. Committed rather than fetched per run because a gate that can fail
