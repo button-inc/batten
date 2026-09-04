@@ -1757,6 +1757,24 @@ mod tests {
         assert_eq!(absorbed(&[String::from("   \n\n")]), None);
     }
 
+    /// **THE FIXTURE NAMES ARE GENERIC, and that is rule 1 rather than taste.**
+    ///
+    /// The first draft spelled these as this repository's own workflow paths and
+    /// `document_facts::no_artifact_name_reaches_the_core` refused it: the core
+    /// knows that a run carries a workflow PATH, and WHICH path carries the
+    /// fan-in is the consumer's — declared in its config, never here. A fixture
+    /// naming one puts a consumer's artifact inside `crates/batten`, which a grep
+    /// is supposed to return nothing for.
+    ///
+    /// **AND THE SECOND DRAFT NAMED IT IN THIS COMMENT**, to explain the first —
+    /// which the gate refused again, correctly. The rule is a grep, so prose
+    /// spelling the path is the same hit as code spelling it, and a reader copies
+    /// what an explanation shows them. `.claude/rules/policy-modules.md` records
+    /// the identical shape one domain over.
+    ///
+    /// The predicate treats the path as an opaque token, so a generic name
+    /// exercises it identically — which is the tell that the specific one was
+    /// never carrying anything.
     fn run(id: &str, path: &str) -> Spending {
         Spending {
             id: String::from(id),
@@ -1775,11 +1793,11 @@ mod tests {
     fn the_run_carrying_the_fan_in_is_spared_and_the_rest_are_not() {
         let (doomed, spared) = worthless(
             &[
-                run("1", ".github/workflows/rust.yml"),
-                run("2", ".github/workflows/ci.yml"),
-                run("3", ".github/workflows/test.yml"),
+                run("1", "sibling-a.yml"),
+                run("2", "the-fan-in.yml"),
+                run("3", "sibling-b.yml"),
             ],
-            ".github/workflows/ci.yml",
+            "the-fan-in.yml",
         );
         assert_eq!(spared, 1, "exactly the fan-in's run");
         assert_eq!(
@@ -1797,11 +1815,8 @@ mod tests {
     #[test]
     fn a_fan_in_no_run_carries_spares_nothing_and_still_cancels() {
         let (doomed, spared) = worthless(
-            &[
-                run("1", ".github/workflows/rust.yml"),
-                run("2", ".github/workflows/test.yml"),
-            ],
-            ".github/workflows/absent.yml",
+            &[run("1", "sibling-a.yml"), run("2", "sibling-b.yml")],
+            "no-run-carries-this.yml",
         );
         assert_eq!(spared, 0);
         assert_eq!(doomed.len(), 2, "nothing is spared by accident");
@@ -1816,7 +1831,7 @@ mod tests {
     /// caller's refusal the only safe reading.
     #[test]
     fn an_empty_fan_in_name_matches_no_run() {
-        let (doomed, spared) = worthless(&[run("1", ".github/workflows/ci.yml")], "");
+        let (doomed, spared) = worthless(&[run("1", "the-fan-in.yml")], "");
         assert_eq!(spared, 0);
         assert_eq!(
             doomed.len(),
@@ -1828,7 +1843,7 @@ mod tests {
     /// Nothing in flight is a clean no-op.
     #[test]
     fn nothing_in_flight_cancels_nothing() {
-        let (doomed, spared) = worthless(&[], ".github/workflows/ci.yml");
+        let (doomed, spared) = worthless(&[], "the-fan-in.yml");
         assert!(doomed.is_empty());
         assert_eq!(spared, 0);
     }
