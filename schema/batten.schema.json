@@ -1632,6 +1632,11 @@
           "description": "[`crate::facts::Fact::GitRemote`] — the configured remotes and HEAD's\nupstream. Read from `.git/config`; never over the network.",
           "type": "string",
           "const": "remote"
+        },
+        {
+          "description": "[`crate::facts::Fact::GitWorktrees`] — the linked worktree registrations,\nand whether each one's directory is still there (CLOUD-1424). Tree surface\nonly: it lists the registry and stats each entry.",
+          "type": "string",
+          "const": "worktrees"
         }
       ]
     },

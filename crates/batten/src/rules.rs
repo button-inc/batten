@@ -2683,6 +2683,10 @@ pub enum GitRead {
     /// [`crate::facts::Fact::GitRemote`] — the configured remotes and HEAD's
     /// upstream. Read from `.git/config`; never over the network.
     Remote,
+    /// [`crate::facts::Fact::GitWorktrees`] — the linked worktree registrations,
+    /// and whether each one's directory is still there (CLOUD-1424). Tree surface
+    /// only: it lists the registry and stats each entry.
+    Worktrees,
 }
 
 /// A rule's declared output (CLOUD-851).
@@ -3343,9 +3347,9 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
     },
     ColumnCensus {
         field: "git",
-        // The head/status/remote family. All three are `Surface::Check`, so the
-        // column is tree-only whichever read a row asked for and one fact
-        // answers for it.
+        // The head/status/remote/worktrees family. All four are
+        // `Surface::Check`, so the column is tree-only whichever read a row
+        // asked for and one fact answers for it.
         declares: Declares::Fact(crate::facts::Fact::GitHead, |rule| !rule.git.is_empty()),
     },
     ColumnCensus {
@@ -7550,6 +7554,13 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
             .contains(&GitRead::Remote)
             .then(|| crate::git::remote_fact(root).ok())
             .flatten(),
+        // CLOUD-1424. Guarded on the declaration like the rest: a run whose rows
+        // ask nothing about the registry never opens the common dir's
+        // `worktrees/` directory.
+        worktrees: declared_reads
+            .contains(&GitRead::Worktrees)
+            .then(|| crate::git::worktree_fact(root).ok())
+            .flatten(),
         refs: (!refs.is_empty())
             .then(|| crate::git::ref_facts(root, &refs).ok())
             .flatten(),
@@ -8450,6 +8461,10 @@ pub(crate) fn tree_document(
             crate::facts::Fact::GitHead => serde_json::json!(resolved.git.head),
             crate::facts::Fact::GitStatus => serde_json::json!(resolved.git.status),
             crate::facts::Fact::GitRemote => serde_json::json!(resolved.git.remote),
+            // CLOUD-1424. `null` when nobody declared it AND when the registry
+            // could not be read; an empty `linked` list is the third answer and
+            // means the registry was read and holds nothing.
+            crate::facts::Fact::GitWorktrees => serde_json::json!(resolved.git.worktrees),
             crate::facts::Fact::GitRef => serde_json::json!(resolved.git.refs),
             crate::facts::Fact::GitRange => serde_json::json!(resolved.git.ranges),
             // CLOUD-1187. Identity fields only — the type carries no body, so

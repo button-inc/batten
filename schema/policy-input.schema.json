@@ -247,6 +247,34 @@
             "null"
           ]
         },
+        "git-worktrees": {
+          "additionalProperties": false,
+          "description": "Fact::GitWorktrees (CLOUD-1424). `linked` is every LINKED worktree registration, ordered by id: `id` is the entry under the common dir's `worktrees/` directory, `present` whether the directory it records still exists, `locked` whether it is deliberately unavailable. There is no path field -- a linked worktree may live anywhere on the machine, so the base is read to decide `present` and dropped, which is non-negotiable rule 4 held at the boundary. An EMPTY `linked` is an answer (the main checkout keeps no registration, so there is genuinely nothing to report); could-not-look is the whole fact being null, and a registration whose own record will not read is dropped rather than reported as a directory that is gone.",
+          "properties": {
+            "linked": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "locked": {
+                    "type": "boolean"
+                  },
+                  "present": {
+                    "type": "boolean"
+                  }
+                },
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "invocations": {
           "additionalProperties": {
             "items": {

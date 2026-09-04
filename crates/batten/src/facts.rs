@@ -467,6 +467,20 @@ pub enum Fact {
     /// What this checkout is connected to: its remotes and HEAD's upstream
     /// (CLOUD-907).
     GitRemote,
+    /// What LINKED worktrees this repository has registered, and for each whether
+    /// the directory it records still exists (CLOUD-1424).
+    ///
+    /// A registration outlives the checkout it names, so removing a worktree
+    /// directory without clearing the registry leaves state git keeps and nothing
+    /// on disk answers for. That is not visible where it is created — it surfaces
+    /// later, in an unrelated command that resolves the registry and refuses over
+    /// a path no reader recognises.
+    ///
+    /// Carries an `id`, a `present` and a `locked` per registration, and no path:
+    /// a linked worktree may live anywhere on the machine, and the base is read to
+    /// decide `present` and dropped. Non-negotiable rule 4 at the boundary, and
+    /// the same reason [`Fact::External`] keys by a declared id.
+    GitWorktrees,
     /// A **declared** ref, resolved — and whether HEAD descends from it
     /// (CLOUD-907).
     GitRef,
@@ -1043,6 +1057,27 @@ pub const GIT_STATUS: Class = Class::new(Cost::Read, Surface::Check);
 /// is about what the boundary resolves rather than about what this costs.
 pub const GIT_REMOTE: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::GitWorktrees`] — the linked worktree registrations, and whether each
+/// one's directory is still there.
+///
+/// `read`: a directory listing under the common dir, one small file per entry,
+/// and one `stat` per entry. No walk of any checkout — this asks whether a
+/// recorded directory EXISTS, never what is in it, which is what keeps it in the
+/// same cost class as [`GIT_REMOTE`] rather than [`GIT_STATUS`].
+///
+/// `Surface::Check` because the cost grows with the number of registrations and,
+/// more to the point, because the question is about the checkout's own hygiene.
+/// A mediated call is about somebody else's command; this is about the repository
+/// the gate is standing in.
+///
+/// **An empty list is an ANSWER here, unlike everywhere else in this family**,
+/// and the distinction is one level down rather than absent: the main checkout
+/// keeps no registration, so a repository with no linked worktrees genuinely has
+/// nothing to report. Could-not-look is the whole fact being `None`, and a
+/// registration whose own record will not read is dropped rather than reported as
+/// a directory that is gone.
+pub const GIT_WORKTREES: Class = Class::new(Cost::Read, Surface::Check);
+
 /// [`Fact::GitRef`] — each **declared** ref, resolved to the commit it names.
 ///
 /// `read`, and DECLARATION is what makes that classification true. The
@@ -1400,6 +1435,7 @@ impl Fact {
         Fact::GitHead,
         Fact::GitStatus,
         Fact::GitRemote,
+        Fact::GitWorktrees,
         Fact::GitRef,
         Fact::GitRange,
         Fact::CommitMeta,
@@ -1442,6 +1478,7 @@ impl Fact {
             Fact::GitHead => "git-head",
             Fact::GitStatus => "git-status",
             Fact::GitRemote => "git-remote",
+            Fact::GitWorktrees => "git-worktrees",
             Fact::GitRef => "git-refs",
             Fact::GitRange => "git-ranges",
             Fact::CommitMeta => "commit-meta",
@@ -1492,6 +1529,7 @@ impl Fact {
             Fact::GitHead => GIT_HEAD,
             Fact::GitStatus => GIT_STATUS,
             Fact::GitRemote => GIT_REMOTE,
+            Fact::GitWorktrees => GIT_WORKTREES,
             Fact::GitRef => GIT_REF,
             Fact::GitRange => GIT_RANGE,
             Fact::CommitMeta => COMMIT_META,
@@ -1558,6 +1596,12 @@ impl Fact {
             Fact::GitHead => Some("git-head"),
             Fact::GitStatus => Some("git-status"),
             Fact::GitRemote => Some("git-remote"),
+            // CLOUD-1424. Tree-only, and for `GitStatus`'s reason rather than
+            // `GitHead`'s: the registry is read once and each row's base is
+            // stat'd, so the cost grows with how many linked worktrees exist.
+            // A mediated call has no occasion to ask this either — the question
+            // is about the checkout's own hygiene, which is a gate's subject.
+            Fact::GitWorktrees => Some("git-worktrees"),
             Fact::GitRef => Some("git-refs"),
             Fact::GitRange => Some("git-ranges"),
             // CLOUD-1187. Tree-only like the rest of the family, and for a
@@ -1805,6 +1849,7 @@ impl Fact {
             Fact::GitHead
             | Fact::GitStatus
             | Fact::GitRemote
+            | Fact::GitWorktrees
             | Fact::GitRef
             | Fact::GitRange
             | Fact::CommitMeta
@@ -1962,6 +2007,7 @@ impl Fact {
             | Fact::GitHead
             | Fact::GitStatus
             | Fact::GitRemote
+            | Fact::GitWorktrees
             | Fact::GitRef
             | Fact::GitRange
             | Fact::CommitMeta
@@ -2053,6 +2099,7 @@ impl Fact {
             | Fact::GitHead
             | Fact::GitStatus
             | Fact::GitRemote
+            | Fact::GitWorktrees
             | Fact::GitRef
             | Fact::GitRange
             | Fact::CommitMeta
@@ -2204,6 +2251,7 @@ impl Fact {
             | Fact::GitHead
             | Fact::GitStatus
             | Fact::GitRemote
+            | Fact::GitWorktrees
             | Fact::GitRef
             | Fact::GitRange
             | Fact::CommitMeta
@@ -2309,6 +2357,25 @@ impl Fact {
                 "properties": {
                     "remotes": {"type": "object", "additionalProperties": {"type": "string"}},
                     "upstream": {"type": ["string", "null"]},
+                },
+                "additionalProperties": false,
+            }),
+            Fact::GitWorktrees => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::GitWorktrees (CLOUD-1424). `linked` is every LINKED worktree registration, ordered by id: `id` is the entry under the common dir's `worktrees/` directory, `present` whether the directory it records still exists, `locked` whether it is deliberately unavailable. There is no path field -- a linked worktree may live anywhere on the machine, so the base is read to decide `present` and dropped, which is non-negotiable rule 4 held at the boundary. An EMPTY `linked` is an answer (the main checkout keeps no registration, so there is genuinely nothing to report); could-not-look is the whole fact being null, and a registration whose own record will not read is dropped rather than reported as a directory that is gone.",
+                "properties": {
+                    "linked": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "present": {"type": "boolean"},
+                                "locked": {"type": "boolean"},
+                            },
+                            "additionalProperties": false,
+                        },
+                    },
                 },
                 "additionalProperties": false,
             }),

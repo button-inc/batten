@@ -159,7 +159,19 @@ A **tree**-scoped module (`scope = "tree"`, run by `batten check`) reads
 `input.tree.produced`, `input.tree.records`, `input.tree.landing`, and the git
 family —
 `input.tree.git-head`, `input.tree.git-refs`, `input.tree.git-ranges`,
-`input.tree.git-remote`, `input.tree.git-status`.
+`input.tree.git-remote`, `input.tree.git-status`, `input.tree.git-worktrees`.
+
+**`git-worktrees` is the one whose EMPTY value is an answer, so it is worth the
+sentence the rest of the family does not need** (CLOUD-1424). Everywhere else here
+an empty collection is the could-not-look shape one level down — an unresolvable
+ref is absent from `git-refs`, a range that would not read is absent from
+`git-ranges`. Here the main checkout keeps no registration at all, so `linked: []`
+is a repository that genuinely has no linked worktrees, `null` is the registry
+that could not be read, and a predicate collapsing the two reports clean over a
+checkout it never looked at. Each entry is `{id, present, locked}` and carries no
+path: a linked worktree may live anywhere on the machine, so its base is read to
+decide `present` and dropped at the boundary — rule 4 held in the fact's TYPE, the
+same way `commit-meta` has no body field.
 
 **Eleven of those keys are DECLARED READS whose subject is not the working tree**,
 and grouping them is worth a sentence because each answers a question no walk

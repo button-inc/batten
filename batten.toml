@@ -5113,6 +5113,33 @@ line_sources = ["AGENTS.md", ".claude/rules/toolchain.md"]
 module = "policy/claim-order-is-stated.rego"
 severity = "deny"
 
+# A worktree registration outlives the checkout it names (CLOUD-1424), and until
+# this row nothing in the tree read the registry — so the stranded state was
+# invisible where it was made and refused somewhere else entirely, in a later
+# command, over a path no reader recognises.
+#
+# THE PROSE WAS ALREADY HERE AND THE MECHANISM WAS NOT. `crates/batten/src/
+# semver.rs`'s `baseline_rustdoc` documents the exact failure — removing the
+# scratch stranded a stale entry and the next run refused over a path that was no
+# longer there — with no runnable gate behind it, which non-negotiable rule 2
+# calls half a change. Two live producers keep it a class rather than an incident:
+# `mise.toml`'s baseline scratch clears its detached worktree from a `trap ...
+# EXIT`, which does not fire when the process is killed, and an agent harness
+# kills a foreground command at ~2 minutes.
+#
+# THE FIRST CONSUMER OF THE GIT FACT FAMILY. CLOUD-907 built `git = [...]` and no
+# row had declared one, so `Fact::GitHead` and its siblings were an unexercised
+# projection until now. `git = ["worktrees"]` is what bounds the read: a run whose
+# rows ask nothing about the registry never opens the common dir's `worktrees/`
+# directory, which is what keeps `Cost::Read` honest.
+[[rule]]
+id = "worktree-registration-live"
+kind = "policy"
+scope = "tree"
+git = ["worktrees"]
+module = "policy/worktree-registration.rego"
+severity = "deny"
+
 [[rule]]
 id = "forge-verdict-required"
 kind = "policy"
@@ -7807,6 +7834,10 @@ gloss = "a CI workflow"
 word = "workspace"
 gloss = "the cargo workspace"
 
+[[vocabulary.subject]]
+word = "worktree"
+gloss = "a linked worktree's registration under the common dir"
+
 # --- action ---
 [[vocabulary.action]]
 word = "add"
@@ -10038,6 +10069,44 @@ no longer exists. The failure is silent and in the permissive direction.
 id = "patch run first"
 kind = "command"
 target = "git cherry"
+
+[[verdict]]
+id = "worktree name absent"
+gloss = "a worktree registration names a directory that is no longer there"
+class = """
+`git worktree add` writes a registration under the common dir's `worktrees/` \
+directory and removing the directory does not remove it, so the registry keeps \
+a row nothing on disk answers for. It is silent where it is created and refuses \
+somewhere else — the next command that resolves the registry, over a path no \
+reader recognises. A live extra worktree is legitimate and is not this; a locked \
+one is excluded, since a lock is the recorded statement that the checkout is \
+deliberately unavailable.
+"""
+
+[[verdict.route]]
+id = "patch run first"
+kind = "command"
+target = "git worktree prune"
+
+# The could-not-look half of the same row, and a separate class because the two
+# need different diagnoses. Above, the registry was read and holds a stale entry;
+# here it could not be read at all, and reporting that as a clean registry is the
+# defect `mem:gate-could-not-look` records.
+[[verdict]]
+id = "worktree list unread"
+gloss = "the worktree registry could not be read, so nothing about it was established"
+class = """
+The row declares `git = ["worktrees"]`, so a null fact is not `nobody asked` — \
+the engine asked and could not look. A registry with no linked worktrees is a \
+different answer and reaches the module as an empty list, which this class is \
+deliberately silent over. Establish why the common dir will not read before \
+reading this gate's silence as a clean registry.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/worktree-registration.rego"
 
 [[verdict]]
 id = "commit write missing"

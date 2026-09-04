@@ -6232,7 +6232,13 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             | crate::facts::Fact::State
             // CLOUD-1154: a mediated call has no SHA to ask about, and reading a
             // record set per call is a cost the budget does not have.
-            | crate::facts::Fact::Forge => None,
+            | crate::facts::Fact::Forge
+            // CLOUD-1424. A directory listing plus a file read and a `stat` per
+            // entry — more than the one ref read that puts a fact in the cheap
+            // group below, and bounded by how many worktrees exist rather than by
+            // anything a row declares. Its subject is the checkout's own hygiene,
+            // which is a gate's question and not a question about a command.
+            | crate::facts::Fact::GitWorktrees => None,
             // The other three are cheap enough for this path — one ref read
             // each, under what `Receipts` already spends — and are absent anyway,
             // because NOTHING ON THIS PATH RESOLVES THEM. `facts.rs` classifies

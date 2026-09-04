@@ -3393,6 +3393,56 @@ pub struct RemoteFact {
     pub upstream: Option<String>,
 }
 
+/// One linked worktree's REGISTRATION, as [`crate::facts::Fact::GitWorktrees`]
+/// carries it.
+///
+/// **There is no path field, and the omission is the design rather than an
+/// oversight.** A linked worktree may live anywhere on the machine, so its
+/// recorded base is an absolute path outside the repository — exactly what
+/// [`crate::facts::Fact::External`] keys by a declared id to keep off the policy
+/// input, one family over. [`worktree_fact`] READS the base to decide `present`
+/// and then drops it; what reaches a module is the registration's own name, which
+/// is a pointer in non-negotiable rule 4's sense and names a machine's home
+/// directory in nobody's.
+///
+/// `id` is enough to act on: it is the directory under the common dir's
+/// `worktrees/` that carries the registration, so it is what a reader looks for
+/// and what the one-command remedy clears.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct WorktreeRegistration {
+    /// The registration's own name — the entry under the common dir's
+    /// `worktrees/` directory.
+    pub id: String,
+    /// Whether the directory the registration records still exists.
+    ///
+    /// `false` is the finding this fact exists for: the registration outlives the
+    /// checkout, so it is state git keeps and nothing on disk answers for. What
+    /// makes it worth a fact is where it surfaces — not here, but in the next
+    /// unrelated command that resolves the registry and refuses over a path no
+    /// reader recognises.
+    pub present: bool,
+    /// Whether the registration is locked.
+    ///
+    /// Read so a predicate can EXCLUDE it: a lock is the recorded statement that
+    /// this worktree is deliberately unavailable — git's own documented case is a
+    /// checkout on removable storage — so an absent directory under a lock is an
+    /// answer somebody already gave, not a stranded row.
+    pub locked: bool,
+}
+
+/// [`crate::facts::Fact::GitWorktrees`] — the linked worktree registrations.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct WorktreeFact {
+    /// Every LINKED registration, ordered by `id`.
+    ///
+    /// Linked only, which is git's own boundary rather than a filter: the main
+    /// checkout keeps no registration, so it has nothing here to be absent from.
+    /// An empty list is therefore a real answer — this repository has no linked
+    /// worktrees — and is not the could-not-look shape, which is the whole fact
+    /// being `None`.
+    pub linked: Vec<WorktreeRegistration>,
+}
+
 /// One commit of a [`crate::facts::Fact::GitRange`], as a pointer.
 ///
 /// A sha and a subject, and nothing else. A message body or a diff would put
@@ -3454,6 +3504,10 @@ pub struct GitFacts {
     pub status: Option<StatusFact>,
     /// [`RemoteFact`], if a rule declared `git = ["remote"]`.
     pub remote: Option<RemoteFact>,
+    /// [`WorktreeFact`], if a rule declared `git = ["worktrees"]`. An EMPTY
+    /// `linked` list is an answer — no linked worktrees — where `None` is
+    /// could-not-look, which is the family's standing distinction one level up.
+    pub worktrees: Option<WorktreeFact>,
     /// The declared refs resolved to the commit each names, if any row declared
     /// one. A ref that does not resolve is ABSENT from the map.
     pub refs: Option<BTreeMap<String, String>>,
@@ -3547,6 +3601,51 @@ pub fn remote_fact(dir: &Path) -> Result<RemoteFact> {
         remotes: remotes(dir)?.into_iter().collect(),
         upstream: upstream_of_head(dir)?,
     })
+}
+
+/// Acquire [`WorktreeFact`] — the linked worktree registrations, and for each
+/// whether the directory it records is still there.
+///
+/// **In process, and that is what makes this a fact rather than a reinstated
+/// spawn.** CLOUD-780 dropped this module's worktree listing because it was a
+/// `git worktree list` shell-out gix had no API for, and the standing strategy
+/// there is *gix for everything gix can do; where it cannot, implement LESS*. gix
+/// answers it now, so the listing comes back on the side of that rule rather than
+/// against it: no spawn, and `no_second_git_invoker_exists` stays terminal. What
+/// stays retired is the DESTRUCTIVE half CLOUD-780 priced — this reports, and the
+/// remedy is the reader's to run.
+///
+/// A registration whose own record cannot be read is skipped rather than reported
+/// with `present: false`. Those are two different answers — the directory is gone
+/// versus this run could not tell — and only the first is a finding; collapsing
+/// them would manufacture one out of an unreadable file.
+///
+/// # Errors
+///
+/// Raises when `dir` is not inside a repository, for [`head_fact`]'s reason
+/// (CLOUD-480): a checkout with no linked worktrees and a path that is not a
+/// checkout at all both have an empty list to offer, and only one of them is an
+/// answer.
+pub fn worktree_fact(dir: &Path) -> Result<WorktreeFact> {
+    repo_root(dir)?;
+    let repo = open(dir)?;
+    let mut linked: Vec<WorktreeRegistration> = Vec::new();
+    for proxy in repo.worktrees()? {
+        let id = proxy.id().to_string();
+        // Read, decide, drop — the base never leaves this scope, which is what
+        // `WorktreeRegistration`'s missing path field is enforcing.
+        let Ok(base) = proxy.base() else { continue };
+        linked.push(WorktreeRegistration {
+            id,
+            present: base.is_dir(),
+            locked: proxy.is_locked(),
+        });
+    }
+    // gix orders by the registration's directory path; ordering by the id this
+    // fact actually carries is what makes the projection byte-stable under §6 for
+    // identical repository state.
+    linked.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(WorktreeFact { linked })
 }
 
 /// Acquire the DECLARED refs, skipping every one that does not resolve.
