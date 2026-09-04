@@ -91,6 +91,30 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          # tests/bats — the runner itself, and a submodule. Measured 2026-09-04:
+          # of the 118 names in `$MUTANT_GATES`, 74 carry no `#MUTANT-SUITE` row,
+          # so each resolves to the `tests/<gate>.bats` default and the sweep
+          # spawns the vendored runner for two thirds of the enforced set.
+          #
+          # WITHOUT IT THE SWEEP RUNS AND PROVES NOTHING, which is the shape worth
+          # naming: those 74 answer could-not-look rather than caught, and a sweep
+          # that could not look is indistinguishable from coverage to anyone
+          # reading only the step's name.
+          #
+          # THE ONLY RUN THIS WORKFLOW HAS EVER HAD failed the Sweep step in ZERO
+          # seconds (33357883063, 2026-08-31) while the census beside it passed.
+          # That run executed `mise-tasks/mutant.sh`, whose preflight refused
+          # outright — "tests/bats is missing; run `mise run doctor`". CLOUD-1267
+          # has since ported the task onto `batten mutate`, and that preflight did
+          # not survive the port: the staging path now skips the runner symlink
+          # when the submodule is absent and carries on. So the checkout is the
+          # fix either way, and the failure it prevents is quieter now, not gone.
+          #
+          # This line is transitional. As CLOUD-843 retires those 74 shell
+          # programs onto `crates/batten/tests/*.rs` tiers, each gate resolves to
+          # a cargo suite instead and the submodule stops being reachable from
+          # this job at all.
+          submodules: true
           # `mutant` stages a tracked tree per mutation and compares against the
           # committed bytes, so it needs the work tree rather than history — and
           # it writes nothing, so no credential is persisted.
