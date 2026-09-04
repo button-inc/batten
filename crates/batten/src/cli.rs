@@ -479,6 +479,25 @@ pub enum LandCommand {
     /// resolved rather than typed. A number on argv would let a lap ask one pull
     /// request to land while every other step is looking at another.
     FastForward,
+    /// Drive the whole lap — replay, verify, push, wait, fast-forward — and lap
+    /// again on every refusal that a rebase would clear.
+    ///
+    /// **THE LOOP IS A SUB-VERB RATHER THAN THE BARE NOUN**, on the reason the
+    /// enum's own header gives: a bare `batten land` would have to be widened
+    /// into this shape later, and that is a surface break for a change that adds
+    /// a capability. It is also the honest spelling — the five steps above are
+    /// reachable individually on purpose, and the loop is one more thing you can
+    /// ask for rather than the only thing.
+    ///
+    /// **A CALLER WHO HAND-STEPS THIS BURNS LAPS EVERY GATE PASSES.** The loop
+    /// re-verifies and re-waits per lap because a rebase mints a new SHA and the
+    /// receipts keyed to the old one are gone; stepping it yourself pays that
+    /// cost without the rebase that earns it. Measured on the predecessor, trunk
+    /// advanced 27 commits during one hand-run `verify`.
+    Lap {
+        /// The remote reference this lap lands onto, e.g. `refs/heads/main`.
+        reference: String,
+    },
 }
 
 /// Subcommands of `mutate`.
@@ -1705,6 +1724,9 @@ fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
         ("push", _) => Some(LandCommand::Push),
         ("verify", _) => Some(LandCommand::Verify),
         ("fast-forward", _) => Some(LandCommand::FastForward),
+        ("lap", matches) => Some(LandCommand::Lap {
+            reference: reference_of(matches),
+        }),
         _ => None,
     }
 }

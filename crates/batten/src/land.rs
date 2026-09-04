@@ -627,6 +627,196 @@ pub fn verify(root: &Path, branch: &str, command: &[String]) -> Result<Verified>
     Ok(verified)
 }
 
+/// One step of the lap, named so the table below reads as a table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Step {
+    /// Advance the base and replay this branch onto it.
+    Replay,
+    /// Run the consumer's gate over this head.
+    Verify,
+    /// Push under receive-pack's compare-and-swap.
+    Push,
+    /// Race green against stale and act on whichever answers.
+    Wait,
+    /// Ask the bot to land this head, and read the keyed answer.
+    FastForward,
+}
+
+/// What the lap does once a step has answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Progress {
+    /// Carry on to the next step of this lap.
+    Proceed,
+    /// Lap again. The base moved, or the answer is not in yet.
+    Lap,
+    /// Stop, carrying the step's own code. A human owns this one.
+    Stop,
+    /// The head is on the landing target.
+    Landed,
+}
+
+/// What a lap does with `code` from `step`.
+///
+/// # This is the whole design, as one table
+///
+/// The split is **whether a rebase would clear the refusal**, and nothing else:
+///
+/// * A **conflict** and a **refused gate** stop. Both are decisions a human
+///   owns, and lapping re-runs them against the same commits to reach the same
+///   answer — paying a full gate each time. Lapping OFTEN is what keeps the
+///   conflict small; lapping over one is what makes it pointless.
+/// * A **raced push**, a **stale base**, an **unanswered wait**, and a
+///   **refused or unreadable fast-forward** all lap. Every one means the base
+///   moved or nobody has answered yet, and the next lap's replay is the remedy.
+///
+/// # Why a refused fast-forward laps rather than stopping
+///
+/// It looks like a verdict and is not. The bot refuses when the head stopped
+/// being a direct descendant — which is a fact about the BASE having moved, so
+/// it is staleness wearing a refusal's clothes. Reading it as a stop would halt
+/// a branch whose only problem is that trunk advanced.
+///
+/// The mirror mistake is the one CLOUD-413 measured: every non-success
+/// conclusion was narrated as "main moved" across 24 laps of one landing, and
+/// that diagnosis was wrong twice over — 7 of 8 laps in one run reached green CI,
+/// and several refusals were the rate limit rather than trunk. So the two
+/// READINGS stay apart (only the staleness arm may assert trunk moved) while
+/// their REMEDY is the same lap.
+///
+/// # A step's own usage or internal code is never the lap's
+///
+/// An unconfigured gate is a usage error about this clone, and a forge that
+/// cannot be read is a could-not-look. Neither is a verdict about the branch, so
+/// both stop carrying their own code rather than being laundered into a lap that
+/// would ask the same unanswerable question again.
+/// # Usage always stops, and could-not-look depends on the step
+///
+/// `Usage` is a misconfiguration of this clone — an unnamed gate, an unnamed
+/// workflow — so every step stops on it. Lapping would ask the same
+/// unanswerable question again, which is the CLOUD-235 hang with a tidier
+/// cause.
+///
+/// `Internal` is could-not-look, and it means two different things depending on
+/// who said it. From `replay`, `verify` or `push` it is a clone or a remote this
+/// lap cannot read, and there is nothing to lap toward. From `wait` and
+/// `fast-forward` it is the loop's ORDINARY state — nobody has answered yet —
+/// so it laps, which is the whole reason exit `3` is a first-class outcome on
+/// those two rather than an error.
+#[must_use]
+pub const fn progress(step: Step, code: crate::exit::ExitCode) -> Progress {
+    use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
+    match (step, code) {
+        // Four of the five steps answering cleanly only means the lap may go on;
+        // the fifth is the one that ends it.
+        (Step::Replay | Step::Verify | Step::Push | Step::Wait, Success) => Progress::Proceed,
+        (Step::FastForward, Success) => Progress::Landed,
+
+        // LAPS. A raced push is the first place the base can move under a lap
+        // that had already replayed — receive-pack's CAS is what noticed, and the
+        // next replay is what fixes it. A stale base and an unanswered wait are
+        // the same lap for different reasons, and a refused fast-forward joins
+        // them because the bot refuses on a head that stopped descending, which
+        // is a fact about the base.
+        (Step::Push, Violation) | (Step::Wait | Step::FastForward, Violation | Internal) => {
+            Progress::Lap
+        }
+
+        // STOPS. The replay and the gate both answer about THIS tree, so a
+        // refusal from either is a decision no rebase clears. A push that could
+        // not look reached a remote it cannot read, which is a clone problem
+        // rather than a race. And `Usage` stops everywhere: a gate or a workflow
+        // this clone never named is not a question another lap can answer.
+        (Step::Replay | Step::Verify, Violation | Internal)
+        | (Step::Push, Internal)
+        | (_, Usage) => Progress::Stop,
+    }
+}
+
+#[cfg(test)]
+mod lap_tests {
+    use super::{Progress, Step, progress};
+    use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
+
+    /// **The discriminating claim: a refusal a rebase would clear laps, and one
+    /// it would not stops.**
+    ///
+    /// Asserted as the whole table rather than as two cases, because the design
+    /// is the SPLIT rather than either side of it. A version that lapped on
+    /// everything and a version that stopped on everything both satisfy any
+    /// single case here; only the pairing rules both out.
+    #[test]
+    fn a_refusal_a_rebase_would_clear_laps_and_one_it_would_not_stops() {
+        // Stops: the tree's own answer. Lapping re-runs a gate against the same
+        // commits to reach the same verdict, paying it again each time.
+        assert_eq!(progress(Step::Replay, Violation), Progress::Stop);
+        assert_eq!(progress(Step::Verify, Violation), Progress::Stop);
+
+        // Laps: the base moved, or nobody has answered. The next replay is the
+        // remedy for all three.
+        assert_eq!(progress(Step::Push, Violation), Progress::Lap);
+        assert_eq!(progress(Step::Wait, Violation), Progress::Lap);
+        assert_eq!(progress(Step::FastForward, Violation), Progress::Lap);
+    }
+
+    /// A refused fast-forward is staleness wearing a refusal's clothes.
+    ///
+    /// The bot refuses when the head stopped being a direct descendant, which is
+    /// a fact about the BASE. Stopping on it would halt a branch whose only
+    /// problem is that trunk advanced — and the mirror error, reading every
+    /// non-success as "main moved", is what CLOUD-413 measured going wrong twice
+    /// over across 24 laps. The readings stay apart; the remedy is one lap.
+    #[test]
+    fn a_refused_fast_forward_laps_because_it_is_a_fact_about_the_base() {
+        assert_eq!(progress(Step::FastForward, Violation), Progress::Lap);
+        assert_ne!(progress(Step::FastForward, Violation), Progress::Stop);
+    }
+
+    /// Could-not-look means two different things, and which step said it decides.
+    ///
+    /// From `wait` and `fast-forward` it is the loop's ordinary state — exit `3`
+    /// is first-class on those two. From the other three it is a clone or a
+    /// remote this lap cannot read, and there is nothing to lap toward.
+    #[test]
+    fn could_not_look_laps_only_where_it_means_nobody_has_answered_yet() {
+        assert_eq!(progress(Step::Wait, Internal), Progress::Lap);
+        assert_eq!(progress(Step::FastForward, Internal), Progress::Lap);
+
+        assert_eq!(progress(Step::Replay, Internal), Progress::Stop);
+        assert_eq!(progress(Step::Verify, Internal), Progress::Stop);
+        assert_eq!(progress(Step::Push, Internal), Progress::Stop);
+    }
+
+    /// Anti-vacuity: a misconfiguration stops everywhere, and success never does.
+    ///
+    /// Without the first half, `Usage` would lap and the loop would spend its
+    /// whole count asking a question no lap can answer. Without the second, a
+    /// table that stopped on everything would pass every case above.
+    #[test]
+    fn a_misconfiguration_stops_every_step_and_success_stops_none() {
+        for step in [
+            Step::Replay,
+            Step::Verify,
+            Step::Push,
+            Step::Wait,
+            Step::FastForward,
+        ] {
+            assert_eq!(
+                progress(step, Usage),
+                Progress::Stop,
+                "{step:?} must not lap over a clone it cannot be configured to answer"
+            );
+            assert_ne!(
+                progress(step, Success),
+                Progress::Stop,
+                "{step:?} answering cleanly is never a stop"
+            );
+        }
+        assert_eq!(progress(Step::FastForward, Success), Progress::Landed);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

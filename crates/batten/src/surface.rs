@@ -4459,6 +4459,26 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[],
     },
+    // THE UNION OF EVERY STEP'S EFFECT, which is `write` because the widest of
+    // them is: the lap replays the working tree, pushes, and comments. It is not
+    // `destructive` for the reason `land replay` is not — every write is one a
+    // rebase or a re-push repeats, and nothing here removes history.
+    //
+    // IT TAKES THE REFERENCE AND NOTHING ELSE. Every other input the lap needs is
+    // already resolved somewhere: the branch from HEAD, the remote from
+    // `$LAND_LOCK_REMOTE`, the gate from `$LAND_VERIFY`, the workflow from
+    // `$LAND_WORKFLOW`, the bound from `$LAND_MAX_LAPS`. Adding a flag for any of
+    // them would put a second spelling on the surface beside the one the
+    // individual sub-verbs already read, and the two would drift — which is
+    // `land verify`'s argument, made once per input rather than once.
+    CommandDecl {
+        path: "land lap",
+        id: "land.lap",
+        about: "Drive the whole lap and lap again on any refusal a rebase would clear",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[LAND_REFERENCE],
+    },
 ];
 
 /// Whether `token` is a declared spelling of a flag that consumes the *next*

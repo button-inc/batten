@@ -5678,7 +5678,120 @@ fn run_land(
             };
             run_land_push(root, &url, &branch, out)
         }
+        cli::LandCommand::Lap { reference } => {
+            let Some(url) = land_remote(root, err)? else {
+                return Ok(ExitCode::Internal);
+            };
+            run_land_lap(root, &url, reference, &branch, out, err)
+        }
     }
+}
+
+/// How many laps before the loop gives up, when the caller names none.
+///
+/// TWO, matching the predecessor. It is a RUNAWAY BACKSTOP rather than a budget:
+/// a lap that keeps losing to contention converges, and one losing to a conflict,
+/// a failed gate or red CI will lose again — so the useful number is small enough
+/// that a broken branch stops rather than grinding.
+const LAPS: u32 = 2;
+
+/// Drive the whole lap and lap again on any refusal a rebase would clear.
+///
+/// # Every bound here is a COUNT, and that is load-bearing
+///
+/// `$LAND_MAX_LAPS` counts laps. Nothing in this loop consults a clock, and the
+/// mechanism refusing one is not this doc comment: `clippy.toml` denies both
+/// `std::thread::sleep` and `tokio::time::sleep`, and `tests/sleep_ban.rs` holds
+/// each ban's stated reason to a bound whose name resolves. A deadline would
+/// reintroduce the VM-reap gap the count exists to close, and would land as a
+/// false refusal on a slow bot rather than on a broken branch.
+///
+/// # Which refusals lap and which stop
+///
+/// The split is whether a REBASE would clear it, and it is the whole design:
+///
+/// * **Conflict, or a gate that refused** — stop. Both are decisions a human
+///   owns, and lapping would re-run them against the same tree to reach the same
+///   answer. This is the one step the loop cannot do for you, and lapping OFTEN
+///   is what keeps it small.
+/// * **A raced push, a stale base, an unanswered wait, a refused or unreadable
+///   fast-forward** — lap. Every one of them means the base moved or the answer
+///   is not in yet, and the next lap's rebase is exactly the remedy.
+///
+/// A refusal is the design working rather than a failure: each lap rebases onto a
+/// little more landed work, so conflicts arrive one small resolvable increment at
+/// a time. Batching laps removes no refusal and only makes each one bigger, which
+/// is the inference CLOUD-238 measured an agent making and optimising toward.
+///
+/// # Exits
+///
+/// `0` landed. `2` stopped for a decision — a conflict or a refused gate, which
+/// is a verdict about this repository. `3` the laps ran out with no answer, which
+/// is not a verdict about anything: the branch may be perfectly landable and the
+/// bot merely slow.
+fn run_land_lap(
+    root: &Path,
+    url: &str,
+    reference: &str,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let laps = std::env::var("LAND_MAX_LAPS")
+        .ok()
+        .and_then(|declared| declared.parse::<u32>().ok())
+        .unwrap_or(LAPS);
+    'laps: for lap in 1..=laps {
+        writeln!(out, "land: lap {lap} of {laps}")?;
+        // THE ORDER IS THE LAP, and every step after `replay` is about a head
+        // that descends from the current base. What each ANSWER means is
+        // `land::progress`'s — one table, read here rather than re-derived per
+        // step, so a reader asking "does this lap or stop" has one place to look
+        // and a change to the policy cannot land in four `if`s out of five.
+        for step in [
+            land::Step::Replay,
+            land::Step::Verify,
+            land::Step::Push,
+            land::Step::Wait,
+            land::Step::FastForward,
+        ] {
+            let code = match step {
+                land::Step::Replay => run_land_replay(root, url, reference, branch, out)?,
+                land::Step::Verify => run_land_verify(root, branch, out, err)?,
+                land::Step::Push => run_land_push(root, url, branch, out)?,
+                land::Step::Wait => run_land_wait(root, url, reference, branch, out, err)?,
+                land::Step::FastForward => run_land_fast_forward(branch, out, err)?,
+            };
+            match land::progress(step, code) {
+                land::Progress::Proceed => {}
+                land::Progress::Landed => {
+                    writeln!(out, "land: landed on lap {lap}")?;
+                    return Ok(ExitCode::Success);
+                }
+                land::Progress::Lap => {
+                    writeln!(
+                        out,
+                        "land: lap {lap} — {step:?} says lap; rebasing and retrying"
+                    )?;
+                    continue 'laps;
+                }
+                // CARRYING THE STEP'S OWN CODE rather than a code of the loop's.
+                // A conflict and a refused gate are both `2`, an unnamed gate is
+                // `1`, and an unreadable clone is `3` — the caller reads the same
+                // answer it would have got running that step by hand, which is
+                // what keeps the loop from becoming a second exit vocabulary.
+                land::Progress::Stop => return Ok(code),
+            }
+        }
+    }
+    // NOT A VERDICT ABOUT THE BRANCH. Exhausting the count says the loop stopped
+    // asking, never that the head is unlandable — so `3`, and the caller runs it
+    // again if the laps were lost to contention rather than to a defect.
+    writeln!(
+        err,
+        "::error:: land: {laps} lap(s) bought no landing. A conflict, a failed gate or red CI will lose again — read the lap lines above for how each ended. If every lap lost only to contention, running this again commits up to {laps} more."
+    )?;
+    Ok(ExitCode::Internal)
 }
 
 /// The url of the remote this lap lands against, or `None` having said why.
@@ -5816,11 +5929,7 @@ fn run_land_fast_forward(
                 // prose and never as "main moved" — that is a fact about a ref,
                 // and only the staleness arm may assert it.
                 fast_forward::Answer::Unknown(token) => {
-                    writeln!(
-                        out,
-                        "land: #{} ran and decided nothing ({token})",
-                        ask.pr
-                    )?;
+                    writeln!(out, "land: #{} ran and decided nothing ({token})", ask.pr)?;
                     Ok(ExitCode::Internal)
                 }
             }
@@ -5829,12 +5938,7 @@ fn run_land_fast_forward(
 }
 
 /// `batten land push`: the branch to its own ref, under receive-pack's CAS.
-fn run_land_push(
-    root: &Path,
-    url: &str,
-    branch: &str,
-    out: &mut dyn Write,
-) -> Result<ExitCode> {
+fn run_land_push(root: &Path, url: &str, branch: &str, out: &mut dyn Write) -> Result<ExitCode> {
     match land::push(root, url, branch)? {
         land::Pushed::Landed(head) => {
             writeln!(out, "land: {branch} on the remote now reads {head}")?;

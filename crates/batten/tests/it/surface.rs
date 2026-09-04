@@ -241,14 +241,11 @@ fn committed_pages() -> Vec<(PathBuf, String)> {
             // nothing, and reddens — which is the direction
             // `the_committed_artifacts_are_exactly_the_ones_the_surface_declares`
             // owns, and this must not quietly pass it.
-            let command = declared_commands()
-                .get(&stem)
-                .cloned()
-                .unwrap_or_else(|| {
-                    stem.strip_prefix("batten-")
-                        .map(|rest| rest.replace('-', " "))
-                        .unwrap_or_default()
-                });
+            let command = declared_commands().get(&stem).cloned().unwrap_or_else(|| {
+                stem.strip_prefix("batten-")
+                    .map(|rest| rest.replace('-', " "))
+                    .unwrap_or_default()
+            });
             (path, command)
         })
         .collect();
