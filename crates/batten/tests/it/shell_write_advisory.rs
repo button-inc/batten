@@ -29,7 +29,7 @@
 
 use crate::common;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use common::{Fixture, run_with_stdin_at_real_root, stderr, stdout};
 
@@ -58,6 +58,50 @@ fn bash_payload(command: &str) -> String {
     .to_string()
 }
 
+/// A bench registering ONLY the advisory module, which is where every case that
+/// asks *what the advisory says* is judged.
+///
+/// **THE PREMISE THESE CASES USED TO INHERIT** (CLOUD-1434). They ran at the real
+/// root, and none of them established that nothing ELSE refuses the call first —
+/// yet `claim-needs-receipt` denies any write inside the repository when the
+/// branch carries no claim receipt, and a deny pre-empts the advisory. So the
+/// positives passed only while the SESSION RUNNING THE SUITE happened to hold a
+/// receipt, and the negatives passed *vacuously* under a deny: no advisory
+/// because the call was refused, rather than because the path is ungoverned.
+/// Measured on one checkout, warm binary, one variable — receipt present 10/10,
+/// receipt absent 6/10 — so this was red for any contributor who had not claimed
+/// on the branch they tested from, and red on every runner the moment CLOUD-1422
+/// re-attached HEAD and let the gate key on a branch at all.
+///
+/// It is the correction [`an_advised_and_denied_call_emits_only_the_refusal`]
+/// already made below, one polarity over: that case needed a deny it did not own,
+/// and these need the ABSENCE of one. Owning the premise is the whole change.
+///
+/// The module's bytes are the COMMITTED ones, so the predicate under test is
+/// unchanged. What deliberately does not survive the move is the incidental
+/// "`batten.toml` registers this module" — a different claim, and a registry
+/// assertion's to make rather than four advisory cases'.
+///
+/// Shared and built once: every case wants the identical config, and a fixture
+/// per case would be four directories asserting one thing.
+static BENCH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+fn bench() -> &'static Path {
+    BENCH.get_or_init(|| {
+        let module = std::fs::read_to_string(root().join("policy/shell-write-advisory.rego"))
+            .expect("the advisory module is readable");
+        Fixture::new("swa-advisory-only")
+            .config(
+                "version = 1\n\n\
+                 [[rule]]\nid = \"shell-write-advisory\"\nkind = \"policy\"\n\
+                 scope = \"mediated_call\"\nmodule = \"policy/shell-write-advisory.rego\"\n\
+                 severity = \"warn\"\n",
+            )
+            .file("policy/shell-write-advisory.rego", &module)
+            .build()
+    })
+}
+
 /// Everything the door said, on either stream.
 ///
 /// BOTH, because which one carries the advisory is a property of the event
@@ -67,7 +111,7 @@ fn bash_payload(command: &str) -> String {
 /// delivering, which is the thing this file is here to catch.
 fn reported(payload: &str) -> String {
     let answer =
-        run_with_stdin_at_real_root(&root(), &["hook", "--harness", "claude-code"], payload);
+        run_with_stdin_at_real_root(bench(), &["hook", "--harness", "claude-code"], payload);
     format!("{}{}", stdout(&answer), stderr(&answer))
 }
 
@@ -84,7 +128,7 @@ fn signals(payload: &str) -> bool {
 fn a_write_to_a_governed_shell_path_signals_without_refusing() {
     let payload = write_payload("Write", "mise-tasks/ready-lint.sh");
     let answer =
-        run_with_stdin_at_real_root(&root(), &["hook", "--harness", "exit-code"], &payload);
+        run_with_stdin_at_real_root(bench(), &["hook", "--harness", "exit-code"], &payload);
     assert_eq!(
         answer.status.code(),
         Some(0),
@@ -101,9 +145,9 @@ fn a_write_to_a_governed_shell_path_signals_without_refusing() {
 /// silently — no advisory looks exactly like a clean path.
 #[test]
 fn the_absolute_spelling_the_host_sends_signals_too() {
-    let absolute = root()
+    let absolute = bench()
         .canonicalize()
-        .expect("the repository root resolves")
+        .expect("the bench root resolves")
         .join("mise-tasks/ready-lint.sh")
         .display()
         .to_string();
@@ -285,7 +329,7 @@ fn an_advised_and_denied_call_emits_only_the_refusal() {
 fn an_advised_and_allowed_call_still_speaks() {
     let payload = write_payload("Write", "mise-tasks/ready-lint.sh");
     let answer =
-        run_with_stdin_at_real_root(&root(), &["hook", "--harness", "exit-code"], &payload);
+        run_with_stdin_at_real_root(bench(), &["hook", "--harness", "exit-code"], &payload);
     let reported = format!(
         "{}{}",
         String::from_utf8_lossy(&answer.stdout),
