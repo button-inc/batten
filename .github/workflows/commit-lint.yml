@@ -101,6 +101,34 @@ jobs:
           # none of them pinned here. The other 27 `[tools]` entries were being
           # installed on every PR push to run a commit-subject predicate.
           install_args: rust
+      # A REQUIRED CHECK THAT SPENDS ~340s COLD-BUILDING TO RUN A 758ms LINT
+      # (CLOUD-1408). This workflow declared no `Swatinem/rust-cache` at all, so
+      # its target directory was empty on every run: `commit-lint` depends on
+      # `commit-attribution` and `commit-check`, both `cargo run --quiet -p
+      # batten`, and job 100806281473 measured both at ~341.9s against a lint
+      # body of 758.6ms. Chronic rather than incidental — 468s, 399s, 370s, 297s
+      # across the 2026-09-03 window. CLOUD-812 narrowed this workflow's tool
+      # installs to `rust` and the cargo cache was simply never in anyone's
+      # scope since.
+      #
+      # `ci-`, WHICH IS `cache-warm-linux`'s, and a key of this job's own would
+      # relocate the cost rather than remove it: GitHub scopes a cache read to
+      # the run's own ref plus the base branch, so only an entry written from
+      # `main` is readable by every pull request, and nothing on `main` would
+      # ever write a `commit-lint-` key.
+      #
+      # `save-if: false` IS LOAD-BEARING AND NOT MERELY TIDY. This job builds ONE
+      # binary against a family whose warm entry is the whole workspace plus its
+      # test targets, and it finishes roughly eleven minutes before `ci` does. A
+      # cache entry is immutable once written, so on a fresh key this job would
+      # win the race to populate a shared family with the thinnest of the trees
+      # that read it, and every later reader would rebuild what the warm job had
+      # already paid for. A pure consumer cannot lose that race because it does
+      # not enter it.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci-
+          save-if: false
       - run: mise run commit-lint
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
