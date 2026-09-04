@@ -267,6 +267,78 @@ fn an_unreadable_stream_is_could_not_look_and_never_an_empty_census() {
     }
 }
 
+/// This module's own header, and the bench record that reads it (CLOUD-1439).
+///
+/// **A prose claim about cost is exactly the kind that rots**, and this one did:
+/// the header asserted its own integration binary for its whole life after
+/// CLOUD-1210 removed it, and `RESULTS.md` priced these cases at 21.8% of the
+/// suite from a summed duration under lock contention. Both were read by a later
+/// author and acted on. `.claude/rules/scanning.md`'s own gate
+/// (`scanner_taxonomy.rs`) is the shape borrowed here: assert the prose still
+/// says the thing, so deleting or reverting the correction reddens rather than
+/// going quiet.
+///
+/// It catches **deletion and drift in the prose** and nothing else. Whether the
+/// measurement is right is not a property of the tree, and a case claiming to
+/// decide that would be the model verdict non-negotiable rule 3 forbids.
+/// **The region is the HEADER, not the file, and the first spelling of this case
+/// proved why.** Asserted over the whole source, the deny arm failed on its own
+/// needle and the allow arm passed on its own — a case that reddens because of
+/// its own text and greens because of its own text decides nothing about the
+/// prose it names. So the header is cut out first, and the needles are split the
+/// way `byte_scan` above already splits `Command::new`.
+fn module_header() -> String {
+    include_str!("symbols.rs")
+        .lines()
+        .take_while(|line| line.starts_with("//!"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn the_header_does_not_reclaim_a_binary_the_grouping_removed() {
+    let header = module_header();
+    assert!(
+        !header.is_empty(),
+        "the header region resolved empty, so both arms below would pass over \
+         nothing — the same silent-empty answer this suite exists to refuse"
+    );
+
+    // The retired claim, in the spelling it actually had.
+    let retired = ["Its own integration", " binary"].concat();
+    assert!(
+        !header.contains(retired.as_str()),
+        "the header claims a target CLOUD-1210 removed; these cases are a module \
+         inside `it`"
+    );
+
+    // And the replacement has to name the filter that DOES select them, or the
+    // next reader re-derives the same wrong `-E 'binary(symbols)'`.
+    let filter = ["binary(it) & ", "test(/^symbols::/)"].concat();
+    assert!(
+        header.contains(filter.as_str()),
+        "the header must name the filter that selects this module, since the \
+         obvious one matches nothing"
+    );
+}
+
+/// The bench record's correction, asserted from the suite it is about.
+#[test]
+fn the_bench_record_prices_the_analyser_group_as_one_build() {
+    let record = include_str!("../../../../bench/rust-suites/RESULTS.md");
+
+    assert!(
+        record.contains("sum of per-case durations"),
+        "RESULTS.md must still distinguish a summed duration from a cost, or its \
+         module table reads as a cost table again"
+    );
+    assert!(
+        record.contains("21.8%") && record.contains("artifact"),
+        "the 21.8% must stay named as an artifact beside the figure itself — a \
+         correction elsewhere in the file is one a reader of the table misses"
+    );
+}
+
 /// §5 again, at the parse boundary: an absolute path from the analyser is made
 /// repo-relative, or the fact would vary by checkout location and §6
 /// byte-stability could not hold.
