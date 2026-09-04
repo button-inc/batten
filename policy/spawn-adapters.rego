@@ -152,6 +152,13 @@ adapters := {
 	"judge", "handler", "action", "rules", "semver",
 	"pinned", "perf", "prune", "pr_watch", "mutate", "bot",
 	"lease",
+	# `fast_forward` takes `pr_watch`'s argument rather than `perf`'s: asking the
+	# bot to land a head and reading the answer keyed to that request are network
+	# calls, and this crate carries no HTTP client that resolves a forge
+	# credential — so the forge's own client IS the call (CLOUD-1143). It is here
+	# rather than folded into `pr_watch` because the two ask about different
+	# objects, and `module-layering` records that placement.
+	"fast_forward",
 	"startup",
 }
 

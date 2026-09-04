@@ -43,6 +43,9 @@ pub mod error;
 pub mod exec;
 pub mod exit;
 pub mod facts;
+/// Asking the fast-forward bot to land a head, and reading the answer keyed to
+/// THIS request rather than to a timestamp (CLOUD-1338).
+pub mod fast_forward;
 pub mod fetch;
 pub mod findings;
 pub mod forge;

@@ -272,6 +272,24 @@ declared_modules := {
 	# weaker copy of the predicate living in a workflow. It also reaches `rules`,
 	# for the process ladder every spawning site in this crate shares.
 	"pr_watch",
+	# `fast_forward` arrived with CLOUD-1338's second half and is placed BESIDE
+	# `pr_watch` rather than inside it. Both spawn the forge client and both are
+	# read by a lap, but they ask about different objects: `pr_watch` asks whether
+	# a SHA is green, this asks whether the bot answered THIS request. Folding it
+	# in would have put two subjects behind one module's name.
+	#
+	# It reaches `pr_watch` for `parse_response` ALONE — the `-i` header/body
+	# split — which is the sanctioned edge `mcp -> rules` takes onto `parse_node`:
+	# onto a parser, never onto a decider. A second response splitter here would
+	# be the disagreement class `.claude/rules/policy-modules.md` records for
+	# parsers, and this endpoint's headers are the ones a rate-limit arm reads.
+	#
+	# IT DECIDES NOTHING ABOUT THE BRANCH, which is what keeps it below the lap:
+	# it resolves a conclusion token and hands it back, and whether a lap may
+	# continue on that token is `land`'s. Its `hook` and `check` edges are
+	# forbidden below for `pr_watch`'s reason — it spawns, and a gate declared
+	# `read` must not.
+	"fast_forward",
 	# `record` arrived with CLOUD-1265 and this rule named it a ninth time — the
 	# module was written, both tiers were green, and this is what said nobody had
 	# placed it.
