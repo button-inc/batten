@@ -185,6 +185,34 @@ pub enum Rebase {
     },
 }
 
+/// Remove `reference`, whatever it points at.
+///
+/// **`Any` for the expected value, matching [`set_ref`]'s reasoning**: the only
+/// caller deletes a remote-TRACKING ref, which is this clone's record of what a
+/// remote said rather than a claim anyone races for. The compare-and-swap that
+/// matters is the remote one, and that is [`crate::lease::swap`]'s.
+///
+/// # Errors
+///
+/// A repository that will not open, a name that will not parse, or a backend
+/// that refuses the edit.
+pub fn delete_ref(dir: &Path, reference: &str) -> Result<()> {
+    let repo = crate::git::open_for_write(dir)?;
+    let name: gix::refs::FullName = reference
+        .try_into()
+        .map_err(|err| anyhow::anyhow!("gitwrite: {reference} is not a ref name: {err}"))?;
+    repo.edit_reference(gix::refs::transaction::RefEdit {
+        change: gix::refs::transaction::Change::Delete {
+            expected: gix::refs::transaction::PreviousValue::Any,
+            log: gix::refs::transaction::RefLog::AndReference,
+        },
+        name,
+        deref: false,
+    })
+    .map_err(|err| anyhow::anyhow!("gitwrite: {reference} will not delete: {err}"))?;
+    Ok(())
+}
+
 /// Does `tip` already carry `candidate`?
 ///
 /// # Why it lives here rather than in `git.rs`
