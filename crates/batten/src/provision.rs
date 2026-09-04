@@ -143,6 +143,27 @@ pub struct Provision {
     pub unpack: Unpack,
     /// The binary's name inside the artifact, and the name it is cached under.
     pub binary: String,
+    /// A directory to ALSO place the binary in, so it reaches `PATH`.
+    ///
+    /// Absent for every entry batten invokes itself: the cache path is resolved
+    /// in-process, so `ripsecrets` needs no `PATH` presence and putting it there
+    /// would widen what a consumer's shell can reach for no gain.
+    ///
+    /// **It exists for the bootstrap case, which is the one entry the cache
+    /// cannot serve** (CLOUD-1389). The container's Setup script is one line
+    /// that installs batten, so batten is the first thing present and the task
+    /// runner is not — and every gate in this repository is a `mise run`. A
+    /// runner resolved only inside batten's own process is unreachable from the
+    /// session handlers, the git hooks and the agent's own shell, all of which
+    /// invoke it by bare name.
+    ///
+    /// `~` is expanded, and nothing else is: no `$VAR`, no `$(…)`, no glob. The
+    /// same bound [`crate::startup::Startup::check`] states for argv, and for
+    /// the same reason — an operator reads the declared path and that is the
+    /// path. A relative value is refused at load rather than resolved against
+    /// whatever directory the process happens to be in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
 }
 
 /// One platform's artifact: where it comes from, and what it must hash to.
@@ -455,10 +476,62 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8]) -> Result<()> {
     };
     fs::write(bin_dir.join(&entry.binary), &binary).context("write the provisioned binary")?;
     make_executable(&bin_dir.join(&entry.binary))?;
+    // BEFORE the artifact, so the same crash window that leaves the entry
+    // reading `missing` also leaves the link unmade. A fresh entry whose link
+    // never landed would be the silent half-install this ordering exists to
+    // rule out.
+    if let Some(dest) = entry.link.as_deref() {
+        link_onto_path(entry, dest, &binary)?;
+    }
     // The artifact is written last, so a crash between the two leaves the entry
     // reading `missing` rather than `fresh` — the direction that re-applies.
     fs::write(dir.join(ARTIFACT), bytes).context("write the cached artifact")?;
     Ok(())
+}
+
+/// Place the verified binary in the declared directory as well as the cache.
+///
+/// A COPY rather than a symlink, deliberately. The cache is keyed by version, so
+/// a symlink would make the `PATH` name follow whatever the manifest says today —
+/// which is right for batten's own resolution and wrong here, because the thing on
+/// `PATH` is what a shell, a git hook and a session handler get, and those must
+/// not change under a running session. A copy also survives the cache being
+/// pruned, which [`crate::target`] may do.
+fn link_onto_path(entry: &Provision, dest: &str, binary: &[u8]) -> Result<()> {
+    let dir = expand_home(dest)?;
+    fs::create_dir_all(&dir).context("create the linked binary's directory")?;
+    let path = dir.join(&entry.binary);
+    fs::write(&path, binary).context("write the linked binary")?;
+    make_executable(&path)
+}
+
+/// Expand a leading `~` and refuse anything that is not then absolute.
+///
+/// The refusal is the point rather than a validation flourish: a relative
+/// destination would resolve against whatever directory the process was launched
+/// from, so the same manifest would install to different places depending on the
+/// caller — and a `PATH` entry nobody can predict is worse than none.
+fn expand_home(dest: &str) -> Result<PathBuf> {
+    let expanded = match dest.strip_prefix("~/") {
+        Some(rest) => {
+            let home = std::env::var_os("HOME").ok_or_else(|| {
+                UsageError::raise(format!(
+                    "the link destination {dest} begins with `~` and HOME is unset, \
+                     so there is nothing to expand it against"
+                ))
+            })?;
+            PathBuf::from(home).join(rest)
+        }
+        None => PathBuf::from(dest),
+    };
+    if !expanded.is_absolute() {
+        return Err(UsageError::raise(format!(
+            "the link destination {dest} is relative; name an absolute path or one \
+             under `~/`, so the same manifest installs to the same place whatever \
+             directory the caller ran from"
+        )));
+    }
+    Ok(expanded)
 }
 
 /// Extract the entry named `binary` from a gzipped tarball.
@@ -779,6 +852,7 @@ mod tests {
             platforms: BTreeMap::new(),
             unpack: Unpack::None,
             binary: "tool".to_owned(),
+            link: None,
         }
     }
 

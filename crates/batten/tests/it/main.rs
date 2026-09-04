@@ -212,6 +212,7 @@ mod spawn_ceilings;
 mod spawn_census;
 mod staged_facts;
 mod startup;
+mod startup_bootstrap;
 mod stop_posture;
 mod submodule;
 mod suite_subjects;

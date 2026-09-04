@@ -2279,6 +2279,13 @@
           "description": "The binary's name inside the artifact, and the name it is cached under.",
           "type": "string"
         },
+        "link": {
+          "description": "A directory to ALSO place the binary in, so it reaches `PATH`.\n\nAbsent for every entry batten invokes itself: the cache path is resolved\nin-process, so `ripsecrets` needs no `PATH` presence and putting it there\nwould widen what a consumer's shell can reach for no gain.\n\n**It exists for the bootstrap case, which is the one entry the cache\ncannot serve** (CLOUD-1389). The container's Setup script is one line\nthat installs batten, so batten is the first thing present and the task\nrunner is not — and every gate in this repository is a `mise run`. A\nrunner resolved only inside batten's own process is unreachable from the\nsession handlers, the git hooks and the agent's own shell, all of which\ninvoke it by bare name.\n\n`~` is expanded, and nothing else is: no `$VAR`, no `$(…)`, no glob. The\nsame bound [`crate::startup::Startup::check`] states for argv, and for\nthe same reason — an operator reads the declared path and that is the\npath. A relative value is refused at load rather than resolved against\nwhatever directory the process happens to be in.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "name": {
           "description": "The entry's name, unique within the manifest. Also the first cache path\nsegment, so two tools never share a directory.",
           "type": "string"

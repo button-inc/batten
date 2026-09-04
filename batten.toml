@@ -308,6 +308,70 @@ tasks = "~/.claude/tasks/{session}"
 # only one CI exercises; the darwin rows are for contributors, and there is no
 # `linux-aarch64` row because upstream publishes no such artifact — a machine
 # that needs one gets exit 1 naming the key, never a silent skip.
+# THE BOOTSTRAP ENTRY, and the only one carrying `link` (CLOUD-1389).
+#
+# The hosting platform gives a container one Setup script field. That field held
+# 180 lines — install mise, wrap it to reach GitHub around the agent proxy,
+# provision every mise config, reshim, install host dependencies — and a text
+# field is exactly the thing no gate can read. The replacement is one line that
+# installs batten and asks it to repair its own preconditions.
+#
+# WHAT MADE THAT LINE UNWRITABLE, and what changed. CLOUD-1389's body says setup
+# must provision mise first *because batten is built from the checkout*. CLOUD-65
+# retired that: `install.sh` fetches a release binary, checksum-verified, with no
+# clone and no toolchain. Measured 2026-09-04 in this container —
+# `version=v0.0.140 target=x86_64-unknown-linux-musl verified=sha256`. So batten
+# is present before mise is, and the ordering the whole sequencing rested on is
+# inverted.
+#
+# WHY THE RUNNER IS PINNED HERE RATHER THAN FETCHED BY A SCRIPT. `curl … | sh` is
+# unexpressible as a `[[startup]]` repair by design: `check` and `repair` are argv,
+# with no shell between what an operator wrote and what runs. That bound is the
+# reason this is a provision row and not a one-liner inside a task — and it buys
+# the digest, which `mise.run` does not offer.
+#
+# `link` is what makes the entry different from `ripsecrets` below. Batten resolves
+# a cached binary in-process, so `ripsecrets` needs no PATH presence. Every gate in
+# this repository is a `mise run`, invoked by BARE NAME from the session handlers,
+# the git hooks and the agent's own shell — none of which can see batten's cache.
+#
+# THE PROXY HALF IS ALREADY THE TREE'S AND IS NOT REPEATED HERE. `mise.toml`'s
+# `[env]` block prepends the GitHub API and asset hosts to both spellings of
+# NO_PROXY and sets GH_TOKEN from the session PAT, so every `mise` invocation in
+# this repository reaches third-party release repos around the proxy. Measured
+# 2026-09-04: `mise exec -- env` carries
+# `NO_PROXY=api.github.com,objects.githubusercontent.com,…`. The old script's PATH
+# wrapper existed to do that before `[env]` did, and it is redundant rather than
+# missing — which is why no row here writes one. `policy/egress-fencing.rego`
+# refuses the commit that deletes that block.
+#
+# The version is not tracked automatically and deliberately so: a runner that
+# updated itself under a container would make two sessions on one commit run
+# different toolchains, which is the disagreement `[[provision]]`'s pinning exists
+# to remove. `lock-currency.yml`'s clock is where a bump belongs.
+[[provision]]
+name = "mise"
+version = "2026.9.1"
+unpack = "none"
+binary = "mise"
+link = "~/.local/bin"
+
+[provision.platforms.linux-x86_64]
+url = "https://github.com/jdx/mise/releases/download/v2026.9.1/mise-v2026.9.1-linux-x64"
+sha256 = "c98423c8470d6dc416d9f7036d0646d8ef5ae92ad9186907f8fcc84cbe7db4ea"
+
+[provision.platforms.linux-aarch64]
+url = "https://github.com/jdx/mise/releases/download/v2026.9.1/mise-v2026.9.1-linux-arm64"
+sha256 = "0ef0a778eaa8599f3e90a8a0979c9fc3f79922cafb5fa6d39f366d974da33bba"
+
+[provision.platforms.macos-x86_64]
+url = "https://github.com/jdx/mise/releases/download/v2026.9.1/mise-v2026.9.1-macos-x64"
+sha256 = "0718a2aa14a96545a287f77a172d700247bb2d33016e5cf29fce1a05e45ac47a"
+
+[provision.platforms.macos-aarch64]
+url = "https://github.com/jdx/mise/releases/download/v2026.9.1/mise-v2026.9.1-macos-arm64"
+sha256 = "3cfbe3295dba1a7e43bd02653517a8cc21135ba91f0635b45c98f1ebecc5513f"
+
 [[provision]]
 name = "ripsecrets"
 version = "0.1.11"
@@ -11299,3 +11363,46 @@ id = "hook-surfaces-are-battens"
 gloss = "no non-batten hook registration survives on this host's merged surfaces"
 check = ["batten", "wiring", "reclaim", "--check"]
 repair = ["batten", "wiring", "reclaim", "-y"]
+
+# THE THREE ROWS THAT MAKE THE ONE-LINE SETUP SCRIPT TRUE (CLOUD-1389), in the
+# order a cold container needs them. Everything above this comment is a
+# precondition about batten itself; these are about the toolchain every gate in
+# this repository runs through, and without them
+# `curl … install.sh | sh && batten startup --repair` installs an engine that
+# cannot run a single `mise run`.
+#
+# ORDER IS RUNNING ORDER, as it is for the `session-*` handlers, and here it is
+# load-bearing rather than tidy: rows two and three invoke `mise`, which row one
+# is what puts on PATH. A reader checking that ordering does not have to trust
+# this comment — `crates/batten/tests/it/startup_bootstrap.rs` asserts the row
+# sequence, because a reordering would leave the later rows' `check` reporting
+# could-not-look on a cold container and the whole set would still read green.
+#
+# WHY THESE ARE `[[startup]]` ROWS RATHER THAN MORE `session-*` HANDLERS. The
+# handlers already provision at every session start and they are the right home
+# for the recurring work — but they are `mise run` bodies, so they need the runner
+# that is not there yet. A `[[startup]]` row is the only surface that runs BEFORE
+# a session and can be asked for by name from the platform's one text field.
+#
+# The `session-*` handlers then re-run the same provisioning every session, which
+# is not duplication: `install --yes` and `deps-install` are idempotent, and the
+# recurring pass is what catches a container whose state drifted after setup. The
+# user's own requirement, stated exactly: both at setup and at session start.
+
+[[startup]]
+id = "toolchain-runner-present"
+gloss = "the task runner every gate in this repository is invoked through resolves by bare name"
+check = ["mise", "--version"]
+repair = ["batten", "provision", "apply"]
+
+[[startup]]
+id = "toolchain-is-provisioned"
+gloss = "every tool this repository pins is installed, so a gate does not install one inside its own timeout"
+check = ["mise", "ls", "--current"]
+repair = ["mise", "install", "--yes"]
+
+[[startup]]
+id = "host-dependencies-present"
+gloss = "the host libraries mise does not own are installed, so a determinism test does not fail on a missing PDFium"
+check = ["mise", "run", "deps"]
+repair = ["mise", "run", "deps-install"]
