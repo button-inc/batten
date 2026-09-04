@@ -3001,6 +3001,35 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(race)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (carry)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -3049,6 +3078,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (bot)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(race)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -5822,6 +5855,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(race)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (carry)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -6429,6 +6466,7 @@ _batten__subcmd__claim_commands() {
     local commands; commands=(
 'check:Refuse a pull of an issue somebody is already on, and mint the receipt when it is free' \
 'bot:Attest a bot branch from the lane'\''s public facts, and mint the receipt when they hold' \
+'race:Refuse a claim a different open pull request already carries, judged by head SHA' \
 'carry:Attest that this branch only carries licence rows forward, and mint the receipt when it does' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -6454,6 +6492,7 @@ _batten__subcmd__claim__subcmd__help_commands() {
     local commands; commands=(
 'check:Refuse a pull of an issue somebody is already on, and mint the receipt when it is free' \
 'bot:Attest a bot branch from the lane'\''s public facts, and mint the receipt when they hold' \
+'race:Refuse a claim a different open pull request already carries, judged by head SHA' \
 'carry:Attest that this branch only carries licence rows forward, and mint the receipt when it does' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -6478,6 +6517,16 @@ _batten__subcmd__claim__subcmd__help__subcmd__check_commands() {
 _batten__subcmd__claim__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten claim help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__claim__subcmd__help__subcmd__race_commands] )) ||
+_batten__subcmd__claim__subcmd__help__subcmd__race_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten claim help race commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__claim__subcmd__race_commands] )) ||
+_batten__subcmd__claim__subcmd__race_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten claim race commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__commit_commands] )) ||
 _batten__subcmd__commit_commands() {
@@ -6916,6 +6965,7 @@ _batten__subcmd__help__subcmd__claim_commands() {
     local commands; commands=(
 'check:Refuse a pull of an issue somebody is already on, and mint the receipt when it is free' \
 'bot:Attest a bot branch from the lane'\''s public facts, and mint the receipt when they hold' \
+'race:Refuse a claim a different open pull request already carries, judged by head SHA' \
 'carry:Attest that this branch only carries licence rows forward, and mint the receipt when it does' \
     )
     _describe -t commands 'batten help claim commands' commands "$@"
@@ -6934,6 +6984,11 @@ _batten__subcmd__help__subcmd__claim__subcmd__carry_commands() {
 _batten__subcmd__help__subcmd__claim__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten help claim check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__claim__subcmd__race_commands] )) ||
+_batten__subcmd__help__subcmd__claim__subcmd__race_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help claim race commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__commit_commands] )) ||
 _batten__subcmd__help__subcmd__commit_commands() {

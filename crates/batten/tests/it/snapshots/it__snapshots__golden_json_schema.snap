@@ -567,6 +567,15 @@ expression: stdout_of(&output)
             }
           ],
           "subcommands": []
+        },
+        {
+          "path": "claim race",
+          "id": "claim.race",
+          "about": "Refuse a claim a different open pull request already carries, judged by head SHA",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
         }
       ]
     },
@@ -2675,6 +2684,10 @@ expression: stdout_of(&output)
     {
       "id": "checks.green",
       "path": "checks green"
+    },
+    {
+      "id": "claim.race",
+      "path": "claim race"
     },
     {
       "id": "commit",

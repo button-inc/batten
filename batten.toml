@@ -3680,6 +3680,16 @@ fields = [
   "url",
   "updatedAt",
   "gitBranchName",
+  # READ BY `claim-before-code`, and absent from this list until CLOUD-1422.
+  # That row's `[[rule.captured]]` reads `node = "project"` off a payload this
+  # projection did not carry, so the reduction answered `present = false` for
+  # every capture and the gate was UNSATISFIABLE by construction — two config
+  # rows disagreeing about the payload's own shape.
+  #
+  # It stayed invisible because the refusal needs a capture to exist: an id
+  # nothing captured is absent from the map and reads as could-not-look, so a
+  # clone that has never read that row passes. It fires the moment someone does.
+  "project",
 ]
 
 # CLOSING THE RAW READ PATH, as the gate `connector-not-granted` structurally
