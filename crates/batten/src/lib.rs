@@ -5763,6 +5763,20 @@ fn run_land_lap(
                 land::Step::FastForward => run_land_fast_forward(branch, out, err)?,
             };
             match land::progress(step, code) {
+                // THE ONE PLACE THE LAP ASKS A QUESTION OF ITS OWN, and it asks
+                // it here because this is the last free moment: everything after
+                // `verify` is metered. A base that moved while the gate ran makes
+                // the push a matrix spent to learn what one ref read already
+                // knows. Fails open — see `land::stale`.
+                land::Progress::Proceed if step == land::Step::Verify => {
+                    if let Some(moved) = land::stale(root, url, reference) {
+                        writeln!(
+                            out,
+                            "land: lap {lap} — {reference} moved to {moved} while the gate ran; lapping before a matrix is spent"
+                        )?;
+                        continue 'laps;
+                    }
+                }
                 land::Progress::Proceed => {}
                 land::Progress::Landed => {
                     writeln!(out, "land: landed on lap {lap}")?;
