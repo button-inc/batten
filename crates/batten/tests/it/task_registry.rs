@@ -151,6 +151,23 @@ fn unassignable_pid() -> String {
         .map_or_else(|| "4194304".to_owned(), |max| max.to_string())
 }
 
+/// Whether a record under [`unassignable_pid`] can read as a corpse on this target.
+///
+/// `pid_exists` has **no probe off unix** — its `#[cfg(not(unix))]` arm answers
+/// `true` for every parseable pid, deliberately, so nothing is ever reported dead
+/// and nothing is ever reaped. The helper above compounds it: there is no
+/// `/proc/sys/kernel/pid_max` to read there either, so it falls back to a literal
+/// that is parseable and therefore "alive". A corpse is unreachable off unix, and
+/// every row whose subject is the crashed verdict has to say so.
+///
+/// STATED ONCE, AND AS A `cfg!` RATHER THAN AN ATTRIBUTE. Three rows below need
+/// it and each spelling it inline is how the first two drifted apart. `cfg!`
+/// keeps BOTH arms compiled on every target, so `cross-check` type-checks the
+/// off-unix branch instead of skipping over it unparsed — which matters here more
+/// than usual, since the whole class was discovered by CI compiling what no local
+/// gate runs.
+const CORPSE_IS_DETECTABLE: bool = cfg!(unix);
+
 #[test]
 fn an_empty_registry_and_one_that_was_never_created_both_report_nothing() {
     // Two paths to one answer, and the answer is REAL — "nothing is running" —
@@ -242,14 +259,29 @@ fn a_record_whose_process_is_gone_reports_crashed_and_is_reaped() {
 
     let output = alive(&repo, &["--program-root", &root, "--instant", "1060"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    assert_eq!(
-        stdout(&output),
-        format!("land crashed(verify) {pid} 60s in-phase 60s\n")
-    );
-    assert!(
-        !entries(&repo).join(&pid).exists(),
-        "a genuine corpse is reaped"
-    );
+    if CORPSE_IS_DETECTABLE {
+        assert_eq!(
+            stdout(&output),
+            format!("land crashed(verify) {pid} 60s in-phase 60s\n")
+        );
+        assert!(
+            !entries(&repo).join(&pid).exists(),
+            "a genuine corpse is reaped"
+        );
+    } else {
+        // The same registry state, read where nothing can be reported dead: the
+        // record renders as the running task it claims to be, and — the half that
+        // still matters — it is NOT reaped. A reap off unix would be the read verb
+        // destroying evidence on a verdict it could not reach.
+        assert_eq!(
+            stdout(&output),
+            format!("land verify {pid} 60s in-phase 60s\n")
+        );
+        assert!(
+            entries(&repo).join(&pid).exists(),
+            "nothing is reaped where nothing can be found dead"
+        );
+    }
 }
 
 #[test]
@@ -270,11 +302,40 @@ fn a_live_pid_that_is_not_this_task_reports_crashed_and_is_never_reaped() {
     seed(&repo, "somethingelse", &pid, "verify", 1000);
 
     let output = alive(&repo, &["--program-root", &root, "--instant", "1000"]);
+
+    // THE CORROBORATION IS LINUX'S, AND THE ENGINE ALREADY SAYS SO. `task_alive`
+    // reads `/proc/<pid>/cmdline`, and its own doc records the direction: "an
+    // unevaluable corroboration reads as ALIVE — which also keeps the reader
+    // honest off Linux, where /proc/<pid>/cmdline does not exist at all." So the
+    // mismatch this row is about is only DETECTABLE where that file is, and
+    // asserting the crashed verdict everywhere states the Linux contract as
+    // universal — which the `windows` job read as `somethingelse verify …`.
+    //
+    // Split rather than `cfg`-gated away, for the reason its two siblings in
+    // `task.rs` and `singleton.rs` carry: gating the test leaves the off-Linux
+    // contract unstated, and an unstated contract is the hole that ships the next
+    // one. `target_os` rather than `unix`, because macOS has no `/proc` either —
+    // the discriminator is the FILE, not the family.
+    #[cfg(target_os = "linux")]
     assert!(
         stdout(&output).contains("crashed(verify)"),
         "got: {}",
         stdout(&output)
     );
+    #[cfg(not(target_os = "linux"))]
+    // Unevaluable, so the safe direction wins and the entry reads as the task it
+    // claims to be. That is the deliberate answer rather than a gap: a live task
+    // misreported as dead licenses the duplicate-landing incident the registry
+    // exists to prevent, which is the asymmetry the engine's doc argues.
+    assert!(
+        stdout(&output).contains("somethingelse verify"),
+        "got: {}",
+        stdout(&output)
+    );
+
+    // PLATFORM-INDEPENDENT, and deliberately outside the split: whichever word the
+    // corroboration produces, it never licenses deletion. That is CLOUD-901's
+    // actual invariant, and it must hold on every target.
     assert!(
         entries(&repo).join(&pid).exists(),
         "an unmatched corroboration is a wrong word, never a reason to delete evidence"
@@ -326,7 +387,15 @@ fn a_record_predating_the_phase_stamp_still_renders() {
     .expect("a record with no phase stamp");
 
     let output = alive(&repo, &["--program-root", &root, "--instant", "1060"]);
-    assert_eq!(stdout(&output), format!("land crashed(verify) {pid} 60s\n"));
+    // This row's subject is the RENDERING of a record with no phase stamp, not the
+    // liveness word in front of it — so only that word moves off unix, and the
+    // missing suffix is asserted on both targets.
+    let expected = if CORPSE_IS_DETECTABLE {
+        format!("land crashed(verify) {pid} 60s\n")
+    } else {
+        format!("land verify {pid} 60s\n")
+    };
+    assert_eq!(stdout(&output), expected);
 }
 
 #[test]
@@ -344,8 +413,18 @@ fn n_records_report_one_line_each_in_a_stable_order() {
     let rendered = stdout(&output);
     let lines: Vec<&str> = rendered.lines().collect();
     assert_eq!(lines.len(), 2, "got: {rendered}");
+    // The COUNT is this row's subject — the loop renders every entry rather than
+    // stopping at the first — and it holds on every target. The crashed word is
+    // what carries the second line's identity on unix and is unreachable off it,
+    // so the assertion moves to the phase, which distinguishes the two lines
+    // either way.
+    let second = if CORPSE_IS_DETECTABLE {
+        "crashed(push)"
+    } else {
+        " push "
+    };
     assert!(
-        lines.iter().any(|line| line.contains("crashed(push)")),
+        lines.iter().any(|line| line.contains(second)),
         "got: {lines:?}"
     );
     assert!(

@@ -635,6 +635,24 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 # and must resolve the same major of it. Bump them together or not at all.
 sha2 = "0.11"
 toml = "1.1"
+# A TRANSITIVE crate this workspace does not call, pinned EXACTLY because
+# `cargo-semver-checks` re-resolves rather than reading `Cargo.lock` — so the lock
+# pinning 1.12.0 constrains our builds and not the tool's. Measured 2026-09-03:
+# 1.13.0 fails to compile under the feature set the tool synthesises for its
+# rustdoc build (`cannot find macro `vec`` at tinyvec.rs:710, an `alloc` gate that
+# does not hold under that combination), so the `semver` job graded nothing and
+# refused — correctly, since a run that graded nothing has not answered — on every
+# branch and not merely on the one that found it.
+#
+# A DIRECT EDGE IS THE ONLY THING THAT CONSTRAINS A RE-RESOLVE. `semver.rs`'s own
+# lock fallback cannot reach this: it replaces the BASELINE side, and the failure
+# is on the CURRENT side's rustdoc build. Nothing here calls tinyvec, and that is
+# the point — the edge exists to bound a version, which is why it is `=` rather
+# than a range a bot could widen back into the break.
+#
+# REMOVE IT when tinyvec ships the feature-gate fix; the pin is a workaround for
+# somebody else's defect and should not outlive it.
+tinyvec = "=1.12.0"
 unicode-normalization = "0.1"
 # YAML, for the `[[budget.<name>.embedded]]` entries that count a string carried
 # INSIDE a host's config file rather than a file of its own (CLOUD-298). TOML and

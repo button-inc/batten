@@ -123,6 +123,11 @@ proc-macro2.workspace = true
 syn.workspace = true
 tar.workspace = true
 toml.workspace = true
+# Unused by this crate BY DESIGN — the edge exists only so the exact pin in
+# `[workspace.dependencies]` reaches `cargo-semver-checks`' re-resolve, which
+# ignores `Cargo.lock`. The rationale, the measurement and the removal condition
+# live with the pin rather than here.
+tinyvec.workspace = true
 unicode-normalization.workspace = true
 yaml-rust2.workspace = true
 

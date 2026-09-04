@@ -2809,6 +2809,19 @@ if [ ! -x "$BATTEN_BIN" ]; then
   exit 1
 fi
 export BATTEN_BIN
+# AND ON `PATH`, because the seam above only reaches a program that READS it
+# (CLOUD-425). The suites drive `mise-tasks/` programs as subprocesses, and those
+# call the engine the way a session does — bare `batten` — so exporting the
+# variable alone leaves every such call resolving against whatever the developer
+# happened to install, and against NOTHING on a CI runner. Measured: with the
+# variable exported and the binary absent from `PATH`, `land-lock`'s heartbeat
+# read exit 127 from `batten task read`, took it for "no verdict" per its own
+# contract, and never fired the stall bail — six `tests/land-lock.bats` cases red
+# in CI and green on any machine with an installed binary. That is the
+# stale-artifact class one step over: not the WRONG binary, but no binary at all,
+# reported as a policy answer.
+PATH="$(dirname "$BATTEN_BIN"):$PATH"
+export PATH
 HOOKS_WIRING_DIAGNOSIS="$BATTEN_BIN doctor hooks -J"
 export HOOKS_WIRING_DIAGNOSIS
 # WHICH SUITES, before how many cases (CLOUD-886). The glob that selects this

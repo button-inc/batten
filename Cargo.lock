@@ -170,6 +170,7 @@ dependencies = [
  "syn 3.0.3",
  "tar",
  "tiktoken-rs",
+ "tinyvec",
  "tokio",
  "toml",
  "tower-service",

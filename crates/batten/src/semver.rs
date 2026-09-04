@@ -61,7 +61,31 @@ const VACUOUS: &str = " 0 checks:";
 
 /// What a `cargo update` that could not resolve says. Either spelling is the
 /// registry refusing, never an API verdict.
-const UNRESOLVABLE: [&str; 2] = ["is yanked", "failed to select a version"];
+///
+/// The third is the same class reached one step later, and it was measured
+/// rather than predicted (2026-09-03). The first two are a resolve that could not
+/// pick a version; this is a resolve that picked one and then could not BUILD it
+/// — `tinyvec 1.13.0` published after this repository's lock pinned 1.12.0, and
+/// it does not compile under the feature set the tool synthesises for its rustdoc
+/// build. The tool re-resolves rather than reading `Cargo.lock`, so the lock that
+/// makes every other build reproducible does not reach it, and the BASELINE side
+/// has no manifest of ours to pin: it is whatever `origin/main` carried.
+///
+/// All three are the registry having moved underneath the comparison, which is
+/// the whole reason [`Route::Lock`] exists — the baseline is still buildable from
+/// the lock it committed. Reading only the first two left that fallback
+/// unreachable for the one spelling that actually arrived, and the gate reported
+/// could-not-look where it had a route it never took.
+///
+/// It does not weaken the gate: a genuine compilation failure in this crate
+/// reaches the lock route too and fails there, so the refusal survives. What
+/// changes is that a broken THIRD-PARTY resolve stops being reported as our
+/// unanswerable comparison.
+const UNRESOLVABLE: [&str; 3] = [
+    "is yanked",
+    "failed to select a version",
+    "failed to build rustdoc",
+];
 
 /// Which baseline produced the verdict.
 ///
@@ -542,6 +566,35 @@ mod tests {
         // rather than on the word, or every run reads as vacuous.
         let compared = report("     Checked [   0.2s] 223 checks: 217 pass, 5 fail\n");
         assert!(!compared.graded_nothing());
+    }
+
+    #[test]
+    fn a_baseline_that_will_not_build_takes_the_lock_route() {
+        // Measured 2026-09-03: `tinyvec 1.13.0` published after this repository's
+        // lock pinned 1.12.0 and does not compile under the feature set the tool
+        // synthesises, so the BASELINE side — whatever `origin/main` carried, with
+        // no manifest of ours to pin it — failed to build. The registry had moved
+        // underneath the comparison, which is exactly what the lock route answers,
+        // and reading only the two resolve spellings left it unreachable.
+        let compared = report(
+            "error: running cargo-doc on crate 'batten' failed with output:\n\
+             error: cannot find macro `vec` in this scope\n\
+             error: failed to build rustdoc for crate batten v0.0.139\n",
+        );
+        assert!(compared.unresolvable());
+    }
+
+    #[test]
+    fn an_api_refusal_is_not_a_could_not_look() {
+        // THE ARM THAT MAKES THE ONE ABOVE DISCRIMINATE. A widened tell that also
+        // matched an ordinary verdict would route every refusal to the lock route
+        // and grade the branch twice against a baseline it already judged — the
+        // gate reporting could-not-look over an answer it had.
+        let compared = report(
+            "--- failure enum_variant_added: pub enum variant added ---\n\
+             Checked [   0.2s] 223 checks: 222 pass, 1 fail\n",
+        );
+        assert!(!compared.unresolvable());
     }
 
     #[test]

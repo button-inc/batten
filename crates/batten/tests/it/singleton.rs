@@ -144,10 +144,33 @@ fn a_lock_whose_holder_is_dead_is_reclaimed_rather_than_waited_out() {
     singleton(&repo, &["acquire", "land", &corpse]);
 
     let output = singleton(&repo, &["acquire", "land", "4242", "--recheck-ms", "1"]);
-    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    assert!(stdout(&output).contains("reclaimed"), "{}", stdout(&output));
-    let held = std::fs::read_to_string(lock(&repo, "land").join("pid")).expect("a pid file");
-    assert_eq!(held.trim(), "4242");
+
+    // THE SAME ASYMMETRY `task::tests::a_reclaim_needs_two_sightings_of_one_dead_pid`
+    // WRITES DOWN, reached through the verb rather than through the decision.
+    // `pid_exists` has no probe off unix — its `#[cfg(not(unix))]` arm answers
+    // `true` for every parseable pid, on purpose — so a corpse reads as a live
+    // holder there, nothing is ever reaped, and the acquire REFUSES instead of
+    // reclaiming. Asserting the unix contract as universal is what made this red
+    // on the `windows` job and green on every developer machine; `#[cfg(unix)]`
+    // over the whole test would leave the Windows contract unstated, which is the
+    // hole that let CI find its sibling.
+    #[cfg(unix)]
+    {
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        assert!(stdout(&output).contains("reclaimed"), "{}", stdout(&output));
+        let held = std::fs::read_to_string(lock(&repo, "land").join("pid")).expect("a pid file");
+        assert_eq!(held.trim(), "4242");
+    }
+    #[cfg(not(unix))]
+    {
+        assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+        let held = std::fs::read_to_string(lock(&repo, "land").join("pid")).expect("a pid file");
+        assert_eq!(
+            held.trim(),
+            corpse,
+            "off unix the corpse still holds it — nothing is ever reported dead"
+        );
+    }
 }
 
 #[test]

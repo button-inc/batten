@@ -466,7 +466,19 @@ fn a_declared_repair_takes_nothing_on_an_undeclared_machine() {
 /// on upgrade, the opposite of house-style §8's raise-only promise.
 #[test]
 fn an_undeclared_repair_leaves_the_merged_surface_exactly_as_it_found_it() {
-    let bench = bench("reclaim-undeclared");
+    // A NAME OF ITS OWN, because `bench` is not a read: `scratch` clears and
+    // recreates the directory it is handed, so two cases sharing one name are two
+    // processes racing over one fixture under a parallel runner. This case and
+    // `an_undeclared_environment_reports_and_removes_nothing` both spelled it
+    // `reclaim-undeclared`, and the race produced both of its symptoms — a
+    // `git init` that could not lock a config file another process had just
+    // created, and a verb reading a home whose `.claude` had been swept out from
+    // under it, reporting `0 sibling registration(s) across 0 surface(s) read`
+    // where the fixture had written two.
+    //
+    // It flaked rather than failing, which is what let it land: run alone, or
+    // scheduled apart, either case passes. CI is where the two met.
+    let bench = bench("reclaim-undeclared-repair");
     let before = bench.surface_text();
     let outcome = session_start(&bench);
     assert!(outcome.status.success(), "{}", stderr(&outcome));
