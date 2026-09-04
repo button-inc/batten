@@ -5855,6 +5855,29 @@ line_sources = [".github/workflows/*.yml"]
 module = "policy/ci-cache-declared.rego"
 severity = "deny"
 
+# CLOUD-1431. The two pinned-tool surfaces this repository has, compared for the
+# first time: what `release-artifacts.yml` PUBLISHES against what a
+# `[[provision]]` row can RESOLVE.
+#
+# `lock-complete` already requires every `[tools]` entry to install on three
+# mandatory platforms, linux-arm64 among them — so that surface is gated and
+# CLOUD-1416 was right to read it as proven. `[[provision]]` carries no
+# platform-completeness requirement at all and holds exactly one entry, which is
+# why the asymmetry went unnoticed until an arm64 runner met it as
+# `provision ripsecrets: no artifact for linux-aarch64`.
+#
+# `sources` names both documents and no `line_sources`: the predicate reads
+# structure — a matrix's `target` values and a platform table's keys — never a
+# line, so declaring a line surface would acquire bytes nothing decides over.
+[[rule]]
+id = "release-provision-parity"
+kind = "policy"
+scope = "tree"
+sources = [".github/workflows/release-artifacts.yml", "batten.toml"]
+module = "policy/release-provision-parity.rego"
+severity = "deny"
+no_fix_reason = "a platform a provisioned tool cannot reach is not fixable in this tree: either the upstream artifact exists and the row should pin it, or it does not and the gap is declared with its consequence — and which of the two is a supply-chain decision, not a rewrite"
+
 [[rule]]
 id = "bats-invocation"
 kind = "policy"
@@ -9172,6 +9195,26 @@ does not know what a caller passes. This class covers the second direction.
 id = "workflow read first"
 kind = "document"
 target = ".github/workflows/ci.yml"
+
+[[verdict]]
+id = "release cover partial"
+gloss = "a release target this repository publishes names a platform a provisioned tool cannot resolve"
+class = """
+Two pinned-tool surfaces exist and only one is gated. `lock-complete` holds every \
+`[tools]` entry to three mandatory platforms; `[[provision]]` carries no such \
+requirement, so a release target can be added — or a tool provisioned — for a \
+platform whose artifact nobody pinned, and the consequence arrives on a \
+consumer's machine as `no artifact for <key>` rather than on the change that \
+caused it. Measured: three arm64 targets published against a table pinning one \
+Linux platform, and `x86_64-pc-windows-gnu` in the same state for its whole life \
+with no runner to reveal it. The runtime is already fail-closed and loud, which \
+is right — this class is about deciding the pairing at authoring time instead.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
 
 [[verdict]]
 id = "workflow read unread"
