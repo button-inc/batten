@@ -116,4 +116,4 @@ to it pays.
 | 0.1 | 0.0% | `tests/evaluator-io-check.bats` |
 | 0.1 | 0.0% | `tests/darwin-link.bats` |
 | 0.1 | 0.0% | `tests/cross-check.bats` |
-| 0.0 | 0.0% | `tests/zizmor-split.bats` |
+| 0.1 | 0.0% | `tests/zizmor-split.bats` |
