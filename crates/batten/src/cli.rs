@@ -470,6 +470,15 @@ pub enum LandCommand {
     /// A flag would put a second spelling of one name on the surface, and the
     /// two would drift.
     Verify,
+    /// Ask the fast-forward bot to land this head, and read the answer keyed to
+    /// that request.
+    ///
+    /// NO POSITIONAL, for `verify`'s reason one step further out: the pull
+    /// request is a fact about this branch that the forge already holds, and the
+    /// workflow whose runs carry the verdict is the CONSUMER's — so both are
+    /// resolved rather than typed. A number on argv would let a lap ask one pull
+    /// request to land while every other step is looking at another.
+    FastForward,
 }
 
 /// Subcommands of `mutate`.
@@ -1695,6 +1704,7 @@ fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
         }),
         ("push", _) => Some(LandCommand::Push),
         ("verify", _) => Some(LandCommand::Verify),
+        ("fast-forward", _) => Some(LandCommand::FastForward),
         _ => None,
     }
 }

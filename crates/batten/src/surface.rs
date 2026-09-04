@@ -4440,6 +4440,25 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[],
     },
+    // `write`, and the write is REMOTE — a comment on somebody else's pull
+    // request — which puts it beside `land push` rather than beside the record
+    // writers above. It is not `destructive`: a comment adds, and the merge it
+    // asks for is the bot's act rather than this verb's.
+    //
+    // NO FLAGS, for `land verify`'s reason carried one step out. The pull request
+    // is a fact about this branch the forge already holds, so it is RESOLVED; the
+    // workflow whose runs carry the verdict is the consumer's, so it arrives from
+    // the environment. A number on argv would let a lap ask one pull request to
+    // land while every other step of the same lap is looking at another — which is
+    // exactly the binding defect CLOUD-465 records for a reused branch.
+    CommandDecl {
+        path: "land fast-forward",
+        id: "land.fast-forward",
+        about: "Ask this head's pull request to fast-forward, and read the answer that request got",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
 ];
 
 /// Whether `token` is a declared spelling of a flag that consumes the *next*

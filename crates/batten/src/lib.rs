@@ -5635,76 +5635,233 @@ fn run_land(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    // `push` names no reference — it pushes the branch it is on — so the shared
-    // preamble below binds an empty one for it rather than growing a second
-    // preamble. Every arm needs the same three facts: a remote, its url, and a
-    // branch to key the record on.
-    let reference = match command {
-        cli::LandCommand::Replay { reference } | cli::LandCommand::Wait { reference } => {
-            reference.clone()
-        }
-        cli::LandCommand::Push | cli::LandCommand::Verify => String::new(),
-    };
     let root = Path::new(".");
+    // THE BRANCH IS EVERY ARM'S, so it is resolved once and ahead of the split:
+    // the record is keyed by it, the push names it, and the pull request is found
+    // by it. A detached HEAD can answer none of those, and that is a statement
+    // about the clone rather than about the work.
+    let Ok(Some(branch)) = git::current_branch(root) else {
+        writeln!(err, "::error:: land: a detached HEAD has no branch to key")?;
+        return Ok(ExitCode::Internal);
+    };
 
-    // VERIFY RUNS BEFORE THE REMOTE IS RESOLVED, and that ordering is the point
-    // rather than a shortcut. Verifying is a question about the WORKING TREE:
-    // a clone with no remote can still answer it, and making the whole verb
-    // depend on a remote would refuse a lap step that had everything it needed.
-    if matches!(command, cli::LandCommand::Verify) {
-        let Ok(Some(branch)) = git::current_branch(root) else {
-            writeln!(err, "::error:: land: a detached HEAD has no branch to key")?;
-            return Ok(ExitCode::Internal);
-        };
-        return run_land_verify(root, &branch, out, err);
+    // ONE EXHAUSTIVE MATCH, on `run_lease`'s shape rather than on the cascade of
+    // `matches!` blocks this replaced. A cascade is a shape a new sub-verb has to
+    // EXTEND — read the guards, work out which preamble it needs, insert it in the
+    // right place — where a match arm is one a new variant SLOTS into and the
+    // compiler names the omission. `fast-forward` is the fifth arm to arrive,
+    // which is the point at which the difference stops being taste.
+    //
+    // THE ORDERING THE CASCADE BOUGHT IS KEPT, and kept by construction rather
+    // than by a comment asking the next reader to preserve it: `verify` asks about
+    // the working tree and `fast-forward` about a pull request, neither of which
+    // is a ref, so a clone with no remote still answers both. Only the three
+    // ref-shaped arms resolve a remote, and each resolves it for itself.
+    match command {
+        cli::LandCommand::Verify => run_land_verify(root, &branch, out, err),
+        cli::LandCommand::FastForward => run_land_fast_forward(&branch, out, err),
+        cli::LandCommand::Replay { reference } => {
+            let Some(url) = land_remote(root, err)? else {
+                return Ok(ExitCode::Internal);
+            };
+            run_land_replay(root, &url, reference, &branch, out)
+        }
+        cli::LandCommand::Wait { reference } => {
+            let Some(url) = land_remote(root, err)? else {
+                return Ok(ExitCode::Internal);
+            };
+            run_land_wait(root, &url, reference, &branch, out, err)
+        }
+        cli::LandCommand::Push => {
+            let Some(url) = land_remote(root, err)? else {
+                return Ok(ExitCode::Internal);
+            };
+            run_land_push(root, &url, &branch, out)
+        }
     }
+}
 
+/// The url of the remote this lap lands against, or `None` having said why.
+///
+/// `None` rather than an error because every way this fails is a could-not-look
+/// about the CLONE — no remotes readable, or none by the configured name — and
+/// the caller turns that into the same `Internal` every other unreadable clone
+/// produces. Returning the url by value rather than borrowing the remote list
+/// keeps the arms above from having to hold it alive across the call.
+fn land_remote(root: &Path, err: &mut dyn Write) -> Result<Option<String>> {
     let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
     let Ok(remotes) = git::remotes(root) else {
         writeln!(err, "::error:: land: cannot read this repository's remotes")?;
-        return Ok(ExitCode::Internal);
+        return Ok(None);
     };
     let Some((_, url)) = remotes.iter().find(|(configured, _)| *configured == name) else {
         writeln!(
             err,
             "::error:: land: no remote named {name}, so this lap has no base"
         )?;
-        return Ok(ExitCode::Internal);
+        return Ok(None);
     };
-    // A DETACHED HEAD HAS NO BRANCH TO REPLAY, and that is a statement about the
-    // clone rather than about the work — `3`, like every other could-not-look.
-    let Ok(Some(branch)) = git::current_branch(root) else {
+    Ok(Some(url.clone()))
+}
+
+/// `batten land fast-forward` (CLOUD-1338): ask, then read the answer to THAT ask.
+///
+/// # `$LAND_WORKFLOW` and no default, for `$LAND_VERIFY`'s reason
+///
+/// The bash lander defaults this to `fast-forward.yml`. That filename is THIS
+/// consumer's, and a default compiled in here would be a consumer's vocabulary
+/// inside `crates/batten` — non-negotiable rule 1's plainest violation, and the
+/// same call `run_land_verify` already makes about the gate's name.
+///
+/// The failure a default would buy is the quiet one: a repository whose bot lives
+/// in a differently-named workflow would read an empty runs list, every lap, and
+/// report a silent bot forever. A refusal costs one line of configuration.
+///
+/// # The three exits, and why the middle one is not an error
+///
+/// `0` the bot accepted, `2` it refused — the branch is no longer a direct
+/// descendant, which is a verdict about this repository and the lap's cue to
+/// rebase — and `3` no answer yet, which is the state the loop exists to sit in.
+/// A forge that cannot be read is `3` and never a false `2`: a lap that could not
+/// look has not been refused.
+///
+/// `3` is spelled [`ExitCode::Internal`] because the table has four codes and no
+/// per-verb exception (non-negotiable rule 5). The variant's name is about where
+/// `3` came from historically; what it MEANS here is the same could-not-look
+/// [`run_land_wait`] returns for an unanswered race, and the two agree
+/// deliberately — a lap reads them through one contract.
+/// # It takes no root, and the absence is a statement rather than an oversight
+///
+/// Every other lap step writes a four-column line to the lap record, which is
+/// what gives a `landing-loop` module something to decide over. This one does
+/// not, because no predicate reads a fast-forward outcome yet — and a record
+/// nothing reads is the dead channel this engine spends its time refusing
+/// elsewhere. When a predicate wants one (whether a lap may re-ask after an
+/// unknown conclusion is the obvious candidate), the record and the module land
+/// together, which is the pairing `.claude/rules/policy-modules.md` requires in
+/// both directions.
+fn run_land_fast_forward(
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let workflow = std::env::var("LAND_WORKFLOW").unwrap_or_default();
+    if workflow.trim().is_empty() {
         writeln!(
             err,
-            "::error:: land: a detached HEAD has no branch to replay"
+            "::error:: land fast-forward: $LAND_WORKFLOW names no workflow, and this engine does not know which of this repository's workflows carries the fast-forward verdict"
+        )?;
+        return Ok(ExitCode::Usage);
+    }
+    let Some(pr) = fast_forward::open_pull_request(branch) else {
+        writeln!(
+            err,
+            "::error:: land fast-forward: no open pull request for {branch}, so there is nothing to ask"
         )?;
         return Ok(ExitCode::Internal);
     };
+    let ask = fast_forward::Ask {
+        repo: String::from(pr_watch::REPO_PLACEHOLDER),
+        pr,
+        workflow,
+    };
 
-    if matches!(command, cli::LandCommand::Wait { .. }) {
-        return run_land_wait(root, url, &reference, &branch, out, err);
-    }
+    // STAMPED BEFORE THE COMMENT, never after, and that ordering is the whole of
+    // the anti-livelock property: a run created by an EARLIER lap of this same
+    // pull request must fall outside the window. Stamping afterwards would leave
+    // a gap in which this lap's own run is created and then excluded by its own
+    // fence — a lap that can never read its own answer.
+    //
+    // `receipt::rfc3339_utc` rather than a second formatter: it is already the
+    // crate's one epoch-to-ISO-8601 spelling and its tests pin the instants a
+    // hand-rolled one gets wrong (leap years, the 2100 non-leap century).
+    let since = receipt::rfc3339_utc(now_unix());
 
-    if matches!(command, cli::LandCommand::Push) {
-        return match land::push(root, url, &branch)? {
-            land::Pushed::Landed(head) => {
-                writeln!(out, "land: {branch} on the remote now reads {head}")?;
-                Ok(ExitCode::Success)
+    match fast_forward::ask(&ask)? {
+        fast_forward::Asked::Refused(status) => {
+            // NEVER ENTER THE POLL. Waiting for the answer to a question nobody
+            // received is a hang with a different cause, and the predecessor's
+            // was measured: the forge answered a secondary rate limit, nothing
+            // read the status, and the lap reported a comment it had not created.
+            writeln!(
+                err,
+                "::error:: land fast-forward: the forge did not create the comment (status {status}); nothing was asked, so there is no answer to wait for"
+            )?;
+            Ok(ExitCode::Internal)
+        }
+        fast_forward::Asked::Commented(comment) => {
+            writeln!(
+                out,
+                "land: asked #{} to fast-forward as comment {comment}",
+                ask.pr
+            )?;
+            match fast_forward::answer(&ask, &since, &comment) {
+                fast_forward::Answer::Accepted => {
+                    writeln!(out, "land: #{} was accepted", ask.pr)?;
+                    Ok(ExitCode::Success)
+                }
+                fast_forward::Answer::Refused => {
+                    writeln!(
+                        out,
+                        "land: #{} was refused; this head is no longer a direct descendant",
+                        ask.pr
+                    )?;
+                    Ok(ExitCode::Violation)
+                }
+                fast_forward::Answer::Pending => {
+                    writeln!(out, "land: #{} has no answer yet", ask.pr)?;
+                    Ok(ExitCode::Internal)
+                }
+                // A CLOSED VOCABULARY REACHES THE READER AS A TOKEN, never as
+                // prose and never as "main moved" — that is a fact about a ref,
+                // and only the staleness arm may assert it.
+                fast_forward::Answer::Unknown(token) => {
+                    writeln!(
+                        out,
+                        "land: #{} ran and decided nothing ({token})",
+                        ask.pr
+                    )?;
+                    Ok(ExitCode::Internal)
+                }
             }
-            // A LOST CAS IS A VERDICT ABOUT THE REPOSITORY, so `2` rather than a
-            // failure code: somebody else moved this branch, the lap has an
-            // answer, and the answer is to lap again.
-            land::Pushed::Raced => {
-                writeln!(
-                    out,
-                    "land: {branch} moved under this push; the remote refused and this lap is spent"
-                )?;
-                Ok(ExitCode::Violation)
-            }
-        };
+        }
     }
+}
 
-    match land::replay(root, url, &reference, &branch)? {
+/// `batten land push`: the branch to its own ref, under receive-pack's CAS.
+fn run_land_push(
+    root: &Path,
+    url: &str,
+    branch: &str,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    match land::push(root, url, branch)? {
+        land::Pushed::Landed(head) => {
+            writeln!(out, "land: {branch} on the remote now reads {head}")?;
+            Ok(ExitCode::Success)
+        }
+        // A LOST CAS IS A VERDICT ABOUT THE REPOSITORY, so `2` rather than a
+        // failure code: somebody else moved this branch, the lap has an answer,
+        // and the answer is to lap again.
+        land::Pushed::Raced => {
+            writeln!(
+                out,
+                "land: {branch} moved under this push; the remote refused and this lap is spent"
+            )?;
+            Ok(ExitCode::Violation)
+        }
+    }
+}
+
+/// `batten land replay`: advance the base and replay this branch onto it.
+fn run_land_replay(
+    root: &Path,
+    url: &str,
+    reference: &str,
+    branch: &str,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    match land::replay(root, url, reference, branch)? {
         land::Replay::Conflicted { commit, paths } => {
             writeln!(
                 out,
