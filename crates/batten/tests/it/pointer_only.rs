@@ -634,6 +634,11 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // either the trunk commit or the comparison — which is the could-not-look
     // this gate is built to fail open on.
     "lease carries",
+    // `lease guard` joins it for `carries`' reason and one more: it is the
+    // composite, so a corpus that cannot read the trunk commit cannot answer its
+    // first half either — and the guard's contract is that every such reading
+    // RUNS, which is exactly could-not-look.
+    "lease guard",
     // `land replay` joins them for the same reason one hop earlier: it FETCHES
     // before it replays, so a corpus with no remote configured cannot reach the
     // replay at all and could-not-look is its honest answer here.
@@ -686,6 +691,16 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "lease carries",
         args: &["0000000000000000000000000000000000000000"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // The step-0 guard renders a head sha, a wanted sha, a lease reason token and
+    // a run id. The forge's own bodies never reach it: `carries` takes a sha and
+    // a status word out of two responses, and `authorises` reads a lease body the
+    // one authority already parses.
+    Verb {
+        path: "lease guard",
+        args: &["0000000000000000000000000000000000000000", "work", "0"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },

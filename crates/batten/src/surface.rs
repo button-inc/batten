@@ -1169,6 +1169,13 @@ const LEASE_BRANCH: FlagDecl = FlagDecl::positional("branch", "The branch being 
 /// default would read every stale head as current, silently.
 const LEASE_HEAD: FlagDecl = FlagDecl::positional("head", "The head commit being judged");
 
+/// `<run>`: the run `lease guard` cancels on a stop.
+///
+/// Positional and required, for [`LEASE_HEAD`]'s reason: the engine must not
+/// guess which run it is standing in, and a guard that cancelled the wrong one
+/// would be worse than one that cancelled none.
+const LEASE_RUN: FlagDecl = FlagDecl::positional("run", "The run to cancel on a stop");
+
 /// `<reference>`: the remote reference `land replay` replays onto.
 ///
 /// **Positional and REQUIRED, for [`LEASE_BRANCH`]'s reason and one more.**
@@ -4313,6 +4320,27 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         effect: Effect::Read,
         flags: &[LEASE_HEAD],
+    },
+    // `write`, and it is the ONLY reason this is not a read: on a stop it cancels
+    // the run it is standing in. A composite of `carries` and `authorises` (both
+    // `read`), because the cancel-and-wait is the subtlest failure mode in the
+    // whole loop — a non-zero exit makes the run's conclusion `failure`, `final`
+    // then fails its `needs:` under `!cancelled()`, and the lander re-drafts
+    // every PR in the fleet. One authority for that, never sixteen copies in
+    // workflow YAML.
+    //
+    // **IT NEVER EXITS NON-ZERO**, so it carries no verdict a caller reads: the
+    // stop IS the cancellation. That is why the exit table's `2` never appears
+    // here and why the step needs no `|| exit 0` to be safe — though the
+    // workflow keeps one anyway, because a binary that will not RUN is a
+    // different failure from one that ran and decided.
+    CommandDecl {
+        path: "lease guard",
+        id: "lease.guard",
+        about: "The runner's step-0 guard: may this branch spend a matrix right now?",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[LEASE_HEAD, LEASE_BRANCH, LEASE_RUN],
     },
     CommandDecl {
         path: "lease check",

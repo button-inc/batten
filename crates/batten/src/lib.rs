@@ -5510,6 +5510,14 @@ fn run_lease(
                 )?;
                 return Ok(ExitCode::Success);
             }
+            // THE GUARD STILL ASKS ITS OTHER HALF. A clone with no lease remote
+            // has no lease to honour, but the STALENESS question is answered by
+            // the forge and does not need one — so reaching `Authorises`' arm
+            // here would skip a reading that was available. `guard` takes `None`
+            // for the authority, which it reads as fail-open.
+            cli::LeaseCommand::Guard { head, branch, run } => {
+                return run_lease_guard_unleased(root, &head, &branch, &run, out, err);
+            }
             cli::LeaseCommand::Check => {
                 writeln!(
                     out,
@@ -5587,6 +5595,9 @@ fn run_lease(
         cli::LeaseCommand::Hold => run_lease_hold(root, &terms, out, err),
         cli::LeaseCommand::Release => run_lease_release(root, &terms, now, out, err),
         cli::LeaseCommand::Reserve { branch } => run_lease_reserve(&terms, &branch, now, out, err),
+        cli::LeaseCommand::Guard { head, branch, run } => {
+            run_lease_guard(root, &terms, &head, &branch, &run, now, out, err)
+        }
         // UNREACHABLE, and stated rather than wildcarded: the arm returns above,
         // before the terms this match is built on resolve. A `_` here would
         // silently swallow the next arm somebody adds, which is what the
@@ -6087,6 +6098,153 @@ fn run_land_verify(
             Ok(ExitCode::Violation)
         }
     }
+}
+
+/// How many ticks the guard waits to be killed after a cancellation lands.
+///
+/// A COUNT, never a deadline, and the exit condition is being killed rather than
+/// the clock running out: exiting `0` here would let the job march into the
+/// matrix the cancellation just paid an API call to prevent, and exiting non-zero
+/// would red the run. So neither, for as long as a cancellation plausibly takes.
+const CANCEL_TICKS: u32 = 24;
+
+/// One tick, in seconds. `pr_watch::pause` carries the crate's single sleep
+/// exemption, so waiting through it opens no new site for `sleep_ban.rs`.
+const CANCEL_TICK_SECONDS: f64 = 5.0;
+
+/// Report the guard's decision and, on a stop, act on it.
+///
+/// # IT NEVER EXITS NON-ZERO, AND THAT IS THE WHOLE CONTRACT
+///
+/// A job that reds before its cancellation lands makes the RUN's conclusion
+/// `failure` rather than `cancelled`; `final` then runs under `!cancelled()`,
+/// fails its `needs:` assertion, and the lander re-drafts every PR in the fleet
+/// — the fleet-wide re-drafting this whole design exists to avoid, reintroduced
+/// by its own remedy. So every path here returns [`ExitCode::Success`],
+/// including the ones that could not look and the one whose cancellation was
+/// refused.
+///
+/// # The annotation is at COLUMN 0 and that is load-bearing
+///
+/// The runner reads a workflow command only when the line begins with `::` after
+/// trimming leading whitespace, so a prefix would emit the token and have it
+/// ignored. A stopped run is a CANCELLED run with a red `final` and no failed
+/// step of its own — so without the annotation a reader sees a red check, no
+/// annotation, and no clue that the remedy is one rebase.
+fn report_guard(
+    guarded: &lease::Guarded,
+    repo: &str,
+    run: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let why = match guarded {
+        lease::Guarded::Run { why } => {
+            writeln!(out, "lease-precondition: {why}")?;
+            return Ok(ExitCode::Success);
+        }
+        lease::Guarded::Stop { why } => why,
+    };
+    writeln!(err, "::error::lease-precondition: {why}")?;
+
+    if run.trim().is_empty() {
+        writeln!(
+            err,
+            "lease-precondition: nothing to cancel — no run id was given; running anyway"
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    writeln!(
+        err,
+        "::error::lease-precondition: this run is not authorised to spend a matrix; cancelling \
+         run {run}"
+    )?;
+    if !lease::cancel_run(repo, run) {
+        writeln!(
+            err,
+            "lease-precondition: the cancellation was refused; running anyway"
+        )?;
+        return Ok(ExitCode::Success);
+    }
+
+    // WAIT TO BE KILLED. See `CANCEL_TICKS`.
+    for _ in 0..CANCEL_TICKS {
+        pr_watch::pause(CANCEL_TICK_SECONDS);
+    }
+    writeln!(
+        err,
+        "lease-precondition: still alive after {CANCEL_TICKS} tick(s); running anyway"
+    )?;
+    Ok(ExitCode::Success)
+}
+
+/// `batten lease guard` (CLOUD-420): the runner's step-0 precondition.
+///
+/// # Errors
+///
+/// Only for a stream that will not accept output.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "stays: three operands the caller must supply because the engine must not GUESS any               of them — a guessed head reads a merge commit and a guessed run cancels somebody               else's — plus the terms, the instant and two streams every lease arm here takes"
+)]
+fn run_lease_guard(
+    root: &Path,
+    terms: &lease::Terms,
+    head: &str,
+    branch: &str,
+    run: &str,
+    now: i64,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
+    let carries = lease_staleness(root, &repo, head);
+
+    // THE LEASE IS ASKED ONLY IF THE HEAD IS CURRENT, which is the predecessor's
+    // ordering: one fewer forge read on a head that is doomed either way.
+    let authority = match &carries {
+        lease::Carries::Current => {
+            let observed = lease::observe(terms).ok();
+            Some(lease::authorises(observed.as_ref(), branch, now))
+        }
+        _ => None,
+    };
+    let guarded = lease::guard(&carries, authority.as_ref());
+    report_guard(&guarded, &repo, run, out, err)
+}
+
+/// The guard on a clone with no lease remote.
+///
+/// The staleness half is the FORGE's answer and needs no remote, so it is still
+/// asked — reaching the unleased `authorises` arm instead would skip a reading
+/// that was available. The lease half is `None`, which `lease::guard` reads as
+/// fail-open.
+fn run_lease_guard_unleased(
+    root: &Path,
+    head: &str,
+    _branch: &str,
+    run: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
+    let carries = lease_staleness(root, &repo, head);
+    let guarded = lease::guard(&carries, None);
+    report_guard(&guarded, &repo, run, out, err)
+}
+
+/// The staleness reading, over the declared landing paths.
+///
+/// One place both guard arms read it, so they cannot disagree about which paths
+/// or which trunk.
+fn lease_staleness(root: &Path, repo: &str, head: &str) -> lease::Carries {
+    let paths = config::load(root)
+        .ok()
+        .and_then(|loaded| loaded.lease)
+        .map(|lease| lease.landing_paths)
+        .unwrap_or_default();
+    let trunk = std::env::var("LEASE_TRUNK").unwrap_or_else(|_| String::from("main"));
+    lease::carries(repo, &trunk, head, &paths)
 }
 
 /// `batten lease carries` (CLOUD-1148 §2): does this head carry the landing

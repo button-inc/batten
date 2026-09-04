@@ -5121,6 +5121,38 @@ trace\:"Add everything"))' \
 ':head -- The head commit being judged:_default' \
 && ret=0
 ;;
+(guard)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':head -- The head commit being judged:_default' \
+':branch -- The branch being asked about:_default' \
+':run -- The run to cancel on a stop:_default' \
+&& ret=0
+;;
 (check)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -5404,6 +5436,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (carries)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(guard)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -6593,6 +6629,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(guard)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (check)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -7655,6 +7695,7 @@ _batten__subcmd__help__subcmd__lease_commands() {
     local commands; commands=(
 'authorises:May this branch spend a matrix right now?' \
 'carries:Gate\: this head carries the landing mechanism trunk has, so it can be serialised' \
+'guard:The runner'\''s step-0 guard\: may this branch spend a matrix right now?' \
 'check:Gate\: the lease is free or a live, well-formed hold — never a wedge and never garbage' \
 'status:Report who holds the lease, for how much longer, and who is admitted behind them' \
 'peek:Print one advisory field of the held lease, or nothing' \
@@ -7686,6 +7727,11 @@ _batten__subcmd__help__subcmd__lease__subcmd__carries_commands() {
 _batten__subcmd__help__subcmd__lease__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten help lease check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__lease__subcmd__guard_commands] )) ||
+_batten__subcmd__help__subcmd__lease__subcmd__guard_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help lease guard commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__lease__subcmd__held_commands] )) ||
 _batten__subcmd__help__subcmd__lease__subcmd__held_commands() {
@@ -8284,6 +8330,7 @@ _batten__subcmd__lease_commands() {
     local commands; commands=(
 'authorises:May this branch spend a matrix right now?' \
 'carries:Gate\: this head carries the landing mechanism trunk has, so it can be serialised' \
+'guard:The runner'\''s step-0 guard\: may this branch spend a matrix right now?' \
 'check:Gate\: the lease is free or a live, well-formed hold — never a wedge and never garbage' \
 'status:Report who holds the lease, for how much longer, and who is admitted behind them' \
 'peek:Print one advisory field of the held lease, or nothing' \
@@ -8317,6 +8364,11 @@ _batten__subcmd__lease__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten lease check commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__lease__subcmd__guard_commands] )) ||
+_batten__subcmd__lease__subcmd__guard_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten lease guard commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__lease__subcmd__held_commands] )) ||
 _batten__subcmd__lease__subcmd__held_commands() {
     local commands; commands=()
@@ -8327,6 +8379,7 @@ _batten__subcmd__lease__subcmd__help_commands() {
     local commands; commands=(
 'authorises:May this branch spend a matrix right now?' \
 'carries:Gate\: this head carries the landing mechanism trunk has, so it can be serialised' \
+'guard:The runner'\''s step-0 guard\: may this branch spend a matrix right now?' \
 'check:Gate\: the lease is free or a live, well-formed hold — never a wedge and never garbage' \
 'status:Report who holds the lease, for how much longer, and who is admitted behind them' \
 'peek:Print one advisory field of the held lease, or nothing' \
@@ -8359,6 +8412,11 @@ _batten__subcmd__lease__subcmd__help__subcmd__carries_commands() {
 _batten__subcmd__lease__subcmd__help__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten lease help check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__lease__subcmd__help__subcmd__guard_commands] )) ||
+_batten__subcmd__lease__subcmd__help__subcmd__guard_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten lease help guard commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__lease__subcmd__help__subcmd__held_commands] )) ||
 _batten__subcmd__lease__subcmd__help__subcmd__held_commands() {

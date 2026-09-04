@@ -911,6 +911,24 @@ pub enum LeaseCommand {
         /// head did not touch it, so every stale head would read as current.
         head: String,
     },
+    /// The runner's step-0 guard: may this branch spend a matrix right now
+    /// (CLOUD-420, CLOUD-1148)?
+    ///
+    /// A WRITE, and the only reason it is: on a stop it CANCELS the run it is
+    /// standing in. Composing `carries` and `authorises` rather than letting a
+    /// workflow do it is what keeps the cancel-and-wait one authority instead of
+    /// sixteen copies of the subtlest failure mode in the loop.
+    Guard {
+        /// The head being judged. `github.event.pull_request.head.sha`, NEVER
+        /// `GITHUB_SHA` — on a `pull_request` event that is the merge commit,
+        /// which carries trunk's landing mechanism whenever the head did not
+        /// touch it, so every stale head would read as current.
+        head: String,
+        /// The branch asking for the lease.
+        branch: String,
+        /// The run to cancel on a stop.
+        run: String,
+    },
     /// Is the lease ref free, or a live and well-formed hold?
     Check,
     /// Who holds it, for how long, and who is admitted behind them.
@@ -1776,6 +1794,23 @@ fn lease_of(matches: &ArgMatches) -> Option<LeaseCommand> {
             // exactly that rather than a usage error — this gate fails open.
             head: matches
                 .get_one::<String>("head")
+                .cloned()
+                .unwrap_or_default(),
+        }),
+        ("guard", matches) => Some(LeaseCommand::Guard {
+            // EMPTY RATHER THAN ABSENT on all three, for `authorises`' reason:
+            // this verb must be able to say it could not look, and a missing
+            // operand is exactly that rather than a usage error. It fails open.
+            head: matches
+                .get_one::<String>("head")
+                .cloned()
+                .unwrap_or_default(),
+            branch: matches
+                .get_one::<String>("branch")
+                .cloned()
+                .unwrap_or_default(),
+            run: matches
+                .get_one::<String>("run")
                 .cloned()
                 .unwrap_or_default(),
         }),

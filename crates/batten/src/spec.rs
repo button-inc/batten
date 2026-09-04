@@ -827,6 +827,7 @@ mod tests {
             "lease authorises".to_owned(),
             "lease carries".to_owned(),
             "lease check".to_owned(),
+            "lease guard".to_owned(),
             "lease held".to_owned(),
             "lease hold".to_owned(),
             "lease peek".to_owned(),

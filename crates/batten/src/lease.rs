@@ -2054,6 +2054,103 @@ pub fn stop(pid: u32) {
 }
 
 // ---------------------------------------------------------------------------
+// CLOUD-420 / CLOUD-1148: the composite step-0 guard.
+// ---------------------------------------------------------------------------
+
+/// What the runner's step-0 guard decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Guarded {
+    /// Spend the matrix.
+    Run {
+        /// Why, as a pointer a human reads off a green step.
+        why: String,
+    },
+    /// Do not. The caller cancels the run it is standing in.
+    Stop {
+        /// Why, and it carries the REMEDY: a stopped run is a cancelled run with
+        /// no failed step of its own, so a reader who is not told sees a red
+        /// check and no cause.
+        why: String,
+    },
+}
+
+/// The guard's decision over the two readings it composes.
+///
+/// # STALENESS FIRST, AND THE LEASE IS NOT CONSULTED WHEN IT STOPS
+///
+/// The predecessor's ordering, conserved: `ci-lease-precondition.sh` sets `stop`
+/// from the staleness row and enters the lease table only `if [[ -z "$stop" ]]`.
+/// So `authority` is `None` where the caller never asked — one fewer forge read
+/// on a head that is doomed either way — and `None` is not a third verdict.
+///
+/// # EVERY COULD-NOT-LOOK RUNS
+///
+/// This gate is the opposite of every other refusal in this repository. A
+/// reading it could not take would stop every job in the fleet, where waving one
+/// matrix through costs one matrix. So [`Carries::Unknown`] runs, an absent
+/// authority runs, and the only two things that stop are a head that provably
+/// does not carry trunk's landing mechanism and a lease that provably names
+/// somebody else.
+#[must_use]
+pub fn guard(carries: &Carries, authority: Option<&Authority>) -> Guarded {
+    match carries {
+        Carries::Stale { wanted } => {
+            return Guarded::Stop {
+                why: format!(
+                    "this head does not carry {wanted}, so it cannot be serialised against the \
+                     fleet. Rebase onto current trunk and land with it."
+                ),
+            };
+        }
+        Carries::Unknown { because } => {
+            return Guarded::Run {
+                why: format!("{because}; not judging this head's age"),
+            };
+        }
+        Carries::Current => {}
+    }
+    match authority {
+        Some(Authority::Stop(why)) => Guarded::Stop { why: why.clone() },
+        Some(Authority::Run(why)) => Guarded::Run { why: why.clone() },
+        // The caller could not read the lease at all. `authorises` fails open by
+        // contract and so does this.
+        None => Guarded::Run {
+            why: String::from("the lease could not be read, so nothing refuses this branch"),
+        },
+    }
+}
+
+/// Ask the forge to cancel `run`.
+///
+/// `false` when the cancellation was refused, which the caller reports and then
+/// runs anyway: a guard that could not stop a run must not also fail the job it
+/// is standing in.
+#[must_use]
+pub fn cancel_run(repo: &str, run: &str) -> bool {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: cancelling the run this guard is standing in is a forge WRITE, and this \
+                  crate carries no HTTP client that resolves a forge credential — the forge's own \
+                  client IS the call (CLOUD-1143, CLOUD-420)"
+    )]
+    let output =
+        crate::rules::spawn_resolving(Some(std::path::Path::new(".")), FORGE, |program, extra| {
+            std::process::Command::new(program)
+                .args(extra)
+                .args([
+                    String::from("api"),
+                    String::from("-X"),
+                    String::from("POST"),
+                    format!("repos/{repo}/actions/runs/{run}/cancel"),
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+        });
+    output.is_ok_and(|status| status.success())
+}
+
+// ---------------------------------------------------------------------------
 // CLOUD-1148 §2: does this head carry the landing mechanism trunk has?
 // ---------------------------------------------------------------------------
 
@@ -3249,7 +3346,85 @@ mod tests {
 // Panicking on a failed assertion is how a test fails loudly.
 #[allow(clippy::expect_used)]
 mod staleness_tests {
-    use super::{Carries, decide};
+    use super::{Authority, Carries, Guarded, decide, guard};
+
+    /// **THE FAIL-OPEN DIRECTION IS THIS GATE'S WHOLE CORRECTNESS, and it is the
+    /// opposite of every other refusal in this repository.**
+    ///
+    /// A reading the guard could not take would cancel every job in the fleet,
+    /// where waving one matrix through costs one matrix. So the set below runs,
+    /// and only a PROVEN stop stops. Asserted as the whole set because a version
+    /// that ran on everything and one that stopped on everything each satisfy
+    /// any single case.
+    #[test]
+    fn every_reading_it_could_not_take_runs_and_only_a_proven_stop_stops() {
+        let unknown = Carries::Unknown {
+            because: String::from("no landing paths declared"),
+        };
+        for (carries, authority) in [
+            (&unknown, None),
+            (&unknown, Some(Authority::Stop(String::from("held")))),
+            (&Carries::Current, None),
+        ] {
+            let verdict = guard(carries, authority.as_ref());
+            assert!(
+                matches!(verdict, Guarded::Run { .. }),
+                "a could-not-look must spend the matrix: {verdict:?}"
+            );
+        }
+
+        // And the two that DO stop, which is what keeps the above from being a
+        // gate that never fires.
+        assert!(matches!(
+            guard(
+                &Carries::Stale {
+                    wanted: String::from("trunksha")
+                },
+                None
+            ),
+            Guarded::Stop { .. }
+        ));
+        assert!(matches!(
+            guard(
+                &Carries::Current,
+                Some(&Authority::Stop(String::from("somebody else holds it")))
+            ),
+            Guarded::Stop { .. }
+        ));
+    }
+
+    /// **AN UNKNOWN STALENESS READING OUTRANKS A LEASE THAT SAYS STOP**, and the
+    /// case is here because the arm order makes it easy to get backwards.
+    ///
+    /// It is not a preference between two verdicts: a `Carries::Unknown` means
+    /// the head was never judged, and the predecessor never consults the lease
+    /// table on that path at all — it sets `stop` from the staleness row and
+    /// enters the table only when it is empty. The second element of the pair
+    /// above pins it.
+    #[test]
+    fn a_stale_head_stops_without_the_lease_being_consulted() {
+        // A stop from staleness names the commit the head is missing, so the
+        // remedy is in the annotation rather than in a follow-up read.
+        let verdict = guard(
+            &Carries::Stale {
+                wanted: String::from("abc123"),
+            },
+            Some(&Authority::Run(String::from("nobody holds it"))),
+        );
+        match verdict {
+            Guarded::Stop { why } => {
+                assert!(
+                    why.contains("abc123"),
+                    "the refusal names the commit: {why}"
+                );
+                assert!(
+                    why.contains("Rebase"),
+                    "and the remedy, because a cancelled run has no failed step to read: {why}"
+                );
+            }
+            Guarded::Run { why } => panic!("a stale head must not spend a matrix: {why}"),
+        }
+    }
 
     fn paths() -> Vec<String> {
         vec![String::from("mise-tasks/land.sh")]
