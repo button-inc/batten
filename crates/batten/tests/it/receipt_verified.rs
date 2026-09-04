@@ -14,24 +14,30 @@
 
 //! # RETIREMENT LEDGER — `tests/verified.bats`, 10 cases
 //!
+//! **Every title below is the base file's, byte for byte.** The first draft of
+//! this block invented them from the brief instead of reading
+//! `git show origin/main:tests/verified.bats`, so all ten arms matched nothing
+//! and `bats-tests-not-deleted` reported ten unmapped cases — which is the
+//! ratchet doing exactly what it exists to do.
+//!
 //! CARRIED — the predicate moved intact onto the composed verb.
 
-// carried: "a verified HEAD exits 0 and names the commit" crates/batten/tests/it/receipt_verified.rs
-// carried: "a missing verify receipt exits 1 and says NOT verified" crates/batten/tests/it/receipt_verified.rs
-// carried: "a missing linear-check receipt exits 1" crates/batten/tests/it/receipt_verified.rs
-// carried: "a moved origin/main invalidates the linear-check receipt" crates/batten/tests/it/receipt_verified.rs
-// carried: "an amended HEAD invalidates the verify receipt" crates/batten/tests/it/receipt_verified.rs
+// carried: "a commit with both current receipts is verified" crates/batten/tests/it/receipt_verified.rs
+// carried: "a verify receipt alone is not enough — linear-check is a separate claim" crates/batten/tests/it/receipt_verified.rs
+// carried: "an amend invalidates the receipt, because it produces a new HEAD" crates/batten/tests/it/receipt_verified.rs
+// carried: "a main that moved under the branch invalidates the receipt" crates/batten/tests/it/receipt_verified.rs
 
 //! CHANGED — behaviour that diverges deliberately, with its reason.
 
-// changed: "not a git repository exits 2" crates/batten/tests/it/receipt_verified.rs the engine has ONE exit table and no per-verb exception (non-negotiable rule 5): `2` is the policy verdict everywhere and `1`/`3` are the only codes a Batten failure produces. The predecessor spelled an unusable checkout `2` and an unverified head `1`, which is the table inverted. The `mise` task keeping the `verified` name translates, so every caller reads what it always read — the shim shape CLOUD-1170 established
-// changed: "an unresolvable HEAD exits 2" crates/batten/tests/it/receipt_verified.rs the same inversion as the row above, on the other environment arm
-// changed: "an unresolvable origin/main exits 2" crates/batten/tests/it/receipt_verified.rs the same inversion, on the third environment arm
+// changed: "THE INVERSION: a failed verify whose exit code was swallowed leaves HEAD unverified" crates/batten/tests/it/receipt_verified.rs the predicate is conserved and the WORDING moved: the verb says WHAT is unverified and the `mise` task keeping the `verified` name says what to do about it, because the remedy names `mise run verify` — a consumer task name, which non-negotiable rule 1 forbids in `crates/batten`. The suite asserting the prose therefore asserts it one layer out
+// changed: "the failure names what to run, not merely that it refused" crates/batten/tests/it/receipt_verified.rs the same move as the row above, and the same reason: a remedy that names a task cannot live in the repo-agnostic core, so the wrapper emits it
+// changed: "an unresolvable origin/main exits 2 — a checkout problem, not a verdict" crates/batten/tests/it/receipt_verified.rs the engine has ONE exit table and no per-verb exception (non-negotiable rule 5): `2` is the policy verdict everywhere and `1`/`3` are the only codes a Batten failure produces. The predecessor spelled an unusable checkout `2` and an unverified head `1`, which is the table inverted. The `mise` task keeping the `verified` name translates, so every caller reads what it always read — the shim shape CLOUD-1170 established
+// changed: "outside a git repository it exits 2 rather than claiming unverified" crates/batten/tests/it/receipt_verified.rs the same inversion as the row above, on the other environment arm
 
 //! SUBSUMED — the assertion is a property of a reader the verb now shares.
 
-// subsumed: "the receipt path resolves under --git-dir so worktrees do not collide" crates/batten/tests/it/receipt_verified.rs
-// subsumed: "output names the receipts read and never their contents" crates/batten/tests/it/receipt_verified.rs
+// subsumed: "a receipt for a different commit does not vouch for this one" crates/batten/tests/it/receipt_verified.rs
+// subsumed: "output is a pointer — it names predicates and shas, never run contents" crates/batten/tests/it/receipt_verified.rs
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -166,6 +172,32 @@ fn a_moved_trunk_expires_the_receipt_taken_against_the_old_one() {
     assert_eq!(
         code, 2,
         "a receipt taken against a moved trunk is stale: {text}"
+    );
+    assert!(text.contains("NOT verified"), "got {text}");
+}
+
+/// An amend expires the receipt, because it produces a new HEAD.
+///
+/// The other half of the keying: the row above moves the TRUNK and this moves
+/// the HEAD, and a reader that answered only one of them would vouch for work
+/// nobody verified. Cheap to state and the pair is what makes the keying
+/// meaningful rather than incidental.
+#[test]
+fn an_amended_head_expires_the_receipt_taken_against_the_old_one() {
+    let dir = repo("receipt-verified-amended");
+    record(&dir, "verify");
+    record(&dir, "linear-check");
+    assert_eq!(verified(&dir).0, 0, "the fixture starts verified");
+
+    let before = out_of(&dir, &["rev-parse", "HEAD"]);
+    git_in(&dir, &["commit", "-q", "--amend", "-m", "chore: reworded"]);
+    let after = out_of(&dir, &["rev-parse", "HEAD"]);
+    assert_ne!(before, after, "the amend minted a new sha");
+
+    let (code, text) = verified(&dir);
+    assert_eq!(
+        code, 2,
+        "a receipt names the commit it validated, and this is not that commit: {text}"
     );
     assert!(text.contains("NOT verified"), "got {text}");
 }
