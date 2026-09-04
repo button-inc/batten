@@ -6227,6 +6227,41 @@ rule = "inline-task-bodies-not-growing"
 reason = "CLOUD-1265's `[tasks.record-verdicts]` is a producer's EFFECT, not a predicate: the predicate it replaces migrated to `policy/validator-verdict-clean.rego`, and section 5 leaves no rule kind for a body that must spawn a validator. `mise-tasks/pkl-check.sh` and its suite leave the tree in the same commit, so the bash surface falls while this row's `mise.toml`-only count rises by one."
 expires = "2026-10-31"
 
+# CLOUD-1387's shadow, waived for as long as its fix takes to land and no longer.
+#
+# `claim-before-code` reads `node = "project"` off the capture keyed to one row,
+# and `captured::reduce` selects that capture with `text.contains(&row.key)` —
+# the FIRST stored response whose bytes merely MENTION the key, rather than the
+# one the key is the subject of. So any response quoting the key shadows the real
+# payload and the reduction answers `present = false` over a row that IS on a
+# project.
+#
+# MEASURED 2026-09-04, and the instance is worth keeping because a fixture would
+# not invent it: the shadowing response was the FILING OF A BUG ABOUT THIS
+# DEFECT, whose body names the keyed row while describing something else. Filing
+# the report triggers the thing reported.
+#
+# `batten capture show <handle> --raw` prints `"project":"Batten"` for the real
+# capture, so the honest answer is the one the gate cannot reach.
+#
+# THE OTHER HALF WAS A REAL DEFECT AND IS FIXED RATHER THAN WAIVED: the
+# `get_issue` projection above omitted `project` entirely, so the rule was
+# unsatisfiable by construction on every clone. That is why this waiver is narrow
+# — with the field carried, the only thing still wrong is the selection.
+#
+# NOT `severity = "allow"`, which switches the row off forever and tells nobody,
+# and not `capture prune`, which was the reachable alternative and is worse: an
+# id nothing captured reads as could-not-look, so pruning would make the gate
+# ABSTAIN rather than pass — deleting evidence until a gate stops deciding.
+#
+# The expiry is short on purpose. PR #842 carries CLOUD-1387's fix; this should
+# be removed by whoever lands it, and the date is what forces the question if
+# they do not.
+[[waiver]]
+rule = "claim-before-code"
+reason = "CLOUD-1387: `captured::reduce` selects the first capture whose bytes MENTION the key rather than the one it is the subject of, so a response quoting the row shadows its real payload and `present` answers false over a row that is on a project. Fix is open in PR #842; remove this waiver with it."
+expires = "2026-10-04"
+
 [ci]
 required_checks = ["final"]
 
