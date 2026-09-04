@@ -1,41 +1,10 @@
-# CLOUD-1431. We publish a binary for a platform on which one of our own rule
-# kinds cannot run, and nothing in the tree relates the two lists.
+# Every architecture `release-artifacts.yml` publishes is covered by every
+# `[[provision]]` platform table, or the gap is declared below.
 #
-# THE DEFECT, MEASURED. `release-artifacts.yml` publishes seven targets, three of
-# them arm64. The `secrets` rule kind resolves its scanner from the single
-# `[[provision]]` row, whose platform table is `linux-x86_64`, `macos-x86_64` and
-# `macos-aarch64`. So a consumer who installs the `aarch64-unknown-linux-gnu`
-# release we ship, declares a `secrets` rule and runs `batten enforce` gets:
-#
-#   provision ripsecrets: no artifact for linux-aarch64;
-#           the entry pins linux-x86_64, macos-aarch64, macos-x86_64
-#
-# Found here as a red required check rather than as a consumer report, on job
-# 100903936005, because moving `batten-check` to `ubuntu-24.04-arm` made this
-# repository the first arm64 consumer of its own engine.
-#
-# THE RUNTIME IS ALREADY RIGHT, AND THAT IS WHY THIS IS A CONFIG GATE.
-# `provision.rs` says it in as many words: "Never a silent skip: an entry that
-# cannot be installed here is a manifest this host cannot satisfy, and reporting
-# it as fresh would let a gate depending on the tool pass without the tool." Exit
-# 1 is the correct direction. What is missing is AUTHORING-TIME detection, so the
-# pairing is decided on the change that introduces it instead of on somebody's
-# arm runner months later.
-#
-# WHY NO STANDING GATE CAUGHT IT, which is the generalisable half. `lock-complete`
-# requires every `[tools]` entry to install on three mandatory platforms,
-# linux-arm64 among them — which is why CLOUD-1416 concluded the tool surface was
-# already proven on this architecture, a sound conclusion for the surface it
-# names. `ripsecrets` is not on that surface: it is the only `[[provision]]` row
-# in the config, and `[[provision]]` carries no platform-completeness requirement
-# of any kind. Two pinned-tool surfaces, one gated for arm64 and one not, and the
-# ungated one holding exactly one entry is why nobody noticed the asymmetry.
-#
-# A CONSUMER MODULE RATHER THAN A PRESET OR THE CORE. The predicate names this
-# repository's facts — which workflow publishes releases, which platform keys its
-# provision rows carry — so `.claude/rules/toolchain.md`'s default applies and a
-# preset would need those pulled out into config a preset cannot read anyway. It
-# needs no engine change: both lists are committed bytes.
+# CLOUD-1431 is the authority on why: the measurement, the two pinned-tool
+# surfaces and only one of them gated, and what the runtime already does right.
+# Not restated here — the row is the durable home, and a copy in this file drifts
+# from it.
 #MUTANT-SUITE crates/batten/tests/it/release_provision_parity.rs
 #MUTANT gap-may-go-undeclared|s@not declared_gap\[key\]@false@|an_undeclared_platform_gap_is_refused
 #MUTANT musl-may-not-map|s@"aarch64-unknown-linux-musl": "linux-aarch64",@@|a_musl_triple_maps_to_the_same_platform_key_as_gnu
@@ -55,17 +24,14 @@ import rego.v1
 
 rules contains "release-target-has-a-provisioned-scanner"
 
-# THE RUST TRIPLE A WORKFLOW PUBLISHES IS NOT THE PLATFORM KEY A PROVISION ROW
-# CARRIES, and the mapping is the whole of what this rule has to get right.
+# A rust triple is not a platform key. `provision.rs`'s `platform_key()` builds
+# `<os>-<arch>` with no libc flavour, so `-gnu` and `-musl` collapse to one key —
+# which is what stops a musl target reading as uncovered when its gnu sibling is
+# pinned.
 #
-# `provision.rs`'s `platform_key()` builds `<os>-<arch>`, so the libc flavour is
-# deliberately absent: `-gnu` and `-musl` are the same platform to a downloaded
-# binary's URL table, and mapping them to one key is what stops a musl target
-# reading as an uncovered platform when its gnu sibling is pinned.
-#
-# A STATIC OBJECT rather than a function with a definition per arm: regorus
-# reads a multi-arm function as a multi-value rule and the module would not load.
-# A target this map does not name is could-not-look below, never a pass.
+# A STATIC OBJECT, not a function with a definition per arm: regorus reads a
+# multi-arm function as a multi-value rule and the module would not load. A
+# target this map does not name is could-not-look below, never a pass.
 platform_of := {
 	"x86_64-unknown-linux-gnu": "linux-x86_64",
 	"aarch64-unknown-linux-gnu": "linux-aarch64",
@@ -76,42 +42,26 @@ platform_of := {
 	"x86_64-pc-windows-gnu": "windows-x86_64",
 }
 
-# THE DECLARED GAPS, AND EACH ONE IS A STATEMENT ABOUT UPSTREAM RATHER THAN A
-# SUPPRESSION.
+# A gap earns a row here only when the artifact does not exist upstream to pin,
+# verified against the scanner's own releases rather than inferred from a
+# refusal. `no-source-built-tool` forbids compiling one.
 #
-# A gap earns a row here only when the artifact does not exist to pin. Both of
-# these were verified against the scanner's own releases, not inferred from the
-# refusal: v0.1.11 publishes exactly `aarch64-apple-darwin`, `x86_64-apple-darwin`
-# and `x86_64-unknown-linux-gnu` — three binaries, and every tag from v0.1.2
-# ships the same three. `no-source-built-tool` forbids compiling one.
-#
-# WINDOWS WAS THE SECOND INSTANCE AND NOBODY HAD NOTICED IT. CLOUD-1431 was
-# written about arm64 because an arm64 runner surfaced it; building this map is
-# what showed `x86_64-pc-windows-gnu` has been in exactly the same state for its
-# whole life, with no runner to reveal it. That is the argument for the gate
-# rather than for the one fix: a list nobody compares drifts in silence.
-#
-# WHAT A DECLARED GAP COSTS A CONSUMER, stated so the row is not read as making
-# the platform work: `batten enforce` on that platform, with a `secrets` rule
-# declared, exits 1 naming the missing key. Fail-closed and loud, which is
-# `provision.rs`'s decision and the right one — but it is a refusal, not
-# scanning. The durable answer is a scanner that ships for these platforms
-# (CLOUD-59 owns that evaluation and its licence question); until then the gate's
-# job is to keep the gap visible instead of emergent.
+# A DECLARED GAP DOES NOT MAKE THE PLATFORM WORK, and reading it that way is the
+# one misreading worth guarding: `batten enforce` there still exits 1 naming the
+# missing key — fail-closed and loud, which is a refusal rather than scanning.
+# The durable answer is a scanner that ships for these platforms (CLOUD-59).
 declared_gap := {
 	"linux-aarch64",
 	"windows-x86_64",
 }
 
-# The release workflow's target matrix, read inline.
-#
-# INLINE RATHER THAN BOUND TO A TOP-LEVEL RULE, and this is not style: measured
-# on the compiled engine, a top-level rule whose VALUE carries a `deny` key at
-# any depth silences the whole module — every predicate, including one whose body
-# is `true`. `policy/ci-parity.rego` was dead over this repository's own tree for
-# as long as it bound `mise.toml`, which declares `[tasks.deny]`. `batten.toml`
-# is a policy authority full of the word, so binding either document is the one
-# mistake that makes this file look clean and decide nothing.
+# READ INLINE, NEVER BOUND TO A TOP-LEVEL RULE. Measured on the compiled engine:
+# a top-level rule whose VALUE carries a `deny` key at any depth silences the
+# whole module, every predicate, including one whose body is `true`.
+# `policy/ci-parity.rego` was dead over this tree for as long as it bound
+# `mise.toml`, which declares `[tasks.deny]`. `batten.toml` is a policy authority
+# full of the word, so binding either document makes this file look clean and
+# decide nothing.
 published contains target if {
 	some _, job in input.tree.documents[".github/workflows/release-artifacts.yml"].jobs
 	some entry in job.strategy.matrix.include
