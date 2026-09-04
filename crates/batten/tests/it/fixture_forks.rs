@@ -297,6 +297,44 @@ fn a_declared_fixture_owns_its_fork() {
     );
 }
 
+/// THE COULD-NOT-LOOK CHANNEL, DRIVEN BY THE ENGINE RATHER THAN FABRICATED.
+///
+/// The module's own `test_` rule for this arm hands over `input.tree.missing`
+/// directly, and `.claude/rules/policy-modules.md` says in as many words why
+/// that is not enough: *"Assert it in the second tier over the compiled binary,
+/// never with `with input as` — that fabricates the very shape the engine may be
+/// unable to produce, which is how the dead clause survived this long."* On
+/// CLOUD-1049 that channel was dead for two revisions while its load-time case
+/// passed, so a collector regression that stopped filing a path here would
+/// suppress `source read unread` and nothing would notice.
+///
+/// **Invalid UTF-8 rather than a permission drop**, and that is forced rather
+/// than chosen: this sandbox runs as root, so a mode bit never bites, and
+/// `primitives.rs::every_permission_drop_asserts_its_own_premise` is the gate
+/// that refuses a case asserting a conclusion over a precondition it never
+/// created. Bytes that are not UTF-8 make the read fail for a reason the
+/// environment cannot undo, which is the `Unparsed` cause rather than `Absent`.
+#[test]
+fn an_unreadable_fixture_is_reported_by_the_engine_rather_than_skipped() {
+    let root = repo("fixture-forks-unreadable", &[], &[]);
+    let path = root.join("crates/batten/tests/it/walker.rs");
+    fs::create_dir_all(path.parent().expect("the suite directory")).expect("scratch parent");
+    fs::write(&path, [0x66, 0x6e, 0x20, 0xff, 0xfe, 0x0a]).expect("write invalid UTF-8");
+
+    assert_eq!(
+        verdicts(&root),
+        vec![FORK_ADDED.to_owned()],
+        "a selected source the engine could not read is a finding, never a \
+         clean tree — the two are byte-identical on the decision surface"
+    );
+    assert_eq!(
+        pointers(&root),
+        vec!["crates/batten/tests/it/walker.rs".to_owned()],
+        "the could-not-look finding points at the file and carries no line, \
+         because there is no line to carry"
+    );
+}
+
 /// ANTI-VACUITY ON THE SCOPE. The engine's own source has the same content and
 /// is not this rule's business — without the anchor the rule would refuse
 /// `git.rs`, and with a wrong anchor it would refuse nothing at all while still

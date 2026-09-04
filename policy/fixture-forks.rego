@@ -12,15 +12,24 @@
 # filesystem instead. This is what stops that reversing: a new fixture that forks
 # `git init` for itself is refused at the line that does it.
 #
-# WHY A MODULE AND A `kind = "ratchet"` ROW BOTH EXIST, since the pair looks like
-# duplication and is not. A ratchet counts a literal across a glob and compares
-# two totals — the right instrument for "the aggregate did not grow", and the
-# only one, because Rego is handed no base-side COUNT. `input.tree["base-delta"]`
-# carries paths and the base side of an edited path's LINES, which is a different
-# and sharper question: WHICH line introduced the fork. So the row owns the
-# aggregate and this module owns the pointer, and neither can answer the other's
-# question. `test-targets.rego`'s header argues the same split from the other
-# side.
+# THIS MODULE IS THE WHOLE GATE, AND THERE IS NO AGGREGATE RATCHET BESIDE IT.
+#
+# A `kind = "ratchet"` row over `git_in(` was written in the same branch as this
+# module and withdrawn in it. It counted CALL SITES, and the measurement above is
+# why that fails: 79 hand-rolled sites produce 1,819 processes, so the template
+# removed 1,008 processes while ADDING 17 call sites, and the row refused its own
+# enabling change. `batten.toml` carries the withdrawal and its reasoning.
+#
+# So the question this module answers is not "the pointer half" of a pair — it is
+# the question, and it is a per-file COMPARISON rather than a total: was a fork
+# ADDED to a file, or did a file END the change with more than it started with?
+# `input.tree["base-delta"]` carries the paths and the base side of an edited
+# path's lines, which is exactly what that needs.
+#
+# THE AGGREGATE IS NOT LEFT UNCOVERED BY THIS. A total can only grow through a
+# fork appearing in some file, and a fork appearing in some file is what the two
+# arms below read — at a `path:line` a reader opens, rather than as a count they
+# have to reconstruct.
 #
 # NO CEILING IS WRITTEN DOWN, for `bash-surface-not-growing`'s reason: a number
 # in a file is a second authority over a count the engine computes. What is

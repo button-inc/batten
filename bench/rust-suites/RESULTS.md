@@ -142,13 +142,24 @@ above, and the fraction of it this work can remove is the next section.
 
 Of the 25.17s of git:
 
-| removed by                                                | seconds   |
-| --------------------------------------------------------- | --------- |
-| `-c gc.auto=0` (all 1,745 `maintenance` processes)        | 0.95      |
-| the `git init` template (1,819 processes)                 | 4.49      |
-| `pin_origin_main` (1,018 `update-ref` processes)          | 0.85      |
-| identity baked into the template (436 `config` processes) | 0.26      |
-| **total**                                                 | **6.55s** |
+**This table was a PREDICTION and two of its rows were wrong.** It is kept with
+the errors named rather than quietly rewritten, because both are the same class
+this file exists to record — reasoning to a number instead of reading one. The
+measured outcome is in "Step 1" and "Step 3" below.
+
+| predicted removal                                         | predicted | measured                                                |
+| --------------------------------------------------------- | --------- | ------------------------------------------------------- |
+| auto-maintenance (all 1,745 `maintenance` processes)      | 0.95      | 0.95 — but by `maintenance.auto=false`, NOT `gc.auto=0` |
+| the `git init` template (1,819 processes)                 | 4.49      | 3.03 (1,819 → 813; the 79 hand-rolled sites remain)     |
+| `pin_origin_main` (1,018 `update-ref` processes)          | 0.85      | 0.85 (1,018 → 0)                                        |
+| identity baked into the template (436 `config` processes) | 0.26      | **0.00 — not removed at all** (436 → 443)               |
+
+The last row is the instructive one. Baking the identity into the template
+removes the two `config` forks a fixture built through `Fixture::git` would have
+spent — but the 79 hand-rolled sites set their own identity after their own
+`init`, so the count did not fall. A prediction that a change removes a cost is
+not a reading that it did.
+| **total** | **6.55s** |
 
 **6.55s of 523.3s is 1.25% of serial.** `commit` (12.23s) and `add` (4.84s) stay,
 because `commit -a` does not stage untracked files and writing objects by hand
@@ -276,9 +287,18 @@ as a total they have to reconstruct.
 
 ## The honest headline
 
-The fixture is not what the suite spends its time on. Making it cheap is worth
-roughly **1.25% of serial**, plus whatever `core.fsync=none` returns from
-`commit`'s 12.23s. It is still worth landing — the change is small, it removes
-5,018 processes, and the ratchet stops the shape regrowing — but it must not be
+The fixture is not what the suite spends its time on. Measured end to end, the
+change removes **3,441 of 9,476 git processes (−36%) and 9.75s of 25.17s
+(−39%)** — which is **1.86% of the 523.3s serial total**.
+
+It is still worth landing: the diff is small, the flags reach every fork, and
+`policy/fixture-forks.rego` stops the shape regrowing. But it must not be
 reported as having made the suite materially faster, and CLOUD-1419's §2 is
 corrected to say so.
+
+**An earlier revision of this paragraph said 5,018 processes**, which was the
+predicted table's `init` + `update-ref` + `config` + `maintenance` summed as if
+each went to zero. Three of the four did not: 813 `init` processes remain and
+`config` did not move. 3,441 is the difference between two readings; 5,018 was
+arithmetic over four predictions — the same substitution this whole file is
+about, made inside it.
