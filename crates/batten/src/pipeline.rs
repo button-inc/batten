@@ -88,12 +88,19 @@ impl Compensation {
     /// rather than by a reviewer who remembers this file's header.
     #[must_use]
     pub const fn is_durable(self) -> bool {
+        // EVERY VARIANT NAMED, never a wildcard, and that is the mechanism this
+        // method is: `Compensation` is `#[non_exhaustive]`, so an arm added later
+        // fails to compile HERE and its author is asked the question by the
+        // compiler rather than by a reviewer who remembers this file's header.
+        //
+        // `Nothing` answers yes vacuously — there is no effect, so nothing could
+        // fail to survive — and the other three are writes to somebody else's
+        // server or ref. One arm rather than two because clippy is right that the
+        // bodies are identical today; the discrimination this buys is over the
+        // arm nobody has written yet, which is exactly what
+        // `Invalid::NotDurable` is the slot for.
         match self {
-            // Vacuously: there is no effect, so there is nothing that could fail
-            // to survive.
-            Self::Nothing => true,
-            // All three are writes to somebody else's server or ref.
-            Self::Redraft | Self::Abandon | Self::ReleaseLease => true,
+            Self::Nothing | Self::Redraft | Self::Abandon | Self::ReleaseLease => true,
         }
     }
 
@@ -189,6 +196,7 @@ impl Pipeline {
     /// Every way the list is unwalkable, as [`Invalid`]. All of them are
     /// returned, not just the first: an author fixing one at a time pays a load
     /// cycle each.
+    #[must_use]
     pub fn validate(&self) -> Vec<Invalid> {
         let mut found = Vec::new();
 
