@@ -3467,6 +3467,7 @@
             "ci-hygiene",
             "commit-hygiene",
             "landing-loop",
+            "mise",
             "pinned-toolchain",
             "shell-hygiene",
             "trunk-based"

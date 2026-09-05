@@ -420,6 +420,45 @@ abandon the other unread.",
         ],
         patterns: &[],
     },
+    // The task runner's own receipt, read as an alias table (CLOUD-946).
+    //
+    // BESIDE `pinned-toolchain` RATHER THAN INSIDE IT, and the difference is the
+    // affordance rather than the subject. That preset asks whether a program was
+    // reached around the pin and can only name the program; this one reads a
+    // receipt mapping task NAME to argv, so its refusal names the task to run
+    // instead. A caller told a program was reached loosely has to go and find
+    // which task wraps it; a caller told the task's name has the remedy in the
+    // refusal.
+    //
+    // NO PATTERNS, and that is honest rather than an omission: the predicate is
+    // set membership over words the boundary already parsed, so there is no
+    // concept here with a spelling. `.claude/rules/policy-modules.md`'s preset
+    // exemption is therefore unexercised — nothing is inline because nothing is
+    // a regex.
+    Manifest {
+        name: "mise",
+        version: 1,
+        scope: RuleScope::MediatedCall,
+        modules: &[(
+            "<preset:mise>/task-over-executable.rego",
+            include_str!("policy/presets/mise/task-over-executable.rego"),
+        )],
+        verdicts: &[VendoredVerdict {
+            id: "task reach loose",
+            gloss: "a task's own program was reached directly rather than through the task",
+            class: "A project that defines a task has already decided how that work is \
+invoked — which program, which arguments, and which environment composes around it. \
+Running the task's program directly reproduces the argv and drops the rest, and the \
+failure that produces looks like the failure being investigated rather than like a wrong \
+invocation. The refusal names the task because the mapping it reads is task to argv: the \
+remedy is in the finding rather than a file the reader has to go and search.",
+            routes: &[run(
+                "task run first",
+                "run the task the refusal names, through the task runner",
+            )],
+        }],
+        patterns: &[],
+    },
     Manifest {
         name: "pinned-toolchain",
         version: 1,
