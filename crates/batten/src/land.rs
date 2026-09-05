@@ -1359,26 +1359,22 @@ pub fn admits_the_landing(root: &Path, gates: &[Vec<String>], pr: &str) -> Admit
         let Some(first) = argv.first() else {
             continue;
         };
-        // THE ADVISORY MARKER, and it exists because the predecessor's pair is
-        // not two enforcers. `mise-tasks/land.sh` ran the drop as
-        // `… || true` and only the check as an `if !`, deliberately: the drop
-        // makes the call and FAILS OPEN — off harness, no token, any non-200 —
-        // while the check reads the receipt and refuses. Without a spelling for
-        // that, porting the pair either drops the call or promotes its exit code
-        // into a stop the bash never had.
-        //
-        // Consumer-facing and one character, because the alternative was a second
-        // environment variable listing which of the gates are advisory — two
-        // authorities over one list, and a drift the moment a name changes in
-        // only one of them.
         let advisory = first.starts_with(ADVISORY);
-        let gate = first.trim_start_matches(ADVISORY).to_owned();
-        if gate.is_empty() {
+        let program = first.trim_start_matches(ADVISORY).to_owned();
+        if program.is_empty() {
             continue;
         }
-        let mut with_pr: Vec<String> = std::iter::once(gate.clone())
+        let mut with_pr: Vec<String> = std::iter::once(program.clone())
             .chain(argv.iter().skip(1).cloned())
             .collect();
+        // THE WHOLE ARGV, NOT ITS FIRST WORD, and this is the sibling of the same
+        // fix in `ready` one function up. The first word is the RUNNER, so with
+        // this consumer's declared pair every possible refusal reported `mise` —
+        // a pointer identical across every finding, which is no pointer at all.
+        // Built from `with_pr` BEFORE the number is appended, and from the
+        // advisory-stripped program, so it reads as the command an operator would
+        // run rather than as this engine's own spelling (review of #848).
+        let gate = with_pr.join(" ");
         with_pr.push(pr.to_owned());
         let Some((code, output)) = crate::exec::piped_argv(root, &with_pr, "") else {
             // AN ADVISORY GATE THAT WILL NOT RUN IS NOT A REFUSAL EITHER, which

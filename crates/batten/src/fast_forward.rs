@@ -96,6 +96,56 @@ pub fn open_pull_request(repo: &str, branch: &str) -> Option<String> {
     }
 }
 
+/// Whether the forge says this pull request actually MERGED.
+///
+/// **The workflow's conclusion is not this, and reading it as this deleted
+/// branches** (review of #848). `Answer::Accepted` says the bot's run finished
+/// without refusing; it does not say a merge happened, and `answer`'s own module
+/// header says so — *"the merge shows up as the pull request's own terminal state
+/// rather than here"*. Nothing read that state, so `Progress::Landed` retired the
+/// branch on the bot's say-so: `refs/heads/<branch>` deleted on the remote, the
+/// tracking ref gone, the receipts swept, under a pull request that could still
+/// be open.
+///
+/// The predecessor asked exactly this question at exactly this point and died on
+/// anything but a merge. This restores that gate.
+///
+/// Three-valued for [`Lookup`]'s reason: a forge that would not answer must not
+/// read as *not merged*, because the caller's action on that is to keep lapping,
+/// which is the safe direction — where reading it as merged deletes things.
+#[must_use]
+pub fn merged(repo: &str, pr: &str) -> Merged {
+    let Some(answer) = crate::rest::get(&format!("repos/{repo}/pulls/{pr}"), None) else {
+        return Merged::Unreadable(0);
+    };
+    if !answer.is_reading() {
+        return Merged::Unreadable(answer.status);
+    }
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(&answer.body) else {
+        return Merged::Unreadable(answer.status);
+    };
+    // `merged` is the forge's own boolean and is the only field that answers
+    // this. `state == "closed"` does NOT: a pull request closed without merging
+    // is closed, and treating that as landed is the predecessor's own `die`
+    // case.
+    match document.get("merged").and_then(serde_json::Value::as_bool) {
+        Some(true) => Merged::Yes,
+        Some(false) => Merged::No,
+        None => Merged::Unreadable(answer.status),
+    }
+}
+
+/// The forge's answer to "did this pull request merge".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Merged {
+    /// It merged. The branch has done its job.
+    Yes,
+    /// The forge answered and it has not merged.
+    No,
+    /// The forge did not answer. **Never a fact about the pull request.**
+    Unreadable(u16),
+}
+
 /// What a pull-request lookup actually found, with could-not-look kept apart.
 ///
 /// **[`open_pull_request`]'s `None` COLLAPSED TWO ANSWERS and every caller
@@ -365,13 +415,25 @@ fn concluded(runs: &[serde_json::Value], since: &str, wanted: &str) -> Option<St
 /// A conclusion token, as the lap's three-valued reading of it.
 ///
 /// A CLOSED VOCABULARY, and `failure` is the only one that is a verdict about the
-/// branch. `skipped` joins `success` because the bot ran and did not refuse;
-/// everything else — `cancelled`, `timed_out`, `startup_failure`, `stale`,
-/// `action_required` — is the bot not deciding, which is not the branch's fault
-/// and must not stop the landing.
+/// branch. Everything that is not `success` or `failure` — `cancelled`,
+/// `timed_out`, `startup_failure`, `stale`, `action_required` — is the bot not
+/// deciding, which is not the branch's fault and must not stop the landing.
+///
+/// **`skipped` USED TO JOIN `success` AND THAT WAS A BRANCH-DESTROYING READ**
+/// (review of #848). The reasoning was *"the bot ran and did not refuse"*, which
+/// is true and is not the question: a workflow skipped by a job-level `if:`, a
+/// path filter or a concurrency rule NEVER MERGED ANYTHING. `Accepted` reaches
+/// `Progress::Landed`, which retires the branch — deleting `refs/heads/<branch>`
+/// on the remote, its tracking ref and its receipts — so a skip deleted the head
+/// branch out from under a pull request that was still open.
+///
+/// It is `Unknown` now, which laps rather than lands. A caller that wants to know
+/// whether the merge actually happened must read the pull request's own terminal
+/// state, which is what the predecessor did and what this answer deliberately
+/// does not claim to be.
 fn grade(conclusion: &str) -> Answer {
     match conclusion {
-        "success" | "skipped" => Answer::Accepted,
+        "success" => Answer::Accepted,
         "failure" => Answer::Refused,
         other => Answer::Unknown(other.to_owned()),
     }
