@@ -1304,6 +1304,53 @@ pub(crate) fn annotations_naming(source: &str, lint: &str) -> Vec<(usize, String
         if close + 2 > next {
             continue;
         }
+        // AN ATTRIBUTE INSIDE A COMMENT IS PROSE, NOT AN INVENTORY ROW.
+        //
+        // The bound above handles a doc comment naming an annotation WITHOUT its
+        // arguments — that has no closer of its own and is skipped. It does not
+        // handle one that spells it in full, and that is the shape a module
+        // explaining why its spawn was retired naturally writes: "this was a
+        // child process under `#[expect(clippy::disallowed_types)]`". Seven such
+        // sentences read as seven annotations carrying no `reason`, so the census
+        // reported the prose that RECORDS a retirement as a row that had not
+        // been decided.
+        //
+        // Keyed on the line's own opening rather than on a span search: a
+        // comment marker anywhere earlier in the file says nothing about this
+        // line, and the question is only ever whether THIS attribute is
+        // commented out.
+        let line_start = source[..open].rfind('\n').map_or(0, |at| at + 1);
+        let before = &source[line_start..open];
+        if before.trim_start().starts_with("//") {
+            continue;
+        }
+        // NOR IS ONE INSIDE A STRING LITERAL. `spawn_widening.rs` builds fixture
+        // MODULES as string constants, so the escape a case hands the gate under
+        // test is spelled in full inside quotes — and the census read three of
+        // its own fixtures as undecided rows. An odd number of quotes before the
+        // opener means this `#[` is inside one; escaped quotes do not open or
+        // close, so they are skipped rather than counted.
+        let quotes = before
+            .char_indices()
+            .filter(|&(at, ch)| ch == '"' && !before[..at].ends_with('\\'))
+            .count();
+        if quotes % 2 == 1 {
+            continue;
+        }
+        // AND AN ATTRIBUTE THAT IS NOT A LINT LEVEL IS NOT THIS INVENTORY'S.
+        //
+        // The span bound above stitches a BARE attribute — `#[test]`, which has
+        // no closer of its own — to the next `)]` further down, so a case whose
+        // body mentions the lint made its own `#[test]` a finding. Requiring the
+        // opener to be one of the four level words is what the callers actually
+        // mean by an annotation, and it decides in one comparison rather than by
+        // guessing where a bare attribute ends.
+        let opens_a_level = ["expect(", "allow(", "warn(", "deny("]
+            .iter()
+            .any(|level| rest[2..].trim_start().starts_with(level));
+        if !opens_a_level {
+            continue;
+        }
         let attribute = &rest[..close + 2];
         if attribute.contains(lint) {
             found.push((source[..open].lines().count() + 1, attribute.to_owned()));

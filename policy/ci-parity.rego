@@ -488,15 +488,33 @@ violation contains {
 # COUNTED rather than grepped for absence, for the reason the predecessor gave:
 # the two forms differ only by a suffix, so a search for the bare spelling would
 # pass a file carrying both.
-lease_invocations(path) := count([line |
-	some line in input.tree.lines[path]
+# PAIRED PER INVOCATION, NEVER TWO INDEPENDENT TOTALS. These were two `count`s
+# compared for equality, and equal totals is not the property: a file with two
+# invocations, one of them untolerated, passes as soon as any unrelated line
+# anywhere in it carries the tolerance string. The comparison could be satisfied
+# by a coincidence, over the one clause whose failure re-drafts the whole fleet.
+#
+# The invocation is a two-line spelling — the guard's argv ends in a `\` and its
+# operands and `|| exit 0` follow on the next line — so the tolerance belongs to
+# the line immediately AFTER the one that invokes. Indexing is what expresses
+# that; counting cannot.
+lease_invocations(path) := count([i |
+	some i, line in input.tree.lines[path]
 	contains(line, "lease guard \\")
 ])
 
-lease_tolerant(path) := count([line |
-	some line in input.tree.lines[path]
-	contains(line, "\"$LEASE_RUN_ID\" || exit 0")
+# An invocation whose CONTINUATION does not carry the tolerance. An absent next
+# line reads as untolerated, which is the direction a miss must fail in: a guard
+# invocation at end-of-file has no `|| exit 0` at all.
+lease_untolerated(path) := count([i |
+	some i, line in input.tree.lines[path]
+	contains(line, "lease guard \\")
+	not tolerated_at(path, i)
 ])
+
+tolerated_at(path, i) if {
+	contains(input.tree.lines[path][i + 1], "\"$LEASE_RUN_ID\" || exit 0")
+}
 
 violation contains {
 	"rule": "lease-authorises-before-spending",
@@ -506,7 +524,7 @@ violation contains {
 	governed
 	some path, _ in input.tree.lines
 	lease_invocations(path) > 0
-	lease_invocations(path) != lease_tolerant(path)
+	lease_untolerated(path) > 0
 }
 
 # --- a workflow reading check status decides green through one predicate ------

@@ -176,9 +176,104 @@ pub fn post_json(path: &str, body: &serde_json::Value) -> Option<Answer> {
     exchange(path, None, Some(&encoded))
 }
 
+/// Where a SUITE may put canned responses instead of the forge.
+///
+/// **A test seam, and it is here because retiring a spawn retired a tier.** The
+/// suites over `pr watch` and its siblings drove the engine by putting a stubbed
+/// `gh` on `PATH`: the program was the seam, so a case could hand the poll a
+/// `304`, a rate-limit header or a green body and count the calls. Moving the
+/// read in-process removed that seam and left those cases with no way to answer,
+/// so `pr watch`'s unbounded loop polled a forge it could not reach — measured at
+/// 46 minutes on two cases before the run was killed.
+///
+/// The alternative was to leave the spawn, and that is the wrong trade: a
+/// compiled-binary tier is what proves the ENGINE builds what the caller reads,
+/// and losing it is exactly the class `.claude/rules/policy-modules.md` names.
+/// So the seam moves to the boundary the read moved to.
+///
+/// **`LEASE_FROM_REF`'s standing, in the same words**: overridable only so the
+/// suite can point it at a fixture. It is read once, here, at the one exchange
+/// every verb in this module goes through — so there is no second route and
+/// nothing a consumer gains by setting it except responses they wrote
+/// themselves.
+const FIXTURE: &str = "BATTEN_REST_FIXTURE";
+
+/// Serve one response from the fixture directory, counting the call.
+///
+/// The protocol is the stubbed program's, conserved exactly so the cases that
+/// read it back need no rewrite: `resp.<n>` for the n-th call and `resp.last`
+/// once they run out, the count in `calls`, and the request appended to `args`.
+fn from_fixture(dir: &std::path::Path, url: &str, etag: Option<&str>) -> Option<Answer> {
+    let calls = dir.join("calls");
+    let n = std::fs::read_to_string(&calls)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .unwrap_or(0)
+        + 1;
+    let _ = std::fs::write(&calls, format!("{n}\n"));
+    if let Ok(mut args) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("args"))
+    {
+        use std::io::Write as _;
+        // THE VALIDATOR IS PART OF THE REQUEST A CASE READS BACK. The stubbed
+        // program recorded its whole argv, so `-H "If-None-Match: …"` was
+        // visible and the 304 case asserts on it — the conditional poll IS the
+        // economy, so a fixture that hid it would let the header go away
+        // silently. Written in the client's own spelling, which is what keeps
+        // that assertion's bytes unchanged.
+        match etag {
+            Some(etag) => {
+                let _ = writeln!(args, "{url} -H If-None-Match: {etag}");
+            }
+            None => {
+                let _ = writeln!(args, "{url}");
+            }
+        }
+    }
+    let raw = std::fs::read_to_string(dir.join(format!("resp.{n}")))
+        .or_else(|_| std::fs::read_to_string(dir.join("resp.last")))
+        .ok()?;
+    Some(canned(&raw))
+}
+
+/// One `-i`-style response text, as an [`Answer`].
+///
+/// The fixtures are written in the shape the forge's own client printed, which
+/// is what lets a case that predates this seam keep its bytes.
+fn canned(raw: &str) -> Answer {
+    let clean = raw.replace('\r', "");
+    let (head, body) = clean.split_once("\n\n").unwrap_or((clean.as_str(), ""));
+    let mut lines = head.split('\n');
+    let status = lines
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse().ok())
+        .unwrap_or(0);
+    let header = |name: &str| {
+        lines.clone().find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            (key.trim().eq_ignore_ascii_case(name)).then(|| value.trim().to_owned())
+        })
+    };
+    Answer {
+        status,
+        etag: header("etag"),
+        poll_floor: header("x-poll-interval")
+            .and_then(|raw| raw.trim().parse::<f64>().ok())
+            .filter(|seconds| seconds.is_finite() && *seconds > 0.0),
+        backoff: header("retry-after").and_then(|raw| raw.trim().parse::<u64>().ok()),
+        body: body.to_owned(),
+    }
+}
+
 fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>) -> Option<Answer> {
     let now = crate::now_unix();
     let url = format!("{API}/{path}");
+    if let Some(dir) = std::env::var_os(FIXTURE) {
+        return from_fixture(std::path::Path::new(&dir), &url, etag);
+    }
     let headers = headers(etag, body.is_some_and(|bytes| !bytes.is_empty()));
     let mut answers = fetch::spend(&[Call {
         url: &url,

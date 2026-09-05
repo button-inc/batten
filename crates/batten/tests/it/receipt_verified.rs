@@ -61,8 +61,13 @@ fn repo(name: &str) -> std::path::PathBuf {
     // taken under — `receipt record` refuses a tree with no `batten.toml` at
     // HEAD, and rightly: a receipt that named no policy would still be valid
     // after the policy changed underneath it.
+    // AND IT DECLARES THE SET, because `verified_by` is the consumer's now: the
+    // two names used to be a `const` in `receipt.rs`, which put this
+    // repository's own task names inside `crates/batten` (rule 1). An
+    // undeclared set REFUSES rather than passing, so a fixture that omitted the
+    // row would exercise the usage error instead of the predicate.
     let dir = Fixture::at(scratch(name).join("repo"))
-        .config("version = 1\n")
+        .config("version = 1\n\n[receipt]\nverified_by = [\"verify\", \"linear-check\"]\n")
         .file("src.rs", "fn main() {}\n")
         .git()
         .base_commit()
