@@ -619,6 +619,50 @@ reason = """
 Hand-watching CI is the ad-hoc shape `mise run ci-wait` replaces. Background \
 it rather than holding a foreground poll open."""
 
+# CLOUD-1461. `land` drives the whole loop, and AGENTS.md puts that above the
+# agent's own judgement: run the lifecycle tasks "as written, never wrapped in
+# bespoke retry or pre-check logic", because "`main` advancing under your branch
+# is this loop working, not a race to engineer around". That rule had no
+# mechanism, which non-negotiable rule 2 calls half a change.
+#
+# MEASURED 2026-09-05, on this repository. `verify` refused with "main moved
+# under this branch — rebase and verify again, there is nothing here to fix",
+# naming its own remedy, and the session hand-stepped `git fetch origin main`,
+# `git rebase origin/main` and `git push` instead of handing the lap back to
+# `land`. Nothing refused any of it. The NEIGHBOURING shape is gated — a
+# `git push --force-with-lease` minutes earlier was refused by `leased-push` —
+# which is what makes this a gap rather than a decision somebody took.
+#
+# `contains` IS THE WHOLE PREDICATE, not a narrowing flourish. AGENTS.md names
+# exactly one hand spelling that stays legitimate — on a conflict, "resolve and
+# `git rebase --continue`, never a fresh `git rebase origin/main`" — and a
+# `shape` row compares operand words with flags already DROPPED, so `pattern`
+# alone cannot tell the two apart and would refuse the one step the contract
+# requires by hand. `contains` matches the raw text of the same segment, so the
+# fresh rebase is denied and the continue is untouched.
+#
+# WHAT THIS DELIBERATELY DOES NOT GATE: a hand `git push`. The honest predicate
+# is "pushing a branch that already has an open pull request", which needs forge
+# state, and a round trip on every mediated call is disqualified for the reason
+# `claim-not-raced` records when it moved off this path. A blanket `git push`
+# deny is refused rather than shipped: committed-and-pushed is what survives a
+# container reclaim, so denying it outright would make the reclaim advice
+# unfollowable. Named as a known limit so the silence is not read as coverage.
+[[rule]]
+id = "rebase-not-hand-stepped"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "git rebase"
+contains = "origin/main"
+reason = """
+Rebasing onto `main` by hand is a lap of the loop `mise run land` drives, and \
+taking it off the task is the race the contract refuses rather than a repair. \
+Background `mise run land`; it fetches, rebases, verifies, pushes and waits, \
+and stops only for a rebase conflict, a failed `verify`, or red CI. A conflict \
+is the one step that is yours: resolve it and `git rebase --continue`, which \
+this row does not touch."""
+
 # The toolchain pin, given a mechanism (CLOUD-271). AGENTS.md has said "never a
 # bare `cargo`" since long before anything enforced it, which non-negotiable
 # rule 2 calls half a change.
