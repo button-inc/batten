@@ -2,7 +2,7 @@
 //!
 //! # What this file is
 //!
-//! `mise-tasks/land.sh` was 2250 lines of Button-specific landing policy and
+//! `mise-tasks/land.sh` was 2250 lines of consumer-specific landing policy and
 //! `tests/land.bats` pinned it with 146 cases. Both are retired here. This file
 //! carries the ledger `policy/shell-retirement.rego` reads — two file-level arms
 //! and one row per `@test` title — plus the cases that answer the one title no

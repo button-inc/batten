@@ -145,6 +145,31 @@ fn string_at(row: &serde_json::Value, key: &str) -> String {
         .to_owned()
 }
 
+/// The wait to honour when the server sent BOTH a cadence and a backoff.
+///
+/// **They are different things and `rest.rs` says so at the field** —
+/// `poll_floor` is *how often to ask*, `backoff` is *stop asking until*. Taking
+/// one `or` the other would drop whichever arrived second; taking the larger is
+/// the only combination that satisfies both, because a backoff is a lower bound
+/// on the wait exactly as a floor is.
+///
+/// Written because `Answer::backoff` had **no consumer at all** outside
+/// `rest.rs` (review of #848): a `403` carrying `Retry-After: 60` was answered by
+/// continuing at the configured one-second cadence, which is the predecessor
+/// defect `rest.rs` names as the reason the field exists — a poll responding to
+/// being rate-limited by generating more of the request that was just refused.
+#[must_use]
+pub(crate) fn longer_of(floor: Option<f64>, backoff: Option<u64>) -> Option<f64> {
+    // Narrowed the way `interval_for` narrows its own argument, and for the same
+    // reason: the conversion is then exact for every value that survives it.
+    let backoff = backoff.map(|secs| f64::from(u32::try_from(secs).unwrap_or(u32::MAX)));
+    match (floor, backoff) {
+        (Some(floor), Some(backoff)) => Some(floor.max(backoff)),
+        (Some(only), None) | (None, Some(only)) => Some(only),
+        (None, None) => None,
+    }
+}
+
 /// The interval to honour: the configured one unless the server asked for more.
 ///
 /// A server-sent floor is the endpoint asking to be polled less often, so it
@@ -255,11 +280,30 @@ impl Poll {
         if let Some(etag) = &answer.etag {
             self.etag = Some(etag.clone());
         }
-        if answer.status != 304 {
+        // **ONLY A READING REPLACES THE READING** (review of #848). This was
+        // `status != 304`, which takes every OTHER status too — so a `401`, a
+        // `403` or a `404` had its ERROR DOCUMENT parsed as a check-run page,
+        // yielding zero runs, and that empty set overwrote a good reading. The
+        // trap is what follows: an error response carries no `ETag`, so the
+        // previous validator survives the branch above, the next request is
+        // conditional against it, the forge answers `304`, and the empty reading
+        // is then preserved by the very rule that exists to preserve a good one.
+        // One transient error and the poll holds "no runs" indefinitely.
+        //
+        // `is_reading()` is `200` alone, and `304` is deliberately not one: it
+        // means *nothing changed*, so the reading it refers to is the one already
+        // held. The guard was applied at `head_verdict` and not here, where every
+        // poll actually goes through.
+        if answer.is_reading() {
             self.runs = runs_from_body(&answer.body);
             self.signature = signature(&answer.body);
         }
-        interval_for(configured, answer.poll_floor)
+        // THE SERVER'S BACKOFF OUTRANKS THE CONFIGURED FLOOR. `Answer::backoff`
+        // carries `Retry-After`, and it had no consumer at all — a `403` that
+        // said "wait 60 seconds" was answered by continuing at the configured
+        // 1s cadence, which is the predecessor defect `rest.rs` names as the
+        // reason the field exists.
+        interval_for(configured, longer_of(answer.poll_floor, answer.backoff))
     }
 
     /// The reading this poll currently holds.

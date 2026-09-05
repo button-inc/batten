@@ -3311,7 +3311,13 @@ fn run_pr(
 
     let config = pr_watch::Config {
         sha,
-        repo: repo.unwrap_or_else(|| pr_watch::REPO_PLACEHOLDER.to_owned()),
+        // `--repo` FIRST, THEN THE REMOTE, and the placeholder only where neither
+        // answers. This verb has no `root` argument, so the reading is taken from
+        // the working directory the caller invoked it in — which is the same
+        // checkout every other reading in this process comes from. See
+        // [`repo_slug`] for why the bare placeholder is a guaranteed 404 rather
+        // than a fallback.
+        repo: repo.unwrap_or_else(|| repo_or_placeholder(Path::new("."))),
         interval,
         progress,
     };
@@ -6508,7 +6514,7 @@ fn run_land(
             let _ = speculation::recover(root, &mut standing);
             run_land_verify(root, &standing, &branch, None, out, err)
         }
-        cli::LandCommand::FastForward => run_land_fast_forward(&branch, out, err),
+        cli::LandCommand::FastForward => run_land_fast_forward(root, &branch, out, err),
         cli::LandCommand::Replay { reference } => {
             let Some(url) = land_remote(root, err)? else {
                 return Ok(ExitCode::Internal);
@@ -6679,13 +6685,7 @@ fn run_land_lap(
                 place_the_bet(root, &mut bet, reference, branch, out)?;
             }
             if let Some(pipeline::Precheck::BaseMoved) = row.precheck {
-                let trunk = trunk_watch(
-                    reference,
-                    "",
-                    &std::env::var("GH_REPO")
-                        .unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned()),
-                    1,
-                );
+                let trunk = trunk_watch(reference, "", &repo_or_placeholder(root), 1);
                 if let Some(moved) = land::stale(root, &mut trunk_poll, &trunk, reference) {
                     writeln!(
                         out,
@@ -6707,7 +6707,7 @@ fn run_land_lap(
                     seen = verdict;
                     code
                 }
-                land::Step::FastForward => run_land_fast_forward(branch, out, err)?,
+                land::Step::FastForward => run_land_fast_forward(root, branch, out, err)?,
             };
             // ENTERED ON SUCCESS, OR ON THE ATTEMPT WHERE THE UNDO SAYS SO. The
             // first half is the discrimination the undo rests on: a `Ready` that
@@ -6810,7 +6810,7 @@ fn unwind_lap(
     if owed.is_empty() {
         return Ok(());
     }
-    let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
+    let repo = repo_or_placeholder(root);
     // ONE OBSERVATION FOR TWO QUESTIONS. Whether this clone owns the pull request
     // and whether it owes the lease back are the same fact, and asking twice
     // invites the two answers to disagree across the gap between them.
@@ -7089,20 +7089,30 @@ fn unwind_the_bet(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {
+    // FULLY QUALIFIED, because both writers end in `gitwrite::set_ref` and its
+    // `FullName::try_from` does not reject a SHORT name — it rejects a slashless
+    // lowercase one and takes a slashed one VERBATIM as a full name. `branch`
+    // comes from `git::current_branch`, which shortens, so `feature/x` wrote a
+    // stray loose ref outside `refs/heads/` while the checkout moved, and
+    // `Somelowercase` failed outright with the borrowed range still in the tree.
+    // Every sibling already qualifies — `place_the_bet` and `land::replay` both
+    // spell `refs/heads/{branch}`, and the only tests of these two writers pass a
+    // full name, which is why nothing caught it (review of #848).
+    let full = format!("refs/heads/{branch}");
     let outcome = if let Some(undo) = bet.undo.as_deref() {
         writeln!(
             out,
             "land: the speculation did not land; unwinding to {} rather than carrying another branch's commits",
             short(undo)
         )?;
-        gitwrite::reset_hard(root, branch, undo).map(|_| true)
+        gitwrite::reset_hard(root, &full, undo).map(|_| true)
     } else {
         writeln!(
             out,
             "land: an earlier run bet on a base that is no longer landing; replaying this branch's own commits onto {} rather than carrying another branch's",
             short(tracking)
         )?;
-        gitwrite::replay_onto(root, branch, base, tracking)
+        gitwrite::replay_onto(root, &full, base, tracking)
             .map(|replayed| !matches!(replayed, gitwrite::Rebase::Conflicted { .. }))
     };
     if let Ok(true) = outcome {
@@ -7249,6 +7259,48 @@ fn drop_the_bet(root: &Path, bet: &mut speculation::Bet) {
     let _ = gitwrite::delete_ref(root, speculation::LIVE_REF);
 }
 
+/// The repository this lap is landing in, as the forge spells it.
+///
+/// # THE PLACEHOLDER WAS A GUARANTEED 404, NOT A FALLBACK
+///
+/// Nine sites read `$GH_REPO` and fell back to [`pr_watch::REPO_PLACEHOLDER`].
+/// That literal is the forge CLI's own substitution, performed inside the client
+/// the retirement removed — `rest::get` sends the path it is given, so
+/// `{owner}/{repo}` reached the endpoint verbatim, every read 404'd, and
+/// `open_pull_request` answered `None`. The caller then printed *"no open pull
+/// request for `<branch>`"*, which is a could-not-look wearing a fact about the
+/// branch, and `mise run land` stopped on it before its first lap (review of
+/// #848). One site had already been corrected in place; the fallback was the
+/// defect, so it is the fallback that moves.
+///
+/// **The remote is the answer, and it is one this clone already has.**
+/// [`race::slug_of`] reduces both spellings the forge hands out, and it refuses
+/// to guess rather than deriving a slug that would ask the forge confidently
+/// about a DIFFERENT repository. `$GH_REPO` still wins where it is set, because
+/// a fork landing into an upstream is a fact only the operator has.
+///
+/// `None` is could-not-look and callers must say so rather than reporting a
+/// verdict about the branch.
+fn repo_slug(root: &Path) -> Option<String> {
+    if let Ok(declared) = std::env::var("GH_REPO")
+        && !declared.trim().is_empty()
+    {
+        return Some(declared);
+    }
+    let name = std::env::var("LAND_REMOTE").unwrap_or_else(|_| String::from("origin"));
+    let remotes = git::remotes(root).ok()?;
+    remotes
+        .iter()
+        .find(|(configured, _)| *configured == name)
+        .and_then(|(_, url)| race::slug_of(url))
+}
+
+/// The same reading with the placeholder kept for the sites that only ever
+/// RENDER it, so a message naming the repository still has something to name.
+fn repo_or_placeholder(root: &Path) -> String {
+    repo_slug(root).unwrap_or_else(|| pr_watch::REPO_PLACEHOLDER.to_owned())
+}
+
 /// A sha as a reader reads one. Pointer-only either way; this is the short form
 /// every other line in this lap already uses.
 fn short(sha: &str) -> &str {
@@ -7304,7 +7356,7 @@ fn land_remote(root: &Path, err: &mut dyn Write) -> Result<Option<String>> {
 /// `3` came from historically; what it MEANS here is the same could-not-look
 /// [`run_land_wait`] returns for an unanswered race, and the two agree
 /// deliberately — a lap reads them through one contract.
-/// # It takes no root, and the absence is a statement rather than an oversight
+/// # It writes no lap record, and the absence is a statement rather than an oversight
 ///
 /// Every other lap step writes a four-column line to the lap record, which is
 /// what gives a `landing-loop` module something to decide over. This one does
@@ -7314,7 +7366,14 @@ fn land_remote(root: &Path, err: &mut dyn Write) -> Result<Option<String>> {
 /// unknown conclusion is the obvious candidate), the record and the module land
 /// together, which is the pairing `.claude/rules/policy-modules.md` requires in
 /// both directions.
+///
+/// **It DOES take a root, and the heading above used to say it did not** — that
+/// sentence was about the record and was written as though it were about the
+/// argument list. The root is what [`repo_slug`] resolves the remote from, and
+/// without it this step fell back to a placeholder that cannot resolve (review
+/// of #848).
 fn run_land_fast_forward(
+    root: &Path,
     branch: &str,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -7339,13 +7398,23 @@ fn run_land_fast_forward(
     // open pull request for <branch>". A retirement that moves a spawn in-process
     // inherits the caller's substitutions or it inherits nothing, and this is the
     // one site in the family that did not carry the read across.
-    let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
-    let Some(pr) = fast_forward::open_pull_request(&repo, branch) else {
-        writeln!(
-            err,
-            "::error:: land fast-forward: no open pull request for {branch}, so there is nothing to ask"
-        )?;
-        return Ok(ExitCode::Internal);
+    let repo = repo_or_placeholder(root);
+    let pr = match fast_forward::look_up_pull_request(&repo, branch) {
+        fast_forward::Lookup::Found(pr) => pr,
+        fast_forward::Lookup::None => {
+            writeln!(
+                err,
+                "::error:: land fast-forward: no open pull request for {branch}, so there is nothing to ask"
+            )?;
+            return Ok(ExitCode::Internal);
+        }
+        fast_forward::Lookup::Unreadable(status) => {
+            writeln!(
+                err,
+                "::error:: land fast-forward: could not read {repo}'s pull requests ({status}), so whether {branch} has one is unknown — this is the environment, not the branch"
+            )?;
+            return Ok(ExitCode::Internal);
+        }
     };
     let ask = fast_forward::Ask { repo, pr, workflow };
 
@@ -7378,7 +7447,52 @@ fn run_land_fast_forward(
                 "land: asked #{} to fast-forward as comment {comment}",
                 ask.pr
             )?;
-            match fast_forward::answer(&ask, &since, &comment) {
+            // **POLLED, BECAUSE THE BOT HAS NOT STARTED YET** (review of #848).
+            // This read `answer` exactly once, immediately after `ask` — and the
+            // workflow takes ~23s just to create the run, so the first read was
+            // always `Pending`, which maps to `Internal`, which `land::progress`
+            // maps to `Lap` for `FastForward`. Every lap therefore unwound (the
+            // Abandon compensation cancelling this head's own green runs),
+            // replayed, re-verified, re-readied, re-pushed, re-waited, and posted
+            // a SECOND `/fast-forward` comment while the first was possibly
+            // merging — then exited `3` when the lap budget ran out.
+            //
+            // The header two screens up already said `3` is "no answer yet, which
+            // is the state the loop exists to sit in". No loop sat in it. This is
+            // that sentence made true.
+            //
+            // A COUNT, never a deadline, matching `run_land_wait`'s own bound and
+            // for its reason: the cost of too many asks is conditional requests
+            // the forge answers cheaply, and the cost of too few is a lap that
+            // reports no answer while one was moments away. Exhausting it still
+            // reports `Pending`, so the lap's own budget stays the outer bound.
+            let asks = std::env::var("LAND_ANSWER_MAX_UNKNOWNS")
+                .ok()
+                .and_then(|raw| raw.trim().parse::<u32>().ok())
+                .unwrap_or(120);
+            let mut verdict = fast_forward::Answer::Pending;
+            for attempt in 0..asks.max(1) {
+                verdict = fast_forward::answer(&ask, &since, &comment);
+                if !matches!(verdict, fast_forward::Answer::Pending) {
+                    break;
+                }
+                if attempt + 1 < asks.max(1) {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "an inventory row (CLOUD-1177): the bound is `LAND_ANSWER_MAX_UNKNOWNS` \
+                                  asks over `fast_forward::answer`, whose terminal states are \
+                                  `Accepted`, `Refused` and `Unknown` — the loop breaks on any of \
+                                  them, so this delay paces a poll rather than standing in for an \
+                                  exit condition. Exhausting the count reports `Pending`, which is \
+                                  the same answer the single read gave and leaves the lap's own \
+                                  budget as the outer bound"
+                    )]
+                    std::thread::sleep(std::time::Duration::from_secs(
+                        fast_forward::ANSWER_POLL_SECONDS,
+                    ));
+                }
+            }
+            match verdict {
                 fast_forward::Answer::Accepted => {
                     writeln!(out, "land: #{} was accepted", ask.pr)?;
                     Ok(ExitCode::Success)
@@ -7717,7 +7831,7 @@ fn run_lease_guard(
     if let Some(code) = fast_forward_lane(root, overrides, branch, out)? {
         return Ok(code);
     }
-    let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
+    let repo = repo_or_placeholder(root);
     let carries = lease_staleness(root, overrides, &repo, head);
 
     // THE LEASE IS ASKED ONLY IF THE HEAD IS CURRENT, which is the predecessor's
@@ -7750,7 +7864,7 @@ fn run_lease_guard_unleased(
     if let Some(code) = fast_forward_lane(root, overrides, branch, out)? {
         return Ok(code);
     }
-    let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
+    let repo = repo_or_placeholder(root);
     let carries = lease_staleness(root, overrides, &repo, head);
     let guarded = lease::guard(&carries, None);
     report_guard(&guarded, &repo, run, out, err)
@@ -7873,7 +7987,7 @@ fn run_lease_carries(
     let paths = lease_config(root, overrides)
         .map(|lease| lease.landing_paths)
         .unwrap_or_default();
-    let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
+    let repo = repo_or_placeholder(root);
     let trunk = std::env::var("LEASE_TRUNK").unwrap_or_else(|_| String::from("main"));
 
     match lease::carries(&repo, &trunk, head, &paths) {
@@ -8033,13 +8147,23 @@ fn spend_the_matrix(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
-    let Some(pr) = fast_forward::open_pull_request(&repo, branch) else {
-        writeln!(
-            err,
-            "::error:: land: no open pull request for {branch}, so there is nothing to ready and no run to buy"
-        )?;
-        return Ok(ExitCode::Internal);
+    let repo = repo_or_placeholder(root);
+    let pr = match fast_forward::look_up_pull_request(&repo, branch) {
+        fast_forward::Lookup::Found(pr) => pr,
+        fast_forward::Lookup::None => {
+            writeln!(
+                err,
+                "::error:: land: no open pull request for {branch}, so there is nothing to ready and no run to buy"
+            )?;
+            return Ok(ExitCode::Internal);
+        }
+        fast_forward::Lookup::Unreadable(status) => {
+            writeln!(
+                err,
+                "::error:: land: could not read {repo}'s pull requests ({status}), so nothing is readied — this is the environment, not the branch"
+            )?;
+            return Ok(ExitCode::Internal);
+        }
     };
     let Some((is_draft, node)) = land::draft_state(&repo, &pr) else {
         writeln!(
@@ -8142,14 +8266,25 @@ fn run_land_entry_gates(
     if gates.is_empty() {
         return Ok(None);
     }
-    let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
-    let Some(pr) = fast_forward::open_pull_request(&repo, branch) else {
-        writeln!(
-            err,
-            "::error:: land: {} entry gate(s) are declared and no open pull request for {branch} will resolve, so they cannot be asked",
-            gates.len()
-        )?;
-        return Ok(Some(ExitCode::Internal));
+    let repo = repo_or_placeholder(root);
+    let pr = match fast_forward::look_up_pull_request(&repo, branch) {
+        fast_forward::Lookup::Found(pr) => pr,
+        fast_forward::Lookup::None => {
+            writeln!(
+                err,
+                "::error:: land: {} entry gate(s) are declared and no open pull request for {branch} will resolve, so they cannot be asked",
+                gates.len()
+            )?;
+            return Ok(Some(ExitCode::Internal));
+        }
+        fast_forward::Lookup::Unreadable(status) => {
+            writeln!(
+                err,
+                "::error:: land: {} entry gate(s) are declared and {repo}'s pull requests could not be read ({status}), so they cannot be asked — this is the environment, not the branch",
+                gates.len()
+            )?;
+            return Ok(Some(ExitCode::Internal));
+        }
     };
     match land::admits_the_landing(root, &gates, &pr) {
         land::Admitted::Clear => {
@@ -8208,7 +8343,7 @@ fn head_verdict(root: &Path, repo: &str) -> Option<checks_green::Verdict> {
     let sha = git::head_commit(root).ok()?;
     let roster = checks_green::Roster {
         required: roster_field(std::env::var("CI_REQUIRED_CHECKS").ok().as_deref()),
-        absent_ok: roster_field(std::env::var("CI_ABSENT_OK").ok().as_deref()),
+        absent_ok: roster_field(std::env::var("CI_ABSENT_OK_CHECKS").ok().as_deref()),
         answered: roster_field(std::env::var("CI_ANSWERED_CONCLUSIONS").ok().as_deref()),
         fanin: std::env::var("CI_FANIN_CHECK")
             .ok()
@@ -8276,7 +8411,7 @@ fn run_land_wait(
     let required = std::env::var("CI_REQUIRED_CHECKS").unwrap_or_default();
     let roster = checks_green::Roster {
         required: roster_field(Some(&required)),
-        absent_ok: roster_field(std::env::var("CI_ABSENT_OK").ok().as_deref()),
+        absent_ok: roster_field(std::env::var("CI_ABSENT_OK_CHECKS").ok().as_deref()),
         answered: roster_field(Some(
             &std::env::var("CI_ANSWERED_CONCLUSIONS")
                 .unwrap_or_else(|_| String::from("success,failure,timed_out,action_required")),
@@ -8318,7 +8453,7 @@ fn run_land_wait(
 
     let config = pr_watch::Config {
         sha: sha.clone(),
-        repo: std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned()),
+        repo: repo_or_placeholder(root),
         interval: 1,
         progress: None,
     };
