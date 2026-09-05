@@ -1037,6 +1037,7 @@ fn a_write_to_a_memory_is_still_refused_as_a_write() {
          \"tool_input\":{{\"file_path\":{}}}}}",
         serde_json::to_string(GUARDED).expect("a path is encodable")
     );
-    let run = run_with_stdin_at_real_root(&root(), &["adjudicate", "--harness", "exit-code"], &payload);
+    let run =
+        run_with_stdin_at_real_root(&root(), &["adjudicate", "--harness", "exit-code"], &payload);
     assert_eq!(run.status.code(), Some(2), "a write is still a write");
 }

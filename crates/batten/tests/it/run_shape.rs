@@ -244,7 +244,8 @@ fn decide(root: &Path, command: &str, background: Option<bool>) -> (bool, String
         "tool_input": tool_input,
     })
     .to_string();
-    let output = common::run_with_stdin(root, &["adjudicate", "--harness", "claude-code"], &envelope);
+    let output =
+        common::run_with_stdin(root, &["adjudicate", "--harness", "claude-code"], &envelope);
     // THE STATUS IS PART OF THE ANSWER. Allow and deny both exit 0, so a
     // non-zero status is exactly and only the crash — and without this check an
     // allow assertion passes over a binary that died before judging anything.

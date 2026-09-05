@@ -114,7 +114,8 @@ fn bench(name: &str) -> PathBuf {
 /// case reading one stream would pass against a build that silently stopped
 /// delivering, which is the thing this file is here to catch.
 fn reported(dir: &Path, payload: &str) -> String {
-    let answer = run_with_stdin_at_real_root(dir, &["adjudicate", "--harness", "claude-code"], payload);
+    let answer =
+        run_with_stdin_at_real_root(dir, &["adjudicate", "--harness", "claude-code"], payload);
     format!("{}{}", stdout(&answer), stderr(&answer))
 }
 
@@ -131,7 +132,8 @@ fn signals(dir: &Path, payload: &str) -> bool {
 fn a_write_to_a_governed_shell_path_signals_without_refusing() {
     let dir = bench("swa-a_write_to_a_governed_shell_path_s");
     let payload = write_payload("Write", "mise-tasks/ready-lint.sh");
-    let answer = run_with_stdin_at_real_root(&dir, &["adjudicate", "--harness", "exit-code"], &payload);
+    let answer =
+        run_with_stdin_at_real_root(&dir, &["adjudicate", "--harness", "exit-code"], &payload);
     assert_eq!(
         answer.status.code(),
         Some(0),
@@ -338,7 +340,8 @@ fn an_advised_and_denied_call_emits_only_the_refusal() {
 fn an_advised_and_allowed_call_still_speaks() {
     let dir = bench("swa-an_advised_and_allowed_call_still_");
     let payload = write_payload("Write", "mise-tasks/ready-lint.sh");
-    let answer = run_with_stdin_at_real_root(&dir, &["adjudicate", "--harness", "exit-code"], &payload);
+    let answer =
+        run_with_stdin_at_real_root(&dir, &["adjudicate", "--harness", "exit-code"], &payload);
     let reported = format!(
         "{}{}",
         String::from_utf8_lossy(&answer.stdout),

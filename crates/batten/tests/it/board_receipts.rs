@@ -668,7 +668,13 @@ fn a_supplied_instant_decides_recency_rather_than_the_clock() {
     );
     let refusal = run_with_stdin(
         &repo,
-        &["adjudicate", "--harness", "exit-code", "--instant", &later(1000)],
+        &[
+            "adjudicate",
+            "--harness",
+            "exit-code",
+            "--instant",
+            &later(1000),
+        ],
         &payload("mcp__Linear__save_issue", update),
     );
     assert_eq!(
@@ -727,12 +733,24 @@ fn a_different_instant_changes_the_verdict() {
     mint_read_receipt(&repo, "CLOUD-1", 5);
     let inside = run_with_stdin(
         &repo,
-        &["adjudicate", "--harness", "exit-code", "--instant", &later(10)],
+        &[
+            "adjudicate",
+            "--harness",
+            "exit-code",
+            "--instant",
+            &later(10),
+        ],
         &payload("mcp__Linear__save_issue", update),
     );
     let past = run_with_stdin(
         &repo,
-        &["adjudicate", "--harness", "exit-code", "--instant", &later(1000)],
+        &[
+            "adjudicate",
+            "--harness",
+            "exit-code",
+            "--instant",
+            &later(1000),
+        ],
         &payload("mcp__Linear__save_issue", update),
     );
     assert_eq!(

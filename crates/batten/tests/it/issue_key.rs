@@ -92,9 +92,13 @@ fn payload(command: &str) -> String {
 }
 
 fn verdict(dir: &Path, command: &str) -> Option<i32> {
-    run_with_stdin(dir, &["adjudicate", "--harness", "exit-code"], &payload(command))
-        .status
-        .code()
+    run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &payload(command),
+    )
+    .status
+    .code()
 }
 
 fn assert_denied(dir: &Path, command: &str) {

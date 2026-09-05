@@ -70,9 +70,13 @@ fn payload(tool: &str) -> String {
 }
 
 fn verdict(repo: &Path, tool: &str) -> Option<i32> {
-    run_with_stdin(repo, &["adjudicate", "--harness", "exit-code"], &payload(tool))
-        .status
-        .code()
+    run_with_stdin(
+        repo,
+        &["adjudicate", "--harness", "exit-code"],
+        &payload(tool),
+    )
+    .status
+    .code()
 }
 
 fn assert_denied(repo: &Path, tool: &str) {
@@ -231,7 +235,11 @@ reason = "this tool is refused here; use the sanctioned path instead"
         "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"mcp__Linear__save_issue\",\
          \"tool_input\":{{\"description\":{encoded}}}}}"
     );
-    let output = run_with_stdin(&repo, &["adjudicate", "--harness", "exit-code"], &with_secret);
+    let output = run_with_stdin(
+        &repo,
+        &["adjudicate", "--harness", "exit-code"],
+        &with_secret,
+    );
     let rendered = format!(
         "{}{}",
         stderr(&output),

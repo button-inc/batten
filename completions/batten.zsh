@@ -3860,7 +3860,7 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
-(hook)
+(adjudicate)
 _arguments "${_arguments_options[@]}" : \
 '--instant=[The epoch second to judge time-dependent records against, supplied as data]: :_default' \
 '--harness=[The harness whose payload to decode and whose decision channel to answer in]: :((claude-code\:"Claude Code'\''s \`PreToolUse\` payload; a deny is returned as the \`hookSpecificOutput.permissionDecision\` JSON object on stdout with exit \`0\` — the channel the production shell guards already use"
@@ -6235,7 +6235,7 @@ esac
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
-(hook)
+(adjudicate)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -6569,7 +6569,7 @@ _batten_commands() {
 'override:Issued admissions\: an override is a record, never a variable somebody knows' \
 'provision:Pinned tools this repository provisions, cached out of tree' \
 'startup:Report whether this container matches what the repository declares' \
-'hook:Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)' \
+'adjudicate:Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)' \
 'payload:Read a hook payload from stdin' \
 'receipt:Verification receipts\: SHA-keyed claims a named check passed, invalidated by git facts' \
 'defects:The append-only defect ledger\: the lessons this repository has already paid for' \
@@ -6583,6 +6583,11 @@ _batten_commands() {
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__adjudicate_commands] )) ||
+_batten__subcmd__adjudicate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten adjudicate commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__attribution_commands] )) ||
 _batten__subcmd__attribution_commands() {
@@ -7163,7 +7168,7 @@ _batten__subcmd__help_commands() {
 'override:Issued admissions\: an override is a record, never a variable somebody knows' \
 'provision:Pinned tools this repository provisions, cached out of tree' \
 'startup:Report whether this container matches what the repository declares' \
-'hook:Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)' \
+'adjudicate:Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)' \
 'payload:Read a hook payload from stdin' \
 'receipt:Verification receipts\: SHA-keyed claims a named check passed, invalidated by git facts' \
 'defects:The append-only defect ledger\: the lessons this repository has already paid for' \
@@ -7177,6 +7182,11 @@ _batten__subcmd__help_commands() {
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__adjudicate_commands] )) ||
+_batten__subcmd__help__subcmd__adjudicate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help adjudicate commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__attribution_commands] )) ||
 _batten__subcmd__help__subcmd__attribution_commands() {
@@ -7430,11 +7440,6 @@ _batten__subcmd__help__subcmd__generate__subcmd__schema_commands() {
 _batten__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten help help commands' commands "$@"
-}
-(( $+functions[_batten__subcmd__help__subcmd__hook_commands] )) ||
-_batten__subcmd__help__subcmd__hook_commands() {
-    local commands; commands=()
-    _describe -t commands 'batten help hook commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__init_commands] )) ||
 _batten__subcmd__help__subcmd__init_commands() {
@@ -7972,11 +7977,6 @@ _batten__subcmd__help__subcmd__worktree_commands() {
 _batten__subcmd__help__subcmd__worktree__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'batten help worktree status commands' commands "$@"
-}
-(( $+functions[_batten__subcmd__hook_commands] )) ||
-_batten__subcmd__hook_commands() {
-    local commands; commands=()
-    _describe -t commands 'batten hook commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__init_commands] )) ||
 _batten__subcmd__init_commands() {

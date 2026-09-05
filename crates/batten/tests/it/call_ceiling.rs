@@ -63,9 +63,13 @@ fn payload(prompt: &str) -> String {
 }
 
 fn verdict(repo: &Path, prompt: &str) -> Option<i32> {
-    run_with_stdin(repo, &["adjudicate", "--harness", "exit-code"], &payload(prompt))
-        .status
-        .code()
+    run_with_stdin(
+        repo,
+        &["adjudicate", "--harness", "exit-code"],
+        &payload(prompt),
+    )
+    .status
+    .code()
 }
 
 /// `budget::estimate_tokens` is characters over four, so this produces a prompt

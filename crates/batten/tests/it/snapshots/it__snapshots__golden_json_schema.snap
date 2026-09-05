@@ -117,6 +117,32 @@ expression: stdout_of(&output)
   ],
   "subcommands": [
     {
+      "path": "adjudicate",
+      "id": "hook",
+      "about": "Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [
+        {
+          "name": "harness",
+          "short": null,
+          "long": "harness",
+          "takes_value": true,
+          "positional": false,
+          "help": "The harness whose payload to decode and whose decision channel to answer in"
+        },
+        {
+          "name": "instant",
+          "short": null,
+          "long": "instant",
+          "takes_value": true,
+          "positional": false,
+          "help": "The epoch second to judge time-dependent records against, supplied as data"
+        }
+      ],
+      "subcommands": []
+    },
+    {
       "path": "attribution",
       "id": "attribution",
       "about": "What produced commits may carry about the tooling that made them",
@@ -1100,32 +1126,6 @@ expression: stdout_of(&output)
           "subcommands": []
         }
       ]
-    },
-    {
-      "path": "adjudicate",
-      "id": "hook",
-      "about": "Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)",
-      "effect": "unclassified",
-      "data_channel": false,
-      "flags": [
-        {
-          "name": "harness",
-          "short": null,
-          "long": "harness",
-          "takes_value": true,
-          "positional": false,
-          "help": "The harness whose payload to decode and whose decision channel to answer in"
-        },
-        {
-          "name": "instant",
-          "short": null,
-          "long": "instant",
-          "takes_value": true,
-          "positional": false,
-          "help": "The epoch second to judge time-dependent records against, supplied as data"
-        }
-      ],
-      "subcommands": []
     },
     {
       "path": "init",

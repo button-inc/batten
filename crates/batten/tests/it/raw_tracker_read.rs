@@ -82,9 +82,13 @@ fn payload(tool: &str) -> String {
 }
 
 fn verdict(repo: &Path, tool: &str) -> Option<i32> {
-    run_with_stdin(repo, &["adjudicate", "--harness", "exit-code"], &payload(tool))
-        .status
-        .code()
+    run_with_stdin(
+        repo,
+        &["adjudicate", "--harness", "exit-code"],
+        &payload(tool),
+    )
+    .status
+    .code()
 }
 
 /// Every spelling of the raw read is refused.
@@ -161,7 +165,11 @@ fn the_refusal_carries_no_byte_of_the_call() {
         "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"mcp__Linear__get_issue\",\
          \"tool_input\":{{\"id\":{encoded}}}}}"
     );
-    let output = run_with_stdin(&repo, &["adjudicate", "--harness", "exit-code"], &with_secret);
+    let output = run_with_stdin(
+        &repo,
+        &["adjudicate", "--harness", "exit-code"],
+        &with_secret,
+    );
     let rendered = format!(
         "{}{}",
         stderr(&output),
