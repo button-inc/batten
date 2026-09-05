@@ -93,6 +93,7 @@ mod connector_bound;
 mod connector_not_granted;
 mod connector_verbs;
 mod container_health;
+mod content_address;
 mod contract_drift;
 mod decision_record;
 mod defects;

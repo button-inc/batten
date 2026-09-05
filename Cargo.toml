@@ -68,6 +68,19 @@ disallowed_methods = "deny"
 
 [workspace.dependencies]
 anyhow = "1"
+# The canonical content-address hash (CLOUD-1364), beside `sha2` rather than in
+# place of it. The 83 SHA-256 sites across 13 files keep their identities: the
+# compatibility policy is a doc comment on `identity::ContentAddress` and each
+# site migrates under its own consumer's row, so this adds an algorithm and
+# retires none.
+#
+# `default-features = false` plus `std`: the default set is `std` alone today,
+# and spelling it keeps `rayon` and the `digest` trait bridge out by
+# construction rather than by upstream's current taste. The `digest` bridge
+# matters here — `digest-major-agreement` polices the major that `hmac` and
+# `sha2` share, and a third crate resolving its own `digest` is exactly the
+# split that row exists to refuse.
+blake3 = { version = "1", default-features = false, features = ["std"] }
 # The HTTP client (CLOUD-745), and it is NOT `reqwest` -- which that row names,
 # so the substitution is recorded there rather than made quietly here.
 #

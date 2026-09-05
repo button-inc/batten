@@ -202,6 +202,198 @@ pub enum SpanNormalization {
     Verbatim,
 }
 
+/// The address grammar's version, carried IN the preimage and in the rendering.
+///
+/// In the preimage so a version bump changes every digest, and rendered so a
+/// reader can tell which grammar produced a string without a lookup. One
+/// constant rather than two, because two would be free to disagree.
+const ADDRESS_VERSION: u8 = 1;
+
+/// The rendered address's fixed length: `b3-1-` plus 64 hex characters.
+const ADDRESS_LEN: usize = 5 + 64;
+
+/// A canonical content address: BLAKE3 over a versioned, domain-separated
+/// whole-document preimage (CLOUD-1364).
+///
+/// # This is not [`Fingerprint`], and the two must never substitute
+///
+/// A `Fingerprint` is a finding's IDENTITY — a SHA-256 over a normalized tuple
+/// describing where and what a finding is. A `ContentAddress` names BYTES. They
+/// are 32 bytes each and hex-render alike, which is exactly why they are
+/// separate types with no conversion between them: the compiler is the thing
+/// that keeps a store from filing one under the other, rather than a convention
+/// each call site remembers.
+///
+/// # Migration is a policy, not a rewrite
+///
+/// The 83 SHA-256 sites across 13 files keep their identities. Re-minting them
+/// would invalidate every stored finding at once, and the migration
+/// equality-join that makes an extractor-version change survivable needs
+/// comparable hashes on both sides — which a change of ALGORITHM destroys in a
+/// way a change of version does not. So each site migrates under its own
+/// consumer's row (CLOUD-1360's inventory), and this type ships beside `sha2`
+/// rather than in place of it.
+///
+/// **A legacy record is recognisable rather than guessed at.** A bare 64-hex
+/// string is a SHA-256 identity; an address always carries its `b3-<version>-`
+/// prefix. [`ContentAddress::parse`] refuses the bare form, so a legacy digest
+/// handed to an address reader is a refusal at the boundary and never a silently
+/// accepted value of the wrong kind.
+///
+/// # What this deliberately does not decide
+///
+/// Chunk or subtree addressing (CLOUD-1368) — BLAKE3's internal Merkle tree is
+/// an implementation detail of this digest and confers no externally addressable
+/// sub-structure, so any chunk manifest must bind to this whole-document address
+/// rather than exposing interior nodes as a second canonical identity.
+/// Resolution and byte preservation are CLOUD-1365's; locators are CLOUD-1366's.
+///
+/// A Git OID is separate interoperability metadata: where Batten addresses Git
+/// content, the mapping is recorded explicitly and neither identity is ever
+/// substituted for the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ContentAddress {
+    /// The grammar version this address was minted under.
+    version: u8,
+    /// The BLAKE3 digest of the canonical preimage.
+    digest: [u8; 32],
+}
+
+/// The domain an address is minted under.
+///
+/// **A closed enum rather than a string**, so the domain set is a reviewable
+/// list rather than whatever a call site passed. A caller cannot mint an address
+/// under a domain nobody declared, which is what makes cross-domain separation a
+/// property of the type instead of a discipline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AddressDomain {
+    /// A captured tool response, as the capture store holds it.
+    Capture,
+    /// A payload a mediated call carried.
+    Payload,
+    /// An artifact produced by a run.
+    Artifact,
+}
+
+impl AddressDomain {
+    /// The tag that enters the preimage.
+    ///
+    /// Stable bytes, never the `Debug` spelling: a rename of the variant must not
+    /// silently re-address every stored payload, so the wire tag is written out
+    /// and `a_domain_tag_is_stable_against_a_variant_rename` is the gate.
+    const fn tag(self) -> &'static [u8] {
+        match self {
+            AddressDomain::Capture => b"capture",
+            AddressDomain::Payload => b"payload",
+            AddressDomain::Artifact => b"artifact",
+        }
+    }
+}
+
+impl ContentAddress {
+    /// Address `bytes` under `domain`.
+    ///
+    /// # The canonical preimage
+    ///
+    /// `b3` ‖ `0x00` ‖ version ‖ `0x00` ‖ domain tag ‖ `0x00` ‖ len(bytes) as
+    /// 8-byte big-endian ‖ bytes.
+    ///
+    /// **Length-prefixed and NUL-separated, which is what makes the separation
+    /// real.** Concatenating a tag with content is ambiguous — a `capture` domain
+    /// over `b"xdata"` and a `capturex` domain over `b"data"` would otherwise
+    /// share a preimage — so the tags are terminated and the payload's length is
+    /// bound in. The same reasoning `code_fingerprint` already applies to its
+    /// tuple, applied to bytes.
+    #[must_use]
+    pub fn of(domain: AddressDomain, bytes: &[u8]) -> ContentAddress {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"b3\0");
+        hasher.update(&[ADDRESS_VERSION, 0]);
+        hasher.update(domain.tag());
+        hasher.update(b"\0");
+        hasher.update(&(bytes.len() as u64).to_be_bytes());
+        hasher.update(bytes);
+        ContentAddress {
+            version: ADDRESS_VERSION,
+            digest: *hasher.finalize().as_bytes(),
+        }
+    }
+
+    /// The one rendered spelling: `b3-<version>-<64 lowercase hex>`.
+    ///
+    /// One fixed length ([`ADDRESS_LEN`]) whatever the content, so a reader can
+    /// bound a field without parsing it, and the prefix is what distinguishes an
+    /// address from a bare legacy digest at a glance and at the parser.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let mut out = String::with_capacity(ADDRESS_LEN);
+        out.push_str("b3-");
+        out.push(char::from_digit(u32::from(self.version), 10).unwrap_or('0'));
+        out.push('-');
+        for byte in self.digest {
+            out.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
+            out.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
+        }
+        out
+    }
+
+    /// Parse the rendered form.
+    ///
+    /// Strict for [`Fingerprint::from_hex`]'s reason — lowercase only, exact
+    /// length — plus one this type adds: a bare 64-hex string is REFUSED rather
+    /// than read as a version-less address, because that is precisely the shape a
+    /// legacy SHA-256 identity has. Accepting it would let the two families
+    /// occupy one namespace, which is the confusion this type exists to prevent.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] when the input is not exactly `b3-<version>-<64
+    /// lowercase hex>`.
+    pub fn parse(text: &str) -> anyhow::Result<ContentAddress> {
+        // POINTER-ONLY IN THE REFUSAL, and it differs from `from_hex`'s on
+        // purpose: that one echoes the first 72 characters of its input, which is
+        // safe for a fingerprint and is not safe here. An address parser is
+        // pointed at whatever a store or a caller hands it, so echoing the input
+        // would put an arbitrary string into a message — the class rule 4 keeps
+        // out of output. The length is enough to act on.
+        let refuse = || {
+            UsageError::raise(format!(
+                "not a content address: expected `b3-<version>-` and 64 lowercase hex characters, \
+                 got {} character(s)",
+                text.len()
+            ))
+        };
+        if text.len() != ADDRESS_LEN {
+            return Err(refuse());
+        }
+        let rest = text.strip_prefix("b3-").ok_or_else(refuse)?;
+        let (version, hex) = rest.split_at_checked(2).ok_or_else(refuse)?;
+        let version = version
+            .strip_suffix('-')
+            .and_then(|digit| digit.parse::<u8>().ok())
+            .ok_or_else(refuse)?;
+        if !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(refuse());
+        }
+        let mut digest = [0u8; 32];
+        for (at, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+            let hi = char::from(pair[0]).to_digit(16).ok_or_else(refuse)?;
+            let lo = char::from(pair[1]).to_digit(16).ok_or_else(refuse)?;
+            digest[at] = u8::try_from(hi * 16 + lo).map_err(|_| refuse())?;
+        }
+        Ok(ContentAddress { version, digest })
+    }
+}
+
+impl fmt::Display for ContentAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.render())
+    }
+}
+
 /// A finding's identity: a SHA-256 over the kind-tagged, length-prefixed,
 /// normalized tuple. Ordered and hex-rendered so stores and `--json` output
 /// sort byte-stably.
