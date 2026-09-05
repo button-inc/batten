@@ -402,6 +402,106 @@ impl fmt::Display for ContentAddress {
     }
 }
 
+/// How a consumer receives a document: as its bytes, or as the address that
+/// names them (CLOUD-1360).
+///
+/// This type IS the engine-wide payload contract, and the contract is written
+/// here rather than in prose somewhere a consumer would have to go looking for
+/// it. Six clauses, each with the failure it prevents:
+///
+/// # 1. Two arms, and every address-accepting consumer accepts both
+///
+/// A consumer that takes [`DocumentInput::Address`] must take
+/// [`DocumentInput::Inline`] carrying the same bytes and reach the same verdict.
+/// That is the parity clause, and it is what makes addressing a TRANSPORT
+/// decision rather than a semantic one — the representation may change for cost
+/// reasons (CLOUD-1367) without any consumer's behaviour moving with it. A
+/// consumer that decoded the two differently would make the cost policy a policy
+/// about verdicts, which nobody declared it to be.
+///
+/// # 2. Resolution verifies before anything decodes
+///
+/// [`crate::store::resolve_address`] rehashes raw bytes against the address
+/// before a decoder sees them, and its five outcomes — `Resolved`, `Missing`,
+/// `Unavailable`, `Corrupt`, `Mismatch` — are distinct because no outcome may
+/// silently substitute another representation. `Missing` and `Unavailable` in
+/// particular are the fact and the could-not-look, and collapsing them is the
+/// class this repository refuses everywhere else.
+///
+/// # 3. Freshness costs no bytes
+///
+/// An expected address compared against a current one distinguishes unchanged,
+/// stale, absent and unavailable **without reading the document**
+/// ([`crate::capture::Freshness`]). That is the whole economic case for carrying
+/// an identity at all: a consumer detecting staleness by re-reading has paid the
+/// bytes it was trying to save.
+///
+/// # 4. Diagnostics are pointers
+///
+/// Nothing in this contract's output path renders resolved payload bytes.
+/// Non-negotiable rule 4, held here by the types the outcomes carry — a count, a
+/// token, a `path:line` — rather than by each consumer's discipline.
+///
+/// # 5. BLAKE3 is adopted; BCP components are evaluated by fit, not assumed
+///
+/// The digest is BLAKE3 and the grammar is Batten's
+/// ([`ContentAddress::of`]). Where a BCP Rust component provides suitable block
+/// or reference encoding, decoding, rendering or tooling, it is adopted rather
+/// than rebuilt — but adoption is decided by an adapter conforming to the
+/// contract above, never assumed from the name. **No BCP component is adopted
+/// today**, and the concrete reason is that the only thing this bundle needs
+/// from that space is a whole-document digest, which `blake3` itself provides:
+/// the block/reference encodings BCP adds would be a second addressable
+/// sub-structure, which clause 6 and CLOUD-1368 both refuse. That is a
+/// measured non-adoption with a stated reason, and it reverses the day a
+/// measured range-read need arrives.
+///
+/// **BCP adoption would transfer no policy authority.** Domain and version
+/// rules, the resolver's outcomes, freshness indexing, privacy admission and
+/// refusal semantics stay Batten's, whatever encodes the bytes.
+///
+/// # 6. A Git OID is not a content address, in either direction
+///
+/// Git object ids remain Git interoperability metadata. A Git OID is SHA-1 or
+/// SHA-256 over Git's own `<type> <len>\0` preimage — a different algorithm over
+/// a different preimage — so it is not this address under another spelling, and
+/// there is no conversion between the types for the same reason there is none
+/// between [`ContentAddress`] and [`Fingerprint`]. Where a Git boundary needs
+/// object traversal, that is `gix`'s job at the boundary; `gix` is not Batten's
+/// content store and a Git OID never reaches a field expecting an address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocumentInput {
+    /// The document's bytes, carried directly.
+    Inline(Vec<u8>),
+    /// The address naming the document's bytes.
+    Address(ContentAddress),
+}
+
+impl DocumentInput {
+    /// The address this input names, minting it from the bytes where the input
+    /// is inline.
+    ///
+    /// The parity clause expressed as a function: both arms name the same
+    /// document, so both arms yield the same address. A consumer comparing
+    /// identities never has to know which arm it was handed.
+    #[must_use]
+    pub fn address(&self, domain: AddressDomain) -> ContentAddress {
+        match self {
+            DocumentInput::Inline(bytes) => ContentAddress::of(domain, bytes),
+            DocumentInput::Address(address) => *address,
+        }
+    }
+
+    /// The stable token naming which arm this is, for a pointer-only diagnostic.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            DocumentInput::Inline(_) => "inline",
+            DocumentInput::Address(_) => "address",
+        }
+    }
+}
+
 /// A finding's identity: a SHA-256 over the kind-tagged, length-prefixed,
 /// normalized tuple. Ordered and hex-rendered so stores and `--json` output
 /// sort byte-stably.
