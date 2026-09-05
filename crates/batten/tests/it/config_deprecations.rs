@@ -168,6 +168,30 @@ impl Published {
         self.write_schema(&derived_schema());
     }
 
+    /// Publish a schema MISSING `key`, so this build reads it as added
+    /// (CLOUD-366).
+    ///
+    /// [`Self::publish_then_remove`]'s mirror over the same doctored document,
+    /// because the two questions a release answers about its schema are one
+    /// comparison read in opposite directions.
+    fn publish_without(&self, key: &str, tag: &str) {
+        let mut schema: serde_json::Value =
+            serde_json::from_slice(&derived_schema()).expect("the schema is JSON");
+        schema
+            .get_mut("properties")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("the schema has properties")
+            .remove(key)
+            .expect("the key this build accepts is in its own derived schema");
+        self.write_schema(
+            serde_json::to_string_pretty(&schema)
+                .expect("the doctored schema serialises")
+                .as_bytes(),
+        );
+        self.publish("publish without a key this build has", tag);
+        self.write_schema(&derived_schema());
+    }
+
     fn baseline(&self) -> Option<String> {
         latest_release_tag(&self.root)
     }
@@ -202,6 +226,43 @@ fn an_unannounced_removal_is_reported_rather_than_passed() {
     assert!(
         said.contains("a_key_that_was_published_and_is_now_gone"),
         "{said}"
+    );
+}
+
+/// CLOUD-366. A release that carries a new config column owes the floor.
+///
+/// `min_batten_version` is compared against the RUNNING build, so the commit
+/// adding a column cannot name the release carrying it — measured 2026-08-11,
+/// floor `0.0.62` against a `0.0.61` build, exit `1`. The floor can only name a
+/// version that already exists, so the obligation lands at the release; this is
+/// the exit code that makes it an obligation rather than prose.
+#[test]
+fn a_release_carrying_a_new_column_owes_the_floor() {
+    let fixture = Published::new("config-deprecations-added");
+    fixture.publish_without("version", "v0.0.2");
+    let (code, said) = fixture.run();
+    assert_eq!(code, 2, "an owed floor is the policy verdict: {said}");
+    assert!(said.contains("version added since"), "{said}");
+}
+
+/// The discriminator, and the one a lazy implementation gets wrong.
+///
+/// Raising the floor on every release satisfies "the floor never exceeds the
+/// build" while tracking no column at all. So a release that adds NO column must
+/// leave the floor exactly where it is — including when the floor is stale, which
+/// this fixture's is: it declares none.
+#[test]
+fn a_release_carrying_no_new_column_owes_nothing_however_stale_the_floor() {
+    let fixture = Published::new("config-deprecations-no-additions");
+    let (code, said) = fixture.run();
+    assert_eq!(
+        code, 0,
+        "no column added means no floor owed, whatever the floor says: {said}"
+    );
+    assert!(
+        said.contains("0 addition(s)"),
+        "the count is stated even at zero, so silence is not mistaken for a gate \
+         that did not run: {said}"
     );
 }
 

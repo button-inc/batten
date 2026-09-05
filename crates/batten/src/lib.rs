@@ -12220,6 +12220,19 @@ struct DeprecationReport<'a> {
     against: &'a str,
     baseline: &'a str,
     removed_without_window: &'a [String],
+    /// Keys this build accepts that `against` did not (CLOUD-366).
+    ///
+    /// Rides this document rather than a verb of its own because it is the same
+    /// comparison read the other way — one `git::show` of the released schema
+    /// answers both — and because the release task needs it as DATA, which is
+    /// what `-J` is for.
+    added_since: &'a [String],
+    /// Whether the release carrying these additions owes a floor raise.
+    ///
+    /// Decided here rather than by the caller so the rule lives with the key sets
+    /// it reads: a consumer branches on a boolean instead of re-deriving one,
+    /// which is the second-authority shape this repository refuses elsewhere.
+    floor_owed: bool,
 }
 
 /// The `config epoch -J` document: the digest and the surface it covers.
@@ -13462,6 +13475,8 @@ fn run_config_deprecations(json: bool, against: &str, out: &mut dyn Write) -> Re
                 against,
                 baseline: "unavailable",
                 removed_without_window: &[],
+                added_since: &[],
+                floor_owed: false,
             };
             writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
         }
@@ -13470,6 +13485,18 @@ fn run_config_deprecations(json: bool, against: &str, out: &mut dyn Write) -> Re
     let released = config::schema_keys(&published, against)?;
     let derived = config::schema()?;
     let current = config::schema_keys(&derived, "the derived schema")?;
+    let added = config::additions_since(&released, &current);
+    // The floor is read from the working tree's own authority and compared with
+    // THIS build's version — exactly the pair `check_min_version` compares, so
+    // the two cannot disagree about what "the floor is current" means.
+    let owed = config::floor_owed(
+        &added,
+        resolve::resolve(Path::new("."), &Overrides::default())
+            .ok()
+            .and_then(|resolved| resolved.min_batten_version.clone())
+            .as_deref(),
+        config::VERSION,
+    );
     let unannounced = config::removals_unannounced(
         &released,
         &current,
@@ -13481,6 +13508,8 @@ fn run_config_deprecations(json: bool, against: &str, out: &mut dyn Write) -> Re
             against,
             baseline: "read",
             removed_without_window: &unannounced,
+            added_since: &added,
+            floor_owed: owed,
         };
         writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
     } else {
@@ -13491,15 +13520,24 @@ fn run_config_deprecations(json: bool, against: &str, out: &mut dyn Write) -> Re
                 "{key} removed since {against} with no deprecation window"
             )?;
         }
+        for key in &added {
+            writeln!(out, "{key} added since {against}")?;
+        }
         // The count is stated even at zero, so silence cannot be mistaken for
         // "the gate did not run".
         writeln!(
             out,
-            "config-deprecations: {} unannounced removal(s) against {against}",
-            unannounced.len()
+            "config-deprecations: {} unannounced removal(s), {} addition(s) against {against}",
+            unannounced.len(),
+            added.len()
         )?;
     }
-    Ok(ExitCode::verdict(!unannounced.is_empty()))
+    // BOTH DIRECTIONS DECIDE THE EXIT (CLOUD-366). A removal with no window and a
+    // floor that has not caught up with a column this build accepts are the two
+    // ways the schema and the version can disagree, and neither is prose: rule 2
+    // says a rule without a runnable gate is half a change, which is exactly what
+    // "raise the floor after the release" was before it had this exit code.
+    Ok(ExitCode::verdict(!unannounced.is_empty() || owed))
 }
 
 fn run_config(

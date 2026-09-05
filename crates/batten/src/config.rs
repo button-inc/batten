@@ -1060,6 +1060,52 @@ pub fn removals_unannounced(
         .collect()
 }
 
+/// Config keys this build accepts that a **released** one did not (CLOUD-366).
+///
+/// [`removals_unannounced`]'s mirror, over the same two key sets, because the
+/// two questions a release must answer about its schema are the same comparison
+/// read in opposite directions: what went away needs a window, and what ARRIVED
+/// needs the floor raised to the release carrying it.
+///
+/// **The floor cannot be raised in the commit that adds the column, and that is
+/// structural rather than a sequencing oversight.** `min_batten_version` is
+/// compared against the RUNNING build (`check_min_version`), and in this
+/// repository the running build is the one built from the tree — so naming the
+/// next release makes the repository refuse its own config for the whole life of
+/// the PR. Measured 2026-08-11: floor `0.0.62` against a `0.0.61` build, exit
+/// `1`. The floor can only name a version that already exists, so the raise
+/// belongs at the release, which is the one moment the floor becomes true.
+///
+/// What the window costs is the DIAGNOSTIC, never the refusal, and this is worth
+/// stating exactly because the fix is easy to oversell: an older binary meeting a
+/// newer column still refuses through `deny_unknown_fields`, so the file is never
+/// half-understood. What it reports is `unknown field` where
+/// `min_batten_version` exists to say `this build is too old`.
+#[must_use]
+pub fn additions_since(
+    released: &std::collections::BTreeSet<String>,
+    current: &std::collections::BTreeSet<String>,
+) -> Vec<String> {
+    current
+        .iter()
+        .filter(|key| !released.contains(*key))
+        .cloned()
+        .collect()
+}
+
+/// Whether the floor already names the version being released (CLOUD-366).
+///
+/// **The discriminator a lazy implementation gets wrong.** Raising the floor on
+/// every release satisfies "the floor never exceeds the build" while tracking no
+/// column at all, so the carries-a-column case has to be decided separately —
+/// which is what `additions` is for. With no additions the floor is left exactly
+/// where it is, because a release that adds no column makes no new demand of a
+/// consumer's binary.
+#[must_use]
+pub fn floor_owed(additions: &[String], floor: Option<&str>, releasing: &str) -> bool {
+    !additions.is_empty() && floor != Some(releasing)
+}
+
 /// Keys a **past** engine accepted and this one has retired, with the issue that
 /// retired each.
 ///
