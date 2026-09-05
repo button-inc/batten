@@ -1029,84 +1029,10 @@ pub fn wiring(
     let mut tried = Vec::new();
     for source in &config.sources {
         tried.push(source.id.clone());
-        let base = match (&source.base, &source.root) {
-            // A BASE THE PLATFORM DEFINES, for the one directory an operator has
-            // no variable for. `temp_dir` reads the platform's own answer rather
-            // than this crate spelling `/tmp`, which would be wrong on Windows and
-            // a literal path in a config either way.
-            (Some(Base::Temp), _) => std::env::temp_dir(),
-            // A ROOT THIS HOST DOES NOT SET IS NOT AN ABSENT FILE, and empty
-            // counts as unset: an empty variable resolves the row against the
-            // process's working directory, which is a different file on every
-            // invocation.
-            (None, Some(name)) => match std::env::var_os(name).filter(|value| !value.is_empty()) {
-                Some(dir) => std::path::PathBuf::from(dir),
-                None => continue,
-            },
-            (None, None) => repo_root.to_path_buf(),
-        };
-        // AN UNSET PLACEHOLDER IS THIS HOST NOT HAVING THE ROW'S SUBJECT, which is
-        // the `root` arm's answer one level down: skip to the next source rather
-        // than resolving a path nobody wrote.
-        let Some(path) = expand(&source.path).map_err(|_| Unresolved::PathUnusable {
-            source: source.id.clone(),
-        })?
-        else {
+        let Some(entry) = entry_in(source, repo_root, server)? else {
             continue;
         };
-        // THE SECOND ESCAPE CHECK, over runtime input. The load-time one saw
-        // `${ID}` and not what `ID` holds, so this is the one that stops a
-        // variable's value from walking out of the base the row declared.
-        if escapes(&path) {
-            return Err(Unresolved::PathUnusable {
-                source: source.id.clone(),
-            });
-        }
-        let Ok(text) = std::fs::read_to_string(base.join(&path)) else {
-            continue;
-        };
-        // A FILE THAT EXISTS AND WILL NOT PARSE STOPS THE SEARCH. Falling through
-        // to the next source would report the next harness's answer for this
-        // one's broken file, which is a wrong answer wearing a right one's shape.
-        //
-        // THROUGH `rules::parse_node`, the one `Format::read` call in the crate
-        // (CLOUD-849): a second call site is a second error mapping, and two
-        // mappings over one grammar diverge.
-        let Ok(document) = crate::rules::parse_node(Format::Json, &text) else {
-            return Err(Unresolved::Unreadable {
-                source: source.id.clone(),
-            });
-        };
-        let Look::Is(map) = document.at(&source.node) else {
-            continue;
-        };
-        // THE EXACT KEY FIRST, AND UNCHANGED. Every table that resolves today
-        // resolves through this arm and reaches the same entry it always did; the
-        // selector below is consulted only where a key lookup found nothing, so
-        // adding a row cannot re-point an existing name.
-        let entry = match map.at(server) {
-            Look::Is(entry) => entry,
-            Look::IsNot | Look::CouldNotLook => match source.endpoint_contains.get(server) {
-                None => continue,
-                Some(needle) => match by_endpoint(map, needle) {
-                    // NOTHING ANSWERED IS A SKIP, NOT A REFUSAL, and it has to be:
-                    // the source list is the multi-harness precedence order, so
-                    // refusing here would make one host's absent wiring the reason
-                    // another host's row is never consulted. It ends at
-                    // `NotFound`, exactly as an exact-key miss does.
-                    Matched::None => continue,
-                    Matched::One(entry) => entry,
-                    Matched::Many(matched) => {
-                        return Err(Unresolved::Ambiguous {
-                            source: source.id.clone(),
-                            server: server.to_owned(),
-                            matched,
-                        });
-                    }
-                },
-            },
-        };
-        let Some(endpoint) = endpoint_of(entry) else {
+        let Some(endpoint) = endpoint_of(&entry) else {
             continue;
         };
         return Ok(Wiring {
@@ -1131,6 +1057,257 @@ pub fn wiring(
         });
     }
     Err(Unresolved::NotFound { tried })
+}
+
+/// One source's entry for `server`, or `None` where this source does not answer.
+///
+/// **Extracted so the census below and [`wiring`] share ONE authority over path
+/// resolution** (CLOUD-1359). The walk is delicate — a platform temp base, an
+/// unset root that must skip rather than resolve against the cwd, two escape
+/// checks, a file that parses versus one that does not, an exact key before the
+/// endpoint selector — and a second copy of it would be free to disagree about
+/// any of them. That is the same reasoning `.claude/rules/policy-modules.md`
+/// gives for refusing a second command-line parser, applied one module over.
+///
+/// The entry is cloned rather than borrowed because the document it lives in is
+/// local to this call. It is a handful of map keys, and the alternative is
+/// threading a lifetime through both callers to save a small copy on a path that
+/// has already read a file.
+fn entry_in(
+    source: &Source,
+    repo_root: &Path,
+    server: &str,
+) -> std::result::Result<Option<Node>, Unresolved> {
+    {
+        let base = match (&source.base, &source.root) {
+            // A BASE THE PLATFORM DEFINES, for the one directory an operator has
+            // no variable for. `temp_dir` reads the platform's own answer rather
+            // than this crate spelling `/tmp`, which would be wrong on Windows and
+            // a literal path in a config either way.
+            (Some(Base::Temp), _) => std::env::temp_dir(),
+            // A ROOT THIS HOST DOES NOT SET IS NOT AN ABSENT FILE, and empty
+            // counts as unset: an empty variable resolves the row against the
+            // process's working directory, which is a different file on every
+            // invocation.
+            (None, Some(name)) => match std::env::var_os(name).filter(|value| !value.is_empty()) {
+                Some(dir) => std::path::PathBuf::from(dir),
+                None => return Ok(None),
+            },
+            (None, None) => repo_root.to_path_buf(),
+        };
+        // AN UNSET PLACEHOLDER IS THIS HOST NOT HAVING THE ROW'S SUBJECT, which is
+        // the `root` arm's answer one level down: skip to the next source rather
+        // than resolving a path nobody wrote.
+        let Some(path) = expand(&source.path).map_err(|_| Unresolved::PathUnusable {
+            source: source.id.clone(),
+        })?
+        else {
+            return Ok(None);
+        };
+        // THE SECOND ESCAPE CHECK, over runtime input. The load-time one saw
+        // `${ID}` and not what `ID` holds, so this is the one that stops a
+        // variable's value from walking out of the base the row declared.
+        if escapes(&path) {
+            return Err(Unresolved::PathUnusable {
+                source: source.id.clone(),
+            });
+        }
+        let Ok(text) = std::fs::read_to_string(base.join(&path)) else {
+            return Ok(None);
+        };
+        // A FILE THAT EXISTS AND WILL NOT PARSE STOPS THE SEARCH. Falling through
+        // to the next source would report the next harness's answer for this
+        // one's broken file, which is a wrong answer wearing a right one's shape.
+        //
+        // THROUGH `rules::parse_node`, the one `Format::read` call in the crate
+        // (CLOUD-849): a second call site is a second error mapping, and two
+        // mappings over one grammar diverge.
+        let Ok(document) = crate::rules::parse_node(Format::Json, &text) else {
+            return Err(Unresolved::Unreadable {
+                source: source.id.clone(),
+            });
+        };
+        let Look::Is(map) = document.at(&source.node) else {
+            return Ok(None);
+        };
+        // THE EXACT KEY FIRST, AND UNCHANGED. Every table that resolves today
+        // resolves through this arm and reaches the same entry it always did; the
+        // selector below is consulted only where a key lookup found nothing, so
+        // adding a row cannot re-point an existing name.
+        let entry = match map.at(server) {
+            Look::Is(entry) => entry,
+            Look::IsNot | Look::CouldNotLook => match source.endpoint_contains.get(server) {
+                None => return Ok(None),
+                Some(needle) => match by_endpoint(map, needle) {
+                    // NOTHING ANSWERED IS A SKIP, NOT A REFUSAL, and it has to be:
+                    // the source list is the multi-harness precedence order, so
+                    // refusing here would make one host's absent wiring the reason
+                    // another host's row is never consulted. It ends at
+                    // `NotFound`, exactly as an exact-key miss does.
+                    Matched::None => return Ok(None),
+                    Matched::One(entry) => entry,
+                    Matched::Many(matched) => {
+                        return Err(Unresolved::Ambiguous {
+                            source: source.id.clone(),
+                            server: server.to_owned(),
+                            matched,
+                        });
+                    }
+                },
+            },
+        };
+        Ok(Some(entry.clone()))
+    }
+}
+
+/// The key each declared tool's approval posture sits under in the injected
+/// wiring.
+const POLICY_KEY: &str = "permission_policy";
+
+/// The posture that means a call stops for a human.
+const ALWAYS_ASK: &str = "always_ask";
+
+/// What a registered connector's tools can actually do, and whether the session
+/// is granted them (CLOUD-1359).
+///
+/// **Pointer-only by construction**, which is the whole shape of this type: it
+/// carries counts and a source id, and there is no field a tool name, a UUID, a
+/// header or an endpoint could occupy. Non-negotiable rule 4 is held in the TYPE
+/// rather than by each caller remembering — the same way `commit-meta` has no
+/// message body. The connector key is deliberately absent: it is a UUID on the
+/// episodes that matter (CLOUD-178), and rule 1 keeps an account-specific
+/// identifier out of every artifact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bound {
+    /// How many tools the wiring declares for this server.
+    pub declared: usize,
+    /// How many of them are `always_ask` — each one stops for a human, so in a
+    /// session with nobody to ask it cannot be called at all.
+    pub asks: usize,
+    /// Whether a committed or user-level `permissions.allow` grants this
+    /// server's tools.
+    ///
+    /// `None` is **could not look** — no settings file, or one that will not
+    /// parse — and never `false`. Reading "I could not compare" as "not granted"
+    /// is the defect this row exists to fix, one layer up.
+    pub granted: Option<bool>,
+}
+
+impl Bound {
+    /// Whether every declared tool stops for a human.
+    ///
+    /// **The discriminating tell** (`mem:connector-allowlist-recovery`): a
+    /// connector whose tools are grantable shows a MIX — Linear measured 57
+    /// `always_allow` against 1 `always_ask` — where the session-management
+    /// server measured 20 of 20 `always_ask`, including the read-only ones. All
+    /// of them asking is a **mandatory-approval** connector, which no local grant
+    /// moves; some of them asking is an ordinary one. A predicate that reported
+    /// both identically would send somebody to a settings screen that does not
+    /// exist for the first, which this memory records having happened.
+    #[must_use]
+    pub const fn mandatory(&self) -> bool {
+        self.declared > 0 && self.asks == self.declared
+    }
+}
+
+/// The tool census for `server`, from whichever declared source answers.
+///
+/// Reuses [`entry_in`]'s walk, so the source precedence, the escape checks and
+/// the could-not-look arms are the ones [`wiring`] already applies — and
+/// [`Unresolved::Unreadable`] reaches the caller unchanged, which is §2's
+/// load-bearing arm: a wiring file that will not parse must never read as a
+/// connector nobody configured.
+///
+/// # Errors
+///
+/// Never in the ordinary sense — every could-not-look is an [`Unresolved`]
+/// value, for [`wiring`]'s reason exactly.
+pub fn bound(
+    config: &McpConfig,
+    repo_root: &Path,
+    server: &str,
+    settings: &[std::path::PathBuf],
+) -> std::result::Result<Bound, Unresolved> {
+    if config.sources.is_empty() {
+        return Err(Unresolved::Undeclared);
+    }
+    let mut tried = Vec::new();
+    for source in &config.sources {
+        tried.push(source.id.clone());
+        let Some(entry) = entry_in(source, repo_root, server)? else {
+            continue;
+        };
+        // A SERVER DECLARING NO `tools` ARRAY IS NOT A SERVER WITH NO TOOLS. The
+        // wiring's shape is the host's business, so an absent array is a source
+        // that cannot answer this question and the search continues — where a
+        // present-but-empty one is a real reading of zero.
+        let Look::Is(Node::List(tools)) = entry.at("tools") else {
+            continue;
+        };
+        let asks = tools
+            .iter()
+            .filter(|tool| {
+                // A TOOL DECLARING NO POSTURE IS NOT ONE THAT ASKS. The absent
+                // key is the host saying nothing, and counting it as `always_ask`
+                // would make every wiring that omits the field read as a
+                // mandatory-approval connector.
+                matches!(
+                    tool.at(POLICY_KEY),
+                    Look::Is(node) if node.scalar().is_some_and(|policy| policy == ALWAYS_ASK)
+                )
+            })
+            .count();
+        return Ok(Bound {
+            declared: tools.len(),
+            asks,
+            granted: granted_in(settings, server),
+        });
+    }
+    Err(Unresolved::NotFound { tried })
+}
+
+/// Whether any settings file grants `server`, three-valued.
+///
+/// `None` where **no** candidate could be read or parsed — could not look. A file
+/// that reads and simply does not name the server is a real `false`, and the two
+/// must not collapse: the first says the comparison did not happen, the second is
+/// the finding.
+///
+/// The MCP grant forms are `mcp__<server>` for every tool of a server and
+/// `mcp__<server>__<tool>` for one. A trailing `__*` is neither, and reads as a
+/// grant while matching nothing — measured 2026-09-05 (`mem:serena-setup`), where
+/// exactly that spelling left every call prompting against a file that looked
+/// correct. So the prefix is tested and the wildcard spelling is not honoured.
+fn granted_in(settings: &[std::path::PathBuf], server: &str) -> Option<bool> {
+    let prefix = format!("mcp__{server}");
+    let mut looked = false;
+    for path in settings {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(document) = crate::rules::parse_node(Format::Json, &text) else {
+            continue;
+        };
+        looked = true;
+        let Look::Is(Node::List(allow)) = document.at("permissions.allow") else {
+            continue;
+        };
+        if allow.iter().filter_map(Node::scalar).any(|rule| {
+            // THE TOOL SEGMENT MUST BE A NAME, and testing only for the `__`
+            // separator is not enough — that was this function's own first draft
+            // and its own case caught it. `mcp__<server>__*` strips to `__*`,
+            // which carries the separator, so the wildcard spelling would have
+            // been honoured by the very check written to refuse it.
+            rule == prefix
+                || rule
+                    .strip_prefix(&prefix)
+                    .and_then(|tail| tail.strip_prefix("__"))
+                    .is_some_and(|tool| !tool.is_empty() && !tool.contains('*'))
+        }) {
+            return Some(true);
+        }
+    }
+    looked.then_some(false)
 }
 
 /// The reduction a method's row declares, or `None` where no row declares one.
