@@ -2345,6 +2345,18 @@ pub fn call_input_schema() -> Result<String> {
                                 "raw": {"type": "string"},
                                 "terminator": {"type": ["string", "null"]},
                                 "input-redirect": {"type": "boolean"},
+                                // CLOUD-1381. `null` at the top level; a
+                                // `kind`/`role` pair inside a control-flow node,
+                                // so a module decides from the node rather than
+                                // from a keyword a parse does not produce.
+                                "construct": {
+                                    "type": ["object", "null"],
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "kind": {"type": "string"},
+                                        "role": {"type": "string"},
+                                    },
+                                },
                             },
                         },
                     },
