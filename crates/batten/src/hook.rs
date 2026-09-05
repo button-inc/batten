@@ -6540,11 +6540,26 @@ fn program_name(token: &str) -> &str {
 /// The day a second mediator exists this becomes a set and the key becomes a
 /// name rather than a boolean; spelling it now would be a vocabulary with one
 /// member and no consumer.
+/// ONE ENTRY PER LINE, NOT PER SEGMENT (CLOUD-1381).
+///
+/// A newline is whitespace to [`segments`], so a two-line call is one segment
+/// whose program is the FIRST line's — and every module anchoring on
+/// `program.name` then reads the wrong one. Measured over the running hook
+/// before this: `git push --force origin main` denied by `no-force-push`, and
+/// `echo starting` plus a newline plus the same command ALLOWED. A force-push to
+/// trunk, through on a line break.
+///
+/// The fix landed for [`matching_shape_rows`] first and left this projection
+/// behind, which was worse than either hole alone: two readers of one call
+/// disagreed, so a shape row denied what the four `programs`-anchored preset
+/// modules allowed. That disagreement is the defect CLOUD-857 measured and this
+/// projection exists to refuse, so it cannot be reintroduced here.
 fn program_reach(command: &str) -> Vec<serde_json::Value> {
     segments(command)
         .iter()
-        .filter_map(|segment| {
-            let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+        .flat_map(line_bounded_words)
+        .filter_map(|words| {
+            let tokens: Vec<&str> = words.iter().map(String::as_str).collect();
             let index = effective_program(&tokens)?;
             let program = program_token(tokens[index]);
             Some(serde_json::json!({

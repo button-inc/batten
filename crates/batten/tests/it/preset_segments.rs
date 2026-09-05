@@ -114,6 +114,43 @@ fn a_force_push_inside_a_compound_command_denies() {
     assert_preset_denies("cd /tmp && echo hi && git push --force origin main");
 }
 
+/// A NEWLINE IS NOT A SEPARATOR TO `segments`, AND THIS TIER WAS GREEN OVER
+/// THAT (CLOUD-1381).
+///
+/// Every case above puts the force push after `&&`, `;` or a variable
+/// assignment — all of which `segments` splits on. None of them uses a NEWLINE,
+/// which it does not split on, so `programs` yielded one entry naming the first
+/// line's program and every module anchoring on `program.name` read the wrong
+/// one. Measured over the running hook: `git push --force origin main` denied,
+/// and the same command after `echo starting` and a newline ALLOWED. A
+/// force-push to trunk, through on a line break, with this file green.
+///
+/// The gap outlived CLOUD-857's fix because that reproduction and this suite
+/// were written from the same list of separators. A case class absent from the
+/// suite is a case class absent from the reproduction — which is why this is a
+/// test rather than a comment.
+#[test]
+fn a_force_push_on_a_later_line_denies() {
+    assert_preset_denies("echo starting\ngit push --force origin main");
+    assert_preset_denies("cd /tmp\ngit push -f origin main");
+    // Mixed: a separator `segments` DOES split on, then one it does not. The
+    // walk has to reach the second line of the second segment.
+    assert_preset_denies("cd /tmp && echo hi\ngit push --force origin main");
+    // A continued line is ONE command, so the operands must still reach the
+    // program rather than being stranded on a line of their own.
+    assert_preset_denies("git push --force \\\n  origin main");
+}
+
+/// The anti-vacuity half of the case above: a newline must not become a deny by
+/// itself, or the row would refuse most of what anyone types.
+#[test]
+fn an_ordinary_multi_line_call_is_untouched() {
+    assert_allowed("echo one\necho two");
+    assert_allowed("git status\ngit diff --stat");
+    // The safer flag still survives, on a later line as much as on the first.
+    assert_preset_allows("echo starting\ngit push --force-with-lease origin main");
+}
+
 #[test]
 fn force_with_lease_survives_segmentation() {
     // The distinction the preset exists to draw, and the half a deny-only suite
