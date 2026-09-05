@@ -1282,11 +1282,11 @@ pub fn reduce(
                 }
                 kept.insert(field.clone(), serde_json::Value::String(text));
             }
-            // UNREACHABLE — the array arm returned before this loop. `continue`
-            // rather than a panic: library code may not panic on a reachable
-            // path, and an impossible branch that keeps nothing is the safe
-            // direction if this ever stops being impossible.
-            Reduce::Each => continue,
+            // UNREACHABLE — the array arm returned before this loop. Keeping
+            // nothing rather than panicking: library code may not panic on a
+            // reachable path, and an impossible branch that drops the field is
+            // the safe direction if this ever stops being impossible.
+            Reduce::Each => {}
         }
     }
     Some(kept)
