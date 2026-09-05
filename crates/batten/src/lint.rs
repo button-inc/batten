@@ -252,8 +252,8 @@ pub fn smells(
     // Parse through the real loader first, so a malformed config produces the
     // same message it would anywhere else rather than this module's own.
     let config = config::parse(text, source)?;
-    let located: Located = toml::from_str(text)
-        .map_err(|err| crate::UsageError::raise(format!("invalid config {source}: {err}")))?;
+    let located: Located =
+        toml::from_str(text).map_err(|err| config::config_error(source, &err))?;
 
     let mut found = Vec::new();
 

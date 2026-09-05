@@ -85,6 +85,7 @@ mod config_lint;
 mod config_provenance;
 mod config_schema;
 mod config_show;
+mod config_skew;
 mod config_trust;
 mod connector_allow_door;
 mod connector_not_granted;

@@ -1108,8 +1108,7 @@ pub const RETIRED_KEYS: &[(&str, &str)] = &[(
 ///
 /// [`trust::load_base`]: crate::trust::load_base
 pub fn parse_base(text: &str, source: &str) -> Result<Config> {
-    let mut table: toml::Table = toml::from_str(text)
-        .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?;
+    let mut table: toml::Table = toml::from_str(text).map_err(|err| config_error(source, &err))?;
     // Nothing is reported when a key is dropped: the report this feeds is a
     // comparison of two policies, and "the base declared a key this build no
     // longer has" is a fact about the build rather than about either policy.
@@ -1214,8 +1213,7 @@ pub struct OverrideConfig {
 /// override surface** — including one that is perfectly valid in the file it was
 /// copied from, which is the case this type exists to catch.
 pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
-    let config: OverrideConfig = toml::from_str(text)
-        .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?;
+    let config: OverrideConfig = toml::from_str(text).map_err(|err| config_error(source, &err))?;
     if config.version != SUPPORTED_VERSION {
         return Err(UsageError::raise(format!(
             "unsupported config version {} in {source}; this build supports version {SUPPORTED_VERSION}",
@@ -1549,9 +1547,65 @@ fn validate_sections(config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// The serde shapes only an unknown KEY produces, as this parser words them.
+///
+/// Matched on the rendered message because serde exposes no typed
+/// discriminant for them, and that is the bound worth stating: a future
+/// `toml`/`serde` bump could reword either string, and this would then silently
+/// stop adding the skew reading. The failure direction is the safe one — the
+/// parse error still prints in full and nothing is suppressed — but it is a
+/// silence, so `config_skew.rs` asserts the wording rather than trusting it.
+const UNKNOWN_KEY: [&str; 2] = ["unknown field", "unknown variant"];
+
+/// Report a config parse failure, naming a version skew where one is possible.
+///
+/// # The defect (CLOUD-1449), measured twice in one session
+///
+/// A rebase brings `main` forward under a live branch, `batten.toml` grows a key,
+/// and the binary built at session start predates it. Serde then reports
+/// `unknown field \`link\`` and the message says **invalid config** — so the
+/// whole file fails to load, EVERY rule stops evaluating at once, and the agent
+/// starts hunting a defect in a file that is exactly right. The remedy is a
+/// rebuild and nothing named it.
+///
+/// # Both readings, because neither is decidable here
+///
+/// An unknown key is a stale binary or a typo, and this parser cannot tell them
+/// apart: it has the key it does not know and nothing else. A message asserting
+/// skew would be this same defect wearing the other subject, so the note states
+/// both and the parse error's own `path:line` serves either.
+///
+/// # `min_batten_version` cannot discriminate, and that is CLOUD-366's
+///
+/// The obvious sharper test — re-read the file permissively and compare its
+/// declared floor against this build — does not work and is recorded so the next
+/// reader does not re-derive it. That key names the oldest binary that can
+/// honour the policy, which is bumped when a config need is BREAKING, not when a
+/// column is added: measured here, the floor is `0.0.82` against a `0.0.141`
+/// build, so both instances of this defect sit far above it and would be missed.
+/// CLOUD-366 is why it cannot name the release that carries a new column.
+///
+/// Pointer-only (rule 4): the note adds a version and a task name. Every byte of
+/// file content in the output is the parser's own error, unchanged.
+//MUTANT-SUITE crates/batten/tests/it/config_skew.rs
+//MUTANT skew-reads-as-malformed|s@    if !UNKNOWN_KEY.iter().any(|shape| rendered.contains(shape)) {@    if true {@|an_unknown_key_names_the_rebuild
+//MUTANT every-parse-error-blames-skew|s@    if !UNKNOWN_KEY.iter().any(|shape| rendered.contains(shape)) {@    if false {@|a_malformed_config_does_not_mention_a_rebuild
+pub(crate) fn config_error(source: &str, err: &toml::de::Error) -> anyhow::Error {
+    let rendered = err.to_string();
+    if !UNKNOWN_KEY.iter().any(|shape| rendered.contains(shape)) {
+        return UsageError::raise(format!("invalid config {source}: {err}"));
+    }
+    UsageError::raise(format!(
+        "invalid config {source}: {err}\n\
+         This build is batten {VERSION}, and an unknown key has two readings it \
+         cannot tell apart: the config declares a key this build predates — \
+         rebuild with `mise run install:local` — or the key is a typo. The error \
+         above names the line for either.",
+    ))
+}
+
 fn parse_ungated(text: &str, source: &str) -> Result<Config> {
-    let config: Config = toml::from_str(text)
-        .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?;
+    let config: Config = toml::from_str(text).map_err(|err| config_error(source, &err))?;
     if config.version != SUPPORTED_VERSION {
         return Err(UsageError::raise(format!(
             "unsupported config version {} in {source}; this build supports version {SUPPORTED_VERSION}",
