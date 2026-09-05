@@ -6287,10 +6287,11 @@ fn settle_the_bet(
     if !bet.live() {
         return Ok(None);
     }
-    let tracking = format!(
-        "refs/remotes/origin/{}",
-        reference.rsplit('/').next().unwrap_or(reference)
-    );
+    // `land::tracking_ref`, not a second spelling of it — and the second
+    // spelling here carried the same last-segment defect it did (review of
+    // #848): a trunk named `release/1.x` resolved to `origin/1.x`, so this
+    // settled a bet against an unrelated branch's tracking ref.
+    let tracking = land::tracking_ref(reference);
     // `None`, never `""`. A ref that would not read is a could-not-look, and
     // flattening it into an empty string made it compare unequal to every
     // `main_at_bet` — which is `speculation::settle`'s "the trunk moved and took
@@ -7912,10 +7913,11 @@ fn run_land_wait(
     // has moved past it, so the comparison needs the local reading rather than a
     // freshly fetched one — a base refreshed first would compare a value to
     // itself and never report stale.
-    let tracking = format!(
-        "refs/remotes/origin/{}",
-        reference.rsplit('/').next().unwrap_or(reference)
-    );
+    // `land::tracking_ref`, not a second spelling of it — and the second
+    // spelling here carried the same last-segment defect it did (review of
+    // #848): a trunk named `release/1.x` resolved to `origin/1.x`, so this
+    // settled a bet against an unrelated branch's tracking ref.
+    let tracking = land::tracking_ref(reference);
     // NO BASE IS A REFUSAL, NOT A SILENT BLOCK, and this is `main-watch.bats`'s
     // last case conserved. `Poll::moved` reads an empty base as *nothing to
     // compare against* and answers `None` for every reading — correct there, and

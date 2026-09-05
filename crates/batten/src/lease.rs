@@ -876,13 +876,27 @@ fn apply_delta(base: &[u8], delta: &[u8]) -> Result<Vec<u8>> {
 /// One of a delta header's two little-endian varint sizes.
 fn delta_size(delta: &[u8], cursor: &mut usize) -> Result<usize> {
     let mut value = 0_usize;
-    let mut shift = 0;
+    let mut shift = 0_u32;
     loop {
         let byte = *delta
             .get(*cursor)
             .ok_or_else(|| anyhow::anyhow!("lease: a delta header runs off its end"))?;
         *cursor += 1;
-        value |= usize::from(byte & 0x7f) << shift;
+        // **THE SHIFT IS BOUNDED, and it was not** (review of #848). `shift += 7`
+        // with no bound over bytes the REMOTE supplied: ten continuation bytes
+        // reach 70, which is `attempt to shift left with overflow` in a debug
+        // build — a panic on a reachable path, which `.claude/rules/rust.md`
+        // forbids — and a silently masked shift in release, so the decoded size is
+        // wrong and surfaces as the generic length mismatch rather than as the
+        // malformed input it is. A truncated or corrupted pack through a flaky
+        // proxy is enough; no malice required.
+        //
+        // A varint wider than the machine's own word cannot describe a size this
+        // process could allocate, so it is could-not-look rather than a value to
+        // salvage — the same direction every other reader on this path takes.
+        value |= usize::from(byte & 0x7f).checked_shl(shift).ok_or_else(|| {
+            anyhow::anyhow!("lease: a delta header's size varint is out of range")
+        })?;
         shift += 7;
         if byte & 0x80 == 0 {
             return Ok(value);
@@ -901,14 +915,18 @@ fn pack_header(rest: &[u8]) -> Result<(u8, usize, usize)> {
         .ok_or_else(|| anyhow::anyhow!("lease: the pack ends where an object header should be"))?;
     let kind = (first >> 4) & 0x07;
     let mut size = usize::from(first & 0x0f);
-    let mut shift = 4;
+    let mut shift = 4_u32;
     let mut index = 1;
     let mut byte = first;
     while byte & 0x80 != 0 {
         byte = *rest.get(index).ok_or_else(|| {
             anyhow::anyhow!("lease: an object header runs off the end of the pack")
         })?;
-        size |= usize::from(byte & 0x7f) << shift;
+        // Bounded for `delta_size`'s reason, one function up: the same unbounded
+        // shift over the same remote-supplied bytes.
+        size |= usize::from(byte & 0x7f).checked_shl(shift).ok_or_else(|| {
+            anyhow::anyhow!("lease: an object header's size varint is out of range")
+        })?;
         shift += 7;
         index += 1;
     }

@@ -308,19 +308,30 @@ impl Pipeline {
     /// stopped at `Verify` never readied, so it owes no re-draft, and computing
     /// the owed set from the composition alone would compensate effects nobody
     /// caused.
+    /// **AT MOST ONCE EACH, because two steps may owe the SAME undo** (review of
+    /// #848). `Lease` and `Push` both declare [`Compensation::ReleaseLease`] —
+    /// one because it took the lease and one because it pushed under it — so a
+    /// lap entering both owed the hand-back twice and `lease_hand_back` ran, and
+    /// reported, twice per unwind. A compensation is a statement about what is
+    /// owed, not a count of who owes it.
+    ///
+    /// Deduped on the way out rather than by forbidding a shared compensation at
+    /// load: two steps owing one undo is a legitimate composition, and the
+    /// alternative would make an adopter's pipeline unloadable for describing its
+    /// effects accurately.
     #[must_use]
     pub fn unwind(&self, entered: &[Step]) -> Vec<Compensation> {
-        entered
-            .iter()
-            .rev()
-            .filter_map(|step| {
-                self.steps
-                    .iter()
-                    .find(|row| row.step == *step)
-                    .map(|row| row.compensate)
-            })
-            .filter(|compensation| compensation.undoes_something())
-            .collect()
+        let mut owed: Vec<Compensation> = Vec::new();
+        for step in entered.iter().rev() {
+            let Some(row) = self.steps.iter().find(|row| row.step == *step) else {
+                continue;
+            };
+            if !row.compensate.undoes_something() || owed.contains(&row.compensate) {
+                continue;
+            }
+            owed.push(row.compensate);
+        }
+        owed
     }
 }
 

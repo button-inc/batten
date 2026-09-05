@@ -209,7 +209,7 @@ violation contains {
 	"verdict": "source parse dead",
 	"subjects": [{"path": path}],
 } if {
-	some path in input.tree.missing
+	some path, _ in input.tree.missing
 	engine_source(path)
 }
 
@@ -240,7 +240,7 @@ vocabulary := {"patterns": {
 
 tree(lines, base) := object.union(vocabulary, {"tree": {
 	"lines": lines,
-	"missing": [],
+	"missing": {},
 	"base-delta": {
 		"added": [],
 		"edited": object.keys(base),
@@ -359,7 +359,7 @@ test_a_doc_comment_naming_a_lint_is_not_an_escape if {
 test_an_unresolvable_base_refuses_rather_than_passing if {
 	some v in violation with input as object.union(
 		vocabulary,
-		{"tree": {"lines": {}, "missing": [], "base-delta": null}},
+		{"tree": {"lines": {}, "missing": {}, "base-delta": null}},
 	)
 	v.verdict == "diff read absent"
 }
@@ -369,7 +369,7 @@ test_an_unresolvable_base_refuses_rather_than_passing if {
 test_an_unparsed_engine_source_is_reported if {
 	some v in violation with input as object.union(vocabulary, {"tree": {
 		"lines": {},
-		"missing": ["crates/batten/src/thing.rs"],
+		"missing": {"crates/batten/src/thing.rs": "unparsed"},
 		"base-delta": {"added": [], "edited": [], "deleted": [], "code-changed": [], "base-lines": {}},
 	}})
 	v.verdict == "source parse dead"
