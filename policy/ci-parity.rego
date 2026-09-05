@@ -876,8 +876,14 @@ sound_input := {"tree": {
 		"release-plz.toml": {"pr": {"pr_draft": true}},
 	},
 	"lines": {
+		# THE DECLARATION SITS AT THE CONSTRUCTOR, rendered the way rustfmt
+		# renders the real call: `abandon_reads_declaration` binds the two
+		# within three lines of each other since review of #848, so a fixture
+		# spelling them independently is no longer sound.
 		"crates/batten/src/lib.rs": [
-			"let fanin = std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default();",
+			"let fanin = land::FanIn::from_workflow_path(",
+			"    std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default(),",
+			");",
 			"let report = land::abandon(&repo, &sha, &fanin);",
 		],
 		# The foreign leg the anti-vacuity term needs a subject from: without it a
@@ -1123,10 +1129,53 @@ test_an_abandon_that_restates_the_path_is_refused if {
 # THE ANTI-VACUITY TERM. Every other fan-in clause makes the abandon SAFE; none
 # of them notices it is never called.
 test_a_lander_that_never_abandons_is_refused if {
-	lines := object.union(sound_input.tree.lines, {"crates/batten/src/lib.rs": ["let fanin = std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default();"]})
+	lines := object.union(sound_input.tree.lines, {"crates/batten/src/lib.rs": ["let fanin = land::FanIn::from_workflow_path(", "    std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default(),", ");"]})
 	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
 	some f in found
 	f.verdict == "job reach dead"
+}
+
+# THE CLASS REVIEW OF #848 NAMED, AND THE ONE THIS ROW COULD NOT SEE. The two
+# fan-in clauses were INDEPENDENT line questions over one file, so a read of the
+# declaration anywhere — a comment, a doc block, an unrelated helper thousands of
+# lines away — plus a call handed the WRONG value satisfied both and the module
+# reported clean. The header above records the engine doing exactly that for the
+# whole of the branch that wrote this rule, so the rule could not catch its own
+# subject.
+#
+# The fixture passes the OLD spelling and fails the new one: `land::abandon` is
+# reached, `CI_FANIN_WORKFLOW` appears, and the constructor is handed a different
+# variable entirely.
+test_a_declaration_read_far_from_the_constructor_is_refused if {
+	lines := object.union(sound_input.tree.lines, {"crates/batten/src/lib.rs": [
+		"// the fan-in is declared as CI_FANIN_WORKFLOW in the manifest",
+		"fn unrelated() -> String {",
+		"    std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default()",
+		"}",
+		"",
+		"let fanin = land::FanIn::from_workflow_path(",
+		"    std::env::var(\"CI_FANIN_CHECK\").unwrap_or_default(),",
+		");",
+		"let report = land::abandon(&repo, &sha, &fanin);",
+	]})
+	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
+	some f in found
+	f.verdict == "job declare duplicate"
+}
+
+# THE WINDOW IS THREE LINES RATHER THAN ONE, DELIBERATELY. Pinning rustfmt's
+# current rendering would make a reflow silence the gate, which is strictly worse
+# than the duplication the binding exists to stop — so the collapsed spelling has
+# to pass, and this is the case that says so.
+test_the_constructor_and_its_declaration_may_sit_on_one_line if {
+	lines := object.union(sound_input.tree.lines, {"crates/batten/src/lib.rs": [
+		"let fanin = land::FanIn::from_workflow_path(std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default());",
+		"let report = land::abandon(&repo, &sha, &fanin);",
+	]})
+	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
+	every f in found {
+		f.verdict != "job declare duplicate"
+	}
 }
 
 test_a_job_that_starts_without_asking_the_lease_is_refused if {
