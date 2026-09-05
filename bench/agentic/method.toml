@@ -1,0 +1,86 @@
+# How an agentic trial is measured, and what it deliberately does not measure.
+#
+# THE AUTHORITY FOR OUTCOMES AND ADJUDICATION (CLOUD-1116 §1). `trials.toml`
+# beside this file is the authority for each experiment's arms; this one is the
+# authority for what "improved" means, over what window, judged how.
+#
+# A SEPARATE RECORD SET FROM `bench/tokens/`, and the reason is that file's own
+# invariant: every arm is run `runs` times and its output compared BYTE-FOR-BYTE,
+# and an arm that is not byte-stable is reported as such and never averaged. A
+# model arm is never byte-stable and averaging is the only way to read one, so a
+# model row in that file either breaks the invariant or is excluded from the
+# comparison — leaving `token-bench-check`'s drift gate deciding nothing about
+# exactly the rows this work adds. `bench/tokens/` is not edited here and its
+# invariant still holds for every row in it.
+
+[method]
+# The window a measurement may attribute an outcome to. Anything after it is a
+# different experiment: an agent that fixes its own mistake three turns later has
+# not been helped by the intervention under test, it has recovered from it.
+attribution_window = "the governed action under test, plus every attempt at that same action until it succeeds or the trial is abandoned"
+
+# Held constant inside a comparison, or the pair is not a pair.
+held_constant = [
+  "repository revision",
+  "task definition",
+  "available tools",
+  "model identity",
+]
+
+[method.outcomes]
+# What is counted. Each is a number or a boolean read off the transcript and the
+# repository, never a judgement about the agent's reasoning.
+measured = [
+  "governed-action success: did the mediated call the trial is about eventually pass",
+  "denials before success: how many refusals the agent collected first",
+  "receipt freshness: whether the receipt the gate read was valid, expired or missing",
+  "verified task outcome: does the repository's own suite pass at the end",
+  "corrective changes after the first proposed solution",
+  "interaction count",
+  "token cost",
+]
+
+# Named because an unmeasured dimension that is not written down gets claimed
+# anyway. Each of these is a judgement, and non-negotiable rule 3 keeps a
+# judgement out of a verdict.
+unmeasured = [
+  "whether the agent's stated rationale is sound",
+  "whether the remediation is the one a maintainer would have chosen",
+  "whether the prose of a verdict's `class` is persuasive",
+  "code quality beyond what the committed suite decides",
+]
+
+[method.adjudication]
+# How a measured outcome becomes a verdict about the intervention.
+#
+# DETERMINISTIC ONLY. The outcome is read from exit codes, the receipt store and
+# the repository's own suite — never from a model's opinion of the result, and
+# never from a model's opinion of another model's result. A semantic score may
+# inform a disposition a human reads; it may never raise a blocking exit code,
+# which is the boundary this whole line of work is inside.
+method = "paired difference on each measured outcome, baseline arm minus treatment arm, over `runs` runs of each"
+requires_both_arms = true
+blocking_on_model_judgement = false
+
+# A trial whose disposition asserts a finding owes a result. `pending` is the
+# honest state for a declared-but-unrun trial and is what every row here carries
+# today; `agentic-experiment-record` refuses any other disposition without one.
+dispositions = [
+  "pending",
+  "gate-candidate",
+  "skill-candidate",
+  "tool-candidate",
+  "advisory-only",
+  "rejected",
+]
+
+[method.canary]
+# CLOUD-1089 paid for this twice: two instruments in that survey returned exit 0
+# while measuring nothing — jscpd reporting "0 files analyzed", sonarjs with an
+# undefined parser — and both would have been written up as clean results. An
+# instrument's own exit code is a claim to be tested, not read.
+#
+# So every arm carries a canary: a case the arm MUST fail. An arm whose canary
+# passes measured nothing, whatever its exit code said.
+required = true
+rule = "an arm reporting success on its own canary is discarded, not averaged"

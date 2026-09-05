@@ -49,6 +49,7 @@ mod admission;
 mod advisory_drain;
 mod agent_capabilities;
 mod agent_facts;
+mod agentic_record;
 mod ambient_authority;
 mod ask_disposition;
 mod attribution;
