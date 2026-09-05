@@ -188,6 +188,19 @@ impl Reading {
     }
 }
 
+/// `policy hooks`' one summary line. ONE line always, which is the self-applying
+/// property: a gate about hook volume whose own report grew with what it found
+/// would be the defect wearing the sensor's clothes.
+///
+/// Forwards to [`Reading::line`] rather than restating it: CLOUD-371 unifies
+/// which types may reach the data channel, never what any of them renders, so
+/// the bytes here are the bytes this type already emitted.
+impl crate::output::Line for Reading {
+    fn line(&self) -> String {
+        Reading::line(self).to_string()
+    }
+}
+
 /// The rule id a session-budget finding carries.
 pub const BUDGET_RULE: &str = "hook-output-budget";
 

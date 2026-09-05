@@ -138,6 +138,18 @@ impl Smell {
     }
 }
 
+/// One `config lint` smell, located by `toml::Spanned` so the pointer carries a
+/// line.
+///
+/// Forwards to [`Smell::line_text`] rather than restating it: CLOUD-371 unifies
+/// which types may reach the data channel, never what any of them renders, so
+/// the bytes here are the bytes this type already emitted.
+impl crate::output::Line for Smell {
+    fn line(&self) -> String {
+        Smell::line_text(self).to_string()
+    }
+}
+
 /// A set declared in the config but covering nothing.
 const EMPTY_PROTECTED_SET: &str = "empty-protected-set";
 /// As above, for `unlanded`.

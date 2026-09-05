@@ -5534,6 +5534,29 @@ pub struct Finding {
     pub remediation: Option<Remediation>,
 }
 
+/// The renderer this type went without (CLOUD-371).
+///
+/// Every other emitted type in the engine named its own `line`/`line_text`/
+/// `summary`; the most-emitted one had none, so its pointer shape lived as an
+/// inline `match` on [`Finding::line`] at two separate call sites in
+/// `lib.rs` — `run_policy_hooks` and `run_rules` — which is the asymmetry that
+/// proved the funnel was missing. The bytes below are exactly what both sites
+/// composed, moved rather than rewritten.
+///
+/// **Pointer only, and that is this type above all** (rule 4): the location and
+/// the rule that fired, never the offending line's text. A rule-scoped finding
+/// carries no line and prints its pointer without one rather than inventing a
+/// number it does not have — the `None` arm is a different pointer, not a
+/// degraded one.
+impl crate::output::Line for Finding {
+    fn line(&self) -> String {
+        match self.line {
+            Some(line) => format!("{}:{} {}", self.path, line, self.rule),
+            None => format!("{} {}", self.path, self.rule),
+        }
+    }
+}
+
 /// Whether a rule kind's predicate decides its question or approximates it
 /// (CLOUD-331).
 ///

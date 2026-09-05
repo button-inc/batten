@@ -262,11 +262,35 @@ impl Report {
     }
 }
 
+/// One budget set's verdict line, printed after its per-file rows where those
+/// explain the verdict. Both boundaries are `<=`, so exactly at budget passes
+/// and a clean run prints nothing at all.
+///
+/// Forwards to [`Report::summary`] rather than restating it: CLOUD-371 unifies which
+/// types may reach the data channel, never what any of them renders.
+impl crate::output::Line for Report {
+    fn line(&self) -> String {
+        Report::summary(self).to_string()
+    }
+}
+
 impl FileCount {
     /// The per-file report line: a pointer and its counts.
     #[must_use]
     pub fn line(&self) -> String {
         format!("{} ~{} tokens {} lines", self.path, self.tokens, self.lines)
+    }
+}
+
+/// One file's contribution to a budget set, printed only where it explains a
+/// verdict — silence is the success signal on the human channel (§6).
+///
+/// Forwards to [`FileCount::line`] rather than restating it: CLOUD-371 unifies
+/// which types may reach the data channel, never what any of them renders, so
+/// the bytes here are the bytes this type already emitted.
+impl crate::output::Line for FileCount {
+    fn line(&self) -> String {
+        FileCount::line(self).to_string()
     }
 }
 

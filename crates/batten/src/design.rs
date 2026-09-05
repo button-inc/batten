@@ -380,6 +380,19 @@ impl Problem {
     }
 }
 
+/// `design audit`'s human arm. Emitted only where a problem exists — the plain
+/// channel prints nothing on a clean tree while `-J` emits its document
+/// unconditionally, and that asymmetry is the verb's, not this trait's.
+///
+/// Forwards to [`Problem::line_text`] rather than restating it: CLOUD-371 unifies
+/// which types may reach the data channel, never what any of them renders, so
+/// the bytes here are the bytes this type already emitted.
+impl crate::output::Line for Problem {
+    fn line(&self) -> String {
+        Problem::line_text(self).to_string()
+    }
+}
+
 /// Parse a JSONL claim stream, or the 1-based line of the first row that does
 /// not parse.
 ///

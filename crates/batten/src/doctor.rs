@@ -121,6 +121,18 @@ impl Check {
     }
 }
 
+/// One `diagnose` check. A stable reason id, never the error text, so the
+/// rendering carries no filesystem path.
+///
+/// Forwards to [`Check::line`] rather than restating it: CLOUD-371 unifies
+/// which types may reach the data channel, never what any of them renders, so
+/// the bytes here are the bytes this type already emitted.
+impl crate::output::Line for Check {
+    fn line(&self) -> String {
+        Check::line(self).to_string()
+    }
+}
+
 /// The whole diagnosis, as the `-J` data channel renders it.
 ///
 /// Deliberately carries no timestamp, no duration and no path: identical input
@@ -319,6 +331,16 @@ impl Mediator {
     }
 }
 
+/// `doctor mediator`'s one line, on `Egress`'s reasoning and for its reason.
+///
+/// Forwards to [`Mediator::line`] rather than restating it: CLOUD-371 unifies which
+/// types may reach the data channel, never what any of them renders.
+impl crate::output::Line for Mediator {
+    fn line(&self) -> String {
+        Mediator::line(self).to_string()
+    }
+}
+
 /// Whether the agent proxy would carry this container's requests (CLOUD-1399).
 ///
 /// # Why this is a sub-verb and not a check in the bare report
@@ -412,6 +434,17 @@ impl Egress {
             Egress::Unproxied => ExitCode::Success,
             Egress::Partial | Egress::Unfenced => ExitCode::Usage,
         }
+    }
+}
+
+/// `doctor egress`'s one line. A stable reason id and never the error text, which
+/// is what keeps this verb's `--json` byte-stable and free of a filesystem path.
+///
+/// Forwards to [`Egress::line`] rather than restating it: CLOUD-371 unifies which
+/// types may reach the data channel, never what any of them renders.
+impl crate::output::Line for Egress {
+    fn line(&self) -> String {
+        Egress::line(self).to_string()
     }
 }
 

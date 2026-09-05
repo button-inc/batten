@@ -530,6 +530,89 @@ pub fn verdict(err: &mut dyn Write, text: &str) -> std::io::Result<()> {
     writeln!(err, "{text}")
 }
 
+/// One line on the **data** channel: house-style §6's pointer shape, stated once.
+///
+/// The stderr writers above have always been a funnel; stdout had none
+/// (CLOUD-371). The crate spells a renderer three ways — `line`, `line_text` and
+/// `summary`, across ten modules — and `lib.rs` wrote whichever one a type
+/// happened to name straight to `out`. Three spellings is the whole problem:
+/// nothing made a type reaching the data channel *declare* that it does, so the
+/// census was a grep over three method names and a hope that no module had
+/// invented a fourth.
+///
+/// Not every module carrying such a method emits through it — `defects::Record`
+/// builds a body string, `waiver` and `outputs` render into findings — and the
+/// distinction is exactly what a name-based census could not draw. Implementing
+/// this is what draws it.
+///
+/// [`crate::rules::Finding`] is the asymmetry that proved the gap: the
+/// most-emitted type in the engine had no renderer at all, so its pointer was
+/// composed by an inline `match` on `Option<usize>` at two separate call sites.
+///
+/// # What implementing this declares
+///
+/// That the type reaches the data channel. The name is not the point: three
+/// spellings for one contract is what made "which types render on stdout" a
+/// question answerable only by grepping method names and hoping a fourth was not
+/// invented. One trait makes it a question about the type system.
+///
+/// # What it does not decide
+///
+/// **Content.** No trait can stop a `String` carrying a payload, so rule 4's
+/// guarantee stays exactly where CLOUD-92 put it — the canary corpus at the
+/// process boundary in `crates/batten/tests/it/pointer_only.rs`. This owns the
+/// pointer *shape*; that owns the pointer *content*, and one authority for both
+/// would be a second authority for each.
+///
+/// # Why there is no blanket impl for `String`
+///
+/// A blanket impl would re-open the hole the trait closes: anything renderable
+/// would join by coercion rather than by declaration, and the census would be
+/// back to a convention. A producer that already yields `Vec<String>` keeps
+/// yielding it and its caller writes the lines; it does not get to launder them
+/// through the trait.
+pub(crate) trait Line {
+    /// This value's one pointer line, without its terminator.
+    fn line(&self) -> String;
+}
+
+/// Emit one value's line on the data channel.
+///
+/// Takes **no [`Mode`]**, and that absence is load-bearing rather than an
+/// omission: it is the same property this module's header rests on, so no rung
+/// can gate stdout and no colour can reach a parsed stream.
+/// `tests::no_ladder_rung_can_change_a_data_document` in the integration suite
+/// pins it from the outside.
+///
+/// # Errors
+///
+/// Propagates the writer's error.
+pub(crate) fn line(out: &mut dyn Write, item: &dyn Line) -> std::io::Result<()> {
+    writeln!(out, "{}", item.line())
+}
+
+/// Emit a sequence of lines on the data channel, in the order given.
+///
+/// The order is the caller's and is never sorted here: several verbs emit in a
+/// declaration order that is itself the §6 byte-stability argument, and a sort
+/// in the funnel would silently overrule each of them.
+///
+/// # Errors
+///
+/// Propagates the writer's error, at the first line that fails.
+pub(crate) fn lines<'a, T>(
+    out: &mut dyn Write,
+    items: impl IntoIterator<Item = &'a T>,
+) -> std::io::Result<()>
+where
+    T: Line + 'a,
+{
+    for item in items {
+        line(out, item)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

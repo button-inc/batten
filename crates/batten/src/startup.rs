@@ -240,6 +240,19 @@ impl Outcome {
     }
 }
 
+/// `startup`'s human arm, EVERY row rather than only the failing ones: a silent
+/// pass over a row whose check never ran is indistinguishable from a row that
+/// was never declared.
+///
+/// Forwards to [`Outcome::line`] rather than restating it: CLOUD-371 unifies
+/// which types may reach the data channel, never what any of them renders, so
+/// the bytes here are the bytes this type already emitted.
+impl crate::output::Line for Outcome {
+    fn line(&self) -> String {
+        Outcome::line(self).to_string()
+    }
+}
+
 /// Run one declared argv under `root` and report whether it exited zero.
 ///
 /// `None` is could-not-look: the program could not be spawned at all, which is

@@ -1347,6 +1347,19 @@ impl Weakening {
     }
 }
 
+/// One base-vs-working weakening, emitted under `--config-from` ahead of the
+/// findings that judgement produced. Pointer-only: a key path and two verdict
+/// tokens, never a ranking of two globs.
+///
+/// Forwards to [`Weakening::line`] rather than restating it: CLOUD-371 unifies
+/// which types may reach the data channel, never what any of them renders, so
+/// the bytes here are the bytes this type already emitted.
+impl crate::output::Line for Weakening {
+    fn line(&self) -> String {
+        Weakening::line(self).to_string()
+    }
+}
+
 /// The tokens a rule severity is written as, read off the type rather than
 /// re-tabulated.
 fn severity_token(severity: RuleSeverity) -> &'static str {

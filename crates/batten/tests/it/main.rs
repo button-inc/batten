@@ -102,6 +102,7 @@ mod document_facts;
 mod document_read_count;
 mod done_not_landed;
 mod egress_fencing;
+mod emission_census;
 mod enforce_journal;
 mod extension_surfaces;
 mod external_facts;

@@ -405,9 +405,7 @@ fn run_design_audit(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
             serde_json::to_string_pretty(&design::Report::new(&problems))?
         )?;
     } else {
-        for problem in &problems {
-            writeln!(out, "{}", problem.line_text())?;
-        }
+        output::lines(out, &problems)?;
     }
 
     let findings: Vec<rules::Finding> = problems.iter().map(design::Problem::finding).collect();
@@ -472,9 +470,7 @@ fn run_startup(
         // container is right, and a silent pass over a row whose check never ran
         // is indistinguishable from a row that was never declared — which is the
         // could-not-look-as-clean failure the whole table exists to refuse.
-        for outcome in &outcomes {
-            writeln!(out, "{}", outcome.line())?;
-        }
+        output::lines(out, &outcomes)?;
         writeln!(out, "startup: {} row(s), {failed} failed", outcomes.len())?;
     }
     // `Usage`, never `Violation` — `doctor`'s reasoning, inherited: a mediating
@@ -4260,10 +4256,8 @@ fn run_budget(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<
         // Silence is the success signal on the human channel (§6), so a set's
         // per-file breakdown is written only when it explains a verdict.
         for report in reports.iter().filter(|report| report.over_budget()) {
-            for file in &report.files {
-                writeln!(out, "{}", file.line())?;
-            }
-            writeln!(out, "{}", report.summary())?;
+            output::lines(out, &report.files)?;
+            output::line(out, report)?;
         }
     }
     Ok(ExitCode::verdict(over))
@@ -4786,19 +4780,15 @@ fn run_policy_hooks(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
         // what it found would be the defect wearing the sensor's clothes; the
         // producers that actually broke a threshold are named in the findings
         // below, which is where a reader who needs one goes.
-        writeln!(out, "{}", reading.line())?;
-        for finding in &findings {
-            // `<subject> <rule>`, the shape every other pointer line here takes,
-            // with the transcript line appended where the finding has one — a
-            // repeat's pointer IS the first copy, so it is the field a reader
-            // acts on. Rendered here rather than through `refusal::render`
-            // because these are findings about a measurement rather than a
-            // refusal of a call, and there is no route out of one to advertise.
-            match finding.line {
-                Some(line) => writeln!(out, "{}:{line} {}", finding.path, finding.rule)?,
-                None => writeln!(out, "{} {}", finding.path, finding.rule)?,
-            }
-        }
+        output::line(out, &reading)?;
+        // `<subject> <rule>`, the shape every other pointer line here takes,
+        // with the transcript line appended where the finding has one — a
+        // repeat's pointer IS the first copy, so it is the field a reader
+        // acts on. Rendered through `output::lines` rather than through
+        // `refusal::render` because these are findings about a measurement
+        // rather than a refusal of a call, and there is no route out of one to
+        // advertise.
+        output::lines(out, &findings)?;
     }
     Ok(ExitCode::verdict(!findings.is_empty()))
 }
@@ -5426,7 +5416,7 @@ fn report_comparison(
         writeln!(err, "::warning:: {line}")?;
     }
     if comparison.regressed.is_empty() {
-        writeln!(out, "{}", comparison.summary())?;
+        output::line(out, &comparison)?;
         return Ok(ExitCode::Success);
     }
     writeln!(
@@ -13037,24 +13027,18 @@ fn run_rules(
         // only under `--config-from`, so a run without one keeps stdout exactly
         // the findings it has always been.
         if let (Some(weakenings), Some(reference)) = (delta.as_ref(), base_ref) {
-            for weakening in weakenings {
-                writeln!(out, "{}", weakening.line())?;
-            }
+            output::lines(out, weakenings.iter())?;
             writeln!(
                 out,
                 "config-from {reference}: {} weakened",
                 weakenings.len()
             )?;
         }
-        for finding in &findings {
-            // Pointer only: location and the rule that fired, never the line
-            // text. A rule-scoped finding (no line) prints its pointer without
-            // one rather than inventing a line number it does not have.
-            match finding.line {
-                Some(line) => writeln!(out, "{}:{} {}", finding.path, line, finding.rule)?,
-                None => writeln!(out, "{} {}", finding.path, finding.rule)?,
-            }
-        }
+        // Pointer only: location and the rule that fired, never the line text.
+        // A rule-scoped finding (no line) prints its pointer without one rather
+        // than inventing a line number it does not have. Both of those are
+        // `Finding`'s own renderer now, not this site's.
+        output::lines(out, &findings)?;
     }
     report_dispositions(mode, err, &scan)?;
     report_clean_run(json, mode, err, &findings, &config, &scan)?;
@@ -13526,9 +13510,7 @@ fn run_config(
                 };
                 writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
             } else {
-                for smell in &smells {
-                    writeln!(out, "{}", smell.line_text())?;
-                }
+                output::lines(out, &smells)?;
                 // The count is stated even at zero: silence would be
                 // indistinguishable from "the lint did not run".
                 writeln!(out, "config-lint: {} smell(s)", smells.len())?;
@@ -13625,7 +13607,7 @@ fn run_doctor_egress(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
         // container is unproxied: JSON that is sometimes absent is unparseable.
         writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
     } else {
-        writeln!(out, "{}", report.line())?;
+        output::line(out, &report)?;
     }
     Ok(report.code())
 }
@@ -13637,7 +13619,7 @@ fn run_doctor_mediator(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
         // mediator is current: JSON that is sometimes absent is unparseable.
         writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
     } else {
-        writeln!(out, "{}", report.line())?;
+        output::line(out, &report)?;
     }
     Ok(report.code())
 }
@@ -13649,9 +13631,7 @@ fn run_diagnose(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
         // healthy repository: JSON that is sometimes absent is unparseable.
         writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
     } else {
-        for check in &report.checks {
-            writeln!(out, "{}", check.line())?;
-        }
+        output::lines(out, &report.checks)?;
         let failed = report.checks.iter().filter(|check| !check.ok).count();
         writeln!(
             out,

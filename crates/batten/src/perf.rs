@@ -1084,6 +1084,22 @@ impl Comparison {
     }
 }
 
+/// `perf compare`'s one clean-run line — the only thing this verb writes to the
+/// data channel, and only on the arm where nothing regressed. Every other
+/// reading it produces (lapsed, accepted, regressed) goes to stderr beside the
+/// refusals, which is why the trait sees one line rather than four.
+///
+/// The verb declares no `-J` (`surface.rs`), and that is unchanged here:
+/// CLOUD-371 unifies which types may reach `out`, never which verbs offer a
+/// data document.
+///
+/// Forwards to [`Comparison::summary`] rather than restating it.
+impl crate::output::Line for Comparison {
+    fn line(&self) -> String {
+        Comparison::summary(self).to_string()
+    }
+}
+
 fn parse_field<'a>(words: &[&'a str], key: &str) -> Option<&'a str> {
     words
         .iter()

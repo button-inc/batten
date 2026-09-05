@@ -11,18 +11,27 @@
 //!
 //! ## Why this sits at the process boundary rather than at the emitters
 //!
-//! There is no shared emission path for the data channel. `output.rs` funnels
-//! *stderr* through `message`/`error`/`verdict`, but each takes a `&str` the
-//! caller already composed; stdout has no funnel at all — ~30 inline
-//! `writeln!(out, …)` sites in `lib.rs`, fed by ten independently-named renderers
-//! (`line`, `line_text`, `summary`) plus `rules::Finding`, which has none and is
-//! formatted inline. Unifying those is real work and a different change
-//! (CLOUD-371); it would also not *decide* anything, because no trait can stop a
-//! `String` carrying content.
+//! **There IS a shared emission path now, and the placement argument is
+//! unchanged — which is the point worth keeping.** This paragraph used to open
+//! "there is no shared emission path for the data channel" and give that absence
+//! as the reason the gate sits at the boundary: stdout had no funnel, only ~30
+//! inline `writeln!(out, …)` sites in `lib.rs` fed by ten independently-named
+//! renderers (`line`, `line_text`, `summary`) plus `rules::Finding`, which had
+//! none and was formatted inline. CLOUD-371 built the funnel — `output::Line`
+//! plus `output::line`/`output::lines` — so that premise is retired rather than
+//! left standing.
 //!
-//! So the gate goes where every one of those sites already converges: the bytes
-//! the process actually wrote. One mechanism, no call-site edits, and it cannot
-//! be routed around by an emitter that spells its renderer a new way.
+//! The conclusion survives it because the premise was never load-bearing. The
+//! same sentence already said the funnel "would also not *decide* anything,
+//! because no trait can stop a `String` carrying content", and that is the whole
+//! argument: a trait can make the census of *what emits* a compile-time
+//! question, and it cannot make the census of *what those emissions contain* one.
+//! CLOUD-371 owns the pointer **shape**; this owns the pointer **content**.
+//!
+//! So the gate stays where every one of those sites converges — the bytes the
+//! process actually wrote. One mechanism, no call-site edits, and it cannot be
+//! routed around by an emitter that spells its renderer a new way, nor by one
+//! that implements the trait and renders the payload through it.
 //!
 //! ## What it decides
 //!
