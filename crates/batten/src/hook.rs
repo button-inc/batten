@@ -7675,22 +7675,43 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
                 }
             }
         }
-        let mut lines = per_line.into_iter().peekable();
-        for segment in out.iter_mut().filter(|segment| !segment.nested) {
+        // ONE PASS, ALL OR NOTHING — a per-segment abstention is not available
+        // here and pretending otherwise was a defect. The line list is SHARED
+        // across segments, so a segment that keeps its fused list has already
+        // drained the entries it walked; every later segment then takes lines
+        // belonging to an earlier one, and `protected_mutation` walks a "line"
+        // that is not its command. That is a mis-assignment wearing the words of
+        // an abstention, which is worse than either.
+        //
+        // So the whole reassignment is computed first and applied only if every
+        // segment landed. If any did not, no segment's `lines` moves and all of
+        // them keep the single fused entry `flatten` gave them — which is the
+        // pre-CLOUD-1287 reading, conservative and consistent, rather than a
+        // half-applied one.
+        let mut lines = per_line.into_iter();
+        let mut assignment: Vec<Vec<Vec<String>>> = Vec::new();
+        let mut landed = true;
+        for segment in out.iter().filter(|segment| !segment.nested) {
             let wanted = segment.words.len();
             let mut taken: Vec<Vec<String>> = Vec::new();
             let mut counted = 0;
-            while counted < wanted && lines.peek().is_some() {
-                if let Some(line) = lines.next() {
-                    counted += line.len();
-                    taken.push(line);
-                }
+            while counted < wanted {
+                let Some(line) = lines.next() else { break };
+                counted += line.len();
+                taken.push(line);
             }
-            // A segment the consume could not fill exactly keeps what `flatten`
-            // gave it. Abstaining is the same posture as the rest of this path:
-            // a partial split would hand the mutation walk a line that is not a
-            // command.
-            if counted == wanted && !taken.is_empty() {
+            if counted != wanted || taken.is_empty() {
+                landed = false;
+                break;
+            }
+            assignment.push(taken);
+        }
+        if landed && lines.next().is_none() {
+            for (segment, taken) in out
+                .iter_mut()
+                .filter(|segment| !segment.nested)
+                .zip(assignment)
+            {
                 segment.lines = taken;
             }
         }
@@ -7757,6 +7778,16 @@ fn covered(nodes: &[rable::Node], command: &str) -> bool {
     if nodes.iter().any(opens_heredoc) {
         return true;
     }
+    // `skip` COUNTS THE SAME UNIT THE SPAN DOES, and getting that wrong makes
+    // this guard pass on exactly the inputs it exists for. `rable`'s `Span`
+    // carries CHARACTER indices — its own doc says so, and `Node::source_text`
+    // converts them to byte offsets before slicing — so the tail has to be
+    // walked in characters too. Mixing the two overshoots on any command with a
+    // multi-byte character before the last node's end (an em-dash in a commit
+    // message, a UTF-8 path): `all()` then runs over an empty iterator, returns
+    // true vacuously, and the dropped-tail case reads clean instead of
+    // abstaining. Asserted rather than reasoned — see the unterminated-quote
+    // case, which carries a multi-byte operand for this reason.
     command.chars().skip(end).all(char::is_whitespace)
 }
 
@@ -7856,8 +7887,13 @@ fn flatten_in(
             for redirect in redirects {
                 spelled.extend(redirect_words(redirect, source));
             }
+            // THE SAME WORDS, AFTER the empty ones are dropped. Snapshotting
+            // `spelled` here put a list in `lines` that `words` no longer
+            // matched, so the two readings of one command disagreed on token
+            // indices — and `protected_mutation` reads `lines` while everything
+            // else reads `words`. Built below, once the retain has run.
             let mut segment = Segment {
-                lines: vec![spelled.clone()],
+                lines: Vec::new(),
                 words: spelled,
                 raw: node.source_text(source).to_owned(),
                 terminator: after,
@@ -7878,6 +7914,7 @@ fn flatten_in(
             if segment.words.iter().any(String::is_empty) {
                 segment.words.retain(|word| !word.is_empty());
             }
+            segment.lines = vec![segment.words.clone()];
             // Everything the descent produced is nested, however deep: an inner
             // `$(…)` inside an outer one is still not a line of the command that
             // contains them.
@@ -14236,6 +14273,35 @@ deny contains "refused by themodule" if {
                 .any(|segment| segment.nested
                     && segment.words.first().is_some_and(|word| word == "cat")),
             "and it is still reached as its own segment (CLOUD-1257)"
+        );
+    }
+
+    /// The dropped-tail guard survives a MULTI-BYTE character.
+    ///
+    /// `covered` compares a walk of the command against the last node's
+    /// `span.end`, and `rable`'s spans are CHARACTER indices. Walking bytes
+    /// instead overshoots on any command carrying a multi-byte character before
+    /// that end, `all()` runs over an empty iterator and returns true
+    /// vacuously, and a command whose operand the parser dropped reads CLEAN
+    /// instead of abstaining — the silent under-denial this row replaced a
+    /// character walk to remove, arriving through a units mismatch.
+    #[test]
+    fn the_dropped_tail_guard_counts_the_same_unit_the_span_does() {
+        // An em-dash before the unterminated quote: byte-counting puts the tail
+        // walk past the end of the string and the guard passes vacuously.
+        assert_eq!(
+            segments("git commit -m \"an em—dash\" && rm \"unclosed path"),
+            crate::facts::Look::CouldNotLook,
+            "a dropped operand is could-not-look, multi-byte command or not"
+        );
+
+        // ANTI-VACUITY: the same command, closed, is read rather than abstained.
+        assert!(
+            matches!(
+                segments("git commit -m \"an em—dash\" && rm \"closed path\""),
+                crate::facts::Look::Is(parsed) if parsed.len() == 2
+            ),
+            "a well-formed multi-byte command still parses"
         );
     }
 
