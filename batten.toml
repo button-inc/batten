@@ -6764,16 +6764,16 @@ root = "target"
 keep = 2
 
 [prune.warm]
-mb = 8971
-worst_mb = 8971
+mb = 9472
+worst_mb = 9472
 multiplier = 1
-measured = "2026-09-04"
+measured = "2026-09-05"
 
 [prune.cold]
-mb = 21455
-worst_mb = 21455
+mb = 22653
+worst_mb = 22653
 multiplier = 1
-measured = "2026-09-04"
+measured = "2026-09-05"
 
 # THE BASIS EACH FLOOR WAS MEASURED AGAINST (CLOUD-1158), because `measured` is a
 # pointer to a basis and not the basis itself.
@@ -6821,6 +6821,20 @@ measured = "2026-09-04"
 # file is one somebody switches off, and the thing being watched is a trend. When
 # it does red, move `count` and `measured` TOGETHER: a count refreshed without a
 # new measurement is the same staleness wearing a newer number.
+#
+# THE 2026-09-05 MOVE, 197 -> 208, DERIVED by the same model and recorded for the
+# same reason. The hk-preset bundle added five suites -- `hk_contract`, `hk_plan`,
+# `hk_observation`, `hk_evidence`, `outcome_advice` -- which took the live count 11
+# past the basis, one outside the tolerance. This gate refused the branch that did
+# it, which is the gate working: the floor it was defending was taken against a
+# tree eleven stems smaller, and a floor taken low fails in the direction that
+# fails silently.
+#
+# Scaled rather than re-measured, and the difference is stated because the
+# paragraph above says a reader who needs an exact should take it rather than
+# trust this line. Warm: 8971 at 197 stems is 45.54 per stem, and 45.54 x 208 is
+# 9472. Cold: 21455 at 197 is 108.91 per stem, and 108.91 x 208 is 22653. Neither
+# is an independent measurement.
 #
 # THE 2026-09-02 MOVE, 164 -> 175, and it is DERIVED like the two before it.
 # `[[startup]]`'s two suites plus `obligations_bound` took the live count 11 past
@@ -6997,12 +7011,12 @@ measured = "2026-09-04"
 # satisfy refuses every lap and gets switched off.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 197
+count = 208
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 197
+count = 208
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
