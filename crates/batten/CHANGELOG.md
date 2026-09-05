@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.143](https://github.com/button-inc/batten/compare/v0.0.142...v0.0.143) - 2026-09-05
+
+### Added
+
+- *(cli)* [**breaking**] rename the mediation entrypoint `hook` to `adjudicate`
+- *(cli)* place `show agent` in the three censuses that judge it
+- *(cli)* recover the agent subtree as `show agent`
+- *(hook)* [**breaking**] no Stop advisory names a write a plan-mode turn may not make (CLOUD-895)
+- *(transcript)* [**breaking**] a tool result carries a keyed observation identity (CLOUD-1348)
+- *(transcript)* split truncation out of StopReason::Other (CLOUD-1464)
+- *(provision)* [**breaking**] name the resolver a row is turned into a binary by
+- *(recorder)* [**breaking**] a row that could not answer says so, instead of writing nothing
+- *(config)* name the rebuild when a config key this build cannot know fails the parse
+- *(provision)* condition a bypass on the interceptor, not on a refusal
+- *(startup)* [**breaking**] the container came up with no tools, and both rows said fine
+
+### Fixed
+
+- *(agent)* refuse to speak for a config that will not load
+- *(perf)* ask each paired binary which mediation verb it declares
+- *(surface)* repair four assertions the bundle's own rows inverted
+- *(hook)* the unlanded nudge keys on the claim, not on a SHA its remedy moves (CLOUD-890)
+- *(policy)* the infinitive hedge is the same tell, one word shorter (CLOUD-487)
+- *(config)* balance the backticks and hoist the items clippy refuses
+- *(config)* balance the backticks clippy reads in the skew note
+- *(trust)* rank a declared arrival so a narrowing is not a weakening
+- *(provision)* satisfy the lints the launcher's own code tripped
+- *(policy)* strip a group's punctuation from both ends, not just the front
+- *(policy)* anchor a program on `programs`, not on the first word
+
+### Other
+
+- *(surface)* regenerate completions, man pages and the suite cost corpus
+- *(surface)* assert what a positional argument may do
+- *(output)* render through the inherent method, not a clone of it
+- *(output)* give the data channel one emission path
+- *(authority-replay)* give the verdict axis a threshold it can read
+- *(scanning)* hold row four's cell to the no-bare-product rule it claimed
+- *(rules)* route a claim about what is filed to the board, as a fourth question class
+- *(provision)* open each launcher spawn's annotation with its verdict
+- *(policy)* the registry case reads the key its preset now anchors on
+- *(policy)* give the preset fixture the key its presets now read
+
 ## [0.0.142](https://github.com/button-inc/batten/compare/v0.0.141...v0.0.142) - 2026-09-05
 
 ### Fixed
