@@ -1557,9 +1557,16 @@ pub fn claim(terms: &Terms, holder: &str, branch: &str, head: &str, now: i64) ->
 /// An empty prefix is ignored rather than matching everything: a blank row in
 /// consumer config is a typo, and reading it as *exempt every branch* would
 /// silently switch the whole gate off.
+///
+/// **ONE PREFIX, NEVER EVERY LEADING ONE.** `trim_start_matches` strips the
+/// pattern repeatedly, so a branch literally named `refs/heads/lane/x` — which
+/// git permits under `refs/heads/` — reduced to `lane/x` and was exempted by a
+/// `lane/` row it does not belong to. `strip_prefix` removes at most one and
+/// falls back to the branch as given, which is the only reading that answers the
+/// question about the string the caller actually named.
 #[must_use]
 pub fn lands_by_fast_forward(branch: &str, prefixes: &[String]) -> bool {
-    let branch = branch.trim_start_matches("refs/heads/");
+    let branch = branch.strip_prefix("refs/heads/").unwrap_or(branch);
     prefixes
         .iter()
         .filter(|prefix| !prefix.is_empty())

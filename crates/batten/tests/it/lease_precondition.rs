@@ -181,4 +181,20 @@ fn the_carve_out_is_a_prefix_and_never_a_substring() {
     // reading would switch the guard off for the whole fleet on a config typo,
     // silently and in the permissive direction.
     assert!(!lands_by_fast_forward("renovate/cargo-deps", &[]));
+
+    // A FULL REF IS REDUCED TO ITS BRANCH, exactly once. `trim_start_matches`
+    // strips the pattern REPEATEDLY, so a branch literally named
+    // `refs/heads/renovate/x` — which git permits under `refs/heads/` — reduced
+    // to `renovate/x` and was exempted by a row it does not belong to. Found in
+    // review; the fix is `strip_prefix`, and this is the case that would notice
+    // it being undone.
+    assert!(lands_by_fast_forward(
+        "refs/heads/renovate/cargo-deps",
+        &lanes
+    ));
+    assert!(
+        !lands_by_fast_forward("refs/heads/refs/heads/renovate/cargo-deps", &lanes),
+        "only one ref prefix is stripped, so a branch whose own name begins \
+         refs/heads/ is judged as written"
+    );
 }
