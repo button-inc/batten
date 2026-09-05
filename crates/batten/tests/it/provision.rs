@@ -834,7 +834,7 @@ fn a_launcher_hands_the_tool_an_environment_a_manifest_could_not() {
     // would — no batten in the argv, because none of those know about one.
     #[expect(
         clippy::disallowed_types,
-        reason = "the fixture IS a spawn of the linked launcher; asserting on anything else would not exercise the kernel's `#!` handling (CLOUD-320)"
+        reason = "stays: the fixture IS a spawn of the linked launcher, and asserting on anything else would not exercise the kernel's `#!` handling (CLOUD-320)"
     )]
     let ran = std::process::Command::new(&linked)
         .env("NO_PROXY", "localhost,pypi.example.invalid")
@@ -877,7 +877,7 @@ fn the_prepend_adds_nothing_it_already_carries() {
 
     #[expect(
         clippy::disallowed_types,
-        reason = "as above: the launcher must be spawned to be exercised (CLOUD-320)"
+        reason = "stays: as above, the launcher must be spawned to be exercised (CLOUD-320)"
     )]
     let ran = std::process::Command::new(dest.join("demo"))
         .env("NO_PROXY", "api.example.invalid,localhost")
@@ -910,7 +910,7 @@ fn a_credential_no_source_carries_is_left_unset() {
 
     #[expect(
         clippy::disallowed_types,
-        reason = "as above: the launcher must be spawned to be exercised (CLOUD-320)"
+        reason = "stays: as above, the launcher must be spawned to be exercised (CLOUD-320)"
     )]
     let ran = std::process::Command::new(dest.join("demo"))
         .env_remove("DEMO_PRIMARY")
@@ -1098,7 +1098,7 @@ fn a_conditioned_row_applies_only_where_the_trust_bundle_names_that_authority() 
         assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
         #[expect(
             clippy::disallowed_types,
-            reason = "the launcher must be spawned for the condition to be exercised (CLOUD-320)"
+            reason = "stays: the launcher must be spawned for the condition to be exercised (CLOUD-320)"
         )]
         let ran = std::process::Command::new(dest.join("demo"))
             .env("SSL_CERT_FILE", &bundle)
@@ -1149,7 +1149,7 @@ fn an_unreadable_trust_bundle_does_not_apply_the_bypass() {
 
     #[expect(
         clippy::disallowed_types,
-        reason = "as above: the launcher must be spawned (CLOUD-320)"
+        reason = "stays: as above, the launcher must be spawned (CLOUD-320)"
     )]
     let ran = std::process::Command::new(dest.join("demo"))
         .env(
