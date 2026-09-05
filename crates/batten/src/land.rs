@@ -1530,6 +1530,46 @@ pub struct Abandoned {
     pub refused: u32,
 }
 
+/// The fan-in's WORKFLOW PATH, which is not its check name.
+///
+/// **A NEWTYPE BECAUSE THE TWO SPELLINGS WERE INTERCHANGEABLE AND ONE OF THEM
+/// WAS WRONG FOR THE WHOLE OF THIS BRANCH.** `CI_FANIN_CHECK` names a check and
+/// belongs to [`crate::checks_green`]'s roster; `CI_FANIN_WORKFLOW` names the
+/// path a run carries, which is what [`worthless`] compares against. Both are
+/// `String`, so reading the wrong one type-checked, every suite in this crate was
+/// green over it, and `spared` was silently always 0 — cancelling the fan-in's own
+/// run, whose `cancelled` context is not an answer and wedges the branch.
+///
+/// The constructor is the whole mechanism: a caller reaching for the check name
+/// has to write [`FanIn::from_workflow_path`] over it, which is a lie a reader
+/// can see rather than an argument position that accepts anything. `ci-parity`'s
+/// `fan-in-is-wired` binds on that constructor appearing on the same line as the
+/// declaration read, so the module and the compiler hold the same join — the
+/// module alone could not, because two independent line matches are satisfied by
+/// an unrelated read plus a wrong argument (found in review of #848).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FanIn(String);
+
+impl FanIn {
+    /// The declared workflow PATH. Empty where the consumer declared nothing.
+    #[must_use]
+    pub fn from_workflow_path(path: impl Into<String>) -> Self {
+        Self(path.into())
+    }
+
+    /// Did the consumer declare one? An undeclared fan-in cancels NOTHING.
+    #[must_use]
+    pub fn declared(&self) -> bool {
+        !self.0.is_empty()
+    }
+
+    /// Does this run carry the fan-in's own workflow?
+    #[must_use]
+    fn spares(&self, run: &Spending) -> bool {
+        run.path == self.0
+    }
+}
+
 /// Which runs on a head a red verdict makes worthless, sparing the fan-in's.
 ///
 /// **THE FAN-IN'S RUN IS NEVER CANCELLED, and that is the whole safety
@@ -1543,12 +1583,12 @@ pub struct Abandoned {
 /// which is the same split [`crate::lease::decide`] makes for the staleness
 /// read.
 #[must_use]
-pub fn worthless(spending: &[Spending], fanin: &str) -> (Vec<Spending>, u32) {
+pub fn worthless(spending: &[Spending], fanin: &FanIn) -> (Vec<Spending>, u32) {
     let mut spared = 0;
     let doomed = spending
         .iter()
         .filter(|run| {
-            if run.path == fanin {
+            if fanin.spares(run) {
                 spared += 1;
                 return false;
             }
@@ -1604,14 +1644,14 @@ pub fn spending(repo: &str, sha: &str) -> Option<Vec<Spending>> {
 /// has, so the blast radius is one push's worth of runs by construction rather
 /// than by filtering — the same argument the lease guard's own cancel carries.
 #[must_use]
-pub fn abandon(repo: &str, sha: &str, fanin: &str) -> Abandoned {
+pub fn abandon(repo: &str, sha: &str, fanin: &FanIn) -> Abandoned {
     // AN UNSET FAN-IN CANCELS NOTHING RATHER THAN GUESSING, and this is the
     // guard whose absence would have been worst: with no name to spare, EVERY
     // run is doomed — including the one carrying the fan-in, whose cancelled
     // context is not an answer and wedges the branch. `abandon-matrix.bats`
     // refuses to run at all without the declaration for exactly this reason, and
     // the first port of this dropped the arm.
-    if fanin.is_empty() {
+    if !fanin.declared() {
         return Abandoned::default();
     }
     let Some(in_flight) = spending(repo, sha) else {
@@ -2563,7 +2603,7 @@ mod tests {
                 run("2", "the-fan-in.yml"),
                 run("3", "sibling-b.yml"),
             ],
-            "the-fan-in.yml",
+            &FanIn::from_workflow_path("the-fan-in.yml"),
         );
         assert_eq!(spared, 1, "exactly the fan-in's run");
         assert_eq!(
@@ -2582,7 +2622,7 @@ mod tests {
     fn a_fan_in_no_run_carries_spares_nothing_and_still_cancels() {
         let (doomed, spared) = worthless(
             &[run("1", "sibling-a.yml"), run("2", "sibling-b.yml")],
-            "no-run-carries-this.yml",
+            &FanIn::from_workflow_path("no-run-carries-this.yml"),
         );
         assert_eq!(spared, 0);
         assert_eq!(doomed.len(), 2, "nothing is spared by accident");
@@ -2604,7 +2644,10 @@ mod tests {
     /// so the guard cannot quietly move back down here and stop refusing.
     #[test]
     fn an_empty_fan_in_name_matches_no_run_so_the_refusal_lives_in_abandon() {
-        let (doomed, spared) = worthless(&[run("1", "the-fan-in.yml")], "");
+        let (doomed, spared) = worthless(
+            &[run("1", "the-fan-in.yml")],
+            &FanIn::from_workflow_path(""),
+        );
         assert_eq!(spared, 0, "a set difference cannot spare an unnamed file");
         assert_eq!(
             doomed.len(),
@@ -2616,7 +2659,7 @@ mod tests {
     /// Nothing in flight is a clean no-op.
     #[test]
     fn nothing_in_flight_cancels_nothing() {
-        let (doomed, spared) = worthless(&[], "the-fan-in.yml");
+        let (doomed, spared) = worthless(&[], &FanIn::from_workflow_path("the-fan-in.yml"));
         assert!(doomed.is_empty());
         assert_eq!(spared, 0);
     }

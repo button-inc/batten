@@ -212,8 +212,32 @@ impl Bet {
 /// ref holding the answer sat on disk beside it (CLOUD-862). Ask git before
 /// asking the process — the caller does that by handing an adopted bet in here
 /// exactly as it would one of its own.
+///
+/// # `main_now` IS THREE-VALUED, AND THE THIRD VALUE IS NOT AN EMPTY STRING
+///
+/// `None` is the tracking ref that would not read — a fetch that lost the
+/// network, a clone with no remote-tracking ref yet, a ref file being rewritten
+/// under the read. It is a COULD-NOT-LOOK, and it must not reach the last arm.
+///
+/// Taking a `&str` is what made it: the caller spelled the failed read
+/// `unwrap_or_default()`, so an unreadable ref arrived as `""`, compared unequal
+/// to every `main_at_bet`, and fell through to "`main` moved and took something
+/// else" — settling a perfectly live bet as [`Settle::Lost`] and unwinding the
+/// tree on a transient read. That is the one direction [`settle_the_bet`]'s own
+/// header forbids: an unresolvable ref means the bet is STALE, never that the
+/// trunk moved.
+///
+/// [`settle_the_bet`]: crate::settle_the_bet
+///
+/// The could-not-look arm is the ADOPTED arm's, not a fourth answer: without a
+/// trunk reading, "has `main` moved" is unanswerable for exactly the reason an
+/// adopted bet's is — there is no comparison to make — and the lease answers the
+/// question either way. So a readable lease still holding for this branch settles
+/// [`Settle::Pending`] and the waiter laps, and [`Live::Unreadable`] still
+/// decides as `No`, which keeps the fail-CLOSED posture where both readings are
+/// gone.
 #[must_use]
-pub fn settle(bet: &Bet, main_now: &str, base_on_main: bool, live: Live) -> Settle {
+pub fn settle(bet: &Bet, main_now: Option<&str>, base_on_main: bool, live: Live) -> Settle {
     let Some(_) = bet.base.as_deref() else {
         return Settle::Nothing;
     };
@@ -230,6 +254,18 @@ pub fn settle(bet: &Bet, main_now: &str, base_on_main: bool, live: Live) -> Sett
     // — so the "has main moved" arm cannot judge it. The lease can: it reads who
     // holds it NOW and whether the base is still on the branch about to land,
     // which is the question either way.
+    //
+    // A trunk reading that would not take is the same position by a different
+    // route: `None` is a could-not-look, so there is nothing to compare
+    // `main_at_bet` AGAINST, and the arm below would read the missing reading as
+    // a moved trunk. Both defer to the lease.
+    let Some(main_now) = main_now else {
+        return if live.decide() {
+            Settle::Pending
+        } else {
+            Settle::Lost
+        };
+    };
     if bet.recovered {
         return if live.decide() {
             Settle::Pending
@@ -328,7 +364,7 @@ mod tests {
     #[test]
     fn a_tree_with_no_bet_settles_to_nothing() {
         assert_eq!(
-            settle(&Bet::default(), MAIN, false, Live::No),
+            settle(&Bet::default(), Some(MAIN), false, Live::No),
             Settle::Nothing
         );
     }
@@ -340,7 +376,10 @@ mod tests {
     /// — unwinding a linearization that is already correct.
     #[test]
     fn a_base_that_reached_main_is_landed_however_the_bet_arrived() {
-        assert_eq!(settle(&placed(), MOVED, true, Live::No), Settle::Landed);
+        assert_eq!(
+            settle(&placed(), Some(MOVED), true, Live::No),
+            Settle::Landed
+        );
 
         let adopted = Bet {
             recovered: true,
@@ -348,7 +387,10 @@ mod tests {
             undo: None,
             ..placed()
         };
-        assert_eq!(settle(&adopted, MOVED, true, Live::No), Settle::Landed);
+        assert_eq!(
+            settle(&adopted, Some(MOVED), true, Live::No),
+            Settle::Landed
+        );
     }
 
     /// **THE THREE OUTCOMES, and the middle one is the whole reason there are
@@ -360,8 +402,11 @@ mod tests {
     /// while achieving nothing: warm, then cold, then warm again.
     #[test]
     fn an_unmoved_main_with_a_live_holder_is_pending_and_a_dead_one_is_lost() {
-        assert_eq!(settle(&placed(), MAIN, false, Live::Yes), Settle::Pending);
-        assert_eq!(settle(&placed(), MAIN, false, Live::No), Settle::Lost);
+        assert_eq!(
+            settle(&placed(), Some(MAIN), false, Live::Yes),
+            Settle::Pending
+        );
+        assert_eq!(settle(&placed(), Some(MAIN), false, Live::No), Settle::Lost);
     }
 
     /// An unmoved `main` used to END the question, and that was the defect.
@@ -374,7 +419,7 @@ mod tests {
     #[test]
     fn a_could_not_look_on_the_lease_is_stale_rather_than_still_landing() {
         assert_eq!(
-            settle(&placed(), MAIN, false, Live::Unreadable),
+            settle(&placed(), Some(MAIN), false, Live::Unreadable),
             Settle::Lost,
             "failing open here would make a network blip land somebody else's work"
         );
@@ -383,11 +428,49 @@ mod tests {
         assert!(Live::Yes.decide());
     }
 
+    /// **A TRUNK READING THAT WOULD NOT TAKE IS NOT A MOVED TRUNK.**
+    ///
+    /// The caller spelled the failed `resolve_ref` as `unwrap_or_default()`, so
+    /// an unreadable `refs/remotes/origin/<ref>` arrived here as `""`. That
+    /// compares unequal to every `main_at_bet`, so a placed bet fell past the
+    /// unmoved-`main` arm and into "`main` moved and took something else" —
+    /// [`Settle::Lost`], and the caller unwinds the tree. A fetch that lost the
+    /// network, a clone with no tracking ref yet, or a ref file being rewritten
+    /// under the read would each have thrown away a live linearization, which is
+    /// the opposite of the fail-open direction `settle_the_bet`'s own header
+    /// states.
+    ///
+    /// The `None` arm defers to the lease, exactly as the adopted arm does and
+    /// for the same reason: with no trunk reading there is no comparison to make.
+    /// So a live holder is `Pending` — and both non-`Yes` readings stay `Lost`,
+    /// which is what keeps the fail-CLOSED posture where the lease is gone too.
+    #[test]
+    fn an_unreadable_trunk_defers_to_the_lease_rather_than_reading_as_a_moved_main() {
+        assert_eq!(
+            settle(&placed(), None, false, Live::Yes),
+            Settle::Pending,
+            "an unresolvable tracking ref is a could-not-look, and unwinding on \
+             one discards a linearization that is still correct"
+        );
+        assert_eq!(settle(&placed(), None, false, Live::No), Settle::Lost);
+        assert_eq!(
+            settle(&placed(), None, false, Live::Unreadable),
+            Settle::Lost
+        );
+
+        // WON still outranks it: an ancestry that resolved is an answer whether
+        // or not the tip did.
+        assert_eq!(settle(&placed(), None, true, Live::No), Settle::Landed);
+    }
+
     /// A `main` that moved without taking the base is a lost bet, whoever placed
     /// it.
     #[test]
     fn a_moved_main_that_did_not_take_the_base_is_lost() {
-        assert_eq!(settle(&placed(), MOVED, false, Live::Yes), Settle::Lost);
+        assert_eq!(
+            settle(&placed(), Some(MOVED), false, Live::Yes),
+            Settle::Lost
+        );
     }
 
     /// An adopted bet is judged by the LEASE, because it has no `main_at_bet`.
@@ -399,8 +482,11 @@ mod tests {
             undo: None,
             ..placed()
         };
-        assert_eq!(settle(&adopted, MOVED, false, Live::Yes), Settle::Pending);
-        assert_eq!(settle(&adopted, MOVED, false, Live::No), Settle::Lost);
+        assert_eq!(
+            settle(&adopted, Some(MOVED), false, Live::Yes),
+            Settle::Pending
+        );
+        assert_eq!(settle(&adopted, Some(MOVED), false, Live::No), Settle::Lost);
     }
 
     /// **CLOUD-1306, PORTED AS-IS AND PINNED SO IT CANNOT BE FIXED BY ACCIDENT.**
@@ -417,7 +503,7 @@ mod tests {
     #[test]
     fn a_poisoned_base_is_conserved_as_pending_because_cloud_1306_owns_the_fix() {
         assert_eq!(
-            settle(&placed(), MAIN, false, Live::Yes),
+            settle(&placed(), Some(MAIN), false, Live::Yes),
             Settle::Pending,
             "the holder is there and main has not moved — which is what a poisoned \
              base looks like from here, and there is no fourth arm"

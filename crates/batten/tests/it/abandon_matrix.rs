@@ -44,7 +44,7 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use batten::land::{Abandoned, Spending, worthless};
+use batten::land::{Abandoned, FanIn, Spending, worthless};
 
 const FANIN: &str = ".github/workflows/ci.yml";
 
@@ -67,7 +67,7 @@ fn the_siblings_are_doomed_and_the_fan_ins_own_run_is_spared() {
         run("2", FANIN),
         run("3", ".github/workflows/test.yml"),
     ];
-    let (doomed, spared) = worthless(&in_flight, FANIN);
+    let (doomed, spared) = worthless(&in_flight, &FanIn::from_workflow_path(FANIN));
 
     assert_eq!(spared, 1, "exactly the fan-in's run is spared");
     assert_eq!(doomed.len(), 2, "both siblings are doomed");
@@ -95,7 +95,10 @@ fn a_declaration_matching_no_run_spares_nothing_and_still_dooms_the_others() {
         run("1", ".github/workflows/rust.yml"),
         run("2", ".github/workflows/test.yml"),
     ];
-    let (doomed, spared) = worthless(&in_flight, ".github/workflows/renamed.yml");
+    let (doomed, spared) = worthless(
+        &in_flight,
+        &FanIn::from_workflow_path(".github/workflows/renamed.yml"),
+    );
 
     assert_eq!(spared, 0, "no run carries the declared path");
     assert_eq!(doomed.len(), 2, "the rest are still worthless and still go");
@@ -114,7 +117,7 @@ fn a_declaration_matching_no_run_spares_nothing_and_still_dooms_the_others() {
 #[test]
 fn an_empty_declaration_would_doom_the_fan_in_which_is_why_abandon_refuses_first() {
     let in_flight = [run("1", ".github/workflows/rust.yml"), run("2", FANIN)];
-    let (doomed, spared) = worthless(&in_flight, "");
+    let (doomed, spared) = worthless(&in_flight, &FanIn::from_workflow_path(""));
 
     assert_eq!(spared, 0);
     assert_eq!(
@@ -145,7 +148,7 @@ fn an_empty_declaration_would_doom_the_fan_in_which_is_why_abandon_refuses_first
 /// would make the compensation itself a reason to stop.
 #[test]
 fn an_empty_flight_list_dooms_nothing_and_spares_nothing() {
-    let (doomed, spared) = worthless(&[], FANIN);
+    let (doomed, spared) = worthless(&[], &FanIn::from_workflow_path(FANIN));
     assert!(doomed.is_empty());
     assert_eq!(spared, 0);
 }
@@ -163,7 +166,7 @@ fn a_re_run_leaves_two_fan_in_runs_and_both_are_spared() {
         run("2", ".github/workflows/rust.yml"),
         run("3", FANIN),
     ];
-    let (doomed, spared) = worthless(&in_flight, FANIN);
+    let (doomed, spared) = worthless(&in_flight, &FanIn::from_workflow_path(FANIN));
 
     assert_eq!(spared, 2, "both fan-in runs are spared");
     assert_eq!(doomed.len(), 1);

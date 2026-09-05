@@ -6023,7 +6023,17 @@ fn unwind_lap(
                 //
                 // An unset one cancels NOTHING rather than guessing;
                 // `land::abandon` holds that guard.
-                let fanin = std::env::var("CI_FANIN_WORKFLOW").unwrap_or_default();
+                // THE CONSTRUCTOR AND THE DECLARATION ARE ONE EXPRESSION, and
+                // that adjacency is what `ci-parity` binds on. `fan-in-is-wired`
+                // used to ask two independent questions of this file — does
+                // something read the declaration, does something call
+                // `land::abandon` — which an unrelated read plus a wrong argument
+                // satisfies (review of #848). `land::FanIn` refuses the check
+                // name at the type, and the module now requires the read to sit
+                // at the constructor rather than anywhere in 6,000 lines.
+                let fanin = land::FanIn::from_workflow_path(
+                    std::env::var("CI_FANIN_WORKFLOW").unwrap_or_default(),
+                );
                 let report = land::abandon(&repo, &sha, &fanin);
                 // COUNTS AND AN ABBREVIATED SHA, never a line from a cancelled
                 // run (non-negotiable rule 4). The predecessor carried the
@@ -6151,10 +6161,12 @@ fn settle_the_bet(
         "refs/remotes/origin/{}",
         reference.rsplit('/').next().unwrap_or(reference)
     );
-    let main_now = git::resolve_ref(root, &tracking)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    // `None`, never `""`. A ref that would not read is a could-not-look, and
+    // flattening it into an empty string made it compare unequal to every
+    // `main_at_bet` — which is `speculation::settle`'s "the trunk moved and took
+    // something else" arm, so a transient read unwound a live bet. The reading is
+    // handed over three-valued and the settle defers to the lease.
+    let main_now = git::resolve_ref(root, &tracking).ok().flatten();
     let base = bet.published().unwrap_or_default().to_owned();
     // WON, and it is asked first and unconditionally: the base being an ancestor
     // of the trunk is true whoever placed the bet, and both arms below would
@@ -6162,12 +6174,18 @@ fn settle_the_bet(
     let base_on_main = speculation::carries(root, &base, &tracking);
     let live = bet_liveness(root, branch, &base);
 
-    match speculation::settle(bet, &main_now, base_on_main, live) {
+    match speculation::settle(bet, main_now.as_deref(), base_on_main, live) {
         speculation::Settle::Landed => {
+            // The tracking ref resolved, or `base_on_main` could not have been
+            // true — but the arm is spelled without an unwrap either way, because
+            // a line naming the trunk is not worth a panic on a reading this
+            // function has just finished treating as optional.
             writeln!(
                 out,
                 "land: the speculation landed — already linearized on {}, no rebase needed",
-                short(&main_now)
+                main_now
+                    .as_deref()
+                    .map_or_else(|| tracking.clone(), |sha| short(sha).to_owned())
             )?;
             drop_the_bet(root, bet);
             Ok(None)
