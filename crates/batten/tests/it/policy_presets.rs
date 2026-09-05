@@ -119,6 +119,7 @@ const PRESET_SCOPES: &[(&str, bool)] = &[
     ("trunk-based", false),
     ("shell-hygiene", true),
     ("pinned-toolchain", false),
+    ("mise", false),
     ("ci-hygiene", true),
     ("landing-loop", true),
 ];
@@ -215,6 +216,78 @@ fn the_commit_hygiene_preset_decides_both_ways() {
     assert_eq!(
         policy::deny(&bundles[0], &call("git commit -m x")),
         Look::Is(Vec::new())
+    );
+}
+
+/// The task-runner preset decides all three ways, over the receipt (CLOUD-946).
+///
+/// **The refusal names the TASK**, which is the affordance a guard over the
+/// program alone cannot give, and the third arm is the one that must never read
+/// as allow-by-emptiness: an unanswerable receipt is `null`, and the schema's own
+/// words are that "a guard comparing against an empty table would permit every
+/// substitution it exists to refuse".
+///
+/// The mediated arm is the anti-vacuity mirror: without it a module that refused
+/// nothing at all would satisfy the negatives here and prove nothing.
+#[test]
+fn the_mise_preset_names_the_task_and_fails_open_on_a_stale_receipt() {
+    let root = scratch("mise");
+    let bundles = policy::load(
+        &root,
+        &[preset_row("mise", "mise")],
+        policy::Vocabulary::EMPTY,
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("the preset loads");
+
+    // A receipt naming one task, and a call reaching that task's own program.
+    let receipted = |mediated: bool| {
+        serde_json::json!({
+            "facts": {"tasks": {"a-task": ["a-program", "--flag"]}},
+            "call": {
+                "command": "a-program --flag",
+                "segments": [{"words": ["a-program", "--flag"], "raw": "a-program --flag", "terminator": null}],
+                "programs": [{"name": "a-program", "mediated": mediated}],
+                "operation": "run",
+                "event": "pre_tool",
+            },
+        })
+        .to_string()
+    };
+
+    let Look::Is(violations) = policy::deny(&bundles[0], &receipted(false)) else {
+        panic!("the preset answered");
+    };
+    assert_eq!(
+        bundles[0].attribute(&violations[0]),
+        "task-over-executable",
+        "a direct call of a receipted task's program is refused"
+    );
+
+    assert_eq!(
+        policy::deny(&bundles[0], &receipted(true)),
+        Look::Is(Vec::new()),
+        "the same program reached through the runner is allowed — the anti-vacuity mirror"
+    );
+
+    // COULD-NOT-LOOK, never allow-by-emptiness: a stale, tampered or unwritten
+    // receipt makes the whole fact null, and nothing is judged.
+    let stale = serde_json::json!({
+        "facts": {"tasks": null},
+        "call": {
+            "command": "a-program --flag",
+            "segments": [{"words": ["a-program", "--flag"], "raw": "a-program --flag", "terminator": null}],
+            "programs": [{"name": "a-program", "mediated": false}],
+            "operation": "run",
+            "event": "pre_tool",
+        },
+    })
+    .to_string();
+    assert_eq!(
+        policy::deny(&bundles[0], &stale),
+        Look::Is(Vec::new()),
+        "an unanswerable receipt refuses nothing rather than refusing the project"
     );
 }
 

@@ -4790,6 +4790,29 @@ severity = "deny"
 # `sources` is what a `scope = "tree"` row hands its bundle. The engine asks the
 # pin which files configure it instead, so neither this row nor `crates/batten`
 # carries their names (non-negotiable rule 1).
+# CONSUMER #1 EATS THE SAME FOOD (CLOUD-946), and this preset is `pinned-toolchain`'s
+# complement rather than a second copy of it. That one asks whether a program was
+# reached around the pin and can only name the PROGRAM; this one reads the task
+# receipt and names the TASK to run instead, so the remedy is in the finding
+# rather than in a file the reader has to go and search.
+#
+# `warn`, AND THE SEVERITY IS THE ROW'S OWN DISCIPLINE RATHER THAN TIMIDITY.
+# CLOUD-946 asks that every new deny predicate be REPLAYED before its severity is
+# selected, and no replay has been run for this one. Choosing `deny` now would be
+# selecting a severity without the evidence the row requires; `warn` is what the
+# predicate has earned, and moving it is a change somebody makes with a number.
+#
+# NO `sources` COLUMN, for `pinned-toolchain-preset`'s reason one row down: the
+# receipt this reads is keyed to the manifest the runner resolves, and naming that
+# manifest here is refused at load and would put a consumer's filenames in a row
+# that ships to every consumer.
+[[rule]]
+id = "mise-preset"
+kind = "policy"
+scope = "mediated_call"
+preset = "mise"
+severity = "warn"
+
 [[rule]]
 id = "pinned-toolchain-preset"
 kind = "policy"
