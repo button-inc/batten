@@ -85,6 +85,7 @@ mod patch;
 pub mod pattern;
 pub mod perf;
 pub mod pinned;
+pub mod pipeline;
 pub mod policy;
 pub mod pr_watch;
 pub mod preset;

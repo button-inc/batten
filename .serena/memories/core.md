@@ -809,6 +809,30 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   asked. A root commit or remote URL is identity-bearing and auto-adopts; a
   matching common dir ALONE is not (a path can be reused by a stranger) and
   yields `Candidate`, bound only by `batten state adopt`.
+- `pipeline.rs` — the landing composition as a DECLARED list, with a
+  compensation per step (CLOUD-1338, PR #848's review). Replaces the driver's
+  array literal and its compile-time step-to-function match, which a consumer
+  could not add to, reorder or re-implement — so the successor still described
+  the "Button-specific landing policy a consumer inherits and cannot tailor"
+  that the whole retirement exists to falsify. `StepRow` carries the step, an
+  `effectful` flag, a `compensate` and an optional `precheck`; that last is
+  where the driver's `step == Verify` staleness exception goes, which had
+  leaked into the loop sixteen lines below a comment promising policy "cannot
+  land in four `if`s out of five". **A COMPENSATION IS A DURABLE EXTERNAL
+  WRITE**: a saga stack unwound in-process does not run when the container is
+  killed (`land.sh:353`, "a trap runs on the container kill too"), so every
+  `Compensation` arm names a forge or ref write and `is_durable` asks a later
+  arm by compiler rather than by review. It is deliberately NOT a `Progress`
+  variant — `Progress` says whether the lap continues, while whether an effect
+  needs undoing is answered by which steps were ENTERED, and that applies to
+  `Lap` as much as `Stop`: a lap that readies, spends and then laps has a live
+  matrix for a SHA about to be replaced. `unwind` walks the entered set newest
+  first, because releasing the lease before re-drafting hands the next branch a
+  slot while this one still spends. `validate` refuses three shapes at LOAD —
+  an effectful step before the commit point with no undo, a step positioned
+  after it, and a composition with no commit point at all — and returns every
+  finding rather than the first. `Step::FastForward` is the commit point and
+  needs no undo, which is what makes everything before it need one.
 - `rest.rs` — the forge's REST tier, IN PROCESS, over `fetch.rs` (CLOUD-1338).
   One client, one credential reader (`GH_TOKEN` then `GITHUB_TOKEN`, the forge
   CLI's own precedence), and a typed `Answer` carrying the status, the `ETag`
