@@ -710,6 +710,14 @@ pub enum WeakeningKind {
     /// A `[[provision]]` row is gone, so a pinned tool stops being verified.
     ProvisionRemoved,
     /// A required check is gone from the `[ci]` projection (CLOUD-54).
+    /// A `[host]` key the authority projected and this tree no longer does
+    /// (CLOUD-380).
+    ///
+    /// An unclaimed key is silent by design — the projection polices only what
+    /// the tree says — so dropping one is exactly how a branch would stop
+    /// `config lint --host-rules` asking about a setting at all, with no other
+    /// trace. The same shape as `ci-merge-check-removed` one field over.
+    HostSettingUnprojected,
     CiMergeCheckRemoved,
     /// The merge-method constraint admits a method it did not, or stopped
     /// constraining methods at all.
@@ -883,6 +891,7 @@ impl WeakeningKind {
         WeakeningKind::MarkerRemoved,
         WeakeningKind::ExecPatternRemoved,
         WeakeningKind::ProvisionRemoved,
+        WeakeningKind::HostSettingUnprojected,
         WeakeningKind::CiMergeCheckRemoved,
         WeakeningKind::CiMergeMethodAdded,
         WeakeningKind::AttributionDenyRemoved,
@@ -944,6 +953,7 @@ impl WeakeningKind {
             WeakeningKind::MarkerRemoved => "marker-removed",
             WeakeningKind::ExecPatternRemoved => "exec-pattern-removed",
             WeakeningKind::ProvisionRemoved => "provision-removed",
+            WeakeningKind::HostSettingUnprojected => "host-setting-unprojected",
             WeakeningKind::CiMergeCheckRemoved => "ci-merge-check-removed",
             WeakeningKind::CiMergeMethodAdded => "ci-merge-method-added",
             WeakeningKind::AttributionDenyRemoved => "attribution-deny-removed",
@@ -1212,6 +1222,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "design",
         coverage: Coverage::Compared(&[WeakeningKind::DesignCaptureLimitRaised]),
+    },
+    FieldCoverage {
+        field: "host",
+        coverage: Coverage::Compared(&[WeakeningKind::HostSettingUnprojected]),
     },
     FieldCoverage {
         field: "ci",
@@ -2107,6 +2121,7 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     }
 
     found.extend(ci_weakenings(base.ci.as_ref(), working.ci.as_ref()));
+    found.extend(host_weakenings(base.host.as_ref(), working.host.as_ref()));
     found.extend(attribution_weakenings(
         base.attribution.as_ref(),
         working.attribution.as_ref(),
@@ -2434,6 +2449,49 @@ fn embedded_entries(set: &crate::budget::BudgetSet) -> Vec<String> {
 /// asking about that check at all. An absent `allowed_merge_methods` is
 /// *unconstrained*, which is why losing the key is a weakening on its own and
 /// carries a key of its own rather than one entry per method nobody listed.
+/// A `[host]` key the base projected and the working tree no longer does
+/// (CLOUD-380).
+///
+/// **Unprojecting is the whole weakening, and the direction is worth stating
+/// because the obvious reading is wrong.** A CHANGED value is not a weakening —
+/// the host is the authority, so a projection that disagrees with it is drift
+/// `config lint --host-rules` already refuses, and calling it a weakening here
+/// would be a second authority over the same fact. What no gate can see is a key
+/// that simply stops being claimed: the comparison is silent over what the tree
+/// does not mention, so dropping a key removes the check with no other trace.
+fn host_weakenings(
+    base: Option<&crate::ci::Host>,
+    working: Option<&crate::ci::Host>,
+) -> Vec<Weakening> {
+    let Some(base) = base else {
+        return Vec::new();
+    };
+    let claimed = |host: Option<&crate::ci::Host>, key: &str| -> bool {
+        host.is_some_and(|host| match key {
+            "delete_branch_on_merge" => host.delete_branch_on_merge.is_some(),
+            "web_commit_signoff_required" => host.web_commit_signoff_required.is_some(),
+            "secret_scanning_push_protection" => host.secret_scanning_push_protection.is_some(),
+            _ => false,
+        })
+    };
+    [
+        "delete_branch_on_merge",
+        "web_commit_signoff_required",
+        "secret_scanning_push_protection",
+    ]
+    .into_iter()
+    .filter(|key| claimed(Some(base), key) && !claimed(working, key))
+    .map(|key| {
+        Weakening::new(
+            WeakeningKind::HostSettingUnprojected,
+            format!("host.{key}"),
+            "projected",
+            "unclaimed",
+        )
+    })
+    .collect()
+}
+
 fn ci_weakenings(base: Option<&crate::ci::Ci>, working: Option<&crate::ci::Ci>) -> Vec<Weakening> {
     let mut found = Vec::new();
     let Some(base) = base else {
@@ -4049,6 +4107,28 @@ mod tests {
                 "`{key}` is ranked as a narrowing without saying why"
             );
         }
+    }
+
+    #[test]
+    fn unprojecting_a_host_setting_is_a_weakening_and_changing_its_value_is_not() {
+        // CLOUD-380. The comparison is silent over what the tree does not claim,
+        // so dropping a key removes the check with no other trace — that is the
+        // weakening. A CHANGED value is not one: the host is the authority, so a
+        // disagreeing projection is drift `config lint --host-rules` refuses, and
+        // calling it a weakening here would be a second authority over one fact.
+        let base = config("[host]\ndelete_branch_on_merge = true\n");
+        let dropped = config("");
+        let found = only(&base, &dropped);
+        assert_eq!(found.kind, WeakeningKind::HostSettingUnprojected);
+        assert_eq!(found.key, "host.delete_branch_on_merge");
+
+        let flipped = config("[host]\ndelete_branch_on_merge = false\n");
+        assert!(
+            weakenings(&base, &flipped).is_empty(),
+            "a changed value is drift, not a weakening"
+        );
+        // And projecting one the base did not is a tightening, never reported.
+        assert!(weakenings(&dropped, &base).is_empty());
     }
 
     #[test]

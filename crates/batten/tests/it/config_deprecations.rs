@@ -241,7 +241,13 @@ fn a_release_carrying_a_new_column_owes_the_floor() {
     let fixture = Published::new("config-deprecations-added");
     fixture.publish_without("version", "v0.0.2");
     let (code, said) = fixture.run();
-    assert_eq!(code, 2, "an owed floor is the policy verdict: {said}");
+    // REPORTED, NEVER REFUSED. The floor is compared against the RUNNING build, so
+    // the commit adding a column cannot name the release carrying it, and an
+    // addition is by construction not in any released schema — so no commit on
+    // `main` can carry this as a verdict. Measured twice on one branch: refusing
+    // outright, and refusing only once the version is tagged, both turned
+    // `[host]`'s own arrival red on the branch that added it.
+    assert_eq!(code, 0, "an owed floor is a fact, not a verdict: {said}");
     assert!(said.contains("version added since"), "{said}");
 }
 

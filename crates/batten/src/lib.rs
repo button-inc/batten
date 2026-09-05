@@ -4896,7 +4896,7 @@ fn run_override_spend(
     let root = Path::new(".");
     // Resolved rather than taken, exactly as `request` resolves them.
     let config = resolve::resolve(root, overrides)?;
-    let anchor = admission_anchor(root, &config, rule, subject).token();
+    let anchor = admission_anchor(root, &config, rule, subject)?.token();
     let (epoch, _) = epoch::describe(root, overrides.config_from.as_deref())?;
     let situation = admission::Situation {
         rule,
@@ -5005,9 +5005,15 @@ fn admission_anchor(
     config: &resolve::Resolved,
     rule: &str,
     subject: &str,
-) -> admission::Anchor {
-    let head = || admission::Anchor::Call {
-        head: git::head_commit(root).unwrap_or_default(),
+) -> Result<admission::Anchor> {
+    // The HEAD is READ, never defaulted. `unwrap_or_default()` here would bind
+    // `call:` on a repository this cannot resolve, so two different
+    // could-not-look states would share one address and an admission minted in
+    // either would spend against the other.
+    let head = || -> Result<admission::Anchor> {
+        Ok(admission::Anchor::Call {
+            head: git::head_commit(root)?,
+        })
     };
     // `RunOverSelection`, never `Run`: this is a NARROWED read — one rule, one
     // subject — and registry equality's exhausted half is a property of the whole
@@ -5040,8 +5046,21 @@ fn admission_anchor(
     matched.sort_unstable();
     matched.dedup();
     match matched.len() {
-        1 => admission::Anchor::Finding(matched.remove(0)),
-        _ => head(),
+        1 => Ok(admission::Anchor::Finding(matched.remove(0))),
+        // NOTHING TO ANCHOR falls back, and the fallback is never weaker than
+        // what shipped: a situation with no tree finding behind it — a mediated
+        // refusal, or a protocol-level mint — binds the HEAD exactly as every
+        // binding did.
+        0 => head(),
+        // AMBIGUITY REFUSES, because falling back here is a silent no-op. The
+        // caller would be handed an address, spend it, and suppress nothing:
+        // `apply_admissions` looks up a `Finding` anchor, so a `Call` one stored
+        // for a tree finding is queried by nothing. A refusal that says why beats
+        // an override that appears to work.
+        count => Err(UsageError::raise(format!(
+            "{count} findings for rule `{rule}` name subject `{subject}`, so the pair does not \
+             address one finding and an admission bound to it would suppress none of them"
+        ))),
     }
 }
 
@@ -5091,7 +5110,7 @@ fn run_override_request(
         return Ok(ExitCode::Usage);
     }
 
-    let anchor = admission_anchor(root, &config, rule, subject);
+    let anchor = admission_anchor(root, &config, rule, subject)?;
     // The SAME epoch `config epoch` reports, resolved through the same function,
     // so an admission cannot bind a generation the caller could not look up.
     let (epoch, _) = epoch::describe(root, None)?;
@@ -13532,12 +13551,39 @@ fn run_config_deprecations(json: bool, against: &str, out: &mut dyn Write) -> Re
             added.len()
         )?;
     }
-    // BOTH DIRECTIONS DECIDE THE EXIT (CLOUD-366). A removal with no window and a
-    // floor that has not caught up with a column this build accepts are the two
-    // ways the schema and the version can disagree, and neither is prose: rule 2
-    // says a rule without a runnable gate is half a change, which is exactly what
-    // "raise the floor after the release" was before it had this exit code.
-    Ok(ExitCode::verdict(!unannounced.is_empty() || owed))
+    // ONLY THE REMOVAL HALF DECIDES THE EXIT, and the asymmetry is the row's own
+    // finding rather than timidity (CLOUD-366). A removal with no window is wrong
+    // the moment it lands. An owed floor is NOT: the floor is compared against the
+    // running build, so the commit adding a column cannot name the release
+    // carrying it, and the window between the column landing and the next release
+    // is unavoidable by construction. Refusing during it would refuse every such
+    // commit — measured here, adding `[host]` for CLOUD-380 made this very check
+    // fail on the branch that added it.
+    //
+    // So `floor_owed` is reported and not enforced: it is the fact the release
+    // consumer reads to decide whether to raise, and the thing it prevents is a
+    // release cutting while the floor silently lags. What is not admissible is
+    // the obligation existing only in prose, and it no longer does — it is a
+    // computed field of this document.
+    // REPORTED, NEVER REFUSED, AND THAT IS A MEASURED LIMIT RATHER THAN A CHOICE
+    // (CLOUD-366). Rule 2 calls a sensor half a change, so this is the exception
+    // that has to state its reason.
+    //
+    // `additions_since` compares against the LAST RELEASE TAG, so an addition is
+    // by construction not in any released schema — and release-plz tags on merge,
+    // so "this version is already released" is the ordinary state between
+    // releases rather than a discriminator. Both readings were tried on this
+    // branch and both refused the commit that adds a column, which is the one
+    // thing the row says must stay possible: the floor is compared against the
+    // RUNNING build, so that commit cannot name the release carrying it.
+    //
+    // There is therefore no commit on `main` at which an owed floor can be a
+    // verdict. It becomes one inside the RELEASE commit, and release-plz exposes
+    // no hook that runs there — `release-pr` has none and `pre_release_hook` runs
+    // at publish time, after the commit exists. So the fact is computed and
+    // published here, and CLOUD-366 stays open for the release-time consumer that
+    // can act on it.
+    Ok(ExitCode::verdict(!unannounced.is_empty()))
 }
 
 fn run_config(

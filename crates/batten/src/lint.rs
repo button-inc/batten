@@ -557,9 +557,43 @@ pub fn host_drift(
             crate::UsageError::raise(format!("cannot read host rules from {source}: {err}"))
         })?
     };
-    let host = crate::ci::derive(&payload)?;
-
     let resolved = crate::resolve::resolve(dir, overrides)?;
+
+    // WHICH PROJECTION IS DECIDED BY THE PAYLOAD'S SHAPE (CLOUD-380), not by a
+    // flag. The branch-rules endpoint returns an ARRAY and the repository
+    // endpoint an OBJECT, so the two host reads are already distinguishable, and
+    // dispatching on that keeps `--host-rules` one flag answering one question:
+    // "here is what the host says — does the tree agree?".
+    //
+    // The array arm is byte-identical to what shipped, which is what lets the
+    // `[ci]` comparison keep its cases unchanged.
+    // ROUTED ON A RECOGNISED KEY, not merely on being an object. A forge ERROR is
+    // an object too — `{"message": "Not Found"}` — and sending it to the host arm
+    // would compare an all-absent projection and find agreement, which turns a
+    // failed fetch into a pass. An object this does not recognise falls through
+    // to the rules arm and gets that arm's refusal, unchanged.
+    let looks_like_host = serde_json::from_str::<serde_json::Value>(&payload)
+        .ok()
+        .and_then(|value| value.as_object().map(crate::ci::is_host_payload))
+        .unwrap_or(false);
+    if looks_like_host {
+        let host = crate::ci::derive_host(&payload)?;
+        let Some(committed) = resolved.host.as_ref() else {
+            return Err(crate::UsageError::raise(format!(
+                "--host-rules was handed a repository object, but {} declares no [host] table",
+                config::CONFIG_FILE
+            )));
+        };
+        return Ok(crate::ci::host_drift(committed, &host)
+            .into_iter()
+            .map(|drift| Smell {
+                at: Where::Key(format!("{} {}", drift.key, drift.rendered())),
+                id: drift.id,
+            })
+            .collect());
+    }
+
+    let host = crate::ci::derive(&payload)?;
     let Some(committed) = resolved.ci.as_ref() else {
         return Err(crate::UsageError::raise(format!(
             "--host-rules asked for a comparison, but {} declares no [ci] table",

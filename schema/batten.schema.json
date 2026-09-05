@@ -190,6 +190,17 @@
         }
       ]
     },
+    "host": {
+      "description": "Repository settings the host decides and this tree projects (CLOUD-380).\n\n`[ci]`'s sibling and held to the same rule: the host is the authority, and\nthis is a copy `config lint --host-rules` polices. Where `[ci]` projects\nthe BRANCH ruleset, this projects the repository object — the settings\nwhose change weakens a control and today leaves no diff behind.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Host"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "judge": {
       "description": "The optional LLM judge's payload-privacy boundary (CLOUD-135): what may\ncross into a model call. Absent means no judge is configured; present and\nempty means pointers and hashes only, which is also what every field\ndefaults to. The type and the pure builder are [`crate::judge`].\n\nThis table lands **before** the judge that reads it, deliberately: a\nboundary written after the code it bounds is a boundary that code has\nalready crossed.",
       "anyOf": [
@@ -1782,6 +1793,34 @@
           "items": {
             "$ref": "#/$defs/Handler"
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Host": {
+      "description": "Repository settings the host decides and the tree projects (CLOUD-380).\n\n**A projection a gate polices, never a second place the fact is decided** —\nthe same wording `[ci]` already carries, and the reason both tables exist:\nthe host is the authority, and a value here is a claim about the host that\nsomething checks.\n\n**Membership is decidable rather than a matter of taste: a setting belongs\nhere iff changing it WEAKENS a control.** That is the test `protected`\nalready uses one table over. Description, topics, homepage and visibility are\nexcluded by it — none of them gates anything — and the exclusion is what\nkeeps this from becoming a mirror of the whole repository object, which would\nreport drift every time somebody edits a sentence.\n\nEvery field is optional and `None` means **unclaimed**, never \"false\". A\nconsumer projecting one setting must not be told it disagrees about three it\nnever mentioned.\n\nMeasured: `delete_branch_on_merge` was set on the repository and nothing in\nthe tree said so, so turning it off would have removed it with no diff, no\ngate and no notification. `ci-drift` established the right pattern for\nexactly one host fact — the branch ruleset — and the generalisation was never\nmade.",
+      "type": "object",
+      "properties": {
+        "delete_branch_on_merge": {
+          "description": "Whether the host deletes a branch when its pull request merges.\n\nOff, stale branches accumulate and `branch-hygiene`'s subject drifts from\nwhat actually landed.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "secret_scanning_push_protection": {
+          "description": "Whether the host blocks a push carrying a detected secret.\n\nOff, the last barrier before a secret reaches the remote is gone, and\n`no-secrets` only ever sees what a local run reached.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "web_commit_signoff_required": {
+          "description": "Whether the host requires a sign-off on web commits.\n\nOff, a commit can enter `main` through the web UI carrying none of the\nattribution `commit-attribution` decides over.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "additionalProperties": false

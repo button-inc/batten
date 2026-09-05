@@ -208,6 +208,169 @@ pub const REQUIRED_CHECKS_DRIFT: &str = "ci-required-checks-drift";
 /// The merge-method half's smell id.
 pub const MERGE_METHODS_DRIFT: &str = "ci-allowed-merge-methods-drift";
 
+/// The repository-object keys [`derive_host`] reads.
+///
+/// Named once so the recogniser and the reader cannot drift: a payload is the
+/// repository response iff it carries one of these, and every one of them is a
+/// setting [`Host`] projects.
+const HOST_KEYS: &[&str] = &[
+    "delete_branch_on_merge",
+    "web_commit_signoff_required",
+    "security_and_analysis",
+];
+
+/// The `[host]` half's smell id (CLOUD-380).
+pub const HOST_SETTING_DRIFT: &str = "host-setting-drift";
+
+/// Repository settings the host decides and the tree projects (CLOUD-380).
+///
+/// **A projection a gate polices, never a second place the fact is decided** —
+/// the same wording `[ci]` already carries, and the reason both tables exist:
+/// the host is the authority, and a value here is a claim about the host that
+/// something checks.
+///
+/// **Membership is decidable rather than a matter of taste: a setting belongs
+/// here iff changing it WEAKENS a control.** That is the test `protected`
+/// already uses one table over. Description, topics, homepage and visibility are
+/// excluded by it — none of them gates anything — and the exclusion is what
+/// keeps this from becoming a mirror of the whole repository object, which would
+/// report drift every time somebody edits a sentence.
+///
+/// Every field is optional and `None` means **unclaimed**, never "false". A
+/// consumer projecting one setting must not be told it disagrees about three it
+/// never mentioned.
+///
+/// Measured: `delete_branch_on_merge` was set on the repository and nothing in
+/// the tree said so, so turning it off would have removed it with no diff, no
+/// gate and no notification. `ci-drift` established the right pattern for
+/// exactly one host fact — the branch ruleset — and the generalisation was never
+/// made.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Host {
+    /// Whether the host deletes a branch when its pull request merges.
+    ///
+    /// Off, stale branches accumulate and `branch-hygiene`'s subject drifts from
+    /// what actually landed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delete_branch_on_merge: Option<bool>,
+    /// Whether the host requires a sign-off on web commits.
+    ///
+    /// Off, a commit can enter `main` through the web UI carrying none of the
+    /// attribution `commit-attribution` decides over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_commit_signoff_required: Option<bool>,
+    /// Whether the host blocks a push carrying a detected secret.
+    ///
+    /// Off, the last barrier before a secret reaches the remote is gone, and
+    /// `no-secrets` only ever sees what a local run reached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_scanning_push_protection: Option<bool>,
+}
+
+/// Whether a JSON object is the repository response rather than some other
+/// document (CLOUD-380).
+///
+/// Exposed so the caller routes on the same recogniser [`derive_host`] enforces,
+/// instead of a second reading that could disagree with it.
+#[must_use]
+pub fn is_host_payload(object: &serde_json::Map<String, Value>) -> bool {
+    HOST_KEYS.iter().any(|key| object.contains_key(*key))
+}
+
+/// Read the host's own view of these settings out of a `GET /repos/{owner}/{repo}`
+/// response (CLOUD-380).
+///
+/// **A key the payload omits stays `None`**, which is could-not-look rather than
+/// `false`: a token with no `administration` scope gets a response missing
+/// `security_and_analysis` entirely, and reading that as "push protection is
+/// off" would report drift the host never claimed.
+///
+/// # Errors
+///
+/// [`UsageError`] when the payload is not a JSON object — the repository
+/// endpoint returns one, and an array is the branch-rules payload handed to the
+/// wrong comparison.
+pub fn derive_host(payload: &str) -> Result<Host> {
+    let value: Value = serde_json::from_str(payload)
+        .map_err(|err| UsageError::raise(format!("host settings payload is not JSON: {err}")))?;
+    let Some(object) = value.as_object() else {
+        return Err(UsageError::raise(
+            "host settings payload is not a repository object; expected the response of `GET \
+             /repos/{owner}/{repo}`"
+                .to_owned(),
+        ));
+    };
+    // A PAYLOAD CARRYING NONE OF THESE KEYS IS COULD-NOT-LOOK, NEVER AGREEMENT.
+    // `{"message": "Not Found"}` is a JSON object too, and deriving `None` for
+    // every field from it would compare clean against any projection — a failed
+    // fetch reading as "the host agrees", which is the one answer this comparison
+    // must never give.
+    if !HOST_KEYS.iter().any(|key| object.contains_key(*key)) {
+        return Err(UsageError::raise(
+            "host settings payload carries none of the repository keys this compares; expected \
+             the response of `GET /repos/{owner}/{repo}`"
+                .to_owned(),
+        ));
+    }
+    let flag = |key: &str| object.get(key).and_then(Value::as_bool);
+    Ok(Host {
+        delete_branch_on_merge: flag("delete_branch_on_merge"),
+        web_commit_signoff_required: flag("web_commit_signoff_required"),
+        secret_scanning_push_protection: object
+            .get("security_and_analysis")
+            .and_then(Value::as_object)
+            .and_then(|analysis| analysis.get("secret_scanning_push_protection"))
+            .and_then(Value::as_object)
+            .and_then(|setting| setting.get("status"))
+            .and_then(Value::as_str)
+            .map(|status| status == "enabled"),
+    })
+}
+
+/// Compare the committed `[host]` against what the host reports (CLOUD-380).
+///
+/// One [`Drift`] per disagreeing key, so a refusal names the key an author has
+/// to edit rather than reporting that "something" differs — which is what
+/// separates a real comparison from a non-zero exit on any non-200.
+///
+/// A key the config leaves unclaimed is skipped: this polices what the tree
+/// says, and says nothing about what it does not.
+#[must_use]
+pub fn host_drift(committed: &Host, host: &Host) -> Vec<Drift> {
+    let mut found = Vec::new();
+    let mut compare = |key: &str, mine: Option<bool>, theirs: Option<bool>| {
+        let (Some(mine), Some(theirs)) = (mine, theirs) else {
+            return;
+        };
+        if mine != theirs {
+            found.push(Drift {
+                id: HOST_SETTING_DRIFT,
+                key: format!("host.{key}"),
+                // POINTER, NEVER PAYLOAD: which side claims what, as two tokens,
+                // and never a byte of the host's response.
+                tokens: vec![format!("-{mine}"), format!("+{theirs}")],
+            });
+        }
+    };
+    compare(
+        "delete_branch_on_merge",
+        committed.delete_branch_on_merge,
+        host.delete_branch_on_merge,
+    );
+    compare(
+        "web_commit_signoff_required",
+        committed.web_commit_signoff_required,
+        host.web_commit_signoff_required,
+    );
+    compare(
+        "secret_scanning_push_protection",
+        committed.secret_scanning_push_protection,
+        host.secret_scanning_push_protection,
+    );
+    found
+}
+
 /// One difference between the committed projection and the host's contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Drift {

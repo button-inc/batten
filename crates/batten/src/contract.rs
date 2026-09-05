@@ -360,9 +360,13 @@ pub fn render(change: &ChangeSet, wiring: &[String]) -> String {
              are not worth reading.\n",
         );
     }
+    // ALL THREE PARTITIONS, and `added` is the one a reader forgets: a wiring file
+    // that ARRIVED is the strongest reason to say the wiring moved, and it is
+    // exactly the class the notice's first line already counts.
     let touched: Vec<&String> = change
         .changed
         .iter()
+        .chain(change.added.iter())
         .chain(change.removed.iter())
         .filter(|path| wiring.iter().any(|w| w == *path))
         .collect();
@@ -522,6 +526,18 @@ mod tests {
             &wiring,
         );
         assert!(touched.contains("The hook wiring is among them"));
+        // And an ADDED wiring file says so too (CLOUD-490). Partitioning `added`
+        // out of `changed` silently dropped this arm until a review caught it:
+        // the notice counted the path and then reported the wiring as untouched.
+        let arrived = render(
+            &ChangeSet {
+                changed: Vec::new(),
+                added: vec!["wiring.json".to_owned()],
+                removed: Vec::new(),
+            },
+            &wiring,
+        );
+        assert!(arrived.contains("The hook wiring is among them"));
         assert!(touched.contains("batten doctor hooks"));
         assert!(
             !touched.contains("self-enforced"),

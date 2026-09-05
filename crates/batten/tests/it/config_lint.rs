@@ -1086,6 +1086,11 @@ fn a_payload_that_is_not_a_ruleset_is_could_not_look_too() {
     // readable file that is not a rules-API response are different failures with
     // the same obligation. Without this, the case above passes over a verb that
     // refuses only on `open()` and would happily compare against `{}`.
+    //
+    // Unchanged by CLOUD-380: `{}` carries none of the repository keys, so it is
+    // not routed to the `[host]` arm and gets this arm's refusal exactly as
+    // before. Routing on a recognised KEY rather than on being an object is what
+    // preserves that.
     let dir = repo_with_config("ci-not-a-ruleset", &ci_config(""));
     let payload = dir.join("not-a-ruleset.json");
     std::fs::write(&payload, "{}").expect("write payload");
@@ -1094,6 +1099,103 @@ fn a_payload_that_is_not_a_ruleset_is_could_not_look_too() {
         output.status.code(),
         Some(1),
         "a payload that is not a rules-API array is a usage error"
+    );
+}
+
+/// A failed fetch must never read as agreement (CLOUD-380).
+///
+/// The forge answers an error as a JSON OBJECT, and the repository response is an
+/// object too. Routing on shape alone would compare an all-absent projection
+/// against a declared `[host]` and find nothing to report — exit `0` over a fetch
+/// that never happened, which is the one answer this comparison must not give.
+#[test]
+fn a_forge_error_object_is_refused_rather_than_compared_as_agreement() {
+    let dir = repo_with_config(
+        "host-error-payload",
+        "version = 1\n\n[host]\ndelete_branch_on_merge = true\n",
+    );
+    let path = dir.join("error.json");
+    fs::write(&path, r#"{"message":"Not Found","status":"404"}"#).expect("write payload");
+
+    let output = lint(&dir, &["--host-rules", path.to_str().unwrap()]);
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "an error payload is never a clean comparison: {}",
+        stdout(&output)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "and it is could-not-look rather than drift: {}",
+        stderr(&output)
+    );
+}
+
+/// CLOUD-380's discriminating pair, over the compiled binary with the payload on
+/// disk so the suite stays offline.
+///
+/// The load-bearing half is that the refusal NAMES THE KEY. A comparison that
+/// exits non-zero on any non-200 looks identical from outside until you read what
+/// it said, and naming the key is what separates the two.
+#[test]
+fn a_host_setting_the_tree_disagrees_with_is_refused_and_names_the_key() {
+    let dir = repo_with_config(
+        "host-drift",
+        "version = 1
+
+[host]
+delete_branch_on_merge = true
+",
+    );
+    let payload = dir.join("repo.json");
+    std::fs::write(&payload, r#"{"delete_branch_on_merge": false}"#).expect("write payload");
+
+    let output = lint(&dir, &["--host-rules", payload.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(2), "drift is a policy verdict");
+    assert!(
+        stdout(&output).contains("host.delete_branch_on_merge"),
+        "the refusal names the key an author must edit: {}",
+        stdout(&output)
+    );
+    // POINTER, NEVER PAYLOAD: which side claims what, never a byte of the
+    // host's response.
+    assert!(
+        stdout(&output).contains("-true,+false"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+/// The agreement half, plus the arm that keeps this from over-reporting.
+///
+/// A key the tree does not claim is silent: a consumer projecting one setting
+/// must not be told it disagrees about two it never mentioned. Without this the
+/// case above passes over a comparison that reports every absent key as drift.
+#[test]
+fn a_host_setting_the_tree_agrees_with_is_clean_and_an_unclaimed_one_is_silent() {
+    let dir = repo_with_config(
+        "host-agree",
+        "version = 1
+
+[host]
+delete_branch_on_merge = true
+",
+    );
+    let payload = dir.join("repo.json");
+    std::fs::write(
+        &payload,
+        r#"{"delete_branch_on_merge": true, "web_commit_signoff_required": false,
+            "security_and_analysis": {"secret_scanning_push_protection": {"status": "disabled"}}}"#,
+    )
+    .expect("write payload");
+
+    let output = lint(&dir, &["--host-rules", payload.to_str().unwrap()]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "two unclaimed keys the host reports are not drift: {}",
+        stdout(&output)
     );
 }
 

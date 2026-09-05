@@ -658,6 +658,11 @@ pub struct Resolved {
     /// question that already has one authority.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ci: Option<crate::ci::Ci>,
+    /// The projected host settings (CLOUD-380), as the authority states them.
+    /// Not layered, for `ci`'s reason: a local file cannot change what the host
+    /// decides.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<crate::ci::Host>,
     /// The build tree and its two disk floors (CLOUD-1030), as the authority
     /// states it. Not layered, and for the direction the raise-only reading gets
     /// wrong here: a floor is a MINIMUM, so the local-file layer's ordinary
@@ -1671,6 +1676,7 @@ fn assemble(
         judge: repo.judge.clone(),
         design: repo.design.clone(),
         ci: repo.ci.clone(),
+        host: repo.host.clone(),
         prune: repo.prune.clone(),
         mcp: repo.mcp.clone(),
         defects: repo.defects.clone(),
@@ -1797,6 +1803,7 @@ fn attribution(
         ("judge", authority_set(repo.judge.is_some())),
         ("design", authority_set(repo.design.is_some())),
         ("ci", authority_set(repo.ci.is_some())),
+        ("host", authority_set(repo.host.is_some())),
         ("prune", authority_set(repo.prune.is_some())),
         ("mcp", authority_set(repo.mcp.is_some())),
         ("defects", authority_set(repo.defects.is_some())),

@@ -6667,6 +6667,27 @@ expires = "2026-10-04"
 [ci]
 required_checks = ["final"]
 
+# The repository settings this tree projects (CLOUD-380). `[ci]` above projects
+# the BRANCH ruleset; this projects the repository object, and the two are the
+# same discipline over two host endpoints: the host is the authority, and a value
+# here is a claim a gate polices.
+#
+# MEMBERSHIP IS THE `protected` TEST, not taste: a setting belongs here iff
+# changing it WEAKENS a control. Description, topics, homepage and visibility are
+# excluded by it — none of them gates anything, and mirroring the whole
+# repository object would report drift every time somebody edits a sentence.
+#
+# ONE KEY, AND THE OMISSIONS ARE DELIBERATE. `delete_branch_on_merge` is the
+# measured case: it is set on the repository, nothing in the tree said so, and
+# turning it off would have removed it with no diff, no gate and no notification.
+# `web_commit_signoff_required` and `secret_scanning_push_protection` are
+# declared in the schema and NOT projected here, because both are currently
+# disabled on this repository — pinning a disabled control would record a
+# weakness as policy, where an unclaimed key honestly says the tree makes no
+# claim. Project them the day they are turned on.
+[host]
+delete_branch_on_merge = true
+
 # ---------------------------------------------------------------------------
 # The build tree this repository defends, and the two floors it defends it with
 # (CLOUD-766, re-measured under CLOUD-861, split in two under CLOUD-1030).

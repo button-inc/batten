@@ -480,6 +480,14 @@ pub struct Config {
     /// place the fact is decided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci: Option<crate::ci::Ci>,
+    /// Repository settings the host decides and this tree projects (CLOUD-380).
+    ///
+    /// `[ci]`'s sibling and held to the same rule: the host is the authority, and
+    /// this is a copy `config lint --host-rules` polices. Where `[ci]` projects
+    /// the BRANCH ruleset, this projects the repository object — the settings
+    /// whose change weakens a control and today leaves no diff behind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<crate::ci::Host>,
     /// What this project's build costs and what to keep of it (CLOUD-1030).
     /// Absent means the repository runs no prune and `batten target prune` has
     /// nothing to decide against — a different claim from a floor of zero, which
@@ -1101,6 +1109,13 @@ pub fn additions_since(
 /// which is what `additions` is for. With no additions the floor is left exactly
 /// where it is, because a release that adds no column makes no new demand of a
 /// consumer's binary.
+///
+/// **A FACT FOR THE RELEASE TO READ, NEVER A VERDICT ON THE COMMIT.** This is
+/// true for the whole window between a column landing and the next release, and
+/// that window is unavoidable: the floor is compared against the RUNNING build,
+/// so the commit adding a column cannot name the release carrying it. Refusing
+/// on it would refuse every column-adding commit — measured, making it a verdict
+/// turned `[host]`'s own arrival (CLOUD-380) red on the branch that added it.
 #[must_use]
 pub fn floor_owed(additions: &[String], floor: Option<&str>, releasing: &str) -> bool {
     !additions.is_empty() && floor != Some(releasing)
@@ -1742,6 +1757,7 @@ impl Config {
     pub fn declaring_nothing() -> Self {
         Config {
             version: SUPPORTED_VERSION,
+            host: None,
             min_batten_version: None,
             strictness: None,
             fail_on_warning: None,
