@@ -6648,70 +6648,90 @@ fn key_present(expression: &str, command: &str, keys: &KeyFacts) -> bool {
 fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a Rule> {
     let mut matched: Vec<&Rule> = Vec::new();
     for segment in segments(&envelope.command) {
-        let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
-        let Some(program_index) = effective_program(&tokens) else {
-            continue;
-        };
-        // Subcommand words with flags dropped. A value-taking flag leaves its
-        // value behind, but the blocked words are adjacent, so that never hides
-        // a real match (`gh -R o/r pr merge` still matches; `gh pr view
-        // merge-fix` never does).
-        let words: Vec<&str> = tokens[program_index + 1..]
-            .iter()
-            .copied()
-            .filter(|token| !token.starts_with('-'))
-            .collect();
-        for rule in &policy.shapes {
-            // Kind-filtered, not scope-filtered: `receipt` rows are
-            // `mediated_call`-scoped too and carry a `pattern`, so without this
-            // they would read as shape rules and refuse their trigger
-            // unconditionally — turning a precondition into a ban.
-            if rule.kind != RuleKind::Shape {
-                continue;
-            }
-            if !blocks(rule.severity(), policy.fail_on_warning) {
-                continue;
-            }
-            // The polarity modifiers (CLOUD-987), applied HERE so every caller
-            // gets them. See this function's header for why the check moved in
-            // from `shape_rules` rather than being copied to the second caller.
-            //
-            // Both halves observed red, one mutation at a time (CLOUD-418):
-            // commenting this out reds `a_keyed_row_excluded_by_its_modifier_
-            // does_not_supply_the_base` AND the earlier round's
-            // `a_command_keyed_row_honours_the_polarity_modifier`.
-            if !modifier_admits(rule, envelope) {
-                continue;
-            }
-            let Some((program, wanted)) = rule.shape() else {
+        // PER LINE, NOT PER SEGMENT (CLOUD-1381). A newline is whitespace to
+        // `segments`, so a two-line call is ONE segment whose first word is the
+        // first line's program — and every shape row was therefore evaded by
+        // writing two lines instead of one. Measured over the running hook:
+        // `git rebase origin/main` denied, the same command after `echo starting`
+        // and a newline allowed.
+        //
+        // `protected_mutation` has not had this hole since CLOUD-1287 built
+        // `line_bounded_units` for exactly this, and wired it to two walks. This
+        // is the third. Segment identity is untouched — `segments()` is unmoved,
+        // `terminator` is unmoved, and no `pipeline` verdict changes, which is
+        // the bound `.claude/rules/policy-modules.md` states and this respects.
+        for (line_words, line_raw) in line_bounded_units(&segment) {
+            let tokens: Vec<&str> = line_words.iter().map(String::as_str).collect();
+            let Some(program_index) = effective_program(&tokens) else {
                 continue;
             };
-            if tokens[program_index] != program {
-                continue;
+            // Subcommand words with flags dropped. A value-taking flag leaves its
+            // value behind, but the blocked words are adjacent, so that never hides
+            // a real match (`gh -R o/r pr merge` still matches; `gh pr view
+            // merge-fix` never does).
+            let words: Vec<&str> = tokens[program_index + 1..]
+                .iter()
+                .copied()
+                .filter(|token| !token.starts_with('-'))
+                .collect();
+            for rule in &policy.shapes {
+                // Kind-filtered, not scope-filtered: `receipt` rows are
+                // `mediated_call`-scoped too and carry a `pattern`, so without this
+                // they would read as shape rules and refuse their trigger
+                // unconditionally — turning a precondition into a ban.
+                if rule.kind != RuleKind::Shape {
+                    continue;
+                }
+                if !blocks(rule.severity(), policy.fail_on_warning) {
+                    continue;
+                }
+                // The polarity modifiers (CLOUD-987), applied HERE so every caller
+                // gets them. See this function's header for why the check moved in
+                // from `shape_rules` rather than being copied to the second caller.
+                //
+                // Both halves observed red, one mutation at a time (CLOUD-418):
+                // commenting this out reds `a_keyed_row_excluded_by_its_modifier_
+                // does_not_supply_the_base` AND the earlier round's
+                // `a_command_keyed_row_honours_the_polarity_modifier`.
+                if !modifier_admits(rule, envelope) {
+                    continue;
+                }
+                let Some((program, wanted)) = rule.shape() else {
+                    continue;
+                };
+                if tokens[program_index] != program {
+                    continue;
+                }
+                if !operands_match(&words, &wanted) {
+                    continue;
+                }
+                // The mediator, read from the segment AS WRITTEN (CLOUD-271). This
+                // is the one place the sanctioned route and the bare one still
+                // differ: `effective_program` has already looked through
+                // `mise exec`, so by here both have resolved to the same program.
+                // Present means the row does not fire — the objection is to the
+                // toolchain selection, not to the program.
+                if let Some(via) = rule.require_via()
+                    && mediator_present(via, &tokens[..program_index])
+                {
+                    continue;
+                }
+                // The extra literal is matched against the LINE as written, because
+                // the thing it looks for lives inside a quoted argument and so is
+                // not one of the words above.
+                //
+                // The line rather than the segment, and that is a correctness
+                // boundary rather than a tightening: the program is resolved per
+                // line above, so a segment-wide needle would let one line's text
+                // qualify another line's program. `line_bounded_units`' header
+                // carries the worked case.
+                if let Some(needle) = rule.contains.as_deref()
+                    && !line_raw.contains(needle)
+                {
+                    continue;
+                }
+                matched.push(rule);
             }
-            if !operands_match(&words, &wanted) {
-                continue;
-            }
-            // The mediator, read from the segment AS WRITTEN (CLOUD-271). This
-            // is the one place the sanctioned route and the bare one still
-            // differ: `effective_program` has already looked through
-            // `mise exec`, so by here both have resolved to the same program.
-            // Present means the row does not fire — the objection is to the
-            // toolchain selection, not to the program.
-            if let Some(via) = rule.require_via()
-                && mediator_present(via, &tokens[..program_index])
-            {
-                continue;
-            }
-            // The extra literal is matched against the segment as written,
-            // because the thing it looks for lives inside a quoted argument and
-            // so is not one of the words above.
-            if let Some(needle) = rule.contains.as_deref()
-                && !segment.raw.contains(needle)
-            {
-                continue;
-            }
-            matched.push(rule);
         }
     }
     matched
@@ -6945,15 +6965,42 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
 /// Heredoc bodies are already gone from `raw`, which is what keeps a `rm` inside
 /// a commit message from becoming a line of its own here (CLOUD-723).
 fn line_bounded_words(segment: &Segment) -> Vec<Vec<String>> {
+    line_bounded_units(segment)
+        .into_iter()
+        .map(|(words, _)| words)
+        .collect()
+}
+
+/// The same split, with each line's OWN raw text beside its words.
+///
+/// **A reader that matches a literal needs this rather than
+/// [`line_bounded_words`], and the difference is a false DENY** — the direction
+/// that gets a guard switched off. `Rule::contains` is matched against the text
+/// as written, because what it looks for lives inside a quoted argument and so
+/// is not one of the words. Handed the whole SEGMENT's raw while the program is
+/// resolved per LINE, a row cross-contaminates: `echo origin/main` on line one
+/// and `git rebase --continue` on line two gives line two the program `git` and
+/// the operand `rebase` (flags are dropped), while `origin/main` is found on
+/// line one — so `rebase-not-hand-stepped` would refuse the conflict exit its
+/// own `contains` exists to protect.
+///
+/// The single-line case returns the segment's own raw unchanged, so nothing a
+/// one-line call decides moves. That is what bounds this to the multi-line
+/// shapes that were under-denying (CLOUD-1381, CLOUD-1287).
+fn line_bounded_units(segment: &Segment) -> Vec<(Vec<String>, String)> {
     // The common case is one line, and it must cost nothing: `batten hook` runs
     // on every mediated call under CLOUD-689's budget.
     if !segment.raw.contains('\n') {
-        return vec![segment.words.clone()];
+        return vec![(segment.words.clone(), segment.raw.clone())];
     }
     joined_lines(&segment.raw)
         .into_iter()
-        .flat_map(|line| segments(&line).into_iter().map(|parsed| parsed.words))
-        .filter(|words| !words.is_empty())
+        .flat_map(|line| {
+            segments(&line)
+                .into_iter()
+                .map(|parsed| (parsed.words, parsed.raw))
+        })
+        .filter(|(words, _)| !words.is_empty())
         .collect()
 }
 

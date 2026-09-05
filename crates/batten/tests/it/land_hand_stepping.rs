@@ -124,6 +124,52 @@ fn the_lap_is_refused_however_it_is_spelled() {
     denied_by_the_row("git fetch origin main && git rebase origin/main");
 }
 
+/// A NEWLINE IS NOT AN ESCAPE HATCH (CLOUD-1381).
+///
+/// `segments` treats a newline as whitespace, so a two-line call is ONE segment
+/// whose first word is the first line's program — and every `shape` row was
+/// evaded by writing two lines instead of one. Measured over the running hook
+/// before the fix: this exact command was ALLOWED while its single-line twin
+/// was refused.
+///
+/// It needs no intent to reach. A two-line bash block is how anyone writes two
+/// commands, so the bypass arrives by accident, which is worse than one needing
+/// a deliberate quoting trick: nothing signals that it happened.
+#[test]
+fn a_second_line_does_not_escape_the_row() {
+    denied_by_the_row("echo starting\ngit rebase origin/main");
+    denied_by_the_row("cd /home/user/batten\ngit rebase origin/main");
+}
+
+/// THE FALSE DENY THE FIX WAS BUILT AROUND, and the reason `line_bounded_units`
+/// carries each line's raw rather than reusing the segment's.
+///
+/// `contains` is matched against the text AS WRITTEN, because what it looks for
+/// sits inside a quoted argument. Resolve the program per line but match the
+/// needle across the whole segment and one line qualifies another line's
+/// program: here line two is `git` with the operand `rebase` — flags are
+/// dropped, so `--continue` is not among the words — while `origin/main` is
+/// found on line one. A segment-wide needle refuses the conflict exit that this
+/// row's own `contains` exists to protect, which is the direction that gets a
+/// guard switched off rather than the sanctioned one.
+#[test]
+fn a_needle_on_another_line_does_not_qualify_this_one() {
+    not_refused_by_the_row("echo origin/main\ngit rebase --continue");
+    not_refused_by_the_row("git fetch origin main\ngit rebase --abort");
+}
+
+/// A BACKSLASH CONTINUATION IS ONE COMMAND, and splitting it would be a bypass
+/// rather than a false refusal: line one would be `git rebase` with no operand
+/// and line two an operand with no program, so the row would judge neither.
+///
+/// `joined_lines` is what keeps that whole, and its header records the case
+/// being caught in review rather than in the field. This is the landing lap's
+/// instance of it.
+#[test]
+fn a_continued_line_is_judged_as_the_one_command_it_is() {
+    denied_by_the_row("git rebase \\\n  origin/main");
+}
+
 // --- allowed: the one step the contract keeps by hand -------------------------
 
 /// THE ANTI-VACUITY HALF, and the reason `contains` exists on this row.
