@@ -257,6 +257,20 @@ reads `input.call.command`, `input.call.segments`, `input.call.programs`,
 `input.call["run-in-background"]`, `input.call["final-message"]`,
 `input.call.transcript` and `input.call["stop-repeat"]`, plus the `facts` object.
 
+**A segment's `construct` is the one field that is about the command's SHAPE
+rather than its text** (CLOUD-1381), and it is worth its own sentence because it
+exists to replace a habit. `null` at the top level; inside a control-flow node it
+is `{kind, role}` — `kind` one of `until`, `while`, `if`, `for`, `select`,
+`case`, `function`, and `role` either `condition` or `body`. Compare it as
+`segment.construct.kind == "until"`, never by hunting for the word: `run-shape`
+established "this call waits on a condition" by finding the literal `until` in
+some segment's `words`, which worked only because the boundary used to split on
+`;` and had no idea what a loop was. A parse has no such token — the keyword IS
+the node — so a predicate written that way now matches nothing and refuses
+nothing. Reading the node is also tighter: `for` is excluded because it is a
+different `kind` rather than because a word list omits it, and a `!` before the
+test lives inside the condition instead of needing to be filtered out.
+
 **The `facts` object is where the hook-surface FACTS live, and it is not
 `input.call`.** That distinction is the one this file's own reader gets wrong
 first: `input.call.*` is the envelope — what the harness handed over — and

@@ -51,6 +51,21 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "construct": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "role": {
+                    "type": "string"
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
               "input-redirect": {
                 "type": "boolean"
               },
