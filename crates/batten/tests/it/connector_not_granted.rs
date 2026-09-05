@@ -7,7 +7,7 @@
 //! inside a DOTFILE DIRECTORY — and if it does not, the module is silent on every
 //! tree, a dead gate and a repository that dropped the raw grants being
 //! byte-identical on the decision surface. That is the class
-//! `.claude/rules/policy-modules.md` records two live instances of, both found by
+//! `rules/policy-modules.md` records two live instances of, both found by
 //! adding this tier rather than by reading.
 //!
 //! **The proof is structural rather than an extra assertion.** A refusal can only

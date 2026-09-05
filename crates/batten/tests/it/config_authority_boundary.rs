@@ -1,7 +1,7 @@
 //! The boundary an ingested reading may not cross (CLOUD-332).
 //!
 //! **This tier is deliberately over the library rather than the compiled
-//! binary**, and the reason is `.claude/rules/rust.md`'s, gated by
+//! binary**, and the reason is `rules/rust.md`'s, gated by
 //! `tests/primitives.rs::every_permission_drop_asserts_its_own_premise`
 //! (CLOUD-249): where the environment cannot produce the failing condition, the
 //! decision is extracted and tested directly rather than asserted over a

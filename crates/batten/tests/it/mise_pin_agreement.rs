@@ -14,7 +14,7 @@
 //!
 //! A `with input as` block writes the shape it then reads, so it is green over a
 //! key the engine never fills — CLOUD-845's defect, and
-//! `.claude/rules/policy-modules.md` records both live instances of it being
+//! `rules/policy-modules.md` records both live instances of it being
 //! found by adding this tier rather than by reading. Every case below goes in
 //! through `batten check`, the same door `verify` and the hk gate come through,
 //! and reads the verdict a caller would read. The module's rules pin the
@@ -171,7 +171,7 @@ fn scoped(version: &str) -> String {
 }
 
 /// The exit contract, asserted by NAME rather than by integer
-/// (`.claude/rules/rust.md`): `2` is the policy verdict, `0` is clean. A case
+/// (`rules/rust.md`): `2` is the policy verdict, `0` is clean. A case
 /// asserting `1` here would be asserting "unreadable input" while meaning
 /// "violation", and it would pass — which is the carry-over CLOUD-909 exists to
 /// catch.
@@ -345,7 +345,7 @@ fn an_absent_server_manifest_is_nothing_to_check() {
 // finding rather than an omission.
 //
 // The module's could-not-look clause reads `input.tree.missing`, which
-// `.claude/rules/policy-modules.md` requires every module to write. MEASURED on
+// `rules/policy-modules.md` requires every module to write. MEASURED on
 // this tree with a throwaway probe module that raises on ANY entry in that set,
 // three inputs, all exit 0 with no finding and no diagnostic:
 //

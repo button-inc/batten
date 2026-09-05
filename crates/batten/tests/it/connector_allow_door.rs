@@ -3,7 +3,7 @@
 //! **The second tier, and the tier that finds this class.**
 //! `tests/connector-allow-guard.bats` runs the script directly and reads what it
 //! printed; that is the bash equivalent of a Rego module's `with input as`, and
-//! `.claude/rules/policy-modules.md` names its failure exactly — it fabricates
+//! `rules/policy-modules.md` names its failure exactly — it fabricates
 //! the shape the ENGINE may be unable to consume, so a guard can pass its own
 //! suite green while the door discards every verdict it produces.
 //!

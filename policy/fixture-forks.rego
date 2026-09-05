@@ -182,7 +182,7 @@ deny contains finding if {
 # input the predicate reads — `with input as` fabricates the very shape the
 # engine may be unable to produce — so `crates/batten/tests/it/fixture_forks.rs`
 # runs the same questions over the compiled binary against a real base ref. Both
-# tiers, per `.claude/rules/policy-modules.md`, and the second is not optional.
+# tiers, per `rules/policy-modules.md`, and the second is not optional.
 
 patterns := {"fixture-git-init": `\["init", "--?q`}
 

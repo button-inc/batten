@@ -125,7 +125,7 @@ pub struct Binding {
     /// of a chain.
     pub prev: Option<String>,
     /// Who articulated it — the git identity, never a model identity
-    /// (`.claude/rules/commits.md`).
+    /// (`rules/commits.md`).
     pub author: String,
 }
 
@@ -355,7 +355,7 @@ fn string(text: &str) -> String {
 /// Admits: <address>
 /// Admits-rule: protected-mutation
 /// Admits-verdict: path write refused
-/// Admits-subject: .claude/rules/toolchain.md
+/// Admits-subject: rules/toolchain.md
 /// Admits-head: <sha>
 /// Admits-epoch: <generation>
 /// Admits-author: <git identity>
@@ -562,7 +562,7 @@ fn lock_path(dir: &Path) -> PathBuf {
 
 /// Take the store's advisory lock for the duration of the returned handle.
 ///
-/// **`fs4`, for the reason `.claude/rules/rust.md` records for the capture lock
+/// **`fs4`, for the reason `rules/rust.md` records for the capture lock
 /// and no other**: an OS advisory lock is released by the kernel when its holder
 /// dies, so a process `SIGKILL`ed mid-write leaves the next reader a defined
 /// prefix rather than a lock nobody can release. No in-process primitive offers

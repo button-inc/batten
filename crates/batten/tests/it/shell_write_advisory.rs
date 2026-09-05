@@ -7,7 +7,7 @@
 //! reads: a fabricated envelope is exactly the shape the engine may be unable to
 //! produce, so a suite made only of them passes over a key nothing fills. Both
 //! live instances of that class in this repository were found by adding this
-//! tier, never by reading — `.claude/rules/policy-modules.md` records them.
+//! tier, never by reading — `rules/policy-modules.md` records them.
 //!
 //! It matters more than usual here. The module reads `input.call.writes`, and
 //! that key CHANGED MEANING under this row's feet: CLOUD-1133 found it carried

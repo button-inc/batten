@@ -179,7 +179,7 @@ fn tracking_ref(reference: &str) -> String {
 /// PUBLIC BECAUSE THE SECOND TIER HAS TO DRIVE IT. `replay` needs a real remote,
 /// so a compiled-binary case cannot reach this writer through it — and a case
 /// that fabricated the store instead would assert the very shape the engine may
-/// be unable to produce, which is the failure `.claude/rules/policy-modules.md`
+/// be unable to produce, which is the failure `rules/policy-modules.md`
 /// records for exactly this pair. `crates/batten/tests/it/land.rs` writes through
 /// here and reads back through `batten check`, so the writer and the vendored
 /// module meet over the engine rather than over a fixture somebody typed.

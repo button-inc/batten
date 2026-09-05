@@ -38,7 +38,7 @@ fn launcher(root: &Path) -> symbols::Launcher {
 /// THE ARGV A PINNED LAUNCHER PRODUCES, composed rather than assumed
 /// (CLOUD-1324).
 ///
-/// Extracted and tested directly for `.claude/rules/rust.md`'s reason: the
+/// Extracted and tested directly for `rules/rust.md`'s reason: the
 /// failing condition is which build of the analyser a spawn reaches, and a test
 /// cannot rearrange this process's `PATH` without `unsafe`. What CAN be created
 /// is the composition, and it is where the defect would live — a dropped prefix
@@ -226,7 +226,7 @@ fn no_site_carries_a_byte_of_what_the_analyser_read() {
 /// §7(d). FAIL-CLOSED, carried verbatim from `secrets.rs`: **clean is never
 /// inferred from a stream that failed to parse.**
 ///
-/// Over the PARSER rather than over a real analyser, for `.claude/rules/rust.md`'s
+/// Over the PARSER rather than over a real analyser, for `rules/rust.md`'s
 /// reason and `secrets.rs`'s: the failing condition is a stream shape, and making
 /// a real clippy emit a malformed diagnostic on demand is not something a fixture
 /// can do. Extracting the decision is what makes it testable at all.
@@ -273,7 +273,7 @@ fn an_unreadable_stream_is_could_not_look_and_never_an_empty_census() {
 /// the header asserted its own integration binary for its whole life after
 /// CLOUD-1210 removed it, and `RESULTS.md` priced these cases at 21.8% of the
 /// suite from a summed duration under lock contention. Both were read by a later
-/// author and acted on. `.claude/rules/scanning.md`'s own gate
+/// author and acted on. `rules/scanning.md`'s own gate
 /// (`scanner_taxonomy.rs`) is the shape borrowed here: assert the prose still
 /// says the thing, so deleting or reverting the correction reddens rather than
 /// going quiet.

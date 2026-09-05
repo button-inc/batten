@@ -242,7 +242,7 @@ took the count to zero.
 the next reader checks the flag rather than the count. It was caught by
 re-running the trace after the edit rather than by reading, which is the only
 thing that tells a working flag from an inert one — the same reason
-`.claude/rules/policy-modules.md` gives for confirming a channel with an
+`rules/policy-modules.md` gives for confirming a channel with an
 unconditional arm.
 
 ### What is not claimed

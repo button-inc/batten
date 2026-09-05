@@ -4,7 +4,7 @@
 //! The manifest's own `#[cfg(test)]` tier holds the two registry directions over
 //! the tables. These drive the ENGINE, which is what proves a manifest field is
 //! read at load rather than merely declared — the distinction
-//! `.claude/rules/policy-modules.md` opens on.
+//! `rules/policy-modules.md` opens on.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

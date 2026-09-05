@@ -111,7 +111,7 @@
 //! kernel when its holder dies, so a supervisor `SIGKILL`ed mid-write (the case
 //! the section below is about) leaves a reader a defined prefix instead of a lock
 //! nobody can release. [`capture::Spool`] carries the full argument; the crate's
-//! concurrency posture is `.claude/rules/rust.md`'s, and this line reads it
+//! concurrency posture is `rules/rust.md`'s, and this line reads it
 //! rather than re-deriving it (CLOUD-747).
 //!
 //! The threads in this module are OS threads for the same posture's reason: one
@@ -608,7 +608,7 @@ impl Drain {
     /// open spent the constant twice.
     ///
     /// The tee threads were never the problem and are untouched — one per pipe,
-    /// started at spawn time, already concurrent, and `.claude/rules/rust.md`'s
+    /// started at spawn time, already concurrent, and `rules/rust.md`'s
     /// concurrency table records that row as staying. What was serial is the
     /// DEADLINE ACCOUNTING, and this is where it stops being: `started` is taken
     /// once before the first stream, so the second gets whatever the first left.

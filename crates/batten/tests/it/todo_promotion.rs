@@ -18,7 +18,7 @@
 //! # This is the SECOND tier, and the whole file exists because the first cannot
 //! answer
 //!
-//! `.claude/rules/policy-modules.md` states the rule and this row is exactly its
+//! `rules/policy-modules.md` states the rule and this row is exactly its
 //! shape: a `with input as`-style unit case fabricates the receipt the engine may
 //! be unable to WRITE. Every case below therefore drives the compiled binary
 //! twice — once on the `PostToolUse` event that mints, once on the `PreToolUse`

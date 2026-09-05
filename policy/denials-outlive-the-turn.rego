@@ -5,7 +5,7 @@
 #
 #   THE PROGRAM THIS REPLACES reads the transcript to decide whether a finding
 #   reached a durable sink. It could not migrate, because
-#   `.claude/rules/policy-modules.md` is explicit that `input.call.transcript` is
+#   `rules/policy-modules.md` is explicit that `input.call.transcript` is
 #   the PATH and never a byte of the session — and the fact that would carry the
 #   rest did not exist. `input.facts.extracted` is that fact, and it is
 #   deliberately not the transcript.

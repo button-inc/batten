@@ -349,7 +349,7 @@ fn proxy_for(host: &str) -> Option<hyper::Uri> {
 /// and the honest way to answer that is to ask the code that will actually carry
 /// it. A second reader of `NO_PROXY` — in Rust or in Rego — is a second
 /// authority, and the two can disagree over a wildcard or a suffix neither
-/// author had in mind, which is the class `.claude/rules/policy-modules.md`
+/// author had in mind, which is the class `rules/policy-modules.md`
 /// records for the shell tokenizer one layer over.
 ///
 /// Pure: [`bypassed`] resolves loopback and the list by string, and

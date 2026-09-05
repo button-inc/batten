@@ -20,10 +20,10 @@
 //!   the third authority this whole gate exists to refuse.
 //!
 //! A module reaching for any of those and getting undefined denies nothing and
-//! loads clean, which is the class `.claude/rules/policy-modules.md` opens with.
+//! loads clean, which is the class `rules/policy-modules.md` opens with.
 //!
 //! **The anti-inversion mirror is the case this gate cannot ship without.**
-//! `.claude/rules/toolchain.md`'s own rule is that a value should NOT be
+//! `rules/toolchain.md`'s own rule is that a value should NOT be
 //! restated, so a gate pushing toward completeness would invert the discipline
 //! it enforces. `a_knob_named_without_a_value_is_untouched` is that assertion
 //! over the real boundary.
@@ -162,7 +162,7 @@ kind = "policy"
 scope = "tree"
 line_sources = [
   "*.md",
-  ".claude/rules/*.md",
+  "rules/*.md",
   ".serena/memories/*.md",
   ".serena/memories/**/*.md",
   "mise-tasks/*.sh",
@@ -298,7 +298,7 @@ fn tree(prose: &str) -> Vec<(&'static str, String)> {
         .into_iter()
         .map(|(path, body)| (path, body.to_owned()))
         .collect();
-    files.push((".claude/rules/toolchain.md", prose.to_owned()));
+    files.push(("rules/toolchain.md", prose.to_owned()));
     files
 }
 
@@ -346,7 +346,7 @@ fn a_restated_default_that_disagrees_is_reported_with_its_pointer() {
         "the finding names its rule\n{said}"
     );
     assert!(
-        said.contains(".claude/rules/toolchain.md:1"),
+        said.contains("rules/toolchain.md:1"),
         "pointer-only, and it must name the line to edit\n{said}"
     );
 }
@@ -740,7 +740,7 @@ fn an_arm_named_without_a_count_is_untouched() {
     );
 }
 
-/// The sentence `.claude/rules/policy-modules.md` closes its key lists with, and
+/// The sentence `rules/policy-modules.md` closes its key lists with, and
 /// the anchor `schema-key-undocumented` keys on.
 const CLAIM: &str = "`rules-drift` holds the lists above to those two files.\n";
 
@@ -846,7 +846,7 @@ fn the_two_anchors_this_gate_keys_on_are_still_one_line_in_the_committed_files()
     // pass over a repository whose anchors had already been reflowed away, which
     // is precisely the state that must be red.
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let toolchain = std::fs::read_to_string(root.join(".claude/rules/toolchain.md"))
+    let toolchain = std::fs::read_to_string(root.join("rules/toolchain.md"))
         .expect("the committed toolchain rules");
     assert!(
         toolchain
@@ -855,7 +855,7 @@ fn the_two_anchors_this_gate_keys_on_are_still_one_line_in_the_committed_files()
         "the arm-count claim must survive on one line or `restated-arm-count` \
          silently stops judging it"
     );
-    let modules = std::fs::read_to_string(root.join(".claude/rules/policy-modules.md"))
+    let modules = std::fs::read_to_string(root.join("rules/policy-modules.md"))
         .expect("the committed module rules");
     assert!(
         modules

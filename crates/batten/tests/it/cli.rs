@@ -10152,7 +10152,7 @@ fn generate_hooks_refuses_the_contract_only_harness() {
 // `--message` rather than `--range` on purpose: the finding then comes from the
 // message file this fixture writes, so it is deterministic. A range case would
 // judge the identity the sandbox's git happens to resolve, which is asserting a
-// premise the fixture never created (`.claude/rules/rust.md`, CLOUD-249).
+// premise the fixture never created (`rules/rust.md`, CLOUD-249).
 
 /// The six harness tokens, as the binary accepts them.
 ///
@@ -11146,7 +11146,7 @@ fn a_buffer_from_another_command_never_becomes_the_fact() {
 /// opaque row — satisfying the check and making a `rows == 0` predicate silently
 /// unsatisfiable. Every case in `tests/facts.rs` passed, because every one of them
 /// calls `rows_declared` directly and the function was never the thing at risk:
-/// the WIRING was, exactly as `.claude/rules/policy-modules.md` records for a
+/// the WIRING was, exactly as `rules/policy-modules.md` records for a
 /// module reading a key the engine never builds.
 ///
 /// So it goes through the binary, and it discriminates: under `rows_in` the prose
@@ -11632,7 +11632,7 @@ fn a_response_shape_the_decoder_cannot_read_is_recorded_as_such() {
 ///
 /// Driven through the state-root seam rather than through permission bits: this
 /// sandbox runs as root, so a mode-based fixture asserts its own premise before
-/// its conclusion (`.claude/rules/rust.md`, CLOUD-249). A state root that is a
+/// its conclusion (`rules/rust.md`, CLOUD-249). A state root that is a
 /// REGULAR FILE fails `create_dir_all` with `ENOTDIR` for root too.
 #[cfg(unix)]
 #[test]
@@ -11823,7 +11823,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
 
     // The discriminator. Stating the precedence rather than the command is what
     // the rule leaves room for — otherwise the row would forbid the very prose
-    // AGENTS.md rule 8 and `.claude/rules/commits.md` are made of.
+    // AGENTS.md rule 8 and `rules/commits.md` are made of.
     let _ = fs::remove_dir_all(
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("denied-identity-clean"),
     );

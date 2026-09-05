@@ -8,7 +8,7 @@ description: Choosing the instrument for a code question — when a symbol tool 
 A question about code has a shape, and the shape decides the tool. Getting this
 wrong is not a style problem: it returns a confidently wrong number.
 
-`.claude/rules/scanning.md` is the authority on which class of question takes
+`rules/scanning.md` is the authority on which class of question takes
 which instrument, and it is not restated here. This skill is the **dispositional**
 half — when to reach, and what each reach costs — for the tools themselves.
 
@@ -47,7 +47,7 @@ does not approximate the answer — it produces a different one.
 `grep` said 14, a syntax-only matcher said 11, name resolution said 9.
 `surface.rs` imports `clap::Command` bare, so the token names two different types
 here and no amount of scanning separates them. Details and the standing rule for
-that one case are in `.claude/rules/rust.md`.
+that one case are in `rules/rust.md`.
 
 ## What Serena does and does not see
 

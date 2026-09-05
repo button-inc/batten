@@ -152,7 +152,7 @@ latest[id] := stamp if {
 # a right answer's shape.
 #
 # NEITHER TIER CAUGHT IT, and that is the same defect one layer up.
-# `.claude/rules/policy-modules.md` records the class: a `with input as` block
+# `rules/policy-modules.md` records the class: a `with input as` block
 # writes the shape it then reads. Every case below spelled the column
 # `1,tests/a.rs:slug-one` — a comma the recorder has never written — so the
 # load-time tier passed over a parse the engine's own writer contradicts, and the
@@ -196,7 +196,7 @@ obligation contains entry if {
 # `mutate.rs`'s `OPENERS` owns the set; a copy of it in this file disagrees the
 # day a third opener is added — the runner would honour a declaration this gate
 # could not see, and `obligations-bound` would refuse an obligation whose row is
-# applied. That is the disagreement class `.claude/rules/policy-modules.md`
+# applied. That is the disagreement class `rules/policy-modules.md`
 # records for `hook::segments`, re-created inside the module that reads that
 # runner's output. `filed-over-own-diff` refused the attempt to file it instead
 # of fixing it, and was right to: a defect in the branch's own diff is what that

@@ -1,6 +1,6 @@
 //! The rules file's description of a lifecycle task matches what the task runs.
 //!
-//! `.claude/rules/toolchain.md` described `fmt` as "the formatters-only subset"
+//! `rules/toolchain.md` described `fmt` as "the formatters-only subset"
 //! for its whole life. `[tasks.fmt]` is `hk fix --all`, which drives every hk
 //! step — `test:bats` and `cargo-clippy` included — so reaching for it to
 //! reformat one file costs a full gate run. Measured 2026-08-28: roughly ten
@@ -35,7 +35,7 @@ use std::fs;
 use common::at_root;
 
 /// The rules file carrying the workshop's task descriptions.
-const RULES: &str = ".claude/rules/toolchain.md";
+const RULES: &str = "rules/toolchain.md";
 
 /// The one authority for what a task runs.
 const TASKS: &str = "mise.toml";

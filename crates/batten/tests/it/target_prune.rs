@@ -7,7 +7,7 @@
 //! are functions of their arguments and keeping them exercisable without a build
 //! is what makes them separable at all.
 //!
-//! What those cases cannot establish is the half `.claude/rules/policy-modules.md`
+//! What those cases cannot establish is the half `rules/policy-modules.md`
 //! names for its own surface and which applies verbatim here: that the ENGINE
 //! builds the input the predicate reads. The floors reach the decision through
 //! `batten.toml`'s `[prune]` table, the config loader, `resolve`, and a `-y`
@@ -506,7 +506,7 @@ fn an_observed_floor_names_the_file_that_holds_it() {
 ///
 /// `prune.rs`'s own cases call `LapJournal::read` directly, so they prove the
 /// predicate and not that the engine routes its answer anywhere. This is the tier
-/// `.claude/rules/policy-modules.md` argues for: the same bytes that refused this
+/// `rules/policy-modules.md` argues for: the same bytes that refused this
 /// container, through the real verb, asserting that the run says so AND that the
 /// number it discarded stopped binding.
 ///

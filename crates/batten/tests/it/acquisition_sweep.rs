@@ -15,7 +15,7 @@
 //! row nothing raises, a module publishing the wrong rule name, a `documents`
 //! array the engine never reads — every one of those makes `batten check` refuse
 //! or no-op, and every arm then times a broken tree and still draws a tidy curve.
-//! `.claude/rules/policy-modules.md` names that class: a dead gate and a clean
+//! `rules/policy-modules.md` names that class: a dead gate and a clean
 //! tree are byte-identical on the decision surface, and only a case over the
 //! compiled binary tells them apart.
 //!
@@ -85,7 +85,7 @@ fn the_generated_fixture_is_a_tree_the_engine_accepts() {
 /// `check` exits 0 over a tree with no rules at all, so the success above proves
 /// nothing on its own — a builder that wrote an empty `batten.toml` would satisfy
 /// it, and so would one whose `documents` array the engine never read. That
-/// second one is the defect `.claude/rules/policy-modules.md` records from the
+/// second one is the defect `rules/policy-modules.md` records from the
 /// field: OpenTelemetry's `weaver` printed `✔ No policy violation`, exit 0, over a
 /// knowingly-broken registry, because its module read a key the schema never
 /// built.

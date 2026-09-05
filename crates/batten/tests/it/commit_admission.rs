@@ -17,7 +17,7 @@
 //!
 //! # Over the compiled binary, and that is the whole discriminator
 //!
-//! `.claude/rules/policy-modules.md`'s second tier, one surface over: the unit
+//! `rules/policy-modules.md`'s second tier, one surface over: the unit
 //! tests in `commit.rs` pin the predicate over a `CommitWrite` a test constructed,
 //! and cannot see whether `git::writes_in_range` builds one. Both halves of this
 //! clause failed exactly there in development — a fixture whose protected glob

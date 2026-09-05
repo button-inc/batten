@@ -234,7 +234,7 @@ local gate = new Mapping<String, Step> {
     glob = List("hk.pkl", ".claude/hooks/git-hook.sh")
     check = "mise run record-verdicts"
   }
-  // `.claude/rules/rust.md` carries no module tree — it defers to mem:core as
+  // `rules/rust.md` carries no module tree — it defers to mem:core as
   // the authority kept current instead. Nothing checked that authority, so a
   // module could land with no row and leave the rule pointing at an incomplete
   // map; `severity.rs` (CLOUD-168) did exactly that, past a green gate.
@@ -244,7 +244,7 @@ local gate = new Mapping<String, Step> {
     glob = List("crates/*/src/*.rs", ".serena/memories/core.md")
     check = "mise run module-map-check"
   }
-  // `.claude/rules/toolchain.md` forbids restating a value three times over and
+  // `rules/toolchain.md` forbids restating a value three times over and
   // then restated four, two of which had drifted — `LAND_MAX_LAPS` quoted as 8
   // where `land` defaults to 2, and `contract-drift` described as running on an
   // event nothing wires (CLOUD-506). These files are read by an agent that then
@@ -1103,7 +1103,7 @@ fail_fast = false
 // --plan` included 58 steps of which 7 were fixers: `test:bats`, the cargo `test`
 // build, `batten-check`, `policy-test`, `sbom-check` and `token-bench-check` all
 // ran under `mise run fmt`, which two authorities — that task's own description
-// and `.claude/rules/toolchain.md` — call the formatters-only subset. A format
+// and `rules/toolchain.md` — call the formatters-only subset. A format
 // pass cost 931s, and because the installed git hook refuses to re-enter a gate
 // already running, it also blocked the next commit for that whole time.
 //

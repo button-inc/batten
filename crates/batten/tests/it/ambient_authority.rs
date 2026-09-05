@@ -34,7 +34,7 @@ use common::{Fixture, at_root, rust_sources, stderr};
 /// This list was a PROXY. The property it protects is CLOUD-745 item 5 and
 /// CLOUD-747 constraint 3 — *"`batten hook` must build no runtime"* — and a
 /// manifest scan could stand in for it only while tokio resolved to nothing.
-/// Both `clippy.toml` and `.claude/rules/rust.md` say so in terms: the runtime
+/// Both `clippy.toml` and `rules/rust.md` say so in terms: the runtime
 /// bans are *"inert today, because tokio resolves to nothing, and both go live
 /// the day an HTTP client arrives"*. CLOUD-745 is the row that brings that day,
 /// deliberately, after measuring that every alternative fails a link gate.
@@ -247,7 +247,7 @@ fn bound_four_the_policy_authority_is_a_protected_path() {
 // no comparable obligation.
 //
 // **The bound, stated rather than claimed.** This is a lexical sweep, so it sees
-// a DIRECT call and not an indirect one. `.claude/rules/scanning.md` records the
+// a DIRECT call and not an indirect one. `rules/scanning.md` records the
 // same shape for its own case, and a claim of coverage this does not have would
 // be that defect again. What closes it empirically is `board_receipts.rs`'s
 // `the_same_instant_yields_the_same_verdict`: an indirect clock read on the
@@ -279,7 +279,7 @@ const EVALUATION_PATH: &[&str] = &[
 ///
 /// Comments are excluded because these files DISCUSS the ban at length. A sweep
 /// counting those would report the documentation as the violation, which is the
-/// failure `.claude/rules/scanning.md` measures for the whole class:
+/// failure `rules/scanning.md` measures for the whole class:
 /// `ci-local-parity` and `pipefail-grep-check` landed in the wrong bucket because
 /// a string appeared in a comment.
 fn calls_the_clock(line: &str) -> bool {

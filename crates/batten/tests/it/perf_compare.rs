@@ -13,7 +13,7 @@
 //! `gate`.
 //!
 //! Driven over the compiled binary rather than with `with input as`, per
-//! `.claude/rules/policy-modules.md`: the exemption table reaches the predicate
+//! `rules/policy-modules.md`: the exemption table reaches the predicate
 //! through `[perf]` in the committed authority, and a fabricated table would
 //! prove the decision works over a shape the engine may be unable to build.
 //!

@@ -2,7 +2,7 @@
 //!
 //! # Ten board gates are CLI verbs because they have nowhere to read from
 //!
-//! `.claude/rules/toolchain.md` names the family outright: each is *"a pure
+//! `rules/toolchain.md` names the family outright: each is *"a pure
 //! function of stdin"* — payloads piped in by the caller, because no tracker
 //! credential exists. They are pure predicates, and every one of them would be a
 //! policy module if a fact channel existed. This is that channel.

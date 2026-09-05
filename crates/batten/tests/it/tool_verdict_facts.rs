@@ -47,7 +47,7 @@
 //! whether `hk.pkl` is valid, and neither has anything to say about a record.
 //! Carrying them into a Rust tier would mean asserting a property of a JVM
 //! native-image's network behaviour from a test that cannot deny egress, which is
-//! the "assert your own premise" shape `.claude/rules/rust.md` refuses.
+//! the "assert your own premise" shape `rules/rust.md` refuses.
 //!
 //! What DOES survive is the mechanism they were written to protect: `run_pkl`'s
 //! `--ca-certificates` selection is carried verbatim into

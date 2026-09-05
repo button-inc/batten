@@ -1440,7 +1440,7 @@ fn post_all(
 /// [`crate::fetch::Response`] is constructible by any caller, so
 /// `crates/batten/tests/it/mcp_dispatch.rs` builds a refusal envelope and asserts
 /// what this renders — no listener, no certificate, no network. That is the tier
-/// `.claude/rules/policy-modules.md` asks for over the ENGINE rather than over a
+/// `rules/policy-modules.md` asks for over the ENGINE rather than over a
 /// hand-made string, and it is reachable here because the seam is a pure function
 /// of a response the test can construct. Nothing else in the crate calls it
 /// through this path.
@@ -1773,7 +1773,7 @@ mod tests {
         // it to the wrong system entirely.
         let name = "BATTEN_TEST_CREDENTIAL_DEFINITELY_UNSET";
         // SAFETY-ADJACENT: assert the premise rather than assume it, per
-        // `.claude/rules/rust.md` — a test whose precondition was never created
+        // `rules/rust.md` — a test whose precondition was never created
         // asserts its own premise before its conclusion.
         assert!(
             std::env::var_os(name).is_none(),

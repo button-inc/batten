@@ -7,7 +7,7 @@
 //! the very shape the engine may be unable to produce, so a module reading a key
 //! nothing fills passes its own suite green and enforces nothing.
 //!
-//! `.claude/rules/policy-modules.md` records that class twice over — a module
+//! `rules/policy-modules.md` records that class twice over — a module
 //! copied from `policy.rs`'s own doc iterated a tree key the engine never built,
 //! and OpenTelemetry's `weaver` printed "No policy violation", exit 0, over a
 //! knowingly-broken registry because its module read a key the v1 schema does not
@@ -155,7 +155,7 @@ fn a_new_top_level_test_file_is_refused_over_the_compiled_engine() {
 }
 
 /// THE CASE THAT MAKES THE RULE SURVIVABLE, and the one an implementer would
-/// skip. `.claude/rules/toolchain.md` requires every retirement to land a
+/// skip. `rules/toolchain.md` requires every retirement to land a
 /// `crates/batten/tests/*.rs` tier, so a rule refusing every added test file
 /// would fire on the next correctly-executed retirement and the campaign would
 /// have to switch it off — the shape a gate does not survive. A tier landing as a

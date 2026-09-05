@@ -110,7 +110,7 @@ fn fixture(name: &str, workflow: &str, body: &str) -> PathBuf {
 }
 
 /// The exit contract, asserted by NAME rather than by integer
-/// (`.claude/rules/rust.md`): `2` is the policy verdict, `0` is clean. The shell
+/// (`rules/rust.md`): `2` is the policy verdict, `0` is clean. The shell
 /// tasks' inverted convention must not be carried in — a case asserting `1` here
 /// would be asserting "unreadable input" while meaning "violation", and it would
 /// pass.
@@ -255,7 +255,7 @@ fn a_read_only_lane_is_not_a_subject() {
 // `rule`, `path`, `severity`, `report` and `identity` — the verdict class is on
 // NEITHER. Two cases asserting the class appears in `check` output fail against a
 // correctly split module, which is a test asserting its own premise rather than
-// its conclusion (`.claude/rules/rust.md`, CLOUD-249). Measured, not reasoned:
+// its conclusion (`rules/rust.md`, CLOUD-249). Measured, not reasoned:
 // both were written that way first and both went red for that reason.
 //
 // What the engine DOES carry through is the registry, and its two directions are

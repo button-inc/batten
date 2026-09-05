@@ -333,7 +333,7 @@ fn decision_with_env(command: &str, key: &str, value: &str) -> String {
 ///
 /// # The docs said otherwise and the docs were wrong (found by this port)
 ///
-/// `.claude/rules/toolchain.md` claimed `BATTEN_GH_GUARD_BYPASS` was "the
+/// `rules/toolchain.md` claimed `BATTEN_GH_GUARD_BYPASS` was "the
 /// `bypass_env` these rows DECLARE rather than the engine's global hatch". It is
 /// not: `batten.toml:273` says in as many words that these four "WOULD DECLARE
 /// `bypass_env = "BATTEN_GH_GUARD_BYPASS"` AND DO NOT YET", deferred to

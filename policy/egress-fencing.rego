@@ -10,7 +10,7 @@
 # is the `[env]` block that prepends the GitHub hosts to `NO_PROXY` so mise's
 # release resolver can reach them at all.
 #
-# Overstating that would be the defect `.claude/rules/scanning.md` records for
+# Overstating that would be the defect `rules/scanning.md` records for
 # its own case: this cannot tell you the container is unproxied, and a §7 saying
 # otherwise would be worse than no gate.
 #

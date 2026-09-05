@@ -2557,7 +2557,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // once as a fourth check inside `diagnose()` and `verify` refused it: bare
     // `doctor` is asserted green over this repository by a compiled-binary case,
     // and an install that has not caught up with a rebuild made that case a
-    // function of install recency. `.claude/rules/toolchain.md` states the rule
+    // function of install recency. `rules/toolchain.md` states the rule
     // from `lock-check`'s post-mortem — a property of the commit belongs in the
     // gate, a property of the world belongs to its own caller — and §2's
     // `doctor <SUB>` is the shape that was already specified for it.
@@ -2575,7 +2575,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     // THE CONTAINER'S PROXY VALUES ARE A PROPERTY OF THE WORLD (CLOUD-1399), so
     // this sits beside `doctor mediator` for the same reason and not in the bare
-    // report: `.claude/rules/toolchain.md`'s rule from `lock-check`'s post-mortem
+    // report: `rules/toolchain.md`'s rule from `lock-check`'s post-mortem
     // — a property of the commit belongs in the gate, a property of the world
     // belongs to its own caller.
     //

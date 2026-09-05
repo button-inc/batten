@@ -440,7 +440,7 @@ pub struct Counts {
 ///
 /// **Decided here rather than in a module.** A per-module conjunct asking "did
 /// this host record turns" is a dead gate on every harness but the one its author
-/// tested, which is the failure `.claude/rules/policy-modules.md` documents.
+/// tested, which is the failure `rules/policy-modules.md` documents.
 ///
 /// The bound, stated rather than absorbed: this cannot distinguish a host that
 /// records no hook runs from a session that genuinely triggered none. It resolves

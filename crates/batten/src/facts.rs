@@ -1140,7 +1140,7 @@ pub const GIT_REF: Class = Class::new(Cost::Read, Surface::Check);
 /// declaration — `origin/main..HEAD` is one declaration and an unknown number of
 /// commits — and this peels an object per commit where [`GIT_RANGE`] reads a
 /// subject, so it multiplies an already-unbounded term by more than a constant.
-/// The ~5.4 µs-per-document figure in `.claude/rules/rust.md` was measured over
+/// The ~5.4 µs-per-document figure in `rules/rust.md` was measured over
 /// `documents` and does NOT cover this arm; measure it rather than quote it.
 /// That cost is why the declaration is its own column rather than riding
 /// `ranges`: a row wanting subjects must not be made to pay for it.
@@ -1188,7 +1188,7 @@ pub const GIT_RANGE: Class = Class::new(Cost::Read, Surface::Check);
 /// **Cost, stated rather than borrowed.** A tag glob over a long history is
 /// unbounded per declaration, the same shape [`GIT_RANGE`]'s own comment records,
 /// and a path query WALKS that history comparing two trees per commit. The
-/// ~5.4 µs-per-document figure in `.claude/rules/rust.md` was measured over
+/// ~5.4 µs-per-document figure in `rules/rust.md` was measured over
 /// `documents` and does not cover this arm; measure it rather than quote it.
 ///
 /// A shallow clone resolves the whole family as could-not-look rather than a
@@ -3465,7 +3465,7 @@ impl PromptArg {
 /// What joins a [`ToolQuery`]'s components into one record name.
 ///
 /// Stated once here rather than spelled at both the composing and the validating
-/// site, which is the two-authorities shape `.claude/rules/policy-modules.md`
+/// site, which is the two-authorities shape `rules/policy-modules.md`
 /// records for patterns, one layer down.
 pub const KEY_SEPARATOR: char = '@';
 

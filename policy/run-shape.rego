@@ -40,7 +40,7 @@
 # ENGINE has already done every one of those passes. Rewriting the first onto
 # segments is a change to a landed verdict rather than an addition, so it is not
 # folded in here — but no NEW predicate should copy the hand-rolled version, and
-# `.claude/rules/policy-modules.md` says so with the parser's own reasons.
+# `rules/policy-modules.md` says so with the parser's own reasons.
 # METADATA
 # description: |
 #   Bound to the mediated-call surface: this module is `scope = "mediated_call"`,

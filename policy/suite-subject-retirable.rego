@@ -275,7 +275,7 @@ violation contains {
 #
 # A DECLARED SOURCE THAT WOULD NOT READ is not a suite with nothing wrong. A
 # module iterating only `lines` reports green over a file it never opened, which
-# is the class `.claude/rules/policy-modules.md` records for this channel.
+# is the class `rules/policy-modules.md` records for this channel.
 violation contains {
 	"rule": "suite-subject-retirable",
 	"verdict": "suite parse unread",

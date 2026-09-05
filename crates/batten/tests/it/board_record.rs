@@ -4,7 +4,7 @@
 //!
 //! `tests/board-write-record.bats` drove a shell program directly. This drives
 //! `batten hook`, so it proves the ENGINE builds the record — the seam
-//! `.claude/rules/policy-modules.md` names as the one a `with input as` case
+//! `rules/policy-modules.md` names as the one a `with input as` case
 //! cannot reach, one layer down: a fabricated invocation passes over a boundary
 //! that may be unable to produce the shape at all.
 //!

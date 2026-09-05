@@ -9,7 +9,7 @@
 //! Its own suite could not see that: a `with input as` case fabricates the very
 //! shape the engine may be unable to produce.
 //!
-//! That is exactly the class `.claude/rules/policy-modules.md` names, and this
+//! That is exactly the class `rules/policy-modules.md` names, and this
 //! is the tier it names as the only one that can catch it. Every case below runs
 //! `batten hook --harness claude-code` against a real payload and reads what a
 //! host would read.

@@ -14,7 +14,7 @@
 //! measured making *every* mediated call pay four git subprocesses, including
 //! calls no receipt rule could gate. A git query is ~6.7ms against a 100ms
 //! budget — inside the noise of a process start — so a timing assertion cannot
-//! see it. `.claude/rules/rust.md` states the rule for this whole class.
+//! see it. `rules/rust.md` states the rule for this whole class.
 //!
 //! # The regression these cases bound
 //!

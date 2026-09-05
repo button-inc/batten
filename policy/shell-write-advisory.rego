@@ -40,7 +40,7 @@
 # `input.tree.lines[path]`. **`input.tree.*` does not exist on the mediated-call
 # surface** — a key from the wrong surface reads as undefined, the body never
 # holds, and the module would be a dead gate byte-identical to a clean tree
-# (`.claude/rules/policy-modules.md`'s recorded class). So this module can only
+# (`rules/policy-modules.md`'s recorded class). So this module can only
 # use the PATH-ONLY predicates, which are `governed_when_deleted`'s, and that set
 # is WIDER than the edit-time one: it includes a `mise-tasks/` file carrying
 # neither marker, which `shell-retirement` would not refuse an edit to.

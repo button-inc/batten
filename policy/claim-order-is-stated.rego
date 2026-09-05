@@ -23,7 +23,7 @@
 # WHAT IT CANNOT DECIDE, stated so no §7 overclaims it. Whether a given session
 # actually claimed before branching is not a property of the tree, and a gate
 # resolving to that would be the model verdict rule 3 forbids. This is the same
-# division `.claude/rules/scanning.md` records for its own case: the prose carries
+# division `rules/scanning.md` records for its own case: the prose carries
 # the position, and the gate keeps the prose from evaporating.
 #
 # TWO FILES BECAUSE A BUDGET FORCED IT, and the split is load-bearing rather than
@@ -54,11 +54,11 @@ rules contains "claim-order-is-stated"
 # the one judged, because the symlink is not what the budget counts.
 index_path := "AGENTS.md"
 
-rules_path := ".claude/rules/toolchain.md"
+rules_path := "rules/toolchain.md"
 
 # A file this reader could not open is could-not-look, and is reported as such by
 # the arm at the bottom rather than passing silently — the `missing` clause
-# `.claude/rules/policy-modules.md` requires, without which a module reports green
+# `rules/policy-modules.md` requires, without which a module reports green
 # over a file it never read.
 line(path) := input.tree.lines[path]
 
@@ -147,7 +147,7 @@ violation contains {
 sound := {"tree": {
 	"lines": {
 		"AGENTS.md": ["pulled — branch first, then claim ONCE (`mise run claim-check`)"],
-		".claude/rules/toolchain.md": ["- Claim, then branch.", "- Claim twice."],
+		"rules/toolchain.md": ["- Claim, then branch.", "- Claim twice."],
 	},
 	"missing": {},
 }}
@@ -177,7 +177,7 @@ test_an_index_that_does_not_ask_for_one_claim_is_refused if {
 }
 
 test_a_rules_file_missing_a_failure_direction_is_refused if {
-	found := violation with input as swap(".claude/rules/toolchain.md", ["- Claim, then branch."])
+	found := violation with input as swap("rules/toolchain.md", ["- Claim, then branch."])
 	some v in found
 	v.verdict == "claim declare dropped"
 }
@@ -186,9 +186,9 @@ test_a_rules_file_missing_a_failure_direction_is_refused if {
 # first: a reader told "the claim order is gone" needs to know which of the two
 # to open.
 test_the_finding_names_the_file_that_drifted if {
-	found := violation with input as swap(".claude/rules/toolchain.md", ["- Claim, then branch."])
+	found := violation with input as swap("rules/toolchain.md", ["- Claim, then branch."])
 	paths := {sub.path | some v in found; some sub in v.subjects}
-	paths == {".claude/rules/toolchain.md"}
+	paths == {"rules/toolchain.md"}
 }
 
 test_a_source_that_would_not_parse_is_reported if {

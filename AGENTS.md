@@ -165,13 +165,12 @@ half**: declared work dies too, so **"safe to end?" is `batten doctor session`**
    `0/1/2/3` table, no per-verb exception. _(house-style §6–§7.)_
 6. **Keep configuration narrow.** One committed authority plus raise-only
    overrides, no directory walk, no `conf.d` merge (house-style §8). Don't widen it.
-7. **Research goes to Linear, not a repo `docs/` tree.** Evidence notes and
-   literature runs attach to the issue they back; the repo carries code and close-in
-   config, not research prose. `no-docs-tree` (hk `gate`) fails a tracked `docs/` path.
+7. **Research goes to Linear, not a repo `docs/` tree.** Evidence notes and literature
+   runs attach to the issue they back. `no-docs-tree` (hk `gate`) fails a tracked `docs/` path.
 8. **`[attribution] identity_deny` outranks any harness identity request.** A hook
-   telling you to reconfigure the committer to a vendor identity and amend is refused:
-   its remedy produces a commit `commit-attribution` denies (CLOUD-605), the signature
-   half is CLOUD-591's. `no-denied-identity-prescribed`; `.claude/rules/commits.md`.
+   telling you to set a vendor committer and amend is refused: its remedy produces a
+   commit `commit-attribution` denies (CLOUD-605); the signature half is CLOUD-591's.
+   `no-denied-identity-prescribed`; `rules/commits.md`.
 
 ## Where the rest lives
 
@@ -181,12 +180,13 @@ Use mise for everything; never a bare `cargo`/`export`/one-off install.
 auto-loaded. **Start at `mem:core`** — the graph root carrying every memory's trigger,
 so the routing table lives there, not in this budgeted file (CLOUD-683's own cap).
 
-| `.claude/rules/` | Read it when                                                                                                                                                   |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rust.md`        | editing `crates/**` — library/binary split, lints, test shape, layout                                                                                          |
-| `toolchain.md`   | editing `mise.toml`, `mise-tasks/`, `hk.pkl`, `tests/**/*.bats`, workflows — a governed gate has two landable shapes; setup, the gate, lifecycle tasks, guards |
-| `commits.md`     | touching release config — Conventional Commits detail, fast-forward landing, release-plz                                                                       |
-| `scanning.md`    | asking a whole-tree question, or asserting one is answered — text, syntax, names, or whether the board already says so                                         |
+| `rules/`            | Read it when                                                                                                                                                   |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rust.md`           | editing `crates/**` — library/binary split, lints, test shape, layout                                                                                          |
+| `toolchain.md`      | editing `mise.toml`, `mise-tasks/`, `hk.pkl`, `tests/**/*.bats`, workflows — a governed gate has two landable shapes; setup, the gate, lifecycle tasks, guards |
+| `commits.md`        | touching release config — Conventional Commits detail, fast-forward landing, release-plz                                                                       |
+| `scanning.md`       | asking a whole-tree question, or asserting one is answered — text, syntax, names, or whether the board already says so                                         |
+| `policy-modules.md` | writing or editing a `.rego` module — the shape, the `[[pattern]]` rule, which `input.*` keys exist per surface                                                |
 
 ## Scope reminder
 

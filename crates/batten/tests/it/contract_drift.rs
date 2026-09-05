@@ -433,7 +433,7 @@ fn each_wiring_names_the_event_it_was_called_on() {
 /// The mediation hatch does not silence the advisory, and that is deliberate.
 ///
 /// The bats predecessor had `BATTEN_CONTRACT_DRIFT_BYPASS`, and that variable is
-/// gone. `.claude/rules/toolchain.md` said the mediated path "takes the engine's
+/// gone. `rules/toolchain.md` said the mediated path "takes the engine's
 /// own hatch" in its place; measured, it does not — `collect_batch_advice` runs
 /// before the bypass reaches anything, and `report_contract_drift` never consults
 /// it. This test pins the behaviour that actually holds, and the rule file is

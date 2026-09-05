@@ -9,7 +9,7 @@
 //! run inside a bundle that has already loaded, so a suite made of them is green
 //! over exactly the modules the loader would have refused.
 //!
-//! `.claude/rules/policy-modules.md` records both live instances of that class
+//! `rules/policy-modules.md` records both live instances of that class
 //! being found by adding this tier rather than by reading, which is why it is
 //! this file and not a fixture module that carries the assertions.
 //!
@@ -126,7 +126,7 @@ fn a_conforming_module_loads_and_denies_with_its_token_and_pointer() {
 /// **The migration's own gate.** A module still speaking the old ABI would
 /// otherwise load clean, evaluate clean and report nothing, because the decoder
 /// no longer reads `msg` — a dead gate and a clean tree being byte-identical is
-/// the defect `.claude/rules/policy-modules.md` opens on.
+/// the defect `rules/policy-modules.md` opens on.
 #[test]
 fn a_module_still_binding_msg_is_refused_and_the_refusal_names_the_key() {
     let source = CONFORMING.replace(
@@ -533,7 +533,7 @@ fn a_command_route_naming_a_defined_task_is_clean_over_the_engine() {
 ///
 /// # Why a source scan rather than name resolution
 ///
-/// `.claude/rules/scanning.md` routes "which type does this name resolve to" to
+/// `rules/scanning.md` routes "which type does this name resolve to" to
 /// rust-analyzer, and `Native::Foo` is not that question — it is "does this
 /// token appear in a raising position", which is a text question about a closed,
 /// unambiguous spelling. There is exactly one `Native` type in this crate and no

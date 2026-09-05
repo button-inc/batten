@@ -12,7 +12,7 @@
 //! `recorder_records` used to read **only** the declared ones — so a store
 //! written by a verb was invisible no matter what any module asked for. A
 //! `with input as` case would have passed over that for the same reason it
-//! passes over any key nothing fills, which is `.claude/rules/policy-modules.md`'s
+//! passes over any key nothing fills, which is `rules/policy-modules.md`'s
 //! whole warning about the two tiers.
 //!
 //! So these cases drive the real writer where they can, and `run_static` over a
