@@ -477,8 +477,16 @@ pub fn alive(git_dir: &Path, options: Alive<'_>) -> Reading {
 
     let mut lines = Vec::new();
     for file in files {
+        // **AN ENTRY THAT WILL NOT READ IS COULD-NOT-LOOK, NOT AN ABSENCE**
+        // (review of #848). This discarded the error and skipped, so a registry
+        // whose entries were all unreadable — a different uid, a restrictive mode,
+        // invalid UTF-8 — fell through to the empty check below and answered
+        // "nothing registered" at exit 0. That is the exact conflation this
+        // module's header says it exists to remove, and it is the dangerous
+        // direction: a successor reads it as a clear field and starts a second
+        // landing.
         let Ok(body) = std::fs::read_to_string(&file) else {
-            continue;
+            return Reading::Unreadable(file.clone());
         };
         let entry = Entry::parse(&body);
         if !entry.is_complete() {

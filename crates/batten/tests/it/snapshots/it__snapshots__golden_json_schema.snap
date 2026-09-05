@@ -1154,6 +1154,33 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
+          "path": "land fast-forward",
+          "id": "land.fast-forward",
+          "about": "Ask this head's pull request to fast-forward, and read the answer that request got",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "land lap",
+          "id": "land.lap",
+          "about": "Drive the whole lap and lap again on any refusal a rebase would clear",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "reference",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The remote reference to replay onto"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "land push",
           "id": "land.push",
           "about": "Push this branch to its own ref, under receive-pack's compare-and-swap",
@@ -1298,12 +1325,64 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "lease carries",
+          "id": "lease.carries",
+          "about": "Gate: this head carries the landing mechanism trunk has, so it can be serialised",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "head",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The head commit being judged"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "lease check",
           "id": "lease.check",
           "about": "Gate: the lease is free or a live, well-formed hold — never a wedge and never garbage",
           "effect": "read",
           "data_channel": false,
           "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "lease guard",
+          "id": "lease.guard",
+          "about": "The runner's step-0 guard: may this branch spend a matrix right now?",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "branch",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The branch being asked about"
+            },
+            {
+              "name": "head",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The head commit being judged"
+            },
+            {
+              "name": "run",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The run to cancel on a stop"
+            }
+          ],
           "subcommands": []
         },
         {
@@ -2122,6 +2201,15 @@ expression: stdout_of(&output)
             }
           ],
           "subcommands": []
+        },
+        {
+          "path": "receipt verified",
+          "id": "receipt.verified",
+          "about": "Is HEAD verified — every declared check's receipt valid against this commit?",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
         }
       ]
     },
@@ -2868,6 +2956,10 @@ expression: stdout_of(&output)
       "path": "lease authorises"
     },
     {
+      "id": "lease.carries",
+      "path": "lease carries"
+    },
+    {
       "id": "lease.check",
       "path": "lease check"
     },
@@ -2942,6 +3034,10 @@ expression: stdout_of(&output)
     {
       "id": "receipt.status",
       "path": "receipt status"
+    },
+    {
+      "id": "receipt.verified",
+      "path": "receipt verified"
     },
     {
       "id": "show",

@@ -384,6 +384,61 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   than guessed: it runs two programs the caller named. "Not yet" never reaches
   the caller — that is the state the loop exists to sit in, and it is the whole
   difference between this verb and `checks green`.
+- `speculation.rs` — betting on the base that is about to exist (CLOUD-748,
+  CLOUD-862, CLOUD-369). A waiter behind the lease holder linearizes onto the
+  holder's head NOW rather than rebasing after it lands. **A CONSERVING PORT
+  CARRYING ONE KNOWN DEFECT:** `settle` has three outcomes — landed, pending,
+  lost — and no arm for a POISONED base, one whose tree will never pass `verify`.
+  That reads as `pending` every lap and the waiter re-bets on the same holder,
+  stalling every waiter behind it. CLOUD-1306 owns the fix and it is deliberately
+  not made here, because a port that improved behaviour could not be shown to
+  conserve it; `a_poisoned_base_is_conserved_as_pending_because_cloud_1306_owns_the_fix`
+  pins the ported reading so the fix cannot arrive by accident. The settle table
+  is a PURE function of readings the caller already took, which is what makes
+  "does this do what the bash did" answerable without a remote. It opens NO
+  backend of its own: the one ancestry read it needs is `gitwrite::carries`,
+  because `gix_is_confined_to_the_git_modules` refuses a fourth module reaching
+  `gix` and caught this file's first draft doing exactly that. Every failure is
+  a fallback except one: `Live::decide` fails CLOSED, because failing open on an
+  unreadable lease would make a network blip the thing that lands somebody else's
+  work.
+- `main_watch.rs` — the STALENESS half of a lap's wait: has the trunk moved past
+  the base this branch was replayed onto (CLOUD-390, ported off
+  `mise-tasks/main-watch.sh`)? A CONDITIONAL forge read of
+  `git/ref/heads/<trunk>` — the smallest body that answers the question —
+  carrying the previous `ETag` as `If-None-Match` and honouring
+  `X-Poll-Interval` as a floor. **The floor comparison is NUMERIC**, which is
+  the whole of CLOUD-390: the predecessor compared with `-gt`, integer-only, so
+  a fractional interval read as "no floor asked for", and the first Rust port
+  reproduced it exactly by typing the field `Option<u64>`. Beside `pr_watch.rs`
+  rather than inside it because the two ask about different objects — a head's
+  check runs versus a ref — while sharing its response parser rather than
+  growing a second one. **An earlier revision of `land::wait` answered this arm
+  with `lease::advertise` instead and argued the conditional poll was a
+  regression; it was not.** Conditionality buys the PACE, not the meter — a ref
+  advertisement has no `304`, so it must be slow or wasteful — a git
+  advertisement carries no server-directed backoff at all, and the green arm's
+  `ETag` conditionality is over check-runs and is not shared with this arm.
+- `fast_forward.rs` — asking the bot to land a head, and reading the answer keyed
+  to THAT request (CLOUD-1338). Beside `pr_watch.rs` rather than inside it: both
+  spawn the forge client and both are read by a lap, but `pr_watch` asks whether a
+  SHA is green and this asks whether the bot answered US. **The join key is the
+  whole correctness argument**: an `issue_comment` run attaches to the DEFAULT
+  BRANCH's tip, so `head_branch` and `head_sha` name trunk on every one of them and
+  no field records which PR asked — measured at ~400 runs in thirty minutes, 243 of
+  them refusals, which makes finding a stranger's inside any lap's window a
+  near-certainty. The comment id comes back from the POST that created it, the
+  workflow mints the same string as its `run-name`, and `display_title` carries it.
+  **Two fences, and the client-side one is the correctness half**: `created>=since`
+  bounds the page server-side so paging terminates, but a query parameter is an
+  optimisation and an endpoint ignoring it would drop the fence silently, so the
+  `created_at >= since` comparison is what holds the line — and what stops an
+  EARLIER lap of this same PR being re-read as this one's verdict. Reaches
+  `pr_watch` for `parse_response` alone, the sanctioned edge onto a parser rather
+  than onto a decider. The conclusion vocabulary is closed and only `failure` is a
+  verdict about the branch; `cancelled`, `timed_out`, `startup_failure` and `stale`
+  are the bot not deciding, and none of them is ever read as "main moved" — that is
+  a fact about a ref and only the staleness arm may assert it.
 - `ci.rs` — the merge contract derived from the host ruleset (CLOUD-54). The HOST
   is the authority; `[ci]` in `batten.toml` is a projection a gate polices, never
   the reverse. Committed rather than fetched per run because a gate that can fail
@@ -754,6 +809,51 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   asked. A root commit or remote URL is identity-bearing and auto-adopts; a
   matching common dir ALONE is not (a path can be reused by a stranger) and
   yields `Candidate`, bound only by `batten state adopt`.
+- `pipeline.rs` — the landing composition as a DECLARED list, with a
+  compensation per step (CLOUD-1338, PR #848's review). Replaces the driver's
+  array literal and its compile-time step-to-function match, which a consumer
+  could not add to, reorder or re-implement — so the successor still described
+  the "Button-specific landing policy a consumer inherits and cannot tailor"
+  that the whole retirement exists to falsify. `StepRow` carries the step, an
+  `effectful` flag, a `compensate` and an optional `precheck`; that last is
+  where the driver's `step == Verify` staleness exception goes, which had
+  leaked into the loop sixteen lines below a comment promising policy "cannot
+  land in four `if`s out of five". **A COMPENSATION IS A DURABLE EXTERNAL
+  WRITE**: a saga stack unwound in-process does not run when the container is
+  killed (`land.sh:353`, "a trap runs on the container kill too"), so every
+  `Compensation` arm names a forge or ref write and `is_durable` asks a later
+  arm by compiler rather than by review. It is deliberately NOT a `Progress`
+  variant — `Progress` says whether the lap continues, while whether an effect
+  needs undoing is answered by which steps were ENTERED, and that applies to
+  `Lap` as much as `Stop`: a lap that readies, spends and then laps has a live
+  matrix for a SHA about to be replaced. `unwind` walks the entered set newest
+  first, because releasing the lease before re-drafting hands the next branch a
+  slot while this one still spends. `validate` refuses three shapes at LOAD —
+  an effectful step before the commit point with no undo, a step positioned
+  after it, and a composition with no commit point at all — and returns every
+  finding rather than the first. `Step::FastForward` is the commit point and
+  needs no undo, which is what makes everything before it need one.
+  **THE PRODUCTION ENTRY POINTS ARE NAMED, because a composition nothing calls
+  is a test fixture** (PR #848's review): `run_land_lap` walks the declared rows
+  rather than an array literal, dispatches `Precheck::BetSettled` through
+  `settle_the_bet`/`place_the_bet`, and every path that leaves the lap early
+  goes through `unwind_lap` — the one caller of `Pipeline::unwind`, so a step
+  that entered cannot exit uncompensated down a branch nobody wired.
+- `rest.rs` — the forge's REST tier, IN PROCESS, over `fetch.rs` (CLOUD-1338).
+  One client, one credential reader (`GH_TOKEN` then `GITHUB_TOKEN`, the forge
+  CLI's own precedence), and a typed `Answer` carrying the status, the `ETag`
+  and the `X-Poll-Interval` floor as an `f64` — so no caller re-parses a status
+  line out of `gh api -i` bytes. **It exists because four spawns claimed a
+  client that was already in the crate**: each carried
+  `#[expect(clippy::disallowed_types)]` reading _"this crate carries no HTTP
+  client that resolves a forge credential"_, and one of the four was written in
+  `lease.rs` eighty lines from the credential reader promoted here. `main_watch`,
+  `fast_forward` and `lease`'s cancel and staleness reads go through it, and
+  `spawn-adapters` lost the two placements those spawns had needed. Named `rest`
+  rather than `forge` because `forge.rs` is a different subject — a verdict
+  RECORD read off disk — and drafting this under that name overwrote it. What is
+  NOT here is git smart-HTTP: `lease.rs` speaks that directly, and folding the
+  two would put a ref-advertisement parser behind a REST helper.
 - `fetch.rs` — one HTTPS request, in process (CLOUD-745). The client is **hyper
   plus hyper-rustls, not `reqwest`**, and that substitution is a measurement
   rather than a preference: every reqwest configuration hits one of the two

@@ -102,6 +102,15 @@
 #MUTANT case-half-deleted|s@body in removed@true@|a_half_deleted_bats_case_is_still_refused
 #MUTANT case-binding-survives|s@binding in removed@true@|a_bats_case_spending_a_surviving_binding_is_refused
 #MUTANT case-names-nothing-retired|s@mentions_retired(path, body, gone)@true@|a_bats_case_testing_a_live_path_is_still_refused
+# Arm 2b's anchor. Dropping it turns the bats spelling into a licence to repoint
+# a binding that names ANY directory — including somebody else's tree, which no
+# retirement here owns — and that is the whole of what keeps a widened spelling
+# from becoming a widened shape.
+#MUTANT bats-directory-unanchored|s@regex.match(data.batten.patterns\["bats-suite-directory"\], head)@true@|a_bats_binding_outside_the_suite_directory_is_refused
+# And the going-away conjunct on the removal side. Dropping it admits a line
+# spending a binding that SURVIVES, which is the loosening `case_earns_removal`
+# warns about arriving one arm over.
+#MUTANT bats-binding-survives|s@assigned_name(binding) == variable@true@|a_bats_case_spending_a_surviving_binding_is_refused
 #
 #MUTANT-SUITE crates/batten/tests/it/shell_retirement.rs
 
@@ -391,6 +400,43 @@ admitted_removal(path, line, _) if {
 # ADDED under the clause below, and a stray identical line removed elsewhere
 # breaks the case it was taken from.
 admitted_removal(path, line, removed) if line_of_a_retired_case(path, line, removed)
+
+# OR IT SPENDS A BATS BINDING THAT IS GOING AWAY IN THE SAME DELTA.
+#
+# The going-away conjunct is the whole of what keeps this from being the
+# loosening `case_earns_removal` warns about: a variable that SURVIVES buys
+# nothing, exactly as it buys nothing there. Without it, admitting the bats
+# spelling anywhere on the removal side turns
+# `a_bats_case_spending_a_surviving_binding_is_refused` green — measured, on the
+# first draft of this arm.
+#
+# It is a sibling of `case_earns_removal`'s second arm rather than a copy: that
+# one decides whether a whole `@test` block earned its removal, this one decides
+# a single line, which is what a suite REPOINTING its spend needs — the case
+# survives and only the call moves.
+admitted_removal(path, line, removed) if {
+	some gone in delta.deleted
+	some variable in bats_retired_path_vars(path, gone)
+	some spelling in {concat("", ["$", variable]), concat("", ["${", variable, "}"])}
+	contains(line, spelling)
+
+	# THE BINDING MUST BE *THE* BINDING, not merely one sharing the name.
+	#
+	# This conjunct was `assigned_name(binding) == variable` alone, and
+	# `bats_retired_path_vars` derives the variable from a binding it finds in the
+	# BASE — so the removed assignment that satisfied it did not have to be that
+	# one. A suite keeping `GATE="$BATS_TEST_DIRNAME/../mise-tasks/old-gate.sh"`
+	# while removing an unrelated `GATE=` line and its spend cleared every removal
+	# check with the retired binding still standing, and the retirement read as
+	# complete over a suite that still calls the deleted program.
+	#
+	# `mentions_retired` is the same predicate the first arm decides a removed
+	# line by, so the join uses one authority on "does this line name the path
+	# that is going away" rather than a second spelling of it.
+	some binding in removed
+	assigned_name(binding) == variable
+	mentions_retired(path, binding, gone)
+}
 
 # An added line is admitted three ways, and all three are shapes rather than
 # judgements.
@@ -690,6 +736,54 @@ script_dir_vars_of[path] := names if {
 # spent as `"$lint"` a hundred lines later. Without this the ARITY of the call
 # cannot change, and every real repointing onto a verb changes it — a path is one
 # word and `mise run x` is three.
+
+# THE BATS SPELLING OF THE SAME BINDING, AND IT IS A SEPARATE RULE ON PURPOSE —
+# feeding it into `is_retired_reference_by_text` is a measured defect, not a
+# tidier factoring.
+#
+# A `.bats` suite cannot write `$(dirname "$0")` at all: `$0` is the bats runner,
+# so bats hands a suite its own directory as `$BATS_TEST_DIRNAME`. That one
+# spelling is why a suite which BINDS a retired program in `setup()` and spends
+# `"$VAR"` in a case had no landable edit in either direction — the spend line
+# carries no path, no naming form and no variable any clause here could resolve.
+# Measured on `tests/tree-clean.bats` while retiring `mise-tasks/verified.sh`: a
+# SURVIVING suite broken by a retirement the campaign itself mandated.
+#
+# WHY NOT `is_retired_reference_by_text`. `case_earns_removal` already records
+# that loosening that function would loosen it "where nothing is going away and
+# the byte-check is the whole safety property" — and adding the spelling there
+# reaches `retired_path_vars`, hence `mentions_retired`, hence `admitted_removal`
+# arm 1, which admits a removed line spending the variable WHETHER OR NOT the
+# binding goes with it. Measured: doing exactly that turned
+# `a_bats_case_spending_a_surviving_binding_is_refused` green, so the arm the
+# module keeps as its own anti-vacuity mirror stopped firing. The comment was
+# right; the correction is to reach the two sides that need it and no third.
+#
+# KEYED BY THE PAIR, for the reason the rule above is: this iterates one path's
+# whole `base-lines` per call, and its two consumers ask per ADDED span and per
+# REMOVED line — so uncached it carries the same O(L²) that rule exists to
+# remove. Same domain, so it answers wherever a call site can ask and nowhere
+# else.
+#
+# ANCHORED AT BOTH ENDS for the reason `shell-script-directory` is, and bounded
+# to path segments: no command substitution, no quote, no space, so what this
+# resolves can only ever be a literal path rooted at the suite's own directory.
+bats_retired_path_vars(path, gone) := bats_retired_path_vars_of[[path, gone]]
+
+bats_retired_path_vars_of[[path, gone]] := names if {
+	some path, lines in delta["base-lines"]
+	some gone in delta.deleted
+	tail := concat("", ["/", basename(gone)])
+	names := {variable |
+		some line in lines
+		variable := assigned_name(line)
+		some form in spellings(assigned_value(line))
+		endswith(form, tail)
+		head := substring(form, 0, count(form) - count(tail))
+		regex.match(data.batten.patterns["bats-suite-directory"], head)
+	}
+}
+
 #
 # KEYED BY THE PAIR, for the reason the rule above gives at length: this is the
 # inner half of the O(L²), because `is_retired_reference_by_text`'s third arm
@@ -746,6 +840,14 @@ is_retired_reference(path, span, gone) if {
 is_retired_reference(path, span, gone) if {
 	some form in spellings(span)
 	some variable in retired_path_vars(path, gone)
+	form in {concat("", ["$", variable]), concat("", ["${", variable, "}"])}
+}
+
+# The same arm over the bats spelling. Separate because the function is; see
+# `bats_retired_path_vars` for why it is not folded into the one above.
+is_retired_reference(path, span, gone) if {
+	some form in spellings(span)
+	some variable in bats_retired_path_vars(path, gone)
 	form in {concat("", ["$", variable]), concat("", ["${", variable, "}"])}
 }
 
@@ -2245,6 +2347,54 @@ test_a_declaration_losing_a_variable_this_delta_unbinds_is_admitted if {
 	}}
 }
 
+# THE DUPLICATE-NAME CASE, and it is what the join above exists for. The suite
+# KEEPS its `GATE=` binding of the retired path and removes an unrelated `GATE=`
+# line plus a spend. Every removal check passed on the name alone, while the
+# binding that actually calls the deleted program stayed exactly where it was.
+test_a_spend_paired_with_an_unrelated_removed_binding_is_refused if {
+	count(violation) > 0 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["tests/wiring.bats"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"tests/wiring.bats": [
+				"#!/usr/bin/env bats",
+				"\tGATE=\"$BATS_TEST_DIRNAME/../mise-tasks/old-gate.sh\"",
+				"\tGATE=\"$BATS_TEST_DIRNAME/../mise-tasks/other.sh\"",
+				"\trun \"$GATE\"",
+			]},
+		},
+		"lines": {
+			# The retired binding SURVIVES; only the unrelated one and the spend go.
+			"tests/wiring.bats": [
+				"#!/usr/bin/env bats",
+				"\tGATE=\"$BATS_TEST_DIRNAME/../mise-tasks/old-gate.sh\"",
+			],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:mise+run+old-gate"],
+		},
+	}}
+}
+
+# THE SAME SHAPE AS A `.bats` SUITE WRITES IT (arm 2b). Identical to the case
+# above in every respect but the spelling of the directory: a suite cannot write
+# `$(dirname "$0")`, because `$0` is the bats runner. Measured on
+# `tests/tree-clean.bats`, which binds `VERIFIED` in `setup()` and spends
+# `"$VERIFIED"` in its acceptance case.
+test_a_bats_suite_repointed_at_a_declared_invocation_is_admitted if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["tests/wiring.bats"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"tests/wiring.bats": ["#!/usr/bin/env bats", "\tGATE=\"$BATS_TEST_DIRNAME/../mise-tasks/old-gate.sh\"", "\trun \"$GATE\""]},
+		},
+		"lines": {
+			"tests/wiring.bats": ["#!/usr/bin/env bats", "\trun mise run old-gate"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:mise+run+old-gate"],
+		},
+	}}
+}
+
 # ANTI-VACUITY FOR THE ARM ABOVE, and it discriminates on the conjunct that does
 # the work rather than on one another conjunct already excludes: `helper` is a
 # variable this file declares and this delta does NOT unbind, so
@@ -2264,6 +2414,27 @@ test_a_declaration_losing_an_unrelated_variable_is_refused if {
 		},
 	}}
 	v.verdict == "shell edit refused"
+}
+
+# ANTI-VACUITY FOR THE BATS SPELLING: the head must be the SUITE'S OWN directory.
+# Without the anchored pattern the arm resolves a variable bound to anywhere at
+# all — including somebody else's tree, which no retirement here owns — and both
+# the removal and the repointing become admissible. Identical to the case above
+# but for the variable the binding reads.
+test_a_bats_binding_outside_the_suite_directory_is_not_a_retired_reference if {
+	some v in violation with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["tests/wiring.bats"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"tests/wiring.bats": ["#!/usr/bin/env bats", "\tGATE=\"$OTHER_TREE/../mise-tasks/old-gate.sh\"", "\trun \"$GATE\""]},
+		},
+		"lines": {
+			"tests/wiring.bats": ["#!/usr/bin/env bats", "\trun mise run old-gate"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:mise+run+old-gate"],
+		},
+	}}
+	v.rule == "shell-rule-retired"
 }
 
 # ANTI-VACUITY: the invocation must be one the LEDGER declares. Without this the

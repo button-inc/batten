@@ -152,6 +152,22 @@ adapters := {
 	"judge", "handler", "action", "rules", "semver",
 	"pinned", "perf", "prune", "pr_watch", "mutate", "bot",
 	"lease",
+	# `fast_forward` AND `main_watch` WERE HERE AND ARE NOT ANY MORE (CLOUD-1338).
+	#
+	# Both were added by a branch whose stated subject was retiring shell, and both
+	# carried the same justification: *"this crate carries no HTTP client that
+	# resolves a forge credential — so the forge's own client IS the call."* The
+	# sentence was false. `crates/batten/src/fetch.rs` is a vendored hyper client,
+	# and `lease.rs` was already reading `GH_TOKEN` through it eighty lines from
+	# one of the spawns that claimed otherwise. Both modules read
+	# `crate::rest` now, spawn nothing, and need no placement.
+	#
+	# THE REMOVAL IS THE POINT AND SO IS THIS COMMENT. The table is deny-by-
+	# omission, so widening it is a two-word edit whose reasoning lives in a
+	# comment nothing reads — which is exactly how those two rows arrived, with
+	# every sensor green over them. `policy/spawn-widening.rego` reads the DIFF
+	# now and refuses an added entry here, so the next row costs an argument to a
+	# human rather than a keystroke.
 	"startup",
 }
 

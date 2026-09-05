@@ -67,35 +67,77 @@ jobs:
       # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT.
       # First step, before any checkout or toolchain install, because a run this
       # branch is not authorised to make should cost the rounding rather than a
-      # matrix. The body is `mise-tasks/ci-lease-precondition.sh` and every
-      # justification lives there; it is fetched from `main` rather than from
-      # this head, so a clone carrying stale rules cannot dodge the predicate by
-      # carrying a stale copy of it. An unreadable body runs — fail open, which
-      # is the whole posture: waving one matrix through costs one matrix, while
-      # a predicate that cannot read itself would stop the fleet.
+      # matrix. The body runs `batten lease guard`, installed from `main` and
+      # pinned to trunk's version rather than to this head's, so a clone
+      # carrying stale rules cannot dodge the predicate by carrying a stale copy
+      # of it. Every justification lives on `run_lease_guard`. THREE DIFFERENT
+      # FAILURES FAIL OPEN below, one `|| exit 0` each: a binary that will not
+      # download, a policy that will not fetch, and a guard that will not run.
+      # That is the whole posture — waving one matrix through costs one matrix,
+      # while a precondition that cannot reach its own inputs would stop the
+      # fleet. What keeps those three from reading as *ran and allowed* is
+      # trunk's installer refusing a binary that does not carry the verb
+      # (`BATTEN_REQUIRE`); until that installer IS trunk's, this step is
+      # vacuous by construction rather than by accident.
+      #
+      # AND IT WAS VACUOUS FOR A SECOND REASON THE PARAGRAPH ABOVE HID (review of
+      # #848). `$RUNNER_TEMP/batten-bin` is not on PATH, and `install.sh`'s
+      # off-PATH refusal is a `die 1` that fires BEFORE the `BATTEN_REQUIRE`
+      # check — so the `|| exit 0` ended the step at the install and the guard
+      # never ran, at any of the sites, whatever the installer's provenance. The
+      # bootstrap above is real and was not the reason; it just described the
+      # same silence convincingly enough that nobody looked further.
+      #
+      # `BATTEN_ALLOW_OFF_PATH=1` is the opt-out for exactly this shape and the
+      # binary is invoked by absolute path two lines down, so nothing here
+      # resolves `batten` by name and the refusal is protecting a caller that
+      # does not exist. Installing onto PATH instead would put a trunk-pinned
+      # binary ahead of the checkout's own for every later step in the job.
       - name: Landing lease precondition
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           LEASE_HEAD_REF: ${{ github.head_ref }}
           # The HEAD sha, never `github.sha`: on a pull_request event that is the
-          # merge commit, which carries trunk's `mise-tasks/land.sh` whenever this
-          # head did not touch it — and the staleness row reads exactly that file.
+          # merge commit, whose tree is trunk's wherever this head did not touch
+          # it — and the staleness read asks about the head's own landing paths.
           LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LEASE_RUN_ID: ${{ github.run_id }}
         run: |
-          body=$(gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition.sh?ref=main") || exit 0
-          # `|| exit 0` on BOTH lines, and the second is the one that was missing
-          # (CLOUD-420). A fetch that fails is handled; a fetch that SUCCEEDS with
-          # something that is not shell was not — a truncated body, a proxy error
-          # page returned 200, or a bad edit to the trunk copy makes this a syntax
-          # error in the FIRST step of every job. The step reds under the runner's
-          # default `bash -e {0}`, `final` fails its `needs:` assertion under
-          # `always()`, and `land` re-drafts a healthy PR — fleet-wide, from one bad
-          # response. The precondition's own header promises it never exits
-          # non-zero; this is what makes that true at the call site too.
-          bash -c "$body" || exit 0
+          # `|| exit 0` ON EVERY LINE, and the reason outlives the shell it was
+          # written for (CLOUD-420). A step that reds makes the RUN's conclusion
+          # `failure` rather than `cancelled`; `final` then runs under
+          # `!cancelled()`, fails its `needs:` assertion, and `land` re-drafts a
+          # healthy PR — fleet-wide, from one bad response. `batten lease guard`
+          # promises it never exits non-zero; these are what make that true at the
+          # call site too, for the cases the promise cannot cover: a binary that
+          # will not download and one that will not run are different failures
+          # from one that ran and decided.
+          #
+          # THE VERSION IS TRUNK'S, NEVER THIS HEAD'S. The installer comes from
+          # trunk and resolves the version from trunk's own manifest, which is the
+          # property the fetched-script design protected by reading its logic from
+          # trunk — a head cannot pin an older guard for itself.
+          installer=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
+          printf '%s\n' "$installer" | \
+            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" \
+            BATTEN_ALLOW_OFF_PATH=1 BATTEN_REQUIRE="lease guard" sh || exit 0
+          # THE POLICY IS TRUNK'S TOO, AND IT HAD TO BE FETCHED. This step runs
+          # BEFORE any checkout, so the directory the guard stands in is empty and
+          # `config::load` found nothing — `[lease] landing_paths` read as *no
+          # paths declared* and the staleness half failed open on every run, which
+          # is the exact silence the row was written to end. Fetched from `main`
+          # for the installer's own reason, one line up: a head must not pin the
+          # policy it is judged by, and the only tree a checkout would offer here
+          # is the pull request's own.
+          mkdir -p "$RUNNER_TEMP/batten-config" || exit 0
+          gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/batten.toml?ref=main" \
+            >"$RUNNER_TEMP/batten-config/batten.toml" || exit 0
+          "$RUNNER_TEMP/batten-bin/batten" --config-in "$RUNNER_TEMP/batten-config" \
+            lease guard \
+            "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

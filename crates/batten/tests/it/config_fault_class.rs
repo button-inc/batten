@@ -76,6 +76,18 @@ const FAULTS: &[(&str, &str, &str)] = &[
          [[exec_pattern]]\nid = \"twice\"\npattern = \"x\"\nreason = \"r\"\n\
          [[exec_pattern]]\nid = \"twice\"\npattern = \"y\"\nreason = \"r\"\n",
     ),
+    // The SECOND `OutputPattern` table, and it earns its own row here for the
+    // reason it earns its own class: the fault is byte-identical to the one above
+    // — a duplicate id — and only the table it sits in decides which file an
+    // author has to open. A case reaching one class over both tables would report
+    // the wrong one and pass.
+    (
+        "environment declare refused",
+        "verify_environment_pattern",
+        "version = 1\n\
+         [[verify_environment_pattern]]\nid = \"twice\"\npattern = \"x\"\nreason = \"r\"\n\
+         [[verify_environment_pattern]]\nid = \"twice\"\npattern = \"y\"\nreason = \"r\"\n",
+    ),
     (
         "waiver declare refused",
         "waiver",

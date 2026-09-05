@@ -266,3 +266,233 @@ fn a_conflict_with_no_path_still_refuses() {
         "the finding names its own predicate, got {out}{err}"
     );
 }
+
+/// A gate program in the fixture that exits `code`, and the argv naming it.
+///
+/// A path rather than a bare name, because `$LAND_VERIFY` is split on whitespace
+/// and run as argv with no shell: `sh -c 'exit 0'` cannot survive that split, and
+/// a bare `true` would resolve against whatever the runner's `PATH` happens to
+/// carry — which is the harness answering a question about the engine.
+fn gate(repo: &Path, name: &str, code: i32) -> String {
+    let path = repo.join(name);
+    std::fs::write(&path, format!("#!/bin/sh\nexit {code}\n")).expect("write the gate");
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("make the gate executable");
+    }
+    path.display().to_string()
+}
+
+/// The lap record this branch has accumulated, or an empty string where the
+/// writer never reached it.
+fn lap_record(repo: &Path, branch: &str) -> String {
+    let dir = common::git_in(repo, &["rev-parse", "--git-dir"]);
+    let path = repo
+        .join(dir.trim())
+        .join("batten-receipts")
+        .join(format!("lap.{}", branch.replace('/', "-")));
+    std::fs::read_to_string(path).unwrap_or_default()
+}
+
+/// `batten land verify`, with the consumer's gate named in the environment.
+fn land_verify(repo: &Path, command: &str) -> (i32, String, String) {
+    let output = batten()
+        .args(["land", "verify"])
+        .env("LAND_VERIFY", command)
+        .current_dir(repo)
+        .output()
+        .expect("run batten land verify");
+    (
+        output.status.code().expect("exit code"),
+        stdout(&output),
+        stderr(&output),
+    )
+}
+
+/// **The verb was unreachable in every clone, and this is the pair that shows it.**
+///
+/// `land::verify` handed `exec::run_in` the caller's anchor — a literal `.` — and
+/// `exec`'s capture store is keyed by the repository's own directory NAME, which
+/// `state::derive_repo_name` cannot read off `.`. So the boundary refused before
+/// starting anything, on EVERY invocation, and the `None` arm wrapped that
+/// `UsageError` in a context naming the gate. Measured against the shipped
+/// binary: a passing gate and a refusing gate produced byte-identical output and
+/// the same exit `1`.
+///
+/// **The pair is what discriminates, and neither half alone does.** Asserting only
+/// the clean arm passes over an engine that reports success without running
+/// anything; asserting only the refusal passes over one that cannot run anything
+/// at all — which is precisely the state this repairs. The record is asserted
+/// too, because an exit code alone cannot tell "the gate ran and passed" from
+/// "nothing ran and nobody wrote it down".
+#[test]
+fn a_configured_gate_is_actually_run_and_its_two_answers_are_told_apart() {
+    let repo = repo("land-verify-runs");
+    let branch = branch_of(&repo);
+
+    let (code, out, err) = land_verify(&repo, &gate(&repo, "passes.sh", 0));
+    assert_eq!(code, 0, "a gate that passed is exit 0: {err}{out}");
+    let record = lap_record(&repo, &branch);
+    assert!(
+        record.contains("verify clean "),
+        "the clean answer reaches the record, got {record:?}"
+    );
+
+    // THE MIRROR, on the SAME branch, so the record is a history rather than a
+    // replacement — and so the two answers are told apart by their own column
+    // rather than by which fixture produced them.
+    let (code, out, err) = land_verify(&repo, &gate(&repo, "refuses.sh", 1));
+    assert_eq!(
+        code, 2,
+        "a gate that refused is the policy verdict, not an error: {err}{out}"
+    );
+    let record = lap_record(&repo, &branch);
+    assert!(
+        record.contains("verify refused "),
+        "the refusal reaches the record as its own token, got {record:?}"
+    );
+}
+
+/// The anti-vacuity half of the pair above, and a different failure.
+///
+/// An unconfigured gate is a USAGE error — exit `1` — and it must stay
+/// distinguishable from both answers above. Without this, the repair could be
+/// "always report clean", which the pair above would not catch: `$LAND_VERIFY`
+/// naming nothing is the one case where refusing to guess is the whole behaviour,
+/// since a default compiled into this crate would be non-negotiable rule 1's
+/// plainest violation.
+#[test]
+fn an_unconfigured_gate_refuses_rather_than_guessing_and_writes_no_record() {
+    let repo = repo("land-verify-unconfigured");
+    let branch = branch_of(&repo);
+
+    let (code, _out, err) = land_verify(&repo, "");
+    assert_eq!(code, 1, "an unconfigured gate is a usage error: {err}");
+    assert!(
+        err.contains("LAND_VERIFY"),
+        "the refusal names the variable the caller must set, got {err}"
+    );
+    assert!(
+        lap_record(&repo, &branch).is_empty(),
+        "a lap that never ran a gate records no verdict about one"
+    );
+}
+
+/// `batten land lap`, with the lap bound named in the environment.
+///
+/// `$LAND_VERIFY` is a gate that always REFUSES, which is what makes the stop
+/// arm reachable without a real gate; the mirror below passes one that succeeds.
+fn land_lap(repo: &Path, laps: &str, gate: &str) -> (i32, String, String) {
+    let output = batten()
+        .args(["land", "lap", "refs/heads/main"])
+        .env("LAND_MAX_LAPS", laps)
+        .env("LAND_VERIFY", gate)
+        .env("LAND_WORKFLOW", "fast-forward.yml")
+        .current_dir(repo)
+        .output()
+        .expect("run batten land lap");
+    (
+        output.status.code().expect("exit code"),
+        stdout(&output),
+        stderr(&output),
+    )
+}
+
+/// **The loop reaches a clone it cannot read and stops carrying that step's own
+/// code**, rather than lapping toward an answer no lap can produce.
+///
+/// # What this tier can and cannot assert, stated rather than implied
+///
+/// A lap begins with `replay`, which fetches over smart-HTTP — so driving the
+/// whole loop in-tree needs a live git server, which this suite does not stand
+/// up. What IS assertable here is the wiring and the failure posture: the verb
+/// parses, resolves its branch, reaches the first step, and reports the clone's
+/// own could-not-look instead of spinning.
+///
+/// **The decision the loop encodes is tested where it lives** — `land::progress`
+/// is a pure table with its own exhaustive cases in `crates/batten/src/land.rs`,
+/// including the discriminating pair (a refusal a rebase would clear laps; one
+/// it would not stops) and both anti-vacuity mirrors. Asserting that here would
+/// need the server; asserting it there needs nothing, and it is the same claim.
+#[test]
+fn a_lap_over_a_clone_with_no_remote_stops_rather_than_lapping_toward_nothing() {
+    let repo = repo("land-lap-no-remote");
+
+    let (code, out, err) = land_lap(&repo, "3", "true");
+    assert_eq!(
+        code, 3,
+        "a clone with no remote is could-not-look: {out} {err}"
+    );
+    assert_ne!(
+        code, 2,
+        "exit 2 would be a verdict about the branch, and nothing here judged one"
+    );
+    assert!(
+        out.matches("land: lap ").count() <= 1,
+        "it must not spend its whole count on a remote that will not resolve: {out}"
+    );
+}
+
+/// `batten land fast-forward`, with the workflow named in the environment.
+fn land_fast_forward(repo: &Path, workflow: &str) -> (i32, String, String) {
+    let output = batten()
+        .args(["land", "fast-forward"])
+        .env("LAND_WORKFLOW", workflow)
+        // NO FORGE, deliberately. Both arms below resolve before any request is
+        // made, which is what makes them assertable at all — a case that needed a
+        // live pull request would be a test of the forge's availability.
+        .env("PATH", "/nonexistent")
+        .current_dir(repo)
+        .output()
+        .expect("run batten land fast-forward");
+    (
+        output.status.code().expect("exit code"),
+        stdout(&output),
+        stderr(&output),
+    )
+}
+
+/// **An unconfigured workflow refuses rather than guessing, and that is rule 1.**
+///
+/// The bash lander defaults `$LAND_WORKFLOW` to `fast-forward.yml`. That filename
+/// is THIS consumer's, so compiling it in here would put a consumer's vocabulary
+/// inside `crates/batten` — and the failure it would buy is the quiet one: a
+/// repository whose bot lives in a differently-named workflow reads an empty runs
+/// list on every lap and reports a silent bot forever, which is exactly the
+/// diagnosis CLOUD-413 spent 24 laps reaching wrongly.
+///
+/// The mirror is the case below: unconfigured is `1`, and a configured workflow
+/// with nothing to ask is `3`. Without the pair, "always refuse" passes.
+#[test]
+fn an_unconfigured_workflow_refuses_rather_than_guessing_a_filename() {
+    let repo = repo("land-ff-unconfigured");
+
+    let (code, _out, err) = land_fast_forward(&repo, "");
+    assert_eq!(code, 1, "an unconfigured workflow is a usage error: {err}");
+    assert!(
+        err.contains("LAND_WORKFLOW"),
+        "the refusal names the variable the caller must set, got {err}"
+    );
+}
+
+/// The anti-vacuity mirror: configured, but there is nothing to ask.
+///
+/// `3` and never `2`. A lap that could not find a pull request has not been
+/// REFUSED by anybody — reading it as a refusal would tell the caller its head is
+/// no longer a direct descendant, which is a claim about the branch that nothing
+/// here established. Exit `2` is reserved for the bot actually saying no.
+#[test]
+fn no_pull_request_to_ask_is_could_not_look_and_never_a_refusal() {
+    let repo = repo("land-ff-no-pr");
+
+    let (code, _out, err) = land_fast_forward(&repo, "fast-forward.yml");
+    assert_eq!(
+        code, 3,
+        "no pull request is a could-not-look, not a refusal: {err}"
+    );
+    assert_ne!(
+        code, 2,
+        "exit 2 would claim the bot refused this head, which nothing established"
+    );
+}

@@ -470,6 +470,34 @@ pub enum LandCommand {
     /// A flag would put a second spelling of one name on the surface, and the
     /// two would drift.
     Verify,
+    /// Ask the fast-forward bot to land this head, and read the answer keyed to
+    /// that request.
+    ///
+    /// NO POSITIONAL, for `verify`'s reason one step further out: the pull
+    /// request is a fact about this branch that the forge already holds, and the
+    /// workflow whose runs carry the verdict is the CONSUMER's — so both are
+    /// resolved rather than typed. A number on argv would let a lap ask one pull
+    /// request to land while every other step is looking at another.
+    FastForward,
+    /// Drive the whole lap — replay, verify, push, wait, fast-forward — and lap
+    /// again on every refusal that a rebase would clear.
+    ///
+    /// **THE LOOP IS A SUB-VERB RATHER THAN THE BARE NOUN**, on the reason the
+    /// enum's own header gives: a bare `batten land` would have to be widened
+    /// into this shape later, and that is a surface break for a change that adds
+    /// a capability. It is also the honest spelling — the five steps above are
+    /// reachable individually on purpose, and the loop is one more thing you can
+    /// ask for rather than the only thing.
+    ///
+    /// **A CALLER WHO HAND-STEPS THIS BURNS LAPS EVERY GATE PASSES.** The loop
+    /// re-verifies and re-waits per lap because a rebase mints a new SHA and the
+    /// receipts keyed to the old one are gone; stepping it yourself pays that
+    /// cost without the rebase that earns it. Measured on the predecessor, trunk
+    /// advanced 27 commits during one hand-run `verify`.
+    Lap {
+        /// The remote reference this lap lands onto, e.g. `refs/heads/main`.
+        reference: String,
+    },
 }
 
 /// Subcommands of `mutate`.
@@ -872,6 +900,35 @@ pub enum LeaseCommand {
         /// The branch asking.
         branch: String,
     },
+    /// Does this head carry the landing mechanism trunk has (CLOUD-1148 §2)?
+    ///
+    /// The staleness half of the CI-side precondition, and a READ: it asks the
+    /// forge two questions and answers, writing nothing.
+    Carries {
+        /// The head being judged. On a `pull_request` event this must be
+        /// `github.event.pull_request.head.sha` and NEVER `GITHUB_SHA` — that is
+        /// the merge commit, which carries trunk's landing mechanism whenever the
+        /// head did not touch it, so every stale head would read as current.
+        head: String,
+    },
+    /// The runner's step-0 guard: may this branch spend a matrix right now
+    /// (CLOUD-420, CLOUD-1148)?
+    ///
+    /// A WRITE, and the only reason it is: on a stop it CANCELS the run it is
+    /// standing in. Composing `carries` and `authorises` rather than letting a
+    /// workflow do it is what keeps the cancel-and-wait one authority instead of
+    /// sixteen copies of the subtlest failure mode in the loop.
+    Guard {
+        /// The head being judged. `github.event.pull_request.head.sha`, NEVER
+        /// `GITHUB_SHA` — on a `pull_request` event that is the merge commit,
+        /// which carries trunk's landing mechanism whenever the head did not
+        /// touch it, so every stale head would read as current.
+        head: String,
+        /// The branch asking for the lease.
+        branch: String,
+        /// The run to cancel on a stop.
+        run: String,
+    },
     /// Is the lease ref free, or a live and well-formed hold?
     Check,
     /// Who holds it, for how long, and who is admitted behind them.
@@ -1237,6 +1294,17 @@ pub enum ReceiptCommand {
         /// Emit the verdict as byte-stable JSON instead of a pointer line.
         json: bool,
     },
+    /// Is HEAD verified — every declared check's receipt valid against this
+    /// exact commit and the trunk it was taken against?
+    ///
+    /// **The composition is the point, and it is why this is a verb rather than
+    /// two calls.** A caller asking `status` twice has to remember both names
+    /// and to AND the answers, and the failure that shape produces is silent:
+    /// one call, one green, and a head reported verified on half the evidence.
+    /// The predecessor existed because that had happened — a `verify` piped into
+    /// `tail` exits with the pipe's status, so a branch `linear-check` had
+    /// rejected reported success and the zero was acted on.
+    Verified,
 }
 
 /// Subcommands of `config`.
@@ -1695,6 +1763,10 @@ fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
         }),
         ("push", _) => Some(LandCommand::Push),
         ("verify", _) => Some(LandCommand::Verify),
+        ("fast-forward", _) => Some(LandCommand::FastForward),
+        ("lap", matches) => Some(LandCommand::Lap {
+            reference: reference_of(matches),
+        }),
         _ => None,
     }
 }
@@ -1715,6 +1787,32 @@ fn lease_of(matches: &ArgMatches) -> Option<LeaseCommand> {
     match matches.subcommand()? {
         ("authorises", matches) => Some(LeaseCommand::Authorises {
             branch: branch_of(matches),
+        }),
+        ("carries", matches) => Some(LeaseCommand::Carries {
+            // EMPTY RATHER THAN ABSENT, for `authorises`' reason one arm up: the
+            // verb must be able to say it cannot answer, and a missing head is
+            // exactly that rather than a usage error — this gate fails open.
+            head: matches
+                .get_one::<String>("head")
+                .cloned()
+                .unwrap_or_default(),
+        }),
+        ("guard", matches) => Some(LeaseCommand::Guard {
+            // EMPTY RATHER THAN ABSENT on all three, for `authorises`' reason:
+            // this verb must be able to say it could not look, and a missing
+            // operand is exactly that rather than a usage error. It fails open.
+            head: matches
+                .get_one::<String>("head")
+                .cloned()
+                .unwrap_or_default(),
+            branch: matches
+                .get_one::<String>("branch")
+                .cloned()
+                .unwrap_or_default(),
+            run: matches
+                .get_one::<String>("run")
+                .cloned()
+                .unwrap_or_default(),
         }),
         ("check", _) => Some(LeaseCommand::Check),
         ("status", matches) => Some(LeaseCommand::Status {
@@ -1810,19 +1908,25 @@ fn generate_of(matches: &ArgMatches) -> Option<GenerateCommand> {
 
 fn receipt_of(matches: &ArgMatches) -> Option<ReceiptCommand> {
     let (name, matches) = matches.subcommand()?;
-    let check = matches.get_one::<String>("check")?.clone();
+    // THE CHECK IS READ PER ARM, not once above the match. `verified` names no
+    // check — it asks about the declared SET — so hoisting the positional would
+    // make this whole function answer `None` for it, and a sub-verb that parses
+    // to nothing is a verb that silently does not exist.
     match name {
-        "record" => Some(ReceiptCommand::Record { check }),
+        "record" => Some(ReceiptCommand::Record {
+            check: matches.get_one::<String>("check")?.clone(),
+        }),
         // `unwrap_or_default` rather than `?`: the flag is declared with a
         // default, so an absent value is the ordinary case, not a parse failure.
         "status" => Some(ReceiptCommand::Status {
-            check,
+            check: matches.get_one::<String>("check")?.clone(),
             key: matches
                 .get_one::<ReceiptKey>("key")
                 .copied()
                 .unwrap_or_default(),
             json: flag(matches, "json"),
         }),
+        "verified" => Some(ReceiptCommand::Verified),
         _ => None,
     }
 }

@@ -7017,9 +7017,22 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
                 // program alone, so a program that mutates under one subcommand or
                 // behind one flag could only be declared as mutating under all of
                 // them — which is why five write shapes could not be expressed.
-                if let Some(matched) =
-                    crate::verbs::qualify(&policy.verbs, program, &tokens[index + 1..])
-                {
+                // NORMALISED FOR THE MATCH TOO, and only the operands were
+                // (review of #848). `qualify` compares a row's `subcommand`
+                // against the first argument and runs `flag_matches` over the
+                // rest, and `flag_matches` rejects any suffix that is not `.` or
+                // `=` — so with `requires_flag = ["--in-place"]`, the call
+                // `(sed -e 's/a/b/' batten.toml --in-place)` tokenises the flag
+                // as `--in-place)`, the row does not apply, and the write to a
+                // protected path is allowed. The identical command without the
+                // parentheses refuses. That is CLOUD-1382's one-keystroke bypass
+                // surviving on the half of the walk that was not normalised.
+                let arguments: Vec<&str> = tokens[index + 1..]
+                    .iter()
+                    .copied()
+                    .map(program_token)
+                    .collect();
+                if let Some(matched) = crate::verbs::qualify(&policy.verbs, program, &arguments) {
                     // The OPERANDS as the program was handed them, with a
                     // group's closing punctuation off (CLOUD-1382): measured,
                     // `(rm batten.toml)` was allowed because the operand read

@@ -389,19 +389,60 @@ fanin_job_declared if {
 	base_name(object.get(job, "name", key)) == base_name(fanin_check)
 }
 
-# THE DECLARATION IS READ, NOT RESTATED. A literal path in the abandon task would
+# THE DECLARATION IS READ, NOT RESTATED. A literal path in the abandon site would
 # be a second authority for one fact, and the one that drifts is always the copy
-# nobody edits. Read as LINES because these are shell programs, which no parser
-# here builds a document for.
+# nobody edits.
+#
+# REPOINTED AT THE ENGINE (CLOUD-1148), AND THE DELETION DOES NOT SILENCE THIS.
+# The subject was `mise-tasks/abandon-matrix.sh`, read as LINES because a shell
+# program has no parser here. Retiring it does not make these two rules go
+# quiet — `input.tree.lines[<gone>]` is undefined, so both helpers go FALSE and
+# both violations FIRE. A retirement that only deleted the files would have
+# reported two findings naming paths that no longer exist, which is why the
+# repoint lands in the same change.
+#
+# `crates/batten/src/lib.rs` is read as lines for the same reason its predecessor
+# was: this asks whether one identifier appears at the site, which is a text
+# question rather than a structural one, and building a Rust document for it
+# would be a parser this module does not need.
+#
+# AND THE IDENTIFIER IS THE ENGINE'S OWN. `CI_FANIN_WORKFLOW` is what the
+# compensation reads — the workflow PATH a run carries, which is what
+# `land::worthless` compares against. Its sibling `CI_FANIN_CHECK` is a check
+# NAME and belongs to `checks_green::Roster`; the engine read the wrong one of
+# the two for the whole of this branch, so `spared` was always 0 and the fan-in's
+# own run was cancelled with the rest. Naming the variable here rather than the
+# task is what makes that a finding next time.
+#
+# AND THE READ MUST SIT AT THE CONSTRUCTOR, WHICH IS THE HALF THIS RULE WAS
+# MISSING (review of #848). Asking "does this file mention `CI_FANIN_WORKFLOW`"
+# and "does this file call `land::abandon`" as two INDEPENDENT questions over
+# ~6,000 lines is satisfied by an unrelated read plus a call handed the check
+# name — which is the exact defect the paragraph above records as having been
+# live for the whole of this branch, so the rule could not have caught its own
+# subject.
+#
+# The join is `land::FanIn::from_workflow_path`, whose argument is the
+# declaration, within a THREE-LINE window because rustfmt splits the call. The
+# window is deliberately not one line: pinning the formatter's current output
+# would make a reflow silence the gate, which is the dead-gate class
+# `.claude/rules/policy-modules.md` warns about one level up. `land::FanIn` is
+# the other half and it is the COMPILER's — a check name no longer type-checks
+# in that argument position at all, so the two mechanisms hold the same join
+# from opposite ends.
 abandon_reads_declaration if {
-	some line in input.tree.lines["mise-tasks/abandon-matrix.sh"]
-	contains(line, "CI_FANIN_WORKFLOW")
+	lines := input.tree.lines["crates/batten/src/lib.rs"]
+	some i, j
+	contains(lines[i], "FanIn::from_workflow_path")
+	j >= i
+	j <= i + 2
+	contains(lines[j], "CI_FANIN_WORKFLOW")
 }
 
 violation contains {
 	"rule": "fan-in-is-wired",
 	"verdict": "job declare duplicate",
-	"subjects": [{"path": "mise-tasks/abandon-matrix.sh"}],
+	"subjects": [{"path": "crates/batten/src/lib.rs"}],
 } if {
 	governed
 	fanin_workflow
@@ -411,15 +452,20 @@ violation contains {
 # ANTI-VACUITY. Every assertion above is about making the abandon SAFE; none of
 # them notices that it is never called. A mechanism nothing invokes passes each
 # of them and saves nothing.
+#
+# The predecessor asked whether `mise-tasks/land.sh` named `abandon-matrix`. The
+# successor's equivalent is whether the lap's compensation dispatch reaches
+# `land::abandon` at all — the same question about the same wiring, one layer
+# down, and still the only one of these rules that notices a dead mechanism.
 lander_calls_abandon if {
-	some line in input.tree.lines["mise-tasks/land.sh"]
-	contains(line, "abandon-matrix")
+	some line in input.tree.lines["crates/batten/src/lib.rs"]
+	contains(line, "land::abandon")
 }
 
 violation contains {
 	"rule": "fan-in-is-wired",
 	"verdict": "job reach dead",
-	"subjects": [{"path": "mise-tasks/land.sh"}],
+	"subjects": [{"path": "crates/batten/src/lib.rs"}],
 } if {
 	governed
 	fanin_workflow
@@ -471,15 +517,50 @@ violation contains {
 #
 # COUNTED rather than grepped for absence, because the two forms differ only by a
 # suffix and a search for the bare spelling would pass a file carrying both.
-lease_invocations(path) := count([line |
-	some line in input.tree.lines[path]
-	contains(line, "bash -c \"$body\"")
+# THE COUNTED SPELLING MOVED WITH THE STEP (CLOUD-1148). It was
+# `bash -c "$body"`, the fetched-script invocation — and when that step became
+# `batten lease guard`, both comprehensions counted a string no workflow
+# contains. Zero invocations means the clause below cannot fire, so the predicate
+# would have gone DEAD WHILE LOADING CLEAN, which is the class this repository
+# exists to refuse and the reason these two move in the same change as the YAML.
+#
+# What is counted is unchanged in kind: the guard's own invocation, and the same
+# invocation carrying its tolerance. The property is still "every invocation
+# carries its `|| exit 0`", because the harm is still the one the clause below
+# names — a step that reds makes the RUN `failure` rather than `cancelled`,
+# `final` fails its `needs:` under `!cancelled()`, and the lander re-drafts the
+# fleet.
+#
+# COUNTED rather than grepped for absence, for the reason the predecessor gave:
+# the two forms differ only by a suffix, so a search for the bare spelling would
+# pass a file carrying both.
+# PAIRED PER INVOCATION, NEVER TWO INDEPENDENT TOTALS. These were two `count`s
+# compared for equality, and equal totals is not the property: a file with two
+# invocations, one of them untolerated, passes as soon as any unrelated line
+# anywhere in it carries the tolerance string. The comparison could be satisfied
+# by a coincidence, over the one clause whose failure re-drafts the whole fleet.
+#
+# The invocation is a two-line spelling — the guard's argv ends in a `\` and its
+# operands and `|| exit 0` follow on the next line — so the tolerance belongs to
+# the line immediately AFTER the one that invokes. Indexing is what expresses
+# that; counting cannot.
+lease_invocations(path) := count([i |
+	some i, line in input.tree.lines[path]
+	contains(line, "lease guard \\")
 ])
 
-lease_tolerant(path) := count([line |
-	some line in input.tree.lines[path]
-	contains(line, "bash -c \"$body\" || exit 0")
+# An invocation whose CONTINUATION does not carry the tolerance. An absent next
+# line reads as untolerated, which is the direction a miss must fail in: a guard
+# invocation at end-of-file has no `|| exit 0` at all.
+lease_untolerated(path) := count([i |
+	some i, line in input.tree.lines[path]
+	contains(line, "lease guard \\")
+	not tolerated_at(path, i)
 ])
+
+tolerated_at(path, i) if {
+	contains(input.tree.lines[path][i + 1], "\"$LEASE_RUN_ID\" || exit 0")
+}
 
 violation contains {
 	"rule": "lease-authorises-before-spending",
@@ -489,7 +570,7 @@ violation contains {
 	governed
 	some path, _ in input.tree.lines
 	lease_invocations(path) > 0
-	lease_invocations(path) != lease_tolerant(path)
+	lease_untolerated(path) > 0
 }
 
 # --- a workflow reading check status decides green through one predicate ------
@@ -795,8 +876,16 @@ sound_input := {"tree": {
 		"release-plz.toml": {"pr": {"pr_draft": true}},
 	},
 	"lines": {
-		"mise-tasks/abandon-matrix.sh": ["run=$CI_FANIN_WORKFLOW"],
-		"mise-tasks/land.sh": ["mise run abandon-matrix"],
+		# THE DECLARATION SITS AT THE CONSTRUCTOR, rendered the way rustfmt
+		# renders the real call: `abandon_reads_declaration` binds the two
+		# within three lines of each other since review of #848, so a fixture
+		# spelling them independently is no longer sound.
+		"crates/batten/src/lib.rs": [
+			"let fanin = land::FanIn::from_workflow_path(",
+			"    std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default(),",
+			");",
+			"let report = land::abandon(&repo, &sha, &fanin);",
+		],
 		# The foreign leg the anti-vacuity term needs a subject from: without it a
 		# clean fixture would be clean because nothing was looked at.
 		".github/workflows/rust.yml": ["      - run: mise exec -- cargo nextest run --workspace"],
@@ -1020,8 +1109,18 @@ test_a_fanin_workflow_declaring_no_such_job_is_refused if {
 	f.verdict == "workflow declare empty"
 }
 
+# A SITE THAT RESTATES THE PATH RATHER THAN READING THE DECLARATION. The literal
+# still reaches the abandon, so nothing observable breaks until somebody moves the
+# fan-in — which is why this is a gate and not a review note.
+#
+# It also covers the sibling-variable defect that shipped on this branch: reading
+# `CI_FANIN_CHECK` here compiles, runs, and cancels the fan-in's own run, and this
+# fixture is what a version doing that looks like.
 test_an_abandon_that_restates_the_path_is_refused if {
-	lines := object.union(sound_input.tree.lines, {"mise-tasks/abandon-matrix.sh": ["run=.github/workflows/ci.yml"]})
+	lines := object.union(sound_input.tree.lines, {"crates/batten/src/lib.rs": [
+		"let fanin = String::from(\".github/workflows/ci.yml\");",
+		"let report = land::abandon(&repo, &sha, &fanin);",
+	]})
 	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
 	some f in found
 	f.verdict == "job declare duplicate"
@@ -1030,10 +1129,53 @@ test_an_abandon_that_restates_the_path_is_refused if {
 # THE ANTI-VACUITY TERM. Every other fan-in clause makes the abandon SAFE; none
 # of them notices it is never called.
 test_a_lander_that_never_abandons_is_refused if {
-	lines := object.union(sound_input.tree.lines, {"mise-tasks/land.sh": ["mise run ci-wait"]})
+	lines := object.union(sound_input.tree.lines, {"crates/batten/src/lib.rs": ["let fanin = land::FanIn::from_workflow_path(", "    std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default(),", ");"]})
 	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
 	some f in found
 	f.verdict == "job reach dead"
+}
+
+# THE CLASS REVIEW OF #848 NAMED, AND THE ONE THIS ROW COULD NOT SEE. The two
+# fan-in clauses were INDEPENDENT line questions over one file, so a read of the
+# declaration anywhere — a comment, a doc block, an unrelated helper thousands of
+# lines away — plus a call handed the WRONG value satisfied both and the module
+# reported clean. The header above records the engine doing exactly that for the
+# whole of the branch that wrote this rule, so the rule could not catch its own
+# subject.
+#
+# The fixture passes the OLD spelling and fails the new one: `land::abandon` is
+# reached, `CI_FANIN_WORKFLOW` appears, and the constructor is handed a different
+# variable entirely.
+test_a_declaration_read_far_from_the_constructor_is_refused if {
+	lines := object.union(sound_input.tree.lines, {"crates/batten/src/lib.rs": [
+		"// the fan-in is declared as CI_FANIN_WORKFLOW in the manifest",
+		"fn unrelated() -> String {",
+		"    std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default()",
+		"}",
+		"",
+		"let fanin = land::FanIn::from_workflow_path(",
+		"    std::env::var(\"CI_FANIN_CHECK\").unwrap_or_default(),",
+		");",
+		"let report = land::abandon(&repo, &sha, &fanin);",
+	]})
+	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
+	some f in found
+	f.verdict == "job declare duplicate"
+}
+
+# THE WINDOW IS THREE LINES RATHER THAN ONE, DELIBERATELY. Pinning rustfmt's
+# current rendering would make a reflow silence the gate, which is strictly worse
+# than the duplication the binding exists to stop — so the collapsed spelling has
+# to pass, and this is the case that says so.
+test_the_constructor_and_its_declaration_may_sit_on_one_line if {
+	lines := object.union(sound_input.tree.lines, {"crates/batten/src/lib.rs": [
+		"let fanin = land::FanIn::from_workflow_path(std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default());",
+		"let report = land::abandon(&repo, &sha, &fanin);",
+	]})
+	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
+	every f in found {
+		f.verdict != "job declare duplicate"
+	}
 }
 
 test_a_job_that_starts_without_asking_the_lease_is_refused if {
@@ -1158,10 +1300,26 @@ test_a_job_that_waits_on_another_is_not_asked_for_the_lease if {
 # COUNTED, NOT SEARCHED FOR ABSENCE: the two forms differ only by a suffix, so a
 # file carrying both would pass a bare search.
 test_a_precondition_invoked_without_the_tolerant_suffix_is_refused if {
-	lines := object.union(sound_input.tree.lines, {".github/workflows/ci.yml": ["        bash -c \"$body\""]})
+	lines := object.union(sound_input.tree.lines, {".github/workflows/ci.yml": [
+		"          \"$RUNNER_TEMP/batten-bin/batten\" lease guard \\",
+		"            \"$LEASE_HEAD_SHA\" \"$LEASE_HEAD_REF\" \"$LEASE_RUN_ID\"",
+	]})
 	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
 	some f in found
 	f.verdict == "lease guard unsafe"
+}
+
+# THE MIRROR, and it is what keeps the case above from passing over a clause that
+# refuses everything: the same invocation WITH its tolerance is silent.
+test_a_precondition_carrying_the_tolerant_suffix_is_admitted if {
+	lines := object.union(sound_input.tree.lines, {".github/workflows/ci.yml": [
+		"          \"$RUNNER_TEMP/batten-bin/batten\" lease guard \\",
+		"            \"$LEASE_HEAD_SHA\" \"$LEASE_HEAD_REF\" \"$LEASE_RUN_ID\" || exit 0",
+	]})
+	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
+	every f in found {
+		f.verdict != "lease guard unsafe"
+	}
 }
 
 test_a_workflow_reading_check_runs_without_the_one_predicate_is_refused if {

@@ -37,12 +37,21 @@ fn repo(name: &str, status_exit: i32, peek_stdout: &str) -> PathBuf {
     write_program(&dir, "status.sh", status_exit, "");
     write_program(&dir, "peek.sh", 0, peek_stdout);
     fs::write(dir.join("batten.toml"), CONFIG).expect("write config");
-    git(&dir, &["init", "--quiet", "--initial-branch", "work"]);
-    git(&dir, &["config", "user.email", "t@example.com"]);
-    git(&dir, &["config", "user.name", "t"]);
-    git(&dir, &["add", "-A"]);
-    git(&dir, &["commit", "--quiet", "-m", "seed"]);
+    commit_on_work(&dir);
     dir
+}
+
+/// The git history the recorder needs, and the ONE place it is built.
+///
+/// Written once rather than per fixture builder: the branch this seeds is the
+/// key the record is filed under, so two builders spelling it separately is a
+/// fixture that can drift from the path every case reads back.
+fn commit_on_work(dir: &Path) {
+    git(dir, &["init", "--quiet", "--initial-branch", "work"]);
+    git(dir, &["config", "user.email", "t@example.com"]);
+    git(dir, &["config", "user.name", "t"]);
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "--quiet", "-m", "seed"]);
 }
 
 /// `printf '%s'` with NO trailing newline, so an empty stdout is genuinely empty.
@@ -266,6 +275,145 @@ fn a_call_the_selector_does_not_name_writes_nothing_at_all() {
         record(&dir).is_empty(),
         "an ordinary call spawns nothing and records nothing: {:?}",
         record(&dir)
+    );
+}
+
+// --- the COMPILED arm (CLOUD-1148 §2) ---------------------------------------
+//
+// `batten.toml` no longer runs a `[program]` for either lease column: the paths
+// those rows named are retired, and a `[program]` path resolves against the
+// repository root, so neither could ever have named the compiled verb. The
+// columns ask `authority = { ask = "lease-status" | "lease-successor" }`, which
+// is CLOUD-1100's landed move for `ready-lint.sh` applied to the same shape.
+//
+// THE STUB CASES ABOVE STAY, AND THEY ARE NOT DEAD. They pin the RECORDER — the
+// selector, the `status` mapping, the fail-open omission, the branch column —
+// over an arm whose producer is chosen by the fixture. What they cannot pin is
+// that the compiled arm is reached at all, and a `Value::Authority` naming a
+// variant nothing dispatches would leave every case above green.
+//
+// A REAL LEASE IS NOT DRIVEN HERE, and the bound is stated rather than absorbed:
+// the arm observes a remote ref, so proving the authorising and held-elsewhere
+// answers needs a lease server. What IS drivable is the answer these fixtures
+// genuinely produce — a clone with no remote — and that is the one arm the
+// asymmetry turns on.
+
+/// A repository with the lease columns on the COMPILED arm and a `status` table
+/// the caller chooses.
+fn compiled_repo(name: &str, status_table: &str) -> PathBuf {
+    let dir = scratch(name);
+    fs::write(
+        dir.join("batten.toml"),
+        COMPILED_CONFIG.replace("STATUS_TABLE", status_table),
+    )
+    .expect("write config");
+    commit_on_work(&dir);
+    dir
+}
+
+/// The shipped shape with no `[program]` table at all — which is the point: a
+/// config declaring none still records both lease columns.
+const COMPILED_CONFIG: &str = r#"
+version = 1
+
+[[pattern]]
+id = "landing-lifecycle-call"
+regex = '(?:^|&&|;|\|)\s*mise run linear-check\b'
+
+[[recorder]]
+name = "landing-lease"
+record = "landing-lease"
+tool = "Bash"
+key = "branch"
+requires-input-matching = { command = "landing-lifecycle-call" }
+
+[[recorder.columns]]
+name = "kind"
+value = { literal = "lease" }
+
+[[recorder.columns]]
+name = "verdict"
+value = { authority = { ask = "lease-status", read = { status = STATUS_TABLE }, stdin = { literal = "" } } }
+
+[[recorder.columns]]
+name = "successor"
+value = { authority = { ask = "lease-successor", read = "stdout", stdin = { literal = "" } } }
+
+[[recorder.columns]]
+name = "branch"
+value = "branch"
+"#;
+
+/// **THE UNCONDITIONAL ARM.** A probe table that maps could-not-look, so the
+/// column carries a token only a producer that actually ran can have produced.
+///
+/// `.claude/rules/policy-modules.md` states the rule this case exists to obey:
+/// confirm a channel with an arm that must speak, never with an arm over the
+/// channel itself. A case asserting only `-` cannot tell a compiled arm that
+/// answered could-not-look from a `Value::Authority` variant nothing dispatches
+/// — both leave the column undefined, and `render_column` renders both as `-`.
+#[test]
+fn the_compiled_lease_arm_is_reached_and_answers() {
+    let dir = compiled_repo("lease-compiled-probe", r#"{ "3" = "unknown" }"#);
+    hook(&dir, "mise run linear-check");
+
+    let line = record(&dir);
+    let columns = columns(&line);
+    assert_eq!(
+        columns.len(),
+        4,
+        "the predicate asserts a count of four: {line:?}"
+    );
+    assert_eq!(
+        columns[1], "unknown",
+        "A CLONE WITH NO REMOTE IS COULD-NOT-LOOK, AND THE ARM SAID SO. A dash \
+         here means nothing dispatched `lease-status` at all: {line:?}"
+    );
+    assert_eq!(
+        columns[3], "work",
+        "and the rest of the line is unchanged by the arm swap: {line:?}"
+    );
+}
+
+/// The shipped table's omission is what makes that answer fail OPEN.
+///
+/// The numbers moved with the producer and the meanings did not: the shell
+/// answered `1` held-elsewhere and `2` could-not-look, the engine answers `2`
+/// and `3`, and `batten.toml`'s map is the one place the two vocabularies meet.
+/// Mapping `3` there would invert the one behaviour the port exists to conserve
+/// — "a lease it cannot read stops EVERY job in the fleet, where waving one
+/// matrix through costs one matrix" — and this is the case that refuses it.
+#[test]
+fn the_shipped_table_leaves_the_compiled_could_not_look_unmapped() {
+    let dir = compiled_repo(
+        "lease-compiled-shipped",
+        r#"{ "0" = "authorised", "2" = "held-elsewhere" }"#,
+    );
+    hook(&dir, "mise run linear-check");
+
+    let line = record(&dir);
+    let columns = columns(&line);
+    assert_eq!(
+        columns[1], "-",
+        "an unmapped status is could-not-look, so the preset's refusal cannot \
+         hold: {line:?}"
+    );
+    assert_ne!(columns[1], "held-elsewhere", "and it is NOT the refusal");
+}
+
+/// The successor arm answers nothing where there is no lease, which the column
+/// records as could-not-look and the preset reads as *not this branch*.
+#[test]
+fn the_compiled_successor_arm_records_could_not_look_without_a_lease() {
+    let dir = compiled_repo("lease-compiled-successor", r#"{ "3" = "unknown" }"#);
+    hook(&dir, "mise run linear-check");
+
+    let line = record(&dir);
+    let columns = columns(&line);
+    assert_eq!(columns[2], "-", "no lease names a successor: {line:?}");
+    assert_ne!(
+        columns[2], columns[3],
+        "so it cannot accidentally admit this branch"
     );
 }
 

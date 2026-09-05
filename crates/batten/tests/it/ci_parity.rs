@@ -198,8 +198,7 @@ fn row() -> Rule {
         ],
         "line_sources": [
             ".github/workflows/*.yml",
-            "mise-tasks/abandon-matrix.sh",
-            "mise-tasks/land.sh",
+            "crates/batten/src/lib.rs",
         ],
         "module": "policy/ci-parity.rego",
         "severity": "deny",
@@ -300,7 +299,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Landing lease precondition
-        run: bash -c "$body" || exit 0
+        run: |
+          "$RUNNER_TEMP/batten-bin/batten" lease guard \
+            "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
       - run: mise run lint
       - run: mise exec -- cargo nextest run --workspace
   final:
@@ -374,15 +375,22 @@ fn sound(name: &str) -> PathBuf {
     common::write(&root, "mise.toml", MANIFEST);
     common::write(&root, "renovate.json5", RENOVATE);
     common::write(&root, "release-plz.toml", "[pr]\npr_draft = true\n");
+    // THE COMPENSATION'S OWN SITE, since CLOUD-1148 retired the two shell
+    // programs this used to stand in for. Both fan-in clauses read one file
+    // now — the site that resolves the declaration and the site that reaches
+    // `land::abandon` are the same lines — so the sound fixture carries both.
+    //
+    // THE DECLARATION SITS AT THE CONSTRUCTOR, which is the binding review of
+    // #848 added: `abandon_reads_declaration` no longer accepts the read
+    // anywhere in the file, so this fixture is written the way rustfmt renders
+    // the real call rather than as one line.
     common::write(
         &root,
-        "mise-tasks/abandon-matrix.sh",
-        "#!/usr/bin/env bash\nrun=\"$CI_FANIN_WORKFLOW\"\n",
-    );
-    common::write(
-        &root,
-        "mise-tasks/land.sh",
-        "#!/usr/bin/env bash\nmise run abandon-matrix\n",
+        "crates/batten/src/lib.rs",
+        "let fanin = land::FanIn::from_workflow_path(\n\
+        \x20   std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default(),\n\
+         );\n\
+         let report = land::abandon(&repo, &sha, &fanin);\n",
     );
     install_module(&root);
     root
@@ -724,10 +732,15 @@ fn a_fanin_workflow_declaring_no_such_job_is_refused() {
 #[test]
 fn an_abandon_that_restates_the_path_is_refused() {
     let root = sound("abandon-literal");
+    // A LITERAL WHERE THE DECLARATION BELONGS. This also covers the
+    // sibling-variable defect CLOUD-1148 measured: reading `CI_FANIN_CHECK`
+    // here compiles, runs, and cancels the fan-in's own run, because that value
+    // is a check NAME and `land::worthless` compares against a workflow PATH.
     common::write(
         &root,
-        "mise-tasks/abandon-matrix.sh",
-        "#!/usr/bin/env bash\nrun=.github/workflows/ci.yml\n",
+        "crates/batten/src/lib.rs",
+        "let fanin = land::FanIn::from_workflow_path(\".github/workflows/ci.yml\");\n\
+         let report = land::abandon(&repo, &sha, &fanin);\n",
     );
     assert!(
         !findings(&root).is_empty(),
@@ -741,14 +754,77 @@ fn a_lander_that_never_abandons_is_refused() {
     // THE ANTI-VACUITY TERM. Every other fan-in clause makes the abandon SAFE;
     // none of them notices it is never called.
     let root = sound("abandon-uncalled");
+    // The declaration is read and the abandon is never reached — which is what a
+    // compensation arm deleted, renamed, or left behind a `match` that no longer
+    // dispatches it looks like from here.
     common::write(
         &root,
-        "mise-tasks/land.sh",
-        "#!/usr/bin/env bash\nmise run ci-wait\n",
+        "crates/batten/src/lib.rs",
+        "let fanin = land::FanIn::from_workflow_path(\n\
+        \x20   std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default(),\n\
+         );\n",
     );
     assert!(
         !findings(&root).is_empty(),
         "a lander that never calls the abandon should be refused"
+    );
+}
+
+#[test]
+fn a_declaration_read_far_from_the_constructor_does_not_satisfy_the_clause() {
+    // **THE CLASS REVIEW OF #848 NAMED, AND THE ONE THE ROW COULD NOT SEE.**
+    // `abandon_reads_declaration` and `lander_calls_abandon` were two
+    // INDEPENDENT line questions over one file, so a read of the declaration
+    // anywhere — a comment, a doc block, an unrelated helper six thousand lines
+    // away — plus a call handed the WRONG value satisfied both, and the module
+    // reported clean.
+    //
+    // That is not a hypothetical shape: the row's own header records the engine
+    // reading `CI_FANIN_CHECK` where it needed `CI_FANIN_WORKFLOW` for the whole
+    // of the branch that wrote it, which is exactly this, so the rule could not
+    // catch its own subject.
+    //
+    // The fixture is written to pass the OLD spelling and fail the new one:
+    // `land::abandon` is reached, `CI_FANIN_WORKFLOW` appears, and the value the
+    // constructor is handed is a different variable entirely.
+    let root = sound("declaration-far-from-the-call");
+    common::write(
+        &root,
+        "crates/batten/src/lib.rs",
+        "// the fan-in is declared as CI_FANIN_WORKFLOW in the manifest\n\
+         fn unrelated() -> String {\n\
+        \x20   std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default()\n\
+         }\n\
+         \n\
+         let fanin = land::FanIn::from_workflow_path(\n\
+        \x20   std::env::var(\"CI_FANIN_CHECK\").unwrap_or_default(),\n\
+         );\n\
+         let report = land::abandon(&repo, &sha, &fanin);\n",
+    );
+    assert!(
+        !findings(&root).is_empty(),
+        "a declaration read that is not the constructor's own argument should \
+         be refused: the call is handed a check name and the module cannot see it"
+    );
+}
+
+#[test]
+fn the_constructor_and_its_declaration_may_sit_on_one_line() {
+    // The window is THREE lines rather than one, deliberately: pinning rustfmt's
+    // current rendering would make a reflow silence the gate, which is strictly
+    // worse than the duplication the binding exists to stop. So the collapsed
+    // spelling has to pass too, and this is the case that says so.
+    let root = sound("constructor-one-line");
+    common::write(
+        &root,
+        "crates/batten/src/lib.rs",
+        "let fanin = land::FanIn::from_workflow_path(std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default());\n\
+         let report = land::abandon(&repo, &sha, &fanin);\n",
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "one line carrying both halves is still the binding: {:?}",
+        findings(&root)
     );
 }
 
@@ -763,7 +839,7 @@ fn a_job_that_starts_without_asking_the_lease_is_refused() {
         &root,
         ".github/workflows/ci.yml",
         &WORKFLOW.replace(
-            "      - name: Landing lease precondition\n        run: bash -c \"$body\" || exit 0\n",
+            "      - name: Landing lease precondition\n        run: |\n          \"$RUNNER_TEMP/batten-bin/batten\" lease guard \\\n            \"$LEASE_HEAD_SHA\" \"$LEASE_HEAD_REF\" \"$LEASE_RUN_ID\" || exit 0\n",
             "",
         ),
     );
@@ -782,7 +858,7 @@ fn a_precondition_invoked_without_the_tolerant_suffix_is_refused() {
     common::write(
         &root,
         ".github/workflows/ci.yml",
-        &WORKFLOW.replace("run: bash -c \"$body\" || exit 0", "run: bash -c \"$body\""),
+        &WORKFLOW.replace("\"$LEASE_RUN_ID\" || exit 0", "\"$LEASE_RUN_ID\""),
     );
     assert!(
         !findings(&root).is_empty(),

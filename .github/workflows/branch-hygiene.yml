@@ -61,4 +61,26 @@ jobs:
       # LAND_LOCK_MAX_WAITS and stops with the saturation message inside ~16
       # minutes. What this adds is the DIAGNOSIS — busy versus wedged — for the
       # one state nothing else can distinguish.
-      - run: mise run land-lock-check
+      #
+      # THE SUCCESSOR IS THE ENGINE'S (CLOUD-1148). `mise-tasks/land-lock-check.sh`
+      # is retired; `batten lease check` decides the same six states through
+      # `lease::health`, which is the one implementation of that predicate rather
+      # than a second reader of the same ref.
+      #
+      # THE EXIT NUMBERS MOVED AND THIS CALLER CANNOT TELL. The predecessor
+      # answered `0` healthy, `1` wedged-or-garbage, `2` could not look; the engine
+      # has one table with no per-verb exception, so a verdict is `2` and a
+      # could-not-look is `3`. A step fails on any non-zero either way, so no shim
+      # is needed here — which is the whole reason this repointing is one line
+      # rather than a translation task.
+      #
+      # `./install.sh` RATHER THAN A BUILD, for `auto-bot-land.yml`'s reason: the
+      # job installs `gh` and `jq` deliberately and has no Rust toolchain, and the
+      # committed script is POSIX sh that verifies every asset against the digest
+      # the release API reports. Run from the checkout, so `install-check` still
+      # governs what this executes.
+      - name: Install the released batten, which the lease gate is now a verb of
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./install.sh
+      - run: batten lease check

@@ -108,16 +108,13 @@ impl Fixture {
         .expect("write the terminal response");
 
         let root = dir.display().to_string();
-        write_program(
-            &bin.join("gh"),
-            &format!(
-                "#!/usr/bin/env bash\n\
-                 n=$(cat '{root}/calls' 2>/dev/null || echo 0)\n\
-                 echo $((n + 1)) >'{root}/calls'\n\
-                 printf '%s\\n' \"$*\" >>'{root}/args'\n\
-                 cat '{root}/resp.'$((n + 1)) 2>/dev/null || cat '{root}/resp.last'\n"
-            ),
-        );
+        // THE STUBBED CLIENT IS GONE WITH THE SPAWN IT STOOD IN FOR. `pr_watch`
+        // read through `gh` and this fixture put a program on `PATH`; the read is
+        // `rest::get` now, so the seam is `BATTEN_REST_FIXTURE` and the engine
+        // serves these same files itself. The protocol is unchanged — `resp.<n>`,
+        // `resp.last`, `calls`, `args` — so every case below reads back exactly
+        // what it did.
+        let _ = &root;
         // The recorder is a program the CALLER names, so the fixture supplies
         // one: it appends its argv, which is what makes "one push per poll"
         // countable rather than sampled.
@@ -172,6 +169,10 @@ impl Fixture {
             .arg("watch")
             .args(args)
             .env("PATH", path)
+            // The seam the stubbed `gh` used to be. Without it this poll reaches
+            // the real forge, never gets a green reading, and — since the loop is
+            // deliberately unbounded — runs until the suite is killed.
+            .env("BATTEN_REST_FIXTURE", &self.dir)
             .current_dir(&self.dir)
             .output()
             .expect("the compiled binary runs");

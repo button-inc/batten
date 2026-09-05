@@ -387,6 +387,7 @@ impl Validity {
 #[must_use]
 pub fn validity(
     receipt: Option<&Statement>,
+    expected: &str,
     head: &str,
     current_main: &str,
     git_dir: &str,
@@ -397,6 +398,22 @@ pub fn validity(
     let Some(subject) = receipt.subject.first() else {
         return Validity::Missing;
     };
+    // THE RECEIPT'S CONTENT IS BOUND TO ITS NAME, and it was not before. Every
+    // caller selects a receipt by PATH — `receipt_path` derives one from a scope
+    // fingerprint of the check's name — and then asked only about the checkout,
+    // the head and the trunk. Which check the receipt actually claims to record,
+    // and whether it records a PASS, were never compared: the type documents
+    // `conclusion` as *"always `CONCLUSION_PASS`: a failed check writes no
+    // receipt"*, and that invariant was asserted in prose and enforced nowhere.
+    //
+    // So a receipt for another check, or one carrying any other conclusion, made
+    // `receipt verified` exit `0` — a gate answering about evidence it never read
+    // the claim of. `Refuted` rather than `Missing`, because the file IS there and
+    // the remedy is not *run the step again*: something wrote a receipt that does
+    // not say what the reader needs it to say.
+    if receipt.predicate.check != expected || receipt.predicate.conclusion != CONCLUSION_PASS {
+        return Validity::Refuted;
+    }
     if receipt.predicate.recorded_git_dir != git_dir {
         return Validity::Missing;
     }
@@ -774,7 +791,13 @@ pub(crate) fn verdicts(
                         let statement = receipt_path(&facts.repo_root, check)
                             .ok()
                             .and_then(|path| load_statement(&path));
-                        validity(statement.as_ref(), &facts.head, &facts.main, &facts.git_dir)
+                        validity(
+                            statement.as_ref(),
+                            check,
+                            &facts.head,
+                            &facts.main,
+                            &facts.git_dir,
+                        )
                     }
                     ReceiptKey::Branch => {
                         branch.as_ref().map_or(Validity::Missing, |(branch, own)| {
@@ -1508,7 +1531,13 @@ pub fn run_status(
             let statement = load_statement(&receipt_path(&facts.repo_root, check)?);
             (
                 facts.head.clone(),
-                validity(statement.as_ref(), &facts.head, &facts.main, &facts.git_dir),
+                validity(
+                    statement.as_ref(),
+                    check,
+                    &facts.head,
+                    &facts.main,
+                    &facts.git_dir,
+                ),
             )
         }
         ReceiptKey::Branch => {
@@ -1544,6 +1573,138 @@ pub fn run_status(
         | Validity::Expired
         | Validity::Refuted => ExitCode::Violation,
     })
+}
+
+/// The checks a head must carry a valid receipt for, when a consumer declares
+/// none.
+///
+/// **These are THIS repository's task names, and that is stated rather than
+/// hidden.** `verify` says the tree passed its gate; `linear-check` says the
+/// branch was linear on the trunk it was measured against, and records WHICH
+/// trunk, so a moved `origin/main` expires it — a head carrying only the first
+/// has been proven against a base that may no longer exist.
+pub(crate) const VERIFIED_BY: [&str; 2] = ["verify", "linear-check"];
+
+/// The checks `verified` requires, from `[receipt] verified_by` or the default.
+///
+/// # A DEFAULT RATHER THAN A REFUSAL, AND THE REFUSAL WAS TRIED FIRST
+///
+/// The set moved into config because two task names compiled into the core are a
+/// different adopter's problem, and the first draft made an undeclared one a
+/// usage error — nothing is unverified when nothing is required, so passing
+/// would be a false clean.
+///
+/// That broke `tests/tree-clean.bats`, whose fixture is a throwaway repository
+/// with no `batten.toml` and no interest in receipts: it asserts that a dirty
+/// tree leaves HEAD unverified, and got the refusal instead of the verdict. That
+/// suite's subject SURVIVES, so under `policy/shell-retirement.rego` the file
+/// has exactly two landable shapes and neither is *edit the fixture* — the gate
+/// is right, and a design that can only land by editing around it is the wrong
+/// design.
+///
+/// So the default stands and config OVERRIDES it, which is strictly more general
+/// than the `const` this replaces and costs an adopter nothing: our names over
+/// their receipts resolve to `Missing`, so `verified` refuses loudly on their
+/// first run rather than passing quietly. A wrong answer that announces itself
+/// is the acceptable failure here; a silent one is not.
+fn verified_by(root: &Path) -> Vec<String> {
+    let site = crate::config::authority_site(root, None);
+    crate::config::load_site(&site)
+        .ok()
+        .and_then(|(loaded, _)| loaded.receipt)
+        .map(|receipt| receipt.verified_by)
+        .filter(|declared| !declared.is_empty())
+        .unwrap_or_else(|| {
+            VERIFIED_BY
+                .iter()
+                .map(|check| (*check).to_owned())
+                .collect()
+        })
+}
+
+/// Is HEAD verified — every check in [`VERIFIED_BY`] valid against this commit?
+///
+/// # Why the composition is a verb rather than two calls
+///
+/// The predecessor was a shell gate, and it existed because a caller had read
+/// the wrong thing: `mise run verify 2>&1 | tail -60` exits with the PIPE's
+/// status, so a branch `linear-check` had rejected reported success and the zero
+/// was acted on. A verb that answers about the SET cannot be half-asked, where
+/// two [`run_status`] calls can be — one of them forgotten, and a head reported
+/// verified on half its evidence.
+///
+/// # Exits
+///
+/// `0` verified. `2` not verified — a receipt is missing or expired, which is a
+/// verdict about this repository's state. `1` the checkout cannot be judged at
+/// all (not a repository, unresolvable HEAD or `origin/main`), which is a
+/// statement about the clone and never about the work.
+///
+/// **The predecessor spelled those `1` and `2` the other way round**, and the
+/// engine's table wins (non-negotiable rule 5): `2` is the policy verdict
+/// everywhere, and `1`/`3` are the only codes a Batten failure produces. The
+/// `mise` task that keeps the old name translates, so every caller reads what it
+/// always read — the shape CLOUD-1170's shims already took.
+///
+/// # Errors
+///
+/// As [`run_status`]: a checkout that cannot be judged is a [`UsageError`], and
+/// an unwritable stream is an internal error.
+pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
+    let facts = repo_facts()?;
+    // `[receipt] verified_by`, or this repository's own pair where a consumer
+    // declares none — see `verified_by`, which records why the undeclared case
+    // takes a default rather than the refusal it was first written as. Never
+    // empty, so the "verified having asked about nothing" arm is unreachable by
+    // construction rather than guarded here.
+    //
+    // **THE REPO ROOT, NOT THE PROCESS CWD** (review of #848). This read
+    // `Path::new(".")` while the very next line uses `facts.repo_root`, and
+    // `config::authority_site` performs no directory walk by design — so run from
+    // a subdirectory it found no `batten.toml`, silently fell through to the
+    // compiled default, and told a consumer who had declared
+    // `verified_by = ["ci", "fmt"]` that they were "NOT verified: <head> verify
+    // missing" about checks they never named, while the ones they did name were
+    // never asked about. It passes in this repository only because the two sets
+    // happen to coincide.
+    let required = verified_by(Path::new(&facts.repo_root));
+    let mut unverified = Vec::new();
+    for check in &required {
+        let statement = load_statement(&receipt_path(&facts.repo_root, check)?);
+        let verdict = validity(
+            statement.as_ref(),
+            check,
+            &facts.head,
+            &facts.main,
+            &facts.git_dir,
+        );
+        if verdict != Validity::Valid {
+            unverified.push((check.clone(), verdict));
+        }
+    }
+    if unverified.is_empty() {
+        writeln!(
+            out,
+            "verified: HEAD {} carries every receipt, linear on {}",
+            facts.head, facts.main
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    // POINTER-ONLY: the check's name and its verdict token, never a receipt's
+    // contents. And "NOT verified" is the predecessor's own wording, kept rather
+    // than improved because a SURVIVING suite reads for it —
+    // `tests/tree-clean.bats` proves a dirty tree leaves HEAD unverified by
+    // looking for exactly this string, and that suite's subject does not retire
+    // here, so the string is part of the contract this port must conserve.
+    for (check, verdict) in &unverified {
+        writeln!(
+            out,
+            "NOT verified: {} {check} {}",
+            facts.head,
+            verdict.as_str()
+        )?;
+    }
+    Ok(ExitCode::Violation)
 }
 
 /// Whether the receipt at `path` records something other than what `bound`
@@ -1694,20 +1855,61 @@ mod tests {
     fn validity_covers_all_four_verdicts() {
         let receipt = statement("head1", "main1", "/repo/.git");
         assert_eq!(
-            validity(None, "head1", "main1", "/repo/.git"),
+            validity(None, "verify", "head1", "main1", "/repo/.git"),
             Validity::Missing
         );
         assert_eq!(
-            validity(Some(&receipt), "head1", "main1", "/repo/.git"),
+            validity(Some(&receipt), "verify", "head1", "main1", "/repo/.git"),
             Validity::Valid
         );
         assert_eq!(
-            validity(Some(&receipt), "head2", "main1", "/repo/.git"),
+            validity(Some(&receipt), "verify", "head2", "main1", "/repo/.git"),
             Validity::StaleHead
         );
         assert_eq!(
-            validity(Some(&receipt), "head1", "main2", "/repo/.git"),
+            validity(Some(&receipt), "verify", "head1", "main2", "/repo/.git"),
             Validity::StaleMain
+        );
+    }
+
+    /// **THE RECEIPT'S CLAIM IS READ, NOT JUST ITS PATH.**
+    ///
+    /// Every caller selects a receipt by a path derived from the check's name and
+    /// then asked only about the checkout, the head and the trunk — so a receipt
+    /// recording ANOTHER check, or one carrying any conclusion at all, made
+    /// `receipt verified` exit `0`. The type's own doc says `conclusion` is
+    /// *"always `CONCLUSION_PASS`: a failed check writes no receipt"*; that was
+    /// prose with nothing behind it.
+    ///
+    /// `Refuted`, not `Missing`: the file is there and the remedy is not *run the
+    /// step again*.
+    #[test]
+    fn a_receipt_claiming_another_check_or_no_pass_is_refuted() {
+        let receipt = statement("head1", "main1", "/repo/.git");
+        assert_eq!(
+            validity(
+                Some(&receipt),
+                "linear-check",
+                "head1",
+                "main1",
+                "/repo/.git"
+            ),
+            Validity::Refuted,
+            "this receipt records `verify`, whatever path it was found at"
+        );
+
+        let mut failed = statement("head1", "main1", "/repo/.git");
+        failed.predicate.conclusion = "fail".to_owned();
+        assert_eq!(
+            validity(Some(&failed), "verify", "head1", "main1", "/repo/.git"),
+            Validity::Refuted
+        );
+
+        // AND THE PAIR THAT MAKES IT DISCRIMINATE: the matching receipt is still
+        // valid, so a binding that refused everything would not satisfy this.
+        assert_eq!(
+            validity(Some(&receipt), "verify", "head1", "main1", "/repo/.git"),
+            Validity::Valid
         );
     }
 
@@ -1717,7 +1919,7 @@ mod tests {
     fn a_foreign_checkouts_receipt_is_missing_not_stale() {
         let receipt = statement("head2", "main2", "/elsewhere/.git");
         assert_eq!(
-            validity(Some(&receipt), "head1", "main1", "/repo/.git"),
+            validity(Some(&receipt), "verify", "head1", "main1", "/repo/.git"),
             Validity::Missing
         );
     }
@@ -1727,7 +1929,7 @@ mod tests {
         let mut receipt = statement("head1", "main1", "/repo/.git");
         receipt.subject.clear();
         assert_eq!(
-            validity(Some(&receipt), "head1", "main1", "/repo/.git"),
+            validity(Some(&receipt), "verify", "head1", "main1", "/repo/.git"),
             Validity::Missing
         );
     }
@@ -1856,7 +2058,7 @@ mod tests {
             "a predicate missing configEpoch is unusable"
         );
         assert_eq!(
-            validity(loaded.as_ref(), "head1", "main1", "/repo/.git"),
+            validity(loaded.as_ref(), "verify", "head1", "main1", "/repo/.git"),
             Validity::Missing,
             "and the verdict denies rather than passing over an unrecorded surface"
         );

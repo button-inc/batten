@@ -72,8 +72,6 @@ if [[ "${1:-}" = "--probe" ]]; then
 		Cargo.lock \
 		batten.toml \
 		mise.toml \
-		mise-tasks/land.sh \
-		tests/land.bats \
 		bench/tokens/fixtures/x \
 		.github/workflows/ci.yml \
 		.claude/hooks/git-hook.sh \

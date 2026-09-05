@@ -43,6 +43,9 @@ pub mod error;
 pub mod exec;
 pub mod exit;
 pub mod facts;
+/// Asking the fast-forward bot to land a head, and reading the answer keyed to
+/// THIS request rather than to a timestamp (CLOUD-1338).
+pub mod fast_forward;
 pub mod fetch;
 pub mod findings;
 pub mod forge;
@@ -68,6 +71,7 @@ pub mod landed;
 /// remote ref, spoken as git smart-HTTP over [`fetch`] (CLOUD-1274).
 pub mod lease;
 pub mod lint;
+pub mod main_watch;
 pub mod markers;
 pub mod mcp;
 pub mod mint;
@@ -81,6 +85,7 @@ mod patch;
 pub mod pattern;
 pub mod perf;
 pub mod pinned;
+pub mod pipeline;
 pub mod policy;
 pub mod pr_watch;
 pub mod preset;
@@ -95,6 +100,7 @@ pub mod redirect;
 pub mod refusal;
 pub mod render;
 pub mod resolve;
+pub mod rest;
 pub mod review;
 pub mod rules;
 pub mod secrets;
@@ -107,6 +113,7 @@ pub mod session;
 pub mod severity;
 pub mod sink;
 pub mod spec;
+pub mod speculation;
 /// Resolved-symbol facts, from a delegated analyser's structured output
 /// (CLOUD-760). The first occupant of `Cost::Effect`: resolving it runs a
 /// program, which is the classification rather than an accident of it.
@@ -295,7 +302,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // is why nothing on the `check` or `hook` surface may reach this module —
         // `policy/module-layering.rego` forbids both edges over the resolved use
         // graph rather than by review.
-        Some(Command::Lease { command }) => run_lease(command, out, err),
+        Some(Command::Lease { command }) => run_lease(command, &overrides, out, err),
         // The landing lap (CLOUD-1335). It reaches the network through `lease`
         // and the worktree through `gitwrite`, so the same two edges are
         // forbidden — transitively, which the layering table states rather than
@@ -626,7 +633,11 @@ fn run_baseline(
 ) -> Result<ExitCode> {
     let root = anchor();
     let config = resolve::resolve(&root, overrides)?;
-    let scan = rules::run_static(
+    // AN INSTANT, for `filed_here_pointers`' reason at its own site: this runs
+    // the WHOLE rule set, so a `[[rule.minted]]` `max_age` bound evaluated here
+    // against epoch 0 would record a baseline over findings `check` does not
+    // produce.
+    let scan = rules::run_static_over(
         &config.rules,
         &config.provisions,
         policy::Vocabulary {
@@ -635,6 +646,11 @@ fn run_baseline(
             recorders: &config.recorders,
         },
         &root,
+        rules::RunOptions {
+            checks: policy::ModuleChecks::Run,
+            scope: &rules::Scope::Tree,
+            now: Some(now_unix()),
+        },
     )?;
 
     if prune {
@@ -2482,6 +2498,7 @@ fn run_receipt(
     match command {
         ReceiptCommand::Record { check } => receipt::run_record(&check, mode, err),
         ReceiptCommand::Status { check, key, json } => receipt::run_status(&check, key, json, out),
+        ReceiptCommand::Verified => receipt::run_verified(out),
     }
 }
 
@@ -2710,7 +2727,13 @@ fn run_pr(
 
     let config = pr_watch::Config {
         sha,
-        repo: repo.unwrap_or_else(|| pr_watch::REPO_PLACEHOLDER.to_owned()),
+        // `--repo` FIRST, THEN THE REMOTE, and the placeholder only where neither
+        // answers. This verb has no `root` argument, so the reading is taken from
+        // the working directory the caller invoked it in — which is the same
+        // checkout every other reading in this process comes from. See
+        // [`repo_slug`] for why the bare placeholder is a guaranteed 404 rather
+        // than a fallback.
+        repo: repo.unwrap_or_else(|| repo_or_placeholder(Path::new("."))),
         interval,
         progress,
     };
@@ -3194,7 +3217,9 @@ fn run_claim_race(
         );
     };
     let grammar = board_grammar(overrides)?;
-    let log = bot::forge::commit_messages(&slug, &me.number).unwrap_or_default();
+    // Taken by value before the listing is rebuilt below: `me` borrows it.
+    let mine_number = me.number.clone();
+    let log = bot::forge::commit_messages(&slug, &mine_number).unwrap_or_default();
     let mine = race::claimed(&me.head_ref, &me.title, &log, &me.body, &grammar);
     if mine.is_empty() {
         return clean(
@@ -3202,7 +3227,35 @@ fn run_claim_race(
             "claim race: this branch claims no issue — nothing to race",
         );
     }
-    let races = race::races(&mine, &pulls, Some(&me.number), &grammar);
+    // **EVERY COMPETITOR IS JUDGED BY THE SAME SOURCES THIS BRANCH IS** (review
+    // of #848). `bot::forge::open_pulls` builds each competitor with an EMPTY
+    // log, and `race::claimed`'s third source is the `Refs:` trailer — read out
+    // of the log. So the comparison was asymmetric: this branch's claim resolved
+    // through a trailer and a rival's could not, and a rival whose only statement
+    // of the key is that trailer was invisible. `commit-lint` requires the
+    // trailer on every commit here and a closing keyword on almost none, so the
+    // unreachable source was the one that actually resolves claims — the gate
+    // reported "no races" at exit 0 on precisely the collision it exists to
+    // refuse.
+    //
+    // ONLY WHERE THE CHEAP SOURCES FOUND NOTHING, which is what keeps this from
+    // becoming a round trip per open pull request: a competitor whose branch,
+    // title or body already names a key has been answered, and the trailer can
+    // only agree. A fetch that fails leaves the log empty, which is the reading
+    // this had before — worse than the truth, and never better than it.
+    let pulls: Vec<race::Pull> = pulls
+        .into_iter()
+        .map(|pull| {
+            if pull.number == mine_number
+                || !race::claimed(&pull.head_ref, &pull.title, "", &pull.body, &grammar).is_empty()
+            {
+                return pull;
+            }
+            let log = bot::forge::commit_messages(&slug, &pull.number).unwrap_or_default();
+            race::Pull { log, ..pull }
+        })
+        .collect();
+    let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
     if races.is_empty() {
         return clean(
             out,
@@ -3818,7 +3871,7 @@ const RECEIPT_DIR: &str = "batten-receipts";
 
 /// Seconds since the epoch, or zero where the clock will not read — a timestamp
 /// nobody can produce is recorded as one rather than refusing the claim.
-fn now_unix() -> u64 {
+pub(crate) fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs())
@@ -5432,29 +5485,23 @@ fn report_comparison(
     Ok(ExitCode::Violation)
 }
 
-/// `batten mutate`: does each declared gate have a mutation its declared suite
-/// is proven to catch (CLOUD-418, CLOUD-1267)?
-///
-/// **The report is the deliverable and the exit code is the verdict**, and the
-/// two say different things on purpose. Every finding reaches stdout as a
-/// pointer — gate, mutation id, case — because the workflow that runs this cats
-/// the file into a step summary, and a run that fails without publishing what it
-/// found sends the reader back to re-run a sweep that costs the better part of
-/// an hour. The `::error::` summary on stderr carries the count and nothing else.
-///
-/// Exit follows the one table: `2` where the sweep decided against the tree, `3`
-/// where it could not look, and the split is the acceptance rather than a
-/// nicety — a gate whose declared suite cannot be resolved or run must never be
-/// reported as "every mutation caught".
 /// The landing lease's nine arms (CLOUD-1274), ported off `mise-tasks/land-lock.sh`.
 ///
-/// # The exit vocabulary is not uniform across these arms, and that is the design
+/// # The exit vocabulary is uniform, and this paragraph used to claim it was not
 ///
-/// `authorises` answers `0` run / `3` stop / `2` could not look, because `1`
-/// already means "held by someone else" — which there is a REASON to stop rather
-/// than the instruction, so a caller keying on `3` cannot mistake a refusal for an
-/// error. Every other arm keeps the ordinary pair, and `2` stays "could not look"
-/// throughout.
+/// It read: _"`authorises` answers `0` run / `3` stop / `2` could not look,
+/// because `1` already means held by someone else."_ That is
+/// `mise-tasks/land-lock.sh`'s table, transcribed rather than ported, and the
+/// landed arm never spoke it — `Authority::Stop` returns
+/// [`ExitCode::Violation`] and an unresolvable terms read returns
+/// [`ExitCode::Internal`], which is the engine's one table with no per-verb
+/// exception (non-negotiable rule 5). `surface.rs`'s `lease authorises` row
+/// states the correction at the declaration; this said the opposite two
+/// screens away, so a reader reaching either one first got a different answer.
+///
+/// The debt that made it survive is now paid too: the predecessor's numbers had
+/// sixteen CI callers, and `refactor(ci)` moved every one of them onto
+/// `lease guard`, which exits `0` unconditionally and keys on nothing.
 ///
 /// # Where the fail-open asymmetry lives
 ///
@@ -5464,11 +5511,20 @@ fn report_comparison(
 /// a runner's budget.
 fn run_lease(
     command: cli::LeaseCommand,
+    overrides: &resolve::Overrides,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let root = Path::new(".");
-    let terms = match lease_terms(root) {
+    // BEFORE THE TERMS RESOLVE, because this arm asks the FORGE rather than the
+    // lease remote and so has no terms to want. `land verify` and
+    // `land fast-forward` sit outside their own remote resolution for the same
+    // reason: a clone that cannot name a remote can still answer both, and
+    // resolving one first would refuse a question that never needed it.
+    if let cli::LeaseCommand::Carries { head } = &command {
+        return run_lease_carries(root, overrides, head, out, err);
+    }
+    let terms = match lease::terms(root) {
         Ok(terms) => terms,
         // A CLONE WITH NO REMOTE IS AN ANSWER FOR THE READ ARMS, and the type
         // above says why. The five arms that reach `swap` still refuse below,
@@ -5485,7 +5541,7 @@ fn run_lease(
         // stopping the fleet because a clone has no remote is exactly the cost
         // that arm exists never to pay. Reaching it required this branch, because
         // the terms resolve BEFORE the arm does.
-        Err(TermsMissing::NoRemote) => match command {
+        Err(lease::TermsMissing::NoRemote) => match command {
             cli::LeaseCommand::Status { json } => {
                 return lease_report(json, "unconfigured", &[], out);
             }
@@ -5495,6 +5551,19 @@ fn run_lease(
                     "lease: no remote is configured, so no lease governs this clone"
                 )?;
                 return Ok(ExitCode::Success);
+            }
+            // THE GUARD STILL ASKS ITS OTHER HALF. A clone with no lease remote
+            // has no lease to honour, but the STALENESS question is answered by
+            // the forge and does not need one — so reaching `Authorises`' arm
+            // here would skip a reading that was available. `guard` takes `None`
+            // for the authority, which it reads as fail-open.
+            cli::LeaseCommand::Guard { head, branch, run } => {
+                let asking = Standing {
+                    head: &head,
+                    branch: &branch,
+                    run: &run,
+                };
+                return run_lease_guard_unleased(root, overrides, &asking, out, err);
             }
             cli::LeaseCommand::Check => {
                 writeln!(
@@ -5508,6 +5577,12 @@ fn run_lease(
             cli::LeaseCommand::Peek { .. } => return Ok(ExitCode::Success),
             // `held` asks whether THIS clone holds it. It does not.
             cli::LeaseCommand::Held => return Ok(ExitCode::Violation),
+            // UNREACHABLE — the arm returns before the terms resolve, above.
+            // Spelled rather than wildcarded so the next arm added here cannot
+            // be swallowed by a `_`, which is the property that forced this row.
+            cli::LeaseCommand::Carries { head } => {
+                return run_lease_carries(root, overrides, &head, out, err);
+            }
             cli::LeaseCommand::Acquire { .. }
             | cli::LeaseCommand::Renew
             | cli::LeaseCommand::Hold
@@ -5557,7 +5632,7 @@ fn run_lease(
             }
         }
         cli::LeaseCommand::Check => run_lease_check(&terms, now, out, err),
-        cli::LeaseCommand::Status { json } => run_lease_status(&terms, json, now, out, err),
+        cli::LeaseCommand::Status { json } => run_lease_status(root, &terms, json, now, out, err),
         cli::LeaseCommand::Peek { field } => run_lease_peek(&terms, &field, now, out, err),
         cli::LeaseCommand::Held => run_lease_held(root, &terms, now, out, err),
         cli::LeaseCommand::Acquire { branch } => {
@@ -5567,42 +5642,19 @@ fn run_lease(
         cli::LeaseCommand::Hold => run_lease_hold(root, &terms, out, err),
         cli::LeaseCommand::Release => run_lease_release(root, &terms, now, out, err),
         cli::LeaseCommand::Reserve { branch } => run_lease_reserve(&terms, &branch, now, out, err),
-    }
-}
-
-/// Resolve the lease's terms from this checkout.
-///
-/// **The remote must resolve to a URL rather than a name.** The transport speaks
-/// smart-HTTP over the vendored client, which has no notion of a git remote alias,
-/// and a name reaching it would be an unresolvable host rather than a clear
-/// refusal here.
-/// Why a clone has no lease terms, and the two are not the same answer.
-///
-/// **A clone with no remote is a FACT about the clone, not a failure to look.**
-/// The could-not-look guard exists so an unreadable lease is never reported as a
-/// free one; a repository with no remote has no lease ref to misread, so folding
-/// it into that guard made `lease status` an error in every clone that has not
-/// been pushed anywhere — including the census fixture, where every other
-/// data-channel verb answers cleanly.
-///
-/// The distinction is only ever RELAXED for the reporting arms. The write arms
-/// refuse either way, because acquiring a lease that has nowhere to live is not
-/// something a missing remote makes safe.
-enum TermsMissing {
-    /// No remote is configured, so this clone cannot participate in a lease.
-    NoRemote,
-    /// A remote exists and something about reading it failed. This is the
-    /// could-not-look the guard is for.
-    Unreadable(String),
-}
-
-impl TermsMissing {
-    /// The diagnostic, for the arms that report one.
-    fn say(&self, name: &str) -> String {
-        match self {
-            TermsMissing::NoRemote => format!("no remote named {name} is configured"),
-            TermsMissing::Unreadable(reason) => reason.clone(),
+        cli::LeaseCommand::Guard { head, branch, run } => {
+            let asking = Standing {
+                head: &head,
+                branch: &branch,
+                run: &run,
+            };
+            run_lease_guard(root, overrides, &terms, &asking, now, out, err)
         }
+        // UNREACHABLE, and stated rather than wildcarded: the arm returns above,
+        // before the terms this match is built on resolve. A `_` here would
+        // silently swallow the next arm somebody adds, which is what the
+        // exhaustive match exists to prevent — it is what forced this very row.
+        cli::LeaseCommand::Carries { head } => run_lease_carries(root, overrides, &head, out, err),
     }
 }
 
@@ -5632,76 +5684,1505 @@ fn run_land(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    // `push` names no reference — it pushes the branch it is on — so the shared
-    // preamble below binds an empty one for it rather than growing a second
-    // preamble. Every arm needs the same three facts: a remote, its url, and a
-    // branch to key the record on.
-    let reference = match command {
-        cli::LandCommand::Replay { reference } | cli::LandCommand::Wait { reference } => {
-            reference.clone()
-        }
-        cli::LandCommand::Push | cli::LandCommand::Verify => String::new(),
-    };
     let root = Path::new(".");
+    // THE BRANCH IS EVERY ARM'S, so it is resolved once and ahead of the split:
+    // the record is keyed by it, the push names it, and the pull request is found
+    // by it. A detached HEAD can answer none of those, and that is a statement
+    // about the clone rather than about the work.
+    let Ok(Some(branch)) = git::current_branch(root) else {
+        writeln!(err, "::error:: land: a detached HEAD has no branch to key")?;
+        return Ok(ExitCode::Internal);
+    };
 
-    // VERIFY RUNS BEFORE THE REMOTE IS RESOLVED, and that ordering is the point
-    // rather than a shortcut. Verifying is a question about the WORKING TREE:
-    // a clone with no remote can still answer it, and making the whole verb
-    // depend on a remote would refuse a lap step that had everything it needed.
-    if matches!(command, cli::LandCommand::Verify) {
-        let Ok(Some(branch)) = git::current_branch(root) else {
-            writeln!(err, "::error:: land: a detached HEAD has no branch to key")?;
-            return Ok(ExitCode::Internal);
-        };
-        return run_land_verify(root, &branch, out, err);
+    // ONE EXHAUSTIVE MATCH, on `run_lease`'s shape rather than on the cascade of
+    // `matches!` blocks this replaced. A cascade is a shape a new sub-verb has to
+    // EXTEND — read the guards, work out which preamble it needs, insert it in the
+    // right place — where a match arm is one a new variant SLOTS into and the
+    // compiler names the omission. `fast-forward` is the fifth arm to arrive,
+    // which is the point at which the difference stops being taste.
+    //
+    // THE ORDERING THE CASCADE BOUGHT IS KEPT, and kept by construction rather
+    // than by a comment asking the next reader to preserve it: `verify` asks about
+    // the working tree and `fast-forward` about a pull request, neither of which
+    // is a ref, so a clone with no remote still answers both. Only the three
+    // ref-shaped arms resolve a remote, and each resolves it for itself.
+    match command {
+        cli::LandCommand::Verify => {
+            // THE REF, NOT AN EMPTY BET. Run by hand, this verb has no lap
+            // holding one — but a bet is durable precisely because it outlives
+            // the process that placed it, so publishing nothing here would tell
+            // the gate this tree carries no borrowed range while it does.
+            let mut standing = speculation::Bet::default();
+            let _ = speculation::recover(root, &mut standing);
+            run_land_verify(root, &standing, &branch, None, out, err)
+        }
+        cli::LandCommand::FastForward => run_land_fast_forward(root, &branch, out, err),
+        cli::LandCommand::Replay { reference } => {
+            let Some(url) = land_remote(root, err)? else {
+                return Ok(ExitCode::Internal);
+            };
+            run_land_replay(root, &url, reference, &branch, out)
+        }
+        // NO REMOTE RESOLVED HERE ANY MORE. The staleness arm asks the FORGE
+        // through its conditional endpoint rather than the git remote, so this
+        // arm stopped being ref-shaped when CLOUD-390's poll landed — and a
+        // resolution nothing reads would refuse a clone that can still answer.
+        // The verdict is the LAP's to read; a hand-driven wait reports the code
+        // and nothing else, exactly as it did before the tap needed one.
+        cli::LandCommand::Wait { reference } => {
+            run_land_wait(root, reference, &branch, out, err).map(|(code, _)| code)
+        }
+        cli::LandCommand::Push => {
+            let Some(url) = land_remote(root, err)? else {
+                return Ok(ExitCode::Internal);
+            };
+            run_land_push(root, &url, &branch, out)
+        }
+        cli::LandCommand::Lap { reference } => {
+            let Some(url) = land_remote(root, err)? else {
+                return Ok(ExitCode::Internal);
+            };
+            run_land_lap(root, &url, reference, &branch, out, err)
+        }
+    }
+}
+
+/// Has the base moved while the previous step ran? `true` means lap.
+///
+/// The last free moment before a step spends, extracted from the driver because
+/// it is one decision with its own could-not-look and the driver is a sequencer.
+///
+/// **THE SLUG OR NO PROBE, never the placeholder** (review of #848). This read
+/// goes on the wire: `main_watch::read` interpolates the repo straight into the
+/// endpoint and no client-side `{owner}/{repo}` substitution exists any more, so
+/// the placeholder 404s every request — `is_reading()` false, `Poll::head` never
+/// set, and `moved()` answers `None`, which this reads as STILL LANDABLE. The
+/// probe would be permanently dead while looking exactly like a quiet trunk, and
+/// each lap would buy a matrix the fast-forward then refuses.
+///
+/// Skipping it on an unresolvable slug is the same fail-open reading
+/// `land::stale` already takes for a forge that did not answer. The difference is
+/// that it is a decision here rather than a silent consequence of a string that
+/// cannot work.
+///
+/// # Errors
+///
+/// Only for a stream that will not accept output.
+fn base_moved(
+    root: &Path,
+    trunk_poll: &mut main_watch::Poll,
+    reference: &str,
+    lap: u32,
+    step: land::Step,
+    out: &mut dyn Write,
+) -> Result<bool> {
+    let Some(slug) = repo_slug(root) else {
+        return Ok(false);
+    };
+    let trunk = trunk_watch(reference, "", &slug, 1);
+    if let Some(moved) = land::stale(root, trunk_poll, &trunk, reference) {
+        writeln!(
+            out,
+            "land: lap {lap} — {reference} moved to {moved} before {step:?}; lapping before a matrix is spent"
+        )?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Charge a lap that is about to go round again, refunding the ones that spent
+/// nothing. `Some(bound)` means stop.
+///
+/// **`Ledger`'s refund had no production caller at all** (review of #848), so a
+/// lap lost to another branch holding the lease consumed one of the two the
+/// runaway backstop allows — and a contended fleet exhausted the budget and then
+/// announced "a conflict, a failed gate or red CI will lose again". That is
+/// precisely the mis-diagnosis `Bound::LeaseWaits` exists to prevent, and the one
+/// CLOUD-413 measured being wrong twice across 24 laps.
+///
+/// **Only the lease arm is wired, and the other two are deliberately not.** The
+/// bot's unreadable answer no longer reaches the lap — `run_land_fast_forward`'s
+/// poll absorbs it now — and the transient re-run has no producer in this engine
+/// yet. A call site for a condition nothing raises is the dead code this finding
+/// was about, one layer over.
+fn charge_the_lap(step: land::Step, ledger: &mut land::Ledger) -> Option<land::Bound> {
+    if step != land::Step::Lease {
+        return None;
+    }
+    match ledger.waited(lease_wait_bound()) {
+        land::Charge::Lap => None,
+        land::Charge::Stop(bound) => Some(bound),
+    }
+}
+
+/// How many lease waits a landing absorbs before it stops.
+///
+/// **Separate from `$LAND_MAX_LAPS`, which is the point.** A lap lost to another
+/// branch holding the lease has spent nothing — no matrix, no gate, no push — so
+/// charging it against a budget that exists to catch "main moves faster than a
+/// lap takes" reports the wrong diagnosis at exhaustion. `Ledger::waited`
+/// refunds the lap and charges here instead.
+///
+/// Generous, because waiting is free and the thing being waited for is another
+/// branch finishing: the cost of too many is conditional requests, and the cost
+/// of too few is giving up on a queue that was moving.
+fn lease_wait_bound() -> u32 {
+    std::env::var("LAND_MAX_LEASE_WAITS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .filter(|waits| *waits > 0)
+        .unwrap_or(60)
+}
+
+/// How many laps before the loop gives up, when the caller names none.
+///
+/// TWO, matching the predecessor. It is a RUNAWAY BACKSTOP rather than a budget:
+/// a lap that keeps losing to contention converges, and one losing to a conflict,
+/// a failed gate or red CI will lose again — so the useful number is small enough
+/// that a broken branch stops rather than grinding.
+const LAPS: u32 = 2;
+
+/// Drive the whole lap and lap again on any refusal a rebase would clear.
+///
+/// # Every bound here is a COUNT, and that is load-bearing
+///
+/// `$LAND_MAX_LAPS` counts laps. Nothing in this loop consults a clock, and the
+/// mechanism refusing one is not this doc comment: `clippy.toml` denies both
+/// `std::thread::sleep` and `tokio::time::sleep`, and `tests/sleep_ban.rs` holds
+/// each ban's stated reason to a bound whose name resolves. A deadline would
+/// reintroduce the VM-reap gap the count exists to close, and would land as a
+/// false refusal on a slow bot rather than on a broken branch.
+///
+/// # Which refusals lap and which stop
+///
+/// The split is whether a REBASE would clear it, and it is the whole design:
+///
+/// * **Conflict, or a gate that refused** — stop. Both are decisions a human
+///   owns, and lapping would re-run them against the same tree to reach the same
+///   answer. This is the one step the loop cannot do for you, and lapping OFTEN
+///   is what keeps it small.
+/// * **A raced push, a stale base, an unanswered wait, a refused or unreadable
+///   fast-forward** — lap. Every one of them means the base moved or the answer
+///   is not in yet, and the next lap's rebase is exactly the remedy.
+///
+/// A refusal is the design working rather than a failure: each lap rebases onto a
+/// little more landed work, so conflicts arrive one small resolvable increment at
+/// a time. Batching laps removes no refusal and only makes each one bigger, which
+/// is the inference CLOUD-238 measured an agent making and optimising toward.
+///
+/// # Exits
+///
+/// `0` landed. `2` stopped for a decision — a conflict or a refused gate, which
+/// is a verdict about this repository. `3` the laps ran out with no answer, which
+/// is not a verdict about anything: the branch may be perfectly landable and the
+/// bot merely slow.
+fn run_land_lap(
+    root: &Path,
+    url: &str,
+    reference: &str,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let laps = std::env::var("LAND_MAX_LAPS")
+        .ok()
+        .and_then(|declared| declared.parse::<u32>().ok())
+        // ZERO IS NOT A BOUND, IT IS A LOOP THAT NEVER RUNS. `1..=0` iterates
+        // never, so the lap loop fell straight through to the exhausted-laps
+        // message and reported "0 lap(s) bought no landing" at exit 3 — a
+        // could-not-look about a branch nothing looked at. The same positive
+        // filter `LAND_ANSWER_MAX_UNKNOWNS` already applies to its own count.
+        .filter(|laps| *laps > 0)
+        .unwrap_or(LAPS);
+    // THE COMPOSITION, VALIDATED BEFORE A LAP SPENDS ANYTHING. A pipeline that
+    // would ready and then abandon fails to LOAD rather than in production,
+    // which is the whole difference between a schema and a convention.
+    let pipeline = pipeline::Pipeline::default();
+    let faults = pipeline.validate();
+    if !faults.is_empty() {
+        for fault in &faults {
+            writeln!(
+                err,
+                "::error:: land: the landing composition will not load: {fault:?}"
+            )?;
+        }
+        return Ok(ExitCode::Usage);
     }
 
+    // THE ENTRY GATES, ONCE, BEFORE ANY LAP CAN SPEND (CLOUD-1471). The bash
+    // lander opened with a pair of calls no lap could proceed past, over a
+    // precondition about the SESSION rather than about the branch — this
+    // repository's ban on PR-webhook babysitting, which the harness arms anyway
+    // (CLOUD-518, CLOUD-790). Nothing in the engine carried it, so retiring the
+    // lander would have dropped a live gate on the floor.
+    //
+    // BEFORE the lease and the singleton, which is where the predecessor put it
+    // and for its reason: a refusal here has spent nothing at all.
+    if let Some(code) = run_land_entry_gates(root, branch, out, err)? {
+        return Ok(code);
+    }
+
+    // ONE POLL FOR THE WHOLE LANDING, held outside the lap loop so lap 2 onward
+    // send the validator lap 1 was given. Rebuilt per lap it was a fresh
+    // unconditional ask every time — see `land::stale`'s own header, which
+    // described this design while the code discarded it.
+    let mut trunk_poll = main_watch::Poll::default();
+    // THE SPEND, COUNTED RATHER THAN INFERRED. `Ledger`'s header records the
+    // measurement: two laps both lost to `main` moving under the gate, the ready
+    // never reached, zero check-runs on the head — and the refusal announced
+    // "having spent 2 CI matrices". `laps` is an attempt counter; `paid` moves at
+    // the one site that buys a run.
+    let mut ledger = land::Ledger::default();
+    // AT MOST ONE OUTSTANDING BET, which is why it is held here rather than built
+    // per lap. `Bet::undo` is this branch's own last NON-speculative HEAD, so a
+    // bet re-placed each lap would overwrite it with a head that is itself
+    // speculative — and the unwind would then restore a tree still carrying
+    // somebody else's commits, which is the exact hazard the undo exists to
+    // remove. `speculation::Bet`'s own header states it.
+    let mut bet = speculation::Bet::default();
+    // **THE REFUND IS WIRED AND THE LOOP BOUND IS NOT MOVED, WHICH LEAVES IT
+    // INERT — DELIBERATELY, AND THIS IS THE SECOND ATTEMPT** (review of #848).
+    //
+    // `Ledger::waited` decrements `laps` so a pass that never won the lease does
+    // not consume the budget. Making the loop read `ledger.laps` does activate
+    // that, and it was tried: the effect is that a refunded pass re-enters the
+    // lap at `Replay`, and `Lease` sits AFTER `Verify` in the composition — so
+    // every refunded wait re-runs the rebase and the full `$LAND_VERIFY` gate,
+    // which this file's own comments price at ~200s, with no backoff. At the
+    // default sixty waits that is ~61 full verify cycles where the shipped bound
+    // is two. "Waiting is free" is true of the lease and false at this position
+    // in the pipeline.
+    //
+    // The three ways out are a design decision rather than a patch: hold the wait
+    // INSIDE the `Lease` primitive (which then carries a verify receipt taken
+    // before the wait, so a trunk that moved during it is unnoticed until the
+    // next precheck), move `Lease` ahead of `Verify` (which holds the lease
+    // across every waiter's verify and serialises the fleet on gate time), or
+    // give the refunded pass a resume point rather than restarting the lap.
+    //
+    // So the counter is charged and read for its REPORT — the refusal can say
+    // the fleet was saturated rather than blaming a conflict — and the budget is
+    // unchanged from what shipped. `LAND_MAX_LEASE_WAITS` bounds the charge, not
+    // the loop.
+    // WHAT HAS BEEN ENTERED AND NOT YET UNDONE, which is what an undo is owed
+    // for. A lap that stopped at `verify` never readied, so it owes no re-draft
+    // — computing the owed set from the composition alone would compensate
+    // effects nobody caused.
+    //
+    // **DECLARED OUTSIDE THE LOOP, and that is the whole of `Landing::Unconfirmed`
+    // working** (review of #848). This was a per-lap binding, so `continue 'laps`
+    // DROPPED it — and the one arm that laps WITHOUT unwinding is the unconfirmed
+    // merge, whose entire argument is that the undos are deferred rather than
+    // forgotten. Measured against the comment that claimed exactly that: an
+    // unconfirmed lap discarded its ready and its live runs, so a lap stopping
+    // afterwards handed back no lease, re-drafted nothing and abandoned nothing.
+    //
+    // `unwind_lap` is what clears it, so every path that DOES compensate starts
+    // the next lap owing nothing and the deferring path starts it owing what it
+    // deferred. `pipeline::unwind` already dedupes, so a step entered twice
+    // across two laps is still compensated once.
+    let mut entered: Vec<land::Step> = Vec::new();
+    'laps: for lap in 1..=laps {
+        ledger.attempt();
+        writeln!(out, "land: lap {lap} of {laps}")?;
+        // WHAT THE WAIT SAW, or `None` where no lap took a reading. The tap
+        // refuses to draft on `None` deliberately — see `land::closes_the_tap`.
+        let mut seen: Option<land::TapVerdict> = None;
+        // THE ORDER IS THE LAP, and it is DECLARED rather than an array literal
+        // in this function. What each answer means is `land::progress`'s — one
+        // table, read here rather than re-derived per step — and what each step
+        // leaves behind is its row's `compensate`.
+        for row in &pipeline.steps {
+            let step = row.step;
+            // THE ROW'S OWN QUESTION, where the driver used to carry a
+            // `step == Verify` exception. A pre-check runs BEFORE the primitive
+            // and can only lap, never land: it exists to spend nothing.
+            // THE BET IS SETTLED BEFORE ANYTHING IS SPENT, and before the
+            // replay that would otherwise build on somebody else's commits.
+            if let Some(pipeline::Precheck::BetSettled) = row.precheck {
+                if let Some(code) =
+                    settle_the_bet(root, url, &mut bet, reference, branch, out, err)?
+                {
+                    unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
+                    return Ok(code);
+                }
+                // AND ONLY THEN IS A NEW ONE PLACED. Placing before settling would
+                // stack a second borrowed range on an unsettled first, and the
+                // undo point recorded for the second would already be
+                // speculative.
+                place_the_bet(root, &mut bet, reference, branch, out)?;
+            }
+            // THE ROW'S OWN QUESTION. Only the row declaring `BaseMoved` asks it:
+            // running the probe before every step would be a forge read per step
+            // rather than per lap, and a precheck the composition never asked for.
+            if row.precheck == Some(pipeline::Precheck::BaseMoved)
+                && base_moved(root, &mut trunk_poll, reference, lap, step, out)?
+            {
+                unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
+                continue 'laps;
+            }
+            let code = match step {
+                land::Step::Replay => run_land_replay(root, url, reference, branch, out)?,
+                land::Step::Verify => {
+                    run_land_verify(root, &bet, branch, Some(reference), out, err)?
+                }
+                land::Step::Lease => run_land_lease(root, branch, out, err)?,
+                land::Step::Ready => run_land_ready(root, branch, &mut ledger, out, err)?,
+                land::Step::Push => run_land_push(root, url, branch, out)?,
+                land::Step::Wait => {
+                    let (code, verdict) = run_land_wait(root, reference, branch, out, err)?;
+                    seen = verdict;
+                    code
+                }
+                land::Step::FastForward => run_land_fast_forward(root, branch, out, err)?,
+            };
+            // ENTERED ON SUCCESS, OR ON THE ATTEMPT WHERE THE UNDO SAYS SO. The
+            // first half is the discrimination the undo rests on: a `Ready` that
+            // REFUSED bought no matrix, so re-drafting over it would draft a pull
+            // request the lap never made ready. The second half is what that rule
+            // gets wrong on its own — `Wait` answers `Success` only when it is
+            // GREEN, so red, stale and unanswered recorded nothing and
+            // `Compensation::Abandon` ran only after a green wait whose
+            // fast-forward then lapped. `owed_on_attempt` carries the reason and
+            // keeps it off this loop, where a `step == Wait` arm would be the
+            // `step == Verify` exception `pipeline` exists to have removed.
+            if row.entered(code == ExitCode::Success) {
+                entered.push(step);
+            }
+            note_the_push(step, code, &mut bet);
+            match land::progress_of(step, code, seen) {
+                land::Progress::Proceed => {}
+                // `None` is not merged, or nobody could say. Either way this is
+                // a lap rather than a retirement — see `landed_for_real`.
+                land::Progress::Landed => match landed_for_real(root, url, branch, out)? {
+                    Landing::Retired(code) => return Ok(code),
+                    // The forge says it did NOT merge, so this head is not trunk
+                    // and the lap's own effects are still this lap's to undo.
+                    Landing::NotMerged => {
+                        unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
+                        continue 'laps;
+                    }
+                    // **NOBODY COULD SAY, SO NOTHING IS CANCELLED** (review of
+                    // #848). Under fast-forward landing this branch's head IS
+                    // trunk's new tip the moment the merge happens, and
+                    // `Compensation::Abandon` reads `git::head_commit` and cancels
+                    // every run carrying that sha — so unwinding on an unread
+                    // answer cancels `main`'s own post-merge runs. The bot said
+                    // `Accepted`; the only thing missing is confirmation.
+                    //
+                    // Lapping without compensating is the cheap direction: the
+                    // next lap re-reads the merge state, and a lap that really
+                    // did not land still has its ready and its runs, which the
+                    // NEXT unwind owes. `entered` outlives the lap and only
+                    // `unwind_lap` drains it, so nothing is forgotten — only
+                    // deferred.
+                    Landing::Unconfirmed => continue 'laps,
+                },
+                land::Progress::Lap => {
+                    if let Some(code) = charge_or_refuse(step, &mut ledger, err)? {
+                        unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
+                        return Ok(code);
+                    }
+                    writeln!(
+                        out,
+                        "land: lap {lap} — {step:?} says lap; rebasing and retrying"
+                    )?;
+                    // A LAP COMPENSATES TOO, and missing this is what a
+                    // `Progress::Compensate` variant would have done: a lap that
+                    // readied, spent and then laps has a ready pull request and a
+                    // live matrix for a SHA about to be replaced.
+                    unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
+                    continue 'laps;
+                }
+                // CARRYING THE STEP'S OWN CODE rather than a code of the loop's.
+                // A conflict and a refused gate are both `2`, an unnamed gate is
+                // `1`, and an unreadable clone is `3` — the caller reads the same
+                // answer it would have got running that step by hand, which is
+                // what keeps the loop from becoming a second exit vocabulary.
+                land::Progress::Stop => {
+                    unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
+                    return Ok(code);
+                }
+            }
+        }
+    }
+    // **THE DEFERRED UNDOS COME DUE HERE, because there is no next lap to defer
+    // them to** (review of #848). `Landing::Unconfirmed` is the one arm that laps
+    // WITHOUT compensating, on the argument that the next lap re-reads the merge
+    // state — and on the LAST lap there is no next lap, so the loop fell out of
+    // the range and returned with `entered` still populated. The lease was held
+    // to its TTL and the in-flight runs kept spending, which is exactly what the
+    // compensation cluster exists to prevent.
+    //
+    // Unconditional rather than guarded on that arm: every other exit already
+    // drained `entered`, so this is a no-op for them and the guard would be a
+    // second statement of which paths compensate.
+    unwind_lap(root, branch, &pipeline, &mut entered, None, out, err)?;
+    // NOT A VERDICT ABOUT THE BRANCH. Exhausting the count says the loop stopped
+    // asking, never that the head is unlandable — so `3`, and the caller runs it
+    // again if the laps were lost to contention rather than to a defect.
+    // WHAT THE ACCOUNTING SUPPORTS, never the lap counter. The two look
+    // interchangeable and are not: a lap that stopped before the ready bought
+    // nothing, so reporting laps as spend states a cost that was never paid.
+    writeln!(
+        err,
+        "::error:: land: {laps} lap(s) bought no landing, spending {} CI matri(ces). A conflict, a failed gate or red CI will lose again — read the lap lines above for how each ended. If every lap lost only to contention, running this again commits up to {laps} more.",
+        ledger.spent()
+    )?;
+    Ok(ExitCode::Internal)
+}
+
+/// Run the undos this lap owes, newest first.
+///
+/// # This is where the compensation cluster gets its entry point
+///
+/// `redraft`, `abandon` and the lease tombstone were all built and none of them
+/// were reached: a lap that readied — *"the one site that buys a matrix"* — and
+/// then stopped at `push`, `wait` or `fast-forward` returned with the pull
+/// request ready and CI still spending, while the tap sat uncalled in the same
+/// file. PR #848's review found that; this function is the answer to it.
+///
+/// # Every arm is a DURABLE EXTERNAL WRITE, which is why none of them is a trap
+///
+/// [`crate::pipeline::Compensation`]'s header carries the argument and
+/// `land.sh:353` carries the measurement — *"a trap runs on the container kill
+/// too"* — so an in-process rollback does not run in the one case compensation
+/// exists for. Each arm here lands on the forge or on a remote ref.
+///
+/// # Nothing here is fatal, in either direction
+///
+/// The caller is already leaving: it is lapping or stopping with an answer, and
+/// an undo that could not be performed must not replace that answer with its own.
+/// So every arm reports what it could not do and carries on to the next — which
+/// also means the LATER undos still run when an earlier one cannot, and reversing
+/// that would let one unreadable pull request strand a live matrix.
+fn unwind_lap(
+    root: &Path,
+    branch: &str,
+    pipeline: &pipeline::Pipeline,
+    entered: &mut Vec<land::Step>,
+    seen: Option<land::TapVerdict>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<()> {
+    // **DRAINED HERE RATHER THAN AT EACH CALL SITE**, because there are five of
+    // them and the one that must NOT drain is the arm that does not call this at
+    // all. Clearing where the compensation happens is what keeps the two facts —
+    // "these were undone" and "these are still owed" — from drifting apart.
+    let owed = pipeline.unwind(entered);
+    entered.clear();
+    if owed.is_empty() {
+        return Ok(());
+    }
+    let repo = repo_or_placeholder(root);
+    // ONE OBSERVATION FOR TWO QUESTIONS. Whether this clone owns the pull request
+    // and whether it owes the lease back are the same fact, and asking twice
+    // invites the two answers to disagree across the gap between them.
+    let holder = lease_identity(root).ok().map(|(_, holder)| holder);
+    let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+    let mine = match (&holder, lease::terms(root)) {
+        (Some(holder), Ok(terms)) => matches!(
+            lease::observe(&terms),
+            Ok(lease::Observed::Held { ref body, .. }) if body.holder == *holder
+        ),
+        // COULD NOT LOOK IS NOT HELD. A clone that cannot read the lease has not
+        // shown it owns the pull request, and `closes_the_tap` refusing to draft
+        // somebody else's work is the property that keeps a refused second land
+        // from touching the live one's.
+        _ => false,
+    };
+
+    for compensation in owed {
+        match compensation {
+            // Filtered out by `Pipeline::unwind`, and matched rather than
+            // wildcarded so a new arm is a compile error here.
+            pipeline::Compensation::Nothing => {}
+            pipeline::Compensation::Abandon => {
+                let Ok(sha) = git::head_commit(root) else {
+                    writeln!(
+                        err,
+                        "::error:: land: this clone's HEAD will not read, so the runs on it keep spending"
+                    )?;
+                    continue;
+                };
+                // THE WORKFLOW, NEVER THE CHECK, and the two are distinct
+                // consumer values: `CI_FANIN_CHECK` names a CHECK and
+                // `CI_FANIN_WORKFLOW` names a workflow PATH. What either one
+                // holds is that consumer's own config and is deliberately not
+                // written down here (non-negotiable rule 1). `land::worthless`
+                // compares against a run's `path`, so reading the check name
+                // here made the comparison unsatisfiable — `spared` was always
+                // 0 and the fan-in's own run was cancelled with the rest, which
+                // is exactly the wedge this whole arm exists to prevent: the
+                // fan-in is the one context branch protection requires, so
+                // cancelling it leaves it ungraded and the pull request stuck.
+                //
+                // Found by reading `tests/abandon-matrix.bats`'s own titles while
+                // retiring it (CLOUD-1148) — *"THE ROW THAT MATTERS: the run
+                // carrying the fan-in is never cancelled"* — and by nothing else.
+                // Every suite in this crate was green over it.
+                //
+                // An unset one cancels NOTHING rather than guessing;
+                // `land::abandon` holds that guard.
+                // THE CONSTRUCTOR AND THE DECLARATION ARE ONE EXPRESSION, and
+                // that adjacency is what `ci-parity` binds on. `fan-in-is-wired`
+                // used to ask two independent questions of this file — does
+                // something read the declaration, does something call
+                // `land::abandon` — which an unrelated read plus a wrong argument
+                // satisfies (review of #848). `land::FanIn` refuses the check
+                // name at the type, and the module now requires the read to sit
+                // at the constructor rather than anywhere in 6,000 lines.
+                let fanin = land::FanIn::from_workflow_path(
+                    std::env::var("CI_FANIN_WORKFLOW").unwrap_or_default(),
+                );
+                let report = land::abandon(&repo, &sha, &fanin);
+                // COUNTS AND AN ABBREVIATED SHA, never a line from a cancelled
+                // run (non-negotiable rule 4). The predecessor carried the
+                // pointer too — `abandon-matrix.bats` pins it — because three
+                // counts with no subject cannot be told from another head's.
+                writeln!(
+                    out,
+                    "land: undo on {} — {} run(s) cancelled, {} spared, {} refused",
+                    sha.get(..7).unwrap_or(&sha),
+                    report.cancelled,
+                    report.spared,
+                    report.refused
+                )?;
+            }
+            pipeline::Compensation::ReleaseLease => match (&holder, lease::terms(root)) {
+                (Some(holder), Ok(terms)) => {
+                    lease_hand_back(root, &terms, holder, now);
+                    writeln!(out, "land: undo — the landing lease is handed back")?;
+                }
+                // Not an error: a lap that never took the lease owes nothing, and
+                // a clone with no remote had nowhere to take one from.
+                _ => {
+                    writeln!(out, "land: undo — no lease of this clone's to hand back")?;
+                }
+            },
+            pipeline::Compensation::Redraft => {
+                let Some(pr) = fast_forward::open_pull_request(&repo, branch) else {
+                    writeln!(
+                        err,
+                        "::error:: land: no open pull request could be read for {branch}, so the tap stays open"
+                    )?;
+                    continue;
+                };
+                let read = land::draft_state(&repo, &pr);
+                let state = land::Tap {
+                    // NOT A CLAIM THIS FUNCTION MAKES UP: every site that reaches
+                    // here is a lap that laps or stops, and the one that lands
+                    // returns before the undo. A merge closes nothing.
+                    landed: false,
+                    singleton_held: mine,
+                    is_draft: read.as_ref().map(|(draft, _)| *draft),
+                    verdict: seen,
+                };
+                if !land::closes_the_tap(&state) {
+                    continue;
+                }
+                let Some((_, node)) = read else {
+                    continue;
+                };
+                if land::redraft(&node) {
+                    writeln!(
+                        out,
+                        "land: undo — the pull request is a draft again; the next push buys no runner"
+                    )?;
+                } else {
+                    writeln!(
+                        err,
+                        "::error:: land: the pull request would not go back to draft, so every push from here spends a runner on an unfixed failure"
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Settle an outstanding speculation, unwinding one that cannot come true.
+///
+/// # THE ENTRY POINT `speculation` DID NOT HAVE
+///
+/// That module is a complete decision layer — `settle`, `recover`, `carries`,
+/// `Bet`, `Live`, with its own suite — and it was reachable from nothing but
+/// `pub mod`. Twenty-one cases in `tests/land.bats` describe behaviour no call
+/// site could produce, which is the shape PR #848's review found for the
+/// compensation cluster and the ready event before it.
+///
+/// # ASK GIT BEFORE ASKING THE PROCESS
+///
+/// [`speculation::recover`] runs first and unconditionally. The predecessor
+/// opened on *"did this process place a bet"* and returned on its first line
+/// when the answer was no — while the ref holding the answer sat on disk beside
+/// it. Measured (CLOUD-862): a stopped `land` left seven of another branch's
+/// commits in the tree, and the next one ran a full clean `verify` and reached
+/// the push with them.
+///
+/// # `Some(code)` STOPS THE LAP, and only an unwind this tree refuses does that
+///
+/// Every reading here fails open — an unreachable remote, an unresolvable ref
+/// and an unknown ancestry all mean *the bet is stale*, never *stop the
+/// landing*. The one thing that stops is a tree the unwind could not rewind,
+/// because carrying on would push another branch's commits under this one's
+/// pull request.
+///
+/// # THE SETTLE RUNS BEFORE THE PLACEMENT, AND THE ORDER IS A DECISION
+///
+/// [`place_the_bet`] runs immediately after this and never before it. A
+/// placement over an unsettled bet stacks a second borrowed range on a first,
+/// and the undo point recorded for the second is then already speculative — so
+/// the unwind would restore a tree still carrying somebody else's commits, which
+/// is the exact hazard [`speculation::Bet::undo`] exists to remove.
+///
+/// This half is also the one that is useful alone: a bet left behind by the bash
+/// lander, or by a `land` this loop replaced, is adopted from its ref and
+/// unwound here rather than pushed, whether or not anything ever places one.
+fn settle_the_bet(
+    root: &Path,
+    url: &str,
+    bet: &mut speculation::Bet,
+    reference: &str,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    // A ref this clone cannot read is not a bet, which is the same fail-open
+    // direction every other reading here takes.
+    if speculation::recover(root, bet).unwrap_or(false) {
+        writeln!(
+            out,
+            "land: adopting an unsettled speculation left by an earlier run; settling it before anything is pushed"
+        )?;
+    }
+    if !bet.live() {
+        return Ok(None);
+    }
+    // `land::tracking_ref`, not a second spelling of it — and the second
+    // spelling here carried the same last-segment defect it did (review of
+    // #848): a trunk named `release/1.x` resolved to `origin/1.x`, so this
+    // settled a bet against an unrelated branch's tracking ref.
+    let tracking = land::tracking_ref(reference);
+    // `None`, never `""`. A ref that would not read is a could-not-look, and
+    // flattening it into an empty string made it compare unequal to every
+    // `main_at_bet` — which is `speculation::settle`'s "the trunk moved and took
+    // something else" arm, so a transient read unwound a live bet. The reading is
+    // handed over three-valued and the settle defers to the lease.
+    let main_now = git::resolve_ref(root, &tracking).ok().flatten();
+    let base = bet.published().unwrap_or_default().to_owned();
+    // WON, and it is asked first and unconditionally: the base being an ancestor
+    // of the trunk is true whoever placed the bet, and both arms below would
+    // misread it.
+    let base_on_main = speculation::carries(root, &base, &tracking);
+    let live = bet_liveness(root, branch, &base);
+
+    match speculation::settle(bet, main_now.as_deref(), base_on_main, live) {
+        speculation::Settle::Landed => {
+            // The tracking ref resolved, or `base_on_main` could not have been
+            // true — but the arm is spelled without an unwrap either way, because
+            // a line naming the trunk is not worth a panic on a reading this
+            // function has just finished treating as optional.
+            writeln!(
+                out,
+                "land: the speculation landed — already linearized on {}, no rebase needed",
+                main_now
+                    .as_deref()
+                    .map_or_else(|| tracking.clone(), |sha| short(sha).to_owned())
+            )?;
+            drop_the_bet(root, bet);
+            Ok(None)
+        }
+        // Undecided — keep the tree: the holder is still landing and this branch
+        // is already linearized behind it. `Nothing` shares the arm because it is
+        // unreachable from here (the `live()` guard above returns first) and
+        // because it takes the same action if the guard ever moves: no bet is
+        // nothing to unwind.
+        speculation::Settle::Pending | speculation::Settle::Nothing => Ok(None),
+        speculation::Settle::Lost => unwind_the_bet(root, url, branch, bet, reference, out, err),
+    }
+}
+
+/// Is the bet still on the branch that is about to land? Fails CLOSED.
+///
+/// [`speculation::Live::decide`] treats anything but a confirmed yes as stale,
+/// and this resolves the reading it decides over: who holds the lease NOW, and
+/// whether the base is still on that branch. Failing open here would make a
+/// network blip the thing that lands somebody else's work.
+fn bet_liveness(root: &Path, branch: &str, base: &str) -> speculation::Live {
+    let Ok(terms) = lease::terms(root) else {
+        return speculation::Live::Unreadable;
+    };
+    let Ok(observed) = lease::observe(&terms) else {
+        return speculation::Live::Unreadable;
+    };
+    let lease::Observed::Held { body, .. } = &observed else {
+        // Nobody holds it. Holding no lease with the base not yet on the trunk
+        // can only mean the branch we bet on is gone — a base that actually
+        // landed is caught one arm earlier, by the ancestry check.
+        return speculation::Live::No;
+    };
+    if body.branch.is_empty() || body.branch == branch {
+        // WE hold it, or it names nobody. Either way the bet is not on somebody
+        // else's landing any more.
+        return speculation::Live::No;
+    }
+    // The holder may have changed or force-pushed past our base, and the
+    // question is the same either way: is the commit we bet on still on the
+    // branch that is about to become the trunk. A SECOND ref, never `BASE_REF` —
+    // reusing it would overwrite the base while asking a question about it.
+    let reference = format!("refs/heads/{}", body.branch);
+    match land::advance(root, &terms.remote, &reference, speculation::LIVE_REF) {
+        Ok(_) if speculation::carries(root, base, speculation::LIVE_REF) => speculation::Live::Yes,
+        Ok(_) => speculation::Live::No,
+        Err(_) => speculation::Live::Unreadable,
+    }
+}
+
+/// Drop the borrowed range, and say which unwind it took.
+///
+/// **TWO UNWINDS, because an adopted bet has no undo point** (CLOUD-862). The
+/// reset is exact and is the path whenever this process placed the bet; the
+/// replay is for one inherited from a dead run, which has only the base — and
+/// `origin/main..HEAD` minus the borrowed range is precisely this branch's own
+/// commits.
+/// Charge this lap against the budget it spent, or refuse having said which one
+/// is exhausted.
+///
+/// **A LAP THAT SPENT NOTHING IS REFUNDED, and nothing called this** (review of
+/// #848). `Ledger::waited` and its siblings had no production caller at all, so
+/// a lap lost to a lease another branch holds consumed one of the two — and a
+/// contended fleet exhausted the budget and then reported "a conflict, a failed
+/// gate or red CI will lose again", which is exactly the mis-diagnosis
+/// [`land::Bound::LeaseWaits`] exists to prevent and which CLOUD-413 measured
+/// being wrong twice across 24 laps.
+///
+/// Only the lease arm is wired. The bot's unreadable answer no longer reaches
+/// this point — the poll absorbs it — and the transient re-run has no producer
+/// yet, so wiring either would be a call site for a condition nothing raises.
+///
+/// `Some(code)` is the refusal and the caller still owes its unwind: the undos
+/// are the driver's, and performing them here would put the compensation cluster
+/// behind two call sites instead of one.
+fn charge_or_refuse(
+    step: land::Step,
+    ledger: &mut land::Ledger,
+    err: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    let Some(bound) = charge_the_lap(step, ledger) else {
+        return Ok(None);
+    };
+    writeln!(
+        err,
+        "::error:: land: gave up waiting for the landing lease ({bound:?}); the fleet is saturated and this branch has spent no CI at all"
+    )?;
+    Ok(Some(ExitCode::Internal))
+}
+
+/// Record that the speculative range reached the remote.
+///
+/// **THE ONE WRITER OF [`speculation::Bet::pushed`], which had none** (review of
+/// #848). The field was declared with its consequence written on it — an unwind
+/// then owes the remote a correction — and was neither set nor read, so the
+/// correction never came due and origin kept another branch's commits under an
+/// open pull request.
+///
+/// A successful push under an outstanding bet is the only event that puts the
+/// range there, so the write is here rather than in `run_land_push`: that is a
+/// standalone verb and holds no bet.
+fn note_the_push(step: land::Step, code: ExitCode, bet: &mut speculation::Bet) {
+    if step == land::Step::Push && code == ExitCode::Success && bet.live() {
+        bet.pushed = true;
+    }
+}
+
+fn unwind_the_bet(
+    root: &Path,
+    url: &str,
+    branch: &str,
+    bet: &mut speculation::Bet,
+    reference: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    // DERIVED HERE rather than handed in, which is one argument and one
+    // duplicated derivation fewer: both are functions of what this already
+    // holds, and the caller's copies are the same two calls.
+    let base = bet.published().unwrap_or_default().to_owned();
+    let tracking = land::tracking_ref(reference);
+    // FULLY QUALIFIED, because both writers end in `gitwrite::set_ref` and its
+    // `FullName::try_from` does not reject a SHORT name — it rejects a slashless
+    // lowercase one and takes a slashed one VERBATIM as a full name. `branch`
+    // comes from `git::current_branch`, which shortens, so `feature/x` wrote a
+    // stray loose ref outside `refs/heads/` while the checkout moved, and
+    // `Somelowercase` failed outright with the borrowed range still in the tree.
+    // Every sibling already qualifies — `place_the_bet` and `land::replay` both
+    // spell `refs/heads/{branch}`, and the only tests of these two writers pass a
+    // full name, which is why nothing caught it (review of #848).
+    let full = format!("refs/heads/{branch}");
+    let outcome = if let Some(undo) = bet.undo.as_deref() {
+        writeln!(
+            out,
+            "land: the speculation did not land; unwinding to {} rather than carrying another branch's commits",
+            short(undo)
+        )?;
+        gitwrite::reset_hard(root, &full, undo).map(|_| true)
+    } else {
+        writeln!(
+            out,
+            "land: an earlier run bet on a base that is no longer landing; replaying this branch's own commits onto {tracking} rather than carrying another branch's"
+        )?;
+        gitwrite::replay_onto(root, &full, &base, &tracking)
+            .map(|replayed| !matches!(replayed, gitwrite::Rebase::Conflicted { .. }))
+    };
+    if let Ok(true) = outcome {
+        // **THE REMOTE OWES A CORRECTION TOO, and nothing paid it** (review of
+        // #848). `Bet::pushed` was declared with this consequence written on it
+        // and was neither set nor read, so unwinding restored the LOCAL branch
+        // and left origin holding another branch's commits under this pull
+        // request — the measured two-PRs-at-one-sha state, and the one the field
+        // names in its own doc.
+        //
+        // The CAS makes this safe rather than merely correct: `lease::push`
+        // takes `old` from the advertisement, so a remote somebody else has since
+        // moved refuses and the lap reports a race instead of overwriting them.
+        //
+        // NOT FATAL, for `unwind_lap`'s reason: the caller is already leaving
+        // with an answer, and a correction that would not go through must not
+        // replace it. It is reported, and the next lap's own push re-attempts it
+        // from a tree that no longer carries the range.
+        if bet.pushed {
+            match land::push(root, url, branch) {
+                Ok(land::Pushed::Landed(head)) => writeln!(
+                    out,
+                    "land: the speculative range was pushed, so {branch} on the remote now reads {head} rather than another branch's commits"
+                )?,
+                Ok(land::Pushed::Raced) => writeln!(
+                    err,
+                    "::error:: land: {branch} moved on the remote, so the speculative range it carries was left in place; the next lap re-reads it"
+                )?,
+                Err(_) => writeln!(
+                    err,
+                    "::error:: land: the remote could not be corrected, so {branch} there may still carry another branch's commits"
+                )?,
+            }
+        }
+        drop_the_bet(root, bet);
+        return Ok(None);
+    }
+    // THE ONE STOP. A tree still carrying another branch's commits must not reach
+    // a push, so this is a decision rather than a lap: lapping would replay onto a
+    // HEAD nobody can describe.
+    writeln!(
+        err,
+        "::error:: land: the speculative range could not be unwound, so this tree still carries commits that are not landing and this loop must not push it"
+    )?;
+    Ok(Some(ExitCode::Internal))
+}
+
+/// Place a speculation: replay onto the head that is ABOUT to become the trunk.
+///
+/// # WHAT IT BUYS, AND IT IS A LAP RATHER THAN A MATRIX
+///
+/// While another branch holds the lease its head is what `main` will read once it
+/// lands. A lap that replays onto today's trunk therefore verifies a head the
+/// fast-forward will refuse, and the next lap replays and pays again. Replaying
+/// onto the holder's head instead makes this branch a direct descendant of the
+/// trunk the moment the holder lands, and the receipt taken over it is still
+/// good.
+///
+/// # EVERY EXIT IS "NO BET", AND THAT IS THE ONLY SAFE DIRECTION
+///
+/// A bet not placed costs a lap. A bet placed on a base that will not land costs
+/// somebody else's commits under this branch's pull request. So an unreadable
+/// lease, an unresolvable ref, a holder that is us and a replay that conflicts
+/// all leave without one — this is the mirror of [`bet_liveness`]'s fail-closed
+/// reading, and it is closed in the same direction.
+///
+/// A CONFLICTING BASE IS REFUSED RATHER THAN ADOPTED (CLOUD-369). A successor
+/// whose base is known to conflict is guaranteed to be voided, so its run grades
+/// a head the fast-forward will refuse and the rebase that follows still has to
+/// resolve the same conflict. Measured for one such admission: a full CI run
+/// burned, a ~200s `verify` discarded, a hand-resolved conflict, and a second
+/// run. The refusal is recorded on the bet rather than merely returned, so a
+/// reader can tell "no holder" from "a holder we will not build on".
+///
+/// # THE REF IS WRITTEN BEFORE THE REPLAY
+///
+/// A bet outlives the process that placed it. Recording after the replay leaves a
+/// window in which the tree carries a borrowed range and nothing on disk says so
+/// — which is CLOUD-862's state exactly, and the whole reason [`settle_the_bet`]
+/// opens by asking git.
+fn place_the_bet(
+    root: &Path,
+    bet: &mut speculation::Bet,
+    reference: &str,
+    branch: &str,
+    out: &mut dyn Write,
+) -> Result<()> {
+    // THE ONE-OUTSTANDING-BET RULE, asked before anything is read.
+    if bet.live() {
+        return Ok(());
+    }
+    let Some(candidate) = holder_head(root, branch) else {
+        return Ok(());
+    };
+    if !bet.would_rebet(&candidate) {
+        return Ok(());
+    }
+    let tracking = land::tracking_ref(reference);
+    // THE HOLDER ALREADY LANDED. Their head is on the trunk, so an ordinary replay
+    // reaches it and a bet would borrow a range that is not borrowed.
+    if speculation::carries(root, &candidate, &tracking) {
+        return Ok(());
+    }
+    let Ok(undo) = git::head_commit(root) else {
+        return Ok(());
+    };
+    let main_at_bet = git::resolve_ref(root, &tracking).ok().flatten();
+
+    // RECORDED FIRST. See the header: a tree carrying a borrowed range with
+    // nothing on disk saying so is the state a killed process leaves behind.
+    if gitwrite::set_ref(root, speculation::BASE_REF, &candidate).is_err() {
+        return Ok(());
+    }
+    let replayed = gitwrite::rebase(root, &format!("refs/heads/{branch}"), &candidate);
+    match replayed {
+        Ok(gitwrite::Rebase::Conflicted { .. }) => {
+            bet.conflicts = Some(candidate.clone());
+            let _ = gitwrite::delete_ref(root, speculation::BASE_REF);
+            writeln!(
+                out,
+                "land: the branch holding the lease conflicts with this one, so this lap builds on {tracking} rather than speculating"
+            )?;
+            Ok(())
+        }
+        Ok(_) => {
+            bet.base = Some(candidate.clone());
+            bet.undo = Some(undo);
+            bet.main_at_bet = main_at_bet;
+            bet.recovered = false;
+            writeln!(
+                out,
+                "land: speculating on {} — the branch holding the lease is about to become the trunk",
+                short(&candidate)
+            )?;
+            Ok(())
+        }
+        // A REPLAY THAT WOULD NOT RUN AT ALL leaves no bet and no ref. The tree
+        // is untouched by a refused rebase, so there is nothing to unwind.
+        Err(_) => {
+            let _ = gitwrite::delete_ref(root, speculation::BASE_REF);
+            Ok(())
+        }
+    }
+}
+
+/// The head of the branch currently holding the lease, or `None`.
+///
+/// `None` for every could-not-look and for every reading that is not *somebody
+/// else is landing right now*: no terms, no lease, a lease naming nobody, and a
+/// lease this branch holds itself. [`place_the_bet`]'s header says why they all
+/// take the same exit.
+fn holder_head(root: &Path, branch: &str) -> Option<String> {
+    let terms = lease::terms(root).ok()?;
+    let observed = lease::observe(&terms).ok()?;
+    let lease::Observed::Held { body, .. } = &observed else {
+        return None;
+    };
+    if body.branch.is_empty() || body.branch == branch {
+        return None;
+    }
+    let reference = format!("refs/heads/{}", body.branch);
+    land::advance(root, &terms.remote, &reference, speculation::LIVE_REF).ok()
+}
+
+/// Forget a settled bet: the bookkeeping and the ref that outlives the process.
+///
+/// **BOTH HALVES, and neither alone is a forget.** The struct is this process's
+/// memory and the ref is the one a later run reads, so clearing only the struct
+/// leaves the next `land` adopting a bet this one already settled, and deleting
+/// only the ref leaves this lap believing it still holds one.
+fn drop_the_bet(root: &Path, bet: &mut speculation::Bet) {
+    bet.forget();
+    let _ = gitwrite::delete_ref(root, speculation::BASE_REF);
+    let _ = gitwrite::delete_ref(root, speculation::LIVE_REF);
+}
+
+/// The lap's own lease acquisition, so one branch at a time buys a matrix.
+///
+/// # NOTHING CALLED THIS, AND THE WHOLE CLUSTER DEPENDED ON IT
+///
+/// `run_lease_acquire` had exactly two callers before this: the `batten lease`
+/// CLI dispatch, and `lease_hand_back` releasing what nobody took. So under
+/// `mise run land` the lease was never held, `unwind_lap`'s `mine` was always
+/// false, `Tap { singleton_held: mine }` was false, and `land::closes_the_tap`
+/// returned before `land::redraft` could be reached. After a red wait the pull
+/// request stayed READY and every later push bought another matrix on a failure
+/// nobody had fixed — which is verbatim the leak `closes_the_tap`'s own header
+/// says it exists to plug (review of #848).
+///
+/// `land::push`'s receive-pack CAS is not this: it excludes two writers of one
+/// BRANCH REF, and the lease excludes two branches of one FLEET. Reading the
+/// first as the second is what made the gap invisible.
+///
+/// # It is a thin adapter, deliberately
+///
+/// Every decision is [`lease`]'s and every code is `run_lease_acquire`'s
+/// already: `Success` took it or already held it, `Violation` somebody else
+/// holds it, `Internal` it would not read. `land::progress` maps the second to a
+/// LAP — the holder is landing, so this branch waits and asks again, which is
+/// what makes the mechanism a queue — and the third to a STOP.
+///
+/// # Errors
+///
+/// Only for a stream that will not accept output; a lease that cannot be
+/// resolved is a code rather than an error, for the reason above.
+fn run_land_lease(
+    root: &Path,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let terms = match lease::terms(root) {
+        Ok(terms) => terms,
+        Err(missing) => {
+            // `say` rather than `Display`, which this type deliberately does not
+            // implement: the diagnostic needs the remote's NAME to be readable
+            // and the enum does not carry it.
+            let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
+            writeln!(
+                err,
+                "::error:: land: the landing lease has no terms in this clone ({}), so nothing serialises which branch spends a matrix",
+                missing.say(&name)
+            )?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+    run_lease_acquire(root, &terms, branch, now, out, err)
+}
+
+/// What the merge confirmation decided, and the third arm is why it is a type.
+///
+/// **`Some`/`None` COLLAPSED TWO ANSWERS THAT MUST COMPENSATE DIFFERENTLY**
+/// (review of #848). A pull request the forge says did NOT merge leaves this
+/// lap's ready and its runs this lap's to undo. A pull request nobody could ASK
+/// about may already be merged — and under fast-forward landing that means this
+/// branch's head is trunk's new tip, so `Compensation::Abandon`, which reads
+/// `git::head_commit` and cancels every run carrying that sha, would cancel
+/// `main`'s own post-merge runs. One 403 between the bot's `success` and the
+/// confirming read was enough.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Landing {
+    /// It merged and the branch is retired. The landing is over.
+    Retired(ExitCode),
+    /// The forge answered: not merged. Lap, and undo what this lap did.
+    NotMerged,
+    /// The forge did not answer. Lap, and cancel NOTHING.
+    Unconfirmed,
+}
+
+/// Retire the branch only if the pull request actually merged.
+///
+/// # `Progress::Landed` IS NOT "MERGED", AND READING IT AS ONE DELETED BRANCHES
+///
+/// That variant means the bot's run finished without refusing.
+/// [`fast_forward`]'s own module header says the rest out loud: *"the merge shows
+/// up as the pull request's own terminal state rather than here"*. Nothing read
+/// that state, so a run concluding `skipped` — a job-level `if:`, a path filter,
+/// a concurrency rule — reached here and [`retire_the_branch`] deleted
+/// `refs/heads/<branch>` on the remote, its tracking ref and its receipts, under
+/// a pull request that was still open (review of #848). The predecessor asked the
+/// forge at exactly this point and died on anything but a merge.
+///
+/// `Some(code)` is a landing that is over. `None` means lap: the caller
+/// compensates and goes round again.
+///
+/// **A COULD-NOT-LOOK LAPS**, and the asymmetry is the whole argument — lapping
+/// costs a lap, and being wrong the other way deletes a branch somebody's open
+/// pull request still points at.
+///
+/// # Errors
+///
+/// Only for a stream that will not accept output.
+fn landed_for_real(root: &Path, url: &str, branch: &str, out: &mut dyn Write) -> Result<Landing> {
+    let repo = repo_or_placeholder(root);
+    // ANY STATE, because a merged pull request is CLOSED and the open-only
+    // lookup can therefore never confirm one — see `pull_request_in_any_state`.
+    let merged = match fast_forward::pull_request_in_any_state(&repo, branch) {
+        fast_forward::Lookup::Found(pr) => fast_forward::merged(&repo, &pr),
+        // The pull request the bot was asked about cannot be found now. That is a
+        // could-not-look about the merge, never evidence of one.
+        fast_forward::Lookup::None => fast_forward::Merged::Unreadable(0),
+        fast_forward::Lookup::Unreadable(status) => fast_forward::Merged::Unreadable(status),
+    };
+    match merged {
+        fast_forward::Merged::Yes => {
+            writeln!(out, "land: landed")?;
+            // **THE LEASE IS HANDED BACK ON THE WAY OUT, and the successful path
+            // never did it** (review of #848). `Compensation::ReleaseLease` runs
+            // only from `unwind_lap`, and this arm returns before reaching it —
+            // so a branch that landed cleanly held its lease until the TTL
+            // expired, and every waiter behind it sat out that TTL before it
+            // could spend a matrix. That is the exact cost the compensation's own
+            // doc says it exists to avoid, paid on the one path where the lease
+            // is certainly finished with. The predecessor released
+            // unconditionally from its exit handler, which the merged path
+            // reached too.
+            //
+            // Before the retirement rather than after: a hand-back that fails is
+            // best-effort either way, and doing it first means a slow remote
+            // delete cannot widen the window another branch waits through.
+            hand_back_the_lease(root, branch, out);
+            // THE BRANCH HAS DONE ITS WHOLE JOB (CLOUD-349, CLOUD-1471). Only
+            // here, never on a stop: an abandoned branch is evidence and has to
+            // survive, while a landed one left behind is how a short-lived branch
+            // becomes a long-lived one — and reusing the name afterwards is the
+            // stale-tracking-ref deadlock `land::stale_tracking` records.
+            retire_the_branch(root, url, branch, out)?;
+            Ok(Landing::Retired(ExitCode::Success))
+        }
+        fast_forward::Merged::No => {
+            writeln!(
+                out,
+                "land: the bot's run finished but the pull request has not merged; lapping rather than retiring a branch that is still open"
+            )?;
+            Ok(Landing::NotMerged)
+        }
+        fast_forward::Merged::Unreadable(status) => {
+            writeln!(
+                out,
+                "land: could not read whether the pull request merged ({status}); lapping without cancelling, because this head may already be the trunk"
+            )?;
+            Ok(Landing::Unconfirmed)
+        }
+    }
+}
+
+/// The repository this lap is landing in, as the forge spells it.
+///
+/// # THE PLACEHOLDER WAS A GUARANTEED 404, NOT A FALLBACK
+///
+/// Nine sites read `$GH_REPO` and fell back to [`pr_watch::REPO_PLACEHOLDER`].
+/// That literal is the forge CLI's own substitution, performed inside the client
+/// the retirement removed — `rest::get` sends the path it is given, so
+/// `{owner}/{repo}` reached the endpoint verbatim, every read 404'd, and
+/// `open_pull_request` answered `None`. The caller then printed *"no open pull
+/// request for `<branch>`"*, which is a could-not-look wearing a fact about the
+/// branch, and `mise run land` stopped on it before its first lap (review of
+/// #848). One site had already been corrected in place; the fallback was the
+/// defect, so it is the fallback that moves.
+///
+/// **The remote is the answer, and it is one this clone already has.**
+/// [`race::slug_of`] reduces both spellings the forge hands out, and it refuses
+/// to guess rather than deriving a slug that would ask the forge confidently
+/// about a DIFFERENT repository. `$GH_REPO` still wins where it is set, because
+/// a fork landing into an upstream is a fact only the operator has.
+///
+/// `None` is could-not-look and callers must say so rather than reporting a
+/// verdict about the branch.
+fn repo_slug(root: &Path) -> Option<String> {
+    if let Ok(declared) = std::env::var("GH_REPO")
+        && !declared.trim().is_empty()
+    {
+        return Some(declared);
+    }
+    // `LAND_LOCK_REMOTE`, which is what every sibling reads — `lease::terms`,
+    // the `lease` dispatch and `run_land_fast_forward` all resolve the remote by
+    // that name. This said `LAND_REMOTE`, a name appearing nowhere else in the
+    // tree, so a consumer pointing the lease at `upstream` would take the lease,
+    // fetch, push and delete against `upstream` while this looked up `origin` —
+    // resolving the wrong slug, or none, and falling back to the placeholder this
+    // function exists to remove (review of #848).
+    let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
+    let remotes = git::remotes(root).ok()?;
+    remotes
+        .iter()
+        .find(|(configured, _)| *configured == name)
+        .and_then(|(_, url)| race::slug_of(url))
+}
+
+/// The same reading with the placeholder kept for the sites that only ever
+/// RENDER it, so a message naming the repository still has something to name.
+fn repo_or_placeholder(root: &Path) -> String {
+    repo_slug(root).unwrap_or_else(|| pr_watch::REPO_PLACEHOLDER.to_owned())
+}
+
+/// A sha as a reader reads one. Pointer-only either way; this is the short form
+/// every other line in this lap already uses.
+fn short(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
+}
+
+/// The url of the remote this lap lands against, or `None` having said why.
+///
+/// `None` rather than an error because every way this fails is a could-not-look
+/// about the CLONE — no remotes readable, or none by the configured name — and
+/// the caller turns that into the same `Internal` every other unreadable clone
+/// produces. Returning the url by value rather than borrowing the remote list
+/// keeps the arms above from having to hold it alive across the call.
+fn land_remote(root: &Path, err: &mut dyn Write) -> Result<Option<String>> {
     let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
     let Ok(remotes) = git::remotes(root) else {
         writeln!(err, "::error:: land: cannot read this repository's remotes")?;
-        return Ok(ExitCode::Internal);
+        return Ok(None);
     };
     let Some((_, url)) = remotes.iter().find(|(configured, _)| *configured == name) else {
         writeln!(
             err,
             "::error:: land: no remote named {name}, so this lap has no base"
         )?;
-        return Ok(ExitCode::Internal);
+        return Ok(None);
     };
-    // A DETACHED HEAD HAS NO BRANCH TO REPLAY, and that is a statement about the
-    // clone rather than about the work — `3`, like every other could-not-look.
-    let Ok(Some(branch)) = git::current_branch(root) else {
+    Ok(Some(url.clone()))
+}
+
+/// `batten land fast-forward` (CLOUD-1338): ask, then read the answer to THAT ask.
+///
+/// # `$LAND_WORKFLOW` and no default, for `$LAND_VERIFY`'s reason
+///
+/// The bash lander defaults this to `fast-forward.yml`. That filename is THIS
+/// consumer's, and a default compiled in here would be a consumer's vocabulary
+/// inside `crates/batten` — non-negotiable rule 1's plainest violation, and the
+/// same call `run_land_verify` already makes about the gate's name.
+///
+/// The failure a default would buy is the quiet one: a repository whose bot lives
+/// in a differently-named workflow would read an empty runs list, every lap, and
+/// report a silent bot forever. A refusal costs one line of configuration.
+///
+/// # The three exits, and why the middle one is not an error
+///
+/// `0` the bot accepted, `2` it refused — the branch is no longer a direct
+/// descendant, which is a verdict about this repository and the lap's cue to
+/// rebase — and `3` no answer yet, which is the state the loop exists to sit in.
+/// A forge that cannot be read is `3` and never a false `2`: a lap that could not
+/// look has not been refused.
+///
+/// `3` is spelled [`ExitCode::Internal`] because the table has four codes and no
+/// per-verb exception (non-negotiable rule 5). The variant's name is about where
+/// `3` came from historically; what it MEANS here is the same could-not-look
+/// [`run_land_wait`] returns for an unanswered race, and the two agree
+/// deliberately — a lap reads them through one contract.
+/// # It writes no lap record, and the absence is a statement rather than an oversight
+///
+/// Every other lap step writes a four-column line to the lap record, which is
+/// what gives a `landing-loop` module something to decide over. This one does
+/// not, because no predicate reads a fast-forward outcome yet — and a record
+/// nothing reads is the dead channel this engine spends its time refusing
+/// elsewhere. When a predicate wants one (whether a lap may re-ask after an
+/// unknown conclusion is the obvious candidate), the record and the module land
+/// together, which is the pairing `.claude/rules/policy-modules.md` requires in
+/// both directions.
+///
+/// **It DOES take a root, and the heading above used to say it did not** — that
+/// sentence was about the record and was written as though it were about the
+/// argument list. The root is what [`repo_slug`] resolves the remote from, and
+/// without it this step fell back to a placeholder that cannot resolve (review
+/// of #848).
+fn run_land_fast_forward(
+    root: &Path,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let workflow = std::env::var("LAND_WORKFLOW").unwrap_or_default();
+    if workflow.trim().is_empty() {
         writeln!(
             err,
-            "::error:: land: a detached HEAD has no branch to replay"
+            "::error:: land fast-forward: $LAND_WORKFLOW names no workflow, and this engine does not know which of this repository's workflows carries the fast-forward verdict"
         )?;
-        return Ok(ExitCode::Internal);
+        return Ok(ExitCode::Usage);
+    }
+    // `GH_REPO` FIRST, AND THE PLACEHOLDER ONLY AS THE FALLBACK EVERY SIBLING
+    // SITE USES. This line read `String::from(REPO_PLACEHOLDER)` and the comment
+    // above it said the placeholder was "resolved by the client that used to be
+    // spawned and now by the endpoint itself" — which was true of the first half
+    // and false of the second. `{owner}/{repo}` is the FORGE CLI's own
+    // substitution, performed before the request left the process; `rest::get`
+    // sends the path it is given, so the literal braces reached the endpoint, the
+    // forge answered 404, `open_pull_request` returned `None`, and every
+    // `land fast-forward` — the lap's commit point included — stopped with "no
+    // open pull request for <branch>". A retirement that moves a spawn in-process
+    // inherits the caller's substitutions or it inherits nothing, and this is the
+    // one site in the family that did not carry the read across.
+    let repo = repo_or_placeholder(root);
+    let pr = match fast_forward::look_up_pull_request(&repo, branch) {
+        fast_forward::Lookup::Found(pr) => pr,
+        fast_forward::Lookup::None => {
+            writeln!(
+                err,
+                "::error:: land fast-forward: no open pull request for {branch}, so there is nothing to ask"
+            )?;
+            return Ok(ExitCode::Internal);
+        }
+        fast_forward::Lookup::Unreadable(status) => {
+            writeln!(
+                err,
+                "::error:: land fast-forward: could not read {repo}'s pull requests ({status}), so whether {branch} has one is unknown — this is the environment, not the branch"
+            )?;
+            return Ok(ExitCode::Internal);
+        }
     };
+    let ask = fast_forward::Ask { repo, pr, workflow };
 
-    if matches!(command, cli::LandCommand::Wait { .. }) {
-        return run_land_wait(root, url, &reference, &branch, out, err);
-    }
+    // STAMPED BEFORE THE COMMENT, never after, and that ordering is the whole of
+    // the anti-livelock property: a run created by an EARLIER lap of this same
+    // pull request must fall outside the window. Stamping afterwards would leave
+    // a gap in which this lap's own run is created and then excluded by its own
+    // fence — a lap that can never read its own answer.
+    //
+    // `receipt::rfc3339_utc` rather than a second formatter: it is already the
+    // crate's one epoch-to-ISO-8601 spelling and its tests pin the instants a
+    // hand-rolled one gets wrong (leap years, the 2100 non-leap century).
+    let since = receipt::rfc3339_utc(now_unix());
 
-    if matches!(command, cli::LandCommand::Push) {
-        return match land::push(root, url, &branch)? {
-            land::Pushed::Landed(head) => {
-                writeln!(out, "land: {branch} on the remote now reads {head}")?;
-                Ok(ExitCode::Success)
+    match fast_forward::ask(&ask)? {
+        fast_forward::Asked::Refused(status) => {
+            // NEVER ENTER THE POLL. Waiting for the answer to a question nobody
+            // received is a hang with a different cause, and the predecessor's
+            // was measured: the forge answered a secondary rate limit, nothing
+            // read the status, and the lap reported a comment it had not created.
+            writeln!(
+                err,
+                "::error:: land fast-forward: the forge did not create the comment (status {status}); nothing was asked, so there is no answer to wait for"
+            )?;
+            Ok(ExitCode::Internal)
+        }
+        fast_forward::Asked::Commented(comment) => {
+            writeln!(
+                out,
+                "land: asked #{} to fast-forward as comment {comment}",
+                ask.pr
+            )?;
+            // **POLLED, BECAUSE THE BOT HAS NOT STARTED YET** (review of #848).
+            // This read `answer` exactly once, immediately after `ask` — and the
+            // workflow takes ~23s just to create the run, so the first read was
+            // always `Pending`, which maps to `Internal`, which `land::progress`
+            // maps to `Lap` for `FastForward`. Every lap therefore unwound (the
+            // Abandon compensation cancelling this head's own green runs),
+            // replayed, re-verified, re-readied, re-pushed, re-waited, and posted
+            // a SECOND `/fast-forward` comment while the first was possibly
+            // merging — then exited `3` when the lap budget ran out.
+            //
+            // The header two screens up already said `3` is "no answer yet, which
+            // is the state the loop exists to sit in". No loop sat in it. This is
+            // that sentence made true.
+            //
+            // A COUNT, never a deadline, matching `run_land_wait`'s own bound and
+            // for its reason: the cost of too many asks is conditional requests
+            // the forge answers cheaply, and the cost of too few is a lap that
+            // reports no answer while one was moments away. Exhausting it still
+            // reports `Pending`, so the lap's own budget stays the outer bound.
+            // `LAND_ANSWER_ASKS`, not `LAND_ANSWER_MAX_UNKNOWNS`. The latter
+            // bounds the CI wait with a default three orders of magnitude larger,
+            // and in the predecessor it meant a third thing again — so one name
+            // over both loops is a setting that cannot be tuned for either
+            // (review of #848).
+            let asks = std::env::var("LAND_ANSWER_ASKS")
+                .ok()
+                .and_then(|raw| raw.trim().parse::<u32>().ok())
+                .unwrap_or(120);
+            let mut verdict = fast_forward::Answer::Pending;
+            // `pause_until` slices its wait so a RACING arm can cut it short.
+            // Nothing races this one — the lap is serial here — so the flag is
+            // permanently false and the slicing is the only thing borrowed.
+            let answer_poll_stop = std::sync::atomic::AtomicBool::new(false);
+            for attempt in 0..asks.max(1) {
+                verdict = fast_forward::answer(&ask, &since, &comment);
+                // **A COULD-NOT-LOOK IS NOT AN ANSWER, and breaking on it undid
+                // the poll.** `Answer::Unknown` covers a transport failure, an
+                // unparseable body and any non-runs document — a 403 error page
+                // included — so ONE transient hiccup during the wait ended it,
+                // which laps: the compensation cancels this head's own in-flight
+                // runs, the lap re-verifies, re-readies (buying another matrix),
+                // re-pushes and posts a SECOND `/fast-forward` comment while the
+                // first may be merging. That is the exact failure this poll was
+                // added to fix, reintroduced by its own exit condition.
+                //
+                // Only a REFUSAL or an ACCEPTANCE ends the wait. Exhausting the
+                // count reports whatever the last read said, so an unknown that
+                // never resolves still reaches the caller as one.
+                if matches!(
+                    verdict,
+                    fast_forward::Answer::Accepted | fast_forward::Answer::Refused
+                ) {
+                    break;
+                }
+                if attempt + 1 < asks.max(1) {
+                    // `pr_watch`'s pause, never a second timer: there is ONE
+                    // sleep in this crate and it carries the one
+                    // `disallowed_methods` escape, which is what `land.rs`'s
+                    // stale arm says at its own site and what `spawn-widening`
+                    // refuses a second copy of. The bound is `LAND_ANSWER_ASKS`
+                    // asks over `fast_forward::answer` — the loop breaks on
+                    // `Accepted` or `Refused`, so this paces a poll rather than
+                    // standing in for an exit condition, and exhausting the
+                    // count reports whatever the last read said (CLOUD-1177).
+                    crate::pr_watch::pause_until(
+                        fast_forward::ANSWER_POLL_SECONDS,
+                        &answer_poll_stop,
+                    );
+                }
             }
-            // A LOST CAS IS A VERDICT ABOUT THE REPOSITORY, so `2` rather than a
-            // failure code: somebody else moved this branch, the lap has an
-            // answer, and the answer is to lap again.
-            land::Pushed::Raced => {
-                writeln!(
-                    out,
-                    "land: {branch} moved under this push; the remote refused and this lap is spent"
-                )?;
-                Ok(ExitCode::Violation)
+            match verdict {
+                fast_forward::Answer::Accepted => {
+                    writeln!(out, "land: #{} was accepted", ask.pr)?;
+                    Ok(ExitCode::Success)
+                }
+                fast_forward::Answer::Refused => {
+                    writeln!(
+                        out,
+                        "land: #{} was refused; this head is no longer a direct descendant",
+                        ask.pr
+                    )?;
+                    Ok(ExitCode::Violation)
+                }
+                fast_forward::Answer::Pending => {
+                    writeln!(out, "land: #{} has no answer yet", ask.pr)?;
+                    Ok(ExitCode::Internal)
+                }
+                // A CLOSED VOCABULARY REACHES THE READER AS A TOKEN, never as
+                // prose and never as "main moved" — that is a fact about a ref,
+                // and only the staleness arm may assert it.
+                fast_forward::Answer::Unknown(token) => {
+                    writeln!(out, "land: #{} ran and decided nothing ({token})", ask.pr)?;
+                    Ok(ExitCode::Internal)
+                }
             }
-        };
+        }
     }
+}
 
-    match land::replay(root, url, &reference, &branch)? {
+/// `batten land push`: the branch to its own ref, under receive-pack's CAS.
+fn run_land_push(root: &Path, url: &str, branch: &str, out: &mut dyn Write) -> Result<ExitCode> {
+    match land::push(root, url, branch)? {
+        land::Pushed::Landed(head) => {
+            writeln!(out, "land: {branch} on the remote now reads {head}")?;
+            Ok(ExitCode::Success)
+        }
+        // A LOST CAS IS A VERDICT ABOUT THE REPOSITORY, so `2` rather than a
+        // failure code: somebody else moved this branch, the lap has an answer,
+        // and the answer is to lap again.
+        land::Pushed::Raced => {
+            writeln!(
+                out,
+                "land: {branch} moved under this push; the remote refused and this lap is spent"
+            )?;
+            Ok(ExitCode::Violation)
+        }
+    }
+}
+
+/// `batten land replay`: advance the base and replay this branch onto it.
+fn run_land_replay(
+    root: &Path,
+    url: &str,
+    reference: &str,
+    branch: &str,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    match land::replay(root, url, reference, branch)? {
         land::Replay::Conflicted { commit, paths } => {
             writeln!(
                 out,
@@ -5753,7 +7234,9 @@ fn run_land(
 /// `prune`'s deletes. A consumer needing that writes a script and names it.
 fn run_land_verify(
     root: &Path,
+    bet: &speculation::Bet,
     branch: &str,
+    reference: Option<&str>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -5766,19 +7249,824 @@ fn run_land_verify(
         )?;
         return Ok(ExitCode::Usage);
     }
-    match land::verify(root, branch, &command)? {
+    // THE PUBLICATION IS A FUNCTION OF THE BET, never a side effect kept in step
+    // with it. `Bet::published` is `None` with no bet outstanding, so the variable
+    // is simply absent from the gate's environment — the predecessor called a
+    // `publish_speculation` at every point a bet was placed or cleared precisely
+    // because the two could disagree.
+    let published: Vec<(String, String)> = bet
+        .published()
+        .map(|base| vec![(speculation::PUBLISHED_AS.to_owned(), base.to_owned())])
+        .unwrap_or_default();
+    let environment = verify_environment(root);
+    match land::verify(root, branch, &command, &published, &environment)? {
         land::Verified::Clean(head) => {
             writeln!(out, "land: {head} passed the configured gate")?;
             Ok(ExitCode::Success)
         }
         // A REFUSAL IS A VERDICT ABOUT THE REPOSITORY, so `2`. The gate's own
-        // output already went to the caller's terminal; repeating a pointer to
-        // it here would be the payload rule's exact failure.
-        land::Verified::Refused(head) => {
-            writeln!(out, "land: {head} was refused by the configured gate")?;
+        // output reached the caller's terminal — `land::verify` tees for exactly
+        // this — so repeating a pointer to it here would be the payload rule's
+        // exact failure. What this arm adds is not the output but the READING:
+        // which of three refusals it was, because the advice differs and two of
+        // the three were previously told the wrong thing.
+        land::Verified::Refused { sha, cause } => {
+            writeln!(out, "land: {sha} was refused by the configured gate")?;
+            match cause {
+                // NOT THIS BRANCH'S DOING, so none of the tree advice applies.
+                // The remedy is the consumer's own words from the row that
+                // matched; this engine knows there was a match and nothing about
+                // what to do, which is what keeps the reclaim's name out of it.
+                land::Refusal::Environment { remedy } => {
+                    writeln!(
+                        err,
+                        "::error:: land: the gate died of the environment rather than of this tree — {remedy}"
+                    )?;
+                }
+                // A SUSPICION, NEVER A VERDICT, and the wording is load-bearing.
+                // This row retracted two attributions in one day for treating
+                // "speculative" as the explanation because it was the salient
+                // difference — so it says how to FIND OUT rather than deciding.
+                //
+                // BOTH recoveries, because `rebase --onto` is not the only one
+                // and the cheaper one is available whenever the remote still
+                // holds this branch unborrowed.
+                land::Refusal::Tree => {
+                    if let Some(base) = bet.published() {
+                        writeln!(
+                            err,
+                            "::error:: land: this tree is SPECULATIVE — it carries {} borrowed from {base}, so the failure may not be yours.",
+                            short(base)
+                        )?;
+                        // THE BASE REF IS THE LAP'S AND A HAND-DRIVEN VERIFY HAS
+                        // NONE, so it is `Option` rather than a guess. `batten
+                        // land verify` run alone takes no positional — the lap
+                        // is what knows which trunk this branch is landing onto
+                        // — and naming a default here would print a recovery
+                        // that reaches the wrong ref in any repository whose
+                        // trunk is spelled differently (non-negotiable rule 1).
+                        // The `reset --hard` half needs no base and is offered
+                        // either way.
+                        match reference {
+                            Some(reference) => writeln!(
+                                err,
+                                "  Re-run the gate off the borrowed base: git rebase --onto {reference} {base}, or git reset --hard <this branch's own head>."
+                            )?,
+                            None => writeln!(
+                                err,
+                                "  Re-run the gate off the borrowed base: git rebase --onto <your base> {base}, or git reset --hard <this branch's own head>."
+                            )?,
+                        }
+                        writeln!(
+                            err,
+                            "  If it still fails off the borrowed base, it is yours."
+                        )?;
+                    } else {
+                        writeln!(err, "::error:: land: reproduce and fix locally.")?;
+                    }
+                }
+            }
             Ok(ExitCode::Violation)
         }
     }
+}
+
+/// The declared `[[verify_environment_pattern]]` rows, or none.
+///
+/// **Could-not-look is an EMPTY table rather than a refusal**, and that is the
+/// safe direction here: with no rows every refusal classifies as
+/// [`land::Refusal::Tree`], which is the advice that was always given and is
+/// right in the common case. A config this cannot read must not turn a refused
+/// gate into a second failure on top of it.
+///
+/// **ANCHORED AT THE REPOSITORY ROOT, never at the caller's directory** (review
+/// of #848). `root` is the cwd the verb was invoked from, so anchoring there
+/// looked for `batten.toml` beside wherever the operator happened to stand — and
+/// `authority_site` with no `config_in` is `required: false`, so a miss is an
+/// EMPTY TABLE at exit 0 rather than a refusal. Every `[[verify_environment_pattern]]`
+/// row then silently did not load and every refusal classified as
+/// `Refusal::Tree`, which is CLOUD-861's misattribution restored by the safe
+/// direction above. `land::verify` next door already resolves the root, and this
+/// PR fixed the same class for `receipt::run_verified`.
+///
+/// A root that will not resolve falls back to the anchor: this function's whole
+/// posture is that a reading it cannot take yields no rows rather than an error.
+fn verify_environment(root: &Path) -> Vec<outputs::OutputPattern> {
+    let anchor = git::repo_root(root).unwrap_or_else(|_| root.to_path_buf());
+    let site = config::authority_site(&anchor, None);
+    config::load_site(&site)
+        .ok()
+        .map(|(loaded, _)| loaded.verify_environment_patterns)
+        .unwrap_or_default()
+}
+
+/// How many ticks the guard waits to be killed after a cancellation lands.
+///
+/// A COUNT, never a deadline, and the exit condition is being killed rather than
+/// the clock running out: exiting `0` here would let the job march into the
+/// matrix the cancellation just paid an API call to prevent, and exiting non-zero
+/// would red the run. So neither, for as long as a cancellation plausibly takes.
+const CANCEL_TICKS: u32 = 24;
+
+/// One tick, in seconds. `pr_watch::pause` carries the crate's single sleep
+/// exemption, so waiting through it opens no new site for `sleep_ban.rs`.
+const CANCEL_TICK_SECONDS: f64 = 5.0;
+
+/// Report the guard's decision and, on a stop, act on it.
+///
+/// # IT NEVER EXITS NON-ZERO, AND THAT IS THE WHOLE CONTRACT
+///
+/// A job that reds before its cancellation lands makes the RUN's conclusion
+/// `failure` rather than `cancelled`; `final` then runs under `!cancelled()`,
+/// fails its `needs:` assertion, and the lander re-drafts every PR in the fleet
+/// — the fleet-wide re-drafting this whole design exists to avoid, reintroduced
+/// by its own remedy. So every path here returns [`ExitCode::Success`],
+/// including the ones that could not look and the one whose cancellation was
+/// refused.
+///
+/// # The annotation is at COLUMN 0 and that is load-bearing
+///
+/// The runner reads a workflow command only when the line begins with `::` after
+/// trimming leading whitespace, so a prefix would emit the token and have it
+/// ignored. A stopped run is a CANCELLED run with a red `final` and no failed
+/// step of its own — so without the annotation a reader sees a red check, no
+/// annotation, and no clue that the remedy is one rebase.
+fn report_guard(
+    guarded: &lease::Guarded,
+    repo: &str,
+    run: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let why = match guarded {
+        lease::Guarded::Run { why } => {
+            writeln!(out, "lease-precondition: {why}")?;
+            return Ok(ExitCode::Success);
+        }
+        lease::Guarded::Stop { why } => why,
+    };
+    writeln!(err, "::error::lease-precondition: {why}")?;
+
+    if run.trim().is_empty() {
+        writeln!(
+            err,
+            "lease-precondition: nothing to cancel — no run id was given; running anyway"
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    writeln!(
+        err,
+        "::error::lease-precondition: this run is not authorised to spend a matrix; cancelling \
+         run {run}"
+    )?;
+    if !lease::cancel_run(repo, run) {
+        writeln!(
+            err,
+            "lease-precondition: the cancellation was refused; running anyway"
+        )?;
+        return Ok(ExitCode::Success);
+    }
+
+    // WAIT TO BE KILLED. See `CANCEL_TICKS`.
+    for _ in 0..CANCEL_TICKS {
+        pr_watch::pause(CANCEL_TICK_SECONDS);
+    }
+    writeln!(
+        err,
+        "lease-precondition: still alive after {CANCEL_TICKS} tick(s); running anyway"
+    )?;
+    Ok(ExitCode::Success)
+}
+
+/// What the runner's step-0 guard is standing in and asking about.
+///
+/// **A struct rather than three operands**, and the reason is the gate this
+/// change also ships (CLOUD-1338). The two guard arms carried an
+/// `#[expect(clippy::too_many_arguments)]` whose reason argued the arity was
+/// necessary — *"three operands the caller must supply because the engine must
+/// not GUESS any of them"* — which is true of the operands and says nothing
+/// about the signature. They are one subject: the run this guard is standing in,
+/// on the head and branch it was started for. Naming it removes the escape
+/// rather than justifying it.
+#[derive(Debug, Clone, Copy)]
+struct Standing<'a> {
+    /// The head commit being judged. Never guessed: on a `pull_request` event
+    /// `github.sha` is the merge commit, which is a different tree.
+    head: &'a str,
+    /// The branch the lease is asked about.
+    branch: &'a str,
+    /// The run to cancel on a stop. Never guessed: cancelling the wrong one
+    /// stops somebody else's matrix.
+    run: &'a str,
+}
+
+/// `batten lease guard` (CLOUD-420): the runner's step-0 precondition.
+///
+/// # Errors
+///
+/// Only for a stream that will not accept output.
+fn run_lease_guard(
+    root: &Path,
+    overrides: &resolve::Overrides,
+    terms: &lease::Terms,
+    asking: &Standing<'_>,
+    now: i64,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let Standing { head, branch, run } = *asking;
+    if let Some(code) = fast_forward_lane(root, overrides, branch, out)? {
+        return Ok(code);
+    }
+    let repo = repo_or_placeholder(root);
+    let carries = lease_staleness(root, overrides, &repo, head);
+
+    // THE LEASE IS ASKED ONLY IF THE HEAD IS CURRENT, which is the predecessor's
+    // ordering: one fewer forge read on a head that is doomed either way.
+    let authority = match &carries {
+        lease::Carries::Current => {
+            let observed = lease::observe(terms).ok();
+            Some(lease::authorises(observed.as_ref(), branch, now))
+        }
+        _ => None,
+    };
+    let guarded = lease::guard(&carries, authority.as_ref());
+    report_guard(&guarded, &repo, run, out, err)
+}
+
+/// The guard on a clone with no lease remote.
+///
+/// The staleness half is the FORGE's answer and needs no remote, so it is still
+/// asked — reaching the unleased `authorises` arm instead would skip a reading
+/// that was available. The lease half is `None`, which `lease::guard` reads as
+/// fail-open.
+fn run_lease_guard_unleased(
+    root: &Path,
+    overrides: &resolve::Overrides,
+    asking: &Standing<'_>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let Standing { head, branch, run } = *asking;
+    if let Some(code) = fast_forward_lane(root, overrides, branch, out)? {
+        return Ok(code);
+    }
+    let repo = repo_or_placeholder(root);
+    let carries = lease_staleness(root, overrides, &repo, head);
+    let guarded = lease::guard(&carries, None);
+    report_guard(&guarded, &repo, run, out, err)
+}
+
+/// The carve-out, asked BEFORE either reading and before anything is spent.
+///
+/// **This ordering is the predecessor's and it is load-bearing.** The `case` sat
+/// above both the staleness read and the lease read, so an exempt branch costs
+/// no forge call at all — and, more importantly, cannot be stopped by a reading
+/// that has nothing to say about it. Asking afterwards would let a stale-head
+/// refusal fire on a branch this gate is not judging.
+///
+/// `Some(Success)` means *not judging this branch*; `None` means carry on.
+fn fast_forward_lane(
+    root: &Path,
+    overrides: &resolve::Overrides,
+    branch: &str,
+    out: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    let prefixes = lease_config(root, overrides)
+        .map(|lease| lease.fast_forward_branches)
+        .unwrap_or_default();
+    if !lease::lands_by_fast_forward(branch, &prefixes) {
+        return Ok(None);
+    }
+    writeln!(
+        out,
+        "lease-precondition: {branch} is fast-forwarded by a lander rather than by a lease holder; not judging it"
+    )?;
+    Ok(Some(ExitCode::Success))
+}
+
+/// The `[lease]` table, read through the §8 authority chain.
+///
+/// # THE READERS BELOW WERE HANDING A DIRECTORY TO A FILE READER
+///
+/// Every one of them spelled this `config::load(root)`, and [`config::load`]
+/// takes a **file** path. `fs::read_to_string(".")` is not `NotFound`, so it
+/// became an internal error, which `.ok()` dropped, which `unwrap_or_default()`
+/// turned into an empty table — so `[lease] landing_paths` read as *nothing
+/// declared* in every checkout it has ever run in, and the staleness half of the
+/// runner-side guard has been failing open since it landed. Measured over the
+/// compiled binary from this repository's own root, with the rows in
+/// `batten.toml` two directories up from the reader.
+///
+/// That is the same class the key exists to close, arriving by a different
+/// route: its own doc comment records the predecessor dying quietly and every
+/// stale head passing. `crates/batten/tests/it/lease_config.rs` is the tier that
+/// catches it, because it drives the ENGINE rather than the reader.
+///
+/// # AND IT HONOURS `--config-in`, WHICH IS NOT A CONVENIENCE HERE
+///
+/// `batten lease guard` is the runner's FIRST step, before any checkout, so the
+/// directory it stands in is empty by construction. A reader anchored on the
+/// working tree therefore has nothing to read even once the path bug is fixed —
+/// the trust half of the same problem, since the only tree a checkout WOULD
+/// offer is the pull request's own. [`config::authority_site`] is the boundary
+/// that already answers this for every other verb: the caller names a directory
+/// holding a trusted `batten.toml`, fetched from trunk exactly as `install.sh`
+/// is, and the guard is judged by trunk's policy rather than by the head's.
+///
+/// `None` is could-not-look and every caller reads it that way.
+fn lease_config(root: &Path, overrides: &resolve::Overrides) -> Option<config::Lease> {
+    let site = config::authority_site(root, overrides.config_in.as_deref().map(Path::new));
+    config::load_site(&site)
+        .ok()
+        .and_then(|(loaded, _)| loaded.lease)
+}
+
+/// The staleness reading, over the declared landing paths.
+///
+/// One place both guard arms read it, so they cannot disagree about which paths
+/// or which trunk.
+fn lease_staleness(
+    root: &Path,
+    overrides: &resolve::Overrides,
+    repo: &str,
+    head: &str,
+) -> lease::Carries {
+    let paths = lease_config(root, overrides)
+        .map(|lease| lease.landing_paths)
+        .unwrap_or_default();
+    let trunk = std::env::var("LEASE_TRUNK").unwrap_or_else(|_| String::from("main"));
+    lease::carries(repo, &trunk, head, &paths)
+}
+
+/// `batten lease carries` (CLOUD-1148 §2): does this head carry the landing
+/// mechanism trunk has?
+///
+/// # THE EXIT TABLE, AND THE CALLER FAILS OPEN ON `3`
+///
+/// `0` the head carries it, `2` it does not — a verdict about this branch, whose
+/// remedy is one rebase — and `3` the reading could not be taken. The CI caller
+/// treats `3` as run, which is this gate's whole posture and the opposite of
+/// every other refusal in this repository: a reading nobody could take would
+/// cancel every job in the fleet, where waving one matrix through costs one
+/// matrix.
+///
+/// # What it replaces, and why the replacement is a path set
+///
+/// `ci-lease-precondition.sh:157` grepped the head's own `mise-tasks/land.sh`
+/// for `land-lock acquire`. That dies with the retirement and dies QUIETLY: the
+/// file goes, `from_ref` fails, the script takes its own fail-open path — "not
+/// judging this head's age" — and every stale head passes. `[lease]
+/// landing_paths` is a row a retirement edits rather than a literal a retirement
+/// invalidates.
+///
+/// # Errors
+///
+/// Only for a stream that will not accept output. Every failure to reach the
+/// forge is a could-not-look reported as `3`.
+fn run_lease_carries(
+    root: &Path,
+    overrides: &resolve::Overrides,
+    head: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let paths = lease_config(root, overrides)
+        .map(|lease| lease.landing_paths)
+        .unwrap_or_default();
+    let repo = repo_or_placeholder(root);
+    let trunk = std::env::var("LEASE_TRUNK").unwrap_or_else(|_| String::from("main"));
+
+    match lease::carries(&repo, &trunk, head, &paths) {
+        lease::Carries::Current => {
+            writeln!(
+                out,
+                "lease carries: {head} carries {trunk}'s landing mechanism"
+            )?;
+            Ok(ExitCode::Success)
+        }
+        // THE REMEDY IS ONE REBASE AND THE REFUSAL SAYS SO. A stopped run is a
+        // CANCELLED run with no failed step of its own, so a reader who is not
+        // told sees a red check and no cause.
+        lease::Carries::Stale { wanted } => {
+            writeln!(
+                err,
+                "::error:: lease carries: {head} does not carry {wanted}, so it cannot be \
+                 serialised against the fleet. Rebase onto current {trunk} and land with it."
+            )?;
+            Ok(ExitCode::Violation)
+        }
+        lease::Carries::Unknown { because } => {
+            writeln!(
+                err,
+                "::error:: lease carries: {because}; not judging this head"
+            )?;
+            Ok(ExitCode::Internal)
+        }
+    }
+}
+
+/// The staleness arm's config, assembled in one place so both readers of it —
+/// the raced wait and the between-gate-and-push probe — cannot disagree about
+/// which ref, which repository or which interval they are asking about.
+///
+/// The branch is the reference's SHORT NAME, because the endpoint path spells a
+/// ref that way (`git/ref/heads/main`) where the caller carries a full one.
+///
+/// **`land::short_ref`, never a second derivation here** (review of #848). This
+/// said it took "the same derivation the tracking ref above takes" while taking
+/// `rsplit('/')` — the leaf — after `tracking_ref` had been fixed off it. A
+/// consumer whose trunk is `release/1.x` therefore asked the forge for
+/// `git/ref/heads/1.x`, got a 404, and BOTH staleness arms went silently dead
+/// while the sentence claiming they could not drift stood over the drift.
+fn trunk_watch(reference: &str, base: &str, repo: &str, interval: u64) -> main_watch::Config {
+    main_watch::Config {
+        repo: repo.to_owned(),
+        branch: land::short_ref(reference).to_owned(),
+        base: base.to_owned(),
+        interval,
+    }
+}
+
+/// The lap's READY phase: the gates that read the pull request's body.
+///
+/// # Both the body source and the gates are the consumer's
+///
+/// `LAND_BODY_SOURCE` is the argv that prints the body, and `LAND_BODY_GATES` is
+/// a `|`-separated list of gate argvs. Neither is defaulted, for
+/// `run_land_fast_forward`'s reason at its own site: a default compiled in here
+/// would be a consumer's vocabulary inside `crates/batten`, which is
+/// non-negotiable rule 1's plainest violation — and the failure a default buys is
+/// the quiet one, a fleet whose gates silently do not run.
+///
+/// **An UNDECLARED gate set is a pass, and a DECLARED one that cannot run is
+/// not.** The asymmetry is the point: a consumer that names no body gates has
+/// none, which is a legitimate configuration; a consumer that names one and
+/// cannot run it has a dead gate, which is the class this engine exists to
+/// refuse. `run_land_fast_forward` refuses an absent `LAND_WORKFLOW` instead,
+/// because a lap with no fast-forward has no way to finish at all — the two
+/// differ because one is optional and the other is the step.
+///
+/// # It buys the matrix, and the accounting lives here for that reason
+///
+/// Readying is what starts CI, so this is the ONE site that increments the
+/// ledger's paid count. `land::Ledger`'s own header records why that cannot be
+/// inferred from the lap counter instead.
+fn run_land_ready(
+    root: &Path,
+    branch: &str,
+    ledger: &mut land::Ledger,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let declared = std::env::var("LAND_BODY_GATES").unwrap_or_default();
+    let gates = land::body_gates(&declared);
+    // AN UNDECLARED GATE SET IS A PASS AND NOT AN EARLY RETURN, which is the
+    // correction this step needed most: returning here skipped the ready itself,
+    // so a consumer declaring no body gates got a lap that pushed and then waited
+    // out its whole ask count on a matrix nobody had started.
+    if gates.is_empty() {
+        writeln!(out, "land: no body gates declared; nothing to ask")?;
+    } else {
+        // FAIL OPEN ON THE FETCH, and only on the fetch. A body this never saw is
+        // not evidence about what the author wrote, which is the predecessor's
+        // posture spelled `[[ -n "$body" ]] &&`. An unreadable source therefore
+        // yields an empty body and `land::ready` treats that as clear.
+        let source = std::env::var("LAND_BODY_SOURCE").unwrap_or_default();
+        let body = land::body_gates(&source)
+            .first()
+            // `Drop`: this string is PARSED as the body, so a client's notice
+            // on stderr would become text the author never wrote. The gates
+            // below take `Keep`, because their stderr IS their reason.
+            .and_then(|argv| exec::piped_argv(root, argv, "", exec::Diagnostics::Drop))
+            .filter(|(code, _)| *code == 0)
+            .map(|(_, body)| body)
+            .unwrap_or_default();
+
+        match land::ready(root, &gates, &body) {
+            land::Readied::Clear => {
+                writeln!(out, "land: {} body gate(s) clear", gates.len())?;
+            }
+            land::Readied::Refused { gate, detail } => {
+                writeln!(
+                    err,
+                    "::error:: land: {gate} refused this pull request's body"
+                )?;
+                if !detail.is_empty() {
+                    writeln!(err, "{detail}")?;
+                }
+                return Ok(ExitCode::Violation);
+            }
+            // INTERNAL RATHER THAN A VIOLATION, because the subject differs: a
+            // refusal is about the body and this is about the clone.
+            // `land::progress` stops on both for this step, so the lap behaves
+            // identically — what the split buys is a reader who can tell "the
+            // author must fix this" from "this checkout cannot ask".
+            land::Readied::Unrunnable { gate } => {
+                writeln!(
+                    err,
+                    "::error:: land: {gate} is declared in LAND_BODY_GATES and will not run, so \
+                     its verdict is unknown rather than clean"
+                )?;
+                return Ok(ExitCode::Internal);
+            }
+        }
+    }
+
+    spend_the_matrix(root, branch, ledger, out, err)
+}
+
+/// Fire the ready, which is the event that starts CI.
+///
+/// # THIS IS THE STEP, AND THE GATES ABOVE ARE ITS PRECONDITION
+///
+/// The step was named `Ready` and ran only the body gates: nothing in this crate
+/// performed the ready itself, so `Compensation::Redraft` undid a state the
+/// driver never created and the whole `push → wait → fast-forward` tail waited on
+/// a matrix nobody had bought. Found reading `tests/land.bats`'s own case titles
+/// against the successor — eight of them describe this economy and not one had a
+/// call site here.
+///
+/// # `Refire` is a draft-then-ready, and it is why this is not one call
+///
+/// A pull request already ready cannot be readied again, so the only way to mint
+/// a fresh run on one whose head can never grade is to put it back to draft
+/// first. [`land::buys_a_matrix`] is where the three states are told apart, and
+/// it reads the CHECKS verdict rather than a run count so that a lap arriving
+/// while this lap's own run is still in flight leaves it alone — cancelling the
+/// matrix it had just bought is the failure that arm exists to refuse.
+fn spend_the_matrix(
+    root: &Path,
+    branch: &str,
+    ledger: &mut land::Ledger,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let repo = repo_or_placeholder(root);
+    let pr = match fast_forward::look_up_pull_request(&repo, branch) {
+        fast_forward::Lookup::Found(pr) => pr,
+        fast_forward::Lookup::None => {
+            writeln!(
+                err,
+                "::error:: land: no open pull request for {branch}, so there is nothing to ready and no run to buy"
+            )?;
+            return Ok(ExitCode::Internal);
+        }
+        fast_forward::Lookup::Unreadable(status) => {
+            writeln!(
+                err,
+                "::error:: land: could not read {repo}'s pull requests ({status}), so nothing is readied — this is the environment, not the branch"
+            )?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let Some((is_draft, node)) = land::draft_state(&repo, &pr) else {
+        writeln!(
+            err,
+            "::error:: land: the pull request's draft state will not read, so whether a ready would buy a run is unknown"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+
+    // THE READING THIS LAP ALREADY OWNS. A verdict that cannot be taken is
+    // `None`, which `buys_a_matrix` answers `Nothing` to — the same posture the
+    // tap takes one direction over, and for the same reason.
+    let reading = head_verdict(root, &repo);
+    match land::buys_a_matrix(Some(is_draft), reading.as_ref()) {
+        land::Spend::Nothing => {
+            writeln!(
+                out,
+                "land: {branch} needs no ready; a run on this head has answered or is on its way"
+            )?;
+            Ok(ExitCode::Success)
+        }
+        land::Spend::Ready => fired(land::mark_ready(&node), ledger, out, err),
+        land::Spend::Refire => {
+            // DRAFT FIRST, and a draft that will not happen is a stop: readying an
+            // already-ready pull request is a no-op the forge reports as success,
+            // so proceeding would report a matrix it never bought.
+            if !land::redraft(&node) {
+                writeln!(
+                    err,
+                    "::error:: land: {branch} is ready over a head that can never grade, and it \
+                     would not go back to draft, so no fresh run can be minted for it"
+                )?;
+                return Ok(ExitCode::Internal);
+            }
+            writeln!(
+                out,
+                "land: {branch} carried no answer and no run in flight; re-firing its ready"
+            )?;
+            fired(land::mark_ready(&node), ledger, out, err)
+        }
+    }
+}
+
+/// One report for both places a ready is fired.
+///
+/// **A ready that did not fire STOPS the lap**, which is the one place this
+/// family does not swallow a forge failure: pushing after it would spend the
+/// wait's whole ask count on a matrix nobody started. `tests/land.bats` states
+/// it as *"a ready that fails stops before the push rather than pushing into
+/// silence"*.
+fn fired(
+    happened: bool,
+    ledger: &mut land::Ledger,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    if happened {
+        // THE ONE SITE THAT BUYS A MATRIX, which is the whole reason `paid` is a
+        // counter rather than an inference off the lap count: a lap that stops
+        // before this point spends nothing, and `Ledger`'s own header records a
+        // refusal announcing "having spent 2 CI matrices" over a head that
+        // carried zero check-runs.
+        ledger.bought_a_matrix();
+        writeln!(out, "land: the pull request is ready; the matrix is bought")?;
+        return Ok(ExitCode::Success);
+    }
+    writeln!(
+        err,
+        "::error:: land: the ready did not fire, so no run was started; pushing now would wait out the whole count on a matrix that does not exist"
+    )?;
+    Ok(ExitCode::Internal)
+}
+
+/// Run `$LAND_ENTRY_GATES` over this landing's pull request, once.
+///
+/// `Some(code)` stops the landing; `None` lets it proceed.
+///
+/// # The consumer names the gate and the engine supplies the pull request
+///
+/// `LAND_ENTRY_GATES` is a `|`-separated list of argvs, each run with the pull
+/// request number appended. Undeclared is a pass and declared-but-unrunnable is a
+/// refusal, which is [`run_land_ready`]'s asymmetry and is stated there.
+///
+/// # A pull request that will not resolve is a REFUSAL rather than a pass
+///
+/// Every other read in this family answers could-not-look and carries on, because
+/// spending nothing is the safe direction for a question about CI. Here it is the
+/// other way round: a gate declared over a pull request nobody could name has not
+/// run, and letting the lap proceed is precisely the dead-gate reading. The lap
+/// cannot finish without a pull request anyway — `run_land_fast_forward` stops on
+/// the same absence — so this refuses at the cheap end instead of after a matrix.
+fn run_land_entry_gates(
+    root: &Path,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    let declared = std::env::var("LAND_ENTRY_GATES").unwrap_or_default();
+    let gates = land::body_gates(&declared);
+    if gates.is_empty() {
+        return Ok(None);
+    }
+    let repo = repo_or_placeholder(root);
+    let pr = match fast_forward::look_up_pull_request(&repo, branch) {
+        fast_forward::Lookup::Found(pr) => pr,
+        fast_forward::Lookup::None => {
+            writeln!(
+                err,
+                "::error:: land: {} entry gate(s) are declared and no open pull request for {branch} will resolve, so they cannot be asked",
+                gates.len()
+            )?;
+            return Ok(Some(ExitCode::Internal));
+        }
+        fast_forward::Lookup::Unreadable(status) => {
+            writeln!(
+                err,
+                "::error:: land: {} entry gate(s) are declared and {repo}'s pull requests could not be read ({status}), so they cannot be asked — this is the environment, not the branch",
+                gates.len()
+            )?;
+            return Ok(Some(ExitCode::Internal));
+        }
+    };
+    match land::admits_the_landing(root, &gates, &pr) {
+        land::Admitted::Clear => {
+            writeln!(out, "land: {} entry gate(s) clear", gates.len())?;
+            Ok(None)
+        }
+        land::Admitted::Refused { gate, detail } => {
+            // THE GATE'S OWN WORDS REACH THE OPERATOR (CLOUD-407). The
+            // predecessor's `die` added only the landing's context, because the
+            // gate is the authority on its own remedy and a summary here would be
+            // a second, staler copy of it.
+            writeln!(err, "::error:: land: {gate} refused this landing")?;
+            if !detail.is_empty() {
+                writeln!(err, "{detail}")?;
+            }
+            writeln!(
+                err,
+                "::error:: nothing has been spent — the refusal above says how to clear it, then run the landing again"
+            )?;
+            Ok(Some(ExitCode::Violation))
+        }
+        land::Admitted::Unrunnable { gate } => {
+            writeln!(
+                err,
+                "::error:: land: the declared entry gate {gate} will not run, so this landing's precondition is unasked rather than met"
+            )?;
+            Ok(Some(ExitCode::Internal))
+        }
+    }
+}
+
+/// Hand the landing lease back, best-effort, on the path that landed.
+///
+/// **`Compensation::ReleaseLease` cannot reach this path**: it runs from
+/// `unwind_lap`, and a landing returns before any unwind. That left the one
+/// outcome where the lease is definitively finished with as the one outcome that
+/// never released it, so every waiter behind a successful landing paid the full
+/// TTL (review of #848).
+///
+/// Silent in every failure, which is [`retire_the_branch`]'s posture and its
+/// reason: the landing already succeeded, and a cleanup step reported as failure
+/// makes a good outcome look broken. A lease this clone does not hold is not an
+/// error either — `lease_hand_back` already decides that.
+fn hand_back_the_lease(root: &Path, branch: &str, out: &mut dyn Write) {
+    let Ok(terms) = lease::terms(root) else {
+        return;
+    };
+    let Ok((_, holder)) = lease_identity(root) else {
+        return;
+    };
+    let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+    lease_hand_back(root, &terms, &holder, now);
+    let _ = writeln!(out, "land: handed the landing lease back after {branch}");
+}
+
+/// Retire the branch a lap has just landed, reporting what went.
+///
+/// Every failure is silent in the exit code and visible in the line, which is
+/// [`land::retire_branch`]'s posture and its reason: the landing already
+/// succeeded, so reporting cleanup as failure would make it look broken.
+fn retire_the_branch(root: &Path, url: &str, branch: &str, out: &mut dyn Write) -> Result<()> {
+    let retired = land::retire_branch(root, url, branch);
+    // COUNTS AND BOOLEANS. `Retired` has nowhere to put a finding's text, which
+    // is non-negotiable rule 4 held in the TYPE rather than in this call site.
+    writeln!(
+        out,
+        "land: retired {branch} — remote:{} tracking:{} receipts:{}",
+        retired.remote, retired.tracking, retired.receipts
+    )?;
+    Ok(())
+}
+
+/// What the required checks say about this clone's HEAD, or `None`.
+///
+/// Every way this fails is a could-not-look — an unreadable HEAD, a roster that
+/// can decide nothing, a reading the forge would not give — and each answers
+/// `None` rather than a verdict, because [`land::buys_a_matrix`] spends nothing
+/// on one and that is the safe direction here.
+fn head_verdict(root: &Path, repo: &str) -> Option<checks_green::Verdict> {
+    let sha = git::head_commit(root).ok()?;
+    let roster = checks_green::Roster {
+        required: roster_field(std::env::var("CI_REQUIRED_CHECKS").ok().as_deref()),
+        absent_ok: roster_field(std::env::var("CI_ABSENT_OK_CHECKS").ok().as_deref()),
+        // THE SAME DEFAULT `run_land_wait` USES, and the asymmetry was a silent
+        // disable (review of #848). `checks_green::decide` REFUSES an empty
+        // `answered` set, and this reads the verdict through `.ok()`, so a
+        // consumer who set a required roster and left the conclusions to the
+        // default got `None` here — could-not-look — which `buys_a_matrix` reads
+        // as "needs no ready". The step that buys CI then did nothing, `Push`
+        // updated a branch nobody had readied, and every later line said "no
+        // answer yet".
+        answered: roster_field(Some(
+            &std::env::var("CI_ANSWERED_CONCLUSIONS")
+                .unwrap_or_else(|_| String::from("success,failure,timed_out,action_required")),
+        )),
+        fanin: std::env::var("CI_FANIN_CHECK")
+            .ok()
+            .filter(|name| !name.is_empty()),
+    };
+    let config = pr_watch::Config {
+        sha,
+        repo: repo.to_owned(),
+        interval: 1,
+        progress: None,
+    };
+    let mut poll = pr_watch::Poll::default();
+    let raw = pr_watch::read(&config, None)?;
+    // THE STATUS IS READ, AND A NON-`200` IS A COULD-NOT-LOOK RATHER THAN AN
+    // EMPTY HEAD (PR #848's review). `rest::get` answers `Some(Answer)` for a
+    // 401, a 403 or a 5xx as readily as for a reading — the transport worked, the
+    // forge declined — and the body is then not the array `runs_from_body`
+    // parses, so `absorb` leaves `runs` EMPTY. Downstream that is
+    // indistinguishable from a head no workflow has registered for:
+    // `checks_green::decide` answers `Pending::Unregistered`, `land::buys_a_matrix`
+    // reads that as `Refire`, and one forge blip re-drafts and re-readies the pull
+    // request — cancelling the very matrix this arm is documented to protect.
+    //
+    // `rest::Answer::is_reading` rather than a comparison written here, because a
+    // second spelling of *which statuses are answers* is a second authority over
+    // it. Every other failure in this function already answers `None` because
+    // `buys_a_matrix` spends nothing on one, and this is that direction.
+    if !raw.is_reading() {
+        return None;
+    }
+    // The interval it returns is for a LOOP to honour, and this is one read.
+    let _pace = poll.absorb(Some(&raw), config.interval);
+    checks_green::decide(poll.runs(), &roster).ok()
 }
 
 /// `batten land wait` (CLOUD-1338): the lap's raced wait, and the record it
@@ -5801,20 +8089,19 @@ fn run_land_verify(
 /// nothing to tell them apart.
 fn run_land_wait(
     root: &Path,
-    remote: &str,
     reference: &str,
     branch: &str,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<ExitCode> {
+) -> Result<(ExitCode, Option<land::TapVerdict>)> {
     let Ok(sha) = git::head_commit(root) else {
         writeln!(err, "::error:: land: cannot read this clone's HEAD")?;
-        return Ok(ExitCode::Internal);
+        return Ok((ExitCode::Internal, None));
     };
     let required = std::env::var("CI_REQUIRED_CHECKS").unwrap_or_default();
     let roster = checks_green::Roster {
         required: roster_field(Some(&required)),
-        absent_ok: roster_field(std::env::var("CI_ABSENT_OK").ok().as_deref()),
+        absent_ok: roster_field(std::env::var("CI_ABSENT_OK_CHECKS").ok().as_deref()),
         answered: roster_field(Some(
             &std::env::var("CI_ANSWERED_CONCLUSIONS")
                 .unwrap_or_else(|_| String::from("success,failure,timed_out,action_required")),
@@ -5828,25 +8115,36 @@ fn run_land_wait(
     // would be a hang whose cause is a typo.
     if let Err(problem) = checks_green::decide(&[], &roster) {
         writeln!(err, "::error:: land wait: {problem}")?;
-        return Ok(ExitCode::Usage);
+        return Ok((ExitCode::Usage, None));
     }
 
     // The base as this clone last saw it. The wait is asking whether the REMOTE
     // has moved past it, so the comparison needs the local reading rather than a
     // freshly fetched one — a base refreshed first would compare a value to
     // itself and never report stale.
-    let tracking = format!(
-        "refs/remotes/origin/{}",
-        reference.rsplit('/').next().unwrap_or(reference)
-    );
-    let base = git::resolve_ref(root, &tracking)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    // `land::tracking_ref`, not a second spelling of it — and the second
+    // spelling here carried the same last-segment defect it did (review of
+    // #848): a trunk named `release/1.x` resolved to `origin/1.x`, so this
+    // settled a bet against an unrelated branch's tracking ref.
+    let tracking = land::tracking_ref(reference);
+    // NO BASE IS A REFUSAL, NOT A SILENT BLOCK, and this is `main-watch.bats`'s
+    // last case conserved. `Poll::moved` reads an empty base as *nothing to
+    // compare against* and answers `None` for every reading — correct there, and
+    // a wait entered with one has silently lost its staleness arm: it would poll
+    // out its whole ask count on a base that moved under it on the first second.
+    // Could-not-look about this CLONE, so `Internal`, and `land::progress` laps
+    // on it — the next lap re-fetches, which is the one thing that fixes it.
+    let Some(base) = git::resolve_ref(root, &tracking).ok().flatten() else {
+        writeln!(
+            err,
+            "::error:: land wait: {tracking} will not resolve, so this wait has no base to judge staleness against and would race with one arm"
+        )?;
+        return Ok((ExitCode::Internal, None));
+    };
 
     let config = pr_watch::Config {
         sha: sha.clone(),
-        repo: std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned()),
+        repo: repo_or_placeholder(root),
         interval: 1,
         progress: None,
     };
@@ -5860,7 +8158,8 @@ fn run_land_wait(
         .filter(|asks| *asks > 0)
         .unwrap_or(3600);
 
-    let waited = land::wait(&config, &roster, remote, reference, &base, asks, out)?;
+    let trunk = trunk_watch(reference, &base, &config.repo, config.interval);
+    let waited = land::wait(&config, &roster, &trunk, asks, out)?;
     let (answers, code) = match &waited {
         land::Waited::Green { verdict } => (
             land::answers(&sha, Some(verdict.as_str()), None),
@@ -5870,6 +8169,12 @@ fn run_land_wait(
             land::answers(&sha, None, Some(base.as_str())),
             ExitCode::Violation,
         ),
+        // A VERDICT ABOUT THIS REPOSITORY, so `2` — the same code the stale arm
+        // carries, because both are. What tells them apart is the READING, which
+        // travels back beside this code and which `land::progress_of` is the one
+        // table over. Inventing a fifth code for red would be the per-verb
+        // exception non-negotiable rule 5 forbids.
+        land::Waited::Red { .. } => (land::answers(&sha, Some("red"), None), ExitCode::Violation),
         land::Waited::Unanswered => (land::answers(&sha, None, None), ExitCode::Internal),
     };
     land::record_wait(root, branch, &answers)?;
@@ -5877,6 +8182,34 @@ fn run_land_wait(
     match &waited {
         land::Waited::Green { .. } => {
             writeln!(out, "land: {sha} is green; the loser was voided unread")?;
+        }
+        land::Waited::Red { findings } => {
+            // POINTERS, and `Finding` has nowhere to put a log line. The count
+            // leads because it is what a reader acts on; the names follow.
+            writeln!(
+                err,
+                "::error:: land: {} required check(s) failed on {sha}",
+                findings.len()
+            )?;
+            for finding in findings {
+                writeln!(err, "  {finding}")?;
+            }
+            // THE RE-RUN ECONOMY, and it is what `failed_runs`/`rerun_failed`
+            // were built for and never reached. `tests/land.bats` splits it in
+            // two: *"a run that died before any mise step is re-run, not
+            // reported red"* against *"a job that reached a verdict is red, and
+            // is never re-run"*. This engine cannot yet tell those apart — that
+            // needs the job-level reading, which is CLOUD-483's own row — so it
+            // takes the SAFE half: report the red, re-run nothing, and let the
+            // author look. Re-running a genuine failure would spend a matrix to
+            // learn what one already answered.
+            //
+            // Stated here rather than left silent, because the two functions
+            // exist and a reader finding them uncalled deserves the reason.
+            writeln!(
+                out,
+                "land: reproduce this locally; a rebase clears nothing here, so the lap stops"
+            )?;
         }
         land::Waited::Stale { base } => {
             writeln!(
@@ -5888,49 +8221,11 @@ fn run_land_wait(
             writeln!(out, "land: no answer yet on {sha} after {asks} ask(s)")?;
         }
     }
-    Ok(code)
-}
-
-fn lease_terms(root: &Path) -> std::result::Result<lease::Terms, TermsMissing> {
-    let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
-    let remotes = git::remotes(root)
-        .map_err(|err| TermsMissing::Unreadable(format!("cannot read this repository: {err}")))?;
-    let url = remotes
-        .iter()
-        .find(|(configured, _)| *configured == name)
-        .map(|(_, url)| url.clone())
-        .ok_or(TermsMissing::NoRemote)?;
-    let mut terms = lease::Terms {
-        remote: url,
-        ..lease::Terms::default()
-    };
-    // Overridable so a suite can drive the bounds without waiting out a real TTL.
-    // Each falls back to the shipped default rather than to zero: a TTL of zero
-    // is a lease that has already lapsed, which would report as a fleet with no
-    // lease at all rather than as a misconfiguration.
-    if let Some(ttl) = env_secs("LAND_LOCK_TTL") {
-        terms.ttl = ttl;
-    }
-    if let Some(beat) = env_secs("LAND_LOCK_HEARTBEAT") {
-        terms.beat = beat;
-    }
-    if let Ok(reference) = std::env::var("LAND_LOCK_BRANCH") {
-        terms.reference = format!("refs/heads/{reference}");
-    }
-    Ok(terms)
-}
-
-/// A positive whole number of seconds from the environment, or `None`.
-///
-/// **Zero and negative are `None`**, not values: every bound here is a duration,
-/// and a zero TTL or beat would turn a lease into a spin rather than into a
-/// tighter test.
-fn env_secs(name: &str) -> Option<i64> {
-    std::env::var(name)
-        .ok()?
-        .parse::<i64>()
-        .ok()
-        .filter(|seconds| *seconds > 0)
+    // THE READING TRAVELS WITH THE CODE, because the exit table cannot carry it:
+    // a stale base and an unanswered wait are both a lap, and only one of them
+    // took a checks reading at all. Deriving the tap's verdict from the code in
+    // the driver would be a second authority over an answer this function holds.
+    Ok((code, land::tap_verdict(&waited)))
 }
 
 /// How many beats a holder may stop progressing before its lease is disbelieved.
@@ -5946,7 +8241,7 @@ fn env_secs(name: &str) -> Option<i64> {
 /// PRs when it was set. Deliberately generous: this exists to catch NEVER, not
 /// slow, and the cost of catching slow is a landing killed for being healthy.
 fn lease_stall_beats() -> i64 {
-    env_secs("LAND_LOCK_STALL_BEATS").unwrap_or(60)
+    lease::env_secs("LAND_LOCK_STALL_BEATS").unwrap_or(60)
 }
 
 /// `lease check`: the lease ref is free, or a live and well-formed hold.
@@ -5967,11 +8262,31 @@ fn run_lease_check(
             return Ok(ExitCode::Internal);
         }
     };
-    match lease::health(&observed, terms, now) {
+    report_health(&lease::health(&observed, terms, now), out, err)
+}
+
+/// Write a health reading and answer with its exit code.
+///
+/// **SPLIT FROM THE READING SO THE MAPPING IS REACHABLE** (CLOUD-1148). Every
+/// state the retired `mise-tasks/land-lock-check.sh` reported needs a lease on a
+/// remote to observe, and `lease::observe` has no offline fixture seam — so with
+/// the reading and the mapping in one function, four of the six arms could be
+/// exercised only against a live remote, which is a test of the network.
+///
+/// A `Wedged` mapped to `Success` is the silent failure this is the sensor on: a
+/// wedged lease would be reported in prose and pass its own gate.
+fn report_health(
+    health: &lease::Health,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    match health {
         lease::Health::Free(why) | lease::Health::Held(why) => {
             writeln!(out, "lease: {why}")?;
             Ok(ExitCode::Success)
         }
+        // A VERDICT ABOUT THIS REPOSITORY, so `2` — never the `1` the predecessor
+        // spelled it. One table, no per-verb exception (non-negotiable rule 5).
         lease::Health::Wedged(why) => {
             writeln!(
                 err,
@@ -5986,8 +8301,36 @@ fn run_lease_check(
     }
 }
 
-/// `lease status`, which is prose for a human and `-J` for everything else.
+/// `lease status`, which is prose for a human, `-J` for everything else, and a
+/// verdict for a `[[recorder]]` column.
+///
+/// # The exit code is a THIRD channel, and dropping it was the port's defect
+///
+/// `mise-tasks/land-lock.sh status` answered `0` for a lease that authorises
+/// this clone — unheld, released, expired, or held by this clone — and `1` for
+/// one held by somebody else. That is what `[program.land-lock-status]` records
+/// and what the `landing-loop` preset's `held-elsewhere` token is a mapping of.
+/// The first port rendered the document and returned `Success` on every
+/// answering path, so a lease held by a rival recorded as `authorised` and the
+/// preset allowed the overlapping spend it exists to refuse — a dead gate with a
+/// green suite, because no case drove the producer.
+///
+/// The codes are the engine's table rather than the predecessor's: a lease held
+/// elsewhere is [`ExitCode::Violation`], not `1`. The consumer's `status` map is
+/// where the two are reconciled, once, in config a reader can look up.
+///
+/// **Reporting is unchanged in both other channels.** The document still emits
+/// on every path including this one, for the reason the could-not-look arm below
+/// already states: the exit code carries the verdict and the document carries the
+/// answer, and a data channel that goes silent hands its reader a decode error.
+///
+/// A clone whose own holder id will not read answers [`ExitCode::Internal`]
+/// rather than guessing. The recorder leaves that code unmapped, the column
+/// records `-`, and the preset allows — which is the lease's whole asymmetry:
+/// waving one matrix through costs one matrix, and stopping the fleet over a
+/// question about THIS clone costs every branch in it.
 fn run_lease_status(
+    root: &Path,
     terms: &lease::Terms,
     json: bool,
     now: i64,
@@ -6068,7 +8411,31 @@ fn run_lease_status(
             fields.push(("stalled", stalled.to_string()));
         }
     }
-    lease_report(json, "held", &fields, out)
+    // THE ONE ARM THAT CARRIES A VERDICT, and the identity read happens HERE
+    // rather than at the top of the verb on purpose: every arm above is
+    // authorising regardless of who this clone is, so resolving an identity to
+    // answer them would make a clone with no readable holder id fail to report a
+    // free lease.
+    //
+    // `lease::authorises_this_clone` rather than a comparison written here, for
+    // the reason its own header gives: the `lease-status` recorder column asks
+    // the identical question, and two spellings of it are how the shell and the
+    // engine came to disagree about one lease.
+    let holder = match lease_identity(root) {
+        Ok((_, holder)) => holder,
+        Err(reason) => {
+            writeln!(err, "::error:: lease: {reason}")?;
+            lease_report(json, "held", &fields, out)?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let mine = lease::authorises_this_clone(&observed, &holder, now);
+    lease_report(json, "held", &fields, out)?;
+    if mine {
+        Ok(ExitCode::Success)
+    } else {
+        Ok(ExitCode::Violation)
+    }
 }
 
 /// One status line, in either channel, from one set of fields.
@@ -6277,18 +8644,42 @@ fn run_lease_acquire(
             Ok(ExitCode::Success)
         }
         lease::Turn::Wait => {
-            let lease::Observed::Held { body, .. } = &observed else {
-                // Unreachable: `Absent` is always a `Take`. Reported rather than
-                // unwrapped, because a `Wait` over an absent lease would mean the
-                // decision table had changed underneath this arm.
-                writeln!(
-                    err,
-                    "::error:: lease: no lease is held, yet the turn was not taken"
-                )?;
-                return Ok(ExitCode::Internal);
-            };
-            writeln!(out, "lease: held by {}", body.holder)?;
-            Ok(ExitCode::Violation)
+            match &observed {
+                lease::Observed::Held { body, .. } => {
+                    writeln!(out, "lease: held by {}", body.holder)?;
+                    Ok(ExitCode::Violation)
+                }
+                // **A REF THAT IS NOT A LEASE IS A WAIT, NOT AN INTERNAL ERROR**
+                // (review of #848). `turn` maps `Garbage` to `Wait` deliberately
+                // — a body nothing can parse stays held to every decision — but
+                // this arm assumed `Wait` implied `Held`, printed a message
+                // asserting an unreachable state, and returned `Internal`, which
+                // `land::progress` maps to `Stop`. So one stray commit pushed to
+                // the lease ref stopped EVERY lander in the fleet instead of
+                // making them wait it out, and told each operator the wrong cause.
+                //
+                // `Violation` is the same code the held case answers with,
+                // because it is the same answer to the caller's question: not
+                // this clone's turn. What differs is the line, which names the
+                // real state so somebody can go and delete the ref.
+                lease::Observed::Garbage { .. } => {
+                    writeln!(
+                        out,
+                        "lease: the lease ref carries something that is not a lease, so nothing may take it until that is cleared"
+                    )?;
+                    Ok(ExitCode::Violation)
+                }
+                // Genuinely unreachable — `Absent` is always a `Take` — and
+                // reported rather than unwrapped, because reaching it would mean
+                // the decision table changed underneath this arm.
+                lease::Observed::Absent => {
+                    writeln!(
+                        err,
+                        "::error:: lease: no lease is held, yet the turn was not taken"
+                    )?;
+                    Ok(ExitCode::Internal)
+                }
+            }
         }
         lease::Turn::Take(why) => {
             let body = lease::claim(terms, &holder, branch, &head, now);
@@ -6430,7 +8821,7 @@ fn run_lease_hold(
             progress,
             terms,
             lease_stall_beats(),
-            env_secs("LAND_LOCK_HANG_BEATS").unwrap_or(3),
+            lease::env_secs("LAND_LOCK_HANG_BEATS").unwrap_or(3),
             now,
         ) {
             // RELEASE FIRST, SIGNAL SECOND. The release is the half that frees the
@@ -6546,6 +8937,38 @@ fn lease_bail_reason(git_dir: &Path, why: &str) {
     }
 }
 
+/// Tell a consumer's reclaim census that THIS process chose to stop.
+///
+/// **The distinction the census draws, and the one thing that keeps it honest**
+/// (CLOUD-451, conserving `land.sh`'s `drop_lease`). A heartbeat records a beat
+/// per interval and a stop-note only where IT decides to stop — but the
+/// commonest stop is not one of those: a lap that finishes normally KILLS the
+/// heartbeat, so the loop never runs another statement and its last record stays
+/// a beat. Left that way, every successful landing afterwards reads as *the
+/// container died under active work* — the false positive that would wrongly
+/// license the mechanism CLOUD-515 removed for want of evidence.
+///
+/// **Written HERE and never from the heartbeat's own exit path** (CLOUD-491): an
+/// exit path runs on the container kill too, and a note from one would erase the
+/// only distinction the census draws. This is the release recording that it
+/// chose to stop its own child.
+///
+/// **The argv is the CONSUMER'S, read from `$LEASE_STOP_NOTE`.** A census
+/// program's name inside `crates/batten` is non-negotiable rule 1's plainest
+/// violation, and this is the same shape `LAND_BODY_GATES` already takes: the
+/// engine spawns what the consumer declared, through the sanctioned boundary,
+/// and a consumer that declares nothing gets nothing spawned.
+///
+/// Silent and best-effort in every direction. A census note that could not be
+/// written is not a reason to fail a release that already succeeded.
+fn note_release(root: &Path) {
+    let declared = std::env::var("LEASE_STOP_NOTE").unwrap_or_default();
+    let Some(argv) = land::body_gates(&declared).into_iter().next() else {
+        return;
+    };
+    let _ = exec::piped_argv(root, &argv, "", exec::Diagnostics::Keep);
+}
+
 /// `lease release`: a tombstone, never a delete.
 ///
 /// Releasing a lease this clone does not hold is NOT an error: the trap that calls
@@ -6592,6 +9015,7 @@ fn run_lease_release(
             // that this clone no longer holds it, and leaving one would let the
             // offline reader honour a lease its holder had already handed on.
             lease_receipt_clear(root, &body.branch);
+            note_release(root);
             writeln!(out, "lease: released")?;
             Ok(ExitCode::Success)
         }
@@ -6722,6 +9146,20 @@ fn lease_receipt_path(root: &Path, branch: &str) -> Option<std::path::PathBuf> {
     )
 }
 
+/// `batten mutate`: does each declared gate have a mutation its declared suite
+/// is proven to catch (CLOUD-418, CLOUD-1267)?
+///
+/// **The report is the deliverable and the exit code is the verdict**, and the
+/// two say different things on purpose. Every finding reaches stdout as a
+/// pointer — gate, mutation id, case — because the workflow that runs this cats
+/// the file into a step summary, and a run that fails without publishing what it
+/// found sends the reader back to re-run a sweep that costs the better part of
+/// an hour. The `::error::` summary on stderr carries the count and nothing else.
+///
+/// Exit follows the one table: `2` where the sweep decided against the tree, `3`
+/// where it could not look, and the split is the acceptance rather than a
+/// nicety — a gate whose declared suite cannot be resolved or run must never be
+/// reported as "every mutation caught".
 fn run_mutate(
     command: cli::MutateCommand,
     out: &mut dyn Write,
@@ -10072,7 +12510,25 @@ fn filed_here_pointers(
         verdicts: &config.verdicts,
         recorders: &config.recorders,
     };
-    let scan = rules::run_static(&selected, &config.provisions, vocabulary, root).ok()?;
+    // `run_static_over` WITH AN INSTANT, because the four-argument wrapper hands
+    // `now: None` to `minted_facts`, which reads it as epoch 0 — so every receipt
+    // looks ancient, every `[[rule.minted]]` `max_age` bound refuses, and this
+    // path disagrees with `check` over the same tree (review of #848). The
+    // wrapper's `None` is the honest answer for a caller that has no clock; this
+    // one is a boundary and does. Latent here only because no `[[rule.minted]]`
+    // row is declared today.
+    let scan = rules::run_static_over(
+        &selected,
+        &config.provisions,
+        vocabulary,
+        root,
+        rules::RunOptions {
+            checks: policy::ModuleChecks::Run,
+            scope: &rules::Scope::Tree,
+            now: Some(now_unix()),
+        },
+    )
+    .ok()?;
     let flagged: std::collections::BTreeSet<String> = scan
         .findings
         .iter()
@@ -10239,6 +12695,11 @@ fn write_records(overrides: &Overrides, envelope: &hook::Envelope) {
         grammar: grammar.as_ref(),
         root,
         branch: Some(&branch),
+        // Read HERE, at the boundary, for the reason every other clock read in
+        // this crate is: `evaluate` stays a pure function of its inputs, and one
+        // instant per invocation is what makes two columns grading the same
+        // lease agree with each other.
+        now: i64::try_from(now_unix()).unwrap_or(i64::MAX),
     };
     crate::recorder::append_all(
         recorders,
@@ -13884,6 +16345,51 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// **THE EXIT TABLE OVER EVERY `Health` ARM, AND THE PREDECESSOR'S NUMBERS
+    /// WERE DIFFERENT** (CLOUD-1148, retiring `mise-tasks/land-lock-check.sh`).
+    ///
+    /// That program answered `0` healthy, `1` wedged-or-garbage, `2` could not
+    /// look. The engine has one table with no per-verb exception, so a verdict
+    /// about this repository is `2` and a could-not-look is `3` — the two
+    /// non-zero answers with their numbers swapped. A port that carried the old
+    /// numbers over would report a wedged lease with the code the table reserves
+    /// for a reading nobody could take.
+    ///
+    /// Exhaustive over the four arms rather than over the two that refuse: a
+    /// `Wedged` mapped to `Success` is silent, and the healthy arms are what a
+    /// wrong mapping would have to hide behind.
+    #[test]
+    fn every_health_reading_maps_to_the_one_exit_table() {
+        let table = [
+            (lease::Health::Free(String::from("free")), ExitCode::Success),
+            (lease::Health::Held(String::from("held")), ExitCode::Success),
+            (
+                lease::Health::Wedged(String::from("wedged")),
+                ExitCode::Violation,
+            ),
+            (
+                lease::Health::Garbage(String::from("garbage")),
+                ExitCode::Violation,
+            ),
+        ];
+        for (health, expected) in table {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = report_health(&health, &mut out, &mut err).expect("report the reading");
+            assert_eq!(code, expected, "{health:?} maps to the wrong code");
+            // AND ONTO THE RIGHT CHANNEL. A refusal on stdout is invisible to a
+            // CI annotation reader, and a healthy reading on stderr reads as a
+            // problem in every log that colours it — so the code alone is only
+            // half of what a caller acts on.
+            let said = String::from_utf8_lossy(if expected == ExitCode::Success {
+                &out
+            } else {
+                &err
+            });
+            assert!(!said.is_empty(), "{health:?} said nothing on its channel");
+        }
+    }
 
     /// The whole decision as a table, because the branch that matters cannot be
     /// reached over a spawned process: this sandbox gives a test no TTY, so

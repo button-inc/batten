@@ -291,6 +291,210 @@ fn a_path_the_base_deleted_leaves_the_worktree() {
     );
 }
 
+// --- unwinding a speculation (CLOUD-862, CLOUD-1456) --------------------------
+//
+// The two primitives the lap's bet settle is built on, driven over a real
+// repository rather than over the driver — which is the same reason the header
+// gives for reaching `land::record` instead of `land::replay`: the composition
+// above them reads a lease over the network, and a case that needed one would be
+// a test of the network rather than of the unwind.
+
+/// **An ADOPTED bet unwinds by replaying this branch's OWN commits.**
+///
+/// The bet has no undo point — the process that recorded it died — so the range
+/// bound and the graft point are two different commits, which is the whole reason
+/// [`gitwrite::replay_onto`] exists beside `rebase`. The bound is the borrowed
+/// base and the graft is the trunk, so `base..HEAD` is precisely what this branch
+/// authored.
+///
+/// The load-bearing assertion is the NEGATIVE one: the holder's file must be gone
+/// from the replayed tree. A `rebase` onto the trunk would land the borrowed
+/// commits too and pass every other assertion here — which is exactly the state
+/// CLOUD-862 measured reaching a push.
+#[test]
+fn an_adopted_bet_replays_only_this_branchs_own_commits() {
+    let (dir, repo) = init("rebase-adopted-bet");
+    let root: Files<'_> = &[("shared.txt", "base\n")];
+    let base = commit(&repo, &[], root);
+
+    // The holder's commit, which this tree was speculatively linearized onto.
+    let borrowed: Files<'_> = &[("shared.txt", "base\n"), ("from-holder.txt", "theirs\n")];
+    let holder = commit(&repo, &[base], borrowed);
+
+    // Our own commit, sitting on top of the borrowed one.
+    let speculative: Files<'_> = &[
+        ("shared.txt", "base\n"),
+        ("from-holder.txt", "theirs\n"),
+        ("ours.txt", "ours\n"),
+    ];
+    let tip = commit(&repo, &[holder], speculative);
+
+    point(&dir, "refs/heads/main", base);
+    point(&dir, "refs/heads/work", tip);
+    materialise(&dir, speculative);
+
+    let outcome = gitwrite::replay_onto(
+        &dir,
+        "refs/heads/work",
+        &holder.to_hex().to_string(),
+        "refs/heads/main",
+    )
+    .expect("replay onto the trunk");
+    let Rebase::Replayed { head, commits } = outcome else {
+        panic!("the unwind must replay, got {outcome:?}");
+    };
+    assert_eq!(commits, 1, "only this branch's own commit was in the range");
+
+    let landed = repo
+        .rev_parse_single("refs/heads/work")
+        .expect("resolve work")
+        .detach();
+    assert_eq!(landed.to_hex().to_string(), head);
+    assert_eq!(
+        repo.find_commit(landed)
+            .expect("find replayed")
+            .parent_ids()
+            .map(gix::Id::detach)
+            .collect::<Vec<_>>(),
+        vec![base],
+        "the unwound branch sits on the trunk rather than on the holder"
+    );
+
+    let names = tree_names(&repo, landed);
+    assert!(
+        !names.contains(&"from-holder.txt".to_owned()),
+        "the borrowed commit came along, which is the state that must never push: {names:?}"
+    );
+    assert!(
+        names.contains(&"ours.txt".to_owned()),
+        "this branch's own work was dropped: {names:?}"
+    );
+    // And the WORKTREE, which is what the next lap's `verify` compiles.
+    assert!(
+        !dir.join("from-holder.txt").exists(),
+        "the borrowed file is still on disk"
+    );
+    assert!(dir.join("ours.txt").is_file(), "our own file left the disk");
+}
+
+/// **A bet this process PLACED unwinds exactly, to the sha it recorded.**
+///
+/// Not a replay: the undo point is this branch's own last non-speculative HEAD,
+/// so restoring it mints nothing and throws no receipt away. A replay here would
+/// produce a new sha for identical work and cost a CI run to re-prove it.
+#[test]
+fn a_placed_bet_unwinds_to_the_recorded_sha() {
+    let (dir, repo) = init("rebase-placed-bet");
+    let root: Files<'_> = &[("shared.txt", "base\n")];
+    let base = commit(&repo, &[], root);
+
+    // The undo point: where this branch stood before anything was borrowed.
+    let mine: Files<'_> = &[("shared.txt", "base\n"), ("ours.txt", "ours\n")];
+    let undo = commit(&repo, &[base], mine);
+
+    let speculative: Files<'_> = &[
+        ("shared.txt", "base\n"),
+        ("ours.txt", "ours\n"),
+        ("from-holder.txt", "theirs\n"),
+    ];
+    let tip = commit(&repo, &[undo], speculative);
+
+    point(&dir, "refs/heads/work", tip);
+    materialise(&dir, speculative);
+
+    let restored = gitwrite::reset_hard(&dir, "refs/heads/work", &undo.to_hex().to_string())
+        .expect("reset to the undo point");
+    assert_eq!(
+        restored,
+        undo.to_hex().to_string(),
+        "the unwind lands on the EXACT recorded sha, minting nothing"
+    );
+    assert_eq!(
+        repo.rev_parse_single("refs/heads/work")
+            .expect("resolve work")
+            .detach(),
+        undo,
+        "the ref did not move"
+    );
+    // The worktree is the half a ref-only assertion never reaches, and the
+    // REMOVAL is the half a checkout does not do on its own.
+    assert!(
+        !dir.join("from-holder.txt").exists(),
+        "the borrowed file survived the unwind"
+    );
+    assert!(dir.join("ours.txt").is_file(), "our own file was removed");
+}
+
+/// **A BET REACHES THE GATE'S ENVIRONMENT, and the publication is a function of
+/// the bet rather than a side effect kept in step with it.**
+///
+/// `land::verify` is the one metered step a speculation has to be visible to: a
+/// gate cannot otherwise tell a commit this branch authored from one the lap
+/// adopted, and CLOUD-748 measured the consequence twice in one session — the
+/// consumer's race check reported the waiter as racing the very PR the bet was
+/// placed on.
+///
+/// Driven through `land::verify` over a real repository, because the thing under
+/// test is whether the pairs SURVIVE the exec boundary. A case asserting that
+/// `Bet::published` returns the base would pass over a `verify` that dropped
+/// them on the floor, which is the whole class the second tier exists for.
+#[test]
+fn a_published_bet_reaches_the_gate_and_an_absent_one_publishes_nothing() {
+    let (dir, repo) = init("verify-publication");
+    let base = commit(&repo, &[], &[("shared.txt", "base\n")]);
+    point(&dir, "refs/heads/work", base);
+    // `verify` reads HEAD, and the other cases in this file never do — so the
+    // fixture's initial branch has to exist as well as `work`. Both spellings,
+    // because which one `gix::init` writes into HEAD is the host git's default
+    // and not this case's to depend on.
+    point(&dir, "refs/heads/main", base);
+    point(&dir, "refs/heads/master", base);
+    materialise(&dir, &[("shared.txt", "base\n")]);
+
+    // A gate that passes only when the variable carries the expected value. The
+    // gate is the assertion, so a dropped pair reddens the case rather than
+    // leaving it to a follow-up read.
+    let gate = dir.join("gate.sh");
+    std::fs::write(
+        &gate,
+        format!(
+            "#!/bin/sh\ntest \"${{{}}}\" = \"speculated-base\"\n",
+            batten::speculation::PUBLISHED_AS
+        ),
+    )
+    .expect("write the gate");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o755))
+            .expect("make the gate runnable");
+    }
+    let command = vec![gate.to_string_lossy().into_owned()];
+
+    let published = vec![(
+        batten::speculation::PUBLISHED_AS.to_owned(),
+        String::from("speculated-base"),
+    )];
+    assert!(
+        matches!(
+            batten::land::verify(&dir, "work", &command, &published, &[]).expect("run the gate"),
+            batten::land::Verified::Clean(_)
+        ),
+        "the published pair did not reach the gate"
+    );
+
+    // THE MIRROR, and it is not hygiene: without it the case passes over a
+    // boundary that publishes the variable unconditionally from some other
+    // source, which would make a settled bet stay visible to every later gate.
+    assert!(
+        matches!(
+            batten::land::verify(&dir, "work", &command, &[], &[]).expect("run the gate"),
+            batten::land::Verified::Refused { .. }
+        ),
+        "the variable reached the gate with no bet outstanding"
+    );
+}
+
 /// The filenames in a commit's tree.
 fn tree_names(repo: &gix::Repository, id: gix::ObjectId) -> Vec<String> {
     let tree = repo

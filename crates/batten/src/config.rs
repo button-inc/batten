@@ -176,6 +176,22 @@ pub struct Config {
     /// could-not-look rather than as a default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready: Option<Ready>,
+    /// The landing mechanism's own paths, for the CI-side staleness read
+    /// (CLOUD-1148 §2).
+    ///
+    /// Absent is could-not-look and exempts everything, which matches the
+    /// precondition's whole posture: it fails open at every unknown, because a
+    /// reading it cannot take would stop every job in the fleet where waving one
+    /// matrix through costs one matrix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease: Option<Lease>,
+    /// Which receipts a head must carry to be called verified (CLOUD-1338).
+    ///
+    /// Absent REFUSES rather than exempting, which is the opposite direction to
+    /// `[lease]` above and deliberately so: this is a gate about the tree in
+    /// hand, where that one is an economy about somebody else's runner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<Receipt>,
     /// Accepted invocation-latency regressions (CLOUD-1163 unit 10). Absent
     /// means this file accepts none, which is the safe direction — an absent
     /// table cannot exempt a path.
@@ -339,6 +355,32 @@ pub struct Config {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub exec_patterns: Vec<crate::outputs::OutputPattern>,
+    /// Output predicates that classify a landing gate's REFUSAL as the
+    /// environment's rather than this tree's (CLOUD-861).
+    ///
+    /// **A separate table from [`Config::exec_patterns`], because the two answer
+    /// opposite questions from the same shape.** That one asks *is this green run
+    /// lying* and promotes a `0`; this one asks *a run already failed, and what
+    /// KIND of failure was it* and promotes nothing. One table serving both would
+    /// have to decide per reader whether a hit means promote-this-success or
+    /// explain-this-failure, and a row written for one reading would silently
+    /// change the other's verdict.
+    ///
+    /// Consumer-specific for [`Config::exec_patterns`]'s reason and then some:
+    /// the literal is a toolchain's wording, and the `reason` is the remedy —
+    /// *which* reclaim task to run is this repository's vocabulary, so putting
+    /// either in the crate is non-negotiable rule 1's plainest violation.
+    /// `crates/batten/tests/it/document_facts.rs` is the gate that would catch it.
+    ///
+    /// The measured case: `target-prune` passed a lap with 6242MB against its
+    /// 4096MB floor, the link step then consumed all of it, and the stop said
+    /// *"Reproduce and fix locally"* over a tree with nothing wrong in it.
+    #[serde(
+        default,
+        rename = "verify_environment_pattern",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub verify_environment_patterns: Vec<crate::outputs::OutputPattern>,
     /// How `batten exec` owns what it dispatched (CLOUD-427). Absent means the
     /// defaults, and the default is today's behaviour: Batten makes no process
     /// group. Authority-only by omission from [`OverrideConfig`] — an uncommitted
@@ -679,6 +721,101 @@ impl Perf {
         }
         Ok(())
     }
+}
+
+/// The landing lease's own configuration (CLOUD-1148 §2).
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct Lease {
+    /// The paths that CONSTITUTE the landing mechanism, so a head can be asked
+    /// whether it carries what trunk has.
+    ///
+    /// # A PATH SET RATHER THAN A GREP STRING, and that is the whole point
+    ///
+    /// The predecessor asked this by grepping the head's `mise-tasks/land.sh`
+    /// for `land-lock acquire`. Both halves of that die with the retirement: the
+    /// file is deleted, so the read fails, so the script takes its own fail-open
+    /// path and reports "not judging this head's age" — and every stale head
+    /// passes, silently, which is worse than a wrong answer.
+    ///
+    /// A declared path set survives, because the thing that changes when the
+    /// mechanism moves is WHICH PATHS, and that is config a retirement edits
+    /// rather than a literal a retirement invalidates.
+    ///
+    /// Empty is could-not-look: nothing to compare means no verdict, never a
+    /// clean one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub landing_paths: Vec<String>,
+
+    /// Branch-name prefixes that land WITHOUT taking the lease, so the runner-side
+    /// precondition must not judge them.
+    ///
+    /// # THE POPULATION IS THE LANDER'S, NOT THE AUTHOR'S
+    ///
+    /// These are branches some other workflow fast-forwards on a `workflow_run`
+    /// completion, so no agent ever holds the lease on their behalf and judging
+    /// them would refuse the run the gate exists to let through. The predecessor
+    /// spelled the same set as a `case` in shell, and its comment carries the
+    /// economics: a cancelled run is `completed`, so those landers DO fire, find
+    /// the checks not green, and stop; nothing retries. Cancelling here would not
+    /// save a matrix, it would DEFER one and add a stall.
+    ///
+    /// **Not the bot-author set** (`[bot_lane] bots`), and the two must not be
+    /// collapsed: that keys on a forge LOGIN and this keys on a branch NAME,
+    /// because what decides the question is which workflow lands the branch. A
+    /// human who names a branch with one of these prefixes gets the same
+    /// treatment, correctly — the lander fires on the name.
+    ///
+    /// **Prefixes on the branch, never a substring anywhere in the ref**, which
+    /// the predecessor's suite pinned as its own case: a `case` arm matching
+    /// mid-ref would exempt a branch that merely mentions one.
+    ///
+    /// Empty means every branch is judged, which is the gate's default and the
+    /// reason this is a short named list rather than a pattern.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fast_forward_branches: Vec<String>,
+}
+
+/// The `[receipt]` table: which receipts a head must carry to be called verified.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Receipt {
+    /// The checks `receipt verified` requires a valid receipt for.
+    ///
+    /// # NON-NEGOTIABLE RULE 1, AND THE ARRAY THIS REPLACES
+    ///
+    /// `receipt.rs` carried `const VERIFIED_BY: [&str; 2] = ["verify",
+    /// "linear-check"]` — two of THIS consumer's task names, compiled into the
+    /// core, which is the rule's plainest shape. A different adopter's gates are
+    /// not called those things, and nothing in the engine could tell them so.
+    ///
+    /// # UNDECLARED FALLS BACK, and this doc said it refused
+    ///
+    /// The hazard is real and unchanged: an empty set would make
+    /// `receipt verified` pass over every head, since *nothing is unverified*
+    /// when nothing is required — a gate that answers clean because it was never
+    /// told what to ask. What closes it is a fallback rather than a refusal.
+    /// [`crate::receipt::verified_by`] resolves an undeclared or empty table to
+    /// [`crate::receipt::VERIFIED_BY`], and its own header records why the first
+    /// draft's usage error could not stand: it refused over a fixture repository
+    /// with no `batten.toml` and no interest in receipts, and that suite's
+    /// subject survives, so the only way to land the refusal was to edit around
+    /// a gate that was right.
+    ///
+    /// The fallback is strictly more general than the `const` it replaced and
+    /// costs an adopter nothing — our names over their receipts resolve to
+    /// `Missing`, so `verified` refuses loudly on their first run rather than
+    /// passing quietly. A wrong answer that announces itself is the acceptable
+    /// failure; a silent one is not.
+    ///
+    /// **Stated here because a field's doc is where a reader looks for what an
+    /// absent key does** (review of #848), and this one asserted a refusal the
+    /// code does not make — with `trust.rs`'s `VerifiedCheckRemoved` repeating
+    /// it, which is how one false premise became two.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verified_by: Vec<String>,
 }
 
 /// The `[ready]` table: the refinement gate's consumer-set thresholds.
@@ -1419,6 +1556,16 @@ fn validate_tables(config: &Config, text: &str, source: &str) -> Result<()> {
         Native::OutputTableRefused,
         crate::outputs::validate(&config.exec_patterns),
     )?;
+    // The same validator over the second pattern table, and deliberately the
+    // same class: both are `OutputPattern`, so an empty id, an empty literal, an
+    // empty reason or a duplicate id is malformed in exactly the same way
+    // whichever question the table answers. A malformed row here would classify
+    // nothing and read as a consumer who declared no classifier at all — the
+    // inert-typo shape this call site exists to refuse.
+    under(
+        Native::VerifyEnvironmentTableRefused,
+        crate::outputs::validate_environment(&config.verify_environment_patterns),
+    )?;
     // And the waiver table, where the stakes are inverted from every other row
     // here: a malformed rule fails to gate, but a malformed *waiver* is a hatch
     // whose expiry nobody could read. Refusing at load is what makes "every
@@ -1697,6 +1844,11 @@ impl Config {
         Config {
             version: SUPPORTED_VERSION,
             min_batten_version: None,
+            // Declaring nothing declares no landing path set, which the reader
+            // takes as could-not-look — the same direction every other absent
+            // table here takes.
+            lease: None,
+            receipt: None,
             strictness: None,
             fail_on_warning: None,
             rules: Vec::new(),
@@ -1730,6 +1882,11 @@ impl Config {
             mcp: None,
             capture: None,
             exec_patterns: Vec::new(),
+            // No declared classifier means every gate refusal reads as being
+            // about the tree, which is the advice that was always given and is
+            // right in the common case — the safe direction for an authority
+            // that could not be read.
+            verify_environment_patterns: Vec::new(),
             waivers: Vec::new(),
             // An authority that declares no budget grants no exemption from one
             // either — there is simply no threshold, which is what `None` says.
@@ -2149,6 +2306,17 @@ mod tests {
             "exec_patterns",
             "crate::outputs::validate(",
             Native::OutputTableRefused,
+        ),
+        // The second `OutputPattern` table, sharing the validator and the class
+        // with the row above. Listed separately because the census is per FIELD:
+        // two fields validated by one call site are two rows here, and collapsing
+        // them would let one of the two go unwired unnoticed — which is CLOUD-242
+        // and CLOUD-253's own shape, where both tables shipped together and the
+        // fix wired up only one.
+        (
+            "verify_environment_patterns",
+            "crate::outputs::validate_environment(",
+            Native::VerifyEnvironmentTableRefused,
         ),
         (
             "provisions",

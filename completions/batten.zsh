@@ -4110,6 +4110,35 @@ trace\:"Add everything"))' \
 ':check -- The check whose receipt is judged:_default' \
 && ret=0
 ;;
+(verified)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__receipt__subcmd__help_commands" \
@@ -4127,6 +4156,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(verified)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -5058,6 +5091,68 @@ trace\:"Add everything"))' \
 ':branch -- The branch being asked about:_default' \
 && ret=0
 ;;
+(carries)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':head -- The head commit being judged:_default' \
+&& ret=0
+;;
+(guard)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':head -- The head commit being judged:_default' \
+':branch -- The branch being asked about:_default' \
+':run -- The run to cancel on a stop:_default' \
+&& ret=0
+;;
 (check)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -5340,6 +5435,14 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(carries)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(guard)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (check)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -5543,6 +5646,65 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(fast-forward)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(lap)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':reference -- The remote reference to replay onto:_default' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__land__subcmd__help_commands" \
@@ -5568,6 +5730,14 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (verify)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(fast-forward)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(lap)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -6279,6 +6449,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(verified)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -6451,6 +6625,14 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(carries)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(guard)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (check)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -6516,6 +6698,14 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (verify)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(fast-forward)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(lap)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -7453,8 +7643,20 @@ _batten__subcmd__help__subcmd__land_commands() {
 'wait:Ask whether this head is green and whether its base still holds; the first answer decides' \
 'push:Push this branch to its own ref, under receive-pack'\''s compare-and-swap' \
 'verify:Run the configured gate over this head and record what it answered' \
+'fast-forward:Ask this head'\''s pull request to fast-forward, and read the answer that request got' \
+'lap:Drive the whole lap and lap again on any refusal a rebase would clear' \
     )
     _describe -t commands 'batten help land commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__land__subcmd__fast-forward_commands] )) ||
+_batten__subcmd__help__subcmd__land__subcmd__fast-forward_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help land fast-forward commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__land__subcmd__lap_commands] )) ||
+_batten__subcmd__help__subcmd__land__subcmd__lap_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help land lap commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__land__subcmd__push_commands] )) ||
 _batten__subcmd__help__subcmd__land__subcmd__push_commands() {
@@ -7492,6 +7694,8 @@ _batten__subcmd__help__subcmd__landed__subcmd__check_commands() {
 _batten__subcmd__help__subcmd__lease_commands() {
     local commands; commands=(
 'authorises:May this branch spend a matrix right now?' \
+'carries:Gate\: this head carries the landing mechanism trunk has, so it can be serialised' \
+'guard:The runner'\''s step-0 guard\: may this branch spend a matrix right now?' \
 'check:Gate\: the lease is free or a live, well-formed hold — never a wedge and never garbage' \
 'status:Report who holds the lease, for how much longer, and who is admitted behind them' \
 'peek:Print one advisory field of the held lease, or nothing' \
@@ -7514,10 +7718,20 @@ _batten__subcmd__help__subcmd__lease__subcmd__authorises_commands() {
     local commands; commands=()
     _describe -t commands 'batten help lease authorises commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__help__subcmd__lease__subcmd__carries_commands] )) ||
+_batten__subcmd__help__subcmd__lease__subcmd__carries_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help lease carries commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__help__subcmd__lease__subcmd__check_commands] )) ||
 _batten__subcmd__help__subcmd__lease__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten help lease check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__lease__subcmd__guard_commands] )) ||
+_batten__subcmd__help__subcmd__lease__subcmd__guard_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help lease guard commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__lease__subcmd__held_commands] )) ||
 _batten__subcmd__help__subcmd__lease__subcmd__held_commands() {
@@ -7763,6 +7977,7 @@ _batten__subcmd__help__subcmd__receipt_commands() {
     local commands; commands=(
 'record:Record that the named check concluded pass against the current HEAD' \
 'status:Judge the named check'\''s recorded receipt against HEAD and origin/main' \
+'verified:Is HEAD verified — every declared check'\''s receipt valid against this commit?' \
     )
     _describe -t commands 'batten help receipt commands' commands "$@"
 }
@@ -7775,6 +7990,11 @@ _batten__subcmd__help__subcmd__receipt__subcmd__record_commands() {
 _batten__subcmd__help__subcmd__receipt__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'batten help receipt status commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__receipt__subcmd__verified_commands] )) ||
+_batten__subcmd__help__subcmd__receipt__subcmd__verified_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help receipt verified commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__record_commands] )) ||
 _batten__subcmd__help__subcmd__record_commands() {
@@ -7990,9 +8210,16 @@ _batten__subcmd__land_commands() {
 'wait:Ask whether this head is green and whether its base still holds; the first answer decides' \
 'push:Push this branch to its own ref, under receive-pack'\''s compare-and-swap' \
 'verify:Run the configured gate over this head and record what it answered' \
+'fast-forward:Ask this head'\''s pull request to fast-forward, and read the answer that request got' \
+'lap:Drive the whole lap and lap again on any refusal a rebase would clear' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten land commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__land__subcmd__fast-forward_commands] )) ||
+_batten__subcmd__land__subcmd__fast-forward_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten land fast-forward commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__land__subcmd__help_commands] )) ||
 _batten__subcmd__land__subcmd__help_commands() {
@@ -8001,14 +8228,26 @@ _batten__subcmd__land__subcmd__help_commands() {
 'wait:Ask whether this head is green and whether its base still holds; the first answer decides' \
 'push:Push this branch to its own ref, under receive-pack'\''s compare-and-swap' \
 'verify:Run the configured gate over this head and record what it answered' \
+'fast-forward:Ask this head'\''s pull request to fast-forward, and read the answer that request got' \
+'lap:Drive the whole lap and lap again on any refusal a rebase would clear' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten land help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__land__subcmd__help__subcmd__fast-forward_commands] )) ||
+_batten__subcmd__land__subcmd__help__subcmd__fast-forward_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten land help fast-forward commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__land__subcmd__help__subcmd__help_commands] )) ||
 _batten__subcmd__land__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten land help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__land__subcmd__help__subcmd__lap_commands] )) ||
+_batten__subcmd__land__subcmd__help__subcmd__lap_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten land help lap commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__land__subcmd__help__subcmd__push_commands] )) ||
 _batten__subcmd__land__subcmd__help__subcmd__push_commands() {
@@ -8029,6 +8268,11 @@ _batten__subcmd__land__subcmd__help__subcmd__verify_commands() {
 _batten__subcmd__land__subcmd__help__subcmd__wait_commands() {
     local commands; commands=()
     _describe -t commands 'batten land help wait commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__land__subcmd__lap_commands] )) ||
+_batten__subcmd__land__subcmd__lap_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten land lap commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__land__subcmd__push_commands] )) ||
 _batten__subcmd__land__subcmd__push_commands() {
@@ -8085,6 +8329,8 @@ _batten__subcmd__landed__subcmd__help__subcmd__help_commands() {
 _batten__subcmd__lease_commands() {
     local commands; commands=(
 'authorises:May this branch spend a matrix right now?' \
+'carries:Gate\: this head carries the landing mechanism trunk has, so it can be serialised' \
+'guard:The runner'\''s step-0 guard\: may this branch spend a matrix right now?' \
 'check:Gate\: the lease is free or a live, well-formed hold — never a wedge and never garbage' \
 'status:Report who holds the lease, for how much longer, and who is admitted behind them' \
 'peek:Print one advisory field of the held lease, or nothing' \
@@ -8108,10 +8354,20 @@ _batten__subcmd__lease__subcmd__authorises_commands() {
     local commands; commands=()
     _describe -t commands 'batten lease authorises commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__lease__subcmd__carries_commands] )) ||
+_batten__subcmd__lease__subcmd__carries_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten lease carries commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__lease__subcmd__check_commands] )) ||
 _batten__subcmd__lease__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten lease check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__lease__subcmd__guard_commands] )) ||
+_batten__subcmd__lease__subcmd__guard_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten lease guard commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__lease__subcmd__held_commands] )) ||
 _batten__subcmd__lease__subcmd__held_commands() {
@@ -8122,6 +8378,8 @@ _batten__subcmd__lease__subcmd__held_commands() {
 _batten__subcmd__lease__subcmd__help_commands() {
     local commands; commands=(
 'authorises:May this branch spend a matrix right now?' \
+'carries:Gate\: this head carries the landing mechanism trunk has, so it can be serialised' \
+'guard:The runner'\''s step-0 guard\: may this branch spend a matrix right now?' \
 'check:Gate\: the lease is free or a live, well-formed hold — never a wedge and never garbage' \
 'status:Report who holds the lease, for how much longer, and who is admitted behind them' \
 'peek:Print one advisory field of the held lease, or nothing' \
@@ -8145,10 +8403,20 @@ _batten__subcmd__lease__subcmd__help__subcmd__authorises_commands() {
     local commands; commands=()
     _describe -t commands 'batten lease help authorises commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__lease__subcmd__help__subcmd__carries_commands] )) ||
+_batten__subcmd__lease__subcmd__help__subcmd__carries_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten lease help carries commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__lease__subcmd__help__subcmd__check_commands] )) ||
 _batten__subcmd__lease__subcmd__help__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten lease help check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__lease__subcmd__help__subcmd__guard_commands] )) ||
+_batten__subcmd__lease__subcmd__help__subcmd__guard_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten lease help guard commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__lease__subcmd__help__subcmd__held_commands] )) ||
 _batten__subcmd__lease__subcmd__help__subcmd__held_commands() {
@@ -8703,6 +8971,7 @@ _batten__subcmd__receipt_commands() {
     local commands; commands=(
 'record:Record that the named check concluded pass against the current HEAD' \
 'status:Judge the named check'\''s recorded receipt against HEAD and origin/main' \
+'verified:Is HEAD verified — every declared check'\''s receipt valid against this commit?' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten receipt commands' commands "$@"
@@ -8712,6 +8981,7 @@ _batten__subcmd__receipt__subcmd__help_commands() {
     local commands; commands=(
 'record:Record that the named check concluded pass against the current HEAD' \
 'status:Judge the named check'\''s recorded receipt against HEAD and origin/main' \
+'verified:Is HEAD verified — every declared check'\''s receipt valid against this commit?' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten receipt help commands' commands "$@"
@@ -8731,6 +9001,11 @@ _batten__subcmd__receipt__subcmd__help__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'batten receipt help status commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__receipt__subcmd__help__subcmd__verified_commands] )) ||
+_batten__subcmd__receipt__subcmd__help__subcmd__verified_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten receipt help verified commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__receipt__subcmd__record_commands] )) ||
 _batten__subcmd__receipt__subcmd__record_commands() {
     local commands; commands=()
@@ -8740,6 +9015,11 @@ _batten__subcmd__receipt__subcmd__record_commands() {
 _batten__subcmd__receipt__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'batten receipt status commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__receipt__subcmd__verified_commands] )) ||
+_batten__subcmd__receipt__subcmd__verified_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten receipt verified commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__record_commands] )) ||
 _batten__subcmd__record_commands() {

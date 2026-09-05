@@ -75,11 +75,30 @@ import rego.v1
 
 rules contains "fixture-fork-added"
 
-# The branch's own diff. NULL when the base rev does not resolve, so `added` does
-# not hold and this rule goes silent — could-not-look, never a fabricated empty
-# delta that would pass the gate on ignorance. `filed-here.rego` reads the same
-# fact the same way and `test-targets.rego` states the reasoning.
+# The branch's own diff. NULL when the base rev does not resolve.
+#
+# **GOING SILENT IS NOT ABSTAINING, AND THIS PARAGRAPH CLAIMED IT WAS** (review
+# of #848). It read "could-not-look, never a fabricated empty delta that would
+# pass the gate on ignorance" — but a null `delta` makes `delta.added` undefined,
+# both refusing clauses go quiet, the `missing` clause below still evaluates so
+# the module does NOT report `RuleSkipped`, and the result is ZERO FINDINGS at
+# exit 0. Silence and a pass are byte-identical on the decision surface, which is
+# the whole thing this module's own header says it refuses.
+#
+# Measured shape: a shallow clone, a detached CI checkout with the base
+# unfetched, or a fork with no `origin/main` — a branch adding a whole file of
+# forked fixtures passes.
 delta := input.tree["base-delta"]
+
+# THE COULD-NOT-LOOK ARM, which `spawn-widening.rego` carries for the same fact
+# and this did not. A base that will not resolve is reported rather than passed.
+violation contains {
+	"rule": "fixture-fork-added",
+	"verdict": "diff read absent",
+	"subjects": [{"path": "batten.toml"}],
+} if {
+	not input.tree["base-delta"]
+}
 
 # A `[[pattern]]` ROW RATHER THAN AN INLINE LITERAL, and not merely because an
 # inline regex fails to load. Two spellings of this one concept are live in the

@@ -201,6 +201,17 @@
         }
       ]
     },
+    "lease": {
+      "description": "The landing mechanism's own paths, for the CI-side staleness read\n(CLOUD-1148 §2).\n\nAbsent is could-not-look and exempts everything, which matches the\nprecondition's whole posture: it fails open at every unknown, because a\nreading it cannot take would stop every job in the fleet where waving one\nmatrix through costs one matrix.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Lease"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "marker": {
       "description": "The suppression markers to count (CLOUD-36). Which comment shape waves\na rule through is a property of the repository being gated, never of\nBatten; the type and the counting are [`crate::markers`].",
       "type": "array",
@@ -308,6 +319,17 @@
         }
       ]
     },
+    "receipt": {
+      "description": "Which receipts a head must carry to be called verified (CLOUD-1338).\n\nAbsent REFUSES rather than exempting, which is the opposite direction to\n`[lease]` above and deliberately so: this is a gate about the tree in\nhand, where that one is an economy about somebody else's runner.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Receipt"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "recorder": {
       "description": "Records written from the tool result that earned them (CLOUD-1051).\n\nThe third selector on the post-tool event, and the one that can carry a\nvalue another gate decided. A `[[mint]]` renders a template over the\npayload; a `[[recorder]]` may additionally run a declared program and\nrecord its verdict, which is what a board write's refinement column IS.\n\nConsumer-owned for the same reason `[[mint]]` is, and more so: the column\nnames, the verdict tokens and the programs are all a tracker's vocabulary,\nso a grep of `crates/batten` for any of them returns nothing and every one\nof them lives here.",
       "type": "array",
@@ -408,6 +430,13 @@
         "$ref": "#/$defs/DeclaredVerdict"
       }
     },
+    "verify_environment_pattern": {
+      "description": "Output predicates that classify a landing gate's REFUSAL as the\nenvironment's rather than this tree's (CLOUD-861).\n\n**A separate table from [`Config::exec_patterns`], because the two answer\nopposite questions from the same shape.** That one asks *is this green run\nlying* and promotes a `0`; this one asks *a run already failed, and what\nKIND of failure was it* and promotes nothing. One table serving both would\nhave to decide per reader whether a hit means promote-this-success or\nexplain-this-failure, and a row written for one reading would silently\nchange the other's verdict.\n\nConsumer-specific for [`Config::exec_patterns`]'s reason and then some:\nthe literal is a toolchain's wording, and the `reason` is the remedy —\n*which* reclaim task to run is this repository's vocabulary, so putting\neither in the crate is non-negotiable rule 1's plainest violation.\n`crates/batten/tests/it/document_facts.rs` is the gate that would catch it.\n\nThe measured case: `target-prune` passed a lap with 6242MB against its\n4096MB floor, the link step then consumed all of it, and the stop said\n*\"Reproduce and fix locally\"* over a tree with nothing wrong in it.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/OutputPattern"
+      }
+    },
     "version": {
       "description": "The config schema version. Must equal [`SUPPORTED_VERSION`].",
       "type": "integer",
@@ -504,6 +533,16 @@
           "description": "[`crate::ready`] — the Ready-block grammar over a tracker payload.",
           "type": "string",
           "const": "ready"
+        },
+        {
+          "description": "[`crate::lease::Asked::Status`] — does the landing lease authorise this\nclone right now? Answers in the engine's exit table, so the consumer's\n`status` map reads `0` authorising / `2` held elsewhere and leaves `3`\nunmapped, which is where the lease's fail-open asymmetry lives.\n\n**Named for the practice rather than for a program** (non-negotiable rule\n1): \"a landing lease\" is a word about trunk-based landing, where\n`land-lock` was one repository's file name.",
+          "type": "string",
+          "const": "lease-status"
+        },
+        {
+          "description": "[`crate::lease::Asked::Successor`] — which branch the live holder\nadmitted behind it, on stdout, or nothing where no reservation stands.",
+          "type": "string",
+          "const": "lease-successor"
         }
       ]
     },
@@ -1842,6 +1881,27 @@
       },
       "additionalProperties": false
     },
+    "Lease": {
+      "description": "The landing lease's own configuration (CLOUD-1148 §2).",
+      "type": "object",
+      "properties": {
+        "fast_forward_branches": {
+          "description": "Branch-name prefixes that land WITHOUT taking the lease, so the runner-side\nprecondition must not judge them.\n\n# THE POPULATION IS THE LANDER'S, NOT THE AUTHOR'S\n\nThese are branches some other workflow fast-forwards on a `workflow_run`\ncompletion, so no agent ever holds the lease on their behalf and judging\nthem would refuse the run the gate exists to let through. The predecessor\nspelled the same set as a `case` in shell, and its comment carries the\neconomics: a cancelled run is `completed`, so those landers DO fire, find\nthe checks not green, and stop; nothing retries. Cancelling here would not\nsave a matrix, it would DEFER one and add a stall.\n\n**Not the bot-author set** (`[bot_lane] bots`), and the two must not be\ncollapsed: that keys on a forge LOGIN and this keys on a branch NAME,\nbecause what decides the question is which workflow lands the branch. A\nhuman who names a branch with one of these prefixes gets the same\ntreatment, correctly — the lander fires on the name.\n\n**Prefixes on the branch, never a substring anywhere in the ref**, which\nthe predecessor's suite pinned as its own case: a `case` arm matching\nmid-ref would exempt a branch that merely mentions one.\n\nEmpty means every branch is judged, which is the gate's default and the\nreason this is a short named list rather than a pattern.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "landing_paths": {
+          "description": "The paths that CONSTITUTE the landing mechanism, so a head can be asked\nwhether it carries what trunk has.\n\n# A PATH SET RATHER THAN A GREP STRING, and that is the whole point\n\nThe predecessor asked this by grepping the head's `mise-tasks/land.sh`\nfor `land-lock acquire`. Both halves of that die with the retirement: the\nfile is deleted, so the read fails, so the script takes its own fail-open\npath and reports \"not judging this head's age\" — and every stale head\npasses, silently, which is worse than a wrong answer.\n\nA declared path set survives, because the thing that changes when the\nmechanism moves is WHICH PATHS, and that is config a retirement edits\nrather than a literal a retirement invalidates.\n\nEmpty is could-not-look: nothing to compare means no verdict, never a\nclean one.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "Literal": {
       "description": "One scalar a [`Declared::matching`] entry compares against.\n\n**A closed set of three, not `serde_json::Value`.** An arbitrary value would\nadmit an object or an array on the right-hand side of an equality, which is\neither a nested predicate nobody specified or a deep comparison whose cost is\nunbounded — and both are the query language CLOUD-690's refinement exists to\nkeep out. Three scalars are what a tool result's leaves actually are.",
       "anyOf": [
@@ -2549,6 +2609,20 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Receipt": {
+      "description": "The `[receipt]` table: which receipts a head must carry to be called verified.",
+      "type": "object",
+      "properties": {
+        "verified_by": {
+          "description": "The checks `receipt verified` requires a valid receipt for.\n\n# NON-NEGOTIABLE RULE 1, AND THE ARRAY THIS REPLACES\n\n`receipt.rs` carried `const VERIFIED_BY: [&str; 2] = [\"verify\",\n\"linear-check\"]` — two of THIS consumer's task names, compiled into the\ncore, which is the rule's plainest shape. A different adopter's gates are\nnot called those things, and nothing in the engine could tell them so.\n\n# UNDECLARED FALLS BACK, and this doc said it refused\n\nThe hazard is real and unchanged: an empty set would make\n`receipt verified` pass over every head, since *nothing is unverified*\nwhen nothing is required — a gate that answers clean because it was never\ntold what to ask. What closes it is a fallback rather than a refusal.\n[`crate::receipt::verified_by`] resolves an undeclared or empty table to\n[`crate::receipt::VERIFIED_BY`], and its own header records why the first\ndraft's usage error could not stand: it refused over a fixture repository\nwith no `batten.toml` and no interest in receipts, and that suite's\nsubject survives, so the only way to land the refusal was to edit around\na gate that was right.\n\nThe fallback is strictly more general than the `const` it replaced and\ncosts an adopter nothing — our names over their receipts resolve to\n`Missing`, so `verified` refuses loudly on their first run rather than\npassing quietly. A wrong answer that announces itself is the acceptable\nfailure; a silent one is not.\n\n**Stated here because a field's doc is where a reader looks for what an\nabsent key does** (review of #848), and this one asserted a refusal the\ncode does not make — with `trust.rs`'s `VerifiedCheckRemoved` repeating\nit, which is how one false premise became two.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false

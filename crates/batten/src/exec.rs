@@ -1359,11 +1359,34 @@ pub fn run_with(
 ///
 /// As [`run`].
 pub fn run_in(repo_root: &Path, command: &[String]) -> Result<ExitCode> {
-    run_in_with(
+    run_in_env(repo_root, command, &[])
+}
+
+/// [`run_in`], with variables published into the child's environment.
+///
+/// **A PARAMETER RATHER THAN `std::env::set_var`, and the workspace forbids the
+/// alternative outright.** Setting a variable on this process would be `unsafe`,
+/// would outlive the call, and would reach every later child whether or not the
+/// fact is still true — a bet unwound two laps ago would still be published.
+///
+/// It is also not an [`ExecConfig`] field: that struct is deserialized from
+/// committed configuration, and these pairs are resolved per call from the state
+/// of the run. A consumer must not be able to declare one.
+///
+/// # Errors
+///
+/// As [`run`].
+pub fn run_in_env(
+    repo_root: &Path,
+    command: &[String],
+    published: &[(String, String)],
+) -> Result<ExitCode> {
+    run_in_with_env(
         repo_root,
         command,
         &[],
         &ExecConfig::DEFAULT,
+        published,
         &mut std::io::sink(),
     )
 }
@@ -1380,9 +1403,98 @@ pub fn run_in_with(
     settings: &ExecConfig,
     report: &mut dyn Write,
 ) -> Result<ExitCode> {
+    run_in_with_env(repo_root, command, patterns, settings, &[], report)
+}
+
+/// [`run_in_with`], with variables published into the child's environment.
+///
+/// # Errors
+///
+/// As [`run`].
+pub fn run_in_with_env(
+    repo_root: &Path,
+    command: &[String],
+    patterns: &[OutputPattern],
+    settings: &ExecConfig,
+    published: &[(String, String)],
+    report: &mut dyn Write,
+) -> Result<ExitCode> {
     let bundle = split_bundle(command)?;
-    let outcomes = dispatch(repo_root, &bundle, settings, next_run())?;
+    let outcomes = dispatch(repo_root, &bundle, settings, published, next_run())?;
     report_bundle(&bundle, &outcomes, patterns, settings, report)
+}
+
+/// Run a command and report WHICH declared patterns its output matched,
+/// whatever it exited.
+///
+/// # This asks a different question from [`run_in_with_env`], and the difference
+/// is the exit code
+///
+/// [`report_bundle`] scans for patterns only on a `0`, and says so in as many
+/// words: *"Only `0` is promotable, and only a declared pattern promotes it."*
+/// That is right for CLOUD-117, whose question is **is this green run lying** —
+/// a child that already failed needs no promotion, and re-deciding a failure
+/// Batten did not diagnose would make the wrapper's verdict unreadable.
+///
+/// The question here is the other one: **a run already failed, and what KIND of
+/// failure was it.** CLOUD-861 is the measured case — a `verify` that died on a
+/// full disk is not a defect in the tree, and reporting it as one sends an
+/// author to reproduce a condition their branch did not create. Reusing the
+/// promotion path could not answer it, because the promotion path returns before
+/// it scans.
+///
+/// So this is a sibling rather than a flag on that one: one function answering
+/// both questions would have to decide, per caller, whether a hit means *promote
+/// this success* or *explain this failure*, and those produce opposite verdicts
+/// from identical inputs.
+///
+/// # It returns hits, never bytes
+///
+/// [`Hit`] is `stream:line id` and carries no matched text, so a caller learns
+/// which class of failure it was without the output passing through its hands —
+/// non-negotiable rule 4 held in the return TYPE rather than by each caller
+/// remembering. A wrapped command's output is the likeliest place in this whole
+/// engine for a secret to appear, which is what makes that load-bearing here.
+///
+/// The exit code is returned rather than raised: a gate that ran and refused is
+/// an ANSWER to its caller, and wrapping it in [`Passthrough`] would make the
+/// caller unwrap an error to read a verdict it asked for.
+///
+/// # Errors
+///
+/// A malformed bundle, or a boundary that could not start the child. A child
+/// that ran and failed is `Ok`, with its code.
+pub(crate) fn classify_in_env(
+    repo_root: &Path,
+    command: &[String],
+    patterns: &[OutputPattern],
+    settings: &ExecConfig,
+    published: &[(String, String)],
+) -> Result<(i32, Vec<Hit>)> {
+    let bundle = split_bundle(command)?;
+    let outcomes = dispatch(repo_root, &bundle, settings, published, next_run())?;
+    let code = bundle_code(&outcomes);
+    let mut found: Vec<Hit> = Vec::new();
+    for outcome in &outcomes {
+        found.extend(outputs::hits(patterns, Stream::Stdout, &outcome.out_bytes));
+        found.extend(outputs::hits(patterns, Stream::Stderr, &outcome.err_bytes));
+    }
+    Ok((code, found))
+}
+
+/// A bundle's exit code: the FIRST non-zero in declaration order.
+///
+/// Extracted rather than written twice (CLOUD-430). A bundle where command 2 of
+/// 3 failed and command 3 succeeded must not report `0`; and reading the FIRST
+/// failure rather than the last keeps the answer a property of the bundle rather
+/// than of the scheduler, which `--jobs` would otherwise make non-deterministic.
+/// Two spellings of that reduction is two authorities over one number.
+fn bundle_code(outcomes: &[Outcome]) -> i32 {
+    outcomes
+        .iter()
+        .map(|outcome| outcome.exit)
+        .find(|exit| *exit != 0)
+        .unwrap_or(0)
 }
 
 /// Run a program at `root/<program>` with `stdin` piped in, and read back its
@@ -1408,10 +1520,6 @@ pub fn run_in_with(
 /// pipe and a child that died without a code are all "no answer", and no caller
 /// can act differently on which. A caller that needs clean-versus-unreadable
 /// apart must not infer it from here.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays: this is the placed adapter's spawn, and the two callers that used to hold their own now hold none (CLOUD-1051)"
-)]
 pub(crate) fn piped(
     root: &Path,
     program: &Path,
@@ -1422,34 +1530,185 @@ pub(crate) fn piped(
     if !path.is_file() {
         return None;
     }
-    // THROUGH THE RESOLUTION LADDER, not `Command::new` directly, and Windows CI
-    // is what said so: a `#!/usr/bin/env bash` program has no extension and no
-    // executable image, so `CreateProcess` refuses it and the caller read the
-    // refusal as could-not-look — a recorder column that said `-` where it should
-    // have said `ready`. `spawn_resolving`'s third rung reads the shebang and
-    // runs the interpreter, which is the same ladder this module's own verb uses
-    // and the reason it exists.
-    //
     // `None` for the resolve root: the program is already absolute here, so a
     // relative name cannot arise and handing a directory would only be a guess at
     // one.
-    let mut child = crate::rules::spawn_resolving(None, path.to_str()?, |program, extra| {
-        Command::new(OsString::from(program))
+    // `Drop`: both callers of this entry point parse the string it returns.
+    piped_through(root, None, path.to_str()?, args, stdin, Diagnostics::Drop)
+}
+
+/// The one spawn both piped entry points share.
+///
+/// **Extracted rather than duplicated, and the reason is the gate this branch
+/// owes** (CLOUD-1338). [`piped_argv`] was written with its own `Command::new`
+/// and its own `#[expect(clippy::disallowed_types)]`, which is the inventory
+/// growing by one for a body byte-identical to this one — an annotation is meant
+/// to record a spawn somebody decided on, not to be the cheap way past the lint.
+/// `policy/spawn-widening.rego` refuses an added escape now, and this is what
+/// that refusal asks for: one site, two callers.
+///
+/// The two callers differ in exactly one thing and it is the argument they pass:
+/// how the first word RESOLVES. See [`piped_argv`]'s header for why that
+/// difference may not be folded away.
+///
+/// THROUGH THE RESOLUTION LADDER, never `Command::new` directly, and Windows CI
+/// is what said so: a `#!/usr/bin/env bash` program has no extension and no
+/// executable image, so `CreateProcess` refuses it and the caller read the
+/// refusal as could-not-look — a recorder column that said `-` where it should
+/// have said `ready`. `spawn_resolving`'s third rung reads the shebang and runs
+/// the interpreter.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: this is the placed adapter's ONE spawn, shared by both piped entry points so \
+              the inventory does not grow per calling shape (CLOUD-1051, CLOUD-1338)"
+)]
+fn piped_through(
+    root: &Path,
+    resolve_root: Option<&Path>,
+    program: &str,
+    args: &[String],
+    stdin: &str,
+    diagnostics: Diagnostics,
+) -> Option<(i32, String)> {
+    let mut child = crate::rules::spawn_resolving(resolve_root, program, |resolved, extra| {
+        Command::new(OsString::from(resolved))
             .args(extra.iter().map(OsString::from))
             .args(args)
             .current_dir(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(diagnostics.redirection())
             .spawn()
     })
     .ok()?;
-    child.stdin.take()?.write_all(stdin.as_bytes()).ok()?;
+    // TAKEN AND DROPPED EVEN WHEN EMPTY, because a gate that reads stdin blocks
+    // until it closes. A caller with nothing to say still has to say nothing and
+    // hang up, which is what an owned handle going out of scope here does.
+    {
+        // **A GATE THAT DID NOT READ STDIN STILL ANSWERED** (review of #848). This
+        // was `.ok()?`, which turns an ordinary `EPIPE` into `None` — and `None`
+        // reaches `land::ready` as `Readied::Unrunnable`, a could-not-look, over a
+        // gate that ran and produced a real verdict. Rust ignores `SIGPIPE`, so a
+        // gate that ignores its stdin and exits before the write completes is not
+        // a crash; it is a program that had already decided.
+        //
+        // The early `?` also abandoned a live child without waiting, leaking a
+        // zombie per occurrence. Dropping the handle closes the pipe either way,
+        // and `wait_with_output` below is what actually decides.
+        if let Some(mut pipe) = child.stdin.take() {
+            let _ = pipe.write_all(stdin.as_bytes());
+        }
+    }
     let finished = child.wait_with_output().ok()?;
-    Some((
-        finished.status.code()?,
-        String::from_utf8_lossy(&finished.stdout).into_owned(),
-    ))
+    let mut output = String::from_utf8_lossy(&finished.stdout).into_owned();
+    if diagnostics == Diagnostics::Keep {
+        // STDOUT FIRST, because that is where a verdict is written and a caller
+        // parsing one must not skip a diagnostic to find it.
+        let reason = String::from_utf8_lossy(&finished.stderr);
+        if !reason.trim().is_empty() {
+            if !output.is_empty() && !output.ends_with('\n') {
+                output.push('\n');
+            }
+            output.push_str(reason.trim_end());
+        }
+    }
+    Some((finished.status.code()?, output))
+}
+
+/// Whether a spawn's stderr joins its stdout, and it is per CALL SITE.
+///
+/// **A shared spawn may not decide this, which is what the first attempt got
+/// wrong** (review of #848). Capturing everywhere fixed `land::ready`'s empty
+/// `detail` and broke two callers that PARSE the string it returns:
+/// `review::ready` runs `serde_json::from_str` over it, so a runner emitting any
+/// diagnostic — a deprecation warning, a TLS notice — would fail to parse and
+/// read as *never dispatched*, which is the one arm a predicate over
+/// `input.tree.review` may refuse on; and `recorder::run_program`'s own doc
+/// states the contract verbatim, *"stderr is discarded, deliberately … a
+/// recorder that surfaced another gate's findings would be a second, unasked-for
+/// channel for them"*, so a gate writing `path:line` to stderr would have written
+/// it into a recorded column.
+///
+/// So the question is the caller's: a gate whose REASON is the payload keeps it,
+/// and a program whose stdout is a parsed value does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Diagnostics {
+    /// Discard stderr. For a caller that parses the returned string.
+    Drop,
+    /// Fold stderr in after stdout. For a caller reporting a gate's own reason.
+    Keep,
+}
+
+impl Diagnostics {
+    fn redirection(self) -> Stdio {
+        match self {
+            Self::Drop => Stdio::null(),
+            Self::Keep => Stdio::piped(),
+        }
+    }
+}
+
+/// [`piped`] over an ARGV rather than a program path.
+///
+/// # Why a sibling rather than a widened `piped`
+///
+/// The two resolve differently and the difference is not cosmetic. [`piped`]
+/// takes a program AT A PATH — `root.join(program)`, guarded by `is_file`, with
+/// no resolve root because the result is already absolute. This takes a command
+/// whose first word is a NAME the ladder resolves on `PATH`, which is what a task
+/// runner's invocation is. Folding them would give one function whose first
+/// argument means two things depending on whether it happens to exist as a file,
+/// and the guard that makes `piped` safe is exactly wrong here: a task name is
+/// not a file, so `is_file` would answer could-not-look for every one of them —
+/// a gate that reads as unreachable rather than as refusing, which is the dead
+/// class this engine exists to refuse.
+///
+/// # Why it exists
+///
+/// The landing lap's ready phase runs gates that take the pull request's BODY on
+/// stdin, and nothing here could spell that shape: [`run_in`] has no stdin
+/// channel and [`piped`] has no argv. The alternative was a fifth `Command::new`
+/// in whichever module needed it, which is the second-spawn-in-an-unplaced-module
+/// shape `piped`'s own header records being added to remove.
+///
+/// **It never spells an argv.** Both the runner and the task names arrive from
+/// the consumer's own configuration, because a task name inside `crates/batten`
+/// is non-negotiable rule 1's plainest violation.
+///
+/// `None` is could-not-look, collapsed for [`piped`]'s reason: unresolvable, a
+/// broken pipe, and a child that died without a code are all "no answer", and no
+/// caller can act differently on which.
+///
+/// # [`Diagnostics`] IS THE CALLER'S, and hardcoding it here was the same defect
+/// one layer up
+///
+/// This entry point pinned [`Diagnostics::Keep`] because the LANDING GATES need
+/// their refusal reason: their verdict is the exit code and the coordinate is on
+/// stderr, so dropping it left `Readied::Refused { detail }` empty and the
+/// operator reading a refusal with nowhere to look.
+///
+/// **But the same entry point also fetches the pull request's BODY** (review of
+/// #848), and there the returned string is PARSED rather than shown. A forge
+/// client's notice on stderr — an auth warning, a deprecation, a proxy line —
+/// was folded into the body, which defeats `land::ready`'s empty-body pass and
+/// runs the body gates over text nobody wrote. [`Diagnostics`]' own doc forbids
+/// `Keep` for a caller that parses.
+///
+/// That is [`piped`]'s history repeated: one shared spawn changed to fix one
+/// caller's symptom, breaking the callers that read the stream. The answer is the
+/// same both times — the call site says which it wants.
+pub(crate) fn piped_argv(
+    root: &Path,
+    argv: &[String],
+    stdin: &str,
+    diagnostics: Diagnostics,
+) -> Option<(i32, String)> {
+    let (program, operands) = argv.split_first()?;
+    // `Some(root)`, where [`piped`] passes `None`: the first word here is a NAME
+    // the ladder resolves, so rung 3 needs a directory to read a shebang out of.
+    // That one argument IS the difference between the two entry points, which is
+    // why they share [`piped_through`] and not a signature.
+    piped_through(root, Some(root), program, operands, stdin, diagnostics)
 }
 
 /// This process's next dispatch number, for the live-capture key.
@@ -1510,6 +1769,7 @@ fn dispatch(
     repo_root: &Path,
     bundle: &[&[String]],
     settings: &ExecConfig,
+    published: &[(String, String)],
     run: u64,
 ) -> Result<Vec<Outcome>> {
     let jobs = settings.jobs.max(1);
@@ -1524,7 +1784,7 @@ fn dispatch(
             // The single-command path stays a plain call, so a bare `batten exec`
             // spawns no thread it does not need — and so the ordinary case is not
             // paying for the bundle case.
-            vec![run_one(repo_root, run, first, wave[0], settings)]
+            vec![run_one(repo_root, run, first, wave[0], settings, published)]
         } else {
             std::thread::scope(|scope| {
                 let handles: Vec<_> = wave
@@ -1532,7 +1792,7 @@ fn dispatch(
                     .enumerate()
                     .map(|(offset, command)| {
                         scope.spawn(move || {
-                            run_one(repo_root, run, first + offset, command, settings)
+                            run_one(repo_root, run, first + offset, command, settings, published)
                         })
                     })
                     .collect();
@@ -1570,6 +1830,7 @@ fn run_one(
     index: usize,
     command: &[String],
     settings: &ExecConfig,
+    published: &[(String, String)],
 ) -> Result<Outcome> {
     let Some((program, args)) = command.split_first() else {
         return Err(UsageError::raise(
@@ -1609,7 +1870,8 @@ fn run_one(
             .args(extra.iter().map(OsString::from))
             .args(args.iter().map(OsString::from))
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .envs(published.iter().map(|(name, value)| (name, value)));
         group_at_spawn(&mut builder, decision);
         builder.spawn()
     });
@@ -1751,11 +2013,7 @@ fn report_bundle(
     // FIRST failure rather than the last keeps the answer a property of the
     // bundle rather than of the scheduler, which `--jobs` would otherwise make
     // non-deterministic.
-    let code = outcomes
-        .iter()
-        .map(|outcome| outcome.exit)
-        .find(|exit| *exit != 0)
-        .unwrap_or(0);
+    let code = bundle_code(outcomes);
 
     // CLOUD-429: the record IS the default answer, and it is emitted before the
     // passthrough below because a non-zero child must not lose it. On `report`,

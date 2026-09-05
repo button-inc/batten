@@ -11,7 +11,6 @@
 
 setup() {
 	GATE="$BATS_TEST_DIRNAME/../mise-tasks/tree-clean.sh"
-	VERIFIED="$BATS_TEST_DIRNAME/../mise-tasks/verified.sh"
 	REPO="$BATS_TEST_TMPDIR/repo-$BATS_TEST_NUMBER"
 	git init -q "$REPO"
 	cd "$REPO" || return 1
@@ -133,7 +132,7 @@ setup() {
 	[ ! -f "$receipts/verify.$HEAD_SHA" ]
 
 	# And that absence is what the next gate in the chain reads.
-	run "$VERIFIED"
-	[ "$status" -eq 1 ]
+	run batten receipt verified
+	[ "$status" -eq 2 ]
 	[[ "$output" == *"NOT verified"* ]]
 }

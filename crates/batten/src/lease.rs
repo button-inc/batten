@@ -46,6 +46,7 @@
 //! what CLOUD-689's ceiling and CLOUD-747's no-runtime assertion both refuse.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use crate::Result;
 use crate::fetch::{self, Call};
@@ -108,19 +109,13 @@ impl Advertisement {
 
 /// The bearer token this repository's remote needs, or `None`.
 ///
-/// **Resolved here and returned to nobody.** It is deliberately not a field of
-/// [`Terms`] or of any other value: a token in a struct is a token in that
-/// struct's `Debug`, and non-negotiable rule 4 makes every report here a pointer.
-/// Keeping it inside the two functions that build a request means there is no
-/// value a caller could print by accident.
-///
-/// `GH_TOKEN` first, matching the forge CLI's own precedence, so a session that
-/// set one for that tool does not have to set a second.
+/// **Delegated to [`crate::rest::credential`]**, which is this function
+/// promoted rather than a second reader. The four spawns CLOUD-1338 removed all
+/// justified themselves with *"this crate carries no HTTP client that resolves a
+/// forge credential"*, and one of them was written in this file — so the reader
+/// has one home now and the sentence has nowhere left to be true.
 fn credential() -> Option<String> {
-    ["GH_TOKEN", "GITHUB_TOKEN"]
-        .into_iter()
-        .find_map(|name| std::env::var(name).ok())
-        .filter(|token| !token.is_empty())
+    crate::rest::credential()
 }
 
 /// The request headers for one exchange, with the credential attached when there
@@ -881,13 +876,27 @@ fn apply_delta(base: &[u8], delta: &[u8]) -> Result<Vec<u8>> {
 /// One of a delta header's two little-endian varint sizes.
 fn delta_size(delta: &[u8], cursor: &mut usize) -> Result<usize> {
     let mut value = 0_usize;
-    let mut shift = 0;
+    let mut shift = 0_u32;
     loop {
         let byte = *delta
             .get(*cursor)
             .ok_or_else(|| anyhow::anyhow!("lease: a delta header runs off its end"))?;
         *cursor += 1;
-        value |= usize::from(byte & 0x7f) << shift;
+        // **THE SHIFT IS BOUNDED, and it was not** (review of #848). `shift += 7`
+        // with no bound over bytes the REMOTE supplied: ten continuation bytes
+        // reach 70, which is `attempt to shift left with overflow` in a debug
+        // build — a panic on a reachable path, which `.claude/rules/rust.md`
+        // forbids — and a silently masked shift in release, so the decoded size is
+        // wrong and surfaces as the generic length mismatch rather than as the
+        // malformed input it is. A truncated or corrupted pack through a flaky
+        // proxy is enough; no malice required.
+        //
+        // A varint wider than the machine's own word cannot describe a size this
+        // process could allocate, so it is could-not-look rather than a value to
+        // salvage — the same direction every other reader on this path takes.
+        value |= usize::from(byte & 0x7f).checked_shl(shift).ok_or_else(|| {
+            anyhow::anyhow!("lease: a delta header's size varint is out of range")
+        })?;
         shift += 7;
         if byte & 0x80 == 0 {
             return Ok(value);
@@ -906,14 +915,18 @@ fn pack_header(rest: &[u8]) -> Result<(u8, usize, usize)> {
         .ok_or_else(|| anyhow::anyhow!("lease: the pack ends where an object header should be"))?;
     let kind = (first >> 4) & 0x07;
     let mut size = usize::from(first & 0x0f);
-    let mut shift = 4;
+    let mut shift = 4_u32;
     let mut index = 1;
     let mut byte = first;
     while byte & 0x80 != 0 {
         byte = *rest.get(index).ok_or_else(|| {
             anyhow::anyhow!("lease: an object header runs off the end of the pack")
         })?;
-        size |= usize::from(byte & 0x7f) << shift;
+        // Bounded for `delta_size`'s reason, one function up: the same unbounded
+        // shift over the same remote-supplied bytes.
+        size |= usize::from(byte & 0x7f).checked_shl(shift).ok_or_else(|| {
+            anyhow::anyhow!("lease: an object header's size varint is out of range")
+        })?;
         shift += 7;
         index += 1;
     }
@@ -1230,15 +1243,249 @@ pub struct Terms {
     pub beat: i64,
 }
 
+/// How many beats fit inside a TTL — the RATIO the field docs call the property.
+///
+/// Written once because it is now read twice: [`Terms::default`] derives the
+/// shipped beat from it, and [`terms`] restores it when an operator declares a
+/// `LAND_LOCK_HEARTBEAT` that is not narrower than their `LAND_LOCK_TTL`. Two
+/// spellings of one relation is exactly the drift this module records elsewhere,
+/// and the pair went unchecked for its whole life because the relation lived in
+/// prose (review of #848).
+const BEATS_PER_TTL: i64 = 4;
+
+/// The shipped TTL. The beat is derived, so the two cannot be edited apart.
+const DEFAULT_TTL: i64 = 120;
+
 impl Default for Terms {
     fn default() -> Self {
         Self {
             remote: String::from("origin"),
             reference: String::from("refs/heads/batten-land-lock"),
             // 120s over a 30s beat. See the field docs for why the ratio rather
-            // than either number is the property.
-            ttl: 120,
-            beat: 30,
+            // than either number is the property, and `BEATS_PER_TTL` for where
+            // that ratio is written down.
+            ttl: DEFAULT_TTL,
+            beat: DEFAULT_TTL / BEATS_PER_TTL,
+        }
+    }
+}
+
+/// Why a clone has no lease terms, and the two are not the same answer.
+///
+/// **A clone with no remote is a FACT about the clone, not a failure to look.**
+/// The could-not-look guard exists so an unreadable lease is never reported as a
+/// free one; a repository with no remote has no lease ref to misread, so folding
+/// it into that guard made `lease status` an error in every clone that has not
+/// been pushed anywhere — including the census fixture, where every other
+/// data-channel verb answers cleanly.
+///
+/// The distinction is only ever RELAXED for the reporting arms. The write arms
+/// refuse either way, because acquiring a lease that has nowhere to live is not
+/// something a missing remote makes safe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TermsMissing {
+    /// No remote is configured, so this clone cannot participate in a lease.
+    NoRemote,
+    /// A remote exists and something about reading it failed. This is the
+    /// could-not-look the guard is for.
+    Unreadable(String),
+}
+
+impl TermsMissing {
+    /// The diagnostic, for the arms that report one.
+    #[must_use]
+    pub fn say(&self, name: &str) -> String {
+        match self {
+            TermsMissing::NoRemote => format!("no remote named {name} is configured"),
+            TermsMissing::Unreadable(reason) => reason.clone(),
+        }
+    }
+}
+
+/// The remote the lease lives on, by configured name.
+///
+/// Named here rather than at each reader because [`terms`] and every diagnostic
+/// that reports a missing remote must agree on which name went missing.
+#[must_use]
+pub fn remote_name() -> String {
+    std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"))
+}
+
+/// A positive whole number of seconds from the environment, or `None`.
+///
+/// **Zero and negative are `None`**, not values: every bound the lease carries is
+/// a duration, and a zero TTL or beat would turn a lease into a spin rather than
+/// into a tighter test.
+#[must_use]
+pub fn env_secs(name: &str) -> Option<i64> {
+    std::env::var(name)
+        .ok()?
+        .trim()
+        .parse::<i64>()
+        .ok()
+        .filter(|seconds| *seconds > 0)
+}
+
+/// Resolve the lease's terms from this checkout.
+///
+/// **The remote must resolve to a URL rather than a name.** The transport speaks
+/// smart-HTTP over the vendored client, which has no notion of a git remote
+/// alias, and a name reaching it would be an unresolvable host rather than a
+/// clear refusal here.
+///
+/// **It lives in this module rather than beside the verb dispatch**, and that is
+/// CLOUD-1148's move rather than tidying: a `[[recorder]]` column now asks the
+/// lease for a grade ([`adjudicate`]), and a resolver reachable only from `lib`
+/// would have had to be written a second time to serve it — which is the second
+/// authority every other duplicated reading in this repository was.
+///
+/// # Errors
+///
+/// [`TermsMissing`], whose two variants are a fact about the clone and a
+/// could-not-look respectively. The distinction is the whole point; see its docs.
+pub fn terms(root: &Path) -> std::result::Result<Terms, TermsMissing> {
+    let name = remote_name();
+    let remotes = crate::git::remotes(root)
+        .map_err(|err| TermsMissing::Unreadable(format!("cannot read this repository: {err}")))?;
+    let url = remotes
+        .iter()
+        .find(|(configured, _)| *configured == name)
+        .map(|(_, url)| url.clone())
+        .ok_or(TermsMissing::NoRemote)?;
+    let mut resolved = Terms {
+        remote: url,
+        ..Terms::default()
+    };
+    // Overridable so a suite can drive the bounds without waiting out a real TTL.
+    // Each falls back to the shipped default rather than to zero: a TTL of zero
+    // is a lease that has already lapsed, which would report as a fleet with no
+    // lease at all rather than as a misconfiguration.
+    if let Some(ttl) = env_secs("LAND_LOCK_TTL") {
+        resolved.ttl = ttl;
+    }
+    if let Some(beat) = env_secs("LAND_LOCK_HEARTBEAT") {
+        resolved.beat = beat;
+    }
+    // **THE RELATION IS THE SAFETY PROPERTY, AND IT WAS PROSE.** `Terms`' own
+    // field docs say the TTL is three beats wide on purpose, and every consumer
+    // of `beat`/`ttl` assumes it — but the two were read INDEPENDENTLY, each
+    // filtered only for `> 0`, so `LAND_LOCK_HEARTBEAT=120 LAND_LOCK_TTL=30`
+    // loaded clean and left the lease expired for 90s of every beat. A waiter's
+    // `body.expired(now) && held_for >= terms.beat` then takes a lease whose
+    // holder is alive and two landers run concurrently, which is the one thing
+    // this module exists to prevent (review of #848).
+    //
+    // THE TTL IS KEPT AND THE BEAT IS DERIVED, which is not a coin toss between
+    // two values. The TTL is the OUTER bound — how long a dead holder can wedge
+    // the fleet — so an operator who raised it wants it raised, and it is the
+    // half that stays. The beat is an implementation detail of staying alive
+    // inside it, so it is the half that moves, back to the width the field docs
+    // already declare. Restoring the relation cannot widen the window a waiter
+    // sees; it can only shorten it.
+    if resolved.beat >= resolved.ttl {
+        resolved.beat = (resolved.ttl / BEATS_PER_TTL).max(1);
+    }
+    if let Ok(reference) = std::env::var("LAND_LOCK_BRANCH") {
+        resolved.reference = format!("refs/heads/{reference}");
+    }
+    Ok(resolved)
+}
+
+/// Whether an observed lease leaves the clone reading it free to spend.
+///
+/// **The decision, extracted from both of its callers, and that is `rust.md`'s
+/// rule rather than tidying**: the failing condition is a lease held by a rival
+/// on a real remote, which no fixture in this sandbox can produce, so the
+/// predicate is tested directly instead of asserting a conclusion over a
+/// precondition nothing created. `batten lease status`'s verdict and
+/// [`adjudicate`]'s `lease-status` answer are the two callers, and a second copy
+/// of this comparison is exactly the drift that made the shell and the engine
+/// disagree about the same lease.
+///
+/// **Absent, released, expired and garbage are one answer here.** The next
+/// `acquire` wins, so nothing is authorised away from this clone. `Garbage` is
+/// deliberately in that set for [`observe`]'s reason — a lease nothing can parse
+/// stays held to every DECISION, and the decision this feeds is the
+/// `landing-loop` preset's, which reads a could-not-look column rather than this
+/// one.
+#[must_use]
+pub fn authorises_this_clone(observed: &Observed, holder: &str, now: i64) -> bool {
+    let Observed::Held { body, .. } = observed else {
+        return true;
+    };
+    if body.released() || body.expired(now) {
+        return true;
+    }
+    body.holder == holder
+}
+
+/// What a `[[recorder]]` column may ask the landing lease for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Asked {
+    /// Does the lease authorise THIS CLONE right now?
+    Status,
+    /// Which branch, if any, the live holder admitted behind it.
+    Successor,
+}
+
+/// One recorder answer, in the exit-status-and-stdout contract a spawned program
+/// would have produced (CLOUD-1148 §2).
+///
+/// # It answers in the ENGINE'S table, and the consumer's `status` map reconciles
+///
+/// `mise-tasks/land-lock.sh status` answered `0` authorising / `1` held
+/// elsewhere / `2` could-not-look, and `[program.land-lock-status]` mapped the
+/// first two and deliberately left the third unmapped — which is where the
+/// lease's fail-open asymmetry is enforced, because an unmapped status records
+/// could-not-look and the `landing-loop` preset's refusal cannot hold over it.
+///
+/// This returns the engine's one table instead: `0` authorising, `2` held
+/// elsewhere, `3` could-not-look. The consumer's map moves with it, once. Every
+/// other spelling of the reconciliation — a per-verb exception here, a second
+/// table in the recorder — would put the same decision in two places.
+///
+/// # `None` is could-not-look and reaches the column as `-`
+///
+/// A clone with no remote, an unreadable identity and an unreachable lease all
+/// answer `3` rather than `None`, because each is a reading the recorder should
+/// store as *could not look* rather than an evaluation that failed. `None` is
+/// reserved for the shape [`crate::recorder::evaluate`] already uses it for.
+#[must_use]
+pub fn adjudicate(asked: Asked, root: &Path, now: i64) -> Option<(i32, String)> {
+    let unknown = Some((crate::exit::ExitCode::Internal.code(), String::new()));
+    let Ok(resolved) = terms(root) else {
+        return unknown;
+    };
+    let Ok(observed) = observe(&resolved) else {
+        return unknown;
+    };
+    match asked {
+        // THE SUCCESSOR IS SILENT WHERE THERE IS NONE, and silent-and-`0` rather
+        // than could-not-look: "no reservation stands" is a reading, and the
+        // preset compares the empty token against a branch name and finds them
+        // unequal, which is the refusal standing rather than being waved.
+        Asked::Successor => {
+            let next = match &observed {
+                Observed::Held { body, .. } if !body.released() && !body.expired(now) => {
+                    body.next.clone()
+                }
+                _ => String::new(),
+            };
+            Some((0, format!("{next}\n")))
+        }
+        Asked::Status => {
+            let Ok(git_dir) = crate::git::git_dir(root) else {
+                return unknown;
+            };
+            let Ok(holder) = Local::under(&git_dir).holder() else {
+                return unknown;
+            };
+            if authorises_this_clone(&observed, &holder, now) {
+                Some((0, String::new()))
+            } else {
+                Some((crate::exit::ExitCode::Violation.code(), String::new()))
+            }
         }
     }
 }
@@ -1335,6 +1582,46 @@ pub fn claim(terms: &Terms, holder: &str, branch: &str, head: &str, now: i64) ->
         progress: String::new(),
         nonce: nonce(),
     }
+}
+
+/// Does this branch land WITHOUT ever taking the lease?
+///
+/// # The population is the LANDER's, and that is the whole predicate
+///
+/// Some branches are fast-forwarded by a workflow that fires on a `workflow_run`
+/// completion, so no agent holds the lease on their behalf and the runner-side
+/// precondition would refuse the very run it exists to let through. Which
+/// branches those are is a fact about which workflow lands them, and the workflow
+/// selects on the branch NAME — so this does too.
+///
+/// **Not `crate::bot::is_lane_bot`, and collapsing the two would be wrong in both
+/// directions.** That keys on a forge LOGIN. A human who names a branch with one
+/// of these prefixes still gets fast-forwarded by the lander and still holds no
+/// lease, so it must be exempt; a lane bot pushing a branch these prefixes do not
+/// name is landed the ordinary way and must be judged.
+///
+/// **A PREFIX ON THE BRANCH, never a substring anywhere in the ref**, which the
+/// predecessor's suite pinned as its own case. Given a full ref, the branch is
+/// its `refs/heads/` remainder — a caller handing one over must not have the
+/// question answered about the wrong string.
+///
+/// An empty prefix is ignored rather than matching everything: a blank row in
+/// consumer config is a typo, and reading it as *exempt every branch* would
+/// silently switch the whole gate off.
+///
+/// **ONE PREFIX, NEVER EVERY LEADING ONE.** `trim_start_matches` strips the
+/// pattern repeatedly, so a branch literally named `refs/heads/lane/x` — which
+/// git permits under `refs/heads/` — reduced to `lane/x` and was exempted by a
+/// `lane/` row it does not belong to. `strip_prefix` removes at most one and
+/// falls back to the branch as given, which is the only reading that answers the
+/// question about the string the caller actually named.
+#[must_use]
+pub fn lands_by_fast_forward(branch: &str, prefixes: &[String]) -> bool {
+    let branch = branch.strip_prefix("refs/heads/").unwrap_or(branch);
+    prefixes
+        .iter()
+        .filter(|prefix| !prefix.is_empty())
+        .any(|prefix| branch.starts_with(prefix.as_str()))
 }
 
 /// The body a release leaves behind.
@@ -1797,22 +2084,67 @@ pub fn health(observed: &Observed, terms: &Terms, now: i64) -> Health {
             "a lease with no holder cannot be released by anyone",
         ));
     }
+    // THE ADMITTED SUCCESSOR (CLOUD-369), rendered ONCE and appended by every arm
+    // below. The lease bounds confirming runs at two — the holder plus one branch
+    // `reserve` admitted — and this report is what a human reads on a wedged
+    // lease. Naming only the holder shows half the occupancy, so the one view
+    // meant to explain who is spending CI could not name the second spender.
+    //
+    // Rendered here rather than at each arm so the four cannot drift into
+    // describing the same field differently, which is the predecessor's own
+    // reason for hoisting it.
+    let behind = successor_clause(body);
     // The release sentinel, reported as a declaration rather than as an expiry
     // fifty-odd years in the past.
     if body.released() {
-        return Health::Free(format!("free — released by {}", body.holder));
+        return Health::Free(format!("free — released by {}{behind}", body.holder));
     }
-    let left = body.expires - now;
+    // **CHECKED, because `expires` is parsed straight out of a ref body somebody
+    // may have written by hand** — which is the very case the `Wedged` arm below
+    // exists for (review of #848). `i64::MIN` parses fine, is not `released()`,
+    // and then this subtraction overflows: a panic under overflow checks, and in
+    // release a wrap to a large positive `left`, so a lease that lapsed decades
+    // ago reports as wedged for another nine billion seconds and blocks the fleet
+    // on a lease that is actually free. `expired()` and `released()` above are
+    // total; only this was not.
+    //
+    // A body whose arithmetic will not close is garbage rather than a duration,
+    // and garbage is the state this module already refuses to read as an
+    // occupancy.
+    let Some(left) = body.expires.checked_sub(now) else {
+        return Health::Wedged(format!(
+            "held by {}{behind} with an expiry that will not compare — the body is not a lease this can read",
+            body.holder
+        ));
+    };
     if left <= 0 {
-        return Health::Free(format!("free — lapsed by {} {}s ago", body.holder, -left));
+        return Health::Free(format!(
+            "free — lapsed by {} {}s ago{behind}",
+            body.holder,
+            left.saturating_neg()
+        ));
     }
     if left > terms.ttl {
         return Health::Wedged(format!(
-            "held by {} for another {left}s, beyond the {}s any lease may claim",
+            "held by {}{behind} for another {left}s, beyond the {}s any lease may claim",
             body.holder, terms.ttl
         ));
     }
-    Health::Held(format!("held by {}, {left}s left", body.holder))
+    Health::Held(format!("held by {}{behind}, {left}s left", body.holder))
+}
+
+/// The admitted successor as a clause, or the empty string.
+///
+/// **Advisory exactly like `branch:` and `head:`** — read for the report, never
+/// for a verdict. It is absent on every lease minted before CLOUD-369 and on
+/// every lease nobody has reserved behind, so an empty reading is the ORDINARY
+/// case and the output stays byte-identical whenever it is empty. That
+/// byte-identity is asserted by a case of its own in the suite this conserves.
+fn successor_clause(body: &Body) -> String {
+    if body.next.is_empty() {
+        return String::new();
+    }
+    format!(", {} admitted behind it", body.next)
 }
 
 /// Delete `reference` on `remote`, from whatever it currently reads.
@@ -1937,10 +2269,29 @@ pub fn push(remote: &str, repo: &std::path::Path, reference: &str, head: &str) -
 /// different answers and only one of them is safe to continue from.
 pub fn fetch(remote: &str, repo: &std::path::Path, reference: &str) -> Result<Fetched> {
     let advertisement = advertise(remote, Service::UploadPack)?;
-    let want = advertisement.head_of(reference);
+    // **QUALIFIED, BECAUSE THE ADVERTISEMENT IS KEYED BY FULL REF NAME.**
+    // `Advertisement::refs` says so in its own field doc and `head_of` is an
+    // exact map lookup, but every driver-level caller carries `reference` SHORT
+    // — `main`, as the CLI positional and the tracking-ref construction both
+    // spell it. So `head_of("main")` missed `refs/heads/main`, answered `ZERO`,
+    // and this reported *"{remote} does not advertise main"* about a remote
+    // whose advertisement carried it twice. Measured against this repository:
+    // 79,973 bytes of advertisement, `refs/heads/main` present, the fetch
+    // refusing anyway.
+    //
+    // The `refs/` test rather than a slash test, because a branch is legitimately
+    // `feature/x` and prefixing by "has no slash" would leave exactly those
+    // unresolvable — which is the same half-right rule that made
+    // `gitwrite::FullName` accept a slashed short name verbatim.
+    let qualified = if reference.starts_with("refs/") {
+        reference.to_owned()
+    } else {
+        format!("refs/heads/{reference}")
+    };
+    let want = advertisement.head_of(&qualified);
     if want == ZERO {
         return Err(anyhow::anyhow!(
-            "lease: {remote} does not advertise {reference}"
+            "lease: {remote} does not advertise {qualified}"
         ));
     }
     // Already in hand: the local odb has it, so there is nothing on the wire to
@@ -1950,6 +2301,7 @@ pub fn fetch(remote: &str, repo: &std::path::Path, reference: &str) -> Result<Fe
         return Ok(Fetched {
             head: want.to_owned(),
             objects: Vec::new(),
+            advertised: advertisement.refs.keys().cloned().collect(),
         });
     }
     let haves = crate::git::recent_commits(repo, HAVE_WINDOW);
@@ -1986,6 +2338,7 @@ pub fn fetch(remote: &str, repo: &std::path::Path, reference: &str) -> Result<Fe
     Ok(Fetched {
         head: want.to_owned(),
         objects: objects_in(tail)?,
+        advertised: advertisement.refs.keys().cloned().collect(),
     })
 }
 
@@ -1997,6 +2350,18 @@ pub struct Fetched {
     /// Every object the answer carried. **Empty means the odb already had it**,
     /// never that the fetch failed.
     pub objects: Vec<Object>,
+    /// Every ref the remote advertised on THIS exchange, by full name.
+    ///
+    /// Carried out rather than dropped because the fetch already read it, and
+    /// the one caller that needs it — the landing path's prune — would otherwise
+    /// have to take a second advertisement to learn what the first one said.
+    /// Two readings of "what does the remote carry" is two answers, and the
+    /// prune is exactly the decision that must not act on the staler one.
+    ///
+    /// **Never empty on a successful fetch**, because a fetch that found nothing
+    /// to want has already failed by then — so a caller may read emptiness as a
+    /// remote carrying no refs rather than as could-not-look.
+    pub advertised: Vec<String>,
 }
 
 /// How many local commits are offered as `have` lines.
@@ -2053,6 +2418,330 @@ pub fn stop(pid: u32) {
         .status();
 }
 
+// ---------------------------------------------------------------------------
+// CLOUD-420 / CLOUD-1148: the composite step-0 guard.
+// ---------------------------------------------------------------------------
+
+/// What the runner's step-0 guard decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Guarded {
+    /// Spend the matrix.
+    Run {
+        /// Why, as a pointer a human reads off a green step.
+        why: String,
+    },
+    /// Do not. The caller cancels the run it is standing in.
+    Stop {
+        /// Why, and it carries the REMEDY: a stopped run is a cancelled run with
+        /// no failed step of its own, so a reader who is not told sees a red
+        /// check and no cause.
+        why: String,
+    },
+}
+
+/// The guard's decision over the two readings it composes.
+///
+/// # STALENESS FIRST, AND THE LEASE IS NOT CONSULTED WHEN IT STOPS
+///
+/// The predecessor's ordering, conserved: `ci-lease-precondition.sh` sets `stop`
+/// from the staleness row and enters the lease table only `if [[ -z "$stop" ]]`.
+/// So `authority` is `None` where the caller never asked — one fewer forge read
+/// on a head that is doomed either way — and `None` is not a third verdict.
+///
+/// # EVERY COULD-NOT-LOOK RUNS
+///
+/// This gate is the opposite of every other refusal in this repository. A
+/// reading it could not take would stop every job in the fleet, where waving one
+/// matrix through costs one matrix. So [`Carries::Unknown`] runs, an absent
+/// authority runs, and the only two things that stop are a head that provably
+/// does not carry trunk's landing mechanism and a lease that provably names
+/// somebody else.
+#[must_use]
+pub fn guard(carries: &Carries, authority: Option<&Authority>) -> Guarded {
+    match carries {
+        Carries::Stale { wanted } => {
+            return Guarded::Stop {
+                why: format!(
+                    "this head does not carry {wanted}, so it cannot be serialised against the \
+                     fleet. Rebase onto current trunk and land with it."
+                ),
+            };
+        }
+        Carries::Unknown { because } => {
+            return Guarded::Run {
+                why: format!("{because}; not judging this head's age"),
+            };
+        }
+        Carries::Current => {}
+    }
+    match authority {
+        Some(Authority::Stop(why)) => Guarded::Stop { why: why.clone() },
+        Some(Authority::Run(why)) => Guarded::Run { why: why.clone() },
+        // The caller could not read the lease at all. `authorises` fails open by
+        // contract and so does this.
+        None => Guarded::Run {
+            why: String::from("the lease could not be read, so nothing refuses this branch"),
+        },
+    }
+}
+
+/// Ask the forge to cancel `run`.
+///
+/// `false` when the cancellation was refused, which the caller reports and then
+/// runs anyway: a guard that could not stop a run must not also fail the job it
+/// is standing in.
+#[must_use]
+pub fn cancel_run(repo: &str, run: &str) -> bool {
+    crate::rest::post(&format!("repos/{repo}/actions/runs/{run}/cancel"))
+}
+
+// ---------------------------------------------------------------------------
+// CLOUD-1148 §2: does this head carry the landing mechanism trunk has?
+// ---------------------------------------------------------------------------
+
+/// What the staleness read decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Carries {
+    /// The head's history contains trunk's newest landing-mechanism commit.
+    Current,
+    /// It does not, so the head cannot be serialised against the fleet.
+    Stale {
+        /// Trunk's commit the head is missing. A pointer, never a diff.
+        wanted: String,
+    },
+    /// The reading could not be taken.
+    ///
+    /// **A distinct variant BECAUSE THE CALLER MUST FAIL OPEN ON IT.** Folding
+    /// it into `Stale` would cancel every run in the fleet on one unreachable
+    /// forge, and folding it into `Current` is how the predecessor's row went
+    /// dead. It is neither, and the caller decides — which for this gate means
+    /// run the matrix.
+    Unknown {
+        /// What could not be read. A pointer for a human, never a payload.
+        because: String,
+    },
+}
+
+/// One REST read, as the body text.
+///
+/// **IN PROCESS, over [`crate::rest`].** This was a `gh` spawn whose
+/// `#[expect(clippy::disallowed_types)]` reason claimed the crate carries no
+/// HTTP client that resolves a forge credential — eighty lines from
+/// [`credential`]'s predecessor in this same file, which reads `GH_TOKEN` and
+/// attaches a bearer header to a [`crate::fetch`] call. The claim was false where
+/// it was easiest to check.
+///
+/// Empty on any failure, which is the same could-not-look posture
+/// [`crate::main_watch::read`] takes: every failure to reach the forge is a
+/// reading nobody took, never a verdict.
+#[must_use]
+fn forge_read(path: &str) -> String {
+    crate::rest::get(path, None).map_or_else(String::new, |answer| answer.body)
+}
+
+/// The newest commit at `trunk` touching any of `paths`.
+///
+/// One request per path, and the newest sha across them wins. **`per_page=1`
+/// rather than a window**, because the question is "what is the latest" and a
+/// page of history would be bytes fetched to discard.
+///
+/// `None` when no path answered, which is could-not-look rather than "nothing
+/// has ever touched the mechanism" — the two are indistinguishable from here and
+/// the caller fails open on both.
+/// Percent-encode one query VALUE.
+///
+/// **A local encoder rather than a crate**, and the trade is stated because it is
+/// the kind of thing that gets waved through: the unreserved set is four lines of
+/// RFC 3986 and vendoring a dependency here would go through `deny.toml`,
+/// `macos-link-check`, `darwin-link`, the ambient-authority bound and the SBOM
+/// inventory to buy them. Everything outside `A-Za-z0-9-._~` is escaped, which is
+/// the conservative direction: over-escaping a segment the server would have
+/// accepted costs nothing, and under-escaping is the defect.
+fn query_value(raw: &str) -> String {
+    let mut encoded = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            // The two hex digits by hand rather than through `format!`, which
+            // allocates per byte — and `write!` here would need `std::fmt::Write`
+            // in scope beside `std::io::Write`, which this module already uses.
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    encoded
+}
+
+/// The newest commit at `trunk` touching any of `paths`.
+///
+/// One request per path, and the newest sha across them wins. **`per_page=1`
+/// rather than a window**, because the question is "what is the latest" and a
+/// page of history would be bytes fetched to discard.
+///
+/// # ORDERED BY ANCESTRY, NEVER BY THE COMMITTER'S DATE
+///
+/// This compared `commit.committer.date` across paths, and that is a MUTABLE
+/// field: a rebase, a cherry-pick or a hand-set `GIT_COMMITTER_DATE` reorders it
+/// freely, and the endpoint's own ordering says nothing across two separate
+/// queries. An older trunk commit could therefore win, and [`carries`] would
+/// report `Current` for a head missing the later landing commit — the guard
+/// answering clean about exactly the staleness it exists to catch.
+///
+/// Every candidate is on `trunk`, so they are totally ordered by ancestry, and
+/// the newest is the one that CARRIES the others. That is one extra compare per
+/// additional path — three, for a four-row declaration — against a guard that
+/// already spends one request per path.
+///
+/// # An unorderable pair is could-not-look for the WHOLE reading
+///
+/// Where [`head_carries`] cannot answer, the two candidates cannot be ordered at
+/// all, and there is no safe way to pick one: taking the older makes the guard
+/// too lenient, which is this function's own defect, and taking the newer makes
+/// it refuse a head it has no evidence against. So the reading is abandoned and
+/// the caller fails open, exactly as it does for a path that never answered.
+///
+/// `None` when no path answered, which is could-not-look rather than "nothing
+/// has ever touched the mechanism" — the two are indistinguishable from here and
+/// the caller fails open on both.
+#[must_use]
+pub fn newest_landing_commit(
+    repo: &str,
+    trunk: &str,
+    paths: &[String],
+) -> Option<(String, String)> {
+    let mut newest: Option<(String, String)> = None;
+    for path in paths {
+        // AN EMPTY ROW ASKS ABOUT THE WHOLE REPOSITORY. `path=` with no value is
+        // not "no filter I meant to write" to this endpoint — it is every commit
+        // on the trunk, so one blank entry in a consumer's `landing_paths` makes
+        // the newest trunk commit the answer and every head that is not tip-of-
+        // trunk read as stale. Skipped rather than refused, because this reading
+        // fails open on everything it cannot use.
+        if path.is_empty() {
+            continue;
+        }
+        // ENCODED, because a configured path is consumer data. A `&` or a `#` in
+        // one silently truncated or re-keyed the query, so the request asked
+        // about a different path than the row declared.
+        let raw = forge_read(&format!(
+            "repos/{repo}/commits?sha={}&path={}&per_page=1",
+            query_value(trunk),
+            query_value(path)
+        ));
+        let Ok(document) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let Some(entry) = document.as_array().and_then(|rows| rows.first()) else {
+            continue;
+        };
+        let Some(sha) = entry.get("sha").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some((held, _)) = newest.as_ref() else {
+            newest = Some((sha.to_owned(), path.clone()));
+            continue;
+        };
+        if held == sha {
+            continue;
+        }
+        // Does the candidate carry what we hold? Then it is the later commit.
+        match head_carries(repo, held, sha) {
+            Some(true) => newest = Some((sha.to_owned(), path.clone())),
+            Some(false) => {}
+            None => return None,
+        }
+    }
+    newest
+}
+
+/// Does `head` carry `wanted`?
+///
+/// # Server-side ancestry, and the reason is the predecessor's own
+///
+/// `ci-lease-precondition.sh` already records why this is an API question rather
+/// than a `merge-base --is-ancestor`: that needs a deep fetch and "answers
+/// wrongly after a rebase or a cherry-pick, both of which are the normal shape
+/// of work here". The compare endpoint answers it in one request against no
+/// clone at all, which is what lets the guard stay the genuine FIRST step.
+///
+/// `identical` and `ahead` carry it; `behind` and `diverged` do not.
+/// [`crate::gitwrite::carries`] is the LOCAL form of the same question, used
+/// where a clone exists.
+#[must_use]
+pub fn head_carries(repo: &str, wanted: &str, head: &str) -> Option<bool> {
+    let raw = forge_read(&format!("repos/{repo}/compare/{wanted}...{head}"));
+    let document = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    let status = document.get("status")?.as_str()?;
+    match status {
+        "identical" | "ahead" => Some(true),
+        "behind" | "diverged" => Some(false),
+        // A status this does not know is not a guess. The forge has only ever
+        // sent those four, so a fifth means the contract moved and a verdict
+        // taken over it would be one nobody checked.
+        _ => None,
+    }
+}
+
+/// The staleness DECISION, over readings the caller already took.
+///
+/// **Split from the reads so the predicate is testable without a forge.** The
+/// two forge calls are `Cost::Effect` and cannot run in a suite; this is a pure
+/// function of what they returned, which is the same split
+/// `crates/batten/src/speculation.rs` makes and for the same reason: "does this
+/// do what the bash did" has to be answerable without a network.
+#[must_use]
+pub fn decide(
+    paths: &[String],
+    head: &str,
+    wanted: Option<&str>,
+    ancestral: Option<bool>,
+) -> Carries {
+    if paths.is_empty() {
+        return Carries::Unknown {
+            because: String::from("no landing paths declared"),
+        };
+    }
+    if head.trim().is_empty() {
+        return Carries::Unknown {
+            because: String::from("no head sha in the environment"),
+        };
+    }
+    let Some(wanted) = wanted else {
+        return Carries::Unknown {
+            because: String::from("no landing commit readable at trunk"),
+        };
+    };
+    match ancestral {
+        Some(true) => Carries::Current,
+        Some(false) => Carries::Stale {
+            wanted: wanted.to_owned(),
+        },
+        None => Carries::Unknown {
+            because: format!("the forge did not compare {wanted} with {head}"),
+        },
+    }
+}
+
+/// The whole staleness read: is this head's landing mechanism current with
+/// trunk's?
+///
+/// The two reads, then [`decide`]. Nothing branches here that is not in that
+/// function, which is what keeps the suite's verdict and production's the same.
+#[must_use]
+pub fn carries(repo: &str, trunk: &str, head: &str, paths: &[String]) -> Carries {
+    if paths.is_empty() || head.trim().is_empty() {
+        return decide(paths, head, None, None);
+    }
+    let wanted = newest_landing_commit(repo, trunk, paths).map(|(sha, _)| sha);
+    let ancestral = wanted
+        .as_deref()
+        .and_then(|wanted| head_carries(repo, wanted, head));
+    decide(paths, head, wanted.as_deref(), ancestral)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -2068,6 +2757,41 @@ mod tests {
             }
         }
         body
+    }
+
+    /// **A PREFIX ON THE BRANCH, NEVER A SUBSTRING ANYWHERE IN THE REF**, which
+    /// is `ci-lease-precondition.bats`'s own case: an arm matching mid-ref would
+    /// exempt a branch that merely mentions a lander's name, and the exemption is
+    /// the one thing in this gate that switches it off.
+    #[test]
+    fn the_exemption_is_a_prefix_on_the_branch_and_not_a_substring() {
+        let lanes = vec![String::from("lane/"), String::from("cut-")];
+
+        assert!(lands_by_fast_forward("lane/bump-x", &lanes));
+        assert!(lands_by_fast_forward("cut-v1.2.3", &lanes));
+        // The full ref resolves to the same answer as the branch name.
+        assert!(lands_by_fast_forward("refs/heads/lane/bump-x", &lanes));
+
+        assert!(
+            !lands_by_fast_forward("fix/not-lane/bump-x", &lanes),
+            "a mention mid-ref is not the lander's branch"
+        );
+        assert!(!lands_by_fast_forward("main", &lanes));
+    }
+
+    /// **AN EMPTY SET JUDGES EVERY BRANCH, and an empty ROW exempts none.**
+    ///
+    /// The default has to be *judge it* or a consumer that declares nothing has
+    /// no gate; and a blank row is a typo, which read as a prefix would match
+    /// every branch and silently switch the whole gate off — the failure the
+    /// exemption is most able to cause and least likely to be noticed for.
+    #[test]
+    fn nothing_declared_exempts_nothing_and_a_blank_row_exempts_nothing_either() {
+        assert!(!lands_by_fast_forward("lane/bump-x", &[]));
+        assert!(!lands_by_fast_forward(
+            "lane/bump-x",
+            &[String::new(), String::new()]
+        ));
     }
 
     #[test]
@@ -2202,6 +2926,116 @@ mod tests {
                 ..Body::default()
             },
         }
+    }
+
+    fn with_successor(holder: &str, expires: i64, next: &str) -> Observed {
+        Observed::Held {
+            sha: String::from("1111111111111111111111111111111111111111"),
+            body: Body {
+                holder: holder.to_owned(),
+                expires,
+                next: next.to_owned(),
+                ..Body::default()
+            },
+        }
+    }
+
+    /// **CLOUD-369 CLAUSE F: every state names the successor admitted behind
+    /// the holder, and the first port of `health` named it in none of them.**
+    ///
+    /// The lease bounds confirming runs at two — the holder plus one branch
+    /// `reserve` admitted — and this report is what a human reads on a wedged
+    /// lease. Naming only the holder shows half the occupancy, so the one view
+    /// meant to explain who is spending CI could not name the second spender.
+    ///
+    /// Five cases in `tests/land-lock-check.bats` assert it, one per state.
+    #[test]
+    fn every_health_state_names_the_admitted_successor() {
+        let terms = Terms::default();
+        let now = 1000;
+
+        let held = health(&with_successor("mine", now + 60, "theirs"), &terms, now);
+        assert!(
+            format!("{held:?}").contains("theirs admitted behind it"),
+            "a held lease names who is behind it: {held:?}"
+        );
+
+        let released = health(&with_successor("mine", 0, "theirs"), &terms, now);
+        assert!(
+            format!("{released:?}").contains("theirs admitted behind it"),
+            "a RELEASED lease still names who was admitted: {released:?}"
+        );
+
+        let lapsed = health(&with_successor("mine", now - 5, "theirs"), &terms, now);
+        assert!(
+            format!("{lapsed:?}").contains("theirs admitted behind it"),
+            "a LAPSED lease names the successor it left behind: {lapsed:?}"
+        );
+
+        let wedged = health(
+            &with_successor("mine", now + terms.ttl + 60, "theirs"),
+            &terms,
+            now,
+        );
+        assert!(
+            format!("{wedged:?}").contains("theirs admitted behind it"),
+            "a WEDGED lease names the successor too, and still fails: {wedged:?}"
+        );
+        assert!(
+            matches!(wedged, Health::Wedged(_)),
+            "and naming it does not soften the verdict: {wedged:?}"
+        );
+    }
+
+    /// **BYTE-IDENTICAL WHEN NO SUCCESSOR IS ADMITTED**, which is the ordinary
+    /// case: the field is absent on every lease minted before CLOUD-369 and on
+    /// every lease nobody has reserved behind.
+    ///
+    /// The anti-vacuity mirror for the case above — without it, a clause that
+    /// rendered `, admitted behind it` over an empty name would satisfy every
+    /// assertion there and corrupt every report that has no successor.
+    #[test]
+    fn a_lease_with_no_successor_renders_byte_identically() {
+        let terms = Terms::default();
+        let now = 1000;
+        for (expires, what) in [
+            (now + 60, "held"),
+            (0, "released"),
+            (now - 5, "lapsed"),
+            (now + terms.ttl + 60, "wedged"),
+        ] {
+            let rendered = format!(
+                "{:?}",
+                health(&with_successor("mine", expires, ""), &terms, now)
+            );
+            assert!(
+                !rendered.contains("admitted behind it"),
+                "{what} with no successor must read exactly as it did before: {rendered}"
+            );
+        }
+    }
+
+    /// A lease at exactly one TTL is the longest legitimate hold, not wedged.
+    ///
+    /// `>` rather than `>=`, and the boundary is the whole of it: the protocol
+    /// mints exactly `now + ttl`, so the maximum legitimate horizon IS one TTL
+    /// and refusing it would refuse every freshly-acquired lease.
+    #[test]
+    fn a_lease_at_exactly_one_ttl_is_the_longest_legitimate_hold() {
+        let terms = Terms::default();
+        let now = 1000;
+        assert!(matches!(
+            health(&with_successor("mine", now + terms.ttl, ""), &terms, now),
+            Health::Held(_)
+        ));
+        assert!(matches!(
+            health(
+                &with_successor("mine", now + terms.ttl + 1, ""),
+                &terms,
+                now
+            ),
+            Health::Wedged(_)
+        ));
     }
 
     fn at(expires: i64, holder: &str) -> Observed {
@@ -2346,6 +3180,67 @@ mod tests {
         assert_eq!(
             bail(Some(ticking), &terms, 60, 3, 1001 + 3 * terms.beat),
             Bail::Stop(String::from("stopped turning 3 beats ago"))
+        );
+    }
+
+    /// **The verdict `lease status` and the `lease-status` column both carry.**
+    ///
+    /// Shown able to fail on the arm that matters: a live lease held by a rival
+    /// authorises nobody, and the same lease held by this clone authorises it.
+    /// Tested here rather than over the binary because the failing condition is
+    /// a lease on a real remote, which no fixture in this sandbox produces —
+    /// `.claude/rules/rust.md`'s rule for exactly that case.
+    ///
+    /// The regression it pins is measured rather than imagined: the first port
+    /// of `land-lock.sh status` returned `Success` on every answering path, so
+    /// `[program.land-lock-status]`'s `held-elsewhere` mapping became
+    /// unreachable, the recorder wrote `authorised` over a rival's lease, and
+    /// the `landing-loop` preset allowed the overlapping spend it exists to
+    /// refuse — a dead gate with a green suite, because no case drove the
+    /// producer.
+    #[test]
+    fn a_live_lease_authorises_its_holder_and_nobody_else() {
+        let now = 1000;
+        let live = body("mine", now + 60, "");
+        assert!(
+            authorises_this_clone(&live, "mine", now),
+            "the holder may spend"
+        );
+        assert!(
+            !authorises_this_clone(&live, "theirs", now),
+            "AND A RIVAL MAY NOT — the arm the whole verdict exists for"
+        );
+    }
+
+    /// Absent, released and expired are one answer, because the next `acquire`
+    /// wins and nothing is authorised away from anybody.
+    ///
+    /// The anti-vacuity mirror for the pair above: without it a predicate that
+    /// answered *not authorised* for every clone but the holder would pass,
+    /// which would stop a fleet standing on a free lease.
+    #[test]
+    fn a_lease_that_holds_nothing_authorises_every_clone() {
+        let now = 1000;
+        assert!(authorises_this_clone(&Observed::Absent, "anyone", now));
+        assert!(
+            authorises_this_clone(&body("theirs", 0, ""), "anyone", now),
+            "a tombstone is a DECLARATION, and `0` is its sentinel rather than an instant"
+        );
+        assert!(
+            authorises_this_clone(&body("theirs", now, ""), "anyone", now),
+            "zero seconds left is none left — the `>=` the expiry comparison uses"
+        );
+        assert!(
+            authorises_this_clone(
+                &Observed::Garbage {
+                    sha: String::from("1111111111111111111111111111111111111111"),
+                    why: String::from("the ref carries no lease body"),
+                },
+                "anyone",
+                now
+            ),
+            "a lease nothing can parse reaches the preset as could-not-look on the \
+             COLUMN, so answering it here as a refusal would fail closed twice"
         );
     }
 
@@ -3046,5 +3941,163 @@ mod tests {
         let text = String::from_utf8_lossy(&body);
         assert!(text.contains("refs/heads/batten-land-lock"));
         assert!(text.ends_with("0000PACKFAKE"), "got: {text}");
+    }
+}
+
+#[cfg(test)]
+// Panicking on a failed assertion is how a test fails loudly.
+#[allow(clippy::expect_used)]
+mod staleness_tests {
+    use super::{Authority, Carries, Guarded, decide, guard};
+
+    /// **THE FAIL-OPEN DIRECTION IS THIS GATE'S WHOLE CORRECTNESS, and it is the
+    /// opposite of every other refusal in this repository.**
+    ///
+    /// A reading the guard could not take would cancel every job in the fleet,
+    /// where waving one matrix through costs one matrix. So the set below runs,
+    /// and only a PROVEN stop stops. Asserted as the whole set because a version
+    /// that ran on everything and one that stopped on everything each satisfy
+    /// any single case.
+    #[test]
+    fn every_reading_it_could_not_take_runs_and_only_a_proven_stop_stops() {
+        let unknown = Carries::Unknown {
+            because: String::from("no landing paths declared"),
+        };
+        for (carries, authority) in [
+            (&unknown, None),
+            (&unknown, Some(Authority::Stop(String::from("held")))),
+            (&Carries::Current, None),
+        ] {
+            let verdict = guard(carries, authority.as_ref());
+            assert!(
+                matches!(verdict, Guarded::Run { .. }),
+                "a could-not-look must spend the matrix: {verdict:?}"
+            );
+        }
+
+        // And the two that DO stop, which is what keeps the above from being a
+        // gate that never fires.
+        assert!(matches!(
+            guard(
+                &Carries::Stale {
+                    wanted: String::from("trunksha")
+                },
+                None
+            ),
+            Guarded::Stop { .. }
+        ));
+        assert!(matches!(
+            guard(
+                &Carries::Current,
+                Some(&Authority::Stop(String::from("somebody else holds it")))
+            ),
+            Guarded::Stop { .. }
+        ));
+    }
+
+    /// **AN UNKNOWN STALENESS READING OUTRANKS A LEASE THAT SAYS STOP**, and the
+    /// case is here because the arm order makes it easy to get backwards.
+    ///
+    /// It is not a preference between two verdicts: a `Carries::Unknown` means
+    /// the head was never judged, and the predecessor never consults the lease
+    /// table on that path at all — it sets `stop` from the staleness row and
+    /// enters the table only when it is empty. The second element of the pair
+    /// above pins it.
+    #[test]
+    fn a_stale_head_stops_without_the_lease_being_consulted() {
+        // A stop from staleness names the commit the head is missing, so the
+        // remedy is in the annotation rather than in a follow-up read.
+        let verdict = guard(
+            &Carries::Stale {
+                wanted: String::from("abc123"),
+            },
+            Some(&Authority::Run(String::from("nobody holds it"))),
+        );
+        match verdict {
+            Guarded::Stop { why } => {
+                assert!(
+                    why.contains("abc123"),
+                    "the refusal names the commit: {why}"
+                );
+                assert!(
+                    why.contains("Rebase"),
+                    "and the remedy, because a cancelled run has no failed step to read: {why}"
+                );
+            }
+            Guarded::Run { why } => panic!("a stale head must not spend a matrix: {why}"),
+        }
+    }
+
+    fn paths() -> Vec<String> {
+        vec![String::from("mise-tasks/land.sh")]
+    }
+
+    /// **The discriminating pair: a head carrying trunk's landing commit is
+    /// current, one that does not is stale.**
+    ///
+    /// This is the predicate whose predecessor is about to go SILENTLY dead.
+    /// `ci-lease-precondition.sh:157` greps the head's `mise-tasks/land.sh` for
+    /// `land-lock acquire`; once that file is retired the read fails, the script
+    /// takes its own fail-open path — "not judging this head's age" — and every
+    /// stale head passes. A path SET survives the retirement that killed a grep
+    /// string, because what changes when the mechanism moves is which paths, and
+    /// that is config a retirement edits rather than a literal it invalidates.
+    #[test]
+    fn a_head_carrying_trunks_landing_commit_is_current_and_one_behind_is_stale() {
+        assert_eq!(
+            decide(&paths(), "headsha", Some("trunksha"), Some(true)),
+            Carries::Current
+        );
+        assert_eq!(
+            decide(&paths(), "headsha", Some("trunksha"), Some(false)),
+            Carries::Stale {
+                wanted: String::from("trunksha")
+            },
+            "the refusal names the commit the head is missing, and nothing else"
+        );
+    }
+
+    /// **EVERY UNKNOWN IS ITS OWN VARIANT, AND NEVER `Stale`.**
+    ///
+    /// This gate is the opposite of every other refusal in the repository: it
+    /// fails OPEN, because a reading it cannot take would cancel every job in
+    /// the fleet where waving one matrix through costs one matrix. Reading a
+    /// could-not-look as stale is the expensive direction; reading it as current
+    /// is how the predecessor's row died. It is neither, and the caller decides.
+    ///
+    /// Asserted as the whole set, because a version that answered `Unknown` for
+    /// everything and one that answered `Current` for everything each satisfy a
+    /// single case.
+    #[test]
+    fn every_reading_that_could_not_be_taken_is_unknown_rather_than_a_verdict() {
+        for (paths, head, wanted, ancestral) in [
+            (Vec::new(), "headsha", Some("trunksha"), Some(false)),
+            (paths(), "", Some("trunksha"), Some(false)),
+            (paths(), "   ", Some("trunksha"), Some(false)),
+            (paths(), "headsha", None, Some(false)),
+            (paths(), "headsha", Some("trunksha"), None),
+        ] {
+            let verdict = decide(&paths, head, wanted, ancestral);
+            assert!(
+                matches!(verdict, Carries::Unknown { .. }),
+                "an unreadable input must not become a verdict: {verdict:?}"
+            );
+        }
+    }
+
+    /// The unknown NAMES what could not be read.
+    ///
+    /// Pointer-only (non-negotiable rule 4): a reason a human can act on, never
+    /// a byte of the response. A stopped run is a cancelled run with no failed
+    /// step of its own, so without this the reader sees a red check and no clue.
+    #[test]
+    fn an_unknown_names_which_reading_was_missing() {
+        let no_paths = decide(&[], "headsha", None, None);
+        let no_head = decide(&paths(), "", None, None);
+        assert_ne!(
+            format!("{no_paths:?}"),
+            format!("{no_head:?}"),
+            "two different could-not-looks must not report the same reason"
+        );
     }
 }

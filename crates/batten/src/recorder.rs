@@ -360,6 +360,18 @@ pub enum Value {
 pub enum Ask {
     /// [`crate::ready`] — the Ready-block grammar over a tracker payload.
     Ready,
+    /// [`crate::lease::Asked::Status`] — does the landing lease authorise this
+    /// clone right now? Answers in the engine's exit table, so the consumer's
+    /// `status` map reads `0` authorising / `2` held elsewhere and leaves `3`
+    /// unmapped, which is where the lease's fail-open asymmetry lives.
+    ///
+    /// **Named for the practice rather than for a program** (non-negotiable rule
+    /// 1): "a landing lease" is a word about trunk-based landing, where
+    /// `land-lock` was one repository's file name.
+    LeaseStatus,
+    /// [`crate::lease::Asked::Successor`] — which branch the live holder
+    /// admitted behind it, on stdout, or nothing where no reservation stands.
+    LeaseSuccessor,
 }
 
 /// What a recorder reads back from a program it ran.
@@ -577,6 +589,15 @@ pub struct Context<'a> {
     /// resolved inside [`evaluate`] for this struct's whole reason: the function
     /// stays a pure function of its inputs and needs no world to test.
     pub branch: Option<&'a str>,
+    /// The instant a column that grades a lifetime compares against.
+    ///
+    /// **The clock is the BOUNDARY'S, never the decision's**, which is the same
+    /// rule `.claude/rules/policy-modules.md` states for why no policy module
+    /// sees a timestamp and `crate::rules::Rule::max_age` states for a receipt's
+    /// age. Carried here rather than read inside [`evaluate`] for [`Context`]'s
+    /// whole reason — the function stays a pure function of its inputs — and it
+    /// is what makes two evaluations over one lease produce one answer.
+    pub now: i64,
 }
 
 /// Evaluate one expression, or `None` where it could not be resolved.
@@ -645,6 +666,22 @@ pub fn evaluate(value: &Value, context: &Context<'_>) -> Option<serde_json::Valu
             let payload = evaluate(stdin, context)?;
             let (status, out) = match ask {
                 Ask::Ready => crate::ready::adjudicate(context.grammar?, &payload, context.root)?,
+                // THE PAYLOAD IS UNREAD ON BOTH LEASE ARMS, and that is a
+                // property of the subject rather than an oversight: the lease
+                // lives on a remote ref, so there is nothing about a tool result
+                // for it to judge. `stdin` is still evaluated above, because a
+                // column whose expression could not resolve must record
+                // could-not-look rather than quietly answering about the lease.
+                Ask::LeaseStatus => crate::lease::adjudicate(
+                    crate::lease::Asked::Status,
+                    context.root,
+                    context.now,
+                )?,
+                Ask::LeaseSuccessor => crate::lease::adjudicate(
+                    crate::lease::Asked::Successor,
+                    context.root,
+                    context.now,
+                )?,
             };
             read_back(read, status, &out)
         }
@@ -1237,6 +1274,12 @@ mod outcome_tests {
                 patterns: &patterns,
                 programs: &programs,
                 grammar: None,
+                // FIXED, because this row grades no lifetime. `now` reached
+                // `Context` on trunk while this case was on a branch, and the
+                // rebase merged the two without a textual conflict; the value
+                // is unread here, so a clock would only make the case
+                // non-deterministic for nothing.
+                now: 0,
             };
         let _ = &context;
 
@@ -1248,6 +1291,7 @@ mod outcome_tests {
             patterns: &patterns,
             programs: &programs,
             grammar: None,
+            now: 0,
         };
         assert_eq!(
             outcome(&row, &blocked),
@@ -1263,6 +1307,7 @@ mod outcome_tests {
             patterns: &patterns,
             programs: &programs,
             grammar: None,
+            now: 0,
         };
         assert_eq!(
             outcome(&row, &missed),
@@ -1279,6 +1324,7 @@ mod outcome_tests {
             patterns: &patterns,
             programs: &programs,
             grammar: None,
+            now: 0,
         };
         assert_eq!(outcome(&row, &applies), Outcome::Applies);
         assert!(satisfied(&row, &applies));

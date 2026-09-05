@@ -222,6 +222,14 @@ declared_modules := {
 	# is not one (CLOUD-1260), which is why the edge is listed rather than left
 	# to follow.
 	"land",
+	# `pipeline` arrived with CLOUD-1338's declared composition, and this rule
+	# named it before a human did. It sits ABOVE `land` and reaches it alone: the
+	# composition is a list of that module's `Step`s with a compensation per row,
+	# and it decides only whether such a list is walkable. Nothing in it resolves a
+	# reading, spawns, or touches the forge — which is what keeps the invariant
+	# ("an effectful step before the commit point must declare an undo") a
+	# load-time property of a table rather than something a lap discovers.
+	"pipeline",
 	# `forge`, `tools`, `captured`, `taskset` arrived with CLOUD-843's substrate
 	# wave, and this rule named all four before a human did — the eighth time the
 	# absence-is-an-error clause has earned its keep, and the first on a batch.
@@ -272,6 +280,69 @@ declared_modules := {
 	# weaker copy of the predicate living in a workflow. It also reaches `rules`,
 	# for the process ladder every spawning site in this crate shares.
 	"pr_watch",
+	# `fast_forward` arrived with CLOUD-1338's second half and is placed BESIDE
+	# `pr_watch` rather than inside it. Both spawn the forge client and both are
+	# read by a lap, but they ask about different objects: `pr_watch` asks whether
+	# a SHA is green, this asks whether the bot answered THIS request. Folding it
+	# in would have put two subjects behind one module's name.
+	#
+	# It reaches `pr_watch` for `parse_response` ALONE — the `-i` header/body
+	# split — which is the sanctioned edge `mcp -> rules` takes onto `parse_node`:
+	# onto a parser, never onto a decider. A second response splitter here would
+	# be the disagreement class `.claude/rules/policy-modules.md` records for
+	# parsers, and this endpoint's headers are the ones a rate-limit arm reads.
+	#
+	# IT DECIDES NOTHING ABOUT THE BRANCH, which is what keeps it below the lap:
+	# it resolves a conclusion token and hands it back, and whether a lap may
+	# continue on that token is `land`'s. Its `hook` and `check` edges are
+	# forbidden below for `pr_watch`'s reason — it spawns, and a gate declared
+	# `read` must not.
+	"fast_forward",
+	# `main_watch` is the staleness half of a lap's wait, and it is placed beside
+	# `pr_watch` rather than inside it because the two ask about DIFFERENT
+	# OBJECTS: one reads a head's check runs, the other reads the trunk ref. What
+	# they share is the conditional-request machinery, and that is imported —
+	# `parse_response`, `interval_for` and the `Response` shape are `pr_watch`'s,
+	# read here rather than re-derived, which is the single-parser rule
+	# `.claude/rules/policy-modules.md` states for an argv and which holds for a
+	# response header block for the same reason.
+	#
+	# IT DECIDES NOTHING ABOUT THE BRANCH, the same edge `fast_forward` carries
+	# above: it resolves a sha and reports whether it differs from a base handed
+	# in. Whether a lap may continue on that reading is `land`'s. Its `hook` and
+	# `check` edges are forbidden below for `pr_watch`'s reason — it spawns, and
+	# a gate declared `read` must not.
+	"main_watch",
+	# `rest` is the forge's REST tier read IN PROCESS, over `fetch` (CLOUD-1338).
+	# It sits BELOW every caller and reaches `fetch` alone: one client, one
+	# credential reader, and a typed answer carrying the status, the `ETag` and
+	# the poll floor.
+	#
+	# IT REPLACED FOUR SPAWNS RATHER THAN JOINING THEM, which is why the three
+	# modules above no longer appear on `spawn-adapters`' placement table. Each of
+	# the four carried the same `#[expect(clippy::disallowed_types)]` reason —
+	# that this crate carries no HTTP client resolving a forge credential — and
+	# the client had been in the crate since CLOUD-745, with `lease` already using
+	# it.
+	#
+	# IT DECIDES NOTHING, which is what keeps it at the bottom: it resolves a
+	# response and hands it back, and every verdict over that reading belongs to
+	# the module that asked. Its `hook` edge is forbidden below for `fetch`'s
+	# reason rather than for the spawning modules' — a network round trip cannot
+	# fit the mediated path's budget whether or not it forks.
+	"rest",
+	# `speculation` is the bet a waiter places on the base that is about to exist
+	# (CLOUD-748, CLOUD-862). It sits BELOW `land` for the reason `fast_forward`
+	# does: it resolves readings and returns a verdict token, and whether a lap
+	# acts on that token is `land`'s. Its settle table is a pure function of
+	# readings the caller already took, which is what lets the conserved
+	# CLOUD-1306 gap be pinned by a case rather than described in prose.
+	#
+	# NO SPAWN EDGE, and that is why it is absent from `spawn-adapters`: every
+	# read it makes is `git.rs`/`gix` in process. The lease reading it needs is
+	# handed IN as a `Live`, so the module never reaches the remote itself — which
+	# is also what keeps its whole decision testable without one.
+	"speculation",
 	# `record` arrived with CLOUD-1265 and this rule named it a ninth time — the
 	# module was written, both tiers were green, and this is what said nobody had
 	# placed it.
@@ -418,8 +489,47 @@ forbidden[from] contains to if {
 		# (house style §5) and the read-only allowlist is DERIVED from that
 		# declaration, so a `check` path reaching a network write would put a
 		# writing prefix on the allowlist itself (CLOUD-90's shape).
-		"hook": {"fetch", "mcp", "lease", "gitwrite", "land"},
-		"check": {"lease", "gitwrite", "land"},
+		# AND THE THREE FORGE-READING ADAPTERS, LISTED RATHER THAN PROMISED.
+		# `pr_watch`, `fast_forward` and `main_watch` each carry a comment in the
+		# placement table above saying their `hook` and `check` edges are
+		# "forbidden below for `pr_watch`'s reason" — and until now no row
+		# forbade any of them, `pr_watch` included. The prose described a rule
+		# that did not exist, so a direct import from either layer passed while
+		# every reader of this file was told it could not.
+		#
+		# The reason the prose gave is the right one and is kept: all three
+		# reach the forge, and a gate declared `read` (house style §5) whose
+		# allowlist is DERIVED from that declaration must not reach a network
+		# call — CLOUD-90's shape. `hook -> land` and `check -> land` already
+		# cover today's lap route TRANSITIVELY, and this file states its own
+		# standard for that case one paragraph up: a guarantee routable around by
+		# one hop is not one (CLOUD-1260), so the direct edges are listed.
+		#
+		# `rest` IS THAT ONE HOP, and listing `fetch` without it was the gap.
+		# `rest` is the REST tier OVER `fetch` — it resolves the forge
+		# credential and makes the call — so `hook -> rest` reached the network
+		# by exactly the route the `fetch` entry refuses, one name later. Found
+		# in review.
+		"hook": {
+			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
+			"pr_watch", "fast_forward", "main_watch",
+		},
+		# `check` NAMES NO MODULE TODAY, so this row is INERT — and that is worth
+		# stating rather than leaving a reader to infer enforcement from a table
+		# entry. There is no `crates/batten/src/check.rs`; the tree-scoped gate is
+		# the `check` VERB, which lives in `lib.rs`, and `lib` legitimately
+		# reaches everything. So the constraint the paragraph above describes is
+		# real and is not expressible as a module edge at this layout.
+		#
+		# Kept rather than deleted, for the same reason the `hook` row beside it
+		# is listed rather than left transitive: the day a `check` module lands,
+		# the edge is already refused instead of being remembered. Found while
+		# adding the three adapter targets below — the case written for it could
+		# not fire, which is how a row with no possible subject announces itself.
+		"check": {
+			"lease", "gitwrite", "land",
+			"pr_watch", "fast_forward", "main_watch",
+		},
 		# And the other direction, which is `symbols`' and `pinned`'s row again: the
 		# dispatcher sits below the engine and must not reach the module that
 		# adjudicates a mediated call. `mcp -> rules` is deliberately NOT here --
@@ -589,6 +699,37 @@ test_the_same_chain_is_clean_in_the_declared_direction if {
 	)
 }
 
+# ONE CASE PER FORGE-READING ADAPTER, IN BOTH DIRECTIONS. The table promised
+# these six edges in prose for their whole life and forbade none of them, so a
+# row without a case here is exactly how that happened again — and the pairs
+# below are what make the addition discriminate rather than merely load.
+test_the_mediated_call_may_not_reach_a_forge_reading_adapter if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("pr_watch", 21)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("fast_forward", 22)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("main_watch", 23)],
+	)
+}
+
+# AND THE DIRECTION THAT IS THE DESIGN: a lap reaches all three, which is what
+# these modules exist for. Without this a table that banned the edge outright
+# would satisfy the six cases above.
+test_the_lap_reaches_every_adapter_it_is_built_on if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/land.rs",
+		[internal("pr_watch", 41), internal("fast_forward", 42), internal("main_watch", 43)],
+	)
+}
+
 test_an_unrelated_edge_is_not_this_rules_business if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/hook.rs",
@@ -658,6 +799,18 @@ test_the_mediated_path_must_not_reach_the_transport if {
 	count(violation) == 1 with input as judging(
 		"crates/batten/src/hook.rs",
 		[internal("fetch", 31)],
+	)
+}
+
+# AND NOT THE TIER OVER IT. `rest` resolves the forge credential and makes the
+# call, so listing `fetch` alone left `hook -> rest` reaching the network by the
+# same route one name later — the one-hop escape this file's own standard
+# refuses. Found in review; without this case the table can lose the row again
+# and every other assertion here stays green.
+test_the_mediated_path_must_not_reach_the_tier_over_the_transport if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("rest", 31)],
 	)
 }
 

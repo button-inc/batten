@@ -1313,28 +1313,32 @@ args = ["--list"]
 #
 # WHAT THAT COSTS, STATED RATHER THAN ABSORBED: `status` grades the lease against
 # this CLONE (`mine`) where `authorises` grades it against the BRANCH, and it does
-# not honour the admitted successor. `land-lock-peek` below is what closes that
-# gap — the module compares `peek`'s answer against `Value::Branch`, which is the
-# whole reason that variant exists.
-[program.land-lock-status]
-path = "mise-tasks/land-lock.sh"
-args = ["status"]
+# not honour the admitted successor. The `lease-successor` column below is what
+# closes that gap — the module compares its answer against `Value::Branch`, which
+# is the whole reason that variant exists.
+#
+# THE TWO ROWS THAT USED TO LIVE HERE ARE GONE, AND THAT IS THE REPOINTING RATHER
+# THAN A DELETION (CLOUD-1148). They were `[program.land-lock-status]` and
+# `[program.land-lock-peek]`, both `path = "mise-tasks/land-lock.sh"`. A
+# `[program]` row names a path resolved against the repository root, so neither
+# could ever have named the compiled verb — and the file they named is retired.
+# The columns ask `authority = { ask = "lease-status" | "lease-successor" }`
+# instead, which is CLOUD-1100's landed move for `ready-lint.sh` applied to the
+# same shape: same `read` contract, same recorded tokens, no spawn.
 
 # THE ADMITTED SUCCESSOR, AS A MACHINE FIELD (CLOUD-369). `status` renders prose
 # for a human; `peek` prints one named field alone or nothing, which is exactly why
 # it exists — "a caller parsing that sentence would turn a message into an
 # interface, and the next edit to the wording would be a silent breakage."
 #
-# THE FIELD ARGUMENT IS REQUIRED AND ITS ABSENCE IS SILENT HERE. `peek` with no
-# field is exit 2 with a usage line on STDOUT, and `render_column` folds whitespace
-# — so the record's SHAPE survives and the successor column quietly carries the
-# usage text. The module then compares that against the branch, finds them unequal,
-# and refuses: a fail-CLOSED deviation on the one row `Value::Branch` was added to
-# keep open. Probed rather than assumed: `peek` alone is exit 2 / 51 bytes, `peek
-# next` is exit 0 / 0 bytes when no reservation stands.
-[program.land-lock-peek]
-path = "mise-tasks/land-lock.sh"
-args = ["peek", "next"]
+# NO FIELD ARGUMENT TO GET WRONG, WHICH IS WHAT THE COMPILED ARM BUYS HERE. The
+# predecessor took the field on argv, so `peek` with none was exit 2 with a usage
+# line on STDOUT — `render_column` folds whitespace, the record's shape survived,
+# and the successor column quietly carried the usage text, which the module then
+# compared against the branch and refused on. A fail-CLOSED deviation on the one
+# row `Value::Branch` was added to keep open, reachable by editing one string.
+# `ask = "lease-successor"` names the field in the variant, so there is no
+# spelling to get wrong.
 
 # ─── THE OUTPUT-POSTURE SCRUB AND ITS TELL (CLOUD-97, ported under CLOUD-1051) ─
 #
@@ -2020,6 +2024,107 @@ regex = 'gh[[:space:]]+pr[[:space:]]+view\b[^|;&]*--jq[[:space:]]+\.body\b'
 id = "shell-script-directory"
 regex = '^\$\(dirname([[:space:]]+--)?[[:space:]]+"[^"]*"\)$|^\$\(cd([[:space:]]+--)?[[:space:]]+"\$\(dirname([[:space:]]+--)?[[:space:]]+"[^"]*"\)"[[:space:]]*&&[[:space:]]*pwd\)$|^\$\{(BASH_SOURCE\[0\]|0)%/\*\}$'
 
+# HOW A BATS SUITE SPELLS THE SAME CONCEPT, and it is a second row rather than a
+# fourth alternation in the one above because the two decide different questions.
+#
+# The row above is a SIBLING directory — a shell program resolving the file next
+# to it, which is why its own comment excludes the parent form by construction. A
+# `.bats` suite does not live next to its subject: every suite in `tests/` names a
+# program in `mise-tasks/`, so the traversal is inherent to the shape rather than
+# a widening of it. And `$(dirname "$0")` is unavailable there at all — `$0` is
+# the bats runner, so bats hands the suite its own directory as
+# `$BATS_TEST_DIRNAME` instead.
+#
+# THE GAP THIS CLOSES WAS NAMED BEFORE IT WAS MEASURED. `shell-retirement`'s
+# `case_earns_removal` already records that "a suite spells it relative to its own
+# directory (`$BATS_TEST_DIRNAME/../.claude/hooks/…`)" and routes the REMOVAL side
+# around the missing spelling — which left the REPOINTING side unreachable, so a
+# suite that BINDS a retired program's path and spends the variable later had no
+# landable edit in either direction. Measured on `tests/tree-clean.bats`: the
+# binding line is removable (the bare stem matches `naming_forms`) while the spend
+# line `run "$VERIFIED"` is neither an admitted removal nor an admitted
+# repointing, so retiring `mise-tasks/verified.sh` broke a surviving suite with no
+# way to repair it. CLOUD-843 retires ~130 programs and most carry such a suite.
+#
+# ANCHORED AT BOTH ENDS for the reason the row above is, and the traversal is
+# bounded to path segments: no command substitution, no quote, no space, so the
+# span this admits can only ever be a literal path rooted at the suite's own
+# directory. The module removes the `/<name>` tail before matching, exactly as it
+# does for the row above.
+#
+# AT MOST ONE `..`, AND NO TRAVERSAL AFTER IT. The segment class was
+# `[A-Za-z0-9._-]+`, which contains `.` — so `.` and `..` were ordinary segments
+# and `$BATS_TEST_DIRNAME/../../../elsewhere/x.sh` matched. That is not the shape
+# the comment above describes: a suite sits in `tests/` and its subject in a
+# sibling directory, which is exactly one level up, and every further `..` walks
+# out of the repository layout this row exists to recognise.
+#
+# The tail class now requires at least one NON-dot character per segment, which
+# is what refuses `.` and `..` while still admitting `.claude` and `a.b` — the
+# spellings the paragraph above names. RE2 has no lookahead, so the exclusion is
+# spelled positively rather than as a negative assertion.
+[[pattern]]
+id = "bats-suite-directory"
+regex = '^\$\{?BATS_TEST_DIRNAME\}?(/\.\.)?(/[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)*$'
+
+# A CLIPPY LINT ESCAPE, in either spelling (CLOUD-1338). `spawn-widening` reads
+# it over the lines a change ADDED to engine source.
+#
+# ANCHORED ON THE ATTRIBUTE OR THE BARE LINT PATH, and both arms are needed
+# because this crate writes it both ways: `#[expect(clippy::disallowed_types)]`
+# on one line, and the multi-line form whose second line is the lint alone. A
+# pattern matching only one of them misses every site written the other way.
+#
+# A DOC COMMENT NAMING A LINT IS NOT AN ESCAPE, which the leading anchor gets for
+# free: a `///` or `//` line does not begin with the attribute or the path, and
+# the modules that discuss `clippy::disallowed_types` at length — including the
+# ones this row was written for — would otherwise refuse every commit that
+# explains itself.
+[[pattern]]
+id = "clippy-lint-escape"
+regex = '^\s*(?:#!?\[\s*(?:expect|allow)\(\s*)?clippy::[a-z_]+'
+
+# THE THREE LINTS A `mod tests` WAIVES, and the exemption is narrow on purpose.
+#
+# Every `#[cfg(test)] mod tests` in this crate opens with
+# `#[allow(clippy::expect_used)]` or its siblings, because the workspace forbids
+# `unwrap`/`expect`/`panic` on REACHABLE paths and panicking loudly is how a test
+# fails. Those modules live inside `crates/batten/src/**`, so the path exclusion
+# that keeps `crates/batten/tests/**` out cannot reach them.
+#
+# Measured: without this row `spawn-widening` refused three modules for using the
+# idiom the whole codebase uses. A rule that fires on the universal case is one
+# somebody switches off, which is the failure mode that ends gates.
+#
+# A CLOSED LIST OF THREE, never a general "test lints" carve-out. Everything else
+# — `too_many_arguments`, `cast_precision_loss`, and `disallowed_types` above all
+# — stays refused, because those are claims about the code rather than about how
+# a test reports failure.
+[[pattern]]
+id = "clippy-test-idiom"
+regex = '^\s*(?:#!?\[\s*(?:expect|allow)\(\s*)?clippy::(?:expect_used|unwrap_used|panic)\b'
+
+# ONE MEMBER OF THE SPAWN PLACEMENT SET (CLOUD-1338).
+#
+# `policy/spawn-adapters.rego`'s `adapters` is a Rego set of bare module names,
+# tab-indented. The row is deliberately narrow: it matches a line made ENTIRELY
+# of quoted lower-snake words with commas, which is that set's shape and nothing
+# else's in the file. Widening it to any quoted string would catch the module's
+# own test fixtures and its prose, and a rule refusing those is a rule somebody
+# switches off.
+#
+# **IT SAID "ONE PER LINE" AND THE FILE IS NOT WRITTEN THAT WAY** (review of
+# #848). The pattern was `^\s*"[a-z_]+",\s*$` — one name ALONE on its line — and
+# `spawn-adapters.rego` packs four to six per line, which is its dominant style.
+# So the whole gate was evaded by appending to an existing line rather than
+# adding one: the added line failed the anchor, clause B never fired, and
+# widening the placement table cost a keystroke instead of the argument
+# `spawn-adapters` says it should cost. A premise about formatting, asserted in a
+# comment and true of nothing.
+[[pattern]]
+id = "spawn-placement-entry"
+regex = '^\s*(?:"[a-z_]+",\s*)+$'
+
 # THE SUBCOMMAND TAIL of a task-name invocation (CLOUD-1299).
 #
 # `shell-retirement`'s repointing arm could only recognise a span that named its
@@ -2240,20 +2345,29 @@ requires-input-matching = { command = "landing-lifecycle-call" }
 name = "kind"
 value = { literal = "lease" }
 
-# THE FRESHNESS GRADE, RESOLVED BY THE PRODUCER'S OWN CLOCK. `status` exits 0 for
-# unheld, released, expired or mine; 1 for held by another clone; 2 where it could
-# not observe the lease at all.
+# THE FRESHNESS GRADE, RESOLVED BY THE PRODUCER'S OWN CLOCK — which since
+# CLOUD-1148 is the recorder boundary's single instant rather than a spawned
+# script's. `lease-status` exits 0 for unheld, released, expired or mine; 2 for
+# held by another clone; 3 where it could not observe the lease, read this
+# clone's identity, or find a remote at all.
 #
-# 2 IS DELIBERATELY UNMAPPED, AND THAT OMISSION IS THE FAIL-OPEN HALF. An unmapped
-# status records `-`, which equals neither token, so the module's refusal cannot
-# hold. `status` fails CLOSED on an unreachable remote where `authorises` fails
-# OPEN — "a lease it cannot read stops EVERY job in the fleet, where waving one
-# matrix through costs one matrix" — and this table is what restores that
-# asymmetry at the boundary rather than asserting it in prose. Adding a `"2"` row
-# here would invert the one behaviour the port exists to conserve.
+# 3 IS DELIBERATELY UNMAPPED, AND THAT OMISSION IS THE FAIL-OPEN HALF. An
+# unmapped status records `-`, which equals neither token, so the module's
+# refusal cannot hold. The producer fails CLOSED on an unreachable remote where
+# `authorises` fails OPEN — "a lease it cannot read stops EVERY job in the fleet,
+# where waving one matrix through costs one matrix" — and this table is what
+# restores that asymmetry at the boundary rather than asserting it in prose.
+# Adding a `"3"` row here would invert the one behaviour the port exists to
+# conserve.
+#
+# THE NUMBERS MOVED WITH THE PRODUCER AND THE MEANINGS DID NOT. The shell
+# answered 1 for held-elsewhere and 2 for could-not-look, because its own 1
+# already meant "held by someone else"; the engine has one table with no
+# per-verb exception (non-negotiable rule 5), so 2 is the verdict and 3 is
+# could-not-look. This map is the one place the two vocabularies meet.
 [[recorder.columns]]
 name = "verdict"
-value = { program = { run = "land-lock-status", read = { status = { "0" = "authorised", "1" = "held-elsewhere" } }, stdin = { literal = "" } } }
+value = { authority = { ask = "lease-status", read = { status = { "0" = "authorised", "2" = "held-elsewhere" } }, stdin = { literal = "" } } }
 
 # THE ADMITTED SUCCESSOR (CLOUD-369). Silent and `-` when no reservation stands,
 # which the module reads as *not this branch* — correct here and only here, because
@@ -2261,7 +2375,7 @@ value = { program = { run = "land-lock-status", read = { status = { "0" = "autho
 # somebody else.
 [[recorder.columns]]
 name = "successor"
-value = { program = { run = "land-lock-peek", read = "stdout", stdin = { literal = "" } } }
+value = { authority = { ask = "lease-successor", read = "stdout", stdin = { literal = "" } } }
 
 # THE BRANCH THE COMPARISON NEEDS, and the reason `Value::Branch` exists at all.
 # `status` grades the lease against the CLONE; only this column lets the module ask
@@ -6125,8 +6239,13 @@ sources = [
 ]
 line_sources = [
   ".github/workflows/*.yml",
-  "mise-tasks/abandon-matrix.sh",
-  "mise-tasks/land.sh",
+  # THE ENGINE, NOT THE RETIRED SHELL (CLOUD-1148). The fan-in clauses used to
+  # read `mise-tasks/abandon-matrix.sh` and `mise-tasks/land.sh`; both are
+  # retired, and a deleted path makes `input.tree.lines[…]` UNDEFINED rather
+  # than empty — so both helpers go false and both violations fire. Repointed at
+  # the compensation's own site, which is where the declaration is now read and
+  # where the abandon is now reached.
+  "crates/batten/src/lib.rs",
 ]
 module = "policy/ci-parity.rego"
 severity = "deny"
@@ -6338,6 +6457,65 @@ scope = "tree"
 symbols = true
 module = "policy/spawn-adapters.rego"
 severity = "deny"
+
+# THE INVENTORY MAY NOT BE SELF-SERVICE (CLOUD-1338), and this row is the reader
+# its two siblings never had. `.claude/rules/rust.md` makes a spawn an inventory
+# row; `spawn-adapters` above says which modules may hold one. Both are answered
+# by the author, in the same commit, with nothing reading the answer: the
+# annotation's `reason` is an unchecked string and a placement is a word added to
+# a Rego set.
+#
+# Measured, and on the worst possible branch: one whose entire subject was
+# RETIRING SHELL added five `#[expect(clippy::disallowed_types)]` spawns and
+# widened the placement table twice, with every sensor green and every reason
+# repeating a claim — *"this crate carries no HTTP client that resolves a forge
+# credential"* — that `crates/batten/src/fetch.rs` had already falsified.
+#
+# `base = "origin/main"` because the subject is a CHANGE rather than a state
+# (CLOUD-1059): a tree holding N escapes is the inventory, and this decides
+# whether N grew. `sources` names the two surfaces it reads lines from, because
+# the module compares the working side against the delta's base side and needs
+# both files acquired.
+#
+# NO `bypass_env`, and its verdicts declare no override route. That follows
+# `shell edit refused`'s precedent rather than inventing a posture: the answer to
+# this refusal is not a token to spend, it is that the change has the wrong
+# shape. A spawn that genuinely belongs is a decision for a groomed row and a
+# human, never an annotation an agent writes about its own work.
+[[rule]]
+id = "spawn-widening"
+kind = "policy"
+scope = "tree"
+module = "policy/spawn-widening.rego"
+base = "origin/main"
+severity = "deny"
+# `delta_sources`, NOT `sources`, and the difference is the whole reading. It is
+# what makes the engine acquire the BASE side of each glob, which is where
+# `base-lines` comes from; `sources` alone builds the working side and leaves the
+# delta null, so the module reports could-not-look on every run and decides
+# nothing. Measured here against a seeded escape it did not catch, which is why
+# the seeding was the acceptance step rather than reading a clean exit as proof.
+#
+# RECURSIVE, because a single-level glob is a hole that arms itself. There is no
+# nested Rust module under `src/` today, so `crates/batten/src/*.rs` matches
+# every file that exists — and the day somebody adds one, this row stops seeing
+# it, both clauses run over a map that never held its lines, and the gate reports
+# clean. That is the same silence the two paragraphs above record being caught by
+# seeding rather than by reading. Found in review of PR #848.
+delta_sources = ["crates/batten/src/**/*.rs", "policy/spawn-adapters.rego"]
+# AND `line_sources` FOR THE WORKING SIDE, because the two keys fill different
+# halves and the module subtracts one from the other. `delta_sources` alone gave
+# a base with nothing to compare against it: `input.tree.lines` was filled by
+# nothing, both refusing clauses ran over an empty map, and the gate reported
+# clean. That is the second time in ten minutes this row read as passing while
+# deciding nothing — which is why the acceptance step is a SEEDED escape and not
+# a clean exit.
+#
+# Recursive for `delta_sources`' reason, one paragraph up: the two keys fill the
+# two halves the module subtracts, so a glob that reached one and not the other
+# would leave a nested module's lines on one side only — which is the same read
+# as not seeing it at all.
+line_sources = ["crates/batten/src/**/*.rs", "policy/spawn-adapters.rego"]
 
 # CLOUD-316's gate, ported off `mise-tasks/mise-pin-agreement.sh` under CLOUD-910
 # — the wave's first gate, and the one whose end-to-end cost sizes the rest.
@@ -6889,14 +7067,35 @@ measured = "2026-09-04"
 # negative, so the next move that raises cold should take the exact measurement
 # rather than scale again: the model's own warning is that a floor nothing can
 # satisfy refuses every lap and gets switched off.
+# THE 2026-09-05 MOVE, and only ONE half of it is taken. CLOUD-1148's retirement
+# added five compiled tiers, taking the live count 15 past the basis — this gate
+# working, exactly as the 2026-08-30 move records.
+#
+# **The count is refreshed and the floors are NOT.** The block above says a count
+# refreshed without a new measurement is the same staleness wearing a newer
+# number, so a measurement was taken: `target/debug` built from an EMPTY tree,
+# full suite run, **2644 MB at 212 stems** — 12.5 MB per stem against this
+# basis's own 108.9. That does not say the floors are 8% low; it says they are
+# roughly 8x HIGH, which is the opposite finding and a much larger claim than a
+# stem refresh.
+#
+# It is filed rather than acted on. Lowering a safety floor eightfold on one
+# reading is the change this block already warns against in the other direction —
+# a floor too high refuses laps that would have been fine, and a floor too low is
+# CLOUD-861's rustc IO error inside a test run. The likeliest reconciliation is
+# that the declared numbers were taken over an ACCUMULATED tree rather than a
+# single cold build, which is the same apples-to-oranges error this block caught
+# once already; confirming that needs its own measurement discipline and its own
+# row. The number is recorded here so the next reader has it rather than
+# retaking it.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 197
+count = 212
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 197
+count = 212
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
@@ -7186,6 +7385,117 @@ email = "alec@wenzowski.com"
 # creation order, which this tracker gives and a slug- or UUID-keyed one does
 # not — and there it would fail silently rather than loudly. Every tracker stamps
 # a creation time.
+# ─── THE LANDING MECHANISM'S OWN PATHS (CLOUD-1148 §2) ────────────────────────
+#
+# What `batten lease carries` asks the forge about: has this head's history got
+# trunk's newest commit touching any of these? A head that has not cannot be
+# serialised against the fleet, so it must rebase before it spends a matrix.
+#
+# A PATH SET RATHER THAN A GREP STRING, and that is the whole change. The
+# predecessor asked this by grepping the head's `mise-tasks/land.sh` for
+# `land-lock acquire` (`ci-lease-precondition.sh:157`). Both halves of that die
+# with the retirement: the file goes, so the read fails, so the script takes its
+# own fail-open path — "not judging this head's age" — and every stale head
+# passes SILENTLY, which is worse than a wrong answer. What changes when the
+# landing mechanism moves is WHICH PATHS, and that is a row a retirement edits
+# rather than a literal a retirement invalidates.
+#
+# THE ENGINE PATHS ARE HERE TOO, AND THEY ARE THE POINT AFTER SLICE 7. Today the
+# mechanism is bash; when it is `crates/batten/src/land.rs`, this row is what
+# keeps the question answerable without being rewritten — the bash paths simply
+# stop appearing in trunk's history and the engine ones carry it.
+#
+# EMPTY IS COULD-NOT-LOOK, never a clean answer: this gate fails open at every
+# unknown, because a reading it cannot take would cancel every job in the fleet
+# where waving one matrix through costs one matrix.
+# ─── WHICH GATE FAILURES ARE THE ENVIRONMENT'S (CLOUD-861) ──────────────────
+#
+# A `verify` refusal is normally about this tree, and "reproduce and fix locally"
+# is the right advice for it. These rows name the failures for which that advice
+# is ACTIVELY WRONG — the branch did not cause them, and reproducing costs a
+# cycle to learn so.
+#
+# MEASURED 2026-08-21: `target-prune` passed a lap with 6242MB against its 4096MB
+# floor, the `cargo test` link step then consumed all of it, and the lap stopped
+# with "Reproduce and fix locally" over a tree with nothing wrong in it. That is
+# the misattribution CLOUD-811 records in `linear-check`, one layer over.
+#
+# THE LITERAL AND THE REMEDY ARE BOTH THIS CONSUMER'S. The wording is a property
+# of the toolchain this repository runs, and the remedy names a task — either one
+# inside `crates/batten` is non-negotiable rule 1's plainest violation, which
+# `document_facts.rs` would refuse. The engine learns only that a declared row
+# matched, and reads the remedy back out.
+#
+# A SEPARATE TABLE FROM `[[exec_pattern]]`, which asks the opposite question:
+# that one promotes a lying exit `0` to a violation, and this one explains a
+# failure that already happened. `report_bundle` scans only on a `0` and says so
+# — "Only `0` is promotable" — so one table serving both readings would produce
+# opposite verdicts over identical bytes.
+[[verify_environment_pattern]]
+id = "disk-full"
+pattern = "No space left on device"
+stream = "both"
+reason = "the disk filled, so this is the environment rather than your branch. Run `mise run target-prune`, and consider building with CARGO_INCREMENTAL=0."
+
+[lease]
+landing_paths = [
+  "mise-tasks/land.sh",
+  "mise-tasks/land-lock.sh",
+  "crates/batten/src/land.rs",
+  "crates/batten/src/lease.rs",
+  # `fast_forward.rs` carries the half of the landing protocol that ASKS for the
+  # merge and recognises the answer — the `/fast-forward` comment, its keyed
+  # verdict and the anti-livelock fence. A head that predates a change there is
+  # exactly as stale as one that predates a change to `land.rs`, and without this
+  # row it read as current. `pipeline.rs` is deliberately NOT here: it decides
+  # whether a composition is walkable and performs nothing, so a head can differ
+  # on it without differing on what a lap DOES.
+  "crates/batten/src/fast_forward.rs",
+]
+
+# THE BRANCHES A LANDER FAST-FORWARDS, so no agent ever holds the lease for them
+# and the runner-side precondition must not judge them. Read off the two landers'
+# own `branches:` filters rather than guessed:
+#
+#   auto-bot-land.yml      renovate/**, sbom-actions/**
+#   auto-release-land.yml  release-plz-**
+#
+# `sbom-actions/` IS THE ONE THE PREDECESSOR MISSED, and it is a live gap rather
+# than a tidy-up. `ci-lease-precondition.sh`'s `case` lists `renovate/*` and
+# `release-plz-*` only, so an `sbom-actions/**` branch — landed by the same
+# workflow, on the same trigger, with nobody holding a lease on its behalf — is
+# judged like an ordinary branch and its run is cancelled whenever some agent
+# holds the lease. Found by reading the carve-out against the filters it is
+# supposed to mirror; the shell has carried it since the lane was added.
+#
+# The economics, which are the predecessor's and unchanged: a cancelled run is
+# `completed`, so those landers DO fire, find the checks not green, and stop.
+# Nothing retries, and the head then waits for its next push to mint a fresh
+# matrix. Cancelling here does not save a matrix — it DEFERS one and adds a
+# stall.
+#
+# NOT `[bot_lane] bots`, which keys on a forge login. What decides this question
+# is which workflow lands the branch, and a workflow selects on the name.
+fast_forward_branches = ["renovate/", "sbom-actions/", "release-plz-"]
+
+# WHICH RECEIPTS A HEAD MUST CARRY TO BE CALLED VERIFIED (CLOUD-1338).
+#
+# These two names were `const VERIFIED_BY: [&str; 2]` inside `crates/batten`,
+# which is non-negotiable rule 1's plainest shape: they are THIS repository's
+# task names, and an adopter whose gates are called something else had no way to
+# say so. The set is the consumer's now and the engine reads it.
+#
+# `verify` says the tree passed its gate. `linear-check` says the branch was
+# linear on the trunk it was measured against, and records WHICH trunk, so a
+# moved `origin/main` expires it — a head carrying only the first has been
+# proven against a base that may no longer exist.
+#
+# AN EMPTY SET REFUSES rather than passing: nothing is unverified when nothing is
+# required, so an undeclared row would make `verified` report clean over every
+# head having asked about nothing.
+[receipt]
+verified_by = ["verify", "linear-check"]
+
 [ready]
 prose_dialect_required_from = "2026-09-02T00:00:00.000Z"
 
@@ -9949,7 +10259,7 @@ would not.
 [[verdict.route]]
 id = "task read first"
 kind = "document"
-target = "mise-tasks/abandon-matrix.sh"
+target = "crates/batten/src/lib.rs"
 
 [[verdict]]
 id = "job reach dead"
@@ -9964,7 +10274,7 @@ fan-in is declared, and the matrix still bills out in full after the first red.
 [[verdict.route]]
 id = "task read first"
 kind = "document"
-target = "mise-tasks/land.sh"
+target = "crates/batten/src/lib.rs"
 
 [[verdict]]
 id = "cargo spelling other"
@@ -11090,6 +11400,79 @@ target = "crates/batten/src/exec.rs"
 id = "module read first"
 kind = "document"
 target = "policy/spawn-adapters.rego"
+
+# CLOUD-1338's four. Separate tokens rather than one, for the reason the three
+# above are separate: a reader meeting an added escape and a reader meeting a
+# widened placement table have nothing to learn from each other.
+#
+# NONE OF THE FOUR DECLARES AN OVERRIDE ROUTE, and that omission is the rule's
+# whole posture. `shell edit refused` is the precedent — one route, no override,
+# no `bypass_env` — and the argument carries: an agent articulating why its own
+# new spawn is fine is the mechanism that already failed, five times in one
+# branch. The routes below point at what to READ, never at what to spend.
+[[verdict]]
+id = "spawn write refused"
+gloss = "this change adds a clippy escape in engine source"
+class = """
+A spawn is an inventory row and the inventory may not grow by annotation. Reach \
+for the in-process form first — `crate::rest` for the forge's REST tier, \
+`crate::fetch` for an ordinary HTTPS call, `crate::exec::piped_through` for a \
+child process that genuinely has to be one. Where a new spawn really is the \
+answer, it is a decision for a groomed row and a human rather than a `reason` \
+string the author writes about their own change.
+"""
+
+[[verdict.route]]
+id = "source read first"
+kind = "document"
+target = "crates/batten/src/rest.rs"
+
+[[verdict.route]]
+id = "prose read first"
+kind = "document"
+target = ".claude/rules/rust.md"
+
+[[verdict]]
+id = "adapter add refused"
+gloss = "this change adds an entry to the spawn placement table"
+class = """
+The placement table is deny-by-omission, so widening it is a two-word edit whose \
+justification lives in a comment nothing reads. That is how two placements landed \
+on a branch whose subject was removing shell. Remove the spawn instead, or take \
+the widening to a groomed row where a human decides it.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/spawn-adapters.rego"
+
+[[verdict]]
+id = "diff read absent"
+gloss = "the base rev did not resolve, so no change could be read"
+class = """
+Could-not-look is not clean. With no delta every clause of this rule is undefined, \
+which is byte-identical to a tree that added no spawn — the dead-gate class this \
+repository exists to refuse. Fetch the base ref and run it again.
+"""
+
+[[verdict.route]]
+id = "patch run first"
+kind = "command"
+target = "git fetch origin main, so the declared base rev resolves and the change can be read"
+
+[[verdict]]
+id = "source parse dead"
+gloss = "a declared engine source would not parse, so it was never judged"
+class = """
+A module that iterates only the documents it could read reports green over a file \
+it never opened. This names the file instead.
+"""
+
+[[verdict.route]]
+id = "source read first"
+kind = "document"
+target = "crates/batten/src/rest.rs"
 
 [[verdict]]
 id = "symbol count absent"

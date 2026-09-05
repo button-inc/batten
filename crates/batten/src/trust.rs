@@ -846,6 +846,40 @@ pub enum WeakeningKind {
     /// to `StartupRowRemoved`. `cli::Command` states the same rule for the same
     /// reason.
     PerfExemptionAdded,
+    /// A path is gone from `lease.landing_paths`, so the staleness read asks
+    /// about less of the landing mechanism than it did (CLOUD-1148 §2).
+    ///
+    /// Monotone in the direction that matters: [`crate::lease::decide`] resolves
+    /// the newest commit touching ANY declared path, so dropping one can only
+    /// move that answer backwards or leave it put — and a head stale in a way
+    /// the shrunken set no longer reaches passes clean. Emptying the table
+    /// altogether is that move at its limit, where the reader takes
+    /// could-not-look and the guard fails open on every head.
+    ///
+    /// **APPENDED, NEVER INSERTED**, and the reason is this enum's `Ord`: the
+    /// declaration order IS the sort order, so a variant added in the middle
+    /// silently reorders every finding after it. That costs byte-stable output
+    /// (house-style §6) for no gain — a new kind belongs at the end, where it
+    /// can only appear after the ones that already existed. Found in review.
+    LandingPathRemoved,
+    /// A check is gone from `receipt.verified_by`, so `verified` demands a
+    /// smaller body of evidence than it did (CLOUD-1338).
+    ///
+    /// Monotone by construction: `run_verified` reports a head verified when NO
+    /// declared check is unverified, so dropping a name can only remove a way to
+    /// fail. Emptying the table is that move at its limit — and there
+    /// [`crate::receipt::verified_by`] FALLS BACK to
+    /// [`crate::receipt::VERIFIED_BY`] rather than refusing, so the empty case
+    /// demands the default body of evidence instead of none.
+    ///
+    /// **This said the empty case was a usage error** (review of #848), which was
+    /// the first draft's behaviour and not the landed one. The correction does
+    /// not move this kind's boundary: emptying the table still weakens the set
+    /// this consumer declared, and the fallback is what stops that weakening
+    /// reaching a vacuous pass.
+    ///
+    /// So this kind covers the shrink, and the fallback covers the limit.
+    VerifiedCheckRemoved,
 }
 
 impl WeakeningKind {
@@ -908,6 +942,8 @@ impl WeakeningKind {
         WeakeningKind::ProtectedReaderAdded,
         WeakeningKind::VocabularyAbandoned,
         WeakeningKind::PerfExemptionAdded,
+        WeakeningKind::LandingPathRemoved,
+        WeakeningKind::VerifiedCheckRemoved,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -926,6 +962,8 @@ impl WeakeningKind {
             WeakeningKind::RulePredicateChanged => "rule-predicate-changed",
             WeakeningKind::MinVersionLowered => "min-version-lowered",
             WeakeningKind::EpochPathRemoved => "epoch-path-removed",
+            WeakeningKind::VerifiedCheckRemoved => "verified-check-removed",
+            WeakeningKind::LandingPathRemoved => "landing-path-removed",
             WeakeningKind::ReadyCutoverRelaxed => "ready-cutover-relaxed",
             WeakeningKind::PerfExemptionAdded => "perf-exemption-added",
             WeakeningKind::VerbRemoved => "verb-removed",
@@ -1066,6 +1104,14 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[WeakeningKind::EpochPathRemoved]),
     },
     FieldCoverage {
+        field: "lease",
+        coverage: Coverage::Compared(&[WeakeningKind::LandingPathRemoved]),
+    },
+    FieldCoverage {
+        field: "receipt",
+        coverage: Coverage::Compared(&[WeakeningKind::VerifiedCheckRemoved]),
+    },
+    FieldCoverage {
         field: "contract",
         coverage: Coverage::NotPolicyBearing(
             "the contract-drift predicate REPORTS and cannot refuse (CLOUD-461): it rides the              advisory channel at a batch boundary, where no host offers a deny channel at              all, so narrowing the surface changes what a session is TOLD and never whether              a call is allowed. And it is unreachable from an override in the first place —              `resolve` reads the table from the authority alone, for the reason `epoch` does",
@@ -1122,6 +1168,18 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "exec_patterns",
         coverage: Coverage::Compared(&[WeakeningKind::ExecPatternRemoved]),
+    },
+    FieldCoverage {
+        field: "verify_environment_patterns",
+        coverage: Coverage::NotPolicyBearing(
+            "the same shape as `redirects`, and deliberately NOT `exec_patterns`' shape \
+             despite sharing its type: a row here classifies a refusal that has ALREADY \
+             happened, so it changes what the stop SAYS and never whether it fires. Dropping \
+             every row costs an operator the reading that a full disk is not their branch's \
+             defect (CLOUD-861); it cannot turn a refusal into a pass, which is what \
+             `exec_patterns` can do in the other direction by no longer promoting a lying \
+             exit `0`. The exit code is `Violation` with the table and without it.",
+        ),
     },
     FieldCoverage {
         field: "exec",
@@ -1840,6 +1898,29 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         "epoch.tracked",
     ));
 
+    // The landing mechanism's own path set (CLOUD-1148 §2). Removed-direction
+    // only, and for the reason `epoch.tracked` is: the staleness read resolves
+    // the newest commit touching ANY declared path, so a shorter list can only
+    // reach back less far. ADDING a path narrows nothing — it can only make more
+    // heads read as stale — so the other direction is silent by design.
+    found.extend(removed_entries(
+        WeakeningKind::LandingPathRemoved,
+        &landing_paths(base),
+        &landing_paths(working),
+        "lease.landing_paths",
+    ));
+
+    // The evidence `verified` demands (CLOUD-1338). Removed-direction only, for
+    // the reason above one field over: the verb reports a head verified when NO
+    // declared check is unverified, so dropping a name can only remove a way to
+    // fail. ADDING one demands more evidence and narrows nothing.
+    found.extend(removed_entries(
+        WeakeningKind::VerifiedCheckRemoved,
+        &verified_by(base),
+        &verified_by(working),
+        "receipt.verified_by",
+    ));
+
     // The refinement gate's prose-dialect cutover (CLOUD-472). A ratchet, so
     // LATER is weaker: it exempts more rows from owing the claims object, and
     // dropping the key altogether is that move taken to its limit, since absent
@@ -2137,6 +2218,41 @@ fn tracked_paths(config: &Config) -> Vec<String> {
         .epoch
         .as_ref()
         .map_or_else(Vec::new, |epoch| epoch.tracked.clone())
+}
+
+/// The `receipt.verified_by` set AS THE VERB WILL READ IT — the declaration, or
+/// the compiled default where a config declares none.
+///
+/// **The default has to be resolved HERE or the comparison lies.** `verified`
+/// falls back to it, so a config that drops the whole table still demands the
+/// same two checks; comparing raw declarations would call that a weakening and
+/// price a consumer for deleting a row that changed nothing. What this must
+/// catch is a declaration that demands LESS than the reading it replaces, and
+/// that is what comparing effective sets does.
+fn verified_by(config: &Config) -> Vec<String> {
+    config
+        .receipt
+        .as_ref()
+        .map(|receipt| receipt.verified_by.clone())
+        .filter(|declared| !declared.is_empty())
+        .unwrap_or_else(|| {
+            crate::receipt::VERIFIED_BY
+                .iter()
+                .map(|check| (*check).to_owned())
+                .collect()
+        })
+}
+
+/// The `lease.landing_paths` set, or an empty one when the table is absent.
+///
+/// Absent and empty reach the same value on purpose: both are could-not-look to
+/// [`crate::lease::decide`], so a comparison that told them apart would report a
+/// weakening where the reader sees no change in posture.
+fn landing_paths(config: &Config) -> Vec<String> {
+    config
+        .lease
+        .as_ref()
+        .map_or_else(Vec::new, |lease| lease.landing_paths.clone())
 }
 
 /// Each `[[verb]]` row as the entry a weakening keys on.
@@ -3548,6 +3664,106 @@ mod tests {
             )
         );
         assert!(weakenings(&working, &base).is_empty());
+    }
+
+    /// Dropping a landing path shrinks what the staleness read can reach.
+    ///
+    /// The direction is the assertion: adding one can only make MORE heads read
+    /// as stale, so the reverse comparison must stay silent — a symmetric
+    /// implementation would price the retirement that widens this set.
+    #[test]
+    fn dropping_a_landing_path_is_a_weakening() {
+        let base = config("[lease]\nlanding_paths = [\"a.sh\", \"b.rs\"]\n");
+        let working = config("[lease]\nlanding_paths = [\"a.sh\"]\n");
+        assert_eq!(
+            only(&base, &working),
+            Weakening::new(
+                WeakeningKind::LandingPathRemoved,
+                "lease.landing_paths[b.rs]",
+                "present",
+                "absent",
+            )
+        );
+        assert!(weakenings(&working, &base).is_empty());
+    }
+
+    /// Dropping the whole table is that move at its limit, not a silent one.
+    ///
+    /// `landing_paths` reads absent and empty alike as could-not-look, so this
+    /// is the case that proves the *table's* removal still names every path it
+    /// used to declare rather than collapsing to no finding at all.
+    #[test]
+    fn dropping_the_lease_table_reports_every_path_it_declared() {
+        let base = config("[lease]\nlanding_paths = [\"a.sh\", \"b.rs\"]\n");
+        let working = config("");
+        let found = weakenings(&base, &working);
+        assert_eq!(
+            found,
+            vec![
+                Weakening::new(
+                    WeakeningKind::LandingPathRemoved,
+                    "lease.landing_paths[a.sh]",
+                    "present",
+                    "absent",
+                ),
+                Weakening::new(
+                    WeakeningKind::LandingPathRemoved,
+                    "lease.landing_paths[b.rs]",
+                    "present",
+                    "absent",
+                ),
+            ]
+        );
+    }
+
+    /// Dropping a required check shrinks the evidence `verified` demands.
+    ///
+    /// The same shape as `landing_paths` one field over, and the same direction
+    /// is the assertion: ADDING a check demands more, so the reverse comparison
+    /// must stay silent or every consumer tightening their own gate would be
+    /// priced as a weakening.
+    #[test]
+    fn dropping_a_verified_check_is_a_weakening() {
+        let base = config("[receipt]\nverified_by = [\"one\", \"two\"]\n");
+        let working = config("[receipt]\nverified_by = [\"one\"]\n");
+        assert_eq!(
+            only(&base, &working),
+            Weakening::new(
+                WeakeningKind::VerifiedCheckRemoved,
+                "receipt.verified_by[two]",
+                "present",
+                "absent",
+            )
+        );
+        assert!(weakenings(&working, &base).is_empty());
+    }
+
+    /// **DROPPING THE TABLE FALLS BACK TO THE DEFAULT, so what it reports is
+    /// what the reading actually loses — not the row.**
+    ///
+    /// `verified` resolves an undeclared set to its compiled default, so a
+    /// config that deletes the table still demands those checks. Comparing raw
+    /// declarations would price that as a weakening and charge a consumer for
+    /// removing a row that changed nothing; comparing EFFECTIVE sets reports
+    /// only the checks the successor no longer demands.
+    #[test]
+    fn dropping_the_table_is_priced_against_the_default_it_falls_back_to() {
+        let base = config("[receipt]\nverified_by = [\"verify\", \"linear-check\", \"extra\"]\n");
+        let working = config("");
+        assert_eq!(
+            weakenings(&base, &working),
+            vec![Weakening::new(
+                WeakeningKind::VerifiedCheckRemoved,
+                "receipt.verified_by[extra]",
+                "present",
+                "absent",
+            )],
+            "only the check the fallback does not carry is lost"
+        );
+
+        // And a table that declares exactly the default loses nothing at all.
+        let same = config("[receipt]\nverified_by = [\"verify\", \"linear-check\"]\n");
+        assert!(weakenings(&same, &config("")).is_empty());
     }
 
     /// CLOUD-472. The direction is the whole of it, so all four arms are here:

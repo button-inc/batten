@@ -629,6 +629,16 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     "lease release",
     "lease renew",
     "lease reserve",
+    // `lease carries` joins them for a different reason: it reaches the FORGE
+    // rather than the lease remote, and a corpus with no credential cannot read
+    // either the trunk commit or the comparison — which is the could-not-look
+    // this gate is built to fail open on.
+    "lease carries",
+    // `lease guard` joins it for `carries`' reason and one more: it is the
+    // composite, so a corpus that cannot read the trunk commit cannot answer its
+    // first half either — and the guard's contract is that every such reading
+    // RUNS, which is exactly could-not-look.
+    "lease guard",
     // `land replay` joins them for the same reason one hop earlier: it FETCHES
     // before it replays, so a corpus with no remote configured cannot reach the
     // replay at all and could-not-look is its honest answer here.
@@ -642,6 +652,13 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // And `land push`, which shares that preamble too and cannot reach the
     // remote at all on a corpus that names none.
     "land push",
+    // `land lap` inherits it from all three: the driver resolves the remote
+    // before its first step, so on a corpus naming none it stops at the same
+    // preamble its steps do. Measured rather than reasoned — the sweep put it
+    // here by failing with `no remote named origin, so this lap has no base`,
+    // which is the honest could-not-look and not a verb that emitted nothing
+    // because it had nothing to emit.
+    "land lap",
 ];
 
 /// One entry per leaf verb of [`SURFACE`], asserted total by
@@ -664,6 +681,26 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "lease status",
         args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // The staleness read renders a HEAD SHA, a wanted sha and a reason token.
+    // The forge's own bodies never reach it: `newest_landing_commit` takes a sha
+    // and a date out of the response and `head_carries` takes one status word,
+    // so there is nothing for a payload to ride on.
+    Verb {
+        path: "lease carries",
+        args: &["0000000000000000000000000000000000000000"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // The step-0 guard renders a head sha, a wanted sha, a lease reason token and
+    // a run id. The forge's own bodies never reach it: `carries` takes a sha and
+    // a status word out of two responses, and `authorises` reads a lease body the
+    // one authority already parses.
+    Verb {
+        path: "lease guard",
+        args: &["0000000000000000000000000000000000000000", "work", "0"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
@@ -739,6 +776,27 @@ const CENSUS: &[Verb] = &[
     // check's own output.
     Verb {
         path: "land wait",
+        args: &["refs/heads/main"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `land fast-forward` renders a workflow name, a comment key and a
+    // CONCLUSION TOKEN. The forge's own prose — a job's log, a bot's comment body
+    // — never reaches it: the verb resolves the answer keyed to its own request
+    // and returns the token, which is the whole of what a lap acts on.
+    Verb {
+        path: "land fast-forward",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `land lap` is the DRIVER, so its own output is a lap number, a step name
+    // and the progress word `land::progress` returned. It composes verbs that are
+    // each pointer-only above, which is what makes the composition pointer-only
+    // rather than an assumption about it: there is nothing in the lap that could
+    // introduce a payload the steps do not already refuse to carry.
+    Verb {
+        path: "land lap",
         args: &["refs/heads/main"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
@@ -1425,6 +1483,17 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // `receipt verified` composes the two receipt reads and renders a sha, a
+    // CHECK NAME and a validity token. It is the same reading `receipt status`
+    // gives, twice, and the predecessor it retired was already pointer-only for
+    // this reason — its own suite asserted "it names predicates and shas, never
+    // run contents", and that case is `subsumed` onto this row.
+    Verb {
+        path: "receipt verified",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The API-compatibility gate (CLOUD-1050). It reads a delegated analyser's
     // report and a range of commit messages — two of the content-richest inputs
     // on this surface — and emits the failing LINT IDS and a short sha, never a
@@ -1781,6 +1850,32 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
         .state_home(&corpus.home)
         .args(args)
         .current_dir(&corpus.repo)
+        // AMBIENT, AND IT CHANGED WHICH PATH THE CORPUS EXERCISED. `land
+        // fast-forward` refuses with `Usage` when `$LAND_WORKFLOW` names no
+        // workflow — the arm this census means to walk, since it renders a
+        // pointer and returns. With the variable set in the environment the
+        // suite inherits (this repository's own `mise.toml` declares one), the
+        // verb went on to `fast_forward::open_pull_request` instead, so the case
+        // measured a forge read that could not happen rather than the refusal.
+        // A census whose corpus depends on the shell it was launched from is not
+        // one.
+        .env_remove("LAND_WORKFLOW")
+        // AND THE ROSTER, for the reason the `pr watch` entry states about its
+        // own: that verb is driven to its REFUSAL because the loop is unbounded
+        // by design, so an entry that reached the network would not be a slow
+        // case, it would be one that never returns. `land wait` reads the same
+        // roster from the ENVIRONMENT rather than from flags, so it inherited
+        // this repository's and entered the poll — an hour per run. Cleared
+        // here, it refuses before the first request exactly as its sibling does.
+        .env_remove("CI_REQUIRED_CHECKS")
+        .env_remove("CI_ANSWERED_CONCLUSIONS")
+        // AND THE CENSUS DOES NOT REACH THE FORGE. Several verbs here read it,
+        // and with the spawn retired they do so in process — so without a seam
+        // this corpus makes real requests, and the ones that POLL keep making
+        // them. An empty fixture directory answers could-not-look instantly,
+        // which is the reading every one of these verbs is required to survive
+        // and the only one a census about OUTPUT should be exercising.
+        .env("BATTEN_REST_FIXTURE", corpus.home.join("no-answers"))
         .env("XDG_CACHE_HOME", corpus.home.join("cache"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -214,11 +214,40 @@ pub fn decide(rows: &[Row], evidence: &Evidence) -> Report {
     let mut findings = Vec::new();
 
     for row in rows {
-        // DIRECTION ONE: the board is behind git. Only In Progress is swept,
-        // because a Backlog or Todo row whose key appears on `main` is the
-        // ordinary case — a commit may cite a row it does not implement, which
-        // is the whole reason `claimed-keys` distinguishes closing from naming.
-        if row.is_in_progress() && evidence.landed(&row.id) {
+        // THE BOARD IS BEHIND GIT. Only In Progress is swept, because a Backlog
+        // or Todo row whose key appears on `main` is the ordinary case — a commit
+        // may cite a row it does not implement, which is the whole reason
+        // `claimed-keys` distinguishes closing from naming.
+        //
+        // Bound here rather than at its arm so the arm can be an `else if`: the
+        // two arms are mutually exclusive by the paragraph below, and spelling
+        // that as a chain is what keeps the exclusion structural.
+        let behind_git = row.is_in_progress() && evidence.landed(&row.id);
+
+        // **THE DECLINE IS ASKED FIRST, because it outranks the landing and the
+        // two arms are mutually exclusive** (review of #848). A row can satisfy
+        // both — its key is in the landed union AND a pull request body declined
+        // it — and they carry OPPOSITE remedies: `BehindGit` says advance to In
+        // Review, `DeclinedButAdvanced` says put it back in Todo. Whichever ran
+        // first decided, and the landed arm ran first, so an explicit human
+        // `DO-NOT-CLOSE` was answered with "advance it" — inverting the arm this
+        // module's own doc calls load-bearing.
+        //
+        // The decline wins because it is the one statement here that needs no
+        // inference: derived evidence says a commit mentioning the key reached
+        // `main`, and a decline says a person looked at that and said no.
+        //
+        // A declined row still in Todo passes, so this is not a blanket refusal
+        // of the marker: `DO-NOT-CLOSE` on a row nothing advanced is the marker
+        // working.
+        if row.is_started() && evidence.declined.contains(&row.id) {
+            findings.push(Finding {
+                id: row.id.clone(),
+                holds: row.status.clone(),
+                reason: Reason::DeclinedButAdvanced,
+                asserted_by: None,
+            });
+        } else if behind_git {
             findings.push(Finding {
                 id: row.id.clone(),
                 holds: row.status.clone(),
@@ -234,24 +263,6 @@ pub fn decide(rows: &[Row], evidence: &Evidence) -> Report {
                 } else {
                     None
                 },
-            });
-            continue;
-        }
-
-        // DIRECTION TWO: the board is ahead of nothing. A key the body DECLINED
-        // sitting in a started column is dishonest whoever wrote the
-        // transition — which is what makes this arm decidable where the
-        // served-key arm is not (see the module doc).
-        //
-        // A declined row still in Todo passes, so this is not a blanket refusal
-        // of the marker: `DO-NOT-CLOSE` on a row nothing advanced is the marker
-        // working.
-        if row.is_started() && evidence.declined.contains(&row.id) {
-            findings.push(Finding {
-                id: row.id.clone(),
-                holds: row.status.clone(),
-                reason: Reason::DeclinedButAdvanced,
-                asserted_by: None,
             });
         }
     }

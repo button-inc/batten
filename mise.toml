@@ -335,7 +335,39 @@ CARGO_TERM_COLOR = "always"
 # itself, so there is nothing to re-download or re-hash. The rule generalises:
 # lock a binary artifact, vendor a source tree. Run `git submodule update
 # --init` once per clone.
-_.path = ["tests/bats/bin"]
+#
+# `target/release` IS THE SECOND ENTRY, AND IT IS THIS CHECKOUT'S BINARY WINNING
+# OVER AN INSTALLED ONE. Four task bodies invoke `batten` as a bare word —
+# `checks green`, `pr watch`, `task`, `task alive` — and nothing put a build
+# directory on PATH, so they resolved whatever `install:local` last copied to
+# `~/.local/bin`. That is a DIFFERENT binary from the tree the task is running
+# against the moment anybody edits `crates/`, and it answers confidently.
+#
+# Measured while landing CLOUD-1338: three consecutive `batten override request`
+# calls refused a `batten.toml` the working tree had just grown a key for —
+# `unknown field fast_forward_branches`, then `unknown field receipt` — because
+# the installed binary predated the config it was judging. A gate reading a
+# config its own schema does not know is the loudest form of this; the quiet form
+# is a task that agrees with a stale answer.
+#
+# A path entry rather than `cargo run --quiet -p batten --` in each body, which
+# was the other candidate: `alive` exists to answer WHILE something else is
+# building, and `cargo run` would block on the target-dir lock exactly then.
+#
+# WHAT THIS DOES NOT DO, and the previous wording claimed the opposite. It said a
+# clean checkout with no build "still fails loudly — `batten: command not found`
+# is an honest report". That is FALSE: `_.path` PREPENDS, so an absent
+# `target/release/batten` falls through to whatever `~/.local/bin` holds — the
+# stale binary this entry exists to stop being reached. A false assurance is
+# worse than a stated gap, which is this repository's own recurring lesson.
+#
+# The compensating control is provisioning rather than resolution:
+# `[tasks."session:batten"]` runs `install:local`, which BUILDS the release
+# binary at session start and reports an `::error::` with a log pointer when it
+# cannot. So the ordinary session has the tree's own binary before any task runs,
+# and a session that does not has already said so out loud. Making the fallback
+# itself refuse needs a mechanism `_.path` has no spelling for. Found in review.
+_.path = ["tests/bats/bin", "target/release"]
 # The checks that carry a verdict about THIS repository, named exactly as GitHub
 # names their check-runs (the matrix leg's suffix included). Shared by `ci-wait`
 # ("is this SHA green?") and `land`'s `graded_runs` ("does this SHA carry an
@@ -359,6 +391,98 @@ _.path = ["tests/bats/bin"]
 # waiting only on `final` would strand every landing on a check that fans in from
 # eighteen. Two sets, two purposes; neither derives the other.
 CI_REQUIRED_CHECKS = "ci,batten-check,bats,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),semver,perf,windows,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+
+# ─── THE LAP'S READY PHASE (CLOUD-1148) ───────────────────────────────────────
+#
+# `batten land lap`'s ready step reads the pull request's BODY and asks the gates
+# that judge it. Both halves are declared here rather than compiled in, and that
+# is non-negotiable rule 1 rather than taste: a task name — or a forge client's
+# argv — inside `crates/batten` is that rule's plainest violation, and the engine
+# refuses to default either.
+#
+# THE ENGINE TREATS THESE TWO ASYMMETRICALLY, on purpose. An UNDECLARED gate list
+# is a legitimate configuration and passes; a DECLARED gate that cannot run is a
+# refusal, because a gate whose verdict is unknown has not said clean. So a typo
+# in a task name here stops a lap rather than quietly retiring the gate — which
+# is the failure this whole campaign is about.
+#
+# `|`-separated argvs, space-separated words. A comma would give one argv per
+# word.
+#
+# WHY THESE TWO AND NOT `filed-here-check`: that gate is already the engine's
+# (CLOUD-1051) and the lap reaches it through `batten check`, so listing it here
+# would run it twice. These two are still bash and still have `land.sh` as their
+# only caller — which is what slice 7's deletion would orphan.
+LAND_BODY_SOURCE = "gh pr view --json body --jq .body"
+LAND_BODY_GATES = "mise run deferral-check|mise run closing-key-check"
+# THE ENTRY GATES, ASKED ONCE BEFORE THE FIRST LAP (CLOUD-1471). Same grammar and
+# same asymmetry as `LAND_BODY_GATES`, and one difference that matters: the engine
+# appends THE PULL REQUEST NUMBER to each argv, because which task drops a
+# subscription is this consumer's vocabulary and which pull request is being
+# landed is a fact the engine already resolved. A gate reading the number from its
+# own environment would be a second authority over it.
+#
+# WHY THIS PAIR. AGENTS.md bans PR-webhook babysitting and the harness arms a
+# subscription on every pull request this repo opens anyway, with no tool call
+# behind it on two of the three measured (CLOUD-518) — so a deny rule on the tool
+# closes only the path nobody used. `drop` FAILS OPEN and `check` does not, which
+# is what keeps the pair safe on the critical path: off harness, no token or any
+# non-200 mints nothing, `check` refuses exactly as before, and the manual
+# `record` is still the way through (CLOUD-790).
+#
+# `land.sh` ran these two as its first act and nothing in the engine carried them,
+# so retiring the lander would have dropped a live gate on the floor. Declared
+# here, they survive the deletion with their caller intact.
+# The `?` marks the drop ADVISORY, which is the pair's own asymmetry rather than
+# a softening: the bash ran `drop … || true` and only `check` as an `if !`. Drop
+# it and a `drop` that answers 1 (not dropped) or 2 (could not look) would stop
+# the landing where the predecessor carried on to `check` — whose refusal is the
+# one that names `record` as the way through.
+LAND_ENTRY_GATES = "?mise run pr-unsubscribed drop|mise run pr-unsubscribed check"
+# THE THREE THE LAP CANNOT RUN WITHOUT, AND NOTHING DECLARED THEM (review of
+# #848). Every one of these is a consumer fact `crates/batten` refuses to guess —
+# which is non-negotiable rule 1 working — but refusing to guess only reaches a
+# working lander if the consumer then DECLARES them, and this file did not. Only
+# the suites injected them, so `mise run land` could not complete: the entry
+# gates resolved the repo to `pr_watch::REPO_PLACEHOLDER` and exited 3, and past
+# that the empty `LAND_VERIFY` returned `Usage`, which `land::progress` maps to
+# `Stop`. A gate that refuses to guess and a manifest that never answers are the
+# same silence from the caller's side.
+#
+# `LAND_VERIFY` is the gate a lap re-proves the tree with, spelled as the argv it
+# runs. It is `verify` rather than `verify:gated` deliberately: the lap owns the
+# rebase, so the outer task's own linear-check is the one that must re-run per
+# lap. The predecessor ran `mise run verify` directly, and this is that call site
+# moved into config rather than a new decision.
+LAND_VERIFY = "mise run verify"
+# The workflow whose runs carry the fast-forward bot's answer, as the BARE FILE
+# NAME the endpoint takes. `fast_forward::answer_request` interpolates it as ONE
+# path segment of `actions/workflows/{workflow}/runs`, so a value carrying
+# slashes makes a route that does not exist: 404, no `workflow_runs` key,
+# `Answer::Unknown("unreadable")`, and a landing that laps forever without ever
+# reading its own answer.
+#
+# THE FIRST SPELLING HERE WAS `.github/workflows/fast-forward.yml` AND ITS
+# COMMENT WAS WRONG TWICE (review of #848): it justified the path form by saying
+# `fast_forward::Ask` matches a run's own `path`, which is `land::FanIn`'s
+# question and `CI_FANIN_WORKFLOW`'s value, not this one. The predecessor used
+# the bare name in exactly this position and so does every test in the tree.
+LAND_WORKFLOW = "fast-forward.yml"
+# HOW MANY TIMES THE FAST-FORWARD POLL ASKS before reporting no answer. Its OWN
+# row rather than `LAND_ANSWER_MAX_UNKNOWNS`, which bounds the CI wait: one name
+# over two loops with two different defaults is a setting that cannot be tuned
+# for either, and in the predecessor that name meant a third thing again (the
+# count of unreadable bot answers, default 3) — so a consumer carrying it forward
+# would have truncated the CI wait to about three seconds (review of #848).
+LAND_ANSWER_ASKS = "120"
+# THE RECLAIM CENSUS'S STOP NOTE (CLOUD-451), declared here because the program
+# is this consumer's and a census name inside `crates/batten` is non-negotiable
+# rule 1's plainest violation. `batten lease release` spawns it when a release
+# applies — which is the engine recording that IT chose to stop its heartbeat,
+# and never the heartbeat's own exit path (CLOUD-491): an exit path runs on the
+# container kill too, and a note from one would erase the only distinction the
+# census draws.
+LEASE_STOP_NOTE = "mise-tasks/reclaim-census.sh note x land-stopped"
 # The subset of that roster for which ABSENCE — no check-run at all, as opposed
 # to one that graded `skipped` — is a legitimate reading rather than a name that
 # has not registered yet. Exactly two WORKFLOWS earn it, and each earns it twice
@@ -475,7 +599,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "attestation-check,engine-config,engine-doctor,engine-pinned,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,ci-cache-declared,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared,worktree-registration"
+MUTANT_GATES = "attestation-check,engine-config,engine-doctor,engine-pinned,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -2996,6 +3120,79 @@ run = "hk check --all"
 # "could not look", which every reader treats as "do not strand the head" rather
 # than as a verdict — so a future code cannot be read as green, and cannot be
 # read as red either.
+# CLOUD-1148's first retirement, and the shim is the whole of why the task name
+# survives. `mise-tasks/verified.sh` is gone; `batten receipt verified` composes
+# the same three reads — a `verify` receipt for this exact HEAD, a
+# `linear-check` receipt, and the `origin/main` it was taken against still being
+# current — through `receipt::validity`, which is the one implementation of that
+# predicate rather than a second reader of the same files.
+#
+# THE EXIT CODES ARE TRANSLATED, AND THAT IS NOT A WORKAROUND. The engine has one
+# table with no per-verb exception (non-negotiable rule 5): `2` is the policy
+# verdict everywhere, and `1`/`3` are the only codes a Batten failure produces.
+# The predecessor spelled an unverified head `1` and an unusable checkout `2` —
+# the table inverted. Callers read the old numbers, so this maps them back, which
+# is the shim shape CLOUD-1170 established and the reason `land.sh` and
+# `tests/tree-clean.bats` need no edit to keep working.
+[tasks."verified"]
+description = "Gate: is HEAD verified? Answers from the receipts, so no shell idiom can mask the verdict"
+shell = "bash -c"
+run = '''
+set -uo pipefail
+# THE REMEDY IS THE CONSUMER'S, and that is rule 1 rather than a layering
+# preference. The predecessor's refusal named `mise run verify` and told the
+# reader to read its status directly, never through a pipe — task names, which
+# `crates/batten` may not carry. So the verb states WHAT is unverified and this
+# wrapper states what to do about it.
+rc=0
+cargo run --quiet -p batten -- receipt verified || rc=$?
+# The exit table inverts once, here. The predecessor answered `1` unverified and
+# `2` could-not-look; the engine has one table with no per-verb exception, so `2`
+# is the policy verdict and `1` the usage error. Every caller reads what it
+# always read.
+case "$rc" in
+0) exit 0 ;;
+2)
+  echo "::error:: HEAD is NOT verified — a receipt is missing or stale, most often because a verify exit status was swallowed by a pipe." >&2
+  echo "  Run \`mise run verify\` and read its exit status directly; never through a pipe, which reports the pipe's status. Then re-run \`mise run verified\`." >&2
+  exit 1
+  ;;
+# BOTH ENGINE FAILURE CODES REACH THE PREDECESSOR'S ONE. The old table had no
+# usage code of its own — `2` was could-not-look and covered every way the
+# question went unanswered — so the engine's `1` (usage) and `3` (internal /
+# could-not-look) both land there. Leaving `3` to the catch-all below handed a
+# legacy caller a code its own table never defined, which is the translation
+# this shim exists to do. Found in review.
+1 | 3) exit 2 ;;
+*) exit "$rc" ;;
+esac
+'''
+
+# ─── `mise run land`, the name every caller still uses (CLOUD-1148) ──────────
+#
+# `mise-tasks/land.sh` was a FILE task, so deleting the program deletes the task
+# name with it — and `mise run land` is invoked by NAME from AGENTS.md,
+# `.claude/rules/commits.md`, `.claude/settings.json` and several `batten.toml`
+# remedies. A shim keeps every one of those call sites byte-identical, which is
+# the same reason `[tasks."verified"]` and `[tasks."task-registry"]` exist and
+# why those retirements touched no caller.
+#
+# NO EXIT TRANSLATION, unlike `verified`'s shim. That one inverts a table because
+# its predecessor answered `1` unverified and `2` could-not-look; this verb was
+# always the engine's own table — `0` landed, `2` a decision the caller must make
+# (a conflict or a refused gate), `3` the laps ran out with no answer — so the
+# codes pass straight through and a wrapper case statement would be a second
+# authority over them.
+#
+# THE BASE IS A POSITIONAL WITH A DEFAULT, because `batten land lap` requires one
+# and the predecessor read `origin/main` throughout. The default is spelled here
+# rather than compiled in: which ref is trunk is this repository's own fact, and
+# `crates/batten` refusing to guess it is non-negotiable rule 1 (see
+# `run_land_fast_forward`'s `$LAND_WORKFLOW` refusal for the same shape).
+[tasks.land]
+description = "Land this branch's PR: rebase, verify, push, wait for CI, /fast-forward — lapping until it merges or a rebase conflicts"
+run = 'cargo run --quiet -p batten -- land lap "{{arg(name="reference", default="main")}}"'
+
 [tasks."checks-green"]
 description = "Is this SHA green over the required check set? (0 green / 1 red / 2 could not look / 3 no answer yet)"
 shell = "bash -c"

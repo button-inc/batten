@@ -56,9 +56,6 @@ use crate::exit::ExitCode;
 /// TOOL's vocabulary, the same standing `semver.rs` gives its analyser.
 pub const REPO_PLACEHOLDER: &str = "{owner}/{repo}";
 
-/// The client this poll reads through.
-const CLIENT: &str = "gh";
-
 /// Seconds between requests when the caller names none.
 ///
 /// One second, because the poll is CONDITIONAL: an unchanged reading answers
@@ -99,78 +96,6 @@ pub struct Progress {
     pub program: String,
     /// The identity the recorder keys on.
     pub id: String,
-}
-
-/// One response, split into the three things a conditional poll reads.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Response {
-    /// The status line's code. `0` where there was no status line at all, which
-    /// is what a client that could not answer looks like.
-    pub status: u16,
-    /// The validator to send back on the next request.
-    pub etag: Option<String>,
-    /// A floor the server asked for, in seconds.
-    pub poll_floor: Option<u64>,
-    /// Everything past the header block.
-    pub body: String,
-}
-
-/// Split a raw `-i` response into status, headers and body.
-///
-/// Carriage returns are dropped first, because a header block arrives CRLF-
-/// terminated and a trailing `\r` would ride along inside every value — an
-/// `ETag` echoed back with one is not the `ETag` the server issued.
-#[must_use]
-pub fn parse_response(raw: &str) -> Response {
-    let clean = raw.replace('\r', "");
-    let mut status = 0u16;
-    let mut etag = None;
-    let mut poll_floor = None;
-    let mut body = String::new();
-    let mut in_body = false;
-
-    for (index, line) in clean.split('\n').enumerate() {
-        if in_body {
-            body.push_str(line);
-            body.push('\n');
-            continue;
-        }
-        if line.is_empty() {
-            in_body = true;
-            continue;
-        }
-        if index == 0 {
-            status = line
-                .split_whitespace()
-                .nth(1)
-                .and_then(|code| code.parse().ok())
-                .unwrap_or(0);
-            continue;
-        }
-        if let Some(value) = header(line, "etag") {
-            etag = Some(value.to_owned());
-        } else if let Some(value) = header(line, "x-poll-interval") {
-            poll_floor = value.parse().ok();
-        }
-    }
-
-    Response {
-        status,
-        etag,
-        poll_floor,
-        body,
-    }
-}
-
-/// The value of `name` on `line`, matched case-insensitively — header names are
-/// not case-sensitive and this endpoint has spelled `ETag` both ways.
-fn header<'a>(line: &'a str, name: &str) -> Option<&'a str> {
-    let (key, value) = line.split_once(':')?;
-    if key.trim().to_ascii_lowercase() == name {
-        Some(value.trim())
-    } else {
-        None
-    }
 }
 
 /// Project a check-runs document into the rows the decision reads.
@@ -220,18 +145,93 @@ fn string_at(row: &serde_json::Value, key: &str) -> String {
         .to_owned()
 }
 
+/// How long to wait before the next request, honouring BOTH server bounds.
+///
+/// **THE BACKOFF DOES NOT GO THROUGH `interval_for`, AND ROUTING IT THERE WAS A
+/// DEFECT** (review of #848). The two are different things and `rest.rs` says so
+/// at the field: `poll_floor` is *how often to ask*, `backoff` is *stop asking
+/// until*. `MAX_FLOOR` is a ceiling on the first — its own doc justifies it
+/// purely as a guard on `X-Poll-Interval`, "larger than any interval this forge
+/// has been observed to ask for, so it clamps nothing real" — and it is
+/// meaningless as a ceiling on the second.
+///
+/// Measured consequence of conflating them: `rest::backoff_of` resolves
+/// `x-ratelimit-reset - now` once `x-ratelimit-remaining` is `0`, so a primary
+/// limit resetting fifty minutes out yields `3000`. Clamped to `300`, the poll
+/// waits five minutes and re-issues the same request, ten more times, each
+/// answered `403` — which is verbatim the "responding to being rate-limited by
+/// generating more of the request that had just been refused" behaviour
+/// `Answer::backoff` was added to stop.
+///
+/// So the cadence is clamped and the backoff is not, and the answer is whichever
+/// is longer: a backoff is a lower bound on the wait exactly as a floor is, and
+/// satisfying only one of them satisfies neither.
+#[must_use]
+pub(crate) fn wait_for(configured: u64, floor: Option<f64>, backoff: Option<u64>) -> f64 {
+    let paced = interval_for(configured, floor);
+    // Narrowed the way `interval_for` narrows its own argument, and for the same
+    // reason: the conversion is exact for every value that survives it.
+    let backoff = backoff.map_or(0.0, |secs| {
+        f64::from(u32::try_from(secs).unwrap_or(u32::MAX))
+    });
+    paced.max(backoff)
+}
+
 /// The interval to honour: the configured one unless the server asked for more.
 ///
 /// A server-sent floor is the endpoint asking to be polled less often, so it
 /// wins over the configured interval — but only upward. Reading it as an
 /// absolute would let a server that asks for `0` turn this into a spin.
+/// **The comparison is NUMERIC.** An integer one is what CLOUD-390 removed from
+/// the predecessor, and restoring it here would drop any fractional floor the
+/// endpoint sends — the same silent hole, in a different language.
+///
+/// **LOSSLESS BY CONSTRUCTION rather than by annotation** (CLOUD-1338). This
+/// carried an `#[expect(clippy::cast_precision_loss)]` over `configured as f64`,
+/// whose reason argued the value is always small — which is a claim about
+/// callers, checked by nobody. Narrowing to `u32` first makes the conversion
+/// exact for every value that survives it, and saturating states the bound in
+/// code: `u32::MAX` seconds is 136 years, so a poll interval that reached it was
+/// never going to turn again anyway.
 #[must_use]
-pub fn interval_for(configured: u64, floor: Option<u64>) -> u64 {
+pub fn interval_for(configured: u64, floor: Option<f64>) -> f64 {
+    let configured = f64::from(u32::try_from(configured).unwrap_or(u32::MAX));
     match floor {
-        Some(floor) if floor > configured => floor,
+        // FINITE OR IT IS NOT A FLOOR, and the guard belongs HERE rather than
+        // only at the boundary that parses one. `crate::rest` already filters a
+        // header to a finite positive, so nothing unusable arrives from the real
+        // path today — but this function is public and takes an `f64`, so a
+        // caller constructing one reaches it, and `INFINITY > configured` holds:
+        // the answer would be an infinite wait, which is the hang the
+        // predecessor's `+0` coercion existed to refuse. A floor nobody can
+        // satisfy is no floor.
+        // AND THE CEILING NEVER REDUCES THE CONFIGURED INTERVAL. `MAX_FLOOR` is a
+        // bound on what the SERVER may add, not a bound on what the caller asked
+        // for: with `configured` above it, a raw `min(MAX_FLOOR)` answered BELOW
+        // the interval this poll was told to use — the one direction this
+        // function must never take, since `Config::interval` is the caller's
+        // floor and nothing here is entitled to lower it.
+        Some(floor) if floor.is_finite() && floor > configured => {
+            floor.min(MAX_FLOOR.max(configured))
+        }
         _ => configured,
     }
 }
+
+/// The longest interval a server may ask this poll to wait, in seconds.
+///
+/// **A CEILING, because the floor comes off the wire.** `X-Poll-Interval` is a
+/// number the forge sends, and a finite one is not thereby a reasonable one: an
+/// endpoint answering `86400` — or a proxy inventing one — turns a wait into a
+/// hang that looks exactly like a slow bot. The finiteness guard above stops the
+/// infinity; this stops the merely absurd.
+///
+/// Five minutes, against a poll whose own default is one second and a landing
+/// whose bound is a COUNT rather than a clock: honouring a floor this large
+/// already means the lap spends its whole ask budget on a handful of requests,
+/// which is the signal a reader needs. Larger than any interval this forge has
+/// been observed to ask for, so it clamps nothing real.
+const MAX_FLOOR: f64 = 300.0;
 
 /// A change detector over a reading, never a digest anyone reads back.
 ///
@@ -270,17 +270,47 @@ impl Poll {
     /// A `304` is the server saying nothing moved: the previous reading stands
     /// and the signature is not recomputed, because re-hashing an unchanged
     /// string per poll is a cost spent to learn what the status line said.
-    pub fn absorb(&mut self, raw: &str, configured: u64) -> u64 {
+    /// **`None` is a poll that could not look**, and it is folded rather than
+    /// skipped: the count still advances, the previous reading still stands, and
+    /// the caller waits its configured interval. Dropping it would let an
+    /// unreachable forge make a bounded loop unbounded — the same fold
+    /// [`crate::main_watch::Poll::absorb`] makes, and deliberately the same
+    /// shape, since the two are the arms of one race.
+    pub fn absorb(&mut self, answer: Option<&crate::rest::Answer>, configured: u64) -> f64 {
         self.polls += 1;
-        let response = parse_response(raw);
-        if let Some(etag) = response.etag {
-            self.etag = Some(etag);
+        let Some(answer) = answer else {
+            return interval_for(configured, None);
+        };
+        // AN ETAG SURVIVES A RESPONSE THAT CARRIES NONE, which is what keeps a
+        // single unvalidated answer from turning every later request
+        // unconditional.
+        if let Some(etag) = &answer.etag {
+            self.etag = Some(etag.clone());
         }
-        if response.status != 304 {
-            self.runs = runs_from_body(&response.body);
-            self.signature = signature(&response.body);
+        // **ONLY A READING REPLACES THE READING** (review of #848). This was
+        // `status != 304`, which takes every OTHER status too — so a `401`, a
+        // `403` or a `404` had its ERROR DOCUMENT parsed as a check-run page,
+        // yielding zero runs, and that empty set overwrote a good reading. The
+        // trap is what follows: an error response carries no `ETag`, so the
+        // previous validator survives the branch above, the next request is
+        // conditional against it, the forge answers `304`, and the empty reading
+        // is then preserved by the very rule that exists to preserve a good one.
+        // One transient error and the poll holds "no runs" indefinitely.
+        //
+        // `is_reading()` is `200` alone, and `304` is deliberately not one: it
+        // means *nothing changed*, so the reading it refers to is the one already
+        // held. The guard was applied at `head_verdict` and not here, where every
+        // poll actually goes through.
+        if answer.is_reading() {
+            self.runs = runs_from_body(&answer.body);
+            self.signature = signature(&answer.body);
         }
-        interval_for(configured, response.poll_floor)
+        // THE SERVER'S BACKOFF OUTRANKS THE CONFIGURED FLOOR. `Answer::backoff`
+        // carries `Retry-After`, and it had no consumer at all — a `403` that
+        // said "wait 60 seconds" was answered by continuing at the configured
+        // 1s cadence, which is the predecessor defect `rest.rs` names as the
+        // reason the field exists.
+        wait_for(configured, answer.poll_floor, answer.backoff)
     }
 
     /// The reading this poll currently holds.
@@ -328,27 +358,6 @@ impl Poll {
     }
 }
 
-/// The request this poll makes, as argv.
-///
-/// Built rather than formatted at the call site so the page size and the
-/// conditional header are one object a test can read.
-#[must_use]
-pub fn request(config: &Config, etag: Option<&str>) -> Vec<String> {
-    let mut args = vec![
-        String::from("api"),
-        String::from("-i"),
-        format!(
-            "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}",
-            config.repo, config.sha
-        ),
-    ];
-    if let Some(etag) = etag {
-        args.push(String::from("-H"));
-        args.push(format!("If-None-Match: {etag}"));
-    }
-    args
-}
-
 /// Poll until the required checks answer.
 ///
 /// # Errors
@@ -379,7 +388,7 @@ pub fn watch(
     let mut poll = Poll::default();
     loop {
         let raw = read(config, poll.etag.as_deref());
-        let wait_for = poll.absorb(&raw, config.interval);
+        let wait_for = poll.absorb(raw.as_ref(), config.interval);
         // EVERY poll pushes, including the ones that learned nothing: proving
         // the loop turned is the tick's whole job.
         push_progress(config, poll.polls(), poll.signature());
@@ -473,25 +482,32 @@ fn render(findings: &[checks_green::Finding]) -> String {
 /// authority over the request, the argv and the failure posture. The loop is the
 /// caller's; the read stays here.
 ///
-/// An unreadable answer is the empty string, never an error: every failure to
+/// An answer that could not be taken is `None`, never an error: every failure to
 /// reach the forge is a could-not-look that the caller's own poll must survive.
+///
+/// # THE SPAWN IS GONE, AND THE REASON IT CARRIED WAS FALSE
+///
+/// This read was a `gh api -i` child process under
+/// `#[expect(clippy::disallowed_types)]` with the reason *"this crate carries no
+/// HTTP client, so the forge's own client IS the read"*. It does —
+/// [`crate::fetch`] is a vendored hyper client and [`crate::rest`] is the tier
+/// over it, both already in the crate — so the annotation recorded a decision
+/// nobody had the facts for. It is [`crate::rest::get`] now, the same one
+/// [`crate::main_watch::read`] takes, which is what makes the two arms of a lap's
+/// race one client rather than two.
+///
+/// The header parsing went with it. `-i` handed back a raw response that this
+/// module then parsed itself for the status, the `ETag` and `X-Poll-Interval` —
+/// a second header parser beside [`crate::rest::Answer`]'s, which is exactly the
+/// second authority that split does not survive.
 #[must_use]
-pub fn read(config: &Config, etag: Option<&str>) -> String {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: reading check runs is a network call and this crate carries no HTTP client, so the forge's own client IS the read (CLOUD-1143)"
-    )]
-    let output =
-        crate::rules::spawn_resolving(Some(std::path::Path::new(".")), CLIENT, |program, extra| {
-            std::process::Command::new(program)
-                .args(extra)
-                .args(request(config, etag))
-                .stderr(std::process::Stdio::null())
-                .output()
-        });
-    output.map_or_else(
-        |_| String::new(),
-        |output| String::from_utf8_lossy(&output.stdout).into_owned(),
+pub fn read(config: &Config, etag: Option<&str>) -> Option<crate::rest::Answer> {
+    crate::rest::get(
+        &format!(
+            "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}",
+            config.repo, config.sha
+        ),
+        etag,
     )
 }
 
@@ -553,12 +569,50 @@ fn record(progress: &Progress, signal: &str, value: &str) {
 /// `clippy.toml`'s timer ban exists to keep out. Named `pause` rather than
 /// `sleep` on the public surface because what a caller is asking for is the
 /// interval BETWEEN asks, not a duration of its own choosing.
-pub fn pause(seconds: u64) {
+pub fn pause(seconds: f64) {
     sleep(seconds);
 }
 
-fn sleep(seconds: u64) {
-    if seconds > 0 {
+/// The longest a raced arm sleeps before it re-reads the stop flag.
+///
+/// Not a second interval — the wait is still the server's, and this only bounds
+/// how coarsely it is served. One second because that is the poll's own default
+/// cadence, so an arm that is NOT stopped behaves exactly as it did.
+const STOP_CHECK_SLICE: f64 = 1.0;
+
+/// [`pause`], abandoned early when `stop` is raised.
+///
+/// **THE LOSER OF A RACE HELD THE WHOLE WAIT** (review of #848). Both arms of
+/// `land::wait` check their stop flag at the top of the loop and then sleep the
+/// full interval, and `thread::scope` joins them before the verdict can be acted
+/// on — so a green answer sat unused for as long as the loser's last interval.
+/// That was survivable while the interval was the poll's one second. It stopped
+/// being survivable when `wait_for` started honouring a rate-limit backoff, which
+/// is measured in minutes: the arm that lost would hold a finished landing for
+/// the whole of somebody else's `Retry-After`.
+///
+/// **One clock still, which is the constraint that shapes this.** `clippy.toml`
+/// bans timers precisely so a second arm cannot grow one, and the crate's single
+/// exemption lives on [`sleep`] below. So this does not add a wait — it serves
+/// the same one in slices, checking between them. An arm that is never stopped
+/// sleeps the identical total.
+pub fn pause_until(seconds: f64, stop: &std::sync::atomic::AtomicBool) {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return;
+    }
+    let mut left = seconds;
+    while left > 0.0 {
+        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let slice = left.min(STOP_CHECK_SLICE);
+        sleep(slice);
+        left -= slice;
+    }
+}
+
+fn sleep(seconds: f64) {
+    if seconds > 0.0 && seconds.is_finite() {
         #[expect(
             clippy::disallowed_methods,
             reason = "the interval between conditional requests, and the interval is the SERVER'S: \
@@ -567,7 +621,7 @@ fn sleep(seconds: u64) {
                       `Verdict::Green` or `Verdict::Red` both return — never on a clock \
                       (CLOUD-1177)"
         )]
-        std::thread::sleep(std::time::Duration::from_secs(seconds));
+        std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
     }
 }
 
@@ -596,28 +650,51 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_status_line_and_two_headers_are_read_off_a_raw_response() {
-        let parsed =
-            parse_response("HTTP/2.0 200 OK\r\nETag: W/\"a\"\r\nX-Poll-Interval: 4\r\n\r\n{}\n");
-        assert_eq!(parsed.status, 200);
-        assert_eq!(parsed.etag.as_deref(), Some("W/\"a\""));
-        assert_eq!(parsed.poll_floor, Some(4));
-        assert_eq!(parsed.body.trim(), "{}");
+    /// One answer, as `rest::get` hands it back.
+    ///
+    /// **THE HEADERS ARE ALREADY OFF IT, which is the point of the port.** These
+    /// cases used to build a raw `-i` response and drive this module's own header
+    /// parser; that parser is gone, and `crate::rest::Answer` is the one reading
+    /// of a status, an `ETag` and a poll floor in this crate.
+    fn answer(status: u16, etag: Option<&str>, body: &str) -> crate::rest::Answer {
+        crate::rest::Answer {
+            status,
+            etag: etag.map(str::to_owned),
+            poll_floor: None,
+            backoff: None,
+            body: body.to_owned(),
+        }
     }
 
+    /// **A POLL THAT COULD NOT LOOK IS FOLDED, NEVER SKIPPED.** The count still
+    /// advances and the previous reading still stands, which is what keeps an
+    /// unreachable forge from making a bounded loop unbounded — the arm the raw
+    /// empty string used to spell, now typed.
     #[test]
-    fn a_header_name_is_matched_whatever_its_case() {
-        let parsed = parse_response("HTTP/2.0 200 OK\netag: W/\"b\"\nx-poll-interval: 2\n\n{}\n");
-        assert_eq!(parsed.etag.as_deref(), Some("W/\"b\""));
-        assert_eq!(parsed.poll_floor, Some(2));
-    }
+    fn a_poll_that_could_not_look_keeps_the_reading_and_still_counts() {
+        let mut poll = Poll::default();
+        poll.absorb(
+            Some(&answer(
+                200,
+                Some("W/\"a\""),
+                r#"{"check_runs":[{"status":"completed","conclusion":"success","name":"ci"}]}"#,
+            )),
+            1,
+        );
+        assert_eq!(poll.runs().len(), 1);
 
-    #[test]
-    fn a_response_with_no_status_line_is_status_zero_and_an_empty_body() {
-        let parsed = parse_response("");
-        assert_eq!(parsed.status, 0);
-        assert!(parsed.body.trim().is_empty());
+        poll.absorb(None, 1);
+        assert_eq!(
+            poll.runs().len(),
+            1,
+            "a reading nobody took must not clear the one that stands"
+        );
+        assert_eq!(poll.polls(), 2, "and it is still a poll that turned");
+        assert_eq!(
+            poll.etag(),
+            Some("W/\"a\""),
+            "nor may it drop the validator, which would turn every later request unconditional"
+        );
     }
 
     #[test]
@@ -654,13 +731,17 @@ mod tests {
     fn a_304_keeps_the_previous_reading_instead_of_clearing_it() {
         let mut poll = Poll::default();
         poll.absorb(
-            "HTTP/2.0 200 OK\nETag: W/\"a\"\n\n{\"check_runs\":[{\"status\":\"completed\",\"conclusion\":\"success\",\"name\":\"ci\"}]}\n",
+            Some(&answer(
+                200,
+                Some("W/\"a\""),
+                r#"{"check_runs":[{"status":"completed","conclusion":"success","name":"ci"}]}"#,
+            )),
             1,
         );
         let before = poll.signature();
         assert_eq!(poll.runs().len(), 1);
 
-        poll.absorb("HTTP/2.0 304 Not Modified\nETag: W/\"a\"\n\n", 1);
+        poll.absorb(Some(&answer(304, Some("W/\"a\""), "")), 1);
         assert_eq!(poll.runs().len(), 1, "a 304 must not clear the reading");
         assert_eq!(
             poll.signature(),
@@ -674,12 +755,20 @@ mod tests {
     fn a_reading_that_changes_moves_the_signature() {
         let mut poll = Poll::default();
         poll.absorb(
-            "HTTP/2.0 200 OK\n\n{\"check_runs\":[{\"status\":\"in_progress\",\"conclusion\":null,\"name\":\"ci\"}]}\n",
+            Some(&answer(
+                200,
+                None,
+                r#"{"check_runs":[{"status":"in_progress","conclusion":null,"name":"ci"}]}"#,
+            )),
             1,
         );
         let before = poll.signature();
         poll.absorb(
-            "HTTP/2.0 200 OK\n\n{\"check_runs\":[{\"status\":\"completed\",\"conclusion\":\"success\",\"name\":\"ci\"}]}\n",
+            Some(&answer(
+                200,
+                None,
+                r#"{"check_runs":[{"status":"completed","conclusion":"success","name":"ci"}]}"#,
+            )),
             1,
         );
         assert_ne!(poll.signature(), before);
@@ -688,42 +777,91 @@ mod tests {
     #[test]
     fn an_etag_survives_a_response_that_carries_none() {
         let mut poll = Poll::default();
-        poll.absorb("HTTP/2.0 200 OK\nETag: W/\"a\"\n\n{}\n", 1);
-        poll.absorb("HTTP/2.0 200 OK\n\n{}\n", 1);
+        poll.absorb(Some(&answer(200, Some("W/\"a\""), "{}")), 1);
+        poll.absorb(Some(&answer(200, None, "{}")), 1);
         assert_eq!(poll.etag.as_deref(), Some("W/\"a\""));
+    }
+
+    /// Seconds, compared to a tolerance rather than for bit equality — the
+    /// interval became numeric with CLOUD-390's fix and a strict `==` over `f64`
+    /// is a lint this crate denies for the ordinary reason.
+    fn is(seconds: f64, expected: f64) -> bool {
+        (seconds - expected).abs() < f64::EPSILON
     }
 
     #[test]
     fn a_server_requested_floor_is_honoured_over_a_shorter_interval() {
-        assert_eq!(interval_for(1, Some(3)), 3);
+        assert!(is(interval_for(1, Some(3.0)), 3.0));
+    }
+
+    /// **A FRACTIONAL FLOOR IS A FLOOR, and this is CLOUD-390 held at its own
+    /// layer.** The predecessor compared with `-gt`, which is integer-only, so a
+    /// fractional `X-Poll-Interval` read as "no floor asked for". The first Rust
+    /// port reproduced it: `poll_floor` was `Option<u64>`, and `"2.5".parse()`
+    /// yields `None` — byte-identical to an absent header.
+    #[test]
+    fn a_fractional_server_floor_is_not_silently_dropped() {
+        assert!(is(interval_for(1, Some(2.5)), 2.5));
+        assert!(is(interval_for(1, Some(0.5)), 1.0), "and only upward");
     }
 
     // ...and only upward. A floor read as an absolute would let a server asking
     // for `0` turn an affordable poll into a spin.
     #[test]
     fn a_server_floor_below_the_configured_interval_does_not_lower_it() {
-        assert_eq!(interval_for(5, Some(1)), 5);
-        assert_eq!(interval_for(5, Some(0)), 5);
-        assert_eq!(interval_for(5, None), 5);
+        assert!(is(interval_for(5, Some(1.0)), 5.0));
+        assert!(is(interval_for(5, Some(0.0)), 5.0));
+        assert!(is(interval_for(5, None), 5.0));
+    }
+
+    /// A floor nobody can compare must not become one nobody can satisfy: `NaN`
+    /// loses every comparison and an infinity wins every one, so both read as no
+    /// floor at all — the fail-open direction the predecessor's `+0` coercion
+    /// took.
+    ///
+    /// **The PARSE half of this case is `crate::rest`'s now**, and moving it is
+    /// what found the defect this case now pins. `exchange` filters a header to a
+    /// finite positive, so nothing unusable arrives from the real path — and
+    /// `interval_for` did not guard it at all, so `INFINITY > configured` held
+    /// and the answer was an infinite wait. The boundary's filter was the only
+    /// thing standing between a public `f64` parameter and a hang.
+    #[test]
+    fn a_non_finite_floor_reads_as_no_floor_rather_than_as_a_hang() {
+        assert!(is(interval_for(5, Some(f64::NAN)), 5.0));
+        assert!(is(interval_for(5, Some(f64::INFINITY)), 5.0));
+        assert!(is(interval_for(5, Some(-1.0)), 5.0));
+    }
+
+    /// **AND A FINITE FLOOR IS NOT THEREBY A REASONABLE ONE.** The value comes
+    /// off the wire, so an endpoint answering a day — or a proxy inventing one —
+    /// would turn this wait into a hang indistinguishable from a slow bot. The
+    /// pair: at the ceiling the floor is honoured exactly, above it clamps.
+    #[test]
+    fn a_floor_beyond_the_ceiling_is_clamped_and_one_at_it_is_honoured() {
+        assert!(is(interval_for(1, Some(MAX_FLOOR)), MAX_FLOOR));
+        assert!(is(interval_for(1, Some(MAX_FLOOR * 100.0)), MAX_FLOOR));
+
+        // AND THE CEILING NEVER CUTS BELOW WHAT THE CALLER CONFIGURED. With an
+        // interval above `MAX_FLOOR`, a raw `min` answered 300 for a poll told
+        // to wait 600 — the ceiling reducing the caller's own floor, which is
+        // the one direction this function may never take. Found in review.
+        assert!(
+            is(interval_for(600, Some(700.0)), 600.0),
+            "a configured interval above the ceiling is never reduced by it"
+        );
+        assert!(
+            is(interval_for(600, None), 600.0),
+            "and the same interval with no floor at all is unchanged"
+        );
+        // And an ordinary floor is untouched, so the clamp discriminates.
+        assert!(is(interval_for(1, Some(4.0)), 4.0));
     }
 
     // The request IS part of the predicate (CLOUD-337): this endpoint returns a
     // run per event per name, and nothing here fetches page 2.
     #[test]
     fn the_request_asks_for_a_full_page() {
-        let args = request(&config(), None);
-        assert!(
-            args.iter().any(|arg| arg.contains("per_page=100")),
-            "{args:?}"
-        );
-    }
-
-    #[test]
-    fn a_held_etag_becomes_a_conditional_header_and_nothing_else_moves() {
-        let plain = request(&config(), None);
-        let conditional = request(&config(), Some("W/\"a\""));
-        assert_eq!(conditional.len(), plain.len() + 2);
-        assert!(conditional.contains(&String::from("If-None-Match: W/\"a\"")));
+        assert_eq!(PER_PAGE, 100);
     }
 
     #[test]

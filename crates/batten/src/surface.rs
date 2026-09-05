@@ -1160,6 +1160,22 @@ const OVERRIDE_VERDICT: FlagDecl = FlagDecl {
 /// behalf of a checkout this process is not in.
 const LEASE_BRANCH: FlagDecl = FlagDecl::positional("branch", "The branch being asked about");
 
+/// `<head>`: the commit `lease carries` judges.
+///
+/// **Positional and required, for [`LEASE_BRANCH`]'s reason.** The caller knows
+/// which sha it means and the engine must not guess: on a `pull_request` event
+/// the obvious guess is `GITHUB_SHA`, which is the MERGE commit and therefore
+/// carries trunk's landing mechanism whenever the head did not touch it — so a
+/// default would read every stale head as current, silently.
+const LEASE_HEAD: FlagDecl = FlagDecl::positional("head", "The head commit being judged");
+
+/// `<run>`: the run `lease guard` cancels on a stop.
+///
+/// Positional and required, for [`LEASE_HEAD`]'s reason: the engine must not
+/// guess which run it is standing in, and a guard that cancelled the wrong one
+/// would be worse than one that cancelled none.
+const LEASE_RUN: FlagDecl = FlagDecl::positional("run", "The run to cancel on a stop");
+
 /// `<reference>`: the remote reference `land replay` replays onto.
 ///
 /// **Positional and REQUIRED, for [`LEASE_BRANCH`]'s reason and one more.**
@@ -3849,6 +3865,22 @@ pub const SURFACE: &[CommandDecl] = &[
             JSON,
         ],
     },
+    // NO POSITIONAL, and the absence is the verb's whole content: it asks about
+    // the DECLARED SET rather than about a check the caller names. A `--check`
+    // here would make it `status` with extra steps, and would restore exactly the
+    // half-asked shape the predecessor existed to remove — one call, one green,
+    // and a head reported verified on half its evidence.
+    //
+    // `read`, and it joins the derived read-only allowlist: it opens receipts and
+    // resolves two refs, and writes nothing.
+    CommandDecl {
+        path: "receipt verified",
+        id: "receipt.verified",
+        about: "Is HEAD verified — every declared check's receipt valid against this commit?",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[],
+    },
     // The noun only dispatches; its subtree carries a write verb, so the parent
     // stays unclassified rather than advertising a write-bearing `read` prefix
     // on the derived allowlist (CLOUD-170) — the posture `receipt` and `state`
@@ -4267,6 +4299,49 @@ pub const SURFACE: &[CommandDecl] = &[
     // correctness hazard for the trunk — the lease decides who goes first, never
     // what may land — so on the landing path it would fail whichever PR happened
     // to be in flight over a condition that PR did not cause and cannot fix.
+    // `read`, and the staleness half of the CI-side precondition (CLOUD-1148 §2).
+    //
+    // A GATE rather than a report, like `check` below: `0` the head carries
+    // trunk's landing mechanism, `2` it does not, `3` the reading could not be
+    // taken. **The caller fails OPEN on `3`**, which is this gate's whole
+    // posture and the opposite of every other refusal here — a reading nobody
+    // could take would cancel every job in the fleet, where waving one matrix
+    // through costs one matrix.
+    //
+    // The predecessor asked this by grepping the head's own `mise-tasks/land.sh`
+    // for `land-lock acquire`. That predicate dies with the retirement and dies
+    // QUIETLY: the read fails, the script takes its own fail-open path, and every
+    // stale head passes. The path set it asks about is `[lease] landing_paths`,
+    // which a retirement edits rather than invalidates.
+    CommandDecl {
+        path: "lease carries",
+        id: "lease.carries",
+        about: "Gate: this head carries the landing mechanism trunk has, so it can be serialised",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[LEASE_HEAD],
+    },
+    // `write`, and it is the ONLY reason this is not a read: on a stop it cancels
+    // the run it is standing in. A composite of `carries` and `authorises` (both
+    // `read`), because the cancel-and-wait is the subtlest failure mode in the
+    // whole loop — a non-zero exit makes the run's conclusion `failure`, `final`
+    // then fails its `needs:` under `!cancelled()`, and the lander re-drafts
+    // every PR in the fleet. One authority for that, never sixteen copies in
+    // workflow YAML.
+    //
+    // **IT NEVER EXITS NON-ZERO**, so it carries no verdict a caller reads: the
+    // stop IS the cancellation. That is why the exit table's `2` never appears
+    // here and why the step needs no `|| exit 0` to be safe — though the
+    // workflow keeps one anyway, because a binary that will not RUN is a
+    // different failure from one that ran and decided.
+    CommandDecl {
+        path: "lease guard",
+        id: "lease.guard",
+        about: "The runner's step-0 guard: may this branch spend a matrix right now?",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[LEASE_HEAD, LEASE_BRANCH, LEASE_RUN],
+    },
     CommandDecl {
         path: "lease check",
         id: "lease.check",
@@ -4439,6 +4514,45 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         effect: Effect::Write,
         flags: &[],
+    },
+    // `write`, and the write is REMOTE — a comment on somebody else's pull
+    // request — which puts it beside `land push` rather than beside the record
+    // writers above. It is not `destructive`: a comment adds, and the merge it
+    // asks for is the bot's act rather than this verb's.
+    //
+    // NO FLAGS, for `land verify`'s reason carried one step out. The pull request
+    // is a fact about this branch the forge already holds, so it is RESOLVED; the
+    // workflow whose runs carry the verdict is the consumer's, so it arrives from
+    // the environment. A number on argv would let a lap ask one pull request to
+    // land while every other step of the same lap is looking at another — which is
+    // exactly the binding defect CLOUD-465 records for a reused branch.
+    CommandDecl {
+        path: "land fast-forward",
+        id: "land.fast-forward",
+        about: "Ask this head's pull request to fast-forward, and read the answer that request got",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
+    // THE UNION OF EVERY STEP'S EFFECT, which is `write` because the widest of
+    // them is: the lap replays the working tree, pushes, and comments. It is not
+    // `destructive` for the reason `land replay` is not — every write is one a
+    // rebase or a re-push repeats, and nothing here removes history.
+    //
+    // IT TAKES THE REFERENCE AND NOTHING ELSE. Every other input the lap needs is
+    // already resolved somewhere: the branch from HEAD, the remote from
+    // `$LAND_LOCK_REMOTE`, the gate from `$LAND_VERIFY`, the workflow from
+    // `$LAND_WORKFLOW`, the bound from `$LAND_MAX_LAPS`. Adding a flag for any of
+    // them would put a second spelling on the surface beside the one the
+    // individual sub-verbs already read, and the two would drift — which is
+    // `land verify`'s argument, made once per input rather than once.
+    CommandDecl {
+        path: "land lap",
+        id: "land.lap",
+        about: "Drive the whole lap and lap again on any refusal a rebase would clear",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[LAND_REFERENCE],
     },
 ];
 

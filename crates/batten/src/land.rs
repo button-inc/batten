@@ -117,11 +117,22 @@ impl Replay {
 /// move. A ref moved before its objects landed names a commit this clone cannot
 /// read, which is a corrupt clone rather than a failed fetch.
 ///
+/// **`pub(crate)` for that ordering rather than for reuse.** The bet's liveness
+/// reading needs the holder's current tip in this clone's odb, which is the same
+/// three steps in the same order; a second spelling of them would be a second
+/// place to get the ordering wrong, over the one ref whose corruption nobody
+/// would notice until an ancestry answer came back false.
+///
 /// # Errors
 ///
 /// A transport failure, a reference the remote does not advertise, or an odb that
 /// will not take the objects.
-fn advance(root: &Path, remote: &str, reference: &str, tracking: &str) -> Result<String> {
+pub(crate) fn advance(
+    root: &Path,
+    remote: &str,
+    reference: &str,
+    tracking: &str,
+) -> Result<String> {
     let fetched = crate::lease::fetch(remote, root, reference)
         .with_context(|| format!("land: fetch {reference} from the remote"))?;
     // EMPTY IS NOT A FAILURE — `Fetched::objects` is empty when the odb already
@@ -132,7 +143,93 @@ fn advance(root: &Path, remote: &str, reference: &str, tracking: &str) -> Result
         .with_context(|| format!("land: write the objects {reference} brought"))?;
     gitwrite::set_ref(root, tracking, &fetched.head)
         .with_context(|| format!("land: move {tracking} to the fetched head"))?;
+    prune(root, &fetched.advertised);
     Ok(fetched.head)
+}
+
+/// The tracking prefix this clone keeps the landing remote's refs under.
+///
+/// One spelling, because [`tracking_ref`] writes into it and [`prune`] deletes
+/// out of it: a prune keyed to a different prefix than the writer uses either
+/// deletes nothing or deletes the writer's own refs.
+///
+/// **THE PREFIX AND THE ADVERTISEMENT MUST NAME THE SAME REMOTE** (review of
+/// #848). This was a `const` reading `origin` while `advance` fetched from
+/// `$LAND_LOCK_REMOTE`, so a consumer whose landing remote is not `origin` had
+/// its FIRST lap delete every `origin/*` tracking ref that other remote does not
+/// advertise — a prune is destructive, so the mismatch is not a no-op in the
+/// forgiving direction. [`crate::lease::remote_name`] is the one authority on
+/// which remote that is, and every sibling already reads it.
+fn tracking_prefix() -> String {
+    format!("refs/remotes/{}/", crate::lease::remote_name())
+}
+
+/// Delete the tracking refs the remote no longer advertises.
+///
+/// **THE PRODUCTION CALLER `stale_tracking` DID NOT HAVE** (review of #848). The
+/// predicate was ported, tested and left unreached, so the predecessor's
+/// `fetch --prune` had no successor at all — and the failure it prevents is
+/// permanent rather than transient: a stale `origin/<branch>` makes
+/// `--force-with-lease` reject forever, because the lease compares against a ref
+/// naming a commit the remote deleted.
+///
+/// Here rather than in the driver because this is where the advertisement is,
+/// and reading a second one to prune against would let the prune act on a staler
+/// answer than the fetch it belongs to.
+///
+/// **NOTHING HERE IS FATAL, and that is the same posture `unwind_lap` takes.**
+/// The caller is mid-replay with a moved base; a tracking ref that would not
+/// list or would not delete must not replace that with an error. The next lap
+/// takes another advertisement and tries again.
+fn prune(root: &Path, advertised: &[String]) {
+    let Ok(local) = crate::git::refs(root) else {
+        return;
+    };
+    for reference in stale_tracking(&local, advertised, &tracking_prefix()) {
+        let _ = gitwrite::delete_ref(root, &reference);
+    }
+}
+
+/// The remote-tracking refs this clone holds that the remote no longer
+/// advertises.
+///
+/// **THE PRUNE, and it is load-bearing for a reason the predecessor measured
+/// rather than assumed** (CLOUD-1338, conserving `fetch_main`'s `--prune`). A
+/// stale `origin/<branch>` left behind after a merge makes `--force-with-lease`
+/// reject **permanently**: the lease compares against this clone's tracking ref,
+/// and a ref naming a commit the remote deleted can never match what the remote
+/// now has.
+///
+/// Measured 2026-08-11, and it misled three readers at once: the push ("someone
+/// else moved the branch" — nobody had), the harness stop hook ("20 unpushed
+/// commits" on a branch whose true unlanded set was 1), and the lander's own
+/// post-merge delete ("already gone, or the remote refused" — both halves were
+/// live).
+///
+/// It belongs on the landing path rather than in each reader, and the
+/// predecessor says why: the readers are not all ours, and only the loop knows
+/// when the ref went stale.
+///
+/// **Pure, over two listings the caller already took.** The decision is a set
+/// difference; taking it here means it tests without a remote, which is the same
+/// split [`worthless`] and [`closes_the_tap`] make. [`prune`] is the caller —
+/// purity is what makes this testable, never a reason to leave it unreached.
+#[must_use]
+pub fn stale_tracking(local: &[String], advertised: &[String], prefix: &str) -> Vec<String> {
+    local
+        .iter()
+        .filter(|reference| reference.starts_with(prefix))
+        .filter(|reference| {
+            // THE BRANCH NAME, not the tracking name: the remote advertises
+            // `refs/heads/x` where this clone holds `refs/remotes/origin/x`, and
+            // comparing the two spellings directly prunes everything.
+            let branch = reference.trim_start_matches(prefix);
+            !advertised
+                .iter()
+                .any(|head| head.trim_start_matches("refs/heads/") == branch)
+        })
+        .cloned()
+        .collect()
 }
 
 /// One lap's replay: advance the base, replay the branch onto it, record it.
@@ -169,9 +266,34 @@ pub fn replay(root: &Path, remote: &str, reference: &str, branch: &str) -> Resul
 /// a function rather than formatted at the call site so the one place that
 /// decides this is greppable, and so a caller cannot pass a tracking ref where a
 /// remote one belongs.
-fn tracking_ref(reference: &str) -> String {
-    let leaf = reference.rsplit('/').next().unwrap_or(reference);
-    format!("refs/remotes/origin/{leaf}")
+/// **THE `refs/heads/` PREFIX, NEVER THE LAST SEGMENT** (review of #848). This
+/// read `reference.rsplit('/').next()`, which is the leaf — so a consumer whose
+/// trunk is `release/1.x` got `refs/remotes/origin/1.x`, and `advance` then wrote
+/// the trunk's head into the tracking ref belonging to an unrelated branch named
+/// `1.x` while `stale` compared this branch's freshness against it. A slashed
+/// branch name is ordinary, not exotic.
+///
+/// `lease::lands_by_fast_forward` states the rule in this same crate — "ONE
+/// PREFIX, NEVER EVERY LEADING ONE" — and uses `strip_prefix` for it. A short
+/// name passes through unchanged, which is what the driver hands in.
+pub(crate) fn tracking_ref(reference: &str) -> String {
+    format!("{}{}", tracking_prefix(), short_ref(reference))
+}
+
+/// A branch's SHORT name — the whole of it, slashes included.
+///
+/// Extracted rather than repeated because it has two readers and they must not
+/// disagree about which trunk they name: [`tracking_ref`] builds the local ref,
+/// and the driver's staleness config builds the endpoint path
+/// (`git/ref/heads/<name>`). Both were `rsplit('/')` once and the fix reached
+/// only one of them, so a consumer on `release/1.x` had a tracking ref pointing
+/// at an unrelated `1.x` AND a staleness poll asking the forge for a ref that
+/// does not exist — one defect, two spellings, and only the first was found.
+pub(crate) fn short_ref(reference: &str) -> &str {
+    reference
+        .strip_prefix("refs/heads/")
+        .unwrap_or(reference)
+        .trim_start_matches('/')
 }
 
 /// Append this lap's outcome to the branch's record.
@@ -316,6 +438,21 @@ pub enum Waited {
         /// The forge's verdict, as a token.
         verdict: String,
     },
+    /// The green question answered, and the answer was no.
+    ///
+    /// **THE ARM THAT WAS MISSING, and its absence was not a gap in the type but
+    /// an hour of runner time per lap.** The green arm broke only on
+    /// `Verdict::Green`, so a red required check was indistinguishable from a
+    /// pending one: the loop asked its whole count — 3600 by default — and then
+    /// reported [`Waited::Unanswered`], which laps. A branch with one failing
+    /// test therefore bought a fresh matrix per lap and waited out an hour on
+    /// each. The predecessor stopped on red, and `tests/land.bats` says so in as
+    /// many words: *"red CI stops the lap without asking for the merge"*.
+    Red {
+        /// Which required checks failed, as pointers. Never a log line —
+        /// [`crate::checks_green::Finding`] has nowhere to put one.
+        findings: Vec<crate::checks_green::Finding>,
+    },
     /// The staleness question answered first: the base moved, so the run in
     /// flight is already spend for a verdict nobody will read.
     Stale {
@@ -330,49 +467,50 @@ pub enum Waited {
     Unanswered,
 }
 
-/// Ask both questions until one answers.
+/// Ask both questions concurrently and take whichever answers first.
 ///
-/// # The race, and why this alternates rather than forking
+/// # The race is a race
 ///
-/// The two questions are asked in ONE loop, one after the other, and the first
-/// to answer returns. That is not a weaker form of the concurrent race it
-/// replaces — it is a stronger form of the property that race exists for.
+/// Two arms, each its own conditional poll, run in a [`std::thread::scope`] and
+/// report through one channel; the first message decides the lap. `ci-wait ∥
+/// main-watch` is what the predecessor did and the reason is economic: the
+/// moment `main` advances, the run in flight is already waste — its verdict
+/// cannot be used, the fast-forward bot will refuse, and every remaining second
+/// of that run is billed. Learning that only after the green arm's round trip
+/// costs a lap.
 ///
-/// **The loser's answer is voided by construction here.** Two pollers running
-/// concurrently both produce answers, and voiding the loser's is then something
-/// the caller has to remember to do; alternating means the loser is simply never
-/// asked again once the winner has spoken. A lap physically cannot read both.
+/// **AN EARLIER REVISION OF THIS FUNCTION ALTERNATED THE ARMS IN ONE LOOP AND
+/// ARGUED THAT WAS STRICTLY BETTER. IT WAS NOT.** The argument ran: a scoped join
+/// would hang on the loser and a detached one would keep spending rate limit, so
+/// alternating is the only shape available without a second authority. Both
+/// halves are answered by the shape below rather than by taste. The loser is not
+/// joined-while-blocked: it checks [`std::sync::atomic::AtomicBool`] at its own
+/// interval boundary, which is a bounded wait it was already taking, so the scope
+/// closes without hanging. And it spends nothing after the winner speaks,
+/// because it stops asking — the flag is read before the request, never after.
 ///
-/// It is also the only shape available without a second authority. `pr_watch`'s
-/// own loop polls until ITS question answers, so racing it in a thread would
-/// leave the loser running with nobody able to stop it — a scoped join would
-/// hang on it, and a detached one would keep spending the forge's rate limit
-/// after the lap had moved on.
-///
-/// The cost is one extra round trip per cycle, and the staleness arm is free of
-/// the metered tier entirely: it is ref discovery over the engine's own client,
-/// so it spawns nothing and asks the forge's API for nothing.
+/// The alternating loop also serialised the two round trips, so the staleness
+/// answer was always at least one green-arm round trip late. That is the latency
+/// the race exists to remove.
 ///
 /// # The bound is a COUNT
 ///
-/// `asks` is how many times the pair is asked, never a deadline. A wall clock
-/// would reintroduce the VM-reap gap `mem:workflow/landing-loop` records, and
-/// `clippy.toml`'s timer ban is the mechanism that refuses one in this crate.
-/// The delay between asks is the server's own interval — a derived delay bounded
-/// by a real exit condition, which is the shape `run-shape-guard` admits.
+/// `asks` is how many times each arm asks, never a deadline. A wall clock would
+/// reintroduce the VM-reap gap `mem:workflow/landing-loop` records, and
+/// `clippy.toml`'s timer ban is the mechanism that refuses one in this crate. The
+/// delay between asks is the server's own interval — a derived delay bounded by a
+/// real exit condition, which is the shape `run-shape-guard` admits.
 ///
 /// # Errors
 ///
-/// Only for a stream that will not accept output. **Every failure to reach
-/// either the forge or the remote is a could-not-look**: the arm reports nothing
-/// that cycle and the pair is asked again, because a lap that concluded from an
-/// unreachable forge would decide about the network rather than about the work.
+/// Only for a stream that will not accept output. **Every failure to reach the
+/// forge is a could-not-look**: the arm reports nothing that cycle and asks
+/// again, because a lap that concluded from an unreachable forge would decide
+/// about the network rather than about the work.
 pub fn wait(
     config: &crate::pr_watch::Config,
     roster: &crate::checks_green::Roster,
-    remote: &str,
-    reference: &str,
-    base: &str,
+    trunk: &crate::main_watch::Config,
     asks: u32,
     out: &mut dyn std::io::Write,
 ) -> Result<Waited> {
@@ -381,38 +519,94 @@ pub fn wait(
         "land: waiting on {} — green or stale, whichever answers first",
         config.sha
     )?;
-    let mut poll = crate::pr_watch::Poll::default();
-    for _ in 0..asks {
-        // ARM ONE: is this commit green? The conditional read is `pr_watch`'s,
-        // so the argv, the client and the empty-string-on-failure posture stay
-        // its business and this loop only decides when to ask.
-        let raw = crate::pr_watch::read(config, poll.etag());
-        let interval = poll.absorb(&raw, config.interval);
-        if let Ok(crate::checks_green::Verdict::Green) =
-            crate::checks_green::decide(poll.runs(), roster)
-        {
-            return Ok(Waited::Green {
-                verdict: String::from("green"),
-            });
-        }
 
-        // ARM TWO: has the base moved out from under it? Ref discovery over the
-        // engine's own client — no forge API, no `gh`, no `git`, and nothing
-        // against the metered tier.
-        if let Ok(advertisement) =
-            crate::lease::advertise(remote, crate::lease::Service::UploadPack)
-        {
-            let now = advertisement.head_of(reference);
-            if now != base {
-                return Ok(Waited::Stale {
-                    base: now.to_owned(),
-                });
+    // ONE CHANNEL, NOT TWO RETURN VALUES. The first message IS the verdict, so
+    // the loser's answer is voided by construction rather than by the caller
+    // remembering to drop it — the property the alternating loop was defending,
+    // kept.
+    let (tx, rx) = std::sync::mpsc::channel::<Waited>();
+    let decided = std::sync::atomic::AtomicBool::new(false);
+
+    let waited = std::thread::scope(|scope| {
+        let green = tx.clone();
+        let stop = &decided;
+        drop(scope.spawn(move || {
+            let mut poll = crate::pr_watch::Poll::default();
+            for _ in 0..asks {
+                if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                // The conditional read is `pr_watch`'s, so the argv, the client
+                // and the empty-string-on-failure posture stay its business and
+                // this arm only decides when to ask.
+                let raw = crate::pr_watch::read(config, poll.etag());
+                let interval = poll.absorb(raw.as_ref(), config.interval);
+                // BOTH TERMINAL ANSWERS END THE WAIT, not only the one the lap
+                // hopes for. Breaking on `Green` alone made a red head
+                // byte-identical to a pending one for the whole ask count.
+                match crate::checks_green::decide(poll.runs(), roster) {
+                    Ok(crate::checks_green::Verdict::Green) => {
+                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                        drop(green.send(Waited::Green {
+                            verdict: String::from("green"),
+                        }));
+                        return;
+                    }
+                    Ok(crate::checks_green::Verdict::Red(findings)) => {
+                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                        drop(green.send(Waited::Red { findings }));
+                        return;
+                    }
+                    // Pending is the state this loop exists to sit in, and a
+                    // roster that cannot decide was refused before the loop.
+                    Ok(crate::checks_green::Verdict::Pending(_)) | Err(_) => {}
+                }
+                // INTERRUPTIBLE, because the OTHER arm may answer during this
+                // wait and `thread::scope` joins this one before the verdict can
+                // be acted on. Checking the flag only at the loop head held a
+                // finished landing for a whole interval — survivable at the
+                // poll's one second, and not once `wait_for` began honouring a
+                // rate-limit backoff measured in minutes (review of #848).
+                crate::pr_watch::pause_until(interval, stop);
             }
-        }
+        }));
 
-        crate::pr_watch::pause(interval);
-    }
-    Ok(Waited::Unanswered)
+        let stale = tx.clone();
+        drop(scope.spawn(move || {
+            let mut poll = crate::main_watch::Poll::default();
+            for _ in 0..asks {
+                if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                let raw = crate::main_watch::read(trunk, poll.etag());
+                let interval = poll.absorb(raw.as_ref(), trunk.interval);
+                if let Some(moved) = poll.moved(&trunk.base) {
+                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    drop(stale.send(Waited::Stale {
+                        base: moved.to_owned(),
+                    }));
+                    return;
+                }
+                // `pr_watch`'s pause deliberately, not a second one: there is one
+                // sleep in this crate and it carries the one `disallowed_methods`
+                // exemption, so a second arm cannot grow a timer of its own.
+                //
+                // Interruptible for the reason the sibling arm states: this arm
+                // loses the race most of the time, and holding the scope open
+                // through its last interval delays every verdict the other one
+                // reaches.
+                crate::pr_watch::pause_until(interval, stop);
+            }
+        }));
+
+        // THE LAST LIVE SENDER MUST BE DROPPED OR THE RECV BELOW NEVER RETURNS.
+        // Both arms exhausting `asks` without answering closes their clones; this
+        // one is the outer handle and would keep the channel open forever.
+        drop(tx);
+        rx.recv().ok()
+    });
+
+    Ok(waited.unwrap_or(Waited::Unanswered))
 }
 
 /// Both arms of one wait, from whichever of them answered.
@@ -554,7 +748,45 @@ pub enum Verified {
     Clean(String),
     /// The gate refused. The lap stops here — this is a failed `verify`, which
     /// the design names as one of the three things that end a lap.
-    Refused(String),
+    Refused {
+        /// The head the gate was run over.
+        sha: String,
+        /// What KIND of refusal it was, which decides the advice.
+        cause: Refusal,
+    },
+}
+
+/// What kind of refusal a gate returned.
+///
+/// # A refusal is not always about the tree, and reporting it as one misattributes
+///
+/// The lap's stop used to be one unconditional line. Two of the sentences it
+/// carried are wrong for a refusal the branch did not cause, and both were
+/// measured rather than imagined (CLOUD-861): a `verify` killed by a full disk
+/// was reported as a defect to reproduce, over a tree with nothing wrong in it.
+/// *"Reproduce and fix locally"* is correct advice for [`Self::Tree`] and a wasted
+/// cycle for [`Self::Environment`].
+///
+/// # It does NOT reach the record
+///
+/// [`Verified::line`] is byte-identical across both arms. The record is a
+/// predicate's input and stays pointer-only; the cause is advice to an operator,
+/// which is a different channel with a different reader. Widening the record to
+/// carry it would put a test runner's diagnosis where a module looks for a
+/// verdict — and `crates/batten/tests/it/land_verify_advice.rs` pins the two
+/// lines equal so the next reader cannot helpfully merge them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refusal {
+    /// The gate refused about this tree. The ordinary case, and the one whose
+    /// advice was always right.
+    Tree,
+    /// The gate died of something that is not this branch's doing, matching a
+    /// declared `[[verify_environment_pattern]]`.
+    Environment {
+        /// The consumer's own remedy, from the matching row's `reason`. Never
+        /// composed here: which reclaim to run is that repository's vocabulary.
+        remedy: String,
+    },
 }
 
 impl Verified {
@@ -567,11 +799,17 @@ impl Verified {
     /// POINTER-ONLY. The gate's own output is not carried at any width — it went
     /// to the caller's terminal where it belongs, and a record read by a
     /// predicate is no place for a test runner's stdout.
+    ///
+    /// **AND THE CAUSE DOES NOT REACH IT EITHER.** Both [`Refusal`] arms render
+    /// the same four columns, deliberately: a module deciding over this store
+    /// asks whether the head verified, and a second verdict column would be a
+    /// diagnosis it has no way to act on. The advice goes to the operator, on
+    /// stderr, where a person reads it.
     #[must_use]
     pub fn line(&self) -> String {
         match self {
             Self::Clean(sha) => format!("verify clean {sha} -"),
-            Self::Refused(sha) => format!("verify refused {sha} -"),
+            Self::Refused { sha, .. } => format!("verify refused {sha} -"),
         }
     }
 }
@@ -582,32 +820,1469 @@ impl Verified {
 /// An empty one is a usage error rather than a default, because guessing a
 /// consumer's gate would put that consumer's vocabulary in this crate.
 ///
+/// `published` reaches the gate's environment and is the caller's too. The
+/// landed use is `speculation::PUBLISHED_AS`: a gate cannot otherwise tell a
+/// commit this branch authored from one the lap speculatively adopted, and
+/// CLOUD-748 measured the consequence twice in one session — the consumer's own
+/// race check reported the waiter as racing the very PR the bet was placed on.
+/// The NAME is the consumer's and nothing in this crate reads it back.
+///
 /// # Errors
 ///
 /// An empty command, a HEAD this clone cannot resolve, or a boundary that cannot
 /// start the program. A gate that RAN and refused is [`Verified::Refused`], not
 /// an error: that is an answer about the tree.
-pub fn verify(root: &Path, branch: &str, command: &[String]) -> Result<Verified> {
+pub fn verify(
+    root: &Path,
+    branch: &str,
+    command: &[String],
+    published: &[(String, String)],
+    environment: &[crate::outputs::OutputPattern],
+) -> Result<Verified> {
     if command.is_empty() {
         return Err(crate::error::UsageError::raise(String::from(
             "land: no verify command is configured, and this engine does not know what verifying means here",
         )));
     }
     let head = crate::git::head_commit(root).context("land: read this clone's HEAD")?;
+    // THE RESOLVED ROOT, NEVER THE ANCHOR — and this is the only call
+    // `exec::run_in` has, so getting it wrong made the verb unreachable rather
+    // than merely awkward. `exec`'s capture store is keyed by the repository's
+    // own directory NAME, which `state::derive_repo_name` cannot read off `.`;
+    // every caller above anchors at `.`, so handing that straight through raised
+    // "cannot derive a repository name from ." on EVERY invocation in every
+    // clone. `exec::run_with` resolves at its own site for exactly this reason,
+    // as do `admission::store_dir` and `lib::run_board`. This was the fourth
+    // site and the only one that did not.
+    //
+    // IT WAS INVISIBLE TWICE OVER, which is why the fix is a resolution here
+    // rather than a message: the refusal is a `UsageError`, so `main`'s reporter
+    // prints one clean line and drops the chain, and the `None` arm below then
+    // wrapped it in a context naming the gate — so a boundary that never started
+    // the program read as the program having run and failed. `LAND_VERIFY=true`
+    // and `LAND_VERIFY=false` were byte-identical.
+    let started = crate::git::repo_root(root).context("land: resolve this clone's root")?;
     // A REFUSAL TRAVELS AS AN ERROR THROUGH THIS BOUNDARY, because `exec` exists
     // to pass a child's status through to the caller. Here it is an ANSWER, so
     // the two are told apart rather than collapsed: a code that came back at all
     // is the gate speaking, and only a failure to START is this lap's problem.
-    let verified = match crate::exec::run_in(root, command) {
-        Ok(crate::exit::ExitCode::Success) => Verified::Clean(head),
-        Ok(_) => Verified::Refused(head),
-        Err(problem) => match problem.downcast_ref::<crate::error::Passthrough>() {
-            Some(_) => Verified::Refused(head),
-            None => return Err(problem.context("land: run the configured verify command")),
+    // TEE, AND THIS LINE IS A FIX RATHER THAN A SETTING. `Verified`'s own header
+    // says the gate's output "went to the caller's terminal where it belongs" —
+    // which was FALSE for this call's whole life. `run_in_env` takes
+    // `ExecConfig::DEFAULT`, whose `tee` is `false` by CLOUD-429's design, so the
+    // child's bytes went to the capture store and nowhere a person could see
+    // them. An operator whose lap stopped on a refused gate was told the gate
+    // refused and shown nothing about why.
+    //
+    // CLOUD-429's default is right for `batten exec`, where the bytes are
+    // addressable and the caller can go and read them. It is wrong here: the lap
+    // is interactive, it has just stopped, and the reason is the next thing its
+    // caller needs.
+    let settings = crate::exec::ExecConfig {
+        tee: true,
+        ..crate::exec::ExecConfig::DEFAULT
+    };
+    // CLASSIFIED, NEVER PROMOTED. `run_in_with_env` scans patterns only on a
+    // `0`, because its question is whether a green run is lying; the question
+    // here is what kind of failure a red one was, and `classify_in_env` is the
+    // sibling that answers it. Both readings from one function would produce
+    // opposite verdicts over identical bytes.
+    let verified = match crate::exec::classify_in_env(
+        &started,
+        command,
+        environment,
+        &settings,
+        published,
+    ) {
+        Ok((0, _)) => Verified::Clean(head),
+        // **THE EXIT CODE IS READ BEFORE THE PATTERNS, and it was not read at
+        // all** (review of #848). Every non-zero became `Refusal::Tree`
+        // unless a declared `[[verify_environment_pattern]]` happened to
+        // match, so a renamed task, a missing runner or a gate that answered
+        // could-not-look were all recorded as `verify refused <sha>` and the
+        // driver printed the speculative-base advice as though the gate had
+        // judged this tree. A consumer cannot be asked to write a pattern for
+        // "the program was not there": there is no output to match on.
+        //
+        // Three codes say the gate did not judge, and none of them is a
+        // verdict. `3` is this engine's own could-not-look (house-style §7),
+        // and `126`/`127` are the shell's — not executable, and not found.
+        // Everything else reaches the pattern scan exactly as before, so a
+        // declared row still classifies a `1` or a `2` that names a
+        // disk-full or a rate limit.
+        Ok((code, _)) if matches!(code, 3 | 126 | 127) => Verified::Refused {
+            sha: head,
+            cause: Refusal::Environment {
+                remedy: format!(
+                    "the verify command exited {code}, which is not a verdict about this tree — check that it names a task this checkout declares and that its runner is on PATH"
+                ),
+            },
         },
+        Ok((_, found)) => Verified::Refused {
+            sha: head,
+            // THE FIRST DECLARED ROW THAT MATCHED, in declaration order, and one
+            // remedy rather than a concatenation: `outputs::reasons` already
+            // dedupes per pattern for the reason it states — a tool that emitted
+            // the same warning forty times should say what to do about it once.
+            // An empty set is `Tree`, which is the common case and the one whose
+            // advice was always right.
+            cause: crate::outputs::reasons(environment, &found).first().map_or(
+                Refusal::Tree,
+                |remedy| Refusal::Environment {
+                    remedy: remedy.clone(),
+                },
+            ),
+        },
+        Err(problem) => return Err(problem.context("land: run the configured verify command")),
     };
     append(root, branch, std::slice::from_ref(&verified.line()))?;
     Ok(verified)
+}
+
+/// Has the base moved since this lap replayed onto it?
+///
+/// # Why this exists between the gate and the push
+///
+/// A gate runs for minutes, and on a busy trunk that is long enough for the base
+/// this lap replayed onto to move. The lap then pushes a head that can no longer
+/// fast-forward, CI grades it, and the whole matrix is spent learning what one
+/// ref read already knew. The predecessor measured the steady state at ~45% of
+/// laps paying a full gate to discover trunk had moved (CLOUD-423), and answered
+/// it by RACING the gate against a watcher so the gate could be aborted early.
+///
+/// **This is the cheaper half of that, and the difference is stated rather than
+/// absorbed.** It does not abort the gate — the gate runs to completion and its
+/// result is then discarded if the base moved. So the gate's minutes are still
+/// spent where the predecessor could reclaim them; what is saved is the CI matrix
+/// and the fast-forward round trip behind it, which is the metered half. Aborting
+/// early needs a poller that can be stopped mid-wait; [`wait`] now has that shape
+/// (a scoped pair over a stop flag), and applying it to the GATE is a different
+/// problem — the gate is a spawn, not a poll — so CLOUD-423's other half stays
+/// open rather than being claimed here.
+///
+/// # ONE ASK, THROUGH THE CONDITIONAL ENDPOINT
+///
+/// This is [`crate::main_watch`]'s poll asked exactly once, not ref discovery. A
+/// single unconditional ref advertisement is affordable in isolation — that is
+/// what made an earlier revision of this function look fine — but it is the same
+/// question [`wait`] asks in a loop, and answering one question two ways is how
+/// the two readings drift. The first ask carries no validator and costs a full
+/// body; every later lap's does, because the [`crate::main_watch::Poll`] is the
+/// lap's.
+///
+/// # It fails OPEN, unlike every gate in this module
+///
+/// A read that did not answer is not evidence the base moved, and this is an
+/// ECONOMY rather than a gate: refusing to push because the forge hiccuped would
+/// stop a landing to save a matrix, which is the wrong trade in the wrong
+/// direction. `None` therefore means "carry on" for both *unmoved* and *could not
+/// look*, and the two are deliberately one reading here.
+/// **THE POLL IS THE CALLER'S, AND IT HAS TO BE.** The paragraph above says
+/// *"every later lap's [ask] does [carry a validator], because the
+/// `main_watch::Poll` is the lap's"* — and this function used to build a fresh
+/// one on every call and pass `None`, so the validator was discarded between
+/// laps and every probe was unconditional. The prose described the design and
+/// the code did not implement it. A `&mut` parameter is what makes the sentence
+/// true rather than aspirational: the driver holds one poll across the whole
+/// landing, so lap 2 onward send `If-None-Match` and a quiet trunk answers `304`
+/// at no rate-limit cost, which is the entire reason the interval is affordable.
+#[must_use]
+pub fn stale(
+    root: &Path,
+    poll: &mut crate::main_watch::Poll,
+    trunk: &crate::main_watch::Config,
+    reference: &str,
+) -> Option<String> {
+    let tracking = tracking_ref(reference);
+    // The base this lap actually replayed onto, read from the ref `advance` set
+    // rather than passed down through five signatures. Local, so it costs nothing
+    // and cannot itself fail to reach anybody.
+    let replayed_onto = crate::git::resolve_ref(root, &tracking).ok()??;
+    let answer = crate::main_watch::read(trunk, poll.etag());
+    let _pace = poll.absorb(answer.as_ref(), trunk.interval);
+    poll.moved(&replayed_onto).map(ToOwned::to_owned)
+}
+
+/// One step of the lap, named so the table below reads as a table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Step {
+    /// Advance the base and replay this branch onto it.
+    Replay,
+    /// Run the consumer's gate over this head.
+    Verify,
+    /// Take the landing lease, so one branch at a time spends a matrix.
+    ///
+    /// **NOTHING TOOK IT, AND THE WHOLE COMPENSATION CLUSTER ASSUMED SOMETHING
+    /// DID** (review of #848). `Compensation::ReleaseLease` was declared on
+    /// `Push`, `unwind_lap` computed `mine` from `lease::observe`, and
+    /// `closes_the_tap` refused to re-draft unless `singleton_held` — but the
+    /// only callers of `run_lease_acquire` were the `batten lease` CLI and the
+    /// hand-back. So `mine` was always false, the tap never closed, and after a
+    /// red wait the pull request stayed READY: every later push bought another
+    /// matrix on a failure nobody had fixed, which is the exact leak
+    /// `closes_the_tap`'s own header says it exists to plug.
+    ///
+    /// **BEFORE `Ready`, which is the predecessor's placement.** `land.sh` ran
+    /// `land-lock acquire` before readying, for the reason `Ready`'s own doc
+    /// gives: readying is the site that buys the matrix, so the serialisation
+    /// has to be upstream of it or it serialises nothing that costs money.
+    Lease,
+    /// Ask the gates that read the pull request's BODY, then commit to review.
+    ///
+    /// **A step of its own rather than a clause inside the push**, because it is
+    /// where a lap stops being free: readying is what starts CI, so it is the one
+    /// site that buys a matrix and the last place a refusal costs nothing. The
+    /// bash ran these three gates BEFORE its own conditional ready block, for
+    /// the same reason stated the other way round: a lap that happened not to
+    /// re-ready must not be a way through.
+    Ready,
+    /// Push under receive-pack's compare-and-swap.
+    Push,
+    /// Race green against stale and act on whichever answers.
+    Wait,
+    /// Ask the bot to land this head, and read the keyed answer.
+    FastForward,
+}
+
+/// What the lap does once a step has answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Progress {
+    /// Carry on to the next step of this lap.
+    Proceed,
+    /// Lap again. The base moved, or the answer is not in yet.
+    Lap,
+    /// Stop, carrying the step's own code. A human owns this one.
+    Stop,
+    /// The head is on the landing target.
+    Landed,
+}
+
+/// What a lap does with `code` from `step`.
+///
+/// # This is the whole design, as one table
+///
+/// The split is **whether a rebase would clear the refusal**, and nothing else:
+///
+/// * A **conflict** and a **refused gate** stop. Both are decisions a human
+///   owns, and lapping re-runs them against the same commits to reach the same
+///   answer — paying a full gate each time. Lapping OFTEN is what keeps the
+///   conflict small; lapping over one is what makes it pointless.
+/// * A **raced push**, a **stale base**, an **unanswered wait**, and a
+///   **refused or unreadable fast-forward** all lap. Every one means the base
+///   moved or nobody has answered yet, and the next lap's replay is the remedy.
+///
+/// # Why a refused fast-forward laps rather than stopping
+///
+/// It looks like a verdict and is not. The bot refuses when the head stopped
+/// being a direct descendant — which is a fact about the BASE having moved, so
+/// it is staleness wearing a refusal's clothes. Reading it as a stop would halt
+/// a branch whose only problem is that trunk advanced.
+///
+/// The mirror mistake is the one CLOUD-413 measured: every non-success
+/// conclusion was narrated as "main moved" across 24 laps of one landing, and
+/// that diagnosis was wrong twice over — 7 of 8 laps in one run reached green CI,
+/// and several refusals were the rate limit rather than trunk. So the two
+/// READINGS stay apart (only the staleness arm may assert trunk moved) while
+/// their REMEDY is the same lap.
+///
+/// # A step's own usage or internal code is never the lap's
+///
+/// An unconfigured gate is a usage error about this clone, and a forge that
+/// cannot be read is a could-not-look. Neither is a verdict about the branch, so
+/// both stop carrying their own code rather than being laundered into a lap that
+/// would ask the same unanswerable question again.
+/// # Usage always stops, and could-not-look depends on the step
+///
+/// `Usage` is a misconfiguration of this clone — an unnamed gate, an unnamed
+/// workflow — so every step stops on it. Lapping would ask the same
+/// unanswerable question again, which is the CLOUD-235 hang with a tidier
+/// cause.
+///
+/// `Internal` is could-not-look, and it means two different things depending on
+/// who said it. From `replay`, `verify` or `push` it is a clone or a remote this
+/// lap cannot read, and there is nothing to lap toward. From `wait` and
+/// `fast-forward` it is the loop's ORDINARY state — nobody has answered yet —
+/// so it laps, which is the whole reason exit `3` is a first-class outcome on
+/// those two rather than an error.
+/// The table, given the reading the exit code cannot carry.
+///
+/// # WHY THIS TAKES A SECOND ARGUMENT AND [`progress`] DOES NOT
+///
+/// The wait has two refusals and they are both a policy verdict, so both are
+/// exit `2` — non-negotiable rule 5 is one table with no per-verb exception, and
+/// inventing a code for one of them is exactly the exception it forbids. But a
+/// base that moved LAPS (the next replay is the remedy) and a red required check
+/// STOPS (no rebase clears a failing test). The code cannot tell them apart; the
+/// reading can, and [`run wait`](wait) already took it.
+///
+/// So the discrimination lives here, in the one table, beside the row it
+/// qualifies — rather than as an `if` in the driver, which is where the last
+/// thing needing per-step room ended up and what the declared pipeline exists to
+/// stop happening again.
+#[must_use]
+pub const fn progress_of(
+    step: Step,
+    code: crate::exit::ExitCode,
+    seen: Option<TapVerdict>,
+) -> Progress {
+    // THE REFUSAL, NOT THE STEP. Keying on `(Wait, Red)` alone reads a wait that
+    // SUCCEEDED as a stop whenever a red reading is in hand — which the driver
+    // can produce, since `seen` is whatever the last wait saw. The qualifier
+    // reaches exactly one cell: the wait's own `2`.
+    if let (Step::Wait, crate::exit::ExitCode::Violation, Some(TapVerdict::Red)) =
+        (step, code, seen)
+    {
+        return Progress::Stop;
+    }
+    progress(step, code)
+}
+
+#[must_use]
+pub const fn progress(step: Step, code: crate::exit::ExitCode) -> Progress {
+    use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
+    match (step, code) {
+        // Five of the six steps answering cleanly only means the lap may go on;
+        // the sixth is the one that ends it.
+        (
+            Step::Replay | Step::Verify | Step::Lease | Step::Ready | Step::Push | Step::Wait,
+            Success,
+        ) => Progress::Proceed,
+        (Step::FastForward, Success) => Progress::Landed,
+
+        // LAPS. A raced push is the first place the base can move under a lap
+        // that had already replayed — receive-pack's CAS is what noticed, and the
+        // next replay is what fixes it. A stale base and an unanswered wait are
+        // the same lap for different reasons, and a refused fast-forward joins
+        // them because the bot refuses on a head that stopped descending, which
+        // is a fact about the base.
+        // A LEASE ANOTHER BRANCH HOLDS IS A LAP, NEVER A STOP, and it is the
+        // arm that makes the whole mechanism a queue rather than a race. The
+        // holder is landing; this branch waits, replays onto whatever they land,
+        // and asks again. Stopping instead would make every waiter a human
+        // decision, and lapping is what lets the speculation path find a holder
+        // to bet on at all.
+        (Step::Push | Step::Lease, Violation)
+        | (Step::Wait | Step::FastForward, Violation | Internal) => Progress::Lap,
+
+        // STOPS. The replay and the gate both answer about THIS tree, so a
+        // refusal from either is a decision no rebase clears. A push that could
+        // not look reached a remote it cannot read, which is a clone problem
+        // rather than a race. And `Usage` stops everywhere: a gate or a workflow
+        // this clone never named is not a question another lap can answer.
+        // The ready gates read the pull request's BODY, so a refusal is a
+        // statement about what the author wrote — a deferral with no ticket, a
+        // key the merge will not close. No rebase clears prose, which puts it
+        // beside the replay and the gate rather than beside the push.
+        // A LEASE THAT WILL NOT READ STOPS, where a lease another branch HOLDS
+        // laps. The two are not the same answer: a holder is a queue this branch
+        // joins, and an unreadable lease is a clone that cannot serialise at all.
+        // Lapping on it would spend the whole budget re-asking a question the
+        // environment cannot answer and then exit `3` anyway, which is the same
+        // outcome later and less legibly — so it joins `Push`'s could-not-look
+        // rather than `Wait`'s.
+        (Step::Replay | Step::Verify | Step::Ready, Violation | Internal)
+        | (Step::Push | Step::Lease, Internal)
+        | (_, Usage) => Progress::Stop,
+    }
+}
+
+/// The gate invocations a ready phase runs, decoded from one declared string.
+///
+/// `|`-separated argvs, each space-separated words. **Both the runner and the
+/// task names are the CONSUMER's** — a task name inside `crates/batten` is
+/// non-negotiable rule 1's plainest violation, and a compiled-in default would
+/// be one with extra steps. The separator is `|` rather than `,` because an argv
+/// contains spaces and a comma would make one argv per word.
+///
+/// Empty entries are dropped rather than becoming an empty argv: a trailing
+/// separator is a typo, not a gate, and [`ready`] treats an unrunnable gate as a
+/// refusal — so an empty argv would stop every lap on a stray character.
+#[must_use]
+pub fn body_gates(declared: &str) -> Vec<Vec<String>> {
+    declared
+        .split('|')
+        .map(|entry| {
+            entry
+                .split_whitespace()
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .filter(|argv| !argv.is_empty())
+        .collect()
+}
+
+/// What a ready phase decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Readied {
+    /// Every declared gate passed, or there was no body to judge.
+    Clear,
+    /// A gate refused, naming itself.
+    Refused {
+        /// The gate's own first word, which is the pointer a reader follows.
+        gate: String,
+        /// What the gate printed. Its own report, forwarded rather than
+        /// summarised — the gate is the authority on its own finding.
+        detail: String,
+    },
+    /// A declared gate could not be run at all.
+    ///
+    /// **A REFUSAL, NOT A PASS**, and that is the whole reason this variant is
+    /// distinct from [`Readied::Clear`]. A declared gate that cannot run is the
+    /// dead-gate class this engine exists to refuse, and the bash agreed by
+    /// construction: `mise run <task>` for a task that does not exist exits
+    /// non-zero, which was a stop.
+    Unrunnable {
+        /// The gate that would not run.
+        gate: String,
+    },
+}
+
+/// Run the declared body gates over `body`.
+///
+/// # An empty body is a PASS, and that is the predecessor's posture
+///
+/// The body is fetched from the forge, and a fetch that failed is not evidence
+/// about what the author wrote: these gates are about what a body SAYS, and one
+/// they never saw says nothing. The bash spelled it `[[ -n "$body" ]] && ! gate`
+/// — the gate simply does not run. Reading a failed fetch as a refusal would
+/// stop every lap on a network blip.
+///
+/// # An unrunnable gate is a REFUSAL
+///
+/// The opposite direction, and both are the predecessor's. `mise run <task>` for
+/// a task that does not exist exits non-zero, so the bash stopped — and it is the
+/// right way round: a gate that cannot run has not passed, and treating it as
+/// clean is exactly how a retired or renamed gate goes silently dead.
+#[must_use]
+pub fn ready(root: &Path, gates: &[Vec<String>], body: &str) -> Readied {
+    if body.trim().is_empty() {
+        return Readied::Clear;
+    }
+    for argv in gates {
+        if argv.is_empty() {
+            continue;
+        }
+        // THE WHOLE ARGV, NOT ITS FIRST WORD. `argv.first()` is the RUNNER —
+        // `mise` for every gate this consumer declares — so every refusal named
+        // the same program and none named the gate that refused. A pointer that
+        // is identical across every possible finding is not a pointer (review of
+        // #848).
+        let gate = argv.join(" ");
+        let Some((code, output)) =
+            crate::exec::piped_argv(root, argv, body, crate::exec::Diagnostics::Keep)
+        else {
+            return Readied::Unrunnable { gate };
+        };
+        if code != 0 {
+            return Readied::Refused {
+                gate,
+                detail: output.trim().to_owned(),
+            };
+        }
+    }
+    Readied::Clear
+}
+
+/// The prefix marking an entry gate whose verdict does not stop the landing.
+///
+/// One character on the gate's own first word, so the marker travels with the
+/// gate it qualifies rather than in a second list somebody has to keep in step.
+/// [`admits_the_landing`] carries the measurement it conserves.
+pub const ADVISORY: char = '?';
+
+/// What retiring a landed branch actually removed.
+///
+/// **COUNTS AND BOOLEANS, never a name or a path** (non-negotiable rule 4). The
+/// caller already knows which branch it landed, and the receipt store's contents
+/// are the findings a branch filed — the one thing this family may not echo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Retired {
+    /// The branch is gone from the remote — deleted here, or already absent.
+    pub remote: bool,
+    /// This clone's remote-tracking ref for it is gone.
+    pub tracking: bool,
+    /// How many branch-keyed receipts were dropped.
+    pub receipts: usize,
+}
+
+/// The receipt families keyed by BRANCH NAME rather than by sha.
+///
+/// **A sha-keyed receipt dies with its sha and needs no sweep; these do not.**
+/// Each of these records something about a branch's whole filing history, so the
+/// next piece of work to reuse the name would be judged against rows that belong
+/// to the last one (CLOUD-774).
+///
+/// `filed-set-nudged` is here and was NOT in the predecessor's pair, which is a
+/// correction rather than a port: `Suppression::PerSet` writes a third store
+/// under the same key shape, and it landed after the bash cleanup was written. A
+/// port that copied the two literals would have left one family accumulating
+/// forever, which is the drift a named list exists to stop.
+const BRANCH_KEYED_RECEIPTS: &[&str] = &["board-writes", "filed-here-nudged", "filed-set-nudged"];
+
+/// Retire a branch whose pull request has merged.
+///
+/// # This is only ever reached from the LANDED path, and that is the whole guard
+///
+/// `mise-tasks/land.sh` states it: *"ONLY here, never on a `die` path — an
+/// abandoned branch is evidence and has to survive."* Trunk-based development is
+/// explicit that a short-lived branch should not outlive its pull request
+/// (CLOUD-349), and a name left behind is how one becomes long-lived; but a
+/// branch that did NOT land is the record of why it did not.
+///
+/// # Every failure is silent, because the landing already succeeded
+///
+/// Reporting a cleanup failure as the landing's exit code would make a successful
+/// landing look broken. So this returns what it managed rather than a `Result`,
+/// and the caller prints the counts — which is also what makes the difference
+/// between *deleted* and *could not* visible without it changing a verdict.
+///
+/// # The tracking ref goes too, and that half is not cosmetic
+///
+/// [`stale_tracking`]'s header carries the measurement: a stale
+/// `origin/<branch>` left after a merge makes a later `--force-with-lease`
+/// reject **permanently**, because the lease compares against a ref naming a
+/// commit the remote deleted. Deleting the remote branch without pruning the
+/// tracking ref manufactures exactly that state.
+#[must_use]
+pub fn retire_branch(root: &Path, remote: &str, branch: &str) -> Retired {
+    let reference = format!("refs/heads/{branch}");
+    let remote_gone = matches!(
+        crate::lease::delete_ref(remote, &reference),
+        Ok(crate::lease::Outcome::Applied)
+    );
+    let tracking = format!("refs/remotes/origin/{branch}");
+    let tracking_gone = crate::gitwrite::delete_ref(root, &tracking).is_ok();
+
+    // THE SLUG IS THE STORE'S OWN SPELLING, not a second one. Every writer under
+    // `.git/batten-receipts` keys a branch as `branch.replace('/', "-")`, so a
+    // sweep spelling it differently would delete nothing and report a clean
+    // count — the silent-empty-answer shape this repository refuses everywhere.
+    let slug = branch.replace('/', "-");
+    let store = crate::git::git_dir(root).map(|dir| dir.join("batten-receipts"));
+    let receipts = store.map_or(0, |dir| {
+        BRANCH_KEYED_RECEIPTS
+            .iter()
+            .filter(|family| std::fs::remove_file(dir.join(format!("{family}.{slug}"))).is_ok())
+            .count()
+    });
+
+    Retired {
+        remote: remote_gone,
+        tracking: tracking_gone,
+        receipts,
+    }
+}
+
+/// What an entry gate decided, before the lap spends anything.
+///
+/// A separate type from [`Readied`] rather than a reuse of it, because the two
+/// answer about different subjects: `Readied` judges the pull request's BODY and
+/// takes it on stdin, and this judges a precondition of the SESSION and takes the
+/// pull request's number on argv. One type over both would have to carry a body
+/// that half its callers do not have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Admitted {
+    /// Every declared gate passed, or none was declared.
+    Clear,
+    /// A gate refused, naming itself.
+    Refused {
+        /// The gate's own first word, which is the pointer a reader follows.
+        gate: String,
+        /// What the gate printed — its own report, forwarded rather than
+        /// summarised, for [`Readied::Refused`]'s reason.
+        detail: String,
+    },
+    /// A declared gate could not be run at all.
+    ///
+    /// **A REFUSAL, NOT A PASS**, for exactly [`Readied::Unrunnable`]'s reason: a
+    /// declared gate that cannot run is the dead-gate class this engine exists to
+    /// refuse, and an undeclared set is the only legitimate way to have none.
+    Unrunnable {
+        /// The gate that would not run.
+        gate: String,
+    },
+}
+
+/// Run the consumer's entry gates over this landing's pull request.
+///
+/// # What this is for, and why it is not an ordinary body gate
+///
+/// `mise-tasks/land.sh` opened with a pair of calls the lap could not proceed
+/// past — a drop and then a check — over a precondition that is about the SESSION
+/// rather than about the branch: this repository's contract forbids PR-webhook
+/// babysitting, the harness arms a subscription on every pull request it opens
+/// anyway, and the lander is the one place that runs at the moment it matters
+/// (CLOUD-518, CLOUD-790). Nothing in the engine carried it, so the retirement
+/// would have dropped a live gate on the floor (CLOUD-1471).
+///
+/// # The pull request's number is the engine's fact and the command is not
+///
+/// Each declared argv is run with the pull request number appended as its LAST
+/// argument. That split is non-negotiable rule 1 as a mechanism: which task drops
+/// a subscription is this consumer's vocabulary and is never compiled in, while
+/// *which pull request this landing is about* is a fact the engine already
+/// resolved and must not ask a consumer to spell a second time. A gate reading it
+/// from its own environment would be a second authority over which pull request a
+/// lap is landing, and the two could name different ones.
+///
+/// # It runs ONCE, before the first lap
+///
+/// The predecessor ran it before the singleton and the lease, so a refusal cost
+/// nothing at all. Per lap it would re-ask a question whose answer cannot change
+/// under a rebase, and each ask spends a process on the critical path.
+///
+/// **An UNDECLARED set is a pass**, on [`ready`]'s asymmetry: naming no entry
+/// gates is a legitimate configuration, and naming one that cannot run is a dead
+/// gate.
+#[must_use]
+pub fn admits_the_landing(root: &Path, gates: &[Vec<String>], pr: &str) -> Admitted {
+    for argv in gates {
+        let Some(first) = argv.first() else {
+            continue;
+        };
+        let advisory = first.starts_with(ADVISORY);
+        let program = first.trim_start_matches(ADVISORY).to_owned();
+        if program.is_empty() {
+            continue;
+        }
+        let mut with_pr: Vec<String> = std::iter::once(program.clone())
+            .chain(argv.iter().skip(1).cloned())
+            .collect();
+        // THE WHOLE ARGV, NOT ITS FIRST WORD, and this is the sibling of the same
+        // fix in `ready` one function up. The first word is the RUNNER, so with
+        // this consumer's declared pair every possible refusal reported `mise` —
+        // a pointer identical across every finding, which is no pointer at all.
+        // Built from `with_pr` BEFORE the number is appended, and from the
+        // advisory-stripped program, so it reads as the command an operator would
+        // run rather than as this engine's own spelling (review of #848).
+        let gate = with_pr.join(" ");
+        with_pr.push(pr.to_owned());
+        let Some((code, output)) =
+            crate::exec::piped_argv(root, &with_pr, "", crate::exec::Diagnostics::Keep)
+        else {
+            // AN ADVISORY GATE THAT WILL NOT RUN IS NOT A REFUSAL EITHER, which
+            // is the same reading one line down rather than a separate decision:
+            // `|| true` swallowed an unrunnable command exactly as it swallowed a
+            // refusing one, and a marker that covered only one of the two would
+            // be a promotion the predecessor never made.
+            if advisory {
+                continue;
+            }
+            return Admitted::Unrunnable { gate };
+        };
+        if code != 0 && !advisory {
+            return Admitted::Refused {
+                gate,
+                detail: output.trim().to_owned(),
+            };
+        }
+    }
+    Admitted::Clear
+}
+
+/// Which bound a charge ran into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bound {
+    /// Never won the lease. The fleet is saturated — and this is the ONE
+    /// exhaustion that has spent no CI at all, which is why a caller reports it
+    /// differently: a `land-lock-check` tells a saturated fleet apart from a
+    /// wedged lease, and they look identical from inside the loop.
+    LeaseWaits,
+    /// The fast-forward bot gave no readable answer. Nothing about the branch is
+    /// wrong and `main` has not moved under it.
+    Unknowns,
+    /// CI failed before reaching a verdict, repeatedly. Past this bound it is not
+    /// a flake any more: the provisioning path is broken, and re-running would
+    /// spend jobs to learn the same thing.
+    Transients,
+}
+
+/// What a charge decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Charge {
+    /// Inside the bound; the lap goes round again.
+    Lap,
+    /// The bound is spent.
+    Stop(Bound),
+}
+
+/// A lap's accounting.
+///
+/// # SPEND IS COUNTED, NEVER INFERRED FROM THE ATTEMPT COUNTER
+///
+/// [`Ledger::laps`] and [`Ledger::paid`] look interchangeable and are not, and
+/// the difference was measured rather than reasoned. The inference — "every lap
+/// that bought no CI is refunded, so the lap counter IS the spend" — fails in
+/// both directions.
+///
+/// There are FIVE refund sites, not the three CLOUD-904 named: the two in the
+/// lease wait, bot silence, an absorbed transient, and the admitted-successor
+/// push. And they still miss the ordinary case: a lap where `main` moves while
+/// the gate runs aborts before the ready, buys nothing, and is charged anyway.
+///
+/// Measured on PR #651 while landing the change that fixed it — two laps, both
+/// lost to `main` moving under the gate, the ready never reached, ZERO check-runs
+/// on the head — and the refusal announced "having spent 2 CI matrices". So
+/// `laps` is an attempt counter and nothing more; `paid` is the spend,
+/// incremented at the ONE site that buys one.
+///
+/// # Counts, never clocks
+///
+/// Every bound here is a count. `clippy.toml` bans the sleeps that would let one
+/// become a deadline, and `tests/sleep_ban.rs` holds each `reason` to a named
+/// bound — a wall clock would reintroduce the VM-reap gap
+/// `mem:workflow/landing-loop` records.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Ledger {
+    /// Attempts. Bounded by the caller's lap maximum as a runaway backstop.
+    pub laps: u32,
+    /// CI matrices actually bought.
+    pub paid: u32,
+    /// Passes that never won the lease.
+    pub lease_waits: u32,
+    /// Passes that got no readable answer from the bot.
+    pub unknowns: u32,
+    /// Runs that failed before reaching a verdict.
+    pub transients: u32,
+}
+
+impl Ledger {
+    /// Open a lap.
+    pub const fn attempt(&mut self) {
+        self.laps = self.laps.saturating_add(1);
+    }
+
+    /// A matrix was bought. **The one site that increments this.**
+    pub const fn bought_a_matrix(&mut self) {
+        self.paid = self.paid.saturating_add(1);
+    }
+
+    /// A pass that never won the lease: refund the lap, charge the wait.
+    ///
+    /// The refund is what keeps a saturated fleet from exhausting a budget that
+    /// exists to catch "main moves faster than a lap takes" — and from reporting
+    /// THAT diagnosis, which CLOUD-413 measured being wrong twice over across 24
+    /// laps.
+    pub const fn waited(&mut self, max: u32) -> Charge {
+        self.laps = self.laps.saturating_sub(1);
+        self.lease_waits = self.lease_waits.saturating_add(1);
+        if self.lease_waits > max {
+            Charge::Stop(Bound::LeaseWaits)
+        } else {
+            Charge::Lap
+        }
+    }
+
+    /// A pass the bot gave no readable answer to.
+    ///
+    /// The same shape as [`Ledger::waited`] for the same reason: the pass spent
+    /// nothing. An unknown re-ask laps, and on an unmoved `main` that lap is free
+    /// by construction — the receipt short-circuits on the unchanged HEAD, the
+    /// head already graded so neither re-fire can fire, and a force-push that
+    /// moves nothing emits no event and buys no run.
+    pub const fn unknown(&mut self, max: u32) -> Charge {
+        self.laps = self.laps.saturating_sub(1);
+        self.unknowns = self.unknowns.saturating_add(1);
+        if self.unknowns > max {
+            Charge::Stop(Bound::Unknowns)
+        } else {
+            Charge::Lap
+        }
+    }
+
+    /// A run that failed before reaching a verdict.
+    pub const fn transient(&mut self, max: u32) -> Charge {
+        self.laps = self.laps.saturating_sub(1);
+        self.transients = self.transients.saturating_add(1);
+        if self.transients > max {
+            Charge::Stop(Bound::Transients)
+        } else {
+            Charge::Lap
+        }
+    }
+
+    /// What a refusal may honestly say was spent.
+    #[must_use]
+    pub const fn spent(&self) -> u32 {
+        self.paid
+    }
+}
+
+/// Was this head's CI failure a provisioning transient rather than a verdict?
+///
+/// `records` is one line per failed run, as the non-verdict scanner reported them.
+/// **A run is absorbed only if EVERY record is a non-verdict**: one line naming a
+/// verdict means the branch was judged, and re-running would spend jobs to
+/// re-learn a real refusal.
+///
+/// `None` for could-not-look, and the causes are deliberately one reading: no
+/// failed runs, a scan that produced nothing, a scan that answered with a
+/// verdict, and a record this reader does not recognise. A caller cannot act
+/// differently on which, and inventing a distinction would invite one to.
+///
+/// **AN UNRECOGNISED RECORD IS COULD-NOT-LOOK, NOT AN ABSENT VERDICT.** The
+/// filter used to keep the `nonverdict` lines and DROP everything else, so a
+/// scanner error, a truncated record or a shape added later read as *every
+/// record is a non-verdict* — the permissive answer, which re-runs the matrix on
+/// a head that may well have been judged. Absorbing is the expensive direction,
+/// so the reading that cannot be justified must not reach it.
+#[must_use]
+pub fn absorbed(records: &[String]) -> Option<Vec<String>> {
+    let lines: Vec<&str> = records
+        .iter()
+        .flat_map(|record| record.lines())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    if lines.iter().any(|line| line.starts_with("verdict")) {
+        return None;
+    }
+    // EVERY line must be one this reader knows. `nonverdict` does not begin with
+    // `verdict`, so the two prefixes partition cleanly and anything outside the
+    // pair is a record nobody here can classify.
+    if !lines.iter().all(|line| line.starts_with("nonverdict")) {
+        return None;
+    }
+    Some(lines.iter().map(|line| (*line).to_owned()).collect())
+}
+
+// ---------------------------------------------------------------------------
+// CLOUD-900 / CLOUD-1338: abandoning the matrix a red check made worthless.
+// ---------------------------------------------------------------------------
+
+/// One run still spending on a head, as the pair the decision needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Spending {
+    /// The run id, for the cancel endpoint.
+    pub id: String,
+    /// The workflow file it came from — what the fan-in is recognised by.
+    pub path: String,
+}
+
+/// What one abandon pass did. Counts, never a log line from a cancelled run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Abandoned {
+    /// Runs this pass asked the forge to stop.
+    pub cancelled: u32,
+    /// Runs deliberately left alone.
+    pub spared: u32,
+    /// Cancellations the forge refused. Not a stop: those minutes bill out.
+    pub refused: u32,
+}
+
+/// The fan-in's WORKFLOW PATH, which is not its check name.
+///
+/// **A NEWTYPE BECAUSE THE TWO SPELLINGS WERE INTERCHANGEABLE AND ONE OF THEM
+/// WAS WRONG FOR THE WHOLE OF THIS BRANCH.** `CI_FANIN_CHECK` names a check and
+/// belongs to [`crate::checks_green`]'s roster; `CI_FANIN_WORKFLOW` names the
+/// path a run carries, which is what [`worthless`] compares against. Both are
+/// `String`, so reading the wrong one type-checked, every suite in this crate was
+/// green over it, and `spared` was silently always 0 — cancelling the fan-in's own
+/// run, whose `cancelled` context is not an answer and wedges the branch.
+///
+/// The constructor is the whole mechanism: a caller reaching for the check name
+/// has to write [`FanIn::from_workflow_path`] over it, which is a lie a reader
+/// can see rather than an argument position that accepts anything. `ci-parity`'s
+/// `fan-in-is-wired` binds on that constructor appearing on the same line as the
+/// declaration read, so the module and the compiler hold the same join — the
+/// module alone could not, because two independent line matches are satisfied by
+/// an unrelated read plus a wrong argument (found in review of #848).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FanIn(String);
+
+impl FanIn {
+    /// The declared workflow PATH. Empty where the consumer declared nothing.
+    #[must_use]
+    pub fn from_workflow_path(path: impl Into<String>) -> Self {
+        Self(path.into())
+    }
+
+    /// Did the consumer declare one? An undeclared fan-in cancels NOTHING.
+    #[must_use]
+    pub fn declared(&self) -> bool {
+        !self.0.is_empty()
+    }
+
+    /// Does this run carry the fan-in's own workflow?
+    #[must_use]
+    fn spares(&self, run: &Spending) -> bool {
+        run.path == self.0
+    }
+}
+
+/// Which runs on a head a red verdict makes worthless, sparing the fan-in's.
+///
+/// **THE FAN-IN'S RUN IS NEVER CANCELLED, and that is the whole safety
+/// property.** `final` is the one context branch protection requires; it is
+/// `always()` over a `needs:` assertion, so cancelling its run leaves that
+/// context `cancelled` — which is not an answer, and buys a branch that can
+/// never grade and never land. The predecessor states it at length and this
+/// conserves it exactly.
+///
+/// Split from the forge calls so the decision is testable without a network,
+/// which is the same split [`crate::lease::decide`] makes for the staleness
+/// read.
+#[must_use]
+pub fn worthless(spending: &[Spending], fanin: &FanIn) -> (Vec<Spending>, u32) {
+    let mut spared = 0;
+    let doomed = spending
+        .iter()
+        .filter(|run| {
+            if fanin.spares(run) {
+                spared += 1;
+                return false;
+            }
+            true
+        })
+        .cloned()
+        .collect();
+    (doomed, spared)
+}
+
+/// The runs still in flight on `sha`, read from the forge.
+///
+/// **`status != "completed"` is the whole filter**, and it is the
+/// predecessor's: a run that has already finished bills nothing further, so
+/// asking to cancel it is a call that buys nothing.
+///
+/// `None` is could-not-look. Every failure here is best-effort by contract —
+/// the caller is on its way to reporting the real failure, and a cleanup step
+/// that could not reach the forge must not replace that message with its own.
+#[must_use]
+pub fn spending(repo: &str, sha: &str) -> Option<Vec<Spending>> {
+    let answer = crate::rest::get(
+        &format!("repos/{repo}/actions/runs?head_sha={sha}&per_page=100"),
+        None,
+    )?;
+    let document = serde_json::from_str::<serde_json::Value>(&answer.body).ok()?;
+    let runs = document.get("workflow_runs")?.as_array()?;
+    Some(
+        runs.iter()
+            .filter(|run| {
+                run.get("status").and_then(serde_json::Value::as_str) != Some("completed")
+            })
+            .filter_map(|run| {
+                let id = run.get("id")?;
+                let id = id
+                    .as_u64()
+                    .map(|found| found.to_string())
+                    .or_else(|| id.as_str().map(str::to_owned))?;
+                let path = run.get("path")?.as_str()?.to_owned();
+                Some(Spending { id, path })
+            })
+            .collect(),
+    )
+}
+
+/// Cancel every run a red verdict made worthless, sparing the fan-in's.
+///
+/// **BEST-EFFORT THROUGHOUT AND NEVER A VERDICT.** A refused cancellation costs
+/// the minutes it would have saved and changes no conclusion, so nothing here
+/// stops and the count is reported rather than raised.
+///
+/// **NOT "cancelling somebody else's runs".** A head sha is one no other branch
+/// has, so the blast radius is one push's worth of runs by construction rather
+/// than by filtering — the same argument the lease guard's own cancel carries.
+#[must_use]
+pub fn abandon(repo: &str, sha: &str, fanin: &FanIn) -> Abandoned {
+    // AN UNSET FAN-IN CANCELS NOTHING RATHER THAN GUESSING, and this is the
+    // guard whose absence would have been worst: with no name to spare, EVERY
+    // run is doomed — including the one carrying the fan-in, whose cancelled
+    // context is not an answer and wedges the branch. `abandon-matrix.bats`
+    // refuses to run at all without the declaration for exactly this reason, and
+    // the first port of this dropped the arm.
+    if !fanin.declared() {
+        return Abandoned::default();
+    }
+    let Some(in_flight) = spending(repo, sha) else {
+        return Abandoned::default();
+    };
+    let (doomed, spared) = worthless(&in_flight, fanin);
+    let mut report = Abandoned {
+        spared,
+        ..Abandoned::default()
+    };
+    for run in doomed {
+        if crate::rest::post(&format!("repos/{repo}/actions/runs/{}/cancel", run.id)) {
+            report.cancelled += 1;
+        } else {
+            report.refused += 1;
+        }
+    }
+    report
+}
+
+// ---------------------------------------------------------------------------
+// CLOUD-1338: the tap. `mise-tasks/land.sh`'s `redraft` / `close_the_tap`.
+// ---------------------------------------------------------------------------
+
+/// Whether a lap that stopped without merging should re-draft its pull request.
+///
+/// **THE TAP, AND IT IS THE PROPERTY THAT MAKES THE DELETION SAFE.** AGENTS.md
+/// states it: *"a red run re-drafts the PR — CI skips drafts, so that is the
+/// only thing that stops the next push buying another run while you fix it
+/// locally."* The predecessor's own header is blunter — *"stopping on a red run
+/// without closing the tap is a leak this exists to plug."* Retiring `land.sh`
+/// without this removes the tap and leaves every later push spending a runner
+/// on a failure nobody has fixed.
+///
+/// Split from the forge calls so the decision is testable without a network,
+/// the same split [`worthless`] and [`crate::lease::decide`] make.
+///
+/// **The verdict mapping is the predecessor's, arm for arm**, and the two arms
+/// that do NOT re-draft are the load-bearing ones:
+///
+/// * `Green` — leave it ready. A resume costs nothing from here.
+/// * a reading that could not be taken — **never strand a head on a failure to
+///   look**. This is the arm a collapsed three-valued read would lose.
+/// * `Red` and `Pending` — both mean the resume needs a fresh run whatever
+///   happens, so the draft costs nothing and stops every push until one starts.
+#[must_use]
+pub fn closes_the_tap(state: &Tap) -> bool {
+    // A LAND THAT MERGED OWNS NOTHING TO CLOSE, and one that never took the
+    // singleton owns neither the lease nor the pull request — which is why a
+    // REFUSED second land must not touch the live one's work.
+    if state.landed || !state.singleton_held {
+        return false;
+    }
+    // Already a draft is already closed. Asked rather than assumed, because
+    // re-drafting one would fail and the failure is swallowed — a silent no-op
+    // reads exactly like a tap that closed.
+    if state.is_draft != Some(false) {
+        return false;
+    }
+    match state.verdict {
+        // COULD NOT LOOK IS NOT RED. `None` is a reading nobody took, and
+        // draft-ing on it would punish a network blip with a stopped branch.
+        None | Some(TapVerdict::Green) => false,
+        Some(TapVerdict::Red | TapVerdict::Pending) => true,
+    }
+}
+
+/// What one wait leaves the tap to read, or `None` where nobody looked.
+///
+/// **`Stale` is `None`, and that is the load-bearing arm.** The staleness arm
+/// won the race, so the green arm was voided UNREAD — no checks reading was
+/// taken, and [`closes_the_tap`] must not be handed a verdict nobody looked up.
+/// `Unanswered` is the opposite case and must not be collapsed into it: the
+/// green arm asked its full count and never saw a terminal answer, which IS a
+/// reading, and is precisely what `Pending` means.
+///
+/// Pure, and separate from [`wait`] for the reason [`worthless`] is separate
+/// from [`abandon`]: the mapping is the decision, and a decision reachable only
+/// through a network call is a decision nothing tests.
+#[must_use]
+pub const fn tap_verdict(waited: &Waited) -> Option<TapVerdict> {
+    match waited {
+        Waited::Green { .. } => Some(TapVerdict::Green),
+        Waited::Red { .. } => Some(TapVerdict::Red),
+        Waited::Unanswered => Some(TapVerdict::Pending),
+        Waited::Stale { .. } => None,
+    }
+}
+
+/// What the tap decision reads. Every field is a reading the caller already
+/// took, so the decision itself opens nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tap {
+    /// Whether this lap merged. A merge closes nothing.
+    pub landed: bool,
+    /// Whether this lap holds the singleton, and so owns the pull request.
+    pub singleton_held: bool,
+    /// The pull request's draft state, or `None` where it could not be read.
+    pub is_draft: Option<bool>,
+    /// What the checks said, or `None` where the reading could not be taken.
+    pub verdict: Option<TapVerdict>,
+}
+
+/// The checks reading, narrowed to what the tap turns on.
+///
+/// **Three values rather than [`crate::checks_green::Verdict`] itself**, because
+/// the tap does not care WHICH check failed or why a pending one is pending —
+/// and a decision that carried the findings would invite a predicate over them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TapVerdict {
+    /// Every required check terminal and green.
+    Green,
+    /// A required check failed.
+    Red,
+    /// Not an answer yet.
+    Pending,
+}
+
+impl TapVerdict {
+    /// Narrow a full verdict to the three the tap reads.
+    #[must_use]
+    pub fn of(verdict: &crate::checks_green::Verdict) -> Self {
+        match verdict {
+            crate::checks_green::Verdict::Green => Self::Green,
+            crate::checks_green::Verdict::Red(_) => Self::Red,
+            crate::checks_green::Verdict::Pending(_) => Self::Pending,
+        }
+    }
+}
+
+/// A pull request's draft state and its node id, in one read.
+///
+/// Both come from the same response deliberately: two calls could disagree about
+/// which state they described, and the node id is only ever wanted in order to
+/// change the state this same read reported.
+#[must_use]
+pub fn draft_state(repo: &str, pr: &str) -> Option<(bool, String)> {
+    let answer = crate::rest::get(&format!("repos/{repo}/pulls/{pr}"), None)?;
+    let document = serde_json::from_str::<serde_json::Value>(&answer.body).ok()?;
+    let draft = document.get("draft")?.as_bool()?;
+    let node = document.get("node_id")?.as_str()?.to_owned();
+    Some((draft, node))
+}
+
+/// Convert a pull request back to a draft.
+///
+/// **GraphQL rather than REST, and that is the endpoint's shape rather than a
+/// preference.** The REST pulls endpoint will not move a ready pull request back
+/// to draft — `convertPullRequestToDraft` is the only mutation that does, which
+/// is why the predecessor shelled to a client that speaks it. It is still one
+/// POST through [`crate::rest`], to the same host, with the same credential.
+///
+/// `false` where it did not happen, swallowed rather than raised: the caller is
+/// on an exit path, and a tap that could not close must not replace the real
+/// diagnosis with its own.
+#[must_use]
+pub fn redraft(node: &str) -> bool {
+    let body = serde_json::json!({
+        "query": "mutation($id:ID!){convertPullRequestToDraft(input:{pullRequestId:$id}){clientMutationId}}",
+        "variables": { "id": node },
+    });
+    let Some(answer) = crate::rest::post_json("graphql", &body) else {
+        return false;
+    };
+    if !(200..300).contains(&answer.status) {
+        return false;
+    }
+    // A GRAPHQL ERROR IS A 200, which is the whole reason the status alone is
+    // not the answer here: the endpoint reports a refused mutation in an
+    // `errors` array with an OK status, so a caller reading the code would
+    // report a tap it never closed.
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(&answer.body) else {
+        return false;
+    };
+    document.get("errors").is_none()
+}
+
+/// Mark a pull request ready for review — the event that buys the matrix.
+///
+/// The exact mirror of [`redraft`], and it is the same endpoint for the same
+/// reason: `markPullRequestReadyForReview` is the only mutation that moves a
+/// draft, so this is one POST through [`crate::rest`] rather than a second
+/// client.
+///
+/// `false` where it did not happen. Unlike the tap's, this failure is NOT
+/// swallowed by its caller: a ready that did not fire buys no run, so pushing
+/// afterwards would wait out the whole ask count on a matrix nobody started —
+/// `tests/land.bats`'s *"a ready that fails stops before the push rather than
+/// pushing into silence"* is the case, and the successor conserves it.
+#[must_use]
+pub fn mark_ready(node: &str) -> bool {
+    let body = serde_json::json!({
+        "query": "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){clientMutationId}}",
+        "variables": { "id": node },
+    });
+    let Some(answer) = crate::rest::post_json("graphql", &body) else {
+        return false;
+    };
+    if !(200..300).contains(&answer.status) {
+        return false;
+    }
+    // A GRAPHQL ERROR IS A 200 here too, for the reason `redraft` states.
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(&answer.body) else {
+        return false;
+    };
+    document.get("errors").is_none()
+}
+
+/// What readying this head would buy.
+///
+/// **`Refire` is a state, not a retry**, which is the distinction the shell's
+/// eight ready cases exist to hold: a pull request already ready cannot be
+/// readied again, so the only way to mint a fresh run on it is to draft it and
+/// ready it back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Spend {
+    /// Ready it. It is a draft, and readying is what starts CI.
+    Ready,
+    /// Draft it and ready it back. It is already ready and the runs on this head
+    /// will never become an answer, so without this the branch waits forever on
+    /// a matrix that cannot grade.
+    Refire,
+    /// Neither. An answer exists, or one is on its way, or nobody could look.
+    Nothing,
+}
+
+/// Whether a ready on this head buys a run, spelled over readings already taken.
+///
+/// # THE IDEMPOTENCE IS WHY THIS READS THE VERDICT RATHER THAN THE RUN COUNT
+///
+/// *"A DRAFT whose push moves nothing readies once, not once and then again"* is
+/// the predecessor's own case, and a predicate over *"are there runs"* fails it:
+/// the lap that readied leaves a run that is **in flight**, and a second lap
+/// reading only presence would draft and ready it again, cancelling the very
+/// matrix it just bought. [`crate::checks_green::Pending`] is what tells the
+/// three apart, so no conclusion name is spelled here — the consumer's
+/// `answered` set already decided which of them is an answer, and a forge's
+/// vocabulary under `crates/batten` is non-negotiable rule 1's violation.
+///
+/// * `Running` — in flight. Leave it; this is the arm idempotence rests on.
+/// * `NoVerdict` — a draft-era `skipped` or a cancelled set: terminal, and never
+///   going to answer. Re-fire.
+/// * `Unregistered` — a fresh sha carrying no run at all. Re-fire.
+///
+/// # A READING NOBODY TOOK SPENDS NOTHING
+///
+/// `None` on either argument is could-not-look, and the answer is [`Spend::
+/// Nothing`] — the same posture [`closes_the_tap`] takes, one direction over.
+/// There it refuses to strand a head on a failure to look; here it refuses to
+/// buy a matrix on one.
+#[must_use]
+pub fn buys_a_matrix(
+    is_draft: Option<bool>,
+    reading: Option<&crate::checks_green::Verdict>,
+) -> Spend {
+    let Some(is_draft) = is_draft else {
+        return Spend::Nothing;
+    };
+    // A DRAFT IS READIED WHATEVER ITS RUNS SAY, and the case that forces it is
+    // the tap's own leftover: a pull request the tap drafted carries a cancelled
+    // set, and reading the runs first would leave it stuck as a draft forever.
+    if is_draft {
+        return Spend::Ready;
+    }
+    match reading {
+        None | Some(crate::checks_green::Verdict::Green | crate::checks_green::Verdict::Red(_)) => {
+            Spend::Nothing
+        }
+        Some(crate::checks_green::Verdict::Pending(pending)) => match pending {
+            crate::checks_green::Pending::Running { .. } => Spend::Nothing,
+            crate::checks_green::Pending::NoVerdict(_)
+            | crate::checks_green::Pending::Unregistered(_) => Spend::Refire,
+        },
+    }
+}
+
+/// The runs on a head that failed, as ids.
+///
+/// **NO PAGE SIZE, deliberately, and the predecessor says why in a sentence
+/// worth carrying:** `tests/land.bats`'s keyed-verdict sensor asserts the lander
+/// carries no windowed page size, because the fast-forward verdict must be found
+/// by its KEY rather than by a window. This is a different endpoint that needs
+/// none — a head sha's failed runs are a handful — so the sensor stays exact
+/// instead of being spelled past.
+///
+/// `None` is could-not-look, and the caller reads it as *not absorbed*: a
+/// transient is a claim about the runs, and a claim over a list nobody could
+/// read is not one.
+#[must_use]
+pub fn failed_runs(repo: &str, sha: &str) -> Option<Vec<String>> {
+    let answer = crate::rest::get(
+        &format!("repos/{repo}/actions/runs?head_sha={sha}&status=failure"),
+        None,
+    )?;
+    let document = serde_json::from_str::<serde_json::Value>(&answer.body).ok()?;
+    let runs = document.get("workflow_runs")?.as_array()?;
+    let ids: Vec<String> = runs
+        .iter()
+        .filter_map(|run| {
+            let id = run.get("id")?;
+            id.as_u64()
+                .map(|found| found.to_string())
+                .or_else(|| id.as_str().map(str::to_owned))
+        })
+        .collect();
+    // AN EMPTY LIST IS NOT AN ANSWER HERE. The predecessor returns non-zero on
+    // one, and it is right to: "no failed runs" cannot support "the failure was
+    // a transient", because there is no failure to have been one.
+    (!ids.is_empty()).then_some(ids)
+}
+
+/// Ask the forge to re-run one run's failed jobs.
+///
+/// `false` where the forge refused. **Reported rather than swallowed**, unlike
+/// the tap: the predecessor dies here with a remedy naming the exact command,
+/// because a lap that believed it re-ran and did not would wait forever for a
+/// run nobody started.
+#[must_use]
+pub fn rerun_failed(repo: &str, run: &str) -> bool {
+    crate::rest::post(&format!(
+        "repos/{repo}/actions/runs/{run}/rerun-failed-jobs"
+    ))
+}
+
+#[cfg(test)]
+mod lap_tests {
+    use super::{Progress, Step, progress};
+    use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
+
+    /// **The discriminating claim: a refusal a rebase would clear laps, and one
+    /// it would not stops.**
+    ///
+    /// Asserted as the whole table rather than as two cases, because the design
+    /// is the SPLIT rather than either side of it. A version that lapped on
+    /// everything and a version that stopped on everything both satisfy any
+    /// single case here; only the pairing rules both out.
+    #[test]
+    fn a_refusal_a_rebase_would_clear_laps_and_one_it_would_not_stops() {
+        // Stops: the tree's own answer. Lapping re-runs a gate against the same
+        // commits to reach the same verdict, paying it again each time.
+        assert_eq!(progress(Step::Replay, Violation), Progress::Stop);
+        assert_eq!(progress(Step::Verify, Violation), Progress::Stop);
+
+        // Laps: the base moved, or nobody has answered. The next replay is the
+        // remedy for all three.
+        assert_eq!(progress(Step::Push, Violation), Progress::Lap);
+        assert_eq!(progress(Step::Wait, Violation), Progress::Lap);
+        assert_eq!(progress(Step::FastForward, Violation), Progress::Lap);
+    }
+
+    /// A refused fast-forward is staleness wearing a refusal's clothes.
+    ///
+    /// The bot refuses when the head stopped being a direct descendant, which is
+    /// a fact about the BASE. Stopping on it would halt a branch whose only
+    /// problem is that trunk advanced — and the mirror error, reading every
+    /// non-success as "main moved", is what CLOUD-413 measured going wrong twice
+    /// over across 24 laps. The readings stay apart; the remedy is one lap.
+    #[test]
+    fn a_refused_fast_forward_laps_because_it_is_a_fact_about_the_base() {
+        assert_eq!(progress(Step::FastForward, Violation), Progress::Lap);
+        assert_ne!(progress(Step::FastForward, Violation), Progress::Stop);
+    }
+
+    /// Could-not-look means two different things, and which step said it decides.
+    ///
+    /// From `wait` and `fast-forward` it is the loop's ordinary state — exit `3`
+    /// is first-class on those two. From the other three it is a clone or a
+    /// remote this lap cannot read, and there is nothing to lap toward.
+    #[test]
+    fn could_not_look_laps_only_where_it_means_nobody_has_answered_yet() {
+        assert_eq!(progress(Step::Wait, Internal), Progress::Lap);
+        assert_eq!(progress(Step::FastForward, Internal), Progress::Lap);
+
+        assert_eq!(progress(Step::Replay, Internal), Progress::Stop);
+        assert_eq!(progress(Step::Verify, Internal), Progress::Stop);
+        assert_eq!(progress(Step::Push, Internal), Progress::Stop);
+    }
+
+    /// **The freshness probe fails OPEN, which is the opposite of every gate in
+    /// this module and is the whole of its correctness.**
+    ///
+    /// It is an economy, not a gate: it exists to avoid spending a CI matrix on
+    /// a head whose base moved. A ref read that did not answer is not evidence
+    /// the base moved, so reading could-not-look as "stale" would stop a landing
+    /// to save a matrix — the wrong trade in the wrong direction, and the one a
+    /// fail-closed reading makes by default.
+    ///
+    /// Driven over a path that is not a repository, which is the strongest form
+    /// of could-not-look this suite can produce without a network: `resolve_ref`
+    /// cannot answer and the conditional read reaches no forge.
+    #[test]
+    fn the_freshness_probe_reads_could_not_look_as_carry_on_rather_than_as_stale() {
+        let dir = std::env::temp_dir().join("batten-land-stale-no-remote");
+        let trunk = crate::main_watch::Config {
+            repo: String::from("nobody/nothing"),
+            branch: String::from("main"),
+            base: String::new(),
+            interval: 1,
+        };
+
+        assert_eq!(
+            super::stale(
+                &dir,
+                &mut crate::main_watch::Poll::default(),
+                &trunk,
+                "refs/heads/main"
+            ),
+            None,
+            "a probe that could not look must not report the base as moved"
+        );
+    }
+
+    /// **The raced wait TERMINATES when neither arm answers, and this case is
+    /// here because the failure it pins is a HANG rather than a wrong verdict.**
+    ///
+    /// Both arms send on clones of one channel and the outer handle stays live
+    /// in this function's frame. Forget to drop it and `recv()` waits on a
+    /// sender that will never send — for ever, inside a `thread::scope` that has
+    /// already joined both arms. No assertion catches that; only the suite not
+    /// coming back does. So the case is written to reach exactly that state:
+    /// `asks: 1`, a forge nothing can reach, so both arms exhaust their count
+    /// and close their clones without answering.
+    ///
+    /// It also pins the direction of an unanswered race. `Unanswered` is a
+    /// could-not-look and never a verdict — a lap that read an unreachable forge
+    /// as "green" would fast-forward on nothing, and one that read it as "stale"
+    /// would burn a lap per network hiccup.
+    #[test]
+    fn a_race_neither_arm_answers_returns_rather_than_waiting_on_a_sender() {
+        let config = crate::pr_watch::Config {
+            sha: String::from("0000000000000000000000000000000000000000"),
+            repo: String::from("nobody/nothing"),
+            interval: 1,
+            progress: None,
+        };
+        let roster = crate::checks_green::Roster {
+            required: vec![String::from("ci")],
+            absent_ok: Vec::new(),
+            answered: vec![String::from("success")],
+            fanin: None,
+        };
+        let trunk = crate::main_watch::Config {
+            repo: String::from("nobody/nothing"),
+            branch: String::from("main"),
+            base: String::from("1111111111111111111111111111111111111111"),
+            interval: 1,
+        };
+
+        let mut out = Vec::new();
+        // `Ok(_)` matched rather than unwrapped: the only `Err` here is a stream
+        // that will not accept output, and a `Vec` always accepts, so a panic
+        // would be reporting the impossible case as the interesting one.
+        assert_eq!(
+            super::wait(&config, &roster, &trunk, 1, &mut out).ok(),
+            Some(super::Waited::Unanswered),
+            "an unreachable forge is a could-not-look, never a verdict about the work"
+        );
+    }
+
+    /// Anti-vacuity: a misconfiguration stops everywhere, and success never does.
+    ///
+    /// Without the first half, `Usage` would lap and the loop would spend its
+    /// whole count asking a question no lap can answer. Without the second, a
+    /// table that stopped on everything would pass every case above.
+    #[test]
+    fn a_misconfiguration_stops_every_step_and_success_stops_none() {
+        for step in [
+            Step::Replay,
+            Step::Verify,
+            Step::Push,
+            Step::Wait,
+            Step::FastForward,
+        ] {
+            assert_eq!(
+                progress(step, Usage),
+                Progress::Stop,
+                "{step:?} must not lap over a clone it cannot be configured to answer"
+            );
+            assert_ne!(
+                progress(step, Success),
+                Progress::Stop,
+                "{step:?} answering cleanly is never a stop"
+            );
+        }
+        assert_eq!(progress(Step::FastForward, Success), Progress::Landed);
+    }
 }
 
 #[cfg(test)]
@@ -615,17 +2290,47 @@ mod tests {
     use super::*;
 
     /// The verify family writes the same four columns every other family does.
+    ///
+    /// **AND BOTH REFUSAL CAUSES WRITE THE SAME LINE**, which is the assertion
+    /// that stops the operator's diagnosis leaking into a predicate's input. The
+    /// two arms are here for that rather than for coverage.
     #[test]
     fn every_verify_outcome_writes_four_columns_led_by_the_kind() {
         for outcome in [
             Verified::Clean(String::from("abc1234")),
-            Verified::Refused(String::from("abc1234")),
+            Verified::Refused {
+                sha: String::from("abc1234"),
+                cause: Refusal::Tree,
+            },
+            Verified::Refused {
+                sha: String::from("abc1234"),
+                cause: Refusal::Environment {
+                    remedy: String::from("disk-full: reclaim something"),
+                },
+            },
         ] {
             let line = outcome.line();
             let columns: Vec<&str> = line.split(' ').collect();
             assert_eq!(columns.len(), 4, "four columns exactly, got {line:?}");
             assert_eq!(columns[0], "verify", "the kind column leads: {line:?}");
         }
+        // THE CAUSE IS NOT IN THE RECORD, stated as an equality rather than left
+        // to the shape check above — which four arbitrary columns would satisfy.
+        assert_eq!(
+            Verified::Refused {
+                sha: String::from("abc1234"),
+                cause: Refusal::Tree,
+            }
+            .line(),
+            Verified::Refused {
+                sha: String::from("abc1234"),
+                cause: Refusal::Environment {
+                    remedy: String::from("disk-full: reclaim something"),
+                },
+            }
+            .line(),
+            "the operator's diagnosis must not reach a predicate's input"
+        );
     }
 
     /// NO DEFAULT COMMAND, asserted rather than described. A default would be a
@@ -634,7 +2339,7 @@ mod tests {
     /// because a lap would report a gate as clean having run something else.
     #[test]
     fn an_unconfigured_verify_command_refuses_rather_than_guessing() {
-        let Err(problem) = verify(Path::new("."), "work", &[]) else {
+        let Err(problem) = verify(Path::new("."), "work", &[], &[], &[]) else {
             panic!("an empty command must refuse rather than run something");
         };
         assert!(
@@ -783,5 +2488,724 @@ mod tests {
     #[test]
     fn the_two_arms_carry_different_tokens() {
         assert_ne!(Arm::Green.token(), Arm::Stale.token());
+    }
+
+    /// `|`-separated argvs, and the separator is not a comma for a reason.
+    #[test]
+    fn a_declared_gate_list_decodes_to_one_argv_per_entry() {
+        assert_eq!(
+            super::body_gates("mise run deferral-check|mise run closing-key-check"),
+            vec![
+                vec![
+                    String::from("mise"),
+                    String::from("run"),
+                    String::from("deferral-check")
+                ],
+                vec![
+                    String::from("mise"),
+                    String::from("run"),
+                    String::from("closing-key-check")
+                ],
+            ],
+            "a comma would give one argv per WORD"
+        );
+    }
+
+    /// An empty entry is dropped rather than becoming an empty argv.
+    ///
+    /// Load-bearing rather than tidy: `ready` treats an unrunnable gate as a
+    /// refusal, so an empty argv would stop every lap on a trailing separator.
+    #[test]
+    fn a_stray_separator_does_not_become_a_gate_that_cannot_run() {
+        assert!(super::body_gates("").is_empty());
+        assert!(super::body_gates("  |  ").is_empty());
+        assert_eq!(super::body_gates("one|").len(), 1);
+    }
+
+    /// **THE TWO DIRECTIONS, and they are opposite on purpose.**
+    ///
+    /// An empty body is a PASS — the body is fetched from a forge, and one this
+    /// never saw is not evidence about what the author wrote, which is the
+    /// predecessor's `[[ -n "$body" ]] &&`. A declared gate that cannot run is a
+    /// REFUSAL — `mise run <task>` for a task that does not exist exited
+    /// non-zero, and treating it as clean is how a renamed gate goes dead.
+    ///
+    /// Asserted as the pair, because a version that passed on both and a version
+    /// that refused on both each satisfy one half.
+    #[test]
+    fn an_unseen_body_passes_and_an_unrunnable_gate_refuses() {
+        let root = std::env::temp_dir();
+        let gate = vec![vec![String::from(
+            "batten-no-such-program-for-the-ready-phase",
+        )]];
+
+        assert_eq!(
+            super::ready(&root, &gate, "   \n "),
+            super::Readied::Clear,
+            "a body the fetch never produced says nothing, so there is nothing to judge"
+        );
+
+        assert_eq!(
+            super::ready(&root, &gate, "Closes CLOUD-1"),
+            super::Readied::Unrunnable {
+                gate: String::from("batten-no-such-program-for-the-ready-phase"),
+            },
+            "a declared gate that cannot run has not passed"
+        );
+    }
+
+    /// **THE POINTER NAMES THE GATE, NOT THE RUNNER.**
+    ///
+    /// This read `argv.first()`, which is `mise` for every gate this consumer
+    /// declares — so a refusal from `deferral-check` and one from
+    /// `closing-key-check` produced the identical pointer and neither said which
+    /// had refused. A value that is constant across every possible finding
+    /// carries no information about which one occurred, which is the same
+    /// objection this crate makes to a fallback that cannot fail.
+    ///
+    /// Driven through `Unrunnable` because that arm needs no live gate: the
+    /// label is built before the spawn is attempted, so it is the same string
+    /// either arm would carry.
+    #[test]
+    fn a_refusal_names_the_whole_gate_rather_than_the_task_runner() {
+        let root = std::env::temp_dir();
+        let gate = vec![vec![
+            String::from("batten-no-such-runner-for-the-ready-phase"),
+            String::from("run"),
+            String::from("closing-key-check"),
+        ]];
+
+        assert_eq!(
+            super::ready(&root, &gate, "Closes CLOUD-1"),
+            super::Readied::Unrunnable {
+                gate: String::from(
+                    "batten-no-such-runner-for-the-ready-phase run closing-key-check"
+                ),
+            },
+            "the pointer must distinguish two gates the same runner invokes"
+        );
+    }
+
+    /// No declared gates is a clear ready, and the distinction from `Unrunnable`
+    /// is the optional-versus-dead one the driver's own header states.
+    #[test]
+    fn a_consumer_declaring_no_body_gates_is_clear_rather_than_unrunnable() {
+        assert_eq!(
+            super::ready(&std::env::temp_dir(), &[], "Closes CLOUD-1"),
+            super::Readied::Clear
+        );
+    }
+
+    /// The ready step stops rather than laps, and that is the table's claim.
+    ///
+    /// A refusal is about the BODY — a deferral with no ticket, a key the merge
+    /// will not close — and no rebase clears prose, which puts it beside the
+    /// replay and the gate rather than beside the push.
+    #[test]
+    fn a_body_gate_refusal_stops_the_lap_rather_than_lapping_it() {
+        use crate::exit::ExitCode::{Internal, Success, Violation};
+        assert_eq!(
+            super::progress(super::Step::Ready, Violation),
+            super::Progress::Stop
+        );
+        assert_eq!(
+            super::progress(super::Step::Ready, Internal),
+            super::Progress::Stop
+        );
+        assert_eq!(
+            super::progress(super::Step::Ready, Success),
+            super::Progress::Proceed
+        );
+        // And the contrast that makes it a claim rather than a default: the push
+        // laps on the same code, because a raced push IS cleared by a rebase.
+        assert_eq!(
+            super::progress(super::Step::Push, Violation),
+            super::Progress::Lap
+        );
+    }
+
+    /// **SPEND IS COUNTED, NOT INFERRED, and this is the case PR #651 produced.**
+    ///
+    /// Two laps, both lost to `main` moving under the gate, the ready never
+    /// reached, zero check-runs on the head — and the refusal announced "having
+    /// spent 2 CI matrices". The attempt counter is not the spend, and the
+    /// inference that they agree fails in both directions.
+    #[test]
+    fn a_lap_that_bought_nothing_is_not_reported_as_a_spend() {
+        let mut ledger = Ledger::default();
+        ledger.attempt();
+        ledger.attempt();
+        assert_eq!(ledger.laps, 2, "two attempts were made");
+        assert_eq!(
+            ledger.spent(),
+            0,
+            "and neither bought a matrix, so nothing was spent"
+        );
+
+        ledger.attempt();
+        ledger.bought_a_matrix();
+        assert_eq!(ledger.spent(), 1, "the one site that buys one, counted");
+    }
+
+    /// **A pass that spent nothing is refunded, and the refund is the point.**
+    ///
+    /// Without it a saturated fleet exhausts the lap budget — a budget that
+    /// exists to catch "main moves faster than a lap takes" — and then reports
+    /// THAT diagnosis, which CLOUD-413 measured being wrong twice over across 24
+    /// laps.
+    #[test]
+    fn a_pass_that_never_won_the_lease_refunds_its_lap() {
+        let mut ledger = Ledger::default();
+        ledger.attempt();
+        assert_eq!(ledger.waited(3), Charge::Lap);
+        assert_eq!(ledger.laps, 0, "the attempt was refunded");
+        assert_eq!(ledger.lease_waits, 1, "and charged to its own bound");
+    }
+
+    /// The three bounds are separate, and exhausting one names it.
+    ///
+    /// Asserted as the whole set rather than one arm: a version with one shared
+    /// counter satisfies any single case here, and only the three together rule
+    /// it out. The bounds must stay distinct because the refusals differ — a
+    /// saturated fleet has spent no CI at all, which is the one exhaustion a
+    /// caller can honestly describe as costless.
+    #[test]
+    fn each_bound_is_charged_and_named_separately() {
+        let mut ledger = Ledger::default();
+        assert_eq!(ledger.waited(0), Charge::Stop(Bound::LeaseWaits));
+
+        let mut ledger = Ledger::default();
+        assert_eq!(ledger.unknown(0), Charge::Stop(Bound::Unknowns));
+
+        let mut ledger = Ledger::default();
+        assert_eq!(ledger.transient(0), Charge::Stop(Bound::Transients));
+
+        // And a bound not yet reached laps rather than stopping, on each.
+        let mut ledger = Ledger::default();
+        assert_eq!(ledger.waited(1), Charge::Lap);
+        assert_eq!(ledger.unknown(1), Charge::Lap);
+        assert_eq!(ledger.transient(1), Charge::Lap);
+    }
+
+    /// A refund cannot take the attempt counter below zero.
+    ///
+    /// Reachable rather than defensive: a bot-silence refund can fire on a pass
+    /// that never opened a lap, and an underflow there would panic in a loop
+    /// whose whole purpose is to keep running.
+    #[test]
+    fn a_refund_with_no_attempt_to_refund_does_not_underflow() {
+        let mut ledger = Ledger::default();
+        assert_eq!(ledger.unknown(5), Charge::Lap);
+        assert_eq!(ledger.laps, 0);
+    }
+
+    /// **The discriminating pair: every record a non-verdict is absorbed, one
+    /// verdict is not.**
+    ///
+    /// A run that reached a verdict was a judgement on this branch, and
+    /// re-running it would spend jobs to re-learn a real refusal.
+    #[test]
+    fn a_failure_before_any_verdict_is_absorbed_and_one_after_is_not() {
+        let absorbed_runs = absorbed(&[
+            String::from("nonverdict 111 provision\n"),
+            String::from("nonverdict 222 checkout\n"),
+        ]);
+        assert_eq!(
+            absorbed_runs,
+            Some(vec![
+                String::from("nonverdict 111 provision"),
+                String::from("nonverdict 222 checkout"),
+            ]),
+            "neither run reached a verdict, so neither judged the branch"
+        );
+
+        assert_eq!(
+            absorbed(&[
+                String::from("nonverdict 111 provision\n"),
+                String::from("verdict 222 test-failed\n"),
+            ]),
+            None,
+            "ONE verdict means the branch was judged; absorbing the pair would \
+             re-run a real refusal"
+        );
+    }
+
+    /// Could-not-look is one reading, and its three causes are deliberately
+    /// indistinguishable: no failed runs, an empty scan, and a scan that
+    /// answered nothing. No caller can act differently on which.
+    #[test]
+    fn an_empty_scan_is_could_not_look_rather_than_an_absorbed_transient() {
+        assert_eq!(absorbed(&[]), None);
+        assert_eq!(absorbed(&[String::new()]), None);
+        assert_eq!(absorbed(&[String::from("   \n\n")]), None);
+    }
+
+    /// **THE FIXTURE NAMES ARE GENERIC, and that is rule 1 rather than taste.**
+    ///
+    /// The first draft spelled these as this repository's own workflow paths and
+    /// `document_facts::no_artifact_name_reaches_the_core` refused it: the core
+    /// knows that a run carries a workflow PATH, and WHICH path carries the
+    /// fan-in is the consumer's — declared in its config, never here. A fixture
+    /// naming one puts a consumer's artifact inside `crates/batten`, which a grep
+    /// is supposed to return nothing for.
+    ///
+    /// **AND THE SECOND DRAFT NAMED IT IN THIS COMMENT**, to explain the first —
+    /// which the gate refused again, correctly. The rule is a grep, so prose
+    /// spelling the path is the same hit as code spelling it, and a reader copies
+    /// what an explanation shows them. `.claude/rules/policy-modules.md` records
+    /// the identical shape one domain over.
+    ///
+    /// The predicate treats the path as an opaque token, so a generic name
+    /// exercises it identically — which is the tell that the specific one was
+    /// never carrying anything.
+    fn run(id: &str, path: &str) -> Spending {
+        Spending {
+            id: String::from(id),
+            path: String::from(path),
+        }
+    }
+
+    /// **THE ROW THAT MATTERS: the run carrying the fan-in is never cancelled.**
+    ///
+    /// `final` is the one context branch protection requires, and it is
+    /// `always()` over a `needs:` assertion — so cancelling its run leaves that
+    /// context `cancelled`, which is not an answer. The saving would buy a
+    /// branch that can never grade and never land, which is strictly worse than
+    /// paying for the matrix.
+    #[test]
+    fn the_run_carrying_the_fan_in_is_spared_and_the_rest_are_not() {
+        let (doomed, spared) = worthless(
+            &[
+                run("1", "sibling-a.yml"),
+                run("2", "the-fan-in.yml"),
+                run("3", "sibling-b.yml"),
+            ],
+            &FanIn::from_workflow_path("the-fan-in.yml"),
+        );
+        assert_eq!(spared, 1, "exactly the fan-in's run");
+        assert_eq!(
+            doomed.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["1", "3"],
+            "and every sibling is still doomed: {doomed:?}"
+        );
+    }
+
+    /// A fan-in declared for a file no run carries spares nothing — and still
+    /// cancels the rest.
+    ///
+    /// The anti-vacuity mirror for the pair above: a predicate that spared
+    /// everything would satisfy the sparing half and save nothing at all.
+    #[test]
+    fn a_fan_in_no_run_carries_spares_nothing_and_still_cancels() {
+        let (doomed, spared) = worthless(
+            &[run("1", "sibling-a.yml"), run("2", "sibling-b.yml")],
+            &FanIn::from_workflow_path("no-run-carries-this.yml"),
+        );
+        assert_eq!(spared, 0);
+        assert_eq!(doomed.len(), 2, "nothing is spared by accident");
+    }
+
+    /// **AN UNSET FAN-IN CANCELS NOTHING RATHER THAN GUESSING, and the split
+    /// between the two halves of that is where the first port went wrong.**
+    ///
+    /// `worthless` is a set difference and cannot refuse — with no name to
+    /// spare, every run is doomed, and that is the honest answer for a pure
+    /// function. The first draft stopped there and wrote "so the CALLER must
+    /// refuse", which was a note rather than a guard: `abandon` had no such
+    /// check, so an unset declaration would have cancelled EVERY run including
+    /// the fan-in's, whose cancelled context is not an answer and wedges the
+    /// branch.
+    ///
+    /// `abandon-matrix.bats` refuses to run at all without the declaration.
+    /// The refusal lives in `abandon` now; this case pins the pure half's shape
+    /// so the guard cannot quietly move back down here and stop refusing.
+    #[test]
+    fn an_empty_fan_in_name_matches_no_run_so_the_refusal_lives_in_abandon() {
+        let (doomed, spared) = worthless(
+            &[run("1", "the-fan-in.yml")],
+            &FanIn::from_workflow_path(""),
+        );
+        assert_eq!(spared, 0, "a set difference cannot spare an unnamed file");
+        assert_eq!(
+            doomed.len(),
+            1,
+            "which is why `abandon` refuses before ever calling this"
+        );
+    }
+
+    /// Nothing in flight is a clean no-op.
+    #[test]
+    fn nothing_in_flight_cancels_nothing() {
+        let (doomed, spared) = worthless(&[], &FanIn::from_workflow_path("the-fan-in.yml"));
+        assert!(doomed.is_empty());
+        assert_eq!(spared, 0);
+    }
+
+    fn tap(landed: bool, held: bool, draft: Option<bool>, v: Option<TapVerdict>) -> Tap {
+        Tap {
+            landed,
+            singleton_held: held,
+            is_draft: draft,
+            verdict: v,
+        }
+    }
+
+    /// **THE PAIR THE TAP EXISTS FOR: red closes it, green leaves it open.**
+    ///
+    /// The predecessor's header states the leak — "stopping on a red run without
+    /// closing the tap is a leak this exists to plug: CI skips drafts, so
+    /// re-drafting is what stops the next push, from any source, spending
+    /// another runner on a failure nobody has fixed yet."
+    #[test]
+    fn a_red_head_is_redrafted_and_a_green_one_is_left_ready() {
+        assert!(
+            closes_the_tap(&tap(false, true, Some(false), Some(TapVerdict::Red))),
+            "a red run must stop the next push"
+        );
+        assert!(
+            !closes_the_tap(&tap(false, true, Some(false), Some(TapVerdict::Green))),
+            "AND A GREEN ONE IS LEFT READY — the resume costs nothing from here"
+        );
+    }
+
+    /// **COULD NOT LOOK IS NOT RED, and this is the arm a collapsed read loses.**
+    ///
+    /// Drafting on a reading nobody took punishes a network blip with a stopped
+    /// branch. The predecessor spells it as an exit code it declines to act on;
+    /// here it is `None`, which is the same three-valued reading typed.
+    #[test]
+    fn a_reading_that_could_not_be_taken_never_strands_the_head() {
+        assert!(
+            !closes_the_tap(&tap(false, true, Some(false), None)),
+            "no checks verdict is not a red one"
+        );
+        assert!(
+            !closes_the_tap(&tap(false, true, None, Some(TapVerdict::Red))),
+            "and neither is a draft state that would not read"
+        );
+    }
+
+    /// Pending closes the tap too: the resume needs a fresh run whatever
+    /// happens, so the draft costs nothing and stops every push until one starts.
+    #[test]
+    fn a_pending_head_closes_the_tap_because_the_resume_needs_a_fresh_run() {
+        assert!(closes_the_tap(&tap(
+            false,
+            true,
+            Some(false),
+            Some(TapVerdict::Pending)
+        )));
+    }
+
+    /// **A LAND THAT MERGED OWNS NOTHING TO CLOSE, and one holding no singleton
+    /// owns neither the lease nor the pull request.**
+    ///
+    /// The second is why a REFUSED second land must not touch the live one's
+    /// work: without it, a session that lost the singleton would re-draft the
+    /// pull request the winner is actively landing.
+    #[test]
+    fn a_merged_lap_and_an_unheld_singleton_both_close_nothing() {
+        assert!(
+            !closes_the_tap(&tap(true, true, Some(false), Some(TapVerdict::Red))),
+            "a merge closes nothing"
+        );
+        assert!(
+            !closes_the_tap(&tap(false, false, Some(false), Some(TapVerdict::Red))),
+            "and a lap that never took the singleton owns nothing to close"
+        );
+    }
+
+    /// An already-drafted pull request is already closed, and asking is what
+    /// keeps a silent no-op from reading like a tap that closed.
+    #[test]
+    fn an_already_drafted_pull_request_is_left_alone() {
+        assert!(!closes_the_tap(&tap(
+            false,
+            true,
+            Some(true),
+            Some(TapVerdict::Red)
+        )));
+    }
+
+    /// **THE ARM THAT DECIDES WHETHER THE TAP CAN EVER FIRE, and the pair that
+    /// shows it discriminates.**
+    ///
+    /// A lap leaves without landing on one of three readings, and two of them
+    /// must not be collapsed. `Unanswered` means the green arm asked its whole
+    /// count and saw nothing terminal — a reading, and the one that closes the
+    /// tap. `Stale` means the staleness arm won the race and the green arm was
+    /// voided UNREAD, so there is no reading, and `closes_the_tap` must leave a
+    /// pull request ready rather than draft it on a failure to look.
+    ///
+    /// Collapsing them either way is a live defect: `Stale → Pending` drafts on
+    /// something nobody read, and `Unanswered → None` makes `Compensation::
+    /// Redraft` unreachable from every path the driver has — which is the state
+    /// PR #848's review found the cluster in.
+    /// **RED STOPS AND STALE LAPS, AND BOTH ARE EXIT 2.**
+    ///
+    /// The wait's two refusals are both a verdict about this repository, so the
+    /// one exit table gives them the same code — and inventing a fifth for red
+    /// would be the per-verb exception non-negotiable rule 5 forbids. What tells
+    /// them apart is the reading: no rebase clears a failing test, and the next
+    /// replay is exactly the remedy for a base that moved.
+    ///
+    /// Without this, a red head is `Unanswered`: the green arm asks its whole
+    /// count — 3600 by default — and the lap then LAPS, buying a fresh matrix and
+    /// waiting out another hour on a branch with one failing test.
+    #[test]
+    fn a_red_wait_stops_where_a_stale_one_laps_on_the_same_code() {
+        use crate::exit::ExitCode::Violation;
+
+        assert_eq!(
+            progress_of(Step::Wait, Violation, Some(TapVerdict::Red)),
+            Progress::Stop,
+            "no rebase clears a failing test"
+        );
+        assert_eq!(
+            progress_of(Step::Wait, Violation, None),
+            Progress::Lap,
+            "the staleness arm won the race, and the next replay is the remedy"
+        );
+    }
+
+    /// The qualifier reaches ONE cell and leaves the table alone otherwise —
+    /// without this, a validator that stopped everything would satisfy the case
+    /// above.
+    #[test]
+    fn the_reading_qualifies_the_wait_row_and_nothing_else() {
+        use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
+
+        for step in [
+            Step::Replay,
+            Step::Verify,
+            Step::Ready,
+            Step::Push,
+            Step::Wait,
+            Step::FastForward,
+        ] {
+            for code in [Success, Usage, Violation, Internal] {
+                for seen in [None, Some(TapVerdict::Green), Some(TapVerdict::Pending)] {
+                    assert_eq!(
+                        progress_of(step, code, seen),
+                        progress(step, code),
+                        "{step:?}/{code:?}/{seen:?} must read as the table does"
+                    );
+                }
+                // And the red reading moves only the wait's own refusal.
+                if !(step == Step::Wait && code == Violation) {
+                    assert_eq!(
+                        progress_of(step, code, Some(TapVerdict::Red)),
+                        progress(step, code),
+                        "{step:?}/{code:?} is not the wait's refusal"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_wait_that_read_nothing_is_not_a_pending_reading() {
+        assert_eq!(
+            tap_verdict(&Waited::Unanswered),
+            Some(TapVerdict::Pending),
+            "asking the full count and seeing nothing terminal IS a reading"
+        );
+        assert_eq!(
+            tap_verdict(&Waited::Stale {
+                base: String::from("0000000"),
+            }),
+            None,
+            "the green arm was voided unread, so nobody looked"
+        );
+        assert_eq!(
+            tap_verdict(&Waited::Green {
+                verdict: String::from("green"),
+            }),
+            Some(TapVerdict::Green)
+        );
+        assert_eq!(
+            tap_verdict(&Waited::Red {
+                findings: Vec::new(),
+            }),
+            Some(TapVerdict::Red),
+            "and a red answer is an answer, which is what stops the lap"
+        );
+    }
+
+    /// And the mapping reaches the decision: a lap that ran out of asks over a
+    /// pull request it owns closes the tap, and one whose base moved does not.
+    #[test]
+    fn an_unanswered_lap_closes_the_tap_and_a_stale_one_does_not() {
+        let unanswered = tap_verdict(&Waited::Unanswered);
+        assert!(closes_the_tap(&tap(false, true, Some(false), unanswered)));
+
+        let stale = tap_verdict(&Waited::Stale {
+            base: String::from("0000000"),
+        });
+        assert!(!closes_the_tap(&tap(false, true, Some(false), stale)));
+    }
+
+    /// **A DRAFT IS READIED WHATEVER ITS RUNS SAY**, and the case that forces it
+    /// is the tap's own leftover: a pull request the tap drafted carries a
+    /// cancelled set, and reading the runs first would leave it a draft forever.
+    /// `tests/land.bats` states it as *"the re-drafted PR a cancelled set left
+    /// behind is readied, not stuck"*.
+    #[test]
+    fn a_draft_is_readied_whatever_its_head_carries() {
+        use crate::checks_green::{Pending, Verdict};
+
+        for reading in [
+            None,
+            Some(Verdict::Green),
+            Some(Verdict::Red(Vec::new())),
+            Some(Verdict::Pending(Pending::NoVerdict(Vec::new()))),
+        ] {
+            assert_eq!(buys_a_matrix(Some(true), reading.as_ref()), Spend::Ready);
+        }
+    }
+
+    /// **THE IDEMPOTENCE ARM, and it is the one a run count gets wrong.**
+    ///
+    /// *"A DRAFT whose push moves nothing readies once, not once and then
+    /// again"*: the lap that readied leaves a run IN FLIGHT, so a later lap
+    /// reading only *are there runs* would draft and ready it again — cancelling
+    /// the matrix it had just bought. `Pending::Running` is what tells that from
+    /// a set that will never grade.
+    #[test]
+    fn a_run_still_in_flight_buys_nothing_and_a_set_that_cannot_grade_refires() {
+        use crate::checks_green::{Pending, Verdict};
+
+        let running = Verdict::Pending(Pending::Running {
+            pending: 1,
+            graded: 0,
+        });
+        assert_eq!(
+            buys_a_matrix(Some(false), Some(&running)),
+            Spend::Nothing,
+            "re-firing here cancels the run this lap just paid for"
+        );
+
+        let cancelled = Verdict::Pending(Pending::NoVerdict(Vec::new()));
+        assert_eq!(
+            buys_a_matrix(Some(false), Some(&cancelled)),
+            Spend::Refire,
+            "a skipped or cancelled set is terminal and will never answer"
+        );
+        let fresh = Verdict::Pending(Pending::Unregistered(Vec::new()));
+        assert_eq!(
+            buys_a_matrix(Some(false), Some(&fresh)),
+            Spend::Refire,
+            "and a head carrying no run at all has nothing to wait for"
+        );
+    }
+
+    /// An answer that exists buys nothing, and a reading nobody took buys
+    /// nothing either — the same could-not-look posture [`closes_the_tap`] takes
+    /// one direction over.
+    #[test]
+    fn an_answered_head_and_an_unread_one_both_spend_nothing() {
+        use crate::checks_green::Verdict;
+
+        assert_eq!(
+            buys_a_matrix(Some(false), Some(&Verdict::Green)),
+            Spend::Nothing
+        );
+        assert_eq!(
+            buys_a_matrix(Some(false), Some(&Verdict::Red(Vec::new()))),
+            Spend::Nothing
+        );
+        assert_eq!(buys_a_matrix(Some(false), None), Spend::Nothing);
+        assert_eq!(
+            buys_a_matrix(None, Some(&Verdict::Green)),
+            Spend::Nothing,
+            "a draft state nobody could read is not a licence to spend"
+        );
+    }
+
+    /// The narrowing keeps every verdict's arm and drops only the findings, so a
+    /// predicate over them cannot grow here later.
+    #[test]
+    fn every_checks_verdict_narrows_to_exactly_one_tap_arm() {
+        use crate::checks_green::{Pending, Verdict};
+
+        assert_eq!(TapVerdict::of(&Verdict::Green), TapVerdict::Green);
+        assert_eq!(TapVerdict::of(&Verdict::Red(Vec::new())), TapVerdict::Red);
+        assert_eq!(
+            TapVerdict::of(&Verdict::Pending(Pending::Unregistered(Vec::new()))),
+            TapVerdict::Pending
+        );
+    }
+
+    /// **THE PRUNE'S DISCRIMINATING PAIR.** A tracking ref the remote no longer
+    /// advertises is stale; one it still advertises is not.
+    ///
+    /// The anti-vacuity half is the one that matters: a predicate pruning
+    /// everything would satisfy the first assertion and delete the base this
+    /// clone lands onto.
+    #[test]
+    fn a_tracking_ref_the_remote_dropped_is_stale_and_a_live_one_is_not() {
+        let local = vec![
+            String::from("refs/remotes/origin/main"),
+            String::from("refs/remotes/origin/merged-and-gone"),
+        ];
+        let advertised = vec![String::from("refs/heads/main")];
+        assert_eq!(
+            stale_tracking(&local, &advertised, "refs/remotes/origin/"),
+            vec![String::from("refs/remotes/origin/merged-and-gone")],
+            "exactly the ref the remote dropped"
+        );
+    }
+
+    /// **THE SPELLINGS DIFFER ON THE TWO SIDES**, and comparing them raw prunes
+    /// everything: the remote advertises `refs/heads/x` where this clone holds
+    /// `refs/remotes/origin/x`.
+    #[test]
+    fn the_branch_name_is_compared_rather_than_the_ref_name() {
+        let local = vec![String::from("refs/remotes/origin/main")];
+        assert!(
+            stale_tracking(
+                &local,
+                &[String::from("refs/heads/main")],
+                "refs/remotes/origin/"
+            )
+            .is_empty(),
+            "a live branch must survive the spelling difference"
+        );
+    }
+
+    /// A local branch is not a tracking ref, so the prefix filter is what keeps
+    /// this from deleting the work it is landing.
+    #[test]
+    fn a_local_branch_is_never_pruned() {
+        let local = vec![
+            String::from("refs/heads/my-work"),
+            String::from("refs/remotes/origin/main"),
+        ];
+        assert!(
+            stale_tracking(
+                &local,
+                &[String::from("refs/heads/main")],
+                "refs/remotes/origin/"
+            )
+            .is_empty(),
+            "refs/heads is out of scope whatever the remote says"
+        );
+    }
+
+    /// **AN EMPTY ADVERTISEMENT PRUNES EVERYTHING, which is why the caller must
+    /// never hand one over from a failed read.**
+    ///
+    /// Stated as a case rather than guarded here: the function is a set
+    /// difference and cannot tell "the remote has no branches" from "the read
+    /// failed". The caller owns that distinction, and this is the case that says
+    /// so out loud.
+    #[test]
+    fn an_empty_advertisement_prunes_every_tracking_ref() {
+        let local = vec![String::from("refs/remotes/origin/main")];
+        assert_eq!(
+            stale_tracking(&local, &[], "refs/remotes/origin/").len(),
+            1,
+            "so a caller that could not read the remote must not call this"
+        );
     }
 }

@@ -1019,6 +1019,12 @@ pub enum Native {
     RuleTableRefused,
     /// The `[[exec_pattern]]` table would not load.
     OutputTableRefused,
+    /// The `[[verify_environment_pattern]]` table would not load.
+    ///
+    /// A SECOND CLASS OVER THE SAME TYPE, and the census refuses sharing one:
+    /// both tables are `OutputPattern`, but a refusal has to name which table to
+    /// edit, and one class over two tables sends a reader to the wrong one.
+    VerifyEnvironmentTableRefused,
     /// The `[[waiver]]` table would not load.
     WaiverTableRefused,
     /// The `[[fact]]` table would not load.
@@ -1068,6 +1074,7 @@ impl Native {
         Native::MarkerTableRefused,
         Native::RuleTableRefused,
         Native::OutputTableRefused,
+        Native::VerifyEnvironmentTableRefused,
         Native::WaiverTableRefused,
         Native::FactTableRefused,
         Native::MintTableRefused,
@@ -1097,6 +1104,7 @@ impl Native {
         Native::MarkerTableRefused,
         Native::RuleTableRefused,
         Native::OutputTableRefused,
+        Native::VerifyEnvironmentTableRefused,
         Native::WaiverTableRefused,
         Native::FactTableRefused,
         Native::MintTableRefused,
@@ -1137,6 +1145,7 @@ impl Native {
             Native::MarkerTableRefused => "marker declare refused",
             Native::RuleTableRefused => "rule declare refused",
             Native::OutputTableRefused => "output declare refused",
+            Native::VerifyEnvironmentTableRefused => "environment declare refused",
             Native::WaiverTableRefused => "waiver declare refused",
             Native::FactTableRefused => "fact declare refused",
             Native::MintTableRefused => "mint declare refused",
@@ -1565,6 +1574,17 @@ indistinguishable in the record they write.",
         routes: &[read("config read first", "batten.toml")],
     },
     VendoredVerdict {
+        id: "environment declare refused",
+        gloss: "the verify-environment classifier table would not load",
+        class: "`[[verify_environment_pattern]]` is what tells a gate refusal caused by the \
+MACHINE from one caused by this tree, so a malformed row does not fail loudly — it classifies \
+nothing and reads as a consumer who declared no classifier at all, and every refusal goes back \
+to being reported as a defect to reproduce. A SECOND class over the same type as \
+`output declare refused` rather than a shared one, because a refusal has to name which of the \
+two tables to edit.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
         id: "waiver declare refused",
         gloss: "the waiver table would not load",
         class: "The stakes here are inverted from every other table: a malformed rule fails \
@@ -1935,6 +1955,7 @@ mod tests {
                 | Native::MarkerTableRefused
                 | Native::RuleTableRefused
                 | Native::OutputTableRefused
+                | Native::VerifyEnvironmentTableRefused
                 | Native::WaiverTableRefused
                 | Native::FactTableRefused
                 | Native::MintTableRefused
