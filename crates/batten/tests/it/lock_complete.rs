@@ -291,6 +291,47 @@ fn a_declared_tool_with_no_lock_entry_is_reported() {
 }
 
 #[test]
+fn a_declared_tool_on_an_exempt_backend_with_no_lock_entry_is_reported() {
+    // CLOUD-611. The case above uses an `aqua:` pin, so for its whole life the
+    // presence question was only ever asked of backends the url question already
+    // judged — and `lock-tool-missing` inherited `locks_nothing` from that other
+    // question, which excused exactly the backends nothing else covered.
+    //
+    // The two questions are different and only one needs the exemption. "Does
+    // this entry lock a url and a checksum" is genuinely inapplicable to a
+    // backend resolving through its own package manager. "Does this tool have an
+    // entry AT ALL" applies to every backend without exception, because
+    // `mise install --locked` demands a row whatever the row contains.
+    //
+    // Measured on CLOUD-580's branch: a `pipx:` pin with no row passed this gate
+    // at exit 0 and `verify` green twice on two SHAs, then took EVERY
+    // mise-action job red at the install step — `zizmor` and `commit-lint`
+    // included, since `--locked` validates the whole file rather than the job's
+    // install list. That is CLOUD-333's own motivating incident reproduced in a
+    // backend the clause it added exempts.
+    //
+    // The fixture tool is neither `pipx:serena-agent` nor
+    // `pipx:ntia-conformance-checker`: both carry real rows in this repository,
+    // so either would let the tree's own correctness satisfy the case while the
+    // gate did nothing.
+    let (code, said) = judge_repo(
+        "lock-complete-unlocked-exempt-tool",
+        &complete_lock(),
+        &manifest("\"t\" = \"1.0.0\"\n\"pipx:cyclonedx-bom\" = \"7.1.0\"\n"),
+        &[],
+    );
+    assert_eq!(
+        code,
+        Some(2),
+        "an exempt backend with no entry is still a finding\n{said}"
+    );
+    assert!(
+        said.contains("lock-tool-missing"),
+        "the finding names its rule\n{said}"
+    );
+}
+
+#[test]
 fn a_pin_its_entry_does_not_name_is_reported() {
     // CLOUD-593. The row being PRESENT is exactly what makes a stale one
     // invisible, and `--locked` validates the whole file, so every job goes red

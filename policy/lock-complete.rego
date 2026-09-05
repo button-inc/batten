@@ -14,6 +14,14 @@
 # is reported; under a plain prefix test it is silently satisfied.
 #MUTANT stale-pin-prefix-not-boundary|s@sprintf("%s.", \[pin\])@pin@|a_pin_the_lock_extends_only_across_a_boundary_is_reported
 #
+# CLOUD-611's row, and it re-creates the exact blind spot the change removed: an
+# exemption on the PRESENCE question keyed on the backend, which is the url
+# question's exemption inherited by a clause that has no business with it. The
+# mutation re-exempts one prefix rather than calling `locks_nothing`, so it
+# reddens only the exempt-backend case and leaves the `aqua:` one green — which
+# is what makes it discriminate the axis rather than the predicate.
+#MUTANT tool-presence-exempted|s@^\tnot lock_tools\[name\]$@\tnot lock_tools[name]; not startswith(name, "pipx:")@|a_declared_tool_on_an_exempt_backend_with_no_lock_entry_is_reported
+#
 # THE PREDECESSOR'S ROW, CARRIED RATHER THAN RETIRED.
 # `policy/lock-entry-complete.rego` declared this mutation against
 # `crates/batten/tests/it/staged_facts.rs`, and that module is subsumed here — so
@@ -322,17 +330,32 @@ violation contains {
 # every job whose install list names the tool. Measured on PR #272, where `msrv`
 # and `commit-lint` went red for a `cargo-msrv` pin neither of them owns, past a
 # fully green `mise run verify`.
+#
+# UNCONDITIONAL SINCE CLOUD-611, and the sentence it replaces called the
+# exemption "a LENIENCE here rather than a necessity" — which was true, and was
+# the false negative. This clause inherited `locks_nothing` from the url
+# question, and the two questions are different: whether an entry LOCKS a url is
+# genuinely inapplicable to a backend resolving through its own package manager,
+# while whether a tool HAS an entry applies to every backend without exception,
+# because `mise install --locked` demands a row whatever the row contains.
+#
+# Measured on CLOUD-580's branch, in a backend this clause exempted, one issue
+# after CLOUD-333 closed: `"pipx:ntia-conformance-checker" = "5.0.3"` with no row
+# passed at exit 0 and `verify` green twice on two SHAs, then took EVERY
+# mise-action job red at the install step — `zizmor` and `commit-lint` included,
+# since `--locked` validates the whole file rather than the job's install list.
+# `final` went red asserting jobs that never answered, and `land` spent two
+# invocations and six runs before its own backstop named the provisioning path.
+#
+# There is no carve-out and none is needed, structurally rather than by survey: a
+# backend whose `mise lock` wrote nothing would produce a tool CI cannot install
+# at all, which is the defect this clause reports rather than an exception to it.
+# Narrowing it changed no verdict on a correct tree — every exempt-backend pin in
+# this repository already carries a row — so it removed a blind spot and demanded
+# nothing new.
 declared_tools[name] := value if {
 	some name, value in manifest.tools
 }
-
-# There is no lockfile entry to read a `backend` from — that absence is the whole
-# finding — so the backend comes from the KEY, which is how mise spells it: a
-# `<backend>:` prefix is the backend itself, and a bare name is a registry name
-# whose core form is `core:<name>`.
-key_backend(name) := name if contains(name, ":")
-
-key_backend(name) := sprintf("core:%s", [name]) if not contains(name, ":")
 
 violation contains {
 	"rule": "lock-tool-missing",
@@ -341,7 +364,6 @@ violation contains {
 } if {
 	lock_readable
 	some name, _ in declared_tools
-	not locks_nothing(key_backend(name))
 	not lock_tools[name]
 }
 
@@ -607,7 +629,7 @@ test_a_required_platform_missing_entirely_is_a_finding if {
 
 test_a_backend_that_cannot_lock_is_exempt_from_locking_nothing if {
 	count(violation) == 0 with input as fixture_input(
-		{"tools": {"core:rust": [{"version": "1.85.0", "backend": "core:rust"}]}},
+		{"tools": {"rust": [{"version": "1.85.0", "backend": "core:rust"}]}},
 		{"settings": {"lockfile": false}, "tools": {"rust": "1.85.0"}},
 	)
 		with data.batten.patterns as fixture_patterns
