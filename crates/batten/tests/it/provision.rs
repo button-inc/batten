@@ -1054,6 +1054,8 @@ fn conditioned_rows(org: &str) -> String {
 /// vacuously.
 #[cfg(unix)]
 fn one_certificate_bundle(into: &Path) -> Option<String> {
+    const FOOTER: &str = "-----END CERTIFICATE-----";
+
     let source = ["SSL_CERT_FILE", "CURL_CA_BUNDLE"]
         .into_iter()
         .filter_map(std::env::var_os)
@@ -1064,7 +1066,6 @@ fn one_certificate_bundle(into: &Path) -> Option<String> {
             system.is_file().then_some(system)
         })?;
     let text = fs::read_to_string(&source).ok()?;
-    const FOOTER: &str = "-----END CERTIFICATE-----";
     for block in text.split_inclusive(FOOTER).filter(|b| b.contains(FOOTER)) {
         let pem = block.trim_start();
         let Some(org) = batten::provision::organisation_of(pem) else {

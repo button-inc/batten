@@ -843,7 +843,7 @@ fn trust_names(org: &str) -> bool {
     // the tool somewhere else. The system path is for a host that names none.
     let bundle = TRUST_BUNDLE_VARS
         .iter()
-        .find_map(|name| std::env::var_os(name))
+        .find_map(std::env::var_os)
         .map_or_else(|| PathBuf::from(SYSTEM_TRUST_BUNDLE), PathBuf::from);
     let Ok(text) = fs::read_to_string(&bundle) else {
         return false;
@@ -926,11 +926,7 @@ fn attribute_text(value: &x509_cert::der::Any) -> Option<String> {
 fn resolved_env(rules: &[ProvisionEnv]) -> Vec<(String, String)> {
     rules
         .iter()
-        .filter(|rule| {
-            rule.when_trust_names
-                .as_deref()
-                .is_none_or(|org| trust_names(org))
-        })
+        .filter(|rule| rule.when_trust_names.as_deref().is_none_or(trust_names))
         .filter_map(|rule| {
             let value = if rule.prepend_list.is_empty() {
                 rule.from_first_set
@@ -969,6 +965,10 @@ fn prepended(current: &str, additions: &[String]) -> String {
 
 /// Replace this process with `command`, or say why it could not be.
 #[cfg(unix)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: the parameter IS the tool the operator asked for, already built by the caller — becoming it is the whole verb, and there is no in-process form of somebody else's binary (CLOUD-320)"
+)]
 fn become_process(
     mut command: std::process::Command,
     exec: &Path,
