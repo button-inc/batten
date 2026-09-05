@@ -208,8 +208,44 @@ fn a_server_level_grant_answers_for_the_server() {
 
 #[test]
 fn a_per_tool_grant_answers_for_the_server_too() {
+    // THE TOOL MUST BE ONE THE SERVER DECLARES. This case originally granted
+    // `mcp__tracker__get_issue` against a wiring declaring only `tool_0`, and
+    // passed — it was asserting the defect below rather than this property.
     let dir = repo("bound-granted-tool", &wiring_with(&["always_allow"]));
-    let file = settings(&dir, "settings.json", &["mcp__tracker__get_issue"]);
+    let file = settings(&dir, "settings.json", &["mcp__tracker__tool_0"]);
+    let census = mcp::bound(&config(), &dir, "tracker", &[file]).expect("the source answers");
+
+    assert_eq!(census.granted, Some(true));
+}
+
+#[test]
+fn a_grant_naming_a_tool_the_server_does_not_declare_is_not_a_grant() {
+    // CodeRabbit on #879, and it is the wildcard defect one level over: a grant
+    // whose tool segment is a NAME but not a name this server has reaches nothing,
+    // exactly as `__*` reaches nothing. Reporting it as a grant makes the census
+    // say a tool is granted while every call to it prompts — the same false
+    // reassurance `mem:serena-setup` measured, from a typo instead of a glob.
+    let dir = repo("bound-unknown-tool", &wiring_with(&["always_allow"]));
+    let file = settings(&dir, "settings.json", &["mcp__tracker__typo"]);
+    let census = mcp::bound(&config(), &dir, "tracker", &[file]).expect("the source answers");
+
+    assert_eq!(
+        census.granted,
+        Some(false),
+        "a real reading of ungranted, never could-not-look: the file parsed fine"
+    );
+}
+
+#[test]
+fn a_server_wide_grant_still_covers_every_tool() {
+    // The anti-vacuity half. Checking the tool segment against declared names
+    // must not narrow `mcp__<server>`, which grants all of them and names none —
+    // a fix that required a tool suffix would refuse the commonest spelling.
+    let dir = repo(
+        "bound-server-wide",
+        &wiring_with(&["always_allow", "always_allow"]),
+    );
+    let file = settings(&dir, "settings.json", &["mcp__tracker"]);
     let census = mcp::bound(&config(), &dir, "tracker", &[file]).expect("the source answers");
 
     assert_eq!(census.granted, Some(true));

@@ -1257,10 +1257,21 @@ pub fn bound(
                 )
             })
             .count();
+        // THE DECLARED NAMES, so a per-tool grant is checked against a tool that
+        // exists rather than against the grammar alone (CodeRabbit on #879).
+        // Collected here because this is where the resolved source is in hand;
+        // `granted_in` reads settings files and has no way to learn them.
+        let names: Vec<String> = tools
+            .iter()
+            .filter_map(|tool| match tool.at("name") {
+                Look::Is(node) => node.scalar(),
+                _ => None,
+            })
+            .collect();
         return Ok(Bound {
             declared: tools.len(),
             asks,
-            granted: granted_in(settings, server),
+            granted: granted_in(settings, server, &names),
         });
     }
     Err(Unresolved::NotFound { tried })
@@ -1278,7 +1289,18 @@ pub fn bound(
 /// grant while matching nothing — measured 2026-09-05 (`mem:serena-setup`), where
 /// exactly that spelling left every call prompting against a file that looked
 /// correct. So the prefix is tested and the wildcard spelling is not honoured.
-fn granted_in(settings: &[std::path::PathBuf], server: &str) -> Option<bool> {
+/// `declared` is the resolved server's tool names. A per-tool grant naming a tool
+/// the server does not declare is **not** a grant: it reaches nothing, exactly as
+/// the `__*` spelling does, and reporting it as one is the same defect one level
+/// over — the census would say a tool is granted while every call to it prompts.
+///
+/// EMPTY `declared` IS COULD-NOT-LOOK, NOT "NO TOOLS", and the distinction is the
+/// reason this is not a bare `contains`. The wiring's shape is the host's, so a
+/// `tools` array whose entries carry no `name` is a source that cannot answer
+/// which names exist; refusing every per-tool grant against it would report a real
+/// grant as absent. Where no name could be read, the grammar is all there is and
+/// the check falls back to it.
+fn granted_in(settings: &[std::path::PathBuf], server: &str, declared: &[String]) -> Option<bool> {
     let prefix = format!("mcp__{server}");
     let mut looked = false;
     for path in settings {
@@ -1302,7 +1324,11 @@ fn granted_in(settings: &[std::path::PathBuf], server: &str) -> Option<bool> {
                 || rule
                     .strip_prefix(&prefix)
                     .and_then(|tail| tail.strip_prefix("__"))
-                    .is_some_and(|tool| !tool.is_empty() && !tool.contains('*'))
+                    .is_some_and(|tool| {
+                        !tool.is_empty()
+                            && !tool.contains('*')
+                            && (declared.is_empty() || declared.iter().any(|name| name == tool))
+                    })
         }) {
             return Some(true);
         }
@@ -1527,6 +1553,20 @@ fn each(
                 // a container beside the page is a shape whose size the caller
                 // did not bound, and this arm has no declaration covering it —
                 // the row's `fields` describe an ELEMENT, not the envelope.
+                // AND THE KEY MUST BE ONE THIS CRATE DECLARES. Bounded and scalar
+                // is a size test, not an authorization: the row's `fields`
+                // describe an ELEMENT, so nothing here declares the envelope, and
+                // a server is free to put `account_email` beside its page. Emitting
+                // it would put an undeclared value into output on the strength of
+                // its LENGTH — non-negotiable rule 4 decided by a byte count.
+                //
+                // A closed list rather than a heuristic, for `AddressDomain`'s
+                // reason: what crosses is then a reviewable set instead of whatever
+                // the server happened to send. A paging key nobody listed is a row
+                // to add here, in a diff, not a silent emission.
+                if !PAGING_KEYS.contains(&key.as_str()) {
+                    continue;
+                }
                 let Some(text) = node.scalar() else { continue };
                 if text.is_empty() || text.len() > TOKEN_MAX {
                     continue;
@@ -1537,6 +1577,27 @@ fn each(
     }
     Some(out)
 }
+
+/// The envelope keys a [`Reduce::Each`] reduction may carry beside its page.
+///
+/// **The whole envelope allowlist, and it is deliberately short.** A row's
+/// `fields` declare an ELEMENT, so nothing in a consumer's config authorizes an
+/// envelope key; without this list the arm emitted every bounded scalar sitting
+/// beside the array, which decides what leaves the process by its byte length.
+/// These are the paging spellings the surveyed connectors use — the means to ask
+/// for the rest of a page, which is the only reason the siblings are read at all.
+///
+/// Adding a key is a diff, which is the point.
+const PAGING_KEYS: &[&str] = &[
+    "cursor",
+    "endCursor",
+    "hasNextPage",
+    "hasPreviousPage",
+    "nextCursor",
+    "startCursor",
+    "total",
+    "totalCount",
+];
 
 /// The key a [`Reduce::Each`] row's projected elements come back under when its
 /// `node` names no path.

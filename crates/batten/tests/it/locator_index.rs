@@ -26,10 +26,20 @@ fn address(bytes: &[u8]) -> ContentAddress {
     ContentAddress::of(DOMAIN, bytes)
 }
 
+/// An index in a scratch repository, and the path it lives at.
+///
+/// The path is RETURNED rather than recomputed, because `Fixture::build` is not
+/// idempotent: calling it twice with one name makes a second, empty directory. A
+/// case that re-derived the path got a fresh fixture and read no file at all —
+/// which is how the first spelling of the byte comparison below failed.
+fn index_with_path(name: &str) -> (Index, std::path::PathBuf) {
+    let at = Fixture::new(name).git().build().join("locator-index");
+    (Index::at(at.clone()), at)
+}
+
 /// An index in a scratch repository, with no payloads written anywhere.
 fn index(name: &str) -> Index {
-    let dir = Fixture::new(name).git().build();
-    Index::at(dir.join("locator-index"))
+    index_with_path(name).0
 }
 
 #[test]
@@ -132,17 +142,29 @@ fn recording_the_same_locator_twice_replaces_rather_than_appends() {
 fn the_index_is_byte_stable_whatever_order_entries_arrive_in() {
     // §6. Two runs recording the same set in different orders must produce
     // identical bytes, or a diff of this file is unreadable.
-    let one = index("locator-order-a");
+    let (one, one_at) = index_with_path("locator-order-a");
     one.record(&Locator::Handle("b".to_owned()), &address(b"2"))
         .expect("write");
     one.record(&Locator::Handle("a".to_owned()), &address(b"1"))
         .expect("write");
 
-    let two = index("locator-order-b");
+    let (two, two_at) = index_with_path("locator-order-b");
     two.record(&Locator::Handle("a".to_owned()), &address(b"1"))
         .expect("write");
     two.record(&Locator::Handle("b".to_owned()), &address(b"2"))
         .expect("write");
+
+    // THE BYTES, not the lookups (CodeRabbit on #879). `current` scans for a
+    // `<locator>\t` prefix, so it answers the same whatever order the lines sit
+    // in — both assertions below stay green with `kept.sort()` deleted, which
+    // means they were testing that recording works, not that it is byte-stable.
+    // The claim is about the FILE, so the file is what gets compared.
+    let one_bytes = std::fs::read(&one_at).expect("the first index");
+    let two_bytes = std::fs::read(&two_at).expect("the second index");
+    assert_eq!(
+        one_bytes, two_bytes,
+        "the same set recorded in two orders is the same bytes"
+    );
 
     assert_eq!(
         one.current(&Locator::Handle("a".to_owned())),
@@ -296,4 +318,33 @@ fn a_record_preserves_every_entry_it_did_not_replace() {
 
     assert_eq!(index.compare(&first, &one), Freshness::Unchanged);
     assert_eq!(index.compare(&second, &two), Freshness::Unchanged);
+}
+
+#[test]
+fn a_reader_never_sees_a_truncated_index_mid_record() {
+    // CodeRabbit on #879, and the half a lock does NOT fix. `std::fs::write`
+    // truncates before it writes, so a `compare` landing in that window read an
+    // empty file and answered `Absent` for every locator that was in fact
+    // recorded — a could-not-look presented as a fact, from the writer this time.
+    //
+    // Asserted through the property the staging buys rather than by racing a
+    // thread, which would be timing-dependent and would pass on a fast machine
+    // whatever the code did: after a record, no intermediate file is left behind
+    // and the index reads whole.
+    let (idx, at) = index_with_path("locator-atomic");
+    let locator = Locator::Handle("h".to_owned());
+
+    idx.record(&locator, &address(b"1")).expect("first");
+    idx.record(&locator, &address(b"2")).expect("second");
+
+    assert_eq!(idx.current(&locator), Some(address(b"2")));
+    assert!(
+        !at.with_extension("staged").exists(),
+        "the staging file is renamed into place, never left beside the index"
+    );
+    let bytes = std::fs::read(&at).expect("the index reads whole");
+    assert!(
+        bytes.ends_with(b"\n") && !bytes.is_empty(),
+        "a published index is a complete file, never a truncation"
+    );
 }

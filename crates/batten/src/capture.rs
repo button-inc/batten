@@ -720,7 +720,45 @@ impl Index {
     /// collapsed the same distinction would make the reader's care pointless:
     /// every prior locator would answer `Absent` afterwards, correctly, about a
     /// mapping this function had just deleted.
+    /// **AND THE WHOLE READ-MODIFY-WRITE IS SERIALIZED AND PUBLISHED ATOMICALLY**,
+    /// which are two requirements rather than one (CodeRabbit on #879). The lock
+    /// stops two concurrent records from reading the same prior contents and the
+    /// later write discarding the earlier entry; it does nothing for a READER,
+    /// because `std::fs::write` truncates before it writes and a `compare` landing
+    /// in that window reads an empty file and answers `Absent` for every locator
+    /// that is in fact recorded. Staging beside the index and renaming over it is
+    /// what closes that: a reader sees the old file or the new one, never a
+    /// truncation, and a crash mid-write leaves the old index rather than a
+    /// partial one.
+    ///
+    /// `fs4` for the reason [`Spool`] already gives: an OS advisory lock is
+    /// released by the kernel when its holder dies, so a process killed mid-record
+    /// does not leave a lock nobody can release.
     pub fn record(&self, locator: &Locator, address: &identity::ContentAddress) -> Result<()> {
+        if let Some(parent) = self.at.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        // THE LOCK IS ITS OWN FILE, never the index: locking the index itself
+        // would mean opening it for write, and the open is what truncates.
+        let lock_at = self.at.with_extension("lock");
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_at)
+            .with_context(|| "the locator index lock could not be opened".to_owned())?;
+        fs4::FileExt::lock(&lock)
+            .with_context(|| "the locator index lock could not be taken".to_owned())?;
+
+        let recorded = self.record_locked(locator, address);
+        // Released explicitly so the unlock is ordered before the function
+        // returns, rather than at whatever point the handle happens to drop.
+        let _ = fs4::FileExt::unlock(&lock);
+        recorded
+    }
+
+    /// [`Index::record`]'s body, with the lock already held.
+    fn record_locked(&self, locator: &Locator, address: &identity::ContentAddress) -> Result<()> {
         let Some(existing) = self.lines() else {
             anyhow::bail!(
                 "the locator index could not be read, so recording would discard entries it \
@@ -736,11 +774,15 @@ impl Index {
         // different orders produce identical bytes, which is what keeps a diff of
         // this file readable and §6's stability claim true of it.
         kept.sort();
-        if let Some(parent) = self.at.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&self.at, kept.join("\n") + "\n")
-            .with_context(|| "the locator index could not be written".to_owned())
+
+        // STAGE BESIDE THE INDEX, so the rename is on one filesystem — a temp dir
+        // elsewhere would make this a copy, and a copy is the truncating write
+        // again under another name.
+        let staged = self.at.with_extension("staged");
+        std::fs::write(&staged, kept.join("\n") + "\n")
+            .with_context(|| "the locator index could not be staged".to_owned())?;
+        std::fs::rename(&staged, &self.at)
+            .with_context(|| "the locator index could not be published".to_owned())
     }
 
     /// The address current for `locator`, if the index names one.
