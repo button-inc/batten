@@ -1533,7 +1533,8 @@ pub(crate) fn piped(
     // `None` for the resolve root: the program is already absolute here, so a
     // relative name cannot arise and handing a directory would only be a guess at
     // one.
-    piped_through(root, None, path.to_str()?, args, stdin)
+    // `Drop`: both callers of this entry point parse the string it returns.
+    piped_through(root, None, path.to_str()?, args, stdin, Diagnostics::Drop)
 }
 
 /// The one spawn both piped entry points share.
@@ -1567,6 +1568,7 @@ fn piped_through(
     program: &str,
     args: &[String],
     stdin: &str,
+    diagnostics: Diagnostics,
 ) -> Option<(i32, String)> {
     let mut child = crate::rules::spawn_resolving(resolve_root, program, |resolved, extra| {
         Command::new(OsString::from(resolved))
@@ -1575,20 +1577,7 @@ fn piped_through(
             .current_dir(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            // **STDERR IS CAPTURED, NOT NULLED, AND THAT IS WHERE THE REASON
-            // LIVES.** Both consumer gates on this path write every refusal
-            // reason to stderr and only their verdict to stdout, so nulling it
-            // left `land::ready` building `Readied::Refused { detail }` from an
-            // empty string and the operator reading `mise refused this pull
-            // request's body` with no coordinate at all. That is the same defect
-            // `land::verify`'s `tee: true` closed, reintroduced one step over
-            // (review of #848).
-            //
-            // Merged rather than kept apart because the caller has ONE detail
-            // field and a gate is free to write to either stream; splitting them
-            // here would make which stream a gate happened to choose decide
-            // whether its reason survives.
-            .stderr(Stdio::piped())
+            .stderr(diagnostics.redirection())
             .spawn()
     })
     .ok()?;
@@ -1600,17 +1589,52 @@ fn piped_through(
         pipe.write_all(stdin.as_bytes()).ok()?;
     }
     let finished = child.wait_with_output().ok()?;
-    // STDOUT FIRST, because that is where a verdict is written and a caller
-    // parsing one must not have to skip a diagnostic to find it.
     let mut output = String::from_utf8_lossy(&finished.stdout).into_owned();
-    let diagnostics = String::from_utf8_lossy(&finished.stderr);
-    if !diagnostics.trim().is_empty() {
-        if !output.is_empty() && !output.ends_with('\n') {
-            output.push('\n');
+    if diagnostics == Diagnostics::Keep {
+        // STDOUT FIRST, because that is where a verdict is written and a caller
+        // parsing one must not skip a diagnostic to find it.
+        let reason = String::from_utf8_lossy(&finished.stderr);
+        if !reason.trim().is_empty() {
+            if !output.is_empty() && !output.ends_with('\n') {
+                output.push('\n');
+            }
+            output.push_str(reason.trim_end());
         }
-        output.push_str(diagnostics.trim_end());
     }
     Some((finished.status.code()?, output))
+}
+
+/// Whether a spawn's stderr joins its stdout, and it is per CALL SITE.
+///
+/// **A shared spawn may not decide this, which is what the first attempt got
+/// wrong** (review of #848). Capturing everywhere fixed `land::ready`'s empty
+/// `detail` and broke two callers that PARSE the string it returns:
+/// `review::ready` runs `serde_json::from_str` over it, so a runner emitting any
+/// diagnostic — a deprecation warning, a TLS notice — would fail to parse and
+/// read as *never dispatched*, which is the one arm a predicate over
+/// `input.tree.review` may refuse on; and `recorder::run_program`'s own doc
+/// states the contract verbatim, *"stderr is discarded, deliberately … a
+/// recorder that surfaced another gate's findings would be a second, unasked-for
+/// channel for them"*, so a gate writing `path:line` to stderr would have written
+/// it into a recorded column.
+///
+/// So the question is the caller's: a gate whose REASON is the payload keeps it,
+/// and a program whose stdout is a parsed value does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Diagnostics {
+    /// Discard stderr. For a caller that parses the returned string.
+    Drop,
+    /// Fold stderr in after stdout. For a caller reporting a gate's own reason.
+    Keep,
+}
+
+impl Diagnostics {
+    fn redirection(self) -> Stdio {
+        match self {
+            Self::Drop => Stdio::null(),
+            Self::Keep => Stdio::piped(),
+        }
+    }
 }
 
 /// [`piped`] over an ARGV rather than a program path.
@@ -1649,7 +1673,19 @@ pub(crate) fn piped_argv(root: &Path, argv: &[String], stdin: &str) -> Option<(i
     // the ladder resolves, so rung 3 needs a directory to read a shebang out of.
     // That one argument IS the difference between the two entry points, which is
     // why they share [`piped_through`] and not a signature.
-    piped_through(root, Some(root), program, operands, stdin)
+    // `Keep`: this entry point serves the LANDING GATES, whose refusal reason is
+    // written to stderr and is the whole of what the operator needs. Both
+    // consumer gates on this path do that (their verdict is the exit code), so a
+    // dropped stderr left `Readied::Refused { detail }` empty and the operator
+    // reading a refusal with no coordinate.
+    piped_through(
+        root,
+        Some(root),
+        program,
+        operands,
+        stdin,
+        Diagnostics::Keep,
+    )
 }
 
 /// This process's next dispatch number, for the live-capture key.

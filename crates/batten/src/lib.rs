@@ -5888,16 +5888,14 @@ fn run_land_lap(
             }
             match land::progress_of(step, code, seen) {
                 land::Progress::Proceed => {}
+                // `None` is not merged, or nobody could say. Either way this is
+                // a lap rather than a retirement — see `landed_for_real`.
                 land::Progress::Landed => {
-                    writeln!(out, "land: landed on lap {lap}")?;
-                    // THE BRANCH HAS DONE ITS WHOLE JOB (CLOUD-349, CLOUD-1471).
-                    // Only here, never on a stop: an abandoned branch is evidence
-                    // and has to survive, while a landed one left behind is how a
-                    // short-lived branch becomes a long-lived one — and reusing
-                    // the name afterwards is the stale-tracking-ref deadlock
-                    // `land::stale_tracking` records.
-                    retire_the_branch(root, url, branch, out)?;
-                    return Ok(ExitCode::Success);
+                    if let Some(code) = landed_for_real(root, url, branch, out)? {
+                        return Ok(code);
+                    }
+                    unwind_lap(root, branch, &pipeline, &entered, seen, out, err)?;
+                    continue 'laps;
                 }
                 land::Progress::Lap => {
                     writeln!(
@@ -6476,6 +6474,71 @@ fn run_land_lease(
     run_lease_acquire(root, &terms, branch, now, out, err)
 }
 
+/// Retire the branch only if the pull request actually merged.
+///
+/// # `Progress::Landed` IS NOT "MERGED", AND READING IT AS ONE DELETED BRANCHES
+///
+/// That variant means the bot's run finished without refusing.
+/// [`fast_forward`]'s own module header says the rest out loud: *"the merge shows
+/// up as the pull request's own terminal state rather than here"*. Nothing read
+/// that state, so a run concluding `skipped` — a job-level `if:`, a path filter,
+/// a concurrency rule — reached here and [`retire_the_branch`] deleted
+/// `refs/heads/<branch>` on the remote, its tracking ref and its receipts, under
+/// a pull request that was still open (review of #848). The predecessor asked the
+/// forge at exactly this point and died on anything but a merge.
+///
+/// `Some(code)` is a landing that is over. `None` means lap: the caller
+/// compensates and goes round again.
+///
+/// **A COULD-NOT-LOOK LAPS**, and the asymmetry is the whole argument — lapping
+/// costs a lap, and being wrong the other way deletes a branch somebody's open
+/// pull request still points at.
+///
+/// # Errors
+///
+/// Only for a stream that will not accept output.
+fn landed_for_real(
+    root: &Path,
+    url: &str,
+    branch: &str,
+    out: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    let repo = repo_or_placeholder(root);
+    let merged = match fast_forward::look_up_pull_request(&repo, branch) {
+        fast_forward::Lookup::Found(pr) => fast_forward::merged(&repo, &pr),
+        // The pull request the bot was asked about cannot be found now. That is a
+        // could-not-look about the merge, never evidence of one.
+        fast_forward::Lookup::None => fast_forward::Merged::Unreadable(0),
+        fast_forward::Lookup::Unreadable(status) => fast_forward::Merged::Unreadable(status),
+    };
+    match merged {
+        fast_forward::Merged::Yes => {
+            writeln!(out, "land: landed")?;
+            // THE BRANCH HAS DONE ITS WHOLE JOB (CLOUD-349, CLOUD-1471). Only
+            // here, never on a stop: an abandoned branch is evidence and has to
+            // survive, while a landed one left behind is how a short-lived branch
+            // becomes a long-lived one — and reusing the name afterwards is the
+            // stale-tracking-ref deadlock `land::stale_tracking` records.
+            retire_the_branch(root, url, branch, out)?;
+            Ok(Some(ExitCode::Success))
+        }
+        fast_forward::Merged::No => {
+            writeln!(
+                out,
+                "land: the bot's run finished but the pull request has not merged; lapping rather than retiring a branch that is still open"
+            )?;
+            Ok(None)
+        }
+        fast_forward::Merged::Unreadable(status) => {
+            writeln!(
+                out,
+                "land: could not read whether the pull request merged ({status}); lapping rather than deleting on an unread answer"
+            )?;
+            Ok(None)
+        }
+    }
+}
+
 /// The repository this lap is landing in, as the forge spells it.
 ///
 /// # THE PLACEHOLDER WAS A GUARANTEED 404, NOT A FALLBACK
@@ -6504,7 +6567,14 @@ fn repo_slug(root: &Path) -> Option<String> {
     {
         return Some(declared);
     }
-    let name = std::env::var("LAND_REMOTE").unwrap_or_else(|_| String::from("origin"));
+    // `LAND_LOCK_REMOTE`, which is what every sibling reads — `lease::terms`,
+    // the `lease` dispatch and `run_land_fast_forward` all resolve the remote by
+    // that name. This said `LAND_REMOTE`, a name appearing nowhere else in the
+    // tree, so a consumer pointing the lease at `upstream` would take the lease,
+    // fetch, push and delete against `upstream` while this looked up `origin` —
+    // resolving the wrong slug, or none, and falling back to the placeholder this
+    // function exists to remove (review of #848).
+    let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
     let remotes = git::remotes(root).ok()?;
     remotes
         .iter()
@@ -6683,14 +6753,35 @@ fn run_land_fast_forward(
             // the forge answers cheaply, and the cost of too few is a lap that
             // reports no answer while one was moments away. Exhausting it still
             // reports `Pending`, so the lap's own budget stays the outer bound.
-            let asks = std::env::var("LAND_ANSWER_MAX_UNKNOWNS")
+            // `LAND_ANSWER_ASKS`, not `LAND_ANSWER_MAX_UNKNOWNS`. The latter
+            // bounds the CI wait with a default three orders of magnitude larger,
+            // and in the predecessor it meant a third thing again — so one name
+            // over both loops is a setting that cannot be tuned for either
+            // (review of #848).
+            let asks = std::env::var("LAND_ANSWER_ASKS")
                 .ok()
                 .and_then(|raw| raw.trim().parse::<u32>().ok())
                 .unwrap_or(120);
             let mut verdict = fast_forward::Answer::Pending;
             for attempt in 0..asks.max(1) {
                 verdict = fast_forward::answer(&ask, &since, &comment);
-                if !matches!(verdict, fast_forward::Answer::Pending) {
+                // **A COULD-NOT-LOOK IS NOT AN ANSWER, and breaking on it undid
+                // the poll.** `Answer::Unknown` covers a transport failure, an
+                // unparseable body and any non-runs document — a 403 error page
+                // included — so ONE transient hiccup during the wait ended it,
+                // which laps: the compensation cancels this head's own in-flight
+                // runs, the lap re-verifies, re-readies (buying another matrix),
+                // re-pushes and posts a SECOND `/fast-forward` comment while the
+                // first may be merging. That is the exact failure this poll was
+                // added to fix, reintroduced by its own exit condition.
+                //
+                // Only a REFUSAL or an ACCEPTANCE ends the wait. Exhausting the
+                // count reports whatever the last read said, so an unknown that
+                // never resolves still reaches the caller as one.
+                if matches!(
+                    verdict,
+                    fast_forward::Answer::Accepted | fast_forward::Answer::Refused
+                ) {
                     break;
                 }
                 if attempt + 1 < asks.max(1) {

@@ -455,11 +455,26 @@ LAND_ENTRY_GATES = "?mise run pr-unsubscribed drop|mise run pr-unsubscribed chec
 # lap. The predecessor ran `mise run verify` directly, and this is that call site
 # moved into config rather than a new decision.
 LAND_VERIFY = "mise run verify"
-# The workflow whose runs carry the fast-forward bot's answer, as a PATH, because
-# `fast_forward::Ask` matches a run's own `path`. The predecessor defaulted this
-# to `fast-forward.yml` compiled in; naming it here is the same value with the
-# consumer holding it.
-LAND_WORKFLOW = ".github/workflows/fast-forward.yml"
+# The workflow whose runs carry the fast-forward bot's answer, as the BARE FILE
+# NAME the endpoint takes. `fast_forward::answer_request` interpolates it as ONE
+# path segment of `actions/workflows/{workflow}/runs`, so a value carrying
+# slashes makes a route that does not exist: 404, no `workflow_runs` key,
+# `Answer::Unknown("unreadable")`, and a landing that laps forever without ever
+# reading its own answer.
+#
+# THE FIRST SPELLING HERE WAS `.github/workflows/fast-forward.yml` AND ITS
+# COMMENT WAS WRONG TWICE (review of #848): it justified the path form by saying
+# `fast_forward::Ask` matches a run's own `path`, which is `land::FanIn`'s
+# question and `CI_FANIN_WORKFLOW`'s value, not this one. The predecessor used
+# the bare name in exactly this position and so does every test in the tree.
+LAND_WORKFLOW = "fast-forward.yml"
+# HOW MANY TIMES THE FAST-FORWARD POLL ASKS before reporting no answer. Its OWN
+# row rather than `LAND_ANSWER_MAX_UNKNOWNS`, which bounds the CI wait: one name
+# over two loops with two different defaults is a setting that cannot be tuned
+# for either, and in the predecessor that name meant a third thing again (the
+# count of unreadable bot answers, default 3) — so a consumer carrying it forward
+# would have truncated the CI wait to about three seconds (review of #848).
+LAND_ANSWER_ASKS = "120"
 # THE RECLAIM CENSUS'S STOP NOTE (CLOUD-451), declared here because the program
 # is this consumer's and a census name inside `crates/batten` is non-negotiable
 # rule 1's plainest violation. `batten lease release` spawns it when a release
