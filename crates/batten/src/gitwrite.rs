@@ -274,6 +274,29 @@ pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
 /// the engine cannot compute, or a worktree write that fails. A CONFLICT is not
 /// an error — it is [`Rebase::Conflicted`].
 pub fn rebase(dir: &Path, branch: &str, onto: &str) -> Result<Rebase> {
+    // The range and the graft point are the same rev, which is what an ordinary
+    // rebase means: replay everything this branch has that `onto` does not.
+    replay_onto(dir, branch, onto, onto)
+}
+
+/// Replay `upstream..branch` onto `onto`, and update the worktree to match.
+///
+/// **`git rebase --onto`, and the third argument is the whole of it.** [`rebase`]
+/// bounds the range by the place it grafts to, which is right when they are the
+/// same rev and wrong when they are not — and the case that needs them apart is
+/// unwinding a bet this process ADOPTED (CLOUD-862). Such a bet has no undo
+/// point, because the process that recorded one is gone; what it has is the
+/// borrowed base, and `origin/main..HEAD` minus the borrowed range is precisely
+/// this branch's own commits. Bounding by `onto` there would replay the borrowed
+/// commits too, which is the tree the unwind exists to get rid of.
+///
+/// Everything else is [`rebase`]'s and is documented there: merge commits
+/// refused, signatures dropped, a conflict returned rather than raised.
+///
+/// # Errors
+///
+/// As [`rebase`].
+pub fn replay_onto(dir: &Path, branch: &str, upstream: &str, onto: &str) -> Result<Rebase> {
     let repo = crate::git::open_for_write(dir)?;
     let resolve = |rev: &str| {
         repo.rev_parse_single(rev)
@@ -281,6 +304,7 @@ pub fn rebase(dir: &Path, branch: &str, onto: &str) -> Result<Rebase> {
             .map(gix::Id::detach)
     };
     let base = resolve(onto)?;
+    let bound = resolve(upstream)?;
     let tip = resolve(branch)?;
 
     // "Does this branch already sit on the base" is an ancestry question, and it
@@ -290,22 +314,29 @@ pub fn rebase(dir: &Path, branch: &str, onto: &str) -> Result<Rebase> {
     // is asked here is whether there is anything to replay, and for that ancestry
     // is exactly the predicate — the base is an ancestor of the tip iff the tip
     // already carries it.
-    if repo
-        .merge_base(base, tip)
-        .is_ok_and(|found| found.detach() == base)
+    // ASKED OF THE GRAFT POINT AND THE BOUND ALIKE, and both are needed once
+    // they can differ: there is nothing to replay when the tip already carries
+    // `onto` AND the range is empty. An adopted bet's unwind has a tip that
+    // carries its bound and NOT its graft point, which is exactly the case that
+    // must not short-circuit.
+    if bound == base
+        && repo
+            .merge_base(base, tip)
+            .is_ok_and(|found| found.detach() == base)
     {
         return Ok(Rebase::Current);
     }
 
     let walk = repo
         .rev_walk([tip])
-        .with_hidden([base])
+        .with_hidden([bound])
         .all()
-        .map_err(|err| anyhow::anyhow!("gitwrite: {onto}..{branch} will not walk: {err}"))?;
+        .map_err(|err| anyhow::anyhow!("gitwrite: {upstream}..{branch} will not walk: {err}"))?;
     let mut range = Vec::new();
     for step in walk {
-        let info =
-            step.map_err(|err| anyhow::anyhow!("gitwrite: {onto}..{branch} will not walk: {err}"))?;
+        let info = step.map_err(|err| {
+            anyhow::anyhow!("gitwrite: {upstream}..{branch} will not walk: {err}")
+        })?;
         if info.parent_ids().count() > 1 {
             return Err(anyhow::anyhow!(
                 "gitwrite: {} is a merge, and this replay does not model one",
@@ -350,6 +381,38 @@ pub fn rebase(dir: &Path, branch: &str, onto: &str) -> Result<Rebase> {
         head: now,
         commits: range.len(),
     })
+}
+
+/// Move `branch` to `to` and make the worktree match — `git reset --hard`.
+///
+/// **The EXACT unwind, and it is a different operation from a replay.** A bet
+/// this process placed recorded the branch's own last non-speculative HEAD, so
+/// undoing it is not "recompute what this branch should be" but "go back to what
+/// it was" — no merge, no new commits, nothing to conflict. Where that undo point
+/// is absent, [`replay_onto`] is the other unwind and its header says why.
+///
+/// The worktree update is [`rebase`]'s, so a reset writes the same bytes a replay
+/// would and leaves an index with the stat data git needs to read the tree as
+/// clean. Without that this is a reset that leaves every tracked file looking
+/// modified, which the next lap's `tree-clean` would refuse.
+///
+/// # Errors
+///
+/// A repository that will not open, a rev that will not resolve, or a worktree
+/// write that fails.
+pub fn reset_hard(dir: &Path, branch: &str, to: &str) -> Result<String> {
+    let repo = crate::git::open_for_write(dir)?;
+    let resolve = |rev: &str| {
+        repo.rev_parse_single(rev)
+            .map_err(|err| anyhow::anyhow!("gitwrite: {rev} will not resolve: {err}"))
+            .map(gix::Id::detach)
+    };
+    let was = resolve(branch)?;
+    let now = resolve(to)?;
+    let id = now.to_hex().to_string();
+    set_ref(dir, branch, &id)?;
+    update_worktree(&repo, was, now)?;
+    Ok(id)
 }
 
 /// What replaying ONE commit produced.
