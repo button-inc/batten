@@ -11,6 +11,7 @@
 pub mod action;
 pub mod admission;
 pub mod advisory;
+pub mod agent;
 pub mod attribution;
 pub mod baseline;
 pub mod bot;
@@ -217,6 +218,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         ),
         Some(Command::Config { command }) => run_config(&command, &overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),
+        Some(Command::ShowAgent { json }) => run_show_agent(json, &overrides, out),
         Some(Command::Doctor { command }) => run_doctor(&command, out),
         // `init` reads no config — it is the verb that exists because there is
         // none — so the §8 chain is deliberately not threaded through it.
@@ -13743,6 +13745,45 @@ fn session_code(report: &doctor::SessionReport) -> ExitCode {
         Some(0) => ExitCode::Success,
         Some(_) => ExitCode::Usage,
     }
+}
+
+/// `show agent` (CLOUD-1180): what an agent may do in this repository.
+///
+/// # Absent config is a STATE, and that decides the error handling
+///
+/// `resolve` raises a `UsageError` where there is no `batten.toml`. That is the
+/// right answer for a gate — a run that cannot read its policy has not passed —
+/// and the wrong one here: "there is nothing configured in this repository" is a
+/// true and useful answer to "what may I do here", and CLOUD-1180's §7(d) asks
+/// for a deterministic unavailable state rather than an error.
+///
+/// So the resolve is made optional and its failure becomes `configured: false`.
+/// A malformed config is NOT swallowed with it — that is a different question
+/// (`ok()` keeps could-not-parse indistinguishable from absent only because both
+/// mean "no gates are in force here", which is the one thing this verb reports;
+/// `config lint` is where a broken file is diagnosed).
+///
+/// # `read`, structurally
+///
+/// Every input is already in hand or derived from the compiled surface;
+/// [`agent::capabilities`] takes the config by reference and touches no
+/// filesystem, so there is no path from this verb to a write or a spawn.
+fn run_show_agent(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides).ok();
+    let reading = agent::capabilities(config.as_ref());
+    if json {
+        // Unconditional, including when nothing is configured: JSON that is
+        // sometimes absent is unparseable.
+        writeln!(out, "{}", serde_json::to_string_pretty(&reading)?)?;
+    } else {
+        output::lines(out, &reading.read_only)?;
+        output::lines(out, &reading.exit_codes)?;
+        output::lines(out, &reading.gates)?;
+        writeln!(out, "{}", reading.summary())?;
+    }
+    // Always `0`: this verb reports a state and judges nothing, so there is no
+    // finding for it to raise and no `2` it could honestly mint.
+    Ok(ExitCode::Success)
 }
 
 fn run_spec(format: SpecFormat, out: &mut dyn Write) -> Result<ExitCode> {

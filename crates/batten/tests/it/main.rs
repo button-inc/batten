@@ -45,6 +45,7 @@ mod acquisition_metric;
 mod acquisition_sweep;
 mod admission;
 mod advisory_drain;
+mod agent_capabilities;
 mod agent_facts;
 mod ambient_authority;
 mod attribution;

@@ -4048,6 +4048,50 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Unclassified,
         flags: &[],
     },
+    // CLOUD-1180's first landable slice, and `record <object>`'s spelling for
+    // `record <object>`'s reason. CLOUD-1180's original table said `agent
+    // instructions`; its own 2026-08-30 amendment respells that to `show agent`
+    // under CLOUD-1184's imperative `VERB OBJECT` grammar, and both CLOUD-1184
+    // and CLOUD-1179 have landed. Adding the noun-first spelling today would be
+    // one more row for CLOUD-1190 to invert.
+    //
+    // `read`, AND THE WHOLE POINT IS THAT THE VERB CARRIES THE BAND. CLOUD-1184's
+    // grammar puts the effect on the verb, so `show` is the read band by
+    // construction — which is what makes a `read` noun here safe where `record`,
+    // `capture` and `receipt` all had to be `unclassified` over write-bearing
+    // subtrees. `tests::every_leaf_under_show_is_read` is what keeps that true
+    // rather than merely intended: without it, one write leaf added under `show`
+    // would silently put a writer on the derived agent allowlist for any consumer
+    // treating an entry as a prefix (CLOUD-170).
+    //
+    // The write half of CLOUD-1180 — `migrate agent`, from the recovered-exact
+    // `agent migrate apply` — is deliberately NOT here. It belongs to a `migrate`
+    // verb in the write band, and the row records that respelling as a DEPARTURE
+    // from a recovered spelling rather than applying it quietly.
+    CommandDecl {
+        path: "show",
+        id: "show",
+        about: "Report what something is, without changing it",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[],
+    },
+    // CLOUD-19's directive, landed at last: an agent asks the engine what it may
+    // do here instead of being told in prose that goes stale.
+    //
+    // NOT A SECOND COMMAND AUTHORITY, which is the directive's actual constraint.
+    // Every field is derived from a model that already exists — the read-only
+    // allowlist from `spec::read_only_allowlist`, the exit table from
+    // `ExitCode::ALL`, the gates from the resolved config — so this row adds a
+    // VIEW and no new source of truth. See `agent.rs`'s module doc.
+    CommandDecl {
+        path: "show agent",
+        id: "show.agent",
+        about: "What an agent may do in this repository: the read-only verbs, the exit contract, and the declared gates",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
     // Its own verb rather than a flag on `check`, for `state record`'s reason: a
     // `--record` there would flip `check` from `read` to `write` and drop it out of
     // the derived agent allowlist, for a side effect nobody asked that invocation
@@ -4974,6 +5018,44 @@ mod tests {
                 !decl.flags.iter().any(|flag| flag.positional),
                 "{} has children and declares a positional; that flips `is_noun` \
                  and drops `subcommand_required`",
+                decl.path
+            );
+        }
+    }
+
+    /// Every leaf under `show` is `read` (CLOUD-1180, CLOUD-1184).
+    ///
+    /// `show` is declared `read` rather than `unclassified`, unlike `record`,
+    /// `capture` and `receipt`, and this assertion is the entire reason that is
+    /// safe. Those nouns sit over write-bearing subtrees, so a `read` noun there
+    /// would leak onto the derived agent allowlist for any consumer treating an
+    /// entry as a prefix (CLOUD-170). `show` is different by CONSTRUCTION rather
+    /// than by luck: CLOUD-1184's grammar puts the effect band on the verb, so a
+    /// write under `show` is a grammar violation and not merely an oversight.
+    ///
+    /// Without this, that is a promise. With it, it is a property — which is the
+    /// same distinction CLOUD-244 caught on `hook` and CLOUD-1180's §2 calls
+    /// "the negative half is the point".
+    ///
+    /// Fails by: adding any leaf under `show` whose effect is not `read`.
+    #[test]
+    fn every_leaf_under_show_is_read() {
+        let leaves: Vec<&CommandDecl> = SURFACE
+            .iter()
+            .filter(|decl| parent_of(decl.path) == "show")
+            .collect();
+        assert!(
+            !leaves.is_empty(),
+            "no leaf under `show`, so this assertion is vacuous — it must not \
+             pass by having nothing to judge"
+        );
+        for decl in leaves {
+            assert_eq!(
+                decl.effect,
+                Effect::Read,
+                "{}: `show` is the read band, so every leaf under it is `read`; \
+                 a writer here reaches the derived agent allowlist through the \
+                 noun's own `read`",
                 decl.path
             );
         }

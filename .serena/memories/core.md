@@ -171,6 +171,30 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   no locking at all — and the questions come off a class's declared
   `override.precondition` in `verdict.rs`. The gate never grades an answer;
   presence and non-emptiness are the whole predicate (rule 3).
+- `agent.rs` — what an agent may do in THIS repository, derived live
+  (CLOUD-1180), surfaced as `show agent`. CLOUD-19's directive ("the agent-first
+  preset work adds a new top-level `agent` subtree… so this does not create a
+  second command authority") survived only as a comment on a Done issue with
+  nothing in the tree; this is its first landable slice. **Spelled `show agent`,
+  not `agent instructions`**: CLOUD-1180's own 2026-08-30 amendment respells it
+  under CLOUD-1184's imperative `VERB OBJECT` grammar, and `record <object>` is
+  the landed precedent for spelling a NEW row in the target grammar rather than
+  adding one more row for CLOUD-1190 to invert. **Not a second authority, which
+  is the directive's actual constraint**: every field is DERIVED — the read-only
+  allowlist from `spec::read_only_allowlist` (the one implementation of §5's
+  `effect == read` filter, so a second one cannot be wrong in the unsafe
+  direction), the exit table from `ExitCode::ALL` and each code's own
+  `meaning()`, the gates from the resolved config. It adds a view and no source
+  of truth. Pointer-only is load-bearing rather than formal here: a gate is its
+  id and severity, never its `glob`, `pattern` or `reason` — this is the verb an
+  agent runs at session start, so it is the likeliest surface to be pasted
+  somewhere, and a pattern is the consumer's own policy text. An absent
+  `batten.toml` is `configured: false` at exit `0`, never an error: "nothing is
+  gated here" answers the question rather than failing it. `show` is `read`
+  where `record`/`capture`/`receipt` are `unclassified`, and that is safe only
+  because CLOUD-1184 puts the effect band on the VERB —
+  `surface::tests::every_leaf_under_show_is_read` is what makes it a property
+  instead of a promise (CLOUD-244's class on `hook`).
 - `advisory.rs` — the advisory CHANNEL and what it may cost (CLOUD-896). A LEAF
   beside `refusal.rs`, and the pairing is the whole placement: `refusal` bounds
   ONE emitted deny line, this bounds ONE emission of the whole channel, so the two

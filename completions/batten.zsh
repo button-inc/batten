@@ -4798,6 +4798,102 @@ esac
     ;;
 esac
 ;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__show_commands" \
+"*::: :->show" \
+&& ret=0
+
+    case $state in
+    (show)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-show-command-$line[1]:"
+        case $line[1] in
+            (agent)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__show__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-show-help-command-$line[1]:"
+        case $line[1] in
+            (agent)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (wiring)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -6299,6 +6395,26 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__show_commands" \
+"*::: :->show" \
+&& ret=0
+
+    case $state in
+    (show)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-show-command-$line[1]:"
+        case $line[1] in
+            (agent)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (wiring)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__wiring_commands" \
@@ -6460,6 +6576,7 @@ _batten_commands() {
 'design:Design-evidence claims\: the integrity of the record behind a decision' \
 'state:The out-of-tree findings store\: which store belongs to this checkout' \
 'record:Out-of-tree verdict stores\: what something else judged, keyed so a stale answer cannot answer' \
+'show:Report what something is, without changing it' \
 'wiring:Repair a host'\''s hook registrations' \
 'lease:The landing lease\: one branch spends a matrix at a time' \
 'land:The landing lap\: replay this branch onto a base that moved' \
@@ -7053,6 +7170,7 @@ _batten__subcmd__help_commands() {
 'design:Design-evidence claims\: the integrity of the record behind a decision' \
 'state:The out-of-tree findings store\: which store belongs to this checkout' \
 'record:Out-of-tree verdict stores\: what something else judged, keyed so a stale answer cannot answer' \
+'show:Report what something is, without changing it' \
 'wiring:Repair a host'\''s hook registrations' \
 'lease:The landing lease\: one branch spends a matrix at a time' \
 'land:The landing lap\: replay this branch onto a base that moved' \
@@ -7694,6 +7812,18 @@ _batten__subcmd__help__subcmd__semver_commands() {
 _batten__subcmd__help__subcmd__semver__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten help semver check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__show_commands] )) ||
+_batten__subcmd__help__subcmd__show_commands() {
+    local commands; commands=(
+'agent:What an agent may do in this repository\: the read-only verbs, the exit contract, and the declared gates' \
+    )
+    _describe -t commands 'batten help show commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__show__subcmd__agent_commands] )) ||
+_batten__subcmd__help__subcmd__show__subcmd__agent_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help show agent commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__singleton_commands] )) ||
 _batten__subcmd__help__subcmd__singleton_commands() {
@@ -8708,6 +8838,37 @@ _batten__subcmd__semver__subcmd__help__subcmd__check_commands() {
 _batten__subcmd__semver__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten semver help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__show_commands] )) ||
+_batten__subcmd__show_commands() {
+    local commands; commands=(
+'agent:What an agent may do in this repository\: the read-only verbs, the exit contract, and the declared gates' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten show commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__show__subcmd__agent_commands] )) ||
+_batten__subcmd__show__subcmd__agent_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten show agent commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__show__subcmd__help_commands] )) ||
+_batten__subcmd__show__subcmd__help_commands() {
+    local commands; commands=(
+'agent:What an agent may do in this repository\: the read-only verbs, the exit contract, and the declared gates' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten show help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__show__subcmd__help__subcmd__agent_commands] )) ||
+_batten__subcmd__show__subcmd__help__subcmd__agent_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten show help agent commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__show__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__show__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten show help help commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__singleton_commands] )) ||
 _batten__subcmd__singleton_commands() {

@@ -121,6 +121,11 @@ pub enum Command {
         /// The output format for the spec.
         format: SpecFormat,
     },
+    /// Report what an agent may do in this repository (CLOUD-1180).
+    ShowAgent {
+        /// Emit the data document rather than pointer lines.
+        json: bool,
+    },
     /// Diagnose whether Batten can run in this repository.
     Doctor {
         /// The chosen diagnosis: the bare report, or a focused sub-diagnostic.
@@ -2024,6 +2029,25 @@ fn capture_of(matches: &ArgMatches) -> Option<CaptureCommand> {
     }
 }
 
+/// The `show` sub-verb a parse resolved to.
+///
+/// Its own function rather than an arm in [`command_of`], on `mcp_of`'s and
+/// `policy_of`'s precedent: the dispatch stays one line per subtree, which is
+/// what keeps that match readable as a census of the surface rather than as a
+/// parser.
+///
+/// `show` is a noun over one leaf today, so an absent subcommand is a usage
+/// error rather than a default action — `surface::is_noun` marks it and clap
+/// refuses the bare invocation before this runs.
+fn show_of(matches: &ArgMatches) -> Option<Command> {
+    match matches.subcommand()? {
+        ("agent", matches) => Some(Command::ShowAgent {
+            json: flag(matches, "json"),
+        }),
+        _ => None,
+    }
+}
+
 /// The `mcp` sub-verb a parse resolved to.
 fn mcp_of(matches: &ArgMatches) -> Option<McpCommand> {
     match matches.subcommand()? {
@@ -2184,6 +2208,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         }
         "capture" => capture_of(matches).map(|command| Command::Capture { command }),
         "mcp" => mcp_of(matches).map(|command| Command::Mcp { command }),
+        "show" => show_of(matches),
         "target" => target_of(matches).map(|command| Command::Target { command }),
         "hook" => matches
             .get_one::<Harness>("harness")
