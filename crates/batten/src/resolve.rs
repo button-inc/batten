@@ -467,6 +467,15 @@ pub struct Resolved {
     /// second, redundant spelling that `check`'s stdout would then have to carry.
     #[serde(skip_serializing)]
     pub authority: config::Authority,
+    /// Rows the committed authority declared that this build could not resolve
+    /// and dropped (CLOUD-1428).
+    ///
+    /// `skip` for [`Resolved::authority`]'s reason and one more: each entry is a
+    /// gate that is OFF, which is a fact about this BUILD meeting this file, not
+    /// a key of the configuration. Putting it in the document would attribute it
+    /// to a layer, and no layer set it.
+    #[serde(skip)]
+    pub unresolvable: Vec<config::Unresolvable>,
     /// The schema version of the committed authority.
     pub version: u32,
     /// The minimum Batten version the authority permits (enforcement: CLOUD-33).
@@ -1624,6 +1633,11 @@ fn assemble(
         origin,
     );
     Resolved {
+        // Carried from the committed authority rather than re-derived: the load
+        // is the only place that can know which rows it dropped, and a second
+        // reading here would be a second authority over the same question
+        // (CLOUD-1428).
+        unresolvable: repo.unresolvable.clone(),
         authority: present,
         version: repo.version,
         min_batten_version: repo.min_batten_version.clone(),

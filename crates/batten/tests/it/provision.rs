@@ -251,17 +251,46 @@ fn dry_run_previews_and_writes_nothing() {
     assert_eq!(env.run(&["provision", "status"]).status.code(), Some(2));
 }
 
-// --- (e) an unknown manifest key is a hard error --------------------------------
+// --- (e) an unknown manifest key costs its own row ------------------------------
 
 #[test]
-fn an_unknown_manifest_key_is_exit_1() {
+fn an_unknown_manifest_key_costs_its_row_and_is_named() {
+    // THIS ASSERTED EXIT 1 UNTIL CLOUD-1428, and the inversion is the repair.
+    // An unknown key was a hard load error for the whole file, and a config
+    // load failure is exit `1` — which under the exit contract does not block a
+    // mediated call. So a key in a `[[provision]]` row switched off every
+    // `shape` row, the verb table and the protected paths too, silently.
+    //
+    // The row itself is still OFF, which is why naming it is half the change
+    // and not a courtesy: a provision row that does not load is a tool that
+    // will not be installed. `config show` names it and `doctor` refuses,
+    // rather than `provision status` inventing a verdict about a row it never
+    // saw.
     let env = Env::new("provision-unknown-key");
     let (url, sha) = env.artifact("demo", BINARY);
     env.config(&format!("{}bogus = true\n", manifest(&url, &sha)));
 
-    let output = env.run(&["provision", "status"]);
-    assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("bogus"));
+    let shown = env.run(&["config", "show"]);
+    let said = String::from_utf8_lossy(&shown.stderr);
+    assert!(
+        said.contains("unresolved row"),
+        "the dropped row must be named rather than silently discarded: {said}"
+    );
+    assert!(
+        said.contains("install:local"),
+        "and it names the rebuild, because a stale binary is the likelier cause: {said}"
+    );
+    assert!(
+        !said.contains("bogus"),
+        "pointer-only: the report names the row, never the file's contents: {said}"
+    );
+
+    let doctor = env.run(&["doctor"]);
+    assert!(
+        String::from_utf8_lossy(&doctor.stdout).contains("config failed config-rows-dropped"),
+        "a dropped provision row must not read as a healthy setup: {}",
+        String::from_utf8_lossy(&doctor.stdout)
+    );
 }
 
 /// CLOUD-970's no-regression case, and the one that fails if the indirection

@@ -189,6 +189,36 @@ const POLICY_MODULE_UNSWEPT: &str = "policy-module-unswept";
 /// exists, so `waiver-names-no-rule` is satisfied, and the expiry is in the
 /// future, so `waiver-expired` is too.
 const WAIVER_UNREACHABLE_KIND: &str = "waiver-unreachable-kind";
+/// A row the loader could not resolve and dropped (CLOUD-1428).
+///
+/// **This is the verb CI runs seeing the drop at all.** The file loading around
+/// an unresolvable row is the repair — the alternative was every gate off at
+/// once — but the row itself still enforces nothing, and `config show` naming it
+/// reaches nobody in a pipeline. It is the same class as `rule-disabled` one
+/// step along: a gate that reads as present in the file and is not one, except
+/// that here the author did not choose it.
+const ROW_UNRESOLVED: &str = "config-row-unresolved";
+/// Drop the rows at the indices the loader could not resolve.
+///
+/// The located view and the parsed config must describe the same rows in the
+/// same order, because the pairing below is positional. `Unresolvable::index` is
+/// the row's ordinal in the source, which is precisely the index to remove.
+fn without_unresolvable<T>(
+    rows: Vec<T>,
+    section: &str,
+    dropped: &[config::Unresolvable],
+) -> Vec<T> {
+    rows.into_iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            !dropped
+                .iter()
+                .any(|row| row.section == section && row.index == *index)
+        })
+        .map(|(_, row)| row)
+        .collect()
+}
+
 /// The spans of the keys the lint locates.
 ///
 /// A parallel view over the same TOML, deserialized with [`Spanned`] so a smell
@@ -276,6 +306,31 @@ pub fn smells(
     // where a refusal only a board action could clear would block every landing
     // on a change that cannot affect it.
     found.extend(deferral_smells(&config, source));
+
+    // THE LOCATED VIEW IS PRUNED TO MATCH, and this is not tidying (CLOUD-1428).
+    // `Located` deserializes the raw text, which still carries every row; the
+    // parsed config no longer does. The two are paired BY POSITION further
+    // down, so one dropped row shifts every later one — measured in review as an
+    // expired waiver silently ceasing to be reported, which is exactly the class
+    // this change exists to close. Filtering by the recorded index restores the
+    // invariant the pairing states, using the pointer the loader already wrote
+    // rather than a second derivation of it.
+    let located = Located {
+        rules: without_unresolvable(located.rules, "rule", &config.unresolvable),
+        waivers: without_unresolvable(located.waivers, "waiver", &config.unresolvable),
+        ..located
+    };
+
+    // A DROPPED ROW IS A GATE THAT IS OFF, reported here because this is the
+    // verb a pipeline runs. Located by section and index rather than by line:
+    // the row's own text is still in the file, but pointing INTO it would be
+    // pointing at a key this build cannot name (rule 4).
+    for row in &config.unresolvable {
+        found.push(Smell {
+            at: Where::Key(row.line()),
+            id: ROW_UNRESOLVED,
+        });
+    }
 
     // A set declared and empty: the config uses the feature and the feature
     // covers nothing. Absence is not flagged — see the module docs.

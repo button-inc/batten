@@ -121,6 +121,20 @@ pub enum Strictness {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// Rows this build could not resolve and dropped, so the rest of the file
+    /// still decides (CLOUD-1428).
+    ///
+    /// Not a config key — `skip` keeps it out of both the deserializer and the
+    /// derived schema, so an author cannot write it and the published surface
+    /// does not grow. It is the loader's own reading about the file, carried on
+    /// the value so every caller can report it rather than each re-deriving it.
+    ///
+    /// **Empty is the answer, not the default.** A reader that treats a
+    /// non-empty list as advisory has reintroduced the defect one layer along:
+    /// each entry is a gate that is OFF, and CLOUD-251's "never a silent pass"
+    /// is what makes reporting it half the change.
+    #[serde(skip)]
+    pub unresolvable: Vec<Unresolvable>,
     /// The config schema version. Must equal [`SUPPORTED_VERSION`].
     pub version: u32,
     /// The minimum Batten version permitted to read this file (semver).
@@ -1663,12 +1677,23 @@ const UNKNOWN_KEY: [&str; 2] = ["unknown field", "unknown variant"];
 ///
 /// Pointer-only (rule 4): the note adds a version and a task name. Every byte of
 /// file content in the output is the parser's own error, unchanged.
+/// Whether a rendered parse error is one of the unknown-key shapes.
+///
+/// Named rather than inlined so the `//MUTANT` rows below can anchor on a line
+/// carrying no `|`: a mutation row is `id|script|case`, split on `|`, so a
+/// closure in the anchor yields five fields and the declaration can only ever
+/// report `malformed-row`. Both rows here did exactly that until it was caught
+/// in review.
+fn names_an_unknown_key(rendered: &str) -> bool {
+    UNKNOWN_KEY.iter().any(|shape| rendered.contains(shape))
+}
+
 //MUTANT-SUITE crates/batten/tests/it/config_skew.rs
-//MUTANT skew-reads-as-malformed|s@    if !UNKNOWN_KEY.iter().any(|shape| rendered.contains(shape)) {@    if true {@|an_unknown_key_names_the_rebuild
-//MUTANT every-parse-error-blames-skew|s@    if !UNKNOWN_KEY.iter().any(|shape| rendered.contains(shape)) {@    if false {@|a_malformed_config_does_not_mention_a_rebuild
+//MUTANT skew-reads-as-malformed|s@    if !names_an_unknown_key(&rendered) {@    if true {@|an_unknown_key_names_the_rebuild
+//MUTANT every-parse-error-blames-skew|s@    if !names_an_unknown_key(&rendered) {@    if false {@|a_malformed_config_does_not_mention_a_rebuild
 pub(crate) fn config_error(source: &str, err: &toml::de::Error) -> anyhow::Error {
     let rendered = err.to_string();
-    if !UNKNOWN_KEY.iter().any(|shape| rendered.contains(shape)) {
+    if !names_an_unknown_key(&rendered) {
         return UsageError::raise(format!("invalid config {source}: {err}"));
     }
     UsageError::raise(format!(
@@ -1680,8 +1705,309 @@ pub(crate) fn config_error(source: &str, err: &toml::de::Error) -> anyhow::Error
     ))
 }
 
+/// One row this build could not resolve, dropped so the rest of the file loads.
+///
+/// Pointer-only by construction (non-negotiable rule 4): the section it came
+/// from and the `id` it declared if it declared one. Not the key, and not a
+/// byte of the file — the parse error quotes the source line, which is exactly
+/// what must not travel, and a key from a schema this build predates is a name
+/// the reader cannot look up anyway.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unresolvable {
+    /// The array-of-tables section, e.g. `rule`.
+    pub section: String,
+    /// The row's declared `id`, when it has one. A row without an id is still
+    /// reported — by section and index — because a silent drop is the vacuous
+    /// pass this whole change exists to refuse.
+    pub id: Option<String>,
+    /// The index of the row within its section, so an id-less row is still
+    /// locatable.
+    pub index: usize,
+}
+
+impl Unresolvable {
+    /// The pointer line a report carries.
+    #[must_use]
+    pub fn line(&self) -> String {
+        match &self.id {
+            Some(id) => format!("{} {id}", self.section),
+            None => format!("{} #{}", self.section, self.index),
+        }
+    }
+}
+
+/// How many rows may be dropped before the file is refused outright.
+///
+/// A bound rather than a loop to exhaustion: a config whose every row this build
+/// misunderstands is not a newer schema, it is the wrong file, and grinding
+/// through it one row at a time would answer "no rules configured" over it —
+/// which is the fail-open one layer along.
+const UNRESOLVABLE_CEILING: usize = 32;
+
+/// Whether this load failure is an UNKNOWN KEY, rather than a value whose key
+/// this build knows and whose content it refuses.
+///
+/// **The distinction is the whole of the bound, and both directions are
+/// defects.** Prune a bad VALUE and `severity = "tree"` becomes a silently
+/// dropped rule — which is `rules.rs`'s closed-enum argument being thrown away
+/// one layer along, a rule configured, typed and off. Prune nothing and one key
+/// from a newer schema still fails the whole file open, which is CLOUD-1428.
+///
+/// **This reads serde's message, which is a second authority, and the guard for
+/// that is a test rather than this sentence.** `serde::de::Error::unknown_field`
+/// is the one constructor producing this prefix and `toml` propagates it
+/// verbatim, but nothing in the type system holds it there: reworded, this
+/// returns `false` for every input and the file fails open again, silently.
+/// `an_unknown_key_is_told_apart_from_a_value_this_build_refuses` below and
+/// `config_forward_compatible.rs`'s mixed-row case both redden on that change.
+///
+/// A structural discriminator was looked for first and there is not one.
+/// `toml::de::Error` carries no kind, and probing by removing one key at a time
+/// cannot tell an unknown key from an OPTIONAL known key holding a bad value:
+/// `scope` is exactly that shape, so the probe drops the row that
+/// `a_scope_token_in_the_severity_key_is_a_usage_error` requires refused.
+fn is_unknown_key(err: &toml::de::Error) -> bool {
+    err.message().starts_with("unknown field")
+}
+
+/// A TOML table header line, as one of the two spellings.
+///
+/// The distinction is load-bearing twice over: `[[name]]` is an array element —
+/// a droppable ROW — and `[name]` is a plain table, which is not one. Reading
+/// them as the same thing is what let an unknown key under `[worktree]` resolve
+/// to a `[[verb]]` row further up and delete it, caught in review.
+#[derive(Clone, Copy)]
+enum Header<'a> {
+    /// `[[name]]` — one element of an array of tables.
+    Row(&'a str),
+    /// `[name]` — a plain table.
+    Table(&'a str),
+}
+
+impl<'a> Header<'a> {
+    /// The declared name, dots and all.
+    fn name(self) -> &'a str {
+        match self {
+            Self::Row(name) | Self::Table(name) => name,
+        }
+    }
+
+    /// The first dotted segment, which is the top-level table the header lives
+    /// under: `provision.env` is part of the `provision` row above it.
+    fn root(self) -> &'a str {
+        self.name().split('.').next().unwrap_or(self.name())
+    }
+
+    /// Whether this header is a dotless `[[name]]` — the only droppable shape.
+    fn is_row(self) -> bool {
+        matches!(self, Self::Row(name) if !name.contains('.'))
+    }
+}
+
+/// Read one line as a table header, if it is one.
+fn header_of(line: &str) -> Option<Header<'_>> {
+    let line = line.trim();
+    if let Some(name) = line.strip_prefix("[[").and_then(|r| r.strip_suffix("]]")) {
+        return (!name.is_empty()).then_some(Header::Row(name));
+    }
+    let name = line.strip_prefix('[').and_then(|r| r.strip_suffix(']'))?;
+    (!name.is_empty()).then_some(Header::Table(name))
+}
+
+/// Every header in `text`, as `(byte offset of its line, header)`.
+fn headers(text: &str) -> impl Iterator<Item = (usize, Header<'_>)> {
+    let base = text.as_ptr() as usize;
+    text.lines().filter_map(move |line| {
+        // `lines()` yields subslices of `text`, so the offset is exact and no
+        // second scan can disagree with it.
+        let at = line.as_ptr() as usize - base;
+        header_of(line).map(|header| (at, header))
+    })
+}
+
+/// Find the array-of-tables row containing `at`, as
+/// `(section, index, byte offset of the row's header line)`.
+///
+/// Scans back over headers so a span inside a nested `[[provision.env]]` or
+/// `[provision.env]` resolves to the `[[provision]]` row that owns it — the row
+/// is the unit that can be dropped, and a nested table is not one.
+///
+/// `None` when the span is not inside such a row: a key on the top-level table,
+/// or inside a plain `[section]`, or under a dotted header whose own root is not
+/// an array row. Those are not droppable and keep the hard refusal, which is
+/// what stops this from degrading into "load whatever parses".
+///
+/// **`text` must be the ORIGINAL source**, not a partly-pruned copy: the index
+/// counts this section's rows as the author wrote them, so two rows dropped in
+/// one load still report distinct pointers. Reading it off the working copy is
+/// how two `[[verb]]` rows both reported `#0`, caught in review.
+fn owning_row(text: &str, at: usize) -> Option<(String, usize, usize)> {
+    // The nearest header at or before `at`, then back through any dotted
+    // headers it nests under.
+    let mut want: Option<&str> = None;
+    let mut found: Option<(usize, &str)> = None;
+    for (offset, header) in headers(text).collect::<Vec<_>>().into_iter().rev() {
+        if offset > at {
+            continue;
+        }
+        if header.is_row() && want.is_none_or(|root| root == header.name()) {
+            found = Some((offset, header.name()));
+            break;
+        }
+        // A dotless plain `[section]` owns everything after it until the next
+        // header, and is not droppable — so a key under one is refused rather
+        // than charged to some earlier row.
+        if !header.name().contains('.') {
+            return None;
+        }
+        // A dotted header nests under its root; keep looking for that root's
+        // own array row, and accept nothing else.
+        want = Some(header.root());
+    }
+    let (offset, section) = found?;
+    let index = headers(text)
+        .filter(|(at, header)| *at <= offset && header.is_row() && header.name() == section)
+        .count()
+        .checked_sub(1)?;
+    Some((section.to_owned(), index, offset))
+}
+
+/// Where the row whose header starts at `at` ends, as a byte offset.
+///
+/// A row runs to the next header that is not part of it: any dotless header, or
+/// a dotted one rooted elsewhere. `[[provision.env]]` after a `[[provision]]`
+/// row belongs to it; `[worktree]` does not.
+fn row_end(text: &str, at: usize, section: &str) -> usize {
+    headers(text)
+        .find(|(offset, header)| {
+            *offset > at && (!header.name().contains('.') || header.root() != section)
+        })
+        .map_or(text.len(), |(offset, _)| offset)
+}
+
+/// Blank `text[at..end]` in place, preserving newlines AND byte length.
+///
+/// **The byte length is the whole point.** Every later parse error's span, and
+/// every span the `lint` module's located view recovers, is an offset into this
+/// string — so a prune that changed lengths would report a line that is not the
+/// one the reader has to edit. The first version re-serialised the whole
+/// document through `toml::to_string`, which sorts keys and strips comments:
+/// measured in review, `[worktree]` on line 11 was reported as `line 4`.
+fn blank(text: &mut String, at: usize, end: usize) {
+    let blanked: String = text[at..end]
+        .chars()
+        .flat_map(|ch| {
+            if ch == '\n' || ch == '\r' {
+                vec![ch]
+            } else {
+                vec![' '; ch.len_utf8()]
+            }
+        })
+        .collect();
+    text.replace_range(at..end, &blanked);
+}
+
+/// The `id` a row declares, if it declares one.
+///
+/// Read through the one parser rather than by scanning for `id = `: the row's
+/// body is valid TOML on its own once its header line is gone, so this is the
+/// same authority the loader uses rather than a second reading of the same
+/// bytes.
+fn row_id(body: &str) -> Option<String> {
+    let after_header = body.find('\n').map_or("", |at| &body[at + 1..]);
+    toml::from_str::<toml::Table>(after_header)
+        .ok()?
+        .get("id")?
+        .as_str()
+        .map(ToOwned::to_owned)
+}
+
+/// Drop the rows this build cannot resolve, keeping every row it can.
+///
+/// **The closed enums and `deny_unknown_fields` are right and stay** — an
+/// unknown variant must not resolve to undefined, because Rego reads undefined
+/// as *does not hold* and that is a rule configured, typed and silently off.
+/// What was wrong is the GRANULARITY: that argument is about one row
+/// under-enforcing, and it was applied to the whole file, where it produces the
+/// strictly worse outcome the same reasoning is trying to prevent. Measured
+/// twice, 2026-09-04 and 2026-09-05: one unknown key switched off the
+/// protected-path gate, the verb table, every shape row and the rest at once,
+/// because `batten hook` cannot resolve a rule set and the mediated path fails
+/// open at exit `1` (CLOUD-1428).
+///
+/// Malformed TOML is untouched and still refused — a file that is not TOML is a
+/// different fault from a well-formed row naming a key from a newer schema, and
+/// collapsing the two is what produced the defect.
+/// **The loop stays in the TEXT domain, and that is not incidental.** Only
+/// `toml::from_str` carries a span; `Config::deserialize` over an already-parsed
+/// `toml::Table` reports the same unknown field with `span() == None`, so a
+/// prune driven off the table has nothing to locate and drops nothing. Measured
+/// while writing this — the first version pruned from the table, found no span,
+/// and failed exactly as before.
+///
+/// **A dropped row is BLANKED rather than removed, and every offset in the
+/// returned text is therefore still the source's own.** Three defects came out
+/// of the version that re-serialised instead, all found in one review: a
+/// refusal after a prune named a line that did not exist in the user's file,
+/// two id-less rows both reported as `#0`, and the `lint` module's located view
+/// — which pairs raw spans against parsed rows by position — silently stopped
+/// reporting an expired waiver. Preserving offsets is what makes all three
+/// unwritable rather than each separately guarded.
+fn prune_unresolvable(source: &str) -> (String, Vec<Unresolvable>) {
+    let mut text = source.to_owned();
+    let mut dropped = Vec::new();
+    while dropped.len() < UNRESOLVABLE_CEILING {
+        let Err(err) = toml::from_str::<Config>(&text) else {
+            break;
+        };
+        // THE ONLY FAULT THIS DROPS A ROW FOR. Anything else — a bad variant, a
+        // missing required key, a wrong type — is a value this build's schema
+        // has an opinion about, and that opinion is the refusal.
+        if !is_unknown_key(&err) {
+            break;
+        }
+        // Located against the SOURCE, which the blanking above keeps aligned
+        // with `text` byte for byte, so the index is the row's own ordinal in
+        // the file the author wrote.
+        let Some((section, index, at)) = err.span().and_then(|span| owning_row(source, span.start))
+        else {
+            break;
+        };
+        let end = row_end(source, at, &section);
+        // A row already blanked cannot be the cause of a new error, so seeing
+        // one means the loop is not converging. Stop rather than spin: the
+        // refusal that follows is a better answer than 32 blanked rows.
+        if text[at..end].trim().is_empty() {
+            break;
+        }
+        let id = row_id(&source[at..end]);
+        blank(&mut text, at, end);
+        dropped.push(Unresolvable { section, id, index });
+    }
+    (text, dropped)
+}
+
 fn parse_ungated(text: &str, source: &str) -> Result<Config> {
-    let config: Config = toml::from_str(text).map_err(|err| config_error(source, &err))?;
+    // MALFORMED TOML IS UNTOUCHED AND STILL REFUSED. A file that is not TOML is
+    // a different fault from a well-formed row naming a key from a newer schema,
+    // and collapsing the two is what produced the defect this repairs.
+    toml::from_str::<toml::Table>(text).map_err(|err| config_error(source, &err))?;
+    // THE COMMON CASE IS UNTOUCHED. A config every row of which this build
+    // understands parses on the first attempt and never enters the prune, so
+    // neither its behaviour nor its cost changes.
+    let (pruned, dropped) = match toml::from_str::<Config>(text) {
+        Ok(_) => (text.to_owned(), Vec::new()),
+        Err(_) => prune_unresolvable(text),
+    };
+    // `config_error` STILL WORDS WHAT IS LEFT, and the two changes compose
+    // rather than compete (CLOUD-1449 beside CLOUD-1428). That row made an
+    // unknown key SAY it might be a stale binary; this one makes an unknown key
+    // cost its own row instead of the file. What reaches here is a failure the
+    // prune could not localise to a row — a key on the top-level table, or one
+    // inside a plain `[section]` — and for exactly those the skew reading is
+    // still the most useful thing to say.
+    let mut config: Config = toml::from_str(&pruned).map_err(|err| config_error(source, &err))?;
+    config.unresolvable = dropped;
     if config.version != SUPPORTED_VERSION {
         return Err(UsageError::raise(format!(
             "unsupported config version {} in {source}; this build supports version {SUPPORTED_VERSION}",
@@ -1771,6 +2097,7 @@ impl Config {
     #[must_use]
     pub fn declaring_nothing() -> Self {
         Config {
+            unresolvable: Vec::new(),
             version: SUPPORTED_VERSION,
             deferrals: Vec::new(),
             host: None,
@@ -2288,6 +2615,15 @@ mod tests {
         // A `Vec<String>` field is a glob list with no typed entry to validate,
         // so it is exempt by its element type rather than by a third hand-kept
         // list that could itself go stale.
+        //
+        // A `#[serde(skip)]` field is exempt for the stronger reason that it is
+        // not a config TABLE: no consumer can write it, because it is never
+        // deserialized — the loader constructs it, and `unresolvable` is the
+        // landed one. Classifying it under either list above would be a claim
+        // about validating input that has no author, and that is the laundering
+        // this check exists to refuse. It opens no hole either: a real table
+        // marked `skip` cannot be written in a `batten.toml` at all, so its row
+        // would already be dead by a route with its own gates.
         let source = include_str!("config.rs");
         let struct_body = {
             let start = source
@@ -2314,10 +2650,18 @@ mod tests {
         let parse_body = parse_body.as_str();
 
         let mut seen = Vec::new();
+        let mut not_deserialized = false;
         for line in struct_body.lines() {
+            if line.trim().starts_with("#[serde(skip)]") {
+                not_deserialized = true;
+                continue;
+            }
             let Some(rest) = line.trim().strip_prefix("pub ") else {
                 continue;
             };
+            if std::mem::take(&mut not_deserialized) {
+                continue;
+            }
             let Some((field, element)) = rest.split_once(": Vec<") else {
                 continue;
             };
@@ -2952,7 +3296,17 @@ mod tests {
         let Ok(emitted) = emit(config) else {
             return false;
         };
-        parse(&emitted, "round-trip").is_ok_and(|reread| &reread == config)
+        // `unresolvable` IS EXCLUDED, AND NOT AS A CONVENIENCE. It is a report
+        // about the SOURCE TEXT rather than part of what the config decides: a
+        // dropped row is absent from `emitted` by construction, so the reread
+        // carries an empty list and always will. Comparing it would make every
+        // pruned document fail this clause for a reason that is the prune
+        // working. What must survive the round trip is the meaning, and the
+        // drop is reported through `config show` rather than through equality
+        // — `config_forward_compatible.rs` is the case that holds that.
+        let mut want = config.clone();
+        want.unresolvable = Vec::new();
+        parse(&emitted, "round-trip").is_ok_and(|reread| reread == want)
     }
 
     #[test]
@@ -3243,5 +3597,42 @@ mod tests {
     fn a_scope_token_in_the_severity_key_is_a_usage_error() {
         let err = parse(&rule_config("severity = \"tree\"\n", ""), "test").unwrap_err();
         assert!(is_usage_error(&err), "severity = \"tree\" must be refused");
+    }
+
+    #[test]
+    fn an_unknown_key_is_told_apart_from_a_value_this_build_refuses() {
+        // THE PAIR IS THE POINT, because each half alone is satisfied by a
+        // build that gets the other half wrong. The unknown key must cost its
+        // row; the bad variant must cost the file. Same section, same row
+        // shape, one line different.
+        //
+        // This is also the guard on `is_unknown_key` reading serde's message: a
+        // reworded `unknown_field` makes the first half refuse rather than
+        // drop, which is CLOUD-1428's fail-open returning, and this reddens
+        // instead of it returning silently.
+        let dropped = parse(
+            &format!(
+                "{}from_a_newer_schema = true\n",
+                rule_config("severity = \"deny\"\n", "scope = \"tree\"\n")
+            ),
+            "test",
+        )
+        .expect("an unknown key costs its own row, never the file");
+        assert!(
+            dropped.rules.is_empty(),
+            "the row this build cannot resolve must not be enforced"
+        );
+        assert_eq!(
+            dropped.unresolvable.len(),
+            1,
+            "and it must be reported rather than silently discarded"
+        );
+        assert_eq!(dropped.unresolvable[0].line(), "rule r");
+
+        let refused = parse(&rule_config("severity = \"nonesuch\"\n", ""), "test").unwrap_err();
+        assert!(
+            is_usage_error(&refused),
+            "a value whose KEY this build knows is bad input, never a lenient drop"
+        );
     }
 }

@@ -1026,6 +1026,16 @@ pub struct FieldCoverage {
 /// next key added, which is the defect rather than a second copy of it.
 pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
+        field: "unresolvable",
+        coverage: Coverage::NotPolicyBearing(
+            "the loader's own report of rows this build could not resolve, `#[serde(skip)]` \
+             and never deserialized. No consumer can write it in either file, so there is no \
+             value of it an override could carry — and the rows it names are rows that \
+             enforce NOTHING, which is a bar removed by the file and reported, never one \
+             this field lowers",
+        ),
+    },
+    FieldCoverage {
         field: "version",
         coverage: Coverage::NotPolicyBearing(
             "the schema version this build understands. A file declaring another one is \

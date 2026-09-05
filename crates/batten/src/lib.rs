@@ -218,7 +218,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             rules::run_all_over,
             RunRequest::spawning(flags.json, &flags.rule),
         ),
-        Some(Command::Config { command }) => run_config(&command, &overrides, out),
+        Some(Command::Config { command }) => run_config(&command, &overrides, out, err),
         Some(Command::Spec { format }) => run_spec(format, out),
         Some(Command::ShowAgent { json }) => run_show_agent(json, &overrides, out),
         Some(Command::Doctor { command }) => run_doctor(&command, out),
@@ -13944,10 +13944,45 @@ fn run_config_deprecations(json: bool, against: &str, out: &mut dyn Write) -> Re
     Ok(ExitCode::verdict(!unannounced.is_empty()))
 }
 
+/// Name every row the loader could not resolve, one pointer per line.
+///
+/// A DROPPED ROW IS A GATE THAT IS OFF, so it is named rather than absorbed
+/// (CLOUD-1428). The row survives a key this build does not know by being
+/// dropped instead of taking the file with it — which is the repair — but
+/// reporting it is the other half: a silent drop is the permissive fallback
+/// CLOUD-251 refuses, and the whole defect being repaired was a gate going off
+/// without saying so.
+///
+/// Pointer-only: the section and the row's declared id, never the unknown key
+/// and never a byte of the file.
+///
+/// AND IT NAMES THE REBUILD, for CLOUD-1449's reason rather than as a courtesy:
+/// an unknown key is a stale binary or a typo, the loader cannot tell them
+/// apart, and a reader given only the row goes hunting a defect in a file that
+/// has none. That row measured the wrong-file hunt on the refusal channel;
+/// dropping the row moves the same reader here, so the same remedy comes too.
+///
+/// # Errors
+///
+/// Propagates a write failure on `err`.
+fn report_unresolvable(rows: &[config::Unresolvable], err: &mut dyn Write) -> Result<()> {
+    for row in rows {
+        writeln!(
+            err,
+            "batten: config: unresolved row {} — this build may predate the key \
+             (rebuild with `mise run install:local`), or the key is a typo. Either \
+             way the row enforces nothing",
+            row.line()
+        )?;
+    }
+    Ok(())
+}
+
 fn run_config(
     command: &ConfigCommand,
     overrides: &Overrides,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<ExitCode> {
     match command {
         ConfigCommand::Show { json } => {
@@ -13979,6 +14014,7 @@ fn run_config(
                     )?;
                 }
             }
+            report_unresolvable(&config.unresolvable, err)?;
             Ok(ExitCode::Success)
         }
         // The alarm beside `--config-from`'s control (CLOUD-87): a smell is a

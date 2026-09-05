@@ -642,6 +642,16 @@ pub fn diagnose(dir: &Path) -> Report {
         // proves the §8 chain (including a `batten.local.toml`) is coherent too.
         // Both are wanted — a config that parses but whose local override is
         // refused is not a working setup.
+        // A ROW THIS BUILD COULD NOT RESOLVE IS A FAILING CHECK, not a clean
+        // load with a footnote (CLOUD-1428). The file loads by design — that is
+        // the whole repair, and the alternative was every gate off at once —
+        // but each dropped row is a declared gate that is NOT running, and a
+        // green `doctor` over one is the same vacuous pass one layer along.
+        // This is the arm that gives the drop an exit code rather than a
+        // message: `config show` names the rows, and nothing else was reading.
+        Ok(config) if !config.unresolvable.is_empty() => {
+            Check::failed(CONFIG, "config-rows-dropped")
+        }
         Ok(_) => match resolve::resolve(dir, &crate::Overrides::default()) {
             Ok(_) => Check::passed(CONFIG),
             Err(_) => Check::failed(CONFIG, "config-unresolvable"),

@@ -769,6 +769,46 @@ fn the_reverse_edit_of_those_keys_is_clean() {
     );
 }
 
+// --- a dropped row (CLOUD-1428) ----------------------------------------------
+
+#[test]
+fn a_dropped_row_does_not_shift_the_waivers_reported_after_it() {
+    // THE FAIL-OPEN REVIEW REPRODUCED, and it is the exact class this change
+    // exists to close arriving through the change itself. `smells` pairs the
+    // located view (raw text, every row) against the parsed config (pruned) BY
+    // POSITION, so one dropped row shifted every later waiver and truncated the
+    // last: the same file went from `waiver-expired` at exit 2 to `0 smell(s)`
+    // at exit 0 once an unrelated row carried a key this build cannot resolve.
+    //
+    // The discriminating shape is a dropped row BEFORE the expired one. With
+    // the order reversed the positional pairing still happens to line up, so
+    // the case would pass against the defect.
+    let dir = repo_with_config(
+        "lint-dropped-row-shift",
+        concat!(
+            "version = 1\n",
+            "\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\n",
+            "pattern = \"TODO\"\nseverity = \"deny\"\n",
+            "\n[[waiver]]\nrule = \"no-todo\"\nreason = \"first\"\nexpires = \"2099-01-01\"\n",
+            "from_a_newer_schema = true\n",
+            "\n[[waiver]]\nrule = \"no-todo\"\nreason = \"lapsed\"\nexpires = \"2020-01-01\"\n",
+        ),
+    );
+    let output = lint(&dir, &[]);
+    let said = stdout(&output);
+    assert!(
+        said.contains("waiver-expired"),
+        "the expired waiver after a dropped row must still be reported: {said}"
+    );
+    // AND THE DROP IS ITSELF A SMELL, because `config show` naming it reaches
+    // nobody in a pipeline: this is the verb CI runs.
+    assert!(
+        said.contains("config-row-unresolved"),
+        "a row this build could not resolve is a gate that is OFF: {said}"
+    );
+    assert_eq!(output.status.code(), Some(2), "smells are exit 2: {said}");
+}
+
 // --- errors are usage errors, never verdicts ---------------------------------
 
 #[test]

@@ -1251,7 +1251,18 @@ fn a_reserved_fix_loads_and_is_refused_rather_than_silently_ignored() {
 }
 
 #[test]
-fn check_unknown_rule_key_is_a_usage_error() {
+fn check_unknown_rule_key_costs_its_row_and_doctor_refuses() {
+    // THIS CASE ASSERTED THE OPPOSITE UNTIL CLOUD-1428, and the inversion is
+    // the repair rather than a relaxation. An unknown key was a hard load
+    // error for the whole file, and a config load failure is exit `1` — which
+    // under this repository's exit contract does not block a call. So one key
+    // in one row switched off every mediated gate at once, silently. Measured
+    // twice, 2026-09-04 and 2026-09-05.
+    //
+    // What replaces it is two assertions, because the first alone would also
+    // pass against a build that ignores unknown keys entirely: `check` runs,
+    // and `doctor` refuses because a dropped row is a declared gate that is
+    // NOT running.
     let dir = repo_with_config(
         "check-bad-rule",
         "version = 1\n\n[[rule]]\nid = \"x\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"y\"\nseverity = \"deny\"\nbogus = true\n",
@@ -1263,8 +1274,20 @@ fn check_unknown_rule_key_is_a_usage_error() {
         .expect("run batten check");
     assert_eq!(
         output.status.code(),
-        Some(1),
-        "an unknown rule key is usage"
+        Some(0),
+        "the file still loads — the unknown key costs its own row: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let doctor = batten()
+        .arg("doctor")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten doctor");
+    assert!(
+        String::from_utf8_lossy(&doctor.stdout).contains("config failed config-rows-dropped"),
+        "a dropped row is a gate that is OFF and must not read as a healthy setup: {}",
+        String::from_utf8_lossy(&doctor.stdout)
     );
 }
 

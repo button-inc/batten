@@ -11,6 +11,23 @@
 //! went hunting a defect in a file that had none. The remedy, a rebuild, was
 //! named nowhere.
 //!
+//! # The subject moved when CLOUD-1428 landed, and the sentence above is why
+//!
+//! This module's own defect statement names it: the whole config failed to
+//! load, so every rule stopped evaluating at once, *not the one row that reads
+//! the new key*. CLOUD-1449 fixed the message half of that and left the
+//! granularity; CLOUD-1428 fixed the granularity, so an unknown key inside a
+//! `[[rule]]` row now costs that row and the file still loads —
+//! `config_forward_compatible.rs` is the case that holds it.
+//!
+//! What still refuses, and is therefore what these cases now drive, is an
+//! unknown key the prune cannot localise to a droppable row: one on the
+//! top-level table, or inside a plain `[section]`. That is not a narrower
+//! subject for the message — it is the one that still reaches a reader, and a
+//! reader meeting it has exactly the wrong-file problem CLOUD-1449 measured.
+//! The row case keeps the same remedy by another channel: the drop is reported
+//! by id, and `doctor` refuses with `config-rows-dropped`.
+//!
 //! # Why both directions are asserted, and why that is the whole file
 //!
 //! An unknown key is a stale binary or a typo, and the parser cannot tell them
@@ -63,11 +80,13 @@ fn check(dir: &std::path::Path) -> std::process::Output {
         .expect("run batten check")
 }
 
-/// The measured instance: a key this build has no field for.
+/// The measured instance: a key this build has no field for, on the TOP-LEVEL
+/// table.
 ///
-/// `deny_unknown_fields` is what turns it into a hard parse error, which is
-/// correct — the alternative is a silently discarded row — so the fix is the
-/// message rather than the refusal.
+/// `deny_unknown_fields` still turns that into a hard parse error, and there it
+/// is correct: a top-level key is not a droppable row, so the only granularities
+/// available are the file or nothing. Inside a `[[rule]]` row the same key costs
+/// the row instead (CLOUD-1428) — the position, not the key, is what decides.
 ///
 /// Fails by: making the `UNKNOWN_KEY` guard unconditional in either direction.
 /// `skew-reads-as-malformed` forces it to `true`, which drops the note.
@@ -75,7 +94,7 @@ fn check(dir: &std::path::Path) -> std::process::Output {
 fn an_unknown_key_names_the_rebuild() {
     let dir = scratch(
         "unknown-key",
-        "version = 1\n\n[[rule]]\nid = \"x\"\nkind = \"forbid\"\nseverity = \"deny\"\nglob = \"*\"\npattern = \"x\"\nnot_a_column_this_build_knows = 1\n",
+        "version = 1\nnot_a_column_this_build_knows = 1\n",
     );
 
     let output = check(&dir);
