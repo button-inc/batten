@@ -213,11 +213,34 @@ impl Bet {
     }
 
     /// Drop the bet's own bookkeeping. The REF is the caller's to delete.
+    ///
+    /// **`pushed` IS CLEARED AND `conflicts` IS NOT, and the asymmetry is the
+    /// whole of this doc** (review of #848). `pushed` is a fact about THIS bet's
+    /// range reaching the remote, so leaving it set leaks a settled bet's state
+    /// into the next one — and the reader is `unwind_the_bet`, which force-writes
+    /// the branch under a CAS that always applies, so a bet that never reached
+    /// the remote would have the remote "corrected" to a head it already had.
+    ///
+    /// `conflicts` survives deliberately, and its own doc says why: it records a
+    /// base KNOWN to conflict, which stays true of that base after the bet built
+    /// on some other one is settled. Forgetting it is what made CLOUD-369's
+    /// mechanism unreachable.
     pub fn forget(&mut self) {
         self.base = None;
         self.undo = None;
         self.main_at_bet = None;
         self.recovered = false;
+        self.pushed = false;
+    }
+
+    #[cfg(test)]
+    /// A settled bet carries nothing forward but the base it will not re-bet on.
+    fn is_forgotten(&self) -> bool {
+        self.base.is_none()
+            && self.undo.is_none()
+            && self.main_at_bet.is_none()
+            && !self.recovered
+            && !self.pushed
     }
 }
 
@@ -368,6 +391,42 @@ pub fn recover(dir: &Path, bet: &mut Bet) -> Result<bool> {
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// **A SETTLED BET LEAKS NOTHING INTO THE NEXT ONE**, which `pushed` did.
+    ///
+    /// It is a fact about THIS bet's range reaching the remote, and its reader
+    /// force-writes the branch under a CAS that always applies — so carrying it
+    /// forward would "correct" the remote for a range that never got there.
+    #[test]
+    fn forgetting_a_bet_clears_every_field_the_next_one_would_inherit() {
+        let mut bet = Bet {
+            base: Some(String::from("abc1234")),
+            undo: Some(String::from("def5678")),
+            main_at_bet: Some(String::from("0badc0de")),
+            recovered: true,
+            pushed: true,
+            conflicts: Some(String::from("feedface")),
+        };
+        bet.forget();
+        assert!(bet.is_forgotten(), "a settled bet carried state forward");
+    }
+
+    /// AND THE ONE FIELD THAT MUST SURVIVE STILL DOES. Without this the case
+    /// above is satisfied by a `forget` that clears everything, which is what
+    /// made CLOUD-369's refusal unreachable in the first place.
+    #[test]
+    fn forgetting_a_bet_keeps_the_base_it_will_not_re_bet_on() {
+        let mut bet = Bet {
+            conflicts: Some(String::from("feedface")),
+            ..Bet::default()
+        };
+        bet.forget();
+        assert_eq!(bet.conflicts.as_deref(), Some("feedface"));
+        assert!(
+            !bet.would_rebet("feedface"),
+            "a base known to conflict is still known to conflict after the bet settles"
+        );
+    }
 
     const HOLDER: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const MAIN: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

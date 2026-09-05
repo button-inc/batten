@@ -6106,6 +6106,18 @@ fn run_land_lap(
             }
         }
     }
+    // **THE DEFERRED UNDOS COME DUE HERE, because there is no next lap to defer
+    // them to** (review of #848). `Landing::Unconfirmed` is the one arm that laps
+    // WITHOUT compensating, on the argument that the next lap re-reads the merge
+    // state — and on the LAST lap there is no next lap, so the loop fell out of
+    // the range and returned with `entered` still populated. The lease was held
+    // to its TTL and the in-flight runs kept spending, which is exactly what the
+    // compensation cluster exists to prevent.
+    //
+    // Unconditional rather than guarded on that arm: every other exit already
+    // drained `entered`, so this is a no-op for them and the guard would be a
+    // second statement of which paths compensate.
+    unwind_lap(root, branch, &pipeline, &mut entered, None, out, err)?;
     // NOT A VERDICT ABOUT THE BRANCH. Exhausting the count says the loop stopped
     // asking, never that the head is unlandable — so `3`, and the caller runs it
     // again if the laps were lost to contention rather than to a defect.
