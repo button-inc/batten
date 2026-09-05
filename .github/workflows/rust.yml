@@ -98,6 +98,20 @@ jobs:
       # trunk's installer refusing a binary that does not carry the verb
       # (`BATTEN_REQUIRE`); until that installer IS trunk's, this step is
       # vacuous by construction rather than by accident.
+      #
+      # AND IT WAS VACUOUS FOR A SECOND REASON THE PARAGRAPH ABOVE HID (review of
+      # #848). `$RUNNER_TEMP/batten-bin` is not on PATH, and `install.sh`'s
+      # off-PATH refusal is a `die 1` that fires BEFORE the `BATTEN_REQUIRE`
+      # check — so the `|| exit 0` ended the step at the install and the guard
+      # never ran, at any of the sites, whatever the installer's provenance. The
+      # bootstrap above is real and was not the reason; it just described the
+      # same silence convincingly enough that nobody looked further.
+      #
+      # `BATTEN_ALLOW_OFF_PATH=1` is the opt-out for exactly this shape and the
+      # binary is invoked by absolute path two lines down, so nothing here
+      # resolves `batten` by name and the refusal is protecting a caller that
+      # does not exist. Installing onto PATH instead would put a trunk-pinned
+      # binary ahead of the checkout's own for every later step in the job.
       - name: Landing lease precondition
         env:
           GH_TOKEN: ${{ github.token }}
@@ -127,7 +141,7 @@ jobs:
             "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
           printf '%s\n' "$installer" | \
             BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" \
-            BATTEN_REQUIRE="lease guard" sh || exit 0
+            BATTEN_ALLOW_OFF_PATH=1 BATTEN_REQUIRE="lease guard" sh || exit 0
           # THE POLICY IS TRUNK'S TOO, AND IT HAD TO BE FETCHED. This step runs
           # BEFORE any checkout, so the directory the guard stands in is empty and
           # `config::load` found nothing — `[lease] landing_paths` read as *no
@@ -211,6 +225,20 @@ jobs:
       # trunk's installer refusing a binary that does not carry the verb
       # (`BATTEN_REQUIRE`); until that installer IS trunk's, this step is
       # vacuous by construction rather than by accident.
+      #
+      # AND IT WAS VACUOUS FOR A SECOND REASON THE PARAGRAPH ABOVE HID (review of
+      # #848). `$RUNNER_TEMP/batten-bin` is not on PATH, and `install.sh`'s
+      # off-PATH refusal is a `die 1` that fires BEFORE the `BATTEN_REQUIRE`
+      # check — so the `|| exit 0` ended the step at the install and the guard
+      # never ran, at any of the sites, whatever the installer's provenance. The
+      # bootstrap above is real and was not the reason; it just described the
+      # same silence convincingly enough that nobody looked further.
+      #
+      # `BATTEN_ALLOW_OFF_PATH=1` is the opt-out for exactly this shape and the
+      # binary is invoked by absolute path two lines down, so nothing here
+      # resolves `batten` by name and the refusal is protecting a caller that
+      # does not exist. Installing onto PATH instead would put a trunk-pinned
+      # binary ahead of the checkout's own for every later step in the job.
       - name: Landing lease precondition
         env:
           GH_TOKEN: ${{ github.token }}
@@ -240,7 +268,7 @@ jobs:
             "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
           printf '%s\n' "$installer" | \
             BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" \
-            BATTEN_REQUIRE="lease guard" sh || exit 0
+            BATTEN_ALLOW_OFF_PATH=1 BATTEN_REQUIRE="lease guard" sh || exit 0
           # THE POLICY IS TRUNK'S TOO, AND IT HAD TO BE FETCHED. This step runs
           # BEFORE any checkout, so the directory the guard stands in is empty and
           # `config::load` found nothing — `[lease] landing_paths` read as *no
@@ -307,6 +335,20 @@ jobs:
       # (`BATTEN_REQUIRE`); until that installer IS trunk's, this step is
       # vacuous by construction rather than by accident.
       #
+      # AND IT WAS VACUOUS FOR A SECOND REASON THE PARAGRAPH ABOVE HID (review of
+      # #848). `$RUNNER_TEMP/batten-bin` is not on PATH, and `install.sh`'s
+      # off-PATH refusal is a `die 1` that fires BEFORE the `BATTEN_REQUIRE`
+      # check — so the `|| exit 0` ended the step at the install and the guard
+      # never ran, at any of the sites, whatever the installer's provenance. The
+      # bootstrap above is real and was not the reason; it just described the
+      # same silence convincingly enough that nobody looked further.
+      #
+      # `BATTEN_ALLOW_OFF_PATH=1` is the opt-out for exactly this shape and the
+      # binary is invoked by absolute path two lines down, so nothing here
+      # resolves `batten` by name and the refusal is protecting a caller that
+      # does not exist. Installing onto PATH instead would put a trunk-pinned
+      # binary ahead of the checkout's own for every later step in the job.
+      #
       # This job in particular is the one the sensor caught: `semver` landed on
       # `main` while this change was in flight, and property 7 refused the merge
       # until it carried the step too. That is the sensor working, and the reason
@@ -340,7 +382,7 @@ jobs:
             "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
           printf '%s\n' "$installer" | \
             BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" \
-            BATTEN_REQUIRE="lease guard" sh || exit 0
+            BATTEN_ALLOW_OFF_PATH=1 BATTEN_REQUIRE="lease guard" sh || exit 0
           # THE POLICY IS TRUNK'S TOO, AND IT HAD TO BE FETCHED. This step runs
           # BEFORE any checkout, so the directory the guard stands in is empty and
           # `config::load` found nothing — `[lease] landing_paths` read as *no
@@ -498,7 +540,7 @@ jobs:
             "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
           printf '%s\n' "$installer" | \
             BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" \
-            BATTEN_REQUIRE="lease guard" sh || exit 0
+            BATTEN_ALLOW_OFF_PATH=1 BATTEN_REQUIRE="lease guard" sh || exit 0
           # THE POLICY IS TRUNK'S TOO, AND IT HAD TO BE FETCHED. This step runs
           # BEFORE any checkout, so the directory the guard stands in is empty and
           # `config::load` found nothing — `[lease] landing_paths` read as *no
