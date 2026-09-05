@@ -2193,10 +2193,12 @@ fn run_landed(
 ) -> Result<ExitCode> {
     match command {
         LandedCommand::Check {
+            claimed,
             merged_prs,
             landed_by,
             declined,
         } => run_landed_check(
+            claimed.as_deref(),
             merged_prs.as_deref(),
             landed_by.as_deref(),
             declined.as_deref(),
@@ -2216,6 +2218,7 @@ fn run_landed(
 /// never looked at has shipped here twice, and both times the silence was
 /// byte-identical to a pass.
 fn run_landed_check(
+    claimed: Option<&str>,
     merged_prs: Option<&str>,
     landed_by: Option<&str>,
     declined: Option<&str>,
@@ -2250,6 +2253,32 @@ fn run_landed_check(
     let rows = landed::rows_from(&value)?;
 
     let mut evidence = landed::Evidence::default();
+    // ARM ONE, and the reason CLOUD-1458 exists: this loop was absent, so
+    // `Evidence::claimed` was a field nothing could fill and the disjunction ran
+    // two-armed under a three-arm header. The keys come from
+    // `claimed-keys --closing-only` rather than from a reading here, because
+    // that program is this repository's one authority on claim-versus-mention.
+    if let Some(path) = claimed {
+        for (key, _) in evidence_file(path, "--claimed")? {
+            evidence.claimed.insert(key);
+        }
+    } else {
+        // ABSENCE IS A READING, NOT SILENCE. The bash predecessor could not
+        // reach this state — it read `main`'s log itself, so arm one always
+        // had a value. Taking the arm as a file makes it omittable, which is
+        // the silently-halved disjunction CLOUD-1458 fixed, displaced one level
+        // out into the caller. So a sweep that ran without it SAYS so, and a
+        // clean board reported on two arms cannot be read as one reported on
+        // three.
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            "landed: no --claimed evidence, so a key whose only landing is a closing keyword on \
+             main is not swept. Supply `claimed-keys --closing-only` output to decide on all \
+             three arms.",
+        )?;
+    }
     for (key, _) in evidence_file(merged_prs, "--merged-prs")? {
         evidence.merged.insert(key);
     }

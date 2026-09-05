@@ -289,6 +289,183 @@ fn a_header_line_in_the_evidence_does_not_stop_the_sweep() {
     );
 }
 
+/// THE ARM THAT SHIPPED UNREACHABLE (CLOUD-1458).
+///
+/// `Evidence::claimed` was public, `landed()` branched on it, and four unit
+/// cases constructed it — with no flag able to fill it, so the binary decided a
+/// two-arm disjunction under a three-arm header. This is the case that could
+/// not be written before the flag existed, which is exactly why the predicate's
+/// own tier could not catch it.
+///
+/// SHOWN ABLE TO FAIL: `#MUTANT claimed-arm-unread` empties the arm, and
+/// without it this row is not drained by anything else — the merged evidence
+/// deliberately names a DIFFERENT key.
+#[test]
+fn a_key_closed_by_a_commit_on_main_is_behind_git() {
+    let dir = common::scratch("landed-claimed");
+    std::fs::write(dir.join("merged.tsv"), "CLOUD-999\t1\n").expect("write merged evidence");
+    std::fs::write(dir.join("claimed.tsv"), "CLOUD-1120\n").expect("write claimed evidence");
+    let out = common::run_with_stdin(
+        &dir,
+        &[
+            "landed",
+            "check",
+            "--merged-prs",
+            "merged.tsv",
+            "--claimed",
+            "claimed.tsv",
+        ],
+        &board(&[("CLOUD-1120", "In Progress")]),
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "the claimed arm must drain this row: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("In Progress -> In Review"), "{err}");
+    assert!(err.contains("behind-git"), "{err}");
+}
+
+/// THE ANTI-VACUITY HALF of the case above: the same board and the same merged
+/// evidence, with the claimed file withheld, must be CLEAN. Without this, a
+/// `--claimed` flag the engine silently ignored would pass the case above for
+/// the wrong reason — which is the shape that shipped.
+#[test]
+fn the_same_row_is_clean_when_the_claimed_evidence_is_withheld() {
+    let dir = common::scratch("landed-claimed-null");
+    std::fs::write(dir.join("merged.tsv"), "CLOUD-999\t1\n").expect("write merged evidence");
+    let out = common::run_with_stdin(
+        &dir,
+        &["landed", "check", "--merged-prs", "merged.tsv"],
+        &board(&[("CLOUD-1120", "In Progress")]),
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "nothing but the claimed arm drains this row, so withholding it must be clean: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// ABSENCE IS A READING (CLOUD-1458). `--claimed` is optional, so a caller can
+/// omit it — and the bash predecessor could not reach that state at all, since
+/// it read `main`'s log itself. An omitted arm that said nothing would be the
+/// silently-halved disjunction this row fixed, moved one level out.
+#[test]
+fn a_sweep_without_the_claimed_arm_says_the_arm_is_unsupplied() {
+    let dir = evidence("landed-claimed-unsaid", &[("CLOUD-1120", "726")], &[], &[]);
+    let out = common::run_with_stdin(
+        &dir,
+        &["landed", "check", "--merged-prs", "merged.tsv"],
+        &board(&[("CLOUD-9999", "Todo")]),
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a clean board is still clean: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("--claimed"),
+        "a two-arm sweep must not read as a three-arm one: {err}"
+    );
+}
+
+/// The other direction: supplying the arm says nothing about it, because a
+/// notice that fired either way would carry no information at all.
+#[test]
+fn a_sweep_with_the_claimed_arm_is_quiet_about_it() {
+    let dir = common::scratch("landed-claimed-said");
+    std::fs::write(dir.join("merged.tsv"), "CLOUD-1120\t726\n").expect("write merged evidence");
+    std::fs::write(dir.join("claimed.tsv"), "CLOUD-903\n").expect("write claimed evidence");
+    let out = common::run_with_stdin(
+        &dir,
+        &[
+            "landed",
+            "check",
+            "--merged-prs",
+            "merged.tsv",
+            "--claimed",
+            "claimed.tsv",
+        ],
+        &board(&[("CLOUD-9999", "Todo")]),
+    );
+
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !err.contains("--claimed"),
+        "the notice must fire only on the arm being absent: {err}"
+    );
+}
+
+/// A DECLINED KEY THAT REACHED DONE (CLOUD-1458), which the predicate could not
+/// see: `Row::STARTED` stopped at In Review, and Done is RELEASED — where the
+/// claim is strongest and the lie costs most.
+///
+/// Measured rather than imagined: this gate's own two rows, CLOUD-186 and
+/// CLOUD-1127, were declined in the body of the pull request that landed the
+/// module and advanced to Done by a release the next morning.
+///
+/// SHOWN ABLE TO FAIL: `#MUTANT done-not-advanced` drops Done from the set.
+#[test]
+fn a_declined_key_released_to_done_is_refused() {
+    let dir = evidence(
+        "landed-declined-done",
+        &[("CLOUD-1119", "726")],
+        &["CLOUD-1110"],
+        &[],
+    );
+    let out = common::run_with_stdin(
+        &dir,
+        &[
+            "landed",
+            "check",
+            "--merged-prs",
+            "merged.tsv",
+            "--declined",
+            "declined.tsv",
+        ],
+        &board(&[("CLOUD-1110", "Done")]),
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a declined key that shipped is the strongest form of the lie: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("CLOUD-1110"), "{err}");
+    assert!(err.contains("declined-but-advanced"), "{err}");
+}
+
+/*
+THE TWO OBLIGATIONS CLOUD-1458's Ready block declares, in the shape
+`crates/batten/tests/it/mcp_dispatch.rs` already uses: a block comment, the row
+at column 0, mutating THIS file's own reading so the named case reddens only if
+its assertion really binds.
+
+Stated plainly rather than implied: `mutate::subjects()` enumerates the shell
+programs under `mise-tasks`, the Rego modules under `policy`, and the preset
+directories — never `crates/batten/tests`, so no sweep reaches these rows today,
+exactly as none reaches `mcp_dispatch.rs`'s. `obligations-bound` is satisfied (a
+tracked file carrying the slug) and the sweep half is not. That gap is the
+mutation-tooling row's, and naming it here is what keeps the declaration from
+reading as coverage it does not have.
+
+(The globs are spelled out in words above because a Rust block comment NESTS,
+and a literal star after a slash opens a second one.)
+
+#MUTANT claimed-arm-unread|s@"CLOUD-1120\\n"@""@|a_key_closed_by_a_commit_on_main_is_behind_git
+#MUTANT done-not-advanced|s@"CLOUD-1110", "Done"@"CLOUD-1110", "Todo"@|a_declined_key_released_to_done_is_refused
+*/
+
 /// POINTER-ONLY (rule 4). The sweep reads a board and three evidence files and
 /// must emit keys, columns and reason classes — never a line of any body.
 #[test]

@@ -1590,6 +1590,37 @@ const LANDED_BY: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--claimed <file>` on `landed check` (CLOUD-186, repaired by CLOUD-1458).
+///
+/// The keys a commit reachable from `origin/main` CLOSES — claiming, never
+/// merely mentioning. This is the first arm of the landedness disjunction, and
+/// the caller supplies it rather than the engine reading it, for the reason
+/// `mise-tasks/landed-check.sh` gives at its own call site: `claimed-keys` is
+/// this repository's ONE authority on claim-versus-mention, and a second copy
+/// of its `CLAIM_RE` is what CLOUD-378 was filed for.
+///
+/// **The arm shipped UNREACHABLE and this flag is the repair.** `Evidence`
+/// declared the field, `landed()` and `asserted_only()` branched on it, and
+/// four unit cases constructed it directly — so the predicate's own tier was
+/// green over an arm the binary could not feed, a two-arm disjunction wearing a
+/// three-arm header. `landed-check.sh` names the direction that costs: a
+/// claim-only reading trades over-reporting for a SILENT UNDER-REPORT, which is
+/// "strictly worse for a drain", and shipping without the arm is that same
+/// error pointed the other way.
+const CLAIMED: FlagDecl = FlagDecl {
+    id: "claimed",
+    long: Some("claimed"),
+    short: None,
+    help: "`<CLOUD-id>` lines a commit on origin/main closes, from `claimed-keys --closing-only`",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--declined <file>` on `landed check` (CLOUD-1127).
 ///
 /// The keys a pull request body declined with `DO-NOT-CLOSE`. That marker is
@@ -3127,7 +3158,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Refuse a board column that contradicts main's history or a declined key",
         data_channel: false,
         effect: Effect::Read,
-        flags: &[MERGED_PRS, LANDED_BY, DECLINED],
+        flags: &[CLAIMED, MERGED_PRS, LANDED_BY, DECLINED],
     },
     CommandDecl {
         path: "ready lint",

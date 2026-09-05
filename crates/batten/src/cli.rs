@@ -629,6 +629,19 @@ pub enum ChecksCommand {
 pub enum LandedCommand {
     /// Sweep a board for columns that contradict git and the forge.
     Check {
+        /// `<CLOUD-id>` lines a commit on `origin/main` CLOSES.
+        ///
+        /// The first arm of the landedness disjunction, and the one this verb
+        /// shipped unable to receive (CLOUD-1458). The caller runs
+        /// `claimed-keys --closing-only` over `main`'s log and hands the answer
+        /// over; the engine never re-decides claim-versus-mention, because a
+        /// second copy of that predicate is what CLOUD-378 was filed for.
+        ///
+        /// Absent-is-empty rather than could-not-look, and the asymmetry with
+        /// `merged_prs` is deliberate: this arm is the 3% one, so a caller with
+        /// no closing-key reading still has the majority arm, while a caller
+        /// with no merged-PR reading has almost nothing and must be refused.
+        claimed: Option<String>,
         /// `<CLOUD-id><TAB><pr-number>` lines for MERGED pull requests.
         ///
         /// Absent is exit 2 rather than an empty set, and the direction is the
@@ -1830,6 +1843,7 @@ fn receipt_of(matches: &ArgMatches) -> Option<ReceiptCommand> {
 fn landed_of(matches: &ArgMatches) -> Option<LandedCommand> {
     match matches.subcommand()? {
         ("check", matches) => Some(LandedCommand::Check {
+            claimed: matches.get_one::<String>("claimed").cloned(),
             merged_prs: matches.get_one::<String>("merged_prs").cloned(),
             landed_by: matches.get_one::<String>("landed_by").cloned(),
             declined: matches.get_one::<String>("declined").cloned(),

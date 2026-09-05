@@ -138,11 +138,27 @@ pub struct Row {
 }
 
 impl Row {
-    /// The columns that mean "somebody has this, or it has landed".
+    /// The columns that mean "somebody has this, or it has landed, or it has
+    /// shipped".
     ///
     /// Named as a set rather than tested inline so the two directions below
-    /// cannot drift about what "started" means.
-    const STARTED: [&'static str; 2] = ["In Progress", "In Review"];
+    /// cannot drift about what "advanced" means.
+    ///
+    /// **`Done` is in the set, and leaving it out was a measured defect**
+    /// (CLOUD-1458). The set read `["In Progress", "In Review"]`, so a declined
+    /// key that reached Done escaped the sweep entirely — and Done is
+    /// RELEASED, which is where the claim is strongest and the lie therefore
+    /// costs most. Measured on this gate's own two rows: CLOUD-186 and
+    /// CLOUD-1127 were declined with `DO-NOT-CLOSE` in the body of the pull
+    /// request that landed this module, advanced to In Review by the merge,
+    /// moved back by hand, and advanced to Done by a release
+    /// 2026-09-05T02:52:56Z — past the far edge of a predicate written the day
+    /// before.
+    ///
+    /// `Backlog` and `Todo` stay out, because they are the ready queue: a
+    /// declined key sitting there is `DO-NOT-CLOSE` working, and refusing it
+    /// would make the marker unwritable.
+    const STARTED: [&'static str; 3] = ["In Progress", "In Review", "Done"];
 
     fn is_in_progress(&self) -> bool {
         self.status == "In Progress"
@@ -155,10 +171,15 @@ impl Row {
 
 /// Everything the sweep knows besides the board itself.
 ///
-/// Assembled by the caller, because none of it is tree state: the closing keys
-/// come from `main`'s log through `claimed-keys`, the merged set from the forge,
-/// and the declined set from the PR body. The verb reads them; the predicate
-/// below decides over them and touches nothing.
+/// Assembled by the caller, and the reason is one authority rather than one
+/// substrate — an earlier revision of this comment said "none of it is tree
+/// state" and then named `main`'s log in the next clause, which is tree state
+/// (CLOUD-1458). The closing keys come from `main`'s log through
+/// `claimed-keys`, which is this repository's ONE authority on
+/// claim-versus-mention and is CONSULTED rather than copied; the merged set
+/// comes from the forge; the declined set from the PR body. The verb reads all
+/// three from files the caller names; the predicate below decides over them and
+/// touches nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Evidence {
     /// Keys `main`'s history CLOSES — claiming, never merely mentioning.
@@ -371,6 +392,25 @@ mod tests {
         assert_eq!(report.findings.len(), 1);
         assert_eq!(report.findings[0].reason, Reason::DeclinedButAdvanced);
         assert_eq!(report.findings[0].reason.wants(), "Todo");
+    }
+
+    /// DONE IS THE FAR EDGE, AND IT WAS OUTSIDE THE SET (CLOUD-1458).
+    ///
+    /// Done means RELEASED, so a key the body declined sitting there is the
+    /// strongest form of the claim and the one that misleads furthest. The
+    /// original `STARTED` stopped at In Review, and this gate's own two rows
+    /// walked straight past it within a day of the module landing.
+    #[test]
+    fn a_declined_key_that_reached_done_is_refused() {
+        let report = decide(
+            &[row("CLOUD-1", "Done")],
+            &Evidence {
+                declined: keys(&["CLOUD-1"]),
+                ..Evidence::default()
+            },
+        );
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].reason, Reason::DeclinedButAdvanced);
     }
 
     /// THE ARM THAT KEEPS THIS FROM BEING A BLANKET REFUSAL OF THE MARKER. A
