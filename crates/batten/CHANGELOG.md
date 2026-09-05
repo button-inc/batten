@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.141](https://github.com/button-inc/batten/compare/v0.0.140...v0.0.141) - 2026-09-05
+
+### Added
+
+- *(mutate)* [**breaking**] let an engine predicate declare a mutation, so "able to fail" is a command
+- *(landed)* the verb, and the one exit table it takes on the way
+- *(landed)* the predicate half of the board sweep, both directions
+- *(startup)* [**breaking**] provision the task runner, so the setup script is one line
+
+### Fixed
+
+- *(doctor)* discard the store path explicitly where no symlink exists
+- *(doctor)* read a pointer at an unwritten task store as zero, not could-not-look
+- *(landed)* withdraw the data channel this verb could not honestly serve
+- *(landed)* the four gates the new verb owed, and one vacuous assertion
+- *(policy)* make seven declared mutations able to fail
+- *(test)* quote the fixture's paths so a native Windows path parses
+- *(test)* hoist the fmt::Write import out of the function body
+- *(test)* meet the fixture-fork ratchet main landed under this branch
+- *(startup)* the runner row was dead twice, both silently
+- *(git)* merge the comment-marker arms clippy refuses to see twice
+- *(git)* classify declaration-language comments so prose-only can see them
+- *(test)* the suite's largest term is a lock wait billed three times
+
+### Other
+
+- *(landed)* name the module the error type lives in
+- *(pointer-only)* the census entry the new verb owes
+- *(surface)* the derived artifacts a new verb moves
+- *(landed)* the compiled tier, over the engine rather than the predicate
+- *(symbols)* gate the corrected prose, because prose-only refused it
+
 ## [0.0.140](https://github.com/button-inc/batten/compare/v0.0.139...v0.0.140) - 2026-09-04
 
 ### Added
