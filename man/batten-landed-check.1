@@ -4,10 +4,13 @@
 .SH NAME
 batten\-landed\-check \- Refuse a board column that contradicts main\*(Aqs history or a declined key
 .SH SYNOPSIS
-\fBbatten landed check\fR [\fB\-\-merged\-prs\fR] [\fB\-\-landed\-by\fR] [\fB\-\-declined\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBbatten landed check\fR [\fB\-\-claimed\fR] [\fB\-\-merged\-prs\fR] [\fB\-\-landed\-by\fR] [\fB\-\-declined\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 Refuse a board column that contradicts main\*(Aqs history or a declined key
 .SH OPTIONS
+.TP
+\fB\-\-claimed\fR
+`<CLOUD\-id>` lines a commit on origin/main closes, from `claimed\-keys \-\-closing\-only`
 .TP
 \fB\-\-merged\-prs\fR
 `<CLOUD\-id><TAB><pr\-number>` lines, one per closing key in a MERGED pull request

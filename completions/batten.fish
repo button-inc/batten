@@ -1326,6 +1326,7 @@ complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_see
 complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -f -a "check" -d 'Refuse a board column that contradicts main\'s history or a declined key'
 complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l claimed -d '`<CLOUD-id>` lines a commit on origin/main closes, from `claimed-keys --closing-only`' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l merged-prs -d '`<CLOUD-id><TAB><pr-number>` lines, one per closing key in a MERGED pull request' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l landed-by -d '`<CLOUD-id><TAB><ref>` lines the caller asserts carry the work' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l declined -d '`<CLOUD-id>` lines a pull request body declined with DO-NOT-CLOSE' -r

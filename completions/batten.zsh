@@ -2162,6 +2162,7 @@ trace\:"Add everything"))' \
         case $line[1] in
             (check)
 _arguments "${_arguments_options[@]}" : \
+'--claimed=[\`<CLOUD-id>\` lines a commit on origin/main closes, from \`claimed-keys --closing-only\`]: :_default' \
 '--merged-prs=[\`<CLOUD-id><TAB><pr-number>\` lines, one per closing key in a MERGED pull request]: :_default' \
 '--landed-by=[\`<CLOUD-id><TAB><ref>\` lines the caller asserts carry the work]: :_default' \
 '--declined=[\`<CLOUD-id>\` lines a pull request body declined with DO-NOT-CLOSE]: :_default' \
