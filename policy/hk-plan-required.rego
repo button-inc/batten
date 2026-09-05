@@ -27,7 +27,17 @@
 # and the kind is the only field that separates them. The runner's own sentence
 # about it is not carried, is not stored, and is not emitted.
 #
-#MUTANT-EXEMPT CLOUD-845|no compiled-binary tier names this module by mutation; the tier that drives the fact (crates/batten/tests/it/hk_plan.rs) installs the row and asserts the engine's own projection, which a mutation of this module cannot redden
+# THIS ROW CARRIED `#MUTANT-EXEMPT` AND THE RATIONALE UNDER IT WAS THE OTHER
+# MARKER'S (CLOUD-1267). The sentence said the tier that drives the fact cannot
+# be reddened by a mutation of this module -- which is true, and is precisely the
+# `#MUTANT-OWNER` criterion rather than an exemption's. An exemption SUPPRESSES
+# the finding; an owner declaration leaves the survivor red and names the row
+# that owes the missing tier, changing no exit code. Spelling one as the other is
+# the laundering the runner exists to refuse, and it was written on this branch.
+#
+#MUTANT-SUITE crates/batten/tests/it/hk_plan.rs
+#MUTANT-OWNER CLOUD-845|the tier this module names drives `input.tree.plan` and never installs the module, so no case in it can turn red under a mutation of the predicate
+#MUTANT plan-unacquired-silenced|s@^\tnot acquired\[id\]$@\tfalse@|the_boundary_acquires_a_plan_the_module_can_read
 
 # METADATA
 # description: |
