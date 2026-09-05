@@ -5,7 +5,7 @@
 //! Measured twice in one session, both times after a routine rebase brought
 //! `main` forward under a live branch: `batten.toml` grew a key, the binary
 //! built at session start predated it, and serde reported
-//! `unknown field \`link\`` under the heading **invalid config**. The file was
+//! ``unknown field `link` `` under the heading **invalid config**. The file was
 //! exactly right. The whole config then failed to load, so EVERY rule stopped
 //! evaluating at once — not the one row that reads the new key — and the agent
 //! went hunting a defect in a file that had none. The remedy, a rebuild, was
@@ -140,14 +140,6 @@ fn the_parser_still_words_an_unknown_key_the_way_the_predicate_expects() {
         #[allow(dead_code)]
         known: u8,
     }
-
-    let err = toml::from_str::<Narrow>("known = 1\nsurprise = 2\n")
-        .expect_err("an unknown field must not parse");
-    assert!(
-        err.to_string().contains("unknown field"),
-        "the predicate keys on this wording; a reword silently drops the note: {err}"
-    );
-
     #[derive(Debug, serde::Deserialize)]
     enum Shape {
         #[allow(dead_code)]
@@ -158,6 +150,13 @@ fn the_parser_still_words_an_unknown_key_the_way_the_predicate_expects() {
         #[allow(dead_code)]
         shape: Shape,
     }
+
+    let err = toml::from_str::<Narrow>("known = 1\nsurprise = 2\n")
+        .expect_err("an unknown field must not parse");
+    assert!(
+        err.to_string().contains("unknown field"),
+        "the predicate keys on this wording; a reword silently drops the note: {err}"
+    );
 
     let err = toml::from_str::<Holder>("shape = \"surprise\"\n")
         .expect_err("an unknown variant must not parse");
