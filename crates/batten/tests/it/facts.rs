@@ -36,9 +36,9 @@ fn a_content_block_envelope_unwraps_to_the_payload_a_bare_one_carries() {
 use batten::facts::{
     AGENT_SOURCED, BASE_DELTA, BYPASS, CAPTURED, COMMIT_META, Class, Cost, DOCUMENT, EXTERNAL,
     EXTRACTED, FORGE, Fact, GIT_HEAD, GIT_HISTORY, GIT_RANGE, GIT_REF, GIT_REMOTE, GIT_STATUS,
-    GIT_WORKTREES, INSTANT, INVOCATIONS, KEYS, LANDING, LINES, Look, MINTED, PINNED, PRODUCED,
-    PROSPECTIVE, RECEIPTS, RECORDS, RECORDS_BLOCKED, REVIEW, STAGED, STATE, STOP, SYMBOLS, Surface,
-    TASKS, TOOL_VERDICT, TRACKED, USES, WAIVED,
+    GIT_WORKTREES, INSTANT, INVOCATIONS, KEYS, LANDING, LINES, Look, MINTED, PINNED, PLAN,
+    PRODUCED, PROSPECTIVE, RECEIPTS, RECORDS, RECORDS_BLOCKED, REVIEW, STAGED, STATE, STOP, SYMBOLS,
+    Surface, TASKS, TOOL_VERDICT, TRACKED, USES, WAIVED,
 };
 
 #[test]
@@ -136,6 +136,7 @@ fn every_fact_returns_its_stated_const() {
             Fact::State => STATE,
             Fact::Forge => FORGE,
             Fact::ToolVerdict => TOOL_VERDICT,
+            Fact::Plan => PLAN,
             Fact::Minted => MINTED,
             Fact::Captured => CAPTURED,
             Fact::Tasks => TASKS,

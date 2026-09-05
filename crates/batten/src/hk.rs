@@ -597,6 +597,277 @@ pub fn resolve(root: &Path) -> Look<Contract> {
     })
 }
 
+// ─── CLOUD-949: the effective plan as a pre-admission fact ───────────────────
+//
+// The section above answers what the plan IS, against a reviewed projection. This
+// one answers what the plan is FOR A PROPOSED INVOCATION, and hands the answer to
+// a policy module as a typed fact.
+//
+// **The two do not share a type, and the difference is the whole row.** The
+// contract deliberately drops `fileCount` and the reason `kind`, because a
+// reviewed artifact that carried them would flap on every edit. The fact
+// deliberately carries them, because whether a step was excluded by a PROFILE or
+// by a glob MISS is exactly what a policy-required step's absence turns on. One
+// type with both readings would be a projection that is wrong for one of its two
+// consumers.
+//
+// **Nothing here parses the runner's own config.** hk owns its selector; this
+// asks the binary and stores what it answered. Re-deriving the selection would
+// make the engine a second authority on which files a step runs over — the
+// disagreement class `.claude/rules/rust.md` records, in the one place where the
+// other authority is a program somebody else maintains.
+
+/// One declared plan query: which surface to ask about, and what a module needs
+/// to decide over the answer.
+///
+/// **`required` and `prohibited_profiles` are CONSUMER facts** and live in the
+/// row rather than in this crate (non-negotiable rule 1). They are projected
+/// alongside the acquired plan so the module compares two halves of one document
+/// rather than reaching for a second source — the same shape a `[[rule.tools]]`
+/// row's `id` gives its module.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct PlanQuery {
+    /// The key this plan is projected under in `input.tree.plan`.
+    pub id: String,
+    /// Which surface to ask about: a hook name the contract also covers.
+    pub hook: String,
+    /// The steps this consumer requires the plan to include.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required: Vec<String>,
+    /// Profiles whose presence makes the plan unusable for this consumer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prohibited_profiles: Vec<String>,
+}
+
+impl PlanQuery {
+    /// Whether this row names a surface the contract does not cover.
+    ///
+    /// Refused at LOAD rather than answered at adjudication: a row asking about a
+    /// hook nothing can plan would resolve to could-not-look forever, which reads
+    /// as an unreachable gate rather than as a misconfigured one.
+    #[must_use]
+    pub fn unknown_hook(&self) -> bool {
+        !SURFACES.iter().any(|argv| hook_of(argv) == self.hook)
+    }
+}
+
+/// The hook a declared argv asks about — its last word.
+///
+/// `check` and `fix` name themselves; `run pre-commit` names the hook second,
+/// which is the runner's grammar rather than a special case here.
+#[must_use]
+fn hook_of(argv: &[&str]) -> String {
+    argv.last()
+        .map_or_else(String::new, |word| (*word).to_owned())
+}
+
+/// One step as the FACT carries it — the projection's four fields plus the two
+/// a decision about a required step turns on.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct PlannedStep {
+    /// The step's declared name.
+    pub name: String,
+    /// Whether the runner would execute it.
+    pub status: String,
+    /// Why, as the runner's own KIND token — never its prose. A step excluded
+    /// for a missing profile and one excluded by a glob miss are different
+    /// findings, and the kind is the only field that separates them.
+    pub reason_kind: Option<String>,
+    /// Position in the plan.
+    pub order_index: u64,
+    /// The parallel group it belongs to.
+    pub parallel_group_id: String,
+    /// How many files it matched. A COUNT, never the paths (rule 4).
+    pub file_count: u64,
+}
+
+/// What one acquisition resolved, bound to the invocation and the tree it was
+/// taken over.
+///
+/// **`input_fingerprint` is why this is not keyed on HEAD.** Dirty and index
+/// state change the selection without moving HEAD, so a fact bound to HEAD alone
+/// answers about a tree that is not the one being judged — the discriminator
+/// CLOUD-949 names, and the one an implementation keyed on HEAD passes every
+/// other case and fails.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct Planned {
+    /// The hook asked about.
+    pub hook: String,
+    /// The run type it resolved to.
+    pub run_type: String,
+    /// The profiles enabled for it.
+    pub profiles: Vec<String>,
+    /// The exact argv, so a reader can tell which question was asked.
+    pub invocation: Vec<String>,
+    /// The tool's self-reported version.
+    pub tool_version: String,
+    /// The digest of the committed surface contract this was taken beside, or
+    /// `None` where no contract is committed.
+    pub contract_digest: Option<String>,
+    /// A digest over HEAD and every path that differs from it, content and all.
+    pub input_fingerprint: String,
+    /// The steps this consumer requires, carried from the row.
+    pub required: Vec<String>,
+    /// The profiles this consumer refuses, carried from the row.
+    pub prohibited_profiles: Vec<String>,
+    /// Every step, in plan order.
+    pub steps: Vec<PlannedStep>,
+}
+
+/// Project one plan document into the fact, keeping the two fields the contract
+/// drops.
+///
+/// [`Look::CouldNotLook`] on an EMPTY plan, for [`project`]'s reason: a plan that
+/// selected nothing looks exactly like a gate that passed.
+#[must_use]
+pub fn planned_steps(value: &serde_json::Value) -> Look<Vec<PlannedStep>> {
+    let Some(entries) = value.get("steps").and_then(serde_json::Value::as_array) else {
+        return Look::CouldNotLook;
+    };
+    let mut steps = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let (Some(name), Some(status)) = (
+            entry.get("name").and_then(serde_json::Value::as_str),
+            entry.get("status").and_then(serde_json::Value::as_str),
+        ) else {
+            return Look::CouldNotLook;
+        };
+        let (Some(order_index), Some(parallel_group_id)) = (
+            entry.get("orderIndex").and_then(serde_json::Value::as_u64),
+            entry
+                .get("parallelGroupId")
+                .and_then(serde_json::Value::as_str),
+        ) else {
+            return Look::CouldNotLook;
+        };
+        steps.push(PlannedStep {
+            name: name.to_owned(),
+            status: status.to_owned(),
+            // The FIRST reason's kind. A step carries reasons in the runner's own
+            // order and the first is the one it acted on; the rest are context a
+            // pointer does not need.
+            reason_kind: entry
+                .get("reasons")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|reasons| reasons.first())
+                .and_then(|reason| reason.get("kind"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+            order_index,
+            parallel_group_id: parallel_group_id.to_owned(),
+            // Absent is zero here rather than could-not-look: the runner omits
+            // the key for a step it never filtered, which is a real count.
+            file_count: entry
+                .get("fileCount")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+        });
+    }
+    if steps.is_empty() {
+        return Look::CouldNotLook;
+    }
+    Look::Is(steps)
+}
+
+/// The digest binding a plan to the tree it was taken over.
+///
+/// HEAD, then every differing path with the digest of its CURRENT bytes — so a
+/// file edited while already dirty moves the fingerprint, which a changed-path
+/// SET alone would not. A path that will not read contributes a `-`, because a
+/// file the engine could not open is a state the fingerprint must distinguish
+/// rather than skip.
+///
+/// Pointer-only in the value it produces: the digest carries no path and no byte
+/// to any reader (rule 4). The paths are inputs to a hash, never output.
+#[must_use]
+pub fn fingerprint(root: &Path) -> Look<String> {
+    let Ok(head) = crate::git::head_fact(root) else {
+        return Look::CouldNotLook;
+    };
+    let Ok(status) = crate::git::status_fact(root) else {
+        return Look::CouldNotLook;
+    };
+    let mut material = String::new();
+    material.push_str(head.commit.as_deref().unwrap_or("-"));
+    material.push('\n');
+    let mut changed = status.changed.clone();
+    changed.sort();
+    for path in &changed {
+        material.push_str(path);
+        material.push(' ');
+        match std::fs::read(root.join(path)) {
+            Ok(bytes) => material.push_str(&crate::tools::digest(&bytes)),
+            Err(_) => material.push('-'),
+        }
+        material.push('\n');
+    }
+    Look::Is(crate::tools::digest(material.as_bytes()))
+}
+
+/// Acquire the effective plan for one declared query.
+///
+/// Fresh, every time, from the exact invocation the query names — never read back
+/// from a store. A stored plan would need every binding field compared before it
+/// could be trusted, and a comparison a caller can forget is the staleness class
+/// `[[rule.tools]]`'s keying exists to remove. Here the fact simply cannot be
+/// stale, because it is taken now.
+#[must_use]
+pub fn acquire(root: &Path, query: &PlanQuery) -> Look<Planned> {
+    let Some(argv) = SURFACES.iter().find(|argv| hook_of(argv) == query.hook) else {
+        return Look::CouldNotLook;
+    };
+    let Look::Is(tool_version) = version(root) else {
+        return Look::CouldNotLook;
+    };
+    let Look::Is(fingerprint) = fingerprint(root) else {
+        return Look::CouldNotLook;
+    };
+    let Look::Is(value) = plan(root, argv) else {
+        return Look::CouldNotLook;
+    };
+    let (Some(hook), Some(run_type)) = (
+        value.get("hook").and_then(serde_json::Value::as_str),
+        value.get("runType").and_then(serde_json::Value::as_str),
+    ) else {
+        return Look::CouldNotLook;
+    };
+    let Some(profiles) = string_list(value.get("profiles")) else {
+        return Look::CouldNotLook;
+    };
+    let Look::Is(steps) = planned_steps(&value) else {
+        return Look::CouldNotLook;
+    };
+    Look::Is(Planned {
+        hook: hook.to_owned(),
+        run_type: run_type.to_owned(),
+        profiles,
+        invocation: argv
+            .iter()
+            .chain(PLAN_FLAGS.iter())
+            .map(|word| (*word).to_owned())
+            .collect(),
+        tool_version,
+        // ABSENT rather than could-not-look: a repository that has not committed
+        // a contract can still ask what its gate would run, and refusing the whole
+        // fact would make this row depend on the other one being adopted first.
+        contract_digest: std::fs::read(root.join(ARTIFACT))
+            .ok()
+            .map(|bytes| crate::tools::digest(&bytes)),
+        input_fingerprint: fingerprint,
+        required: query.required.clone(),
+        prohibited_profiles: query.prohibited_profiles.clone(),
+        steps,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

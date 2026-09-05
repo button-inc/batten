@@ -1914,6 +1914,7 @@ fn default_rules() -> Vec<Rule> {
         state: Vec::new(),
         forge: Vec::new(),
         tools: Vec::new(),
+        plan: Vec::new(),
         minted: Vec::new(),
         captured: Vec::new(),
         tasks: Vec::new(),

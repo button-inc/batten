@@ -185,7 +185,7 @@ closes-the-row exemption was unreachable rather than unsatisfied. The store is
 written only when a row is blocked, so its absence and its emptiness are one
 fact: read a PRESENT entry, and never infer one from an absence.
 
-**Eleven of those keys are DECLARED READS whose subject is not the working tree**,
+**Twelve of those keys are DECLARED READS whose subject is not the working tree**,
 and grouping them is worth a sentence because each answers a question no walk
 can: `input.tree["base-delta"]` is how the declared globs' paths differ from a
 declared base rev — `added`, `edited`, `deleted`, `code-changed` and the base side
@@ -208,7 +208,12 @@ does not answer (CLOUD-1171); `input.tree.minted` is one declared FIELD of a
 receipt the MEDIATED boundary already wrote, bounded by how old the reading is —
 which is what makes it a different family from `captured`, whose store is keyed
 by content, carries no clock, and would answer a question about a mutable field
-from whichever read sorts first in digest order (CLOUD-1310); and
+from whichever read sorts first in digest order (CLOUD-1310); `input.tree.plan` is the adopted gate
+runner's EFFECTIVE plan for a declared surface, acquired from the runner rather
+than re-derived from its config — `Cost::Effect`, in `symbols`' class, and bound
+to an `inputFingerprint` over HEAD and every differing path's CURRENT bytes,
+because dirty and index state move a selection without moving HEAD (CLOUD-949);
+and
 `input.tree.captured` is a declared REDUCTION
 over the capture store — `present`, `count` or a bounded token, never a payload
 (CLOUD-1188); and `input.tree.review` is whether a VENDORED agent prompt was

@@ -6308,6 +6308,35 @@ no_fix_reason = "add the missing step to `fixers` in hk.pkl, or remove the one t
 #
 # Tree-scoped and spawning, which is the right side of the CLOUD-170 split: it
 # runs under `enforce` and the hk gate, never on the mediated path.
+# The adopted runner's EFFECTIVE plan, adjudicated (CLOUD-949). The row above
+# answers what the plan IS against a reviewed projection; this one answers
+# whether the plan a proposed invocation would produce still runs what this
+# repository requires.
+#
+# `kind = "policy"` and the fact is acquired at the BOUNDARY, so the module
+# spawns nothing — which is what keeps a Rego rule from becoming a second
+# authority on the runner's selector. The acquisition is `Cost::Effect`, so the
+# row is resolved on the spawning surface and never on the mediated call.
+#
+# THE REQUIRED LIST IS THIS REPOSITORY'S, and it lives here for non-negotiable
+# rule 1: `crates/batten` names no step of anybody's, and the module reads the
+# list out of the fact it is handed.
+[[rule]]
+id = "hk-plan-required"
+kind = "policy"
+scope = "tree"
+module = "policy/hk-plan-required.rego"
+severity = "deny"
+
+# The three steps whose absence from the gate would mean this repository's own
+# engine, its config and its policy corpus stopped being checked. A wider list
+# would make the row fire on every hk.pkl edit; a narrower one would let the
+# three that matter be silently excluded.
+[[rule.plan]]
+id = "gate"
+hook = "check"
+required = ["batten-check", "test", "policy-test"]
+
 [[rule]]
 id = "hk-contract-drift"
 kind = "command"
@@ -11111,6 +11140,52 @@ target = "crates/batten/src/exec.rs"
 id = "module read first"
 kind = "document"
 target = "policy/spawn-adapters.rego"
+
+[[verdict]]
+id = "plan read missing"
+gloss = "a declared plan the boundary could not acquire from the runner"
+class = """
+A plan nobody could read and a plan with nothing wrong are identical on the
+decision surface, so this refuses rather than passing. The cause is upstream of
+the gate: the pinned runner is not resolvable, its config will not evaluate, or
+it answered with something this build cannot read. Reacquire — provision the
+runner through the project's own pin and run the gate again.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "policy/hk-plan-required.rego"
+
+[[verdict]]
+id = "step run missing"
+gloss = "the plan will not run a step this repository requires"
+class = """
+A step the row requires is missing from the plan, or present with a status that
+is not inclusion. Either way the gate would run without it, and a required step
+the runner silently excluded reads as satisfied to everything downstream. Restore
+the step, or change what the row requires — the second is a decision about what
+this repository checks, and it belongs in the diff that makes it.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "hk.pkl"
+
+[[verdict]]
+id = "plan run refused"
+gloss = "the plan resolved under a profile this row refuses"
+class = """
+The plan is a plan the gate would run, and the row refuses the profile set it
+resolved under. Distinct from a missing step because the remedy is different:
+this is how the gate was invoked rather than what the gate contains.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "hk.pkl"
 
 [[verdict]]
 id = "symbol count absent"

@@ -6311,6 +6311,12 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // this function's opinion — and `no_effect_fact_is_hook_resolvable`
             // is the assertion that keeps the two agreeing.
             crate::facts::Fact::Symbols => None,
+            // `Cost::Effect` too (CLOUD-949), and `None` here for `Symbols`'
+            // reason exactly: resolving it runs the adopted gate runner over the
+            // whole tree, which a per-call budget measured in milliseconds cannot
+            // pay. `facts.rs` classifies it `Surface::Check`, so this arm is
+            // `None` by the model rather than by this function's opinion.
+            crate::facts::Fact::Plan => None,
             // Two unbounded walks — the base tree and the working tree — so this
             // sits with `GitStatus` above rather than with the cheap three, and
             // for a sharper version of the same reason (CLOUD-1059). Its
@@ -8774,6 +8780,7 @@ mod tests {
             state: Vec::new(),
             forge: Vec::new(),
             tools: Vec::new(),
+            plan: Vec::new(),
             minted: Vec::new(),
             captured: Vec::new(),
             tasks: Vec::new(),
