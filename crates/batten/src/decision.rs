@@ -494,6 +494,88 @@ pub fn append(repo_root: &Path, worktree: &Path, record: &DecisionRecord) -> Res
     Ok(())
 }
 
+/// One SHA's caller provenance, as the log answers it.
+///
+/// A GROUPING RATHER THAN A MERGE, and that is the whole shape of the answer
+/// (CLOUD-275). A commit can carry many records — several mediated calls, or a
+/// tree that went dirty between two of them — and those records can disagree
+/// about the caller. Folding them into one row would invent a fact no record
+/// carries, so each distinct `(caller, dirty)` pair is its own row and `records`
+/// says how many carried it. A consumer wanting "the" model for a SHA reads a
+/// single row and knows, when there are two, that the question had two answers.
+///
+/// `dirty` is part of the key rather than a column, because it changes what the
+/// row claims: a record taken against a dirty tree describes a call the commit
+/// does not fully contain.
+///
+/// **Pointer-only, structurally** (non-negotiable rule 4): the fields here are
+/// the commit, three provenance tokens and a count. `subject` and `context` are
+/// on [`DecisionRecord`] and never reach this type at all, so no rendering
+/// choice can leak them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attribution {
+    /// The commit the records were anchored to.
+    pub commit: String,
+    /// Who the host said made those calls, each field degraded independently.
+    pub caller: Caller,
+    /// Whether the tree was dirty when these records were taken.
+    pub dirty: bool,
+    /// How many records carried exactly this answer.
+    pub records: usize,
+}
+
+/// What the log says about who touched `commit`.
+///
+/// **An empty answer is not an `unknown` one, and keeping them apart is the
+/// point of the query** (CLOUD-275). No rows means the log holds nothing
+/// anchored to this commit — the could-not-look case, and the ordinary state of
+/// a commit made outside a mediated session. A row whose fields read `unknown`
+/// means a record exists and the host exposed no identity. Collapsing the two is
+/// what makes a gap read as a fact, which is CLOUD-251's trap in this surface.
+///
+/// Byte-stable by construction: rows are sorted on the tokens themselves, so two
+/// runs over one log render identically whatever order the shards were read in
+/// (§6). [`load_all`] already sorts the shard paths; this sorts the answer.
+///
+/// # Errors
+///
+/// Returns an error when the state root cannot be resolved or a shard cannot be
+/// read — never for an absent log, which is an empty one.
+pub fn attribution_for(repo_root: &Path, commit: &str) -> Result<Vec<Attribution>> {
+    // Keyed on the tokens and holding the record's OWN `Caller`, never one
+    // rebuilt from those tokens: `Provenance::from_host` degrades empty and
+    // whitespace, and it is `Provenance`'s `Deserialize` that maps the `unknown`
+    // token back to `Unknown`. Reconstructing through `from_host` would turn a
+    // degraded field into `Declared("unknown")` — the query and the record
+    // disagreeing about what a degraded field is, which is exactly the
+    // distinction this row exists to keep.
+    let mut counted: std::collections::BTreeMap<(String, String, String, bool), (Caller, usize)> =
+        std::collections::BTreeMap::new();
+    for record in load_all(repo_root)? {
+        if record.anchor.commit != commit {
+            continue;
+        }
+        let key = (
+            record.caller.model_id.as_str().to_owned(),
+            record.caller.harness.as_str().to_owned(),
+            record.caller.session.as_str().to_owned(),
+            record.anchor.dirty,
+        );
+        let entry = counted.entry(key).or_insert((record.caller, 0));
+        entry.1 += 1;
+    }
+    Ok(counted
+        .into_iter()
+        .map(|((_, _, _, dirty), (caller, records))| Attribution {
+            commit: commit.to_owned(),
+            caller,
+            dirty,
+            records,
+        })
+        .collect())
+}
+
 /// Every record in the log, shards read in sorted path order.
 ///
 /// A line that does not parse is dropped rather than failing the read — the torn
