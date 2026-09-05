@@ -224,6 +224,7 @@ mod staged_facts;
 mod startup;
 mod startup_bootstrap;
 mod stop_posture;
+mod store_lifecycle;
 mod submodule;
 mod suite_subjects;
 mod surface;
