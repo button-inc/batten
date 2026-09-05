@@ -187,6 +187,67 @@ fn a_moved_contract_file_is_reported_in_band() {
     assert!(told.contains("1 changed"), "{told}");
 }
 
+/// CLOUD-490's discriminating pair, both halves in one case.
+///
+/// An ADDED path is the one class a relevance filter cannot keep — the session
+/// does not know it exists, so it has no basis on which to judge it relevant —
+/// and it must therefore not be framed as one more file to re-read. A path that
+/// merely MOVED keeps that framing, because a changed rule alters something the
+/// session already does.
+#[test]
+fn an_added_path_is_reported_apart_from_a_moved_one_and_says_something_different() {
+    let dir = fixture("contract-added");
+    drift(&dir, "s1");
+    // One of each, so the case cannot pass by rendering everything one way.
+    std::fs::write(dir.join("AGENTS.md"), "# the contract\nmore\n").unwrap();
+    std::fs::write(dir.join("mise-tasks/alive"), "#!/usr/bin/env bash\ntrue\n").unwrap();
+    common::git_in(&dir, &["add", "-A"]);
+
+    let told = drift(&dir, "s1").pipe_notice().expect("the surface moved");
+    assert!(told.contains("mise-tasks/alive"), "{told}");
+    assert!(told.contains("AGENTS.md"), "{told}");
+    assert!(
+        told.contains("added — you could not have been doing these:"),
+        "the added path carries its own heading: {told}"
+    );
+    assert!(
+        told.contains("new capability, not a changed rule"),
+        "and its own sentence, which is the substantive half: {told}"
+    );
+    // The count is the whole change-set, not one partition of it.
+    assert!(told.contains("2 changed"), "{told}");
+    // POINTER-ONLY (non-negotiable rule 4): a path, never a byte of it.
+    assert!(!told.contains("#!/usr/bin/env bash"), "{told}");
+    assert!(!told.contains("# the contract"), "{told}");
+}
+
+/// The anti-vacuity half: with nothing added, the notice reads exactly as it did.
+///
+/// Without this, the case above passes over a render that grew an empty section
+/// or moved the old sentence, and a reader of a modification-only change-set gets
+/// a notice that changed for no reason.
+#[test]
+fn a_change_set_with_nothing_added_carries_no_added_section() {
+    let dir = fixture("contract-none-added");
+    drift(&dir, "s1");
+    std::fs::write(dir.join("AGENTS.md"), "# the contract\nmore\n").unwrap();
+
+    let told = drift(&dir, "s1").pipe_notice().expect("the surface moved");
+    assert!(told.contains("changed:"), "{told}");
+    assert!(
+        !told.contains("added —"),
+        "absent rather than empty: {told}"
+    );
+    assert!(
+        !told.contains("new capability"),
+        "and its sentence goes with it: {told}"
+    );
+    assert!(
+        told.contains("read the OLD ones at start"),
+        "the modified half keeps today's wording: {told}"
+    );
+}
+
 /// **The load-bearing bound.** A suite proving only that it fires would pass on
 /// a hook that nags every batch, which is how an advisory channel becomes noise
 /// and stops being read.

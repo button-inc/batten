@@ -92,8 +92,30 @@ const SHARED_KEY: &str = "shared";
 /// [`crate::rules::Finding`] has for matched bytes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChangeSet {
-    /// Repo-relative paths whose bytes moved, or that are newly tracked.
+    /// Repo-relative paths whose bytes moved, and which the session read an
+    /// older version of at start.
     pub changed: Vec<String>,
+    /// Repo-relative paths the session's snapshot did not contain at all
+    /// (CLOUD-490).
+    ///
+    /// **Partitioned out of `changed` rather than computed separately**: git
+    /// already labels an added path, so this is the same comparison read one key
+    /// further. The split exists because the two need DIFFERENT sentences, and
+    /// the wrong one measurably cost a capability.
+    ///
+    /// A reader filtering a 45-entry list by "what do I need for my next step"
+    /// is doing the only reasonable thing, and that filter works for a changed
+    /// rule — a changed rule alters something the session already does, so its
+    /// name is already in the session's working set. It CANNOT work for a new
+    /// capability: the session does not know the path exists, so it has no basis
+    /// on which to judge it relevant. The one class the filter is guaranteed to
+    /// drop is the class that is pure gain to adopt.
+    ///
+    /// Measured 2026-08-12: a session resumed to 45 changed files with
+    /// `mise-tasks/alive` among them, re-read the two it judged relevant, and
+    /// spent the rest of the session hand-rolling `pgrep`/`sleep` pollers —
+    /// nine live at once — for the question `mise run alive` answers in one line.
+    pub added: Vec<String>,
     /// Repo-relative paths that were in the surface and are no longer.
     pub removed: Vec<String>,
 }
@@ -102,7 +124,17 @@ impl ChangeSet {
     /// Whether anything moved.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.changed.is_empty() && self.removed.is_empty()
+        self.changed.is_empty() && self.added.is_empty() && self.removed.is_empty()
+    }
+
+    /// How many paths moved, however they moved.
+    ///
+    /// The count the notice's first line carries. Named rather than summed at
+    /// the call site so the two partitions cannot drift apart from the total a
+    /// reader is shown.
+    #[must_use]
+    pub fn touched(&self) -> usize {
+        self.changed.len() + self.added.len()
     }
 }
 
@@ -157,17 +189,25 @@ pub fn surface(root: &Path, tracked: &[String]) -> Result<Look<Manifest>> {
 /// all the caller's, which is what keeps this testable without a fixture.
 #[must_use]
 pub fn compare(previous: &Manifest, current: &Manifest) -> ChangeSet {
-    let changed = current
+    // ONE PASS, TWO BUCKETS. A path the snapshot never held is ADDED; one it
+    // held under a different hash is CHANGED. Deciding it here rather than at
+    // render time is what keeps the notice's counts and its sections reading off
+    // the same comparison.
+    let (added, changed) = current
         .iter()
         .filter(|(path, hash)| previous.get(*path) != Some(*hash))
         .map(|(path, _)| path.clone())
-        .collect();
+        .partition(|path| !previous.contains_key(path));
     let removed = previous
         .keys()
         .filter(|path| !current.contains_key(*path))
         .cloned()
         .collect();
-    ChangeSet { changed, removed }
+    ChangeSet {
+        changed,
+        added,
+        removed,
+    }
 }
 
 /// The snapshot file for `session` under `git_dir`.
@@ -268,11 +308,27 @@ pub fn record(git_dir: &Path, session: Option<&str>, manifest: &Manifest) -> Res
 pub fn render(change: &ChangeSet, wiring: &[String]) -> String {
     let mut out = format!(
         "contract-drift {} changed, {} removed\n",
-        change.changed.len(),
+        change.touched(),
         change.removed.len()
     );
+    // ADDED FIRST, and its own sentence rides with it (CLOUD-490). A new path is
+    // an OFFER rather than an obligation, and it is the one class a relevance
+    // filter cannot keep: nothing in the session's working set names it. Saying
+    // that where the paths are is what stops it being filtered out with the rest.
+    //
+    // This SHORTENS what a reader must act on rather than lengthening it — the
+    // added set is almost always the smaller one, and it is the half worth
+    // reading first.
+    if !change.added.is_empty() {
+        out.push_str("\nadded — you could not have been doing these:\n");
+        for path in &change.added {
+            out.push_str("  ");
+            out.push_str(path);
+            out.push('\n');
+        }
+    }
     if !change.changed.is_empty() {
-        out.push_str("\nchanged or added:\n");
+        out.push_str("\nchanged:\n");
         for path in &change.changed {
             out.push_str("  ");
             out.push_str(path);
@@ -287,10 +343,23 @@ pub fn render(change: &ChangeSet, wiring: &[String]) -> String {
             out.push('\n');
         }
     }
-    out.push_str(
-        "\nThese files changed under this session, which read the OLD ones at start and has\n\
-         not re-read them. Re-read the ones named above before the next lifecycle step.\n",
-    );
+    // TWO SENTENCES, EACH SPEAKING ONLY FOR ITS OWN SECTION. The old single
+    // sentence — "read the OLD ones at start" — is FALSE of an added path: there
+    // was no old one. Printing it over both sections is what framed a new
+    // capability as one more file to re-read.
+    if !change.changed.is_empty() {
+        out.push_str(
+            "\nThese files changed under this session, which read the OLD ones at start and has\n\
+             not re-read them. Re-read the ones named above before the next lifecycle step.\n",
+        );
+    }
+    if !change.added.is_empty() {
+        out.push_str(
+            "\nThe added ones are new capability, not a changed rule: this session never read\n\
+             them and has no basis for judging them irrelevant. Read them before deciding they\n\
+             are not worth reading.\n",
+        );
+    }
     let touched: Vec<&String> = change
         .changed
         .iter()
@@ -383,12 +452,20 @@ mod tests {
     }
 
     #[test]
-    fn a_moved_file_is_changed_and_a_dropped_one_is_removed() {
+    fn a_moved_file_is_changed_an_unseen_one_is_added_and_a_dropped_one_is_removed() {
+        // CLOUD-490 partitioned `changed`: this asserted `new.md` among the
+        // changed, which is the framing the row removes. Rewritten rather than
+        // deleted — the guarantee it protects (every moved path is reported
+        // exactly once, under exactly one heading) is still wanted.
         let before = manifest(&[("guide.md", "aa"), ("gone.md", "cc")]);
         let after = manifest(&[("guide.md", "zz"), ("new.md", "dd")]);
         let change = compare(&before, &after);
-        assert_eq!(change.changed, vec!["guide.md", "new.md"]);
+        assert_eq!(change.changed, vec!["guide.md"]);
+        assert_eq!(change.added, vec!["new.md"]);
         assert_eq!(change.removed, vec!["gone.md"]);
+        // The partition is exhaustive and disjoint: the count a reader is shown
+        // is still every path that moved.
+        assert_eq!(change.touched(), 2);
     }
 
     /// An undeclared surface is **could not look**, never "nothing moved".
@@ -414,6 +491,7 @@ mod tests {
         let secret = "ghp_thisIsTheSortOfThingAContractFileMustNeverEcho";
         let change = ChangeSet {
             changed: vec!["wiring.json".to_owned()],
+            added: Vec::new(),
             removed: Vec::new(),
         };
         let text = render(&change, &["wiring.json".to_owned()]);
@@ -438,6 +516,7 @@ mod tests {
         let touched = render(
             &ChangeSet {
                 changed: vec!["wiring.json".to_owned()],
+                added: Vec::new(),
                 removed: Vec::new(),
             },
             &wiring,
@@ -452,6 +531,7 @@ mod tests {
         let untouched = render(
             &ChangeSet {
                 changed: vec!["guide.md".to_owned()],
+                added: Vec::new(),
                 removed: Vec::new(),
             },
             &wiring,
