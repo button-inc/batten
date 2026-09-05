@@ -48,6 +48,7 @@ mod advisory_drain;
 mod agent_facts;
 mod ambient_authority;
 mod attribution;
+mod attribution_provenance;
 mod authority_replay;
 mod baseline;
 mod bats_invocation;
