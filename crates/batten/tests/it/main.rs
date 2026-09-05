@@ -43,6 +43,7 @@ mod common;
 mod acceptance_corpus;
 mod acquisition_metric;
 mod acquisition_sweep;
+mod address_resolve;
 mod admission;
 mod advisory_drain;
 mod agent_capabilities;

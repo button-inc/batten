@@ -638,6 +638,151 @@ fn mint(observed: &KeyMaterial) -> StoreId {
     StoreId(identity::store_fingerprint(&seed).to_hex())
 }
 
+/// What resolving a content address produced (CLOUD-1365).
+///
+/// **Five outcomes, and no sixth spelling of "something went wrong".** Each names
+/// a different fact about the world and a different remedy, so collapsing any two
+/// is how a caller acts on the wrong one:
+///
+/// * [`Resolution::Resolved`] — bytes read AND rehashed to the address asked for.
+/// * [`Resolution::Missing`] — nothing is stored at that address.
+/// * [`Resolution::Unavailable`] — something is there and could not be read.
+///   Could-not-look: the payload may be perfectly good.
+/// * [`Resolution::Corrupt`] — the entry exists and is not a readable blob at
+///   all, so there are no bytes to hash.
+/// * [`Resolution::Mismatch`] — bytes were read cleanly and hash to something
+///   else. The store is lying, which is the one outcome that says the content is
+///   *wrong* rather than absent or unreadable.
+///
+/// `Missing` and `Unavailable` are the pair most often merged, and they must not
+/// be: absence is a fact about the store, unreadability is a fact about this
+/// process's access to it, and a caller that retries on one should not retry on
+/// the other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resolution {
+    /// The verified bytes.
+    Resolved(Vec<u8>),
+    /// No entry at this address.
+    Missing,
+    /// An entry exists and could not be read.
+    Unavailable,
+    /// An entry exists and is not a readable blob.
+    Corrupt,
+    /// Bytes were read and do not hash to the address.
+    Mismatch,
+}
+
+impl Resolution {
+    /// The stable token used in machine output and diagnostics.
+    ///
+    /// Pointer-only: an outcome name, never a resolved byte.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Resolution::Resolved(_) => "resolved",
+            Resolution::Missing => "missing",
+            Resolution::Unavailable => "unavailable",
+            Resolution::Corrupt => "corrupt",
+            Resolution::Mismatch => "mismatch",
+        }
+    }
+}
+
+/// Whether a resolution came from the store or from a caller's inline copy.
+///
+/// **Observable rather than silent**, which is the whole of the fallback clause:
+/// an inline copy that answered where the store could not is a different
+/// provenance, and a caller that cannot tell has no way to notice its store
+/// rotting underneath it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provenance {
+    /// The addressed store answered.
+    Store,
+    /// The caller's inline bytes answered, verified against the same address.
+    Inline,
+}
+
+/// Resolve `address` from the addressed directory `dir`, verifying before
+/// returning (CLOUD-1365).
+///
+/// # The rehash is the boundary, and it happens before ANY decode
+///
+/// The bytes are read raw, re-addressed under `domain`, and compared. Only a
+/// caller holding [`Resolution::Resolved`] has bytes worth decoding. That
+/// ordering is the entire integrity claim: trusting a filename, decoding first,
+/// or re-serialising JSON all produce something that *looks* like the content and
+/// is not byte-identical to it, and each of those is a live path in the capture
+/// and MCP readers today.
+///
+/// # Why `domain` is a parameter rather than carried in the address
+///
+/// [`identity::ContentAddress`] is a version and a digest; the domain enters the
+/// PREIMAGE rather than the rendered form, so it cannot be recovered from an
+/// address and must be supplied to verify one. That is deliberate — it keeps the
+/// rendered address one fixed length, and it means asking for a payload under the
+/// wrong domain answers [`Resolution::Mismatch`] rather than quietly succeeding.
+///
+/// # The inline fallback
+///
+/// `inline` is a caller's own copy of the bytes. It is consulted **only** when
+/// the store does not answer, and it is verified against the same address by the
+/// same rehash — a fallback that skipped verification would be a hole straight
+/// through the boundary this function exists to be. The provenance is returned
+/// beside the outcome so its use is recorded rather than invisible.
+#[must_use]
+pub fn resolve_address(
+    dir: &Path,
+    domain: identity::AddressDomain,
+    address: &identity::ContentAddress,
+    inline: Option<&[u8]>,
+) -> (Resolution, Provenance) {
+    let at = dir.join(address.render());
+    let stored = match std::fs::symlink_metadata(&at) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Resolution::Missing,
+        // COULD NOT LOOK, never absent. A permission error or an I/O fault says
+        // nothing about whether the payload is there.
+        Err(_) => Resolution::Unavailable,
+        // AN ENTRY THAT IS NOT A FILE HAS NO BYTES TO HASH. A directory or a
+        // symlink at an address is a store that has been damaged in a way reading
+        // cannot repair, and it is not the same as a wrong digest.
+        Ok(meta) if !meta.is_file() => Resolution::Corrupt,
+        Ok(_) => match std::fs::read(&at) {
+            Err(_) => Resolution::Unavailable,
+            Ok(bytes) => verified(domain, address, bytes),
+        },
+    };
+    if matches!(stored, Resolution::Resolved(_)) {
+        return (stored, Provenance::Store);
+    }
+    // THE FALLBACK IS TRIED ONLY WHERE THE STORE DID NOT ANSWER, and it is
+    // verified identically. A `Mismatch` from the store is still worth falling
+    // back from — the caller's copy may be the honest one — and the provenance is
+    // what tells the two apart afterwards.
+    match inline {
+        Some(bytes) => match verified(domain, address, bytes.to_vec()) {
+            Resolution::Resolved(bytes) => (Resolution::Resolved(bytes), Provenance::Inline),
+            // A FALLBACK THAT ALSO FAILS DOES NOT OVERWRITE THE STORE'S VERDICT.
+            // The store's answer is the one a reader must act on; reporting the
+            // inline copy's failure instead would send them to the wrong place.
+            _ => (stored, Provenance::Store),
+        },
+        None => (stored, Provenance::Store),
+    }
+}
+
+/// Re-address `bytes` and answer `Resolved` only on an exact match.
+fn verified(
+    domain: identity::AddressDomain,
+    address: &identity::ContentAddress,
+    bytes: Vec<u8>,
+) -> Resolution {
+    if identity::ContentAddress::of(domain, &bytes) == *address {
+        Resolution::Resolved(bytes)
+    } else {
+        Resolution::Mismatch
+    }
+}
+
 /// The outcome of binding a store to a repository.
 #[derive(Debug)]
 pub struct Bound {
