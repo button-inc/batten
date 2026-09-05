@@ -413,9 +413,30 @@ fanin_job_declared if {
 # the two for the whole of this branch, so `spared` was always 0 and the fan-in's
 # own run was cancelled with the rest. Naming the variable here rather than the
 # task is what makes that a finding next time.
+#
+# AND THE READ MUST SIT AT THE CONSTRUCTOR, WHICH IS THE HALF THIS RULE WAS
+# MISSING (review of #848). Asking "does this file mention `CI_FANIN_WORKFLOW`"
+# and "does this file call `land::abandon`" as two INDEPENDENT questions over
+# ~6,000 lines is satisfied by an unrelated read plus a call handed the check
+# name — which is the exact defect the paragraph above records as having been
+# live for the whole of this branch, so the rule could not have caught its own
+# subject.
+#
+# The join is `land::FanIn::from_workflow_path`, whose argument is the
+# declaration, within a THREE-LINE window because rustfmt splits the call. The
+# window is deliberately not one line: pinning the formatter's current output
+# would make a reflow silence the gate, which is the dead-gate class
+# `.claude/rules/policy-modules.md` warns about one level up. `land::FanIn` is
+# the other half and it is the COMPILER's — a check name no longer type-checks
+# in that argument position at all, so the two mechanisms hold the same join
+# from opposite ends.
 abandon_reads_declaration if {
-	some line in input.tree.lines["crates/batten/src/lib.rs"]
-	contains(line, "CI_FANIN_WORKFLOW")
+	lines := input.tree.lines["crates/batten/src/lib.rs"]
+	some i, j
+	contains(lines[i], "FanIn::from_workflow_path")
+	j >= i
+	j <= i + 2
+	contains(lines[j], "CI_FANIN_WORKFLOW")
 }
 
 violation contains {
