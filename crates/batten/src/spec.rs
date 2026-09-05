@@ -576,6 +576,14 @@ mod tests {
                 // claiming otherwise would advertise a writing verb as read-only.
                 "ready lint".to_owned(),
                 "receipt status".to_owned(),
+                // CLOUD-1180's recovered `agent` slice. BOTH the noun and its
+                // leaf are read, and that is the row's §2 predicate rather than
+                // an accident: `show` is the read band under CLOUD-1184's
+                // grammar, and `surface::tests::every_leaf_under_show_is_read`
+                // is what keeps a writer from ever reaching this list through
+                // the noun's own `read` (CLOUD-170's prefix hazard).
+                "show".to_owned(),
+                "show agent".to_owned(),
                 "spec".to_owned(),
                 "state list".to_owned(),
                 // The verb, never the `worktree` noun: the noun stays
@@ -938,6 +946,12 @@ mod tests {
             // allowlist above: `acquire` READS to decide and WRITES the lock it
             // hands out, and a row claiming `read` would put a writing verb on
             // the derived allowlist.
+            // CLOUD-1180's first landable slice of the recovered `agent`
+            // subtree, spelled in CLOUD-1184's `VERB OBJECT` grammar rather than
+            // as `agent instructions` — the row's own 2026-08-30 amendment, on
+            // `record <object>`'s precedent.
+            "show".to_owned(),
+            "show agent".to_owned(),
             "singleton".to_owned(),
             "singleton acquire".to_owned(),
             "singleton release".to_owned(),

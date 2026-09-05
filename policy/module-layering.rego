@@ -96,6 +96,21 @@ declared_modules := {
 	# `symbols`' class exactly: an acquisition module resolving a `Cost::Effect`
 	# fact by spawning, whose caller is the engine that decides WHEN to acquire.
 	"review",
+	# `agent` arrived with CLOUD-1180 and this rule named it once more — module
+	# written, both test tiers green, `mise run fix` clean, and nobody had placed
+	# it. That is now the ninth time the coverage clause has caught a new module
+	# before a reviewer did, and it caught this one on the LAST gate before
+	# landing rather than the first.
+	#
+	# It is a PROJECTION and sits above the declarations it reads: `spec` and
+	# `surface` for the derived read-only allowlist, `exit` for the §7 table,
+	# `resolve` for the gates actually in force. Nothing in the crate reads it
+	# but `lib`, which is what makes it a view rather than an authority — the
+	# whole constraint CLOUD-19's directive placed on the recovered subtree. It
+	# reaches no store, mints no `Finding`, and spawns nothing, so it has no
+	# back-edge to forbid: a reader that added one would be turning the view into
+	# a second source of truth, which is the thing the module exists not to be.
+	"agent",
 	# `recorder` arrived with CLOUD-1051 and it worked a fourth time: the module
 	# landed undeclared and this rule named it, before any reviewer did. It is a
 	# writer rather than a decider — it accumulates what a gate already said — so

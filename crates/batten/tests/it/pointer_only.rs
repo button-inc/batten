@@ -1582,6 +1582,20 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-1180's recovered `agent` slice. `PointerOnly` and not `Echoes`,
+    // which is the load-bearing distinction here: it reports the repository's
+    // own gates, and a gate's `pattern` and `glob` are the consumer's policy
+    // text. So it emits each gate's id and severity and nothing else — asserted
+    // over the emitted bytes in
+    // `agent_capabilities::the_verb_reports_this_repositorys_gates_as_pointers`.
+    // `spec` is `Echoes` because it echoes Batten's OWN declarations; this one
+    // reads the caller's tree, so that exemption does not transfer.
+    Verb {
+        path: "show agent",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "state list",
         args: &[],
