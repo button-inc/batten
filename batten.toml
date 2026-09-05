@@ -376,12 +376,19 @@ link = "~/.local/bin"
 # find one — the session's, falling back to the runner's own in CI, and nothing
 # at all where neither exists, which is the container-build case.
 #
-# `github.com` is deliberately NOT exempted, matching `mise.toml`: `git` keeps
-# its proxy-provided auth for this repository, and only the API and asset hosts
-# go direct.
+# `github.com` IS EXEMPTED HERE, AND THAT IS THE DIFFERENCE FROM `mise.toml`.
+# That file leaves it proxied so `git` keeps its proxy-provided auth to this
+# repository — a real constraint, and one that does not reach this row. These
+# variables are applied to the RUNNER'S OWN PROCESS by the launcher; `git` runs
+# in its own process and never sees them. So the reason to hold github.com back
+# does not apply, and holding it back costs the thing the row exists for: a
+# release asset is served from `github.com/<owner>/<repo>/releases/download/…`
+# before it ever redirects, so the proxy gets first refusal on the biggest
+# single source of these 403s.
 [[provision.env]]
 name = "NO_PROXY"
 prepend_list = [
+  "github.com",
   "api.github.com",
   "objects.githubusercontent.com",
   "codeload.github.com",
@@ -391,6 +398,7 @@ prepend_list = [
 [[provision.env]]
 name = "no_proxy"
 prepend_list = [
+  "github.com",
   "api.github.com",
   "objects.githubusercontent.com",
   "codeload.github.com",
