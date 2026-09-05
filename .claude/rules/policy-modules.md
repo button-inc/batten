@@ -268,6 +268,29 @@ mediated path parses no manifest (CLOUD-856); and `input.facts.extracted` is a
 declared extractor's COUNT over this session's transcript — an integer over
 typed events, never a byte of the session (CLOUD-1172).
 
+**`extracted` WILL NOT GROW AN ARM THAT READS PROSE, AND THAT IS A DECIDED
+REFUSAL RATHER THAN AN UNBUILT FEATURE** (CLOUD-1254). The count landed for two
+named programs and carries neither, so the temptation is to widen it until it
+does. It cannot be widened, and the reason is one level down rather than in this
+family: `transcript.rs`'s own header states that every event is built from a
+TYPED field — a call's `name`, a result's `is_error` boolean, a hook's
+`exitCode` — and that _"the free-text payload is never interpreted and never
+emitted"_, because a transcript is the richest source of secrets the engine can
+be pointed at. So the stream a member reduces holds no prose to match.
+
+`finding-sink-check` is the measured instance and its first arm is a regex over
+assistant prose (`mise-tasks/finding-sink-check.sh:254`), joined per turn
+against that turn's own tool calls with a negated arm. An extraction expressing
+that join would have to retain the prose to match it — and a predicate built on
+prose is a classifier wearing a gate's clothes, which is non-negotiable rule 3
+and which `transcript.rs` refuses at its own header. The refusal is therefore
+about the SUBSTRATE, not about the reduction's shape: a count of stranded turns
+would be a perfectly admissible RESULT, and there is nothing to compute it from.
+
+Read this the way the missing INSTANT key below is read. It is not a gap for the
+next author to close; it is a route already walked to its end, and the thing at
+the end is a rule refusing it.
+
 `programs` is the ARGV ALREADY READ (CLOUD-1028), and it is NOT `segments` under
 another name: one entry per segment, each carrying the EFFECTIVE program, the
 `arguments` that program was handed, and whether a mediator selected it.
