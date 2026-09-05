@@ -171,14 +171,46 @@ pub enum Lookup {
     Unreadable(u16),
 }
 
+/// The pull request for `branch` WHATEVER its state.
+///
+/// **[`look_up_pull_request`] filters `state=open`, and a merged pull request is
+/// CLOSED** — so asking it to confirm a merge asks a question whose `Yes` is
+/// unreachable by construction. `landed_for_real` did exactly that: the
+/// fast-forward succeeded, the lookup found nothing, the merge read as
+/// could-not-look, and the lap went round until the budget was spent and exited
+/// `3` without ever retiring the branch (review of #848). The gate against
+/// deleting a branch on an unmerged pull request became a gate against ever
+/// landing.
+///
+/// `state=all`, and it is a different question from the open-only one rather
+/// than a widening of it: that lookup asks *is there work in flight for this
+/// branch*, and this asks *what became of the work there was*.
+#[must_use]
+pub fn pull_request_in_any_state(repo: &str, branch: &str) -> Lookup {
+    look_up(
+        repo,
+        branch,
+        &format!(
+            "repos/{repo}/pulls?head={}:{branch}&state=all&per_page=1",
+            repo.split('/').next().unwrap_or(repo)
+        ),
+    )
+}
+
 /// The three-valued lookup [`open_pull_request`] flattens.
 #[must_use]
 pub fn look_up_pull_request(repo: &str, branch: &str) -> Lookup {
     let owner = repo.split('/').next().unwrap_or(repo);
-    let Some(answer) = crate::rest::get(
+    look_up(
+        repo,
+        branch,
         &format!("repos/{repo}/pulls?head={owner}:{branch}&state=open&per_page=1"),
-        None,
-    ) else {
+    )
+}
+
+/// The reading both lookups share. One parser, two questions.
+fn look_up(_repo: &str, _branch: &str, path: &str) -> Lookup {
+    let Some(answer) = crate::rest::get(path, None) else {
         // The request did not complete at all — no host, no route, no answer.
         // `0` rather than a status, because there was none to carry.
         return Lookup::Unreadable(0);
@@ -531,9 +563,19 @@ mod tests {
     #[test]
     fn only_failure_is_a_verdict_about_the_branch() {
         assert_eq!(grade("success"), Answer::Accepted);
-        assert_eq!(grade("skipped"), Answer::Accepted);
         assert_eq!(grade("failure"), Answer::Refused);
-        for token in ["cancelled", "timed_out", "startup_failure", "stale"] {
+        // **`skipped` IS NOT AN ACCEPTANCE, and this case asserted that it was**
+        // for as long as `grade` said so. A skip merges nothing, and `Accepted`
+        // reaches `Progress::Landed`, which retires the branch — so the pair
+        // agreed with each other about a reading that deleted branches. Listed
+        // with the other not-a-verdict tokens now, where it belongs.
+        for token in [
+            "cancelled",
+            "timed_out",
+            "startup_failure",
+            "stale",
+            "skipped",
+        ] {
             assert_eq!(
                 grade(token),
                 Answer::Unknown(token.to_owned()),
