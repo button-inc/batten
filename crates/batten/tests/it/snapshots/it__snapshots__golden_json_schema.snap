@@ -117,6 +117,32 @@ expression: stdout_of(&output)
   ],
   "subcommands": [
     {
+      "path": "adjudicate",
+      "id": "hook",
+      "about": "Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [
+        {
+          "name": "harness",
+          "short": null,
+          "long": "harness",
+          "takes_value": true,
+          "positional": false,
+          "help": "The harness whose payload to decode and whose decision channel to answer in"
+        },
+        {
+          "name": "instant",
+          "short": null,
+          "long": "instant",
+          "takes_value": true,
+          "positional": false,
+          "help": "The epoch second to judge time-dependent records against, supplied as data"
+        }
+      ],
+      "subcommands": []
+    },
+    {
       "path": "attribution",
       "id": "attribution",
       "about": "What produced commits may carry about the tooling that made them",
@@ -1146,32 +1172,6 @@ expression: stdout_of(&output)
           "subcommands": []
         }
       ]
-    },
-    {
-      "path": "hook",
-      "id": "hook",
-      "about": "Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)",
-      "effect": "unclassified",
-      "data_channel": false,
-      "flags": [
-        {
-          "name": "harness",
-          "short": null,
-          "long": "harness",
-          "takes_value": true,
-          "positional": false,
-          "help": "The harness whose payload to decode and whose decision channel to answer in"
-        },
-        {
-          "name": "instant",
-          "short": null,
-          "long": "instant",
-          "takes_value": true,
-          "positional": false,
-          "help": "The epoch second to judge time-dependent records against, supplied as data"
-        }
-      ],
-      "subcommands": []
     },
     {
       "path": "init",
@@ -2280,6 +2280,34 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "show",
+      "id": "show",
+      "about": "Report what something is, without changing it",
+      "effect": "read",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "show agent",
+          "id": "show.agent",
+          "about": "What an agent may do in this repository: the read-only verbs, the exit contract, and the declared gates",
+          "effect": "read",
+          "data_channel": true,
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "positional": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "singleton",
       "id": "singleton",
       "about": "Whether a second copy of a task may start in this clone",
@@ -2964,6 +2992,14 @@ expression: stdout_of(&output)
     {
       "id": "receipt.status",
       "path": "receipt status"
+    },
+    {
+      "id": "show",
+      "path": "show"
+    },
+    {
+      "id": "show.agent",
+      "path": "show agent"
     },
     {
       "id": "spec",
