@@ -1225,6 +1225,14 @@ expression: stdout_of(&output)
           "data_channel": false,
           "flags": [
             {
+              "name": "claimed",
+              "short": null,
+              "long": "claimed",
+              "takes_value": true,
+              "positional": false,
+              "help": "`<CLOUD-id>` lines a commit on origin/main closes, from `claimed-keys --closing-only`"
+            },
+            {
               "name": "declined",
               "short": null,
               "long": "declined",
