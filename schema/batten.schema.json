@@ -1867,6 +1867,13 @@
       "description": "The landing lease's own configuration (CLOUD-1148 §2).",
       "type": "object",
       "properties": {
+        "fast_forward_branches": {
+          "description": "Branch-name prefixes that land WITHOUT taking the lease, so the runner-side\nprecondition must not judge them.\n\n# THE POPULATION IS THE LANDER'S, NOT THE AUTHOR'S\n\nThese are branches some other workflow fast-forwards on a `workflow_run`\ncompletion, so no agent ever holds the lease on their behalf and judging\nthem would refuse the run the gate exists to let through. The predecessor\nspelled the same set as a `case` in shell, and its comment carries the\neconomics: a cancelled run is `completed`, so those landers DO fire, find\nthe checks not green, and stop; nothing retries. Cancelling here would not\nsave a matrix, it would DEFER one and add a stall.\n\n**Not the bot-author set** (`[bot_lane] bots`), and the two must not be\ncollapsed: that keys on a forge LOGIN and this keys on a branch NAME,\nbecause what decides the question is which workflow lands the branch. A\nhuman who names a branch with one of these prefixes gets the same\ntreatment, correctly — the lander fires on the name.\n\n**Prefixes on the branch, never a substring anywhere in the ref**, which\nthe predecessor's suite pinned as its own case: a `case` arm matching\nmid-ref would exempt a branch that merely mentions one.\n\nEmpty means every branch is judged, which is the gate's default and the\nreason this is a short named list rather than a pattern.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "landing_paths": {
           "description": "The paths that CONSTITUTE the landing mechanism, so a head can be asked\nwhether it carries what trunk has.\n\n# A PATH SET RATHER THAN A GREP STRING, and that is the whole point\n\nThe predecessor asked this by grepping the head's `mise-tasks/land.sh`\nfor `land-lock acquire`. Both halves of that die with the retirement: the\nfile is deleted, so the read fails, so the script takes its own fail-open\npath and reports \"not judging this head's age\" — and every stale head\npasses, silently, which is worse than a wrong answer.\n\nA declared path set survives, because the thing that changes when the\nmechanism moves is WHICH PATHS, and that is config a retirement edits\nrather than a literal a retirement invalidates.\n\nEmpty is could-not-look: nothing to compare means no verdict, never a\nclean one.",
           "type": "array",

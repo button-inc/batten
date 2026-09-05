@@ -715,6 +715,34 @@ pub struct Lease {
     /// clean one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub landing_paths: Vec<String>,
+
+    /// Branch-name prefixes that land WITHOUT taking the lease, so the runner-side
+    /// precondition must not judge them.
+    ///
+    /// # THE POPULATION IS THE LANDER'S, NOT THE AUTHOR'S
+    ///
+    /// These are branches some other workflow fast-forwards on a `workflow_run`
+    /// completion, so no agent ever holds the lease on their behalf and judging
+    /// them would refuse the run the gate exists to let through. The predecessor
+    /// spelled the same set as a `case` in shell, and its comment carries the
+    /// economics: a cancelled run is `completed`, so those landers DO fire, find
+    /// the checks not green, and stop; nothing retries. Cancelling here would not
+    /// save a matrix, it would DEFER one and add a stall.
+    ///
+    /// **Not the bot-author set** (`[bot_lane] bots`), and the two must not be
+    /// collapsed: that keys on a forge LOGIN and this keys on a branch NAME,
+    /// because what decides the question is which workflow lands the branch. A
+    /// human who names a branch with one of these prefixes gets the same
+    /// treatment, correctly — the lander fires on the name.
+    ///
+    /// **Prefixes on the branch, never a substring anywhere in the ref**, which
+    /// the predecessor's suite pinned as its own case: a `case` arm matching
+    /// mid-ref would exempt a branch that merely mentions one.
+    ///
+    /// Empty means every branch is judged, which is the gate's default and the
+    /// reason this is a short named list rather than a pattern.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fast_forward_branches: Vec<String>,
 }
 
 /// The `[ready]` table: the refinement gate's consumer-set thresholds.

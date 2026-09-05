@@ -6361,6 +6361,9 @@ fn run_lease_guard(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let Standing { head, branch, run } = *asking;
+    if let Some(code) = fast_forward_lane(root, branch, out)? {
+        return Ok(code);
+    }
     let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
     let carries = lease_staleness(root, &repo, head);
 
@@ -6389,11 +6392,39 @@ fn run_lease_guard_unleased(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let Standing { head, run, .. } = *asking;
+    let Standing { head, branch, run } = *asking;
+    if let Some(code) = fast_forward_lane(root, branch, out)? {
+        return Ok(code);
+    }
     let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
     let carries = lease_staleness(root, &repo, head);
     let guarded = lease::guard(&carries, None);
     report_guard(&guarded, &repo, run, out, err)
+}
+
+/// The carve-out, asked BEFORE either reading and before anything is spent.
+///
+/// **This ordering is the predecessor's and it is load-bearing.** The `case` sat
+/// above both the staleness read and the lease read, so an exempt branch costs
+/// no forge call at all — and, more importantly, cannot be stopped by a reading
+/// that has nothing to say about it. Asking afterwards would let a stale-head
+/// refusal fire on a branch this gate is not judging.
+///
+/// `Some(Success)` means *not judging this branch*; `None` means carry on.
+fn fast_forward_lane(root: &Path, branch: &str, out: &mut dyn Write) -> Result<Option<ExitCode>> {
+    let prefixes = config::load(root)
+        .ok()
+        .and_then(|loaded| loaded.lease)
+        .map(|lease| lease.fast_forward_branches)
+        .unwrap_or_default();
+    if !lease::lands_by_fast_forward(branch, &prefixes) {
+        return Ok(None);
+    }
+    writeln!(
+        out,
+        "lease-precondition: {branch} is fast-forwarded by a lander rather than by a lease holder; not judging it"
+    )?;
+    Ok(Some(ExitCode::Success))
 }
 
 /// The staleness reading, over the declared landing paths.

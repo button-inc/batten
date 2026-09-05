@@ -7357,6 +7357,31 @@ landing_paths = [
   "crates/batten/src/lease.rs",
 ]
 
+# THE BRANCHES A LANDER FAST-FORWARDS, so no agent ever holds the lease for them
+# and the runner-side precondition must not judge them. Read off the two landers'
+# own `branches:` filters rather than guessed:
+#
+#   auto-bot-land.yml      renovate/**, sbom-actions/**
+#   auto-release-land.yml  release-plz-**
+#
+# `sbom-actions/` IS THE ONE THE PREDECESSOR MISSED, and it is a live gap rather
+# than a tidy-up. `ci-lease-precondition.sh`'s `case` lists `renovate/*` and
+# `release-plz-*` only, so an `sbom-actions/**` branch — landed by the same
+# workflow, on the same trigger, with nobody holding a lease on its behalf — is
+# judged like an ordinary branch and its run is cancelled whenever some agent
+# holds the lease. Found by reading the carve-out against the filters it is
+# supposed to mirror; the shell has carried it since the lane was added.
+#
+# The economics, which are the predecessor's and unchanged: a cancelled run is
+# `completed`, so those landers DO fire, find the checks not green, and stop.
+# Nothing retries, and the head then waits for its next push to mint a fresh
+# matrix. Cancelling here does not save a matrix — it DEFERS one and adds a
+# stall.
+#
+# NOT `[bot_lane] bots`, which keys on a forge login. What decides this question
+# is which workflow lands the branch, and a workflow selects on the name.
+fast_forward_branches = ["renovate/", "sbom-actions/", "release-plz-"]
+
 [ready]
 prose_dialect_required_from = "2026-09-02T00:00:00.000Z"
 

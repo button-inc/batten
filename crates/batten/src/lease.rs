@@ -1533,6 +1533,39 @@ pub fn claim(terms: &Terms, holder: &str, branch: &str, head: &str, now: i64) ->
     }
 }
 
+/// Does this branch land WITHOUT ever taking the lease?
+///
+/// # The population is the LANDER's, and that is the whole predicate
+///
+/// Some branches are fast-forwarded by a workflow that fires on a `workflow_run`
+/// completion, so no agent holds the lease on their behalf and the runner-side
+/// precondition would refuse the very run it exists to let through. Which
+/// branches those are is a fact about which workflow lands them, and the workflow
+/// selects on the branch NAME — so this does too.
+///
+/// **Not `crate::bot::is_lane_bot`, and collapsing the two would be wrong in both
+/// directions.** That keys on a forge LOGIN. A human who names a branch with one
+/// of these prefixes still gets fast-forwarded by the lander and still holds no
+/// lease, so it must be exempt; a lane bot pushing a branch these prefixes do not
+/// name is landed the ordinary way and must be judged.
+///
+/// **A PREFIX ON THE BRANCH, never a substring anywhere in the ref**, which the
+/// predecessor's suite pinned as its own case. Given a full ref, the branch is
+/// its `refs/heads/` remainder — a caller handing one over must not have the
+/// question answered about the wrong string.
+///
+/// An empty prefix is ignored rather than matching everything: a blank row in
+/// consumer config is a typo, and reading it as *exempt every branch* would
+/// silently switch the whole gate off.
+#[must_use]
+pub fn lands_by_fast_forward(branch: &str, prefixes: &[String]) -> bool {
+    let branch = branch.trim_start_matches("refs/heads/");
+    prefixes
+        .iter()
+        .filter(|prefix| !prefix.is_empty())
+        .any(|prefix| branch.starts_with(prefix.as_str()))
+}
+
 /// The body a release leaves behind.
 ///
 /// **A tombstone, not a delete**: the expiry CASes to `0`, which leaves the lease
@@ -2546,6 +2579,41 @@ mod tests {
             }
         }
         body
+    }
+
+    /// **A PREFIX ON THE BRANCH, NEVER A SUBSTRING ANYWHERE IN THE REF**, which
+    /// is `ci-lease-precondition.bats`'s own case: an arm matching mid-ref would
+    /// exempt a branch that merely mentions a lander's name, and the exemption is
+    /// the one thing in this gate that switches it off.
+    #[test]
+    fn the_exemption_is_a_prefix_on_the_branch_and_not_a_substring() {
+        let lanes = vec![String::from("lane/"), String::from("cut-")];
+
+        assert!(lands_by_fast_forward("lane/bump-x", &lanes));
+        assert!(lands_by_fast_forward("cut-v1.2.3", &lanes));
+        // The full ref resolves to the same answer as the branch name.
+        assert!(lands_by_fast_forward("refs/heads/lane/bump-x", &lanes));
+
+        assert!(
+            !lands_by_fast_forward("fix/not-lane/bump-x", &lanes),
+            "a mention mid-ref is not the lander's branch"
+        );
+        assert!(!lands_by_fast_forward("main", &lanes));
+    }
+
+    /// **AN EMPTY SET JUDGES EVERY BRANCH, and an empty ROW exempts none.**
+    ///
+    /// The default has to be *judge it* or a consumer that declares nothing has
+    /// no gate; and a blank row is a typo, which read as a prefix would match
+    /// every branch and silently switch the whole gate off — the failure the
+    /// exemption is most able to cause and least likely to be noticed for.
+    #[test]
+    fn nothing_declared_exempts_nothing_and_a_blank_row_exempts_nothing_either() {
+        assert!(!lands_by_fast_forward("lane/bump-x", &[]));
+        assert!(!lands_by_fast_forward(
+            "lane/bump-x",
+            &[String::new(), String::new()]
+        ));
     }
 
     #[test]
