@@ -117,6 +117,24 @@ declared_modules := {
 	# it sits below `rules` and reaches `exec` for its one spawn, which is the
 	# placed adapter `policy/spawn-adapters.rego` requires.
 	"recorder",
+	# `deferral` and `source` arrived with this bundle, and this rule named BOTH
+	# on the last gate before landing — module written, both suites green,
+	# `mise run fix` clean, `module-map-check` satisfied, and nobody had placed
+	# either. That is the coverage clause working again, and it is worth one line
+	# because the two are placed for opposite reasons.
+	#
+	# `deferral` is a LEAF. It reads nothing in the crate: a `[[deferral]]` row is
+	# data plus a comparison over one named fact, so its whole surface is a type,
+	# a validator and a predicate. Three modules read it — `config` at load,
+	# `lint` for the gate, `trust` for the weakening — and it reads none of them,
+	# which is what keeps the declaration free of the gates that consume it.
+	#
+	# `source` sits BELOW `invocation` and `uses` for the reason it exists: both
+	# read it, it reads neither, and its only edge is onto `facts` for `Look` —
+	# the same edge `invocation` already carries. A back-edge from here would be
+	# the parser deciding what a parse MEANS, which is exactly the collapse into
+	# one authority that the module was extracted to prevent.
+	"deferral", "source",
 	# `perf` arrived with CLOUD-875 and this rule named it too — a sixth time. It
 	# is a measurement harness rather than a decider: it builds two binaries and
 	# spawns a benchmark runner, so it sits with the acquisition modules below and

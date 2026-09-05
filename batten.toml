@@ -6704,7 +6704,7 @@ delete_branch_on_merge = true
 # CLOUD-647 deferred regorus on `rust-version = 1.88.0` against a 1.85.0 pin.
 # The pin is 1.98 and regorus is a dependency: fully discharged.
 #
-# CLOUD-310 deferred ast-grep on a conjunction — "declares a stable public API
+# CLOUD-310 deferred its own subject on a conjunction — "declares a stable public API
 # AND its rust-version is at or below this repo's pin". The MSRV half is
 # satisfied; the API half is not expressible over any fact this tree holds, so
 # the deferral no longer has a version-gated reversal and its row is RESTATED

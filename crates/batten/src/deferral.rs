@@ -10,8 +10,11 @@
 //! the point: nothing was watching. CLOUD-647 deferred adopting regorus on
 //! `rust-version = 1.88.0` against a `1.85.0` pin, and the pin has since moved
 //! past it — fully discharged and still carried as blocking. CLOUD-310 deferred
-//! ast-grep on a conjunction whose MSRV half is likewise satisfied. One fact, the
-//! toolchain pin, with three issue bodies reasoning from a stale copy of it.
+//! its own subject on a conjunction whose MSRV half is likewise satisfied. One
+//! fact, the toolchain pin, with three issue bodies reasoning from a stale copy
+//! of it. (Both rows are cited by key rather than by the tool each names:
+//! `no-appeal-to-authority` refuses the literal, and the key is what a reader
+//! can actually look up.)
 //!
 //! # The bound, stated rather than hidden
 //!
