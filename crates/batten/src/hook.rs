@@ -7872,6 +7872,10 @@ fn binds_stdin(redirect: &rable::Node) -> bool {
 /// exactly `"`, `\`, `$` and `` ` ``, which is bash's rule and not a
 /// simplification of it. An unterminated quote keeps its tail, matching what the
 /// parser accepted.
+pub(crate) fn unquote_word(word: &str) -> String {
+    unquote(word)
+}
+
 fn unquote(word: &str) -> String {
     let mut out = String::with_capacity(word.len());
     let mut chars = word.chars().peekable();
