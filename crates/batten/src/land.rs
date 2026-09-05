@@ -357,6 +357,21 @@ pub enum Waited {
         /// The forge's verdict, as a token.
         verdict: String,
     },
+    /// The green question answered, and the answer was no.
+    ///
+    /// **THE ARM THAT WAS MISSING, and its absence was not a gap in the type but
+    /// an hour of runner time per lap.** The green arm broke only on
+    /// `Verdict::Green`, so a red required check was indistinguishable from a
+    /// pending one: the loop asked its whole count — 3600 by default — and then
+    /// reported [`Waited::Unanswered`], which laps. A branch with one failing
+    /// test therefore bought a fresh matrix per lap and waited out an hour on
+    /// each. The predecessor stopped on red, and `tests/land.bats` says so in as
+    /// many words: *"red CI stops the lap without asking for the merge"*.
+    Red {
+        /// Which required checks failed, as pointers. Never a log line —
+        /// [`crate::checks_green::Finding`] has nowhere to put one.
+        findings: Vec<crate::checks_green::Finding>,
+    },
     /// The staleness question answered first: the base moved, so the run in
     /// flight is already spend for a verdict nobody will read.
     Stale {
@@ -445,14 +460,25 @@ pub fn wait(
                 // this arm only decides when to ask.
                 let raw = crate::pr_watch::read(config, poll.etag());
                 let interval = poll.absorb(raw.as_ref(), config.interval);
-                if let Ok(crate::checks_green::Verdict::Green) =
-                    crate::checks_green::decide(poll.runs(), roster)
-                {
-                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                    drop(green.send(Waited::Green {
-                        verdict: String::from("green"),
-                    }));
-                    return;
+                // BOTH TERMINAL ANSWERS END THE WAIT, not only the one the lap
+                // hopes for. Breaking on `Green` alone made a red head
+                // byte-identical to a pending one for the whole ask count.
+                match crate::checks_green::decide(poll.runs(), roster) {
+                    Ok(crate::checks_green::Verdict::Green) => {
+                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                        drop(green.send(Waited::Green {
+                            verdict: String::from("green"),
+                        }));
+                        return;
+                    }
+                    Ok(crate::checks_green::Verdict::Red(findings)) => {
+                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                        drop(green.send(Waited::Red { findings }));
+                        return;
+                    }
+                    // Pending is the state this loop exists to sit in, and a
+                    // roster that cannot decide was refused before the loop.
+                    Ok(crate::checks_green::Verdict::Pending(_)) | Err(_) => {}
                 }
                 crate::pr_watch::pause(interval);
             }
@@ -842,6 +868,39 @@ pub enum Progress {
 /// `fast-forward` it is the loop's ORDINARY state — nobody has answered yet —
 /// so it laps, which is the whole reason exit `3` is a first-class outcome on
 /// those two rather than an error.
+/// The table, given the reading the exit code cannot carry.
+///
+/// # WHY THIS TAKES A SECOND ARGUMENT AND [`progress`] DOES NOT
+///
+/// The wait has two refusals and they are both a policy verdict, so both are
+/// exit `2` — non-negotiable rule 5 is one table with no per-verb exception, and
+/// inventing a code for one of them is exactly the exception it forbids. But a
+/// base that moved LAPS (the next replay is the remedy) and a red required check
+/// STOPS (no rebase clears a failing test). The code cannot tell them apart; the
+/// reading can, and [`run wait`](wait) already took it.
+///
+/// So the discrimination lives here, in the one table, beside the row it
+/// qualifies — rather than as an `if` in the driver, which is where the last
+/// thing needing per-step room ended up and what the declared pipeline exists to
+/// stop happening again.
+#[must_use]
+pub const fn progress_of(
+    step: Step,
+    code: crate::exit::ExitCode,
+    seen: Option<TapVerdict>,
+) -> Progress {
+    // THE REFUSAL, NOT THE STEP. Keying on `(Wait, Red)` alone reads a wait that
+    // SUCCEEDED as a stop whenever a red reading is in hand — which the driver
+    // can produce, since `seen` is whatever the last wait saw. The qualifier
+    // reaches exactly one cell: the wait's own `2`.
+    if let (Step::Wait, crate::exit::ExitCode::Violation, Some(TapVerdict::Red)) =
+        (step, code, seen)
+    {
+        return Progress::Stop;
+    }
+    progress(step, code)
+}
+
 #[must_use]
 pub const fn progress(step: Step, code: crate::exit::ExitCode) -> Progress {
     use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
@@ -1318,6 +1377,7 @@ pub fn closes_the_tap(state: &Tap) -> bool {
 pub const fn tap_verdict(waited: &Waited) -> Option<TapVerdict> {
     match waited {
         Waited::Green { .. } => Some(TapVerdict::Green),
+        Waited::Red { .. } => Some(TapVerdict::Red),
         Waited::Unanswered => Some(TapVerdict::Pending),
         Waited::Stale { .. } => None,
     }
@@ -2308,6 +2368,68 @@ mod tests {
     /// something nobody read, and `Unanswered → None` makes `Compensation::
     /// Redraft` unreachable from every path the driver has — which is the state
     /// PR #848's review found the cluster in.
+    /// **RED STOPS AND STALE LAPS, AND BOTH ARE EXIT 2.**
+    ///
+    /// The wait's two refusals are both a verdict about this repository, so the
+    /// one exit table gives them the same code — and inventing a fifth for red
+    /// would be the per-verb exception non-negotiable rule 5 forbids. What tells
+    /// them apart is the reading: no rebase clears a failing test, and the next
+    /// replay is exactly the remedy for a base that moved.
+    ///
+    /// Without this, a red head is `Unanswered`: the green arm asks its whole
+    /// count — 3600 by default — and the lap then LAPS, buying a fresh matrix and
+    /// waiting out another hour on a branch with one failing test.
+    #[test]
+    fn a_red_wait_stops_where_a_stale_one_laps_on_the_same_code() {
+        use crate::exit::ExitCode::Violation;
+
+        assert_eq!(
+            progress_of(Step::Wait, Violation, Some(TapVerdict::Red)),
+            Progress::Stop,
+            "no rebase clears a failing test"
+        );
+        assert_eq!(
+            progress_of(Step::Wait, Violation, None),
+            Progress::Lap,
+            "the staleness arm won the race, and the next replay is the remedy"
+        );
+    }
+
+    /// The qualifier reaches ONE cell and leaves the table alone otherwise —
+    /// without this, a validator that stopped everything would satisfy the case
+    /// above.
+    #[test]
+    fn the_reading_qualifies_the_wait_row_and_nothing_else() {
+        use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
+
+        for step in [
+            Step::Replay,
+            Step::Verify,
+            Step::Ready,
+            Step::Push,
+            Step::Wait,
+            Step::FastForward,
+        ] {
+            for code in [Success, Usage, Violation, Internal] {
+                for seen in [None, Some(TapVerdict::Green), Some(TapVerdict::Pending)] {
+                    assert_eq!(
+                        progress_of(step, code, seen),
+                        progress(step, code),
+                        "{step:?}/{code:?}/{seen:?} must read as the table does"
+                    );
+                }
+                // And the red reading moves only the wait's own refusal.
+                if !(step == Step::Wait && code == Violation) {
+                    assert_eq!(
+                        progress_of(step, code, Some(TapVerdict::Red)),
+                        progress(step, code),
+                        "{step:?}/{code:?} is not the wait's refusal"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_wait_that_read_nothing_is_not_a_pending_reading() {
         assert_eq!(
@@ -2327,6 +2449,13 @@ mod tests {
                 verdict: String::from("green"),
             }),
             Some(TapVerdict::Green)
+        );
+        assert_eq!(
+            tap_verdict(&Waited::Red {
+                findings: Vec::new(),
+            }),
+            Some(TapVerdict::Red),
+            "and a red answer is an answer, which is what stops the lap"
         );
     }
 

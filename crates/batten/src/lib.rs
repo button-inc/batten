@@ -5816,7 +5816,7 @@ fn run_land_lap(
             if code == ExitCode::Success && row.effectful {
                 entered.push(step);
             }
-            match land::progress(step, code) {
+            match land::progress_of(step, code, seen) {
                 land::Progress::Proceed => {}
                 land::Progress::Landed => {
                     writeln!(out, "land: landed on lap {lap}")?;
@@ -6801,6 +6801,12 @@ fn run_land_wait(
             land::answers(&sha, None, Some(base.as_str())),
             ExitCode::Violation,
         ),
+        // A VERDICT ABOUT THIS REPOSITORY, so `2` — the same code the stale arm
+        // carries, because both are. What tells them apart is the READING, which
+        // travels back beside this code and which `land::progress_of` is the one
+        // table over. Inventing a fifth code for red would be the per-verb
+        // exception non-negotiable rule 5 forbids.
+        land::Waited::Red { .. } => (land::answers(&sha, Some("red"), None), ExitCode::Violation),
         land::Waited::Unanswered => (land::answers(&sha, None, None), ExitCode::Internal),
     };
     land::record_wait(root, branch, &answers)?;
@@ -6808,6 +6814,34 @@ fn run_land_wait(
     match &waited {
         land::Waited::Green { .. } => {
             writeln!(out, "land: {sha} is green; the loser was voided unread")?;
+        }
+        land::Waited::Red { findings } => {
+            // POINTERS, and `Finding` has nowhere to put a log line. The count
+            // leads because it is what a reader acts on; the names follow.
+            writeln!(
+                err,
+                "::error:: land: {} required check(s) failed on {sha}",
+                findings.len()
+            )?;
+            for finding in findings {
+                writeln!(err, "  {finding}")?;
+            }
+            // THE RE-RUN ECONOMY, and it is what `failed_runs`/`rerun_failed`
+            // were built for and never reached. `tests/land.bats` splits it in
+            // two: *"a run that died before any mise step is re-run, not
+            // reported red"* against *"a job that reached a verdict is red, and
+            // is never re-run"*. This engine cannot yet tell those apart — that
+            // needs the job-level reading, which is CLOUD-483's own row — so it
+            // takes the SAFE half: report the red, re-run nothing, and let the
+            // author look. Re-running a genuine failure would spend a matrix to
+            // learn what one already answered.
+            //
+            // Stated here rather than left silent, because the two functions
+            // exist and a reader finding them uncalled deserves the reason.
+            writeln!(
+                out,
+                "land: reproduce this locally; a rebase clears nothing here, so the lap stops"
+            )?;
         }
         land::Waited::Stale { base } => {
             writeln!(
