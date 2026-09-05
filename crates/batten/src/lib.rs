@@ -8086,8 +8086,25 @@ fn run_hook(
         facts::Look::CouldNotLook
     };
     let (tasks, extracted) = session_facts(&policy, &envelope);
+    // What a `git reset --hard` in this call would leave unreferenced (CLOUD-462).
+    //
+    // NARROWED TO THE CALL THAT MAKES ONE, which is the whole cost story: the
+    // argv reading is over an envelope already decoded, and the git walk runs
+    // only when that reading finds a `--hard` reset. Every other mediated call —
+    // which is all of them, nearly always — opens nothing.
+    //
+    // Could-not-look on any failure, and it allows. A target that will not
+    // resolve, a clone with no remote, a repository this process cannot open:
+    // none of those is evidence that work would be lost, and refusing on them
+    // would refuse hardest exactly where the answer is least knowable.
+    let discards =
+        hook::destructive_reset_target(&envelope).map_or(facts::Look::CouldNotLook, |target| {
+            git::unpushed_in_range(hook_authority_root(), &target)
+                .map_or(facts::Look::CouldNotLook, facts::Look::Is)
+        });
     let facts = hook::Facts {
         bypass,
+        discards: &discards,
         receipts: &receipts,
         keys: &keys,
         stop: &stop,

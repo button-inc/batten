@@ -3935,7 +3935,12 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     // reads the hatch any more: the chain decides what the policy says, and
     // [`adjudicated`] decides which of those refusals the hatch may suppress. A
     // gate that could still see it would be a second place the answer is made.
-    let Facts { receipts, keys, .. } = *facts;
+    let Facts {
+        receipts,
+        keys,
+        discards,
+        ..
+    } = *facts;
     // The end-of-turn gate (CLOUD-85), and it no longer DENIES (CLOUD-889).
     //
     // It returned `Decision::Deny` here, which is exit 2 — the channel that
@@ -4023,6 +4028,30 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     }
     if policy.is_empty() {
         return Decision::Allow;
+    }
+    // THE DESTRUCTIVE-RESET GATE (CLOUD-462), and its predicate is REACHABILITY
+    // rather than the verb's spelling.
+    //
+    // `git reset --hard` onto a ref whose commits are all on a remote loses
+    // nothing, and refusing that would be the false-positive rate that gets a
+    // guard switched off — the row says exactly that. What can lose work is a
+    // commit that exists in this clone and nowhere else, which the boundary
+    // answered in `Facts::discards` because reachability is a property of the
+    // repository and this function is pure.
+    //
+    // FIRST AMONG THE GATES, because it is the only one whose subject is already
+    // gone by the time any other could speak: every refusal below is about a call
+    // that has not happened, and so is this, but the recovery it names —
+    // `git reflog` — is the one a caller needs before they run the next thing.
+    //
+    // Measured 2026-08-12, which is why the row exists: a `git reset --hard
+    // HEAD~1` meant to undo a probe also discarded `mise-tasks/semver`, a pin and
+    // 39 lines of lockfile whose only copy was that commit. Nothing warned and
+    // nothing refused.
+    if let crate::facts::Look::Is(unreferenced) = discards
+        && !unreferenced.is_empty()
+    {
+        return Decision::Deny(history_drop_refusal(unreferenced));
     }
     // The write gate, before the command gate and not inside it: a write tool
     // carries no command, so every path below this point used to return Allow
@@ -4604,6 +4633,24 @@ pub struct Facts<'a> {
     pub stop: &'a crate::stop::StopFacts,
     /// The rules a live waiver suppresses today, with the expiry each claims.
     pub waived: &'a crate::waiver::Live,
+    /// The commits a `git reset --hard` in this call would leave unreferenced,
+    /// as short SHAs, and only those reachable from no remote (CLOUD-462).
+    ///
+    /// **Resolved at the boundary, because reachability is a property of the
+    /// repository rather than of the envelope** — `adjudicate` is contractually
+    /// pure, so it cannot ask git anything. `git::unpushed_in_range` is the one
+    /// query, and it runs only when the call actually makes such a reset, so a
+    /// session that never resets pays nothing.
+    ///
+    /// Could-not-look ALLOWS, which for this fact is the only honest direction: a
+    /// target that will not resolve, a detached head, a clone with no remote at
+    /// all. A gate that refused because it could not run its own query would be
+    /// the wall the row refuses, and would refuse hardest in exactly the
+    /// repositories where the answer is least knowable.
+    ///
+    /// **Empty is a real answer and it allows**: every commit in range is on a
+    /// remote, which is the ordinary undo the row insists must not be refused.
+    pub discards: &'a crate::facts::Look<Vec<String>>,
     /// What the agent reported for each agent-sourced check.
     pub sourced: &'a AgentFacts,
     /// What this call's write would land, before it happens (CLOUD-758).
@@ -4670,6 +4717,10 @@ impl<'a> Facts<'a> {
             stop,
             waived,
             sourced: &None,
+            // Could-not-look, never an empty list: "this reset discards nothing"
+            // is a claim about a repository's remotes, and a caller that resolved
+            // nothing is not making it (CLOUD-462).
+            discards: &crate::facts::Look::CouldNotLook,
             // Could-not-look, never "an empty write". A `Facts::none` caller has
             // resolved nothing, which is a different claim from having looked
             // and found no content.
@@ -6785,6 +6836,13 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
 /// refusal and its tests, which is what stops the two from drifting.
 pub const PROTECTED_MUTATION: &str = "protected-mutation";
 
+/// The rule id the destructive-reset gate refuses under (CLOUD-462).
+///
+/// A declared constant rather than a `[[rule]]` row, for the reason the row
+/// states: `forbid` matches a literal, and this predicate is over VCS state. The
+/// same reason `must_land_on` is a top-level key rather than a rule.
+pub const HISTORY_DROP: &str = "history-drop";
+
 /// The pseudo-programs a shell redirect is reported as.
 ///
 /// A truncating redirect mutates a file with no program to classify: in
@@ -7230,6 +7288,43 @@ fn unknown_program_refusal(program: &str, path: &str) -> Refusal {
         // its operands and will not guess on a protected path.
         Fix::declared(Some(
             "declare it in `protected_readers` if it only reads, or take the hatch",
+        )),
+    )
+}
+
+/// Refuse a reset that would leave work referenced by nothing (CLOUD-462).
+///
+/// **Pointer-only, and this class is where that rule earns its keep** (rule 4).
+/// The subjects are a COUNT and the short SHAs — never a diff, never a message,
+/// never a path. A refusal that quoted what was about to be lost would print the
+/// very bytes the caller is about to discard, which is both the largest payload
+/// on this surface and the one most likely to carry something private.
+///
+/// The count first, because it is the number that decides whether the caller
+/// stops: "3 commits" is actionable where three SHAs are a lookup. The SHAs
+/// follow so `git show` has something to take, and they are what makes the
+/// remedy reachable rather than a suggestion.
+///
+/// The remedy is the RECOVERY rather than the refusal, per the row's §5: a
+/// caller who reads this has not lost anything yet, and the thing they need to
+/// know is that `git reflog` still holds what a second attempt would not.
+fn history_drop_refusal(unreferenced: &[String]) -> Refusal {
+    let mut subjects = vec![crate::verdict::Subject::Count {
+        count: unreferenced.len() as u64,
+    }];
+    subjects.extend(
+        unreferenced
+            .iter()
+            .map(|commit| crate::verdict::Subject::Artifact {
+                artifact: commit.clone(),
+            }),
+    );
+    Refusal::declared(
+        HISTORY_DROP,
+        crate::verdict::Native::HistoryDropUnpushed,
+        &subjects,
+        Fix::declared(Some(
+            "these commits are on no remote; `git reflog` still holds them",
         )),
     )
 }
@@ -7962,6 +8057,115 @@ const LOOKTHROUGH_WRAPPERS: [&str; 9] = [
 #[must_use]
 pub(crate) fn is_lookthrough_wrapper(token: &str) -> bool {
     LOOKTHROUGH_WRAPPERS.contains(&token)
+}
+
+/// Git's global options that CONSUME the next argument, so a subcommand scan
+/// does not mistake their value for the verb.
+///
+/// **A DECLARED STOPGAP, exactly as [`SHELL_GRAMMAR`] is, and behind the same
+/// row.** A list cannot enumerate git's option grammar either, and the next
+/// value-taking global nobody wrote down puts its value where this scan looks
+/// for a verb. The miss then lands in the UNDER-deny direction — the scan finds
+/// a word that is not `reset` and the gate stays silent — which is this file's
+/// declared fail-open posture and is why the list is admissible while CLOUD-1381
+/// is open. It is not why it is right.
+const GIT_VALUE_OPTIONS: [&str; 6] = [
+    "-C",
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--config-env",
+];
+
+/// The index of git's SUBCOMMAND in the argv git itself was handed, skipping the
+/// global options that precede it.
+///
+/// `None` where the argv is all options — `git --version`, or a value-taking
+/// global whose value never arrived — because there is no verb to judge.
+///
+/// A `--foo=bar` spelling carries its value inline, so it consumes nothing; only
+/// the separated form does, which is why the set above is matched on equality
+/// rather than as a prefix.
+fn git_subcommand(arguments: &[&str]) -> Option<usize> {
+    let mut index = 0;
+    while index < arguments.len() {
+        let word = arguments[index];
+        if !word.starts_with('-') {
+            return Some(index);
+        }
+        index += if GIT_VALUE_OPTIONS.contains(&word) {
+            2
+        } else {
+            1
+        };
+    }
+    None
+}
+
+/// The target of a `git reset --hard` in this call, if it makes one (CLOUD-462).
+///
+/// **Read off `programs`, which is the argv the boundary already resolved** — so
+/// `(git reset --hard HEAD~1)`, `time git reset …` and a reset in the second half
+/// of a list are all seen, for the same reason CLOUD-1382 moved every other
+/// program anchor there. A second parser here would be the second authority this
+/// module refuses to grow.
+///
+/// The target defaults to `HEAD` when none is written, which is git's own
+/// default and the case that discards only the working tree. That still resolves
+/// to an empty range, so the gate is silent on it without needing an arm.
+///
+/// `--hard` specifically, and the row's own scope is why. A mixed or soft reset
+/// leaves the work in the tree; `--hard` discards the working tree *and* the
+/// index with no "you have unstaged changes" refusal, which is what removes the
+/// compensating control people assume git provides.
+pub(crate) fn destructive_reset_target(envelope: &Envelope) -> Option<String> {
+    let reach = program_reach(&envelope.command);
+    for entry in &reach {
+        let name = entry.get("name").and_then(serde_json::Value::as_str);
+        if name != Some("git") {
+            continue;
+        }
+        let arguments: Vec<&str> = entry
+            .get("arguments")
+            .and_then(serde_json::Value::as_array)
+            .map(|list| list.iter().filter_map(serde_json::Value::as_str).collect())
+            .unwrap_or_default();
+        // GIT'S OWN OPTIONS COME BEFORE THE SUBCOMMAND, so `arguments[0]` is not
+        // the verb (CLOUD-462, caught in review). `git -C . reset --hard HEAD~1`
+        // and `git --no-pager reset --hard HEAD~1` both run the reset and both
+        // put a flag first — measured against the version this shipped with,
+        // every such spelling exited 0 while the bare one exited 2. That is the
+        // same under-deny `SHELL_GRAMMAR` records one layer out, reached by the
+        // same mistake: taking the first token for the thing.
+        let Some(verb) = git_subcommand(&arguments) else {
+            continue;
+        };
+        if arguments[verb] != "reset" || !arguments.contains(&"--hard") {
+            continue;
+        }
+        // The first operand that is not a flag and not the subcommand. `--` ends
+        // option parsing for a PATHSPEC reset, which discards no commits at all,
+        // so a `--` means there is no range to judge.
+        //
+        // `continue`, NEVER `return`, and review caught it the other way round.
+        // The `--` answers for THIS entry and not for the command: a pathspec
+        // reset written in front of a real one — `git reset --hard -- path &&
+        // git reset --hard HEAD~1` — ended the whole walk, so the reset that
+        // discards was never looked at. One innocent segment silencing the scan
+        // is the same one-keystroke bypass `SHELL_GRAMMAR` above records.
+        if arguments.contains(&"--") {
+            continue;
+        }
+        let target = arguments
+            .iter()
+            .skip(verb + 1)
+            .find(|word| !word.starts_with('-'))
+            .copied()
+            .unwrap_or("HEAD");
+        return Some(target.to_owned());
+    }
+    None
 }
 
 /// Shell GRAMMAR that may stand where a program is written — CLOUD-1382's
@@ -8751,6 +8955,10 @@ mod tests {
                 stop,
                 waived: &crate::waiver::Live::new(),
                 sourced: &None,
+                // Could-not-look: these unit cases resolve no repository, so
+                // they make no claim about what a reset would discard. The
+                // compiled tier `history_drop.rs` is where that fact is real.
+                discards: &crate::facts::Look::CouldNotLook,
                 prospective: &crate::facts::Look::CouldNotLook,
                 manifest: None,
                 tasks: &crate::facts::Look::CouldNotLook,

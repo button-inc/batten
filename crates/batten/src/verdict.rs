@@ -946,6 +946,8 @@ pub enum Native {
     SpawningRuleOnReadVerb,
     /// The end-of-turn facts do not permit stopping.
     StopConditionUnmet,
+    /// A `git reset --hard` would leave commits reachable from no remote.
+    HistoryDropUnpushed,
     // ─── the mediated composers' own classes (CLOUD-1285) ────────────────────
     //
     // These are Batten's OWN words about generic concepts, which is what puts
@@ -1047,6 +1049,7 @@ impl Native {
         Native::ScannerUnprovisioned,
         Native::SpawningRuleOnReadVerb,
         Native::StopConditionUnmet,
+        Native::HistoryDropUnpushed,
         Native::ReceiptUnusable,
         Native::ReceiptExpired,
         Native::ReceiptRefuted,
@@ -1115,6 +1118,7 @@ impl Native {
             Native::ScannerUnpinned => "scanner pin missing",
             Native::ScannerUnprovisioned => "scanner install missing",
             Native::SpawningRuleOnReadVerb => "spawn run refused",
+            Native::HistoryDropUnpushed => "history drop unpushed",
             Native::StopConditionUnmet => "turn finish unmet",
             Native::ReceiptUnusable => "receipt read missing",
             Native::ReceiptExpired => "receipt read late",
@@ -1281,6 +1285,41 @@ refusal names when one exists.",
                 "the surface this class names cannot express the change, so writing the \
 protected path directly is the only route left, and the write is one a reviewer will see \
 in the diff it lands in",
+            ),
+        ],
+    },
+    VendoredVerdict {
+        id: "history drop unpushed",
+        gloss: "the reset would discard commits that exist in no other clone",
+        class: "`git reset --hard` moves the branch and discards the working tree \
+and the index together, with none of the \"you have unstaged changes\" refusals that \
+stop git's other destructive verbs. Where every commit in the discarded range is on a \
+remote that is the ordinary undo and nothing is lost. Where one is not, the only copy \
+of that work is the commit being removed, and it is unreferenced the moment the reflog \
+expires. The class fires on the second case only: the verb is not the defect, \
+reachability is.",
+        routes: &[
+            // The two verbs that reach the same outcome without discarding a
+            // commit. Named as the FIRST route because a caller who wanted to
+            // drop a change usually wanted to drop a change, not a commit.
+            //
+            // The first draft named the set-aside verb `no_gix_gap_primitive_survives`
+            // refuses anywhere in this tree: the primitives built on it retired with
+            // the spawn they required (CLOUD-780), and a route naming a retired
+            // concept is a remedy nobody here can follow. `--soft` is the better
+            // answer anyway — it moves the same ref and leaves both the tree and the
+            // index where they were.
+            read("ref moved, work kept", "git reset --soft"),
+            read("file reverted", "git checkout -- <path>"),
+            // The way through that leaves a record, which is what keeps this a
+            // gate rather than a wall. Its precondition also makes the class
+            // non-suppressible by `BATTEN_HOOK_BYPASS` (CLOUD-1357), which is
+            // right for a verb whose subject is gone by the time anyone reads
+            // the refusal.
+            admit(
+                "articulate the loss",
+                "the commits this discards are ones you have read and intend to lose, and \
+you can name what they contained without consulting them",
             ),
         ],
     },
@@ -1914,6 +1953,7 @@ mod tests {
                 | Native::ScannerUnprovisioned
                 | Native::SpawningRuleOnReadVerb
                 | Native::StopConditionUnmet
+                | Native::HistoryDropUnpushed
                 | Native::ReceiptUnusable
                 | Native::ReceiptExpired
                 | Native::ReceiptRefuted
