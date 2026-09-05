@@ -209,3 +209,79 @@ fn the_refusal_is_a_declared_class_with_a_route() {
     );
     assert!(!row.retired(), "the gate raises a live class");
 }
+
+/// **The drifted arm, over the real runtime path** — the one this file could not
+/// otherwise show able to fire.
+///
+/// Every other case here reaches clean, could-not-look, or `hk::compare` in
+/// isolation. None of them drives `hk drift` to a `2`, so the CLI's own
+/// comparison, its refusal construction and its exit mapping were unexercised:
+/// a build that mapped drift to `0` would have passed this whole file. That is
+/// the CLOUD-418 shape — a gate never shown able to fail is a gate nobody has
+/// evidence for — and the gap was reported in review of #873 rather than found
+/// here, which is the reason it is written out.
+///
+/// **The baseline is GENERATED in the scratch root rather than copied from the
+/// committed one**, and that is load-bearing. `hk` plans against the tree it
+/// runs in, so a step whose glob matches nothing here is `skipped` where the
+/// real tree has it `included` — and `status` is in the projection. Seeding
+/// with the repository's own artifact would therefore drift for a reason this
+/// case is not about, and would pass while proving nothing. Generating first
+/// makes the mutation below the ONLY difference, and exercises the writer on
+/// the way past.
+#[test]
+fn a_drifted_contract_exits_two_and_names_the_class() {
+    // `Fixture` rather than a `tempfile`: it is this suite's own scratch
+    // convention and needs no dev-dependency the binary does not link.
+    let scratch = common::Fixture::new("hk-contract-drift");
+    let root = scratch.path();
+    fs::copy(common::at_root("hk.pkl"), root.join("hk.pkl")).expect("the runner config copies");
+    fs::create_dir_all(root.join("contracts")).expect("the artifact directory");
+
+    let generated = common::run_at_real_root(root, &["hk", "contract"]);
+    if code(&generated) != Some(0) {
+        // The pinned runner is unreachable here, which is a provisioning fault
+        // and not a drifted contract. Skipped rather than asserted, because a
+        // `3` from the generator says nothing about the arm under test — and
+        // `the_committed_contract_is_the_one_the_binary_derives` above is the
+        // case that goes red when the runner genuinely cannot be reached.
+        return;
+    }
+
+    let artifact = root.join(hk::ARTIFACT);
+    let text = fs::read_to_string(&artifact).expect("the generator wrote the artifact");
+    let mut contract = hk::Contract::parse(&text).expect("it reads back");
+    let step = contract
+        .surfaces
+        .first_mut()
+        .and_then(|surface| surface.steps.first_mut())
+        .expect("the generated contract carries a step");
+    // A RENAME rather than a deletion: renaming drifts both directions at once
+    // (one step gone, one arrived) and leaves the counts equal, so an
+    // implementation comparing only lengths still goes red here.
+    step.name = format!("{}-renamed", step.name);
+    fs::write(&artifact, contract.render().expect("it renders")).expect("the drift is committed");
+
+    let output = common::run_at_real_root(root, &["hk", "drift"]);
+    assert_eq!(
+        code(&output),
+        Some(2),
+        "a drifted contract is a policy verdict, not a fault.\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(batten::verdict::Native::PlanReadStale.id()),
+        "the refusal names its declared class: {stderr}"
+    );
+    assert!(
+        stderr.contains(hk::ARTIFACT),
+        "and points at the artifact, which is the remedy's subject: {stderr}"
+    );
+    // RULE 4, at the one site where a diff would be the tempting thing to
+    // print: the refusal carries step NAMES and never either plan's body.
+    assert!(
+        !stderr.contains("\"steps\":") && !stderr.contains("orderIndex"),
+        "the refusal quoted a plan instead of pointing at one: {stderr}"
+    );
+}
