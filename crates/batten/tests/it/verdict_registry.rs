@@ -361,11 +361,15 @@ fn a_vendored_preset_loads_with_no_consumer_rows_at_all() {
     .expect("a vendored preset ships its own vocabulary");
     let Look::Is(denials) = policy::deny(
         &bundles[0],
-        // `segments` because the ENGINE always emits it (CLOUD-857): a fixture
-        // carrying only `command` hands the predicate a shape
-        // `hook::call_document` never produces, and the deny this case asserts
-        // would vanish for a reason that has nothing to do with the registry.
-        r#"{"call": {"command": "git commit --allow-empty -m x", "segments": [{"words": ["git", "commit", "--allow-empty", "-m", "x"], "raw": "git commit --allow-empty -m x", "terminator": null}]}}"#,
+        // `segments` AND `programs`, because the ENGINE always emits both and
+        // this preset reads the second (CLOUD-857, CLOUD-1382): a fixture
+        // carrying only `command` — or only `segments`, once the preset moved
+        // its anchor off `words[0]` onto the program — hands the predicate a
+        // shape `hook::call_document` never produces, and the deny this case
+        // asserts would vanish for a reason that has nothing to do with the
+        // registry. That is not hypothetical here: it is what this line did on
+        // the commit that moved the anchor.
+        r#"{"call": {"command": "git commit --allow-empty -m x", "segments": [{"words": ["git", "commit", "--allow-empty", "-m", "x"], "raw": "git commit --allow-empty -m x", "terminator": null}], "programs": [{"program": "git", "name": "git", "arguments": ["commit", "--allow-empty", "-m", "x"], "mediated": false}]}}"#,
     ) else {
         panic!("the preset answered could-not-look");
     };
