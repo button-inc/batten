@@ -143,7 +143,41 @@ pub(crate) fn advance(
         .with_context(|| format!("land: write the objects {reference} brought"))?;
     gitwrite::set_ref(root, tracking, &fetched.head)
         .with_context(|| format!("land: move {tracking} to the fetched head"))?;
+    prune(root, &fetched.advertised);
     Ok(fetched.head)
+}
+
+/// The tracking prefix this clone keeps the landing remote's refs under.
+///
+/// One spelling, because [`tracking_ref`] writes into it and [`prune`] deletes
+/// out of it: a prune keyed to a different prefix than the writer uses either
+/// deletes nothing or deletes the writer's own refs.
+const TRACKING_PREFIX: &str = "refs/remotes/origin/";
+
+/// Delete the tracking refs the remote no longer advertises.
+///
+/// **THE PRODUCTION CALLER `stale_tracking` DID NOT HAVE** (review of #848). The
+/// predicate was ported, tested and left unreached, so the predecessor's
+/// `fetch --prune` had no successor at all — and the failure it prevents is
+/// permanent rather than transient: a stale `origin/<branch>` makes
+/// `--force-with-lease` reject forever, because the lease compares against a ref
+/// naming a commit the remote deleted.
+///
+/// Here rather than in the driver because this is where the advertisement is,
+/// and reading a second one to prune against would let the prune act on a staler
+/// answer than the fetch it belongs to.
+///
+/// **NOTHING HERE IS FATAL, and that is the same posture `unwind_lap` takes.**
+/// The caller is mid-replay with a moved base; a tracking ref that would not
+/// list or would not delete must not replace that with an error. The next lap
+/// takes another advertisement and tries again.
+fn prune(root: &Path, advertised: &[String]) {
+    let Ok(local) = crate::git::refs(root) else {
+        return;
+    };
+    for reference in stale_tracking(&local, advertised, TRACKING_PREFIX) {
+        let _ = gitwrite::delete_ref(root, &reference);
+    }
 }
 
 /// The remote-tracking refs this clone holds that the remote no longer
@@ -168,7 +202,8 @@ pub(crate) fn advance(
 ///
 /// **Pure, over two listings the caller already took.** The decision is a set
 /// difference; taking it here means it tests without a remote, which is the same
-/// split [`worthless`] and [`closes_the_tap`] make.
+/// split [`worthless`] and [`closes_the_tap`] make. [`prune`] is the caller —
+/// purity is what makes this testable, never a reason to leave it unreached.
 #[must_use]
 pub fn stale_tracking(local: &[String], advertised: &[String], prefix: &str) -> Vec<String> {
     local
@@ -232,11 +267,23 @@ pub fn replay(root: &Path, remote: &str, reference: &str, branch: &str) -> Resul
 /// PREFIX, NEVER EVERY LEADING ONE" — and uses `strip_prefix` for it. A short
 /// name passes through unchanged, which is what the driver hands in.
 pub(crate) fn tracking_ref(reference: &str) -> String {
-    let name = reference
+    format!("{TRACKING_PREFIX}{}", short_ref(reference))
+}
+
+/// A branch's SHORT name — the whole of it, slashes included.
+///
+/// Extracted rather than repeated because it has two readers and they must not
+/// disagree about which trunk they name: [`tracking_ref`] builds the local ref,
+/// and the driver's staleness config builds the endpoint path
+/// (`git/ref/heads/<name>`). Both were `rsplit('/')` once and the fix reached
+/// only one of them, so a consumer on `release/1.x` had a tracking ref pointing
+/// at an unrelated `1.x` AND a staleness poll asking the forge for a ref that
+/// does not exist — one defect, two spellings, and only the first was found.
+pub(crate) fn short_ref(reference: &str) -> &str {
+    reference
         .strip_prefix("refs/heads/")
         .unwrap_or(reference)
-        .trim_start_matches('/');
-    format!("refs/remotes/origin/{name}")
+        .trim_start_matches('/')
 }
 
 /// Append this lap's outcome to the branch's record.
