@@ -3932,6 +3932,56 @@ fields = [
   "project",
 ]
 
+# THE LIST-SIDE REDUCTION (CLOUD-1380). `list_issues` had no row and the verb said
+# so on every call — `undeclared — stored 17,313 bytes, emitted 20,366`. MORE OUT
+# THAN IN, because an undeclared result is handed back re-serialised rather than
+# reduced, and a list response is inherently the widest of the three.
+#
+# `reduce = "each"` RATHER THAN `project`, and the arm had to be built before this
+# row could be written. `project` does one flat field-pick against the node it is
+# given: naming `issues` selects an ARRAY, every field lookup against it misses,
+# and the projection is empty; leaving `node` at the root keeps `issues` whole and
+# reduces nothing. `acknowledge` refuses a container outright, so it would drop the
+# array and leave the verb unable to answer the one question a search asks.
+#
+# THE FIELD SET IS NOT CHOSEN FOR SIZE, which is the constraint that decides it.
+# `graph-check` reads `id`, `status`, `description`, `projectMilestone` and
+# `parentId`, and CLOUD-1151's wave ports it onto the capture store — so a
+# projection trimmed to the smallest thing that still looks like a search result
+# would leave that gate quietly unjudgeable rather than red.
+#
+# `description` EARNS ITS PLACE FOR THE SAME REASON, against the obvious objection.
+# `.claude/rules/toolchain.md` records that a list response TRUNCATES it, which
+# makes a projected `list_issues` an invalid input to `spec-ref-check` — that is a
+# statement about CLAUSE citation, which needs the whole body, and says nothing
+# about the presence-and-shape reads every other consumer does. Reading it as a
+# prohibition is the generalisation CLOUD-1380's own body records itself making.
+#
+# `title` and `url` are the identity half — what a human reads to know which row
+# matched — and `filing-needs-a-search` is the consumer that must not be blinded: a
+# reduction emitting only `hasNextPage` would satisfy every size predicate and
+# destroy the verb's purpose.
+#
+# `hasNextPage` AND `cursor` ARE NOT DECLARED AND ARRIVE ANYWAY. They are scalar
+# siblings of the array, carried by the arm itself, because they are what make the
+# page size a thing the caller controls — and this arm's bound is the page rather
+# than the declaration. Declaring them as `fields` would instead look them up on
+# every ELEMENT, where they do not exist, and they would be absent from every row.
+[[mcp.result]]
+method = "list_issues"
+reduce = "each"
+node = "issues"
+fields = [
+  "id",
+  "title",
+  "status",
+  "description",
+  "projectMilestone",
+  "parentId",
+  "url",
+  "updatedAt",
+]
+
 # CLOSING THE RAW READ PATH, as the gate `connector-not-granted` structurally
 # cannot be (CLOUD-1264). That row asserts what this repository's own committed
 # `.claude/settings.json` grants, and its module says in as many words that
@@ -3998,6 +4048,33 @@ capture store by key — and hands back the declared projection instead of the \
 payload. Measured 2026-09-02: 20,580 bytes stored, 609 emitted. The raw tool \
 was 85% of one session's whole tool output, and a first read is not an \
 exception: the store is what a gate reads, and it is filled either way."""
+
+# THE TRANSPORT THRESHOLD, DECLARED RATHER THAN DEFAULTED (CLOUD-1367).
+#
+# At or under this many bytes a rendered response carries the payload; over it,
+# it carries a content address. The boundary is INCLUSIVE, which is the one
+# property an off-by-one hides — `crates/batten/tests/it/address_transport.rs`
+# sits its fixtures one byte either side for exactly that reason.
+#
+# THE NUMBER IS READ OFF A MEASUREMENT, not chosen. `mise run
+# address-transport-bench` writes `bench/address-transport/RESULTS.md`, and the
+# curve there is what moves this value: an address costs a fixed 69 characters —
+# the rendered grammar including `b3-`, the version and both separators — so
+# below roughly that length a payload is cheaper than its own pointer, and the
+# saving only becomes real once a payload is read more than once. 1024 is the
+# smallest round value the measured curve supports.
+#
+# COMMITTED RATHER THAN LEFT TO THE DEFAULT, because a threshold nobody declared
+# cannot be reviewed against the bench that justifies it, and a default buried in
+# `capture.rs` moves without anyone noticing that the measurement moved too.
+#
+# IT IS NOT A PRIVACY CAP AND MUST NOT BE READ AS ONE. A payload over this size
+# is still emitted — as an address — so this only ever changes the
+# REPRESENTATION. Refusing to emit content at all is a different mechanism with
+# its own rows, and one number serving both would let a measurement about token
+# cost silently decide what may leave the process.
+[capture]
+inline_max_bytes = 1024
 
 [budget.instructions]
 files = ["AGENTS.md"]
@@ -6881,6 +6958,38 @@ measured = "2026-09-04"
 # empty `target` for cold, a minimal post-prune tree for warm — and stating the
 # derivation is what leaves that choice open instead of quietly foreclosing it.
 #
+# THE 2026-09-05 MOVE, 197 -> 208, FIFTH OF THE SAME SHAPE (CLOUD-1360). The
+# mcp-address bundle's seven compiled-binary tiers — `mcp_reduce_array`,
+# `connector_bound`, `content_address`, `address_resolve`, `locator_index`,
+# `address_transport`, `store_lifecycle` — took the gate's own reading 11 past the
+# basis, one outside the tolerance. `main` sat at 201, comfortably inside it, so
+# this branch is what tipped it and this is the gate working rather than a refusal
+# to argue with.
+#
+# `count` moves and THE FLOORS AND `measured` DELIBERATELY DO NOT, following the
+# 2026-09-03 entry rather than the scaling ones above it. That entry is right about
+# which half is honest: bumping `measured` to satisfy the refusal's own sentence
+# would be the staleness it warns about, performed on the field that records it. An
+# exact floor needs the independent measurement this block names — a build from an
+# empty `target` for cold, a minimal post-prune tree for warm — which is
+# CLOUD-1158's row and was not taken here.
+#
+# A `du -sm target` WAS available on this lap and is deliberately NOT written into
+# a floor, which is worth the sentence because it LOOKS like the missing
+# measurement: 4194 MB at 208 stems, 20.2 per stem against the 45.54 the entry
+# above derives. The reading was taken after the escalation had dropped 17264 MB of
+# regrowable cache, so it measures a tree the warm floor does not budget for. A
+# number disagreeing with the model by half is a signal about the reading's
+# provenance, not a floor.
+#
+# AND THE CALLER MISREPORTS IT A FIFTH TIME, with a wrinkle the four entries above
+# do not describe. `verify` again renders this as "not enough disk to run the
+# gate", and free space was again not close: 22313 MB against an 8971 MB declared
+# warm floor. What is new is that the same lap LEARNED a warm floor of 18747 MB
+# from a pathological rebuild and printed it two lines above the refusal — so for
+# the first time the caller's fabricated explanation has a plausible-looking number
+# sitting next to it. It is still a stem count that refused. Read the callee.
+
 # ONE READING WORTH LEAVING BEHIND, because it is the first time the derived cold
 # floor has exceeded what this container can offer: 21455 MB against 21065 MB free
 # at the time of the move. That is latent rather than blocking — cold is judged
@@ -6891,12 +7000,12 @@ measured = "2026-09-04"
 # satisfy refuses every lap and gets switched off.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 197
+count = 208
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 197
+count = 208
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops

@@ -638,6 +638,293 @@ fn mint(observed: &KeyMaterial) -> StoreId {
     StoreId(identity::store_fingerprint(&seed).to_hex())
 }
 
+/// What resolving a content address produced (CLOUD-1365).
+///
+/// **Five outcomes, and no sixth spelling of "something went wrong".** Each names
+/// a different fact about the world and a different remedy, so collapsing any two
+/// is how a caller acts on the wrong one:
+///
+/// * [`Resolution::Resolved`] — bytes read AND rehashed to the address asked for.
+/// * [`Resolution::Missing`] — nothing is stored at that address.
+/// * [`Resolution::Unavailable`] — something is there and could not be read.
+///   Could-not-look: the payload may be perfectly good.
+/// * [`Resolution::Corrupt`] — the entry exists and is not a readable blob at
+///   all, so there are no bytes to hash.
+/// * [`Resolution::Mismatch`] — bytes were read cleanly and hash to something
+///   else. The store is lying, which is the one outcome that says the content is
+///   *wrong* rather than absent or unreadable.
+///
+/// `Missing` and `Unavailable` are the pair most often merged, and they must not
+/// be: absence is a fact about the store, unreadability is a fact about this
+/// process's access to it, and a caller that retries on one should not retry on
+/// the other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resolution {
+    /// The verified bytes.
+    Resolved(Vec<u8>),
+    /// No entry at this address.
+    Missing,
+    /// An entry exists and could not be read.
+    Unavailable,
+    /// An entry exists and is not a readable blob.
+    Corrupt,
+    /// Bytes were read and do not hash to the address.
+    Mismatch,
+}
+
+impl Resolution {
+    /// The stable token used in machine output and diagnostics.
+    ///
+    /// Pointer-only: an outcome name, never a resolved byte.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Resolution::Resolved(_) => "resolved",
+            Resolution::Missing => "missing",
+            Resolution::Unavailable => "unavailable",
+            Resolution::Corrupt => "corrupt",
+            Resolution::Mismatch => "mismatch",
+        }
+    }
+}
+
+/// Why an address no longer resolves, or resolves to less than a document
+/// (CLOUD-1368).
+///
+/// **An extension of [`Resolution`], never a replacement.** The resolver answers
+/// *can these bytes be trusted*; this answers *what happened to them*, and the
+/// two are asked at different moments by different callers. Sharing one enum
+/// would force every resolver caller to handle lifecycle arms it cannot act on.
+///
+/// # Explicit prune and automatic eviction are not one outcome
+///
+/// [`Lifecycle::Pruned`] is somebody's decision — a person or a policy asked for
+/// the content to go — and re-fetching it would undo that decision.
+/// [`Lifecycle::Evicted`] is the store running out of budget, and re-fetching is
+/// exactly the right response. Reporting both as "gone" is how a retention
+/// decision gets quietly reversed by a retry loop, so they are separate variants
+/// with separate remedies.
+///
+/// [`Lifecycle::Incomplete`] is the one that must never be read as content: a
+/// range or a partial write is present, and it is not the document. §2 states it
+/// as a rule — a range is never represented as the complete document, and never
+/// used as proof of full-document freshness — and a variant is how that becomes
+/// unrepresentable rather than remembered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lifecycle {
+    /// Removed by an explicit decision. Re-fetching would reverse it.
+    Pruned,
+    /// Removed to stay inside the store's budget. Re-fetching is correct.
+    Evicted,
+    /// Present and partial: a range, or a write that did not finish.
+    Incomplete,
+    /// Present and not a readable blob.
+    Corrupt,
+    /// Could not be looked at. Says nothing about what is there.
+    Unavailable,
+}
+
+impl Lifecycle {
+    /// The stable token used in machine output.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Lifecycle::Pruned => "pruned",
+            Lifecycle::Evicted => "evicted",
+            Lifecycle::Incomplete => "incomplete",
+            Lifecycle::Corrupt => "corrupt",
+            Lifecycle::Unavailable => "unavailable",
+        }
+    }
+
+    /// Whether re-fetching the content is the right response.
+    ///
+    /// The whole reason [`Lifecycle::Pruned`] and [`Lifecycle::Evicted`] are
+    /// separate, expressed as the question a caller actually has. `Unavailable`
+    /// answers `false` because could-not-look is not evidence that anything is
+    /// gone — a retry against the STORE is right there, a re-fetch of the content
+    /// is not.
+    #[must_use]
+    pub const fn refetchable(self) -> bool {
+        matches!(self, Lifecycle::Evicted | Lifecycle::Incomplete)
+    }
+}
+
+/// A storage-internal identity: a chunk id, a cursor, a generation, an
+/// integrity checksum the store keeps for itself (CLOUD-1368).
+///
+/// **Typed apart from [`identity::ContentAddress`] so it cannot be rendered as
+/// one.** These are the store's own bookkeeping and they change when the store
+/// reorganises — a chunk boundary moves, a generation rolls, a cursor advances —
+/// while a content address never does. There is no conversion in either
+/// direction and no `Display`: the rendering is explicit and kind-prefixed, so a
+/// storage id that reached a field expecting an address is visible in the bytes
+/// and refused by the address parser.
+///
+/// This is the type that keeps §2's first clause true by construction rather
+/// than by review, and it is deliberately inert — no chunk or sub-address
+/// PROTOCOL is designed here, because CLOUD-1368 says not to design one until a
+/// measured range-read need justifies it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum StorageId {
+    /// One chunk of a larger payload, as this store happens to have split it.
+    Chunk(String),
+    /// A position in a stream or a listing.
+    Cursor(String),
+    /// A store generation, for retention.
+    Generation(String),
+    /// An integrity checksum the store keeps for its own repair, which is NOT
+    /// the canonical address and is not domain-separated.
+    Checksum(String),
+}
+
+impl StorageId {
+    /// The rendered form, kind-prefixed so it can never be read as an address.
+    #[must_use]
+    pub fn render(&self) -> String {
+        match self {
+            StorageId::Chunk(id) => format!("chunk:{id}"),
+            StorageId::Cursor(at) => format!("cursor:{at}"),
+            StorageId::Generation(era) => format!("generation:{era}"),
+            StorageId::Checksum(sum) => format!("checksum:{sum}"),
+        }
+    }
+
+    /// The kind alone, for a pointer-only diagnostic.
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            StorageId::Chunk(_) => "chunk",
+            StorageId::Cursor(_) => "cursor",
+            StorageId::Generation(_) => "generation",
+            StorageId::Checksum(_) => "checksum",
+        }
+    }
+}
+
+/// A chunked payload's binding back to the whole-document address it reassembles
+/// to (CLOUD-1368).
+///
+/// **The binding is the point, not the chunking.** No chunk protocol is designed
+/// here; what is fixed is that if a payload is ever stored in parts, the parts
+/// carry the canonical address of the WHOLE, and reassembly is verified against
+/// it by the same rehash the resolver uses. A chunk manifest that named only its
+/// own pieces would be a second canonical identity, which the row forbids
+/// outright.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkBinding {
+    /// The canonical address of the reassembled document.
+    pub whole: identity::ContentAddress,
+    /// The parts, in reassembly order. Storage-internal ids, never addresses.
+    pub parts: Vec<StorageId>,
+}
+
+impl ChunkBinding {
+    /// Whether `reassembled` is the document this binding names.
+    ///
+    /// The same verification the resolver performs, so a chunked path cannot
+    /// reach a weaker standard of "the same content" than an unchunked one.
+    #[must_use]
+    pub fn verifies(&self, domain: identity::AddressDomain, reassembled: &[u8]) -> bool {
+        identity::ContentAddress::of(domain, reassembled) == self.whole
+    }
+}
+
+/// Whether a resolution came from the store or from a caller's inline copy.
+///
+/// **Observable rather than silent**, which is the whole of the fallback clause:
+/// an inline copy that answered where the store could not is a different
+/// provenance, and a caller that cannot tell has no way to notice its store
+/// rotting underneath it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provenance {
+    /// The addressed store answered.
+    Store,
+    /// The caller's inline bytes answered, verified against the same address.
+    Inline,
+}
+
+/// Resolve `address` from the addressed directory `dir`, verifying before
+/// returning (CLOUD-1365).
+///
+/// # The rehash is the boundary, and it happens before ANY decode
+///
+/// The bytes are read raw, re-addressed under `domain`, and compared. Only a
+/// caller holding [`Resolution::Resolved`] has bytes worth decoding. That
+/// ordering is the entire integrity claim: trusting a filename, decoding first,
+/// or re-serialising JSON all produce something that *looks* like the content and
+/// is not byte-identical to it, and each of those is a live path in the capture
+/// and MCP readers today.
+///
+/// # Why `domain` is a parameter rather than carried in the address
+///
+/// [`identity::ContentAddress`] is a version and a digest; the domain enters the
+/// PREIMAGE rather than the rendered form, so it cannot be recovered from an
+/// address and must be supplied to verify one. That is deliberate — it keeps the
+/// rendered address one fixed length, and it means asking for a payload under the
+/// wrong domain answers [`Resolution::Mismatch`] rather than quietly succeeding.
+///
+/// # The inline fallback
+///
+/// `inline` is a caller's own copy of the bytes. It is consulted **only** when
+/// the store does not answer, and it is verified against the same address by the
+/// same rehash — a fallback that skipped verification would be a hole straight
+/// through the boundary this function exists to be. The provenance is returned
+/// beside the outcome so its use is recorded rather than invisible.
+#[must_use]
+pub fn resolve_address(
+    dir: &Path,
+    domain: identity::AddressDomain,
+    address: &identity::ContentAddress,
+    inline: Option<&[u8]>,
+) -> (Resolution, Provenance) {
+    let at = dir.join(address.render());
+    let stored = match std::fs::symlink_metadata(&at) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Resolution::Missing,
+        // COULD NOT LOOK, never absent. A permission error or an I/O fault says
+        // nothing about whether the payload is there.
+        Err(_) => Resolution::Unavailable,
+        // AN ENTRY THAT IS NOT A FILE HAS NO BYTES TO HASH. A directory or a
+        // symlink at an address is a store that has been damaged in a way reading
+        // cannot repair, and it is not the same as a wrong digest.
+        Ok(meta) if !meta.is_file() => Resolution::Corrupt,
+        Ok(_) => match std::fs::read(&at) {
+            Err(_) => Resolution::Unavailable,
+            Ok(bytes) => verified(domain, address, bytes),
+        },
+    };
+    if matches!(stored, Resolution::Resolved(_)) {
+        return (stored, Provenance::Store);
+    }
+    // THE FALLBACK IS TRIED ONLY WHERE THE STORE DID NOT ANSWER, and it is
+    // verified identically. A `Mismatch` from the store is still worth falling
+    // back from — the caller's copy may be the honest one — and the provenance is
+    // what tells the two apart afterwards.
+    match inline {
+        Some(bytes) => match verified(domain, address, bytes.to_vec()) {
+            Resolution::Resolved(bytes) => (Resolution::Resolved(bytes), Provenance::Inline),
+            // A FALLBACK THAT ALSO FAILS DOES NOT OVERWRITE THE STORE'S VERDICT.
+            // The store's answer is the one a reader must act on; reporting the
+            // inline copy's failure instead would send them to the wrong place.
+            _ => (stored, Provenance::Store),
+        },
+        None => (stored, Provenance::Store),
+    }
+}
+
+/// Re-address `bytes` and answer `Resolved` only on an exact match.
+fn verified(
+    domain: identity::AddressDomain,
+    address: &identity::ContentAddress,
+    bytes: Vec<u8>,
+) -> Resolution {
+    if identity::ContentAddress::of(domain, &bytes) == *address {
+        Resolution::Resolved(bytes)
+    } else {
+        Resolution::Mismatch
+    }
+}
+
 /// The outcome of binding a store to a repository.
 #[derive(Debug)]
 pub struct Bound {

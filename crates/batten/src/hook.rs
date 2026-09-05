@@ -7975,11 +7975,42 @@ const SHELL_GRAMMAR: [&str; 9] = [
 /// reaching every case above. It is a rule about two characters, not a parser,
 /// and CLOUD-1381 is still what replaces it.
 fn program_token(token: &str) -> &str {
-    let opened = token.trim_start_matches(['(', '{']);
-    if opened.contains(['(', '{']) {
-        return opened;
+    // BALANCE-AWARE, because this is applied to arguments and operands as well
+    // as to the program, and an unconditional two-character trim rewrites a word
+    // the caller actually wrote (CLOUD-1482). Measured: `rm {a}` yielded the
+    // operand `a`, so a `protected_paths` entry `a` refused a command that never
+    // named it — a false refusal on the MUTATION walk, which is CLOUD-1287's
+    // direction, the one that gets a guard switched off rather than the
+    // sanctioned one.
+    //
+    // What has to be stripped is a grouping delimiter the token does not close:
+    // `(git` opens a group the token never closes, and `--force)` closes one it
+    // never opened. What must NOT be stripped is a delimiter the token balances
+    // itself — a brace expansion, a glob, a JSON argument — because that is a
+    // word, not grammar. Counting is enough to tell them apart, and it keeps
+    // every case the previous spelling got right: `(git` -> `git`, `--force)` ->
+    // `--force`, a bare `(` -> empty, which `is_shell_grammar` reads as grammar.
+    let openers = token.matches(['(', '{']).count();
+    let closers = token.matches([')', '}']).count();
+
+    let mut out = token;
+    let mut unclosed = openers.saturating_sub(closers);
+    while unclosed > 0 {
+        let Some(rest) = out.strip_prefix(['(', '{']) else {
+            break;
+        };
+        out = rest;
+        unclosed -= 1;
     }
-    opened.trim_end_matches([')', '}'])
+    let mut unopened = closers.saturating_sub(openers);
+    while unopened > 0 {
+        let Some(rest) = out.strip_suffix([')', '}']) else {
+            break;
+        };
+        out = rest;
+        unopened -= 1;
+    }
+    out
 }
 
 /// Is this token shell grammar standing where a program is written?
@@ -12077,6 +12108,35 @@ deny contains "refused by themodule" if {
         // is what makes the contract greppable.
         assert!(REDIRECT_VERBS.contains(&">"));
         assert!(REDIRECT_VERBS.contains(&">>"));
+    }
+
+    #[test]
+    fn a_balanced_delimiter_in_an_operand_is_a_word_not_grammar() {
+        // CLOUD-1482, and it is a FALSE REFUSAL rather than a missed one.
+        // `program_token` reaches every argument and operand, not just the
+        // program, so an unconditional two-character trim rewrites what the
+        // caller wrote before any predicate compares it. Measured on the previous
+        // spelling: `{a}` yielded `a`, so a `protected_paths` entry `a` refused a
+        // command that never named it — the direction CLOUD-1287 records as the
+        // one that gets a guard switched off.
+        assert_eq!(program_token("{a}"), "{a}");
+        assert_eq!(program_token("--data={\"x\":1}"), "--data={\"x\":1}");
+        assert_eq!(program_token("file{1,2}.txt"), "file{1,2}.txt");
+    }
+
+    #[test]
+    fn an_unbalanced_delimiter_is_still_stripped() {
+        // The anti-vacuity half: the measured cases the previous spelling existed
+        // for must stay fixed. `(git` opens a group it never closes and `--force)`
+        // closes one it never opened, and CLOUD-1382 measured
+        // `(git push --force origin main)` being ALLOWED because the closing paren
+        // landed on the last argument. A balance rule that stopped stripping these
+        // would trade a false refusal for a bypass.
+        assert_eq!(program_token("(git"), "git");
+        assert_eq!(program_token("--force)"), "--force");
+        assert_eq!(program_token("((git"), "git");
+        assert_eq!(program_token("{"), "");
+        assert!(is_shell_grammar("("), "a bare opener is still grammar");
     }
 
     #[test]

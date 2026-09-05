@@ -11374,7 +11374,9 @@ fn register_advisories(raised: &[findings::Advisory], err: &mut dyn Write) -> Re
 ///
 /// Propagates a write failure on the error channel, and a store or journal I/O
 /// failure (exit 3, fail loud — never a deny).
-fn register_enforce_findings(scan: &rules::Scan, mode: Mode, err: &mut dyn Write) -> Result<()> {
+/// Returns whether secret-identity custody orphaned a key generation, which the
+/// caller folds into the run's verdict (CLOUD-311 §2(3)).
+fn register_enforce_findings(scan: &rules::Scan, mode: Mode, err: &mut dyn Write) -> Result<bool> {
     let repo = git::repo_root(Path::new("."))?;
     let opened = store::resolve(&repo)?;
     let Some(dir) = store::bound_dir(&opened) else {
@@ -11384,7 +11386,7 @@ fn register_enforce_findings(scan: &rules::Scan, mode: Mode, err: &mut dyn Write
             err,
             "no bound findings store, so this scan is not journalled",
         )?;
-        return Ok(());
+        return Ok(false);
     };
     // The ref comes from the process directory, never from `repo`: `repo_root`
     // answers with the MAIN worktree's root, so asking it for the branch would
@@ -11394,7 +11396,7 @@ fn register_enforce_findings(scan: &rules::Scan, mode: Mode, err: &mut dyn Write
             err,
             "batten: HEAD is detached, so this scan belongs to no ref: persisted:false"
         )?;
-        return Ok(());
+        return Ok(false);
     };
     let context = findings::Context::new(format!("refs/heads/{branch}"));
     let commit = git::head_commit(Path::new("."))?;
@@ -11403,7 +11405,7 @@ fn register_enforce_findings(scan: &rules::Scan, mode: Mode, err: &mut dyn Write
     if let journal::Access::DegradedReadOnly { reason, .. } = &access {
         writeln!(err, "batten: degraded read-only: {reason}")?;
         writeln!(err, "batten: enforce {context}: persisted:false")?;
-        return Ok(());
+        return Ok(false);
     }
     let schema = access.format().findings_schema;
 
@@ -11457,7 +11459,7 @@ fn register_enforce_findings(scan: &rules::Scan, mode: Mode, err: &mut dyn Write
     // Custody acts on stored records, which is why it lands here and not in
     // `secrets.rs`: that module holds the keys and must never read the store it
     // protects, and this seam holds the store and never sees a key's bytes.
-    reconcile_secret_custody(&repo, &dir, err)?;
+    let orphaned = reconcile_secret_custody(&repo, &dir, err)?;
 
     // The worktree actually scanned, not the repository root: `shard_id` is per
     // WORKTREE, and a relative `.` would fingerprint identically from every one of
@@ -11476,7 +11478,7 @@ fn register_enforce_findings(scan: &rules::Scan, mode: Mode, err: &mut dyn Write
         err,
         &format!("enforce {context}: {appended} evaluation(s) journalled"),
     )?;
-    Ok(())
+    Ok(orphaned)
 }
 
 /// Apply what the custody ledger says to the records it is about: move a rotated
@@ -11516,7 +11518,25 @@ fn register_enforce_findings(scan: &rules::Scan, mode: Mode, err: &mut dyn Write
 /// # Errors
 ///
 /// Propagates a ledger read, a store read or a record write failure.
-fn reconcile_secret_custody(repo: &Path, store_dir: &Path, err: &mut dyn Write) -> Result<()> {
+/// Returns whether a key generation was orphaned by this run (CLOUD-311 §2(3)).
+///
+/// **The loud line was never the verdict, and that was the gap.** Wave two
+/// (CLOUD-529) landed the whole orphan mechanism — the lost ids, the re-opened
+/// records, the per-generation event, and a report explicitly written
+/// unconditionally rather than ladder-gated. What it did not do is reach the exit
+/// code: this returned `Ok(())`, so the run's verdict came from the findings
+/// alone. Where the store holds secret-class records the re-opened ones raise it
+/// indirectly, and where it holds none — any clone that has never matched a
+/// secret, which is most of them — a lost key printed its sentence and exited
+/// `0`. §5 names that case the policy verdict, "because it is a refusal to mint
+/// identities that would compare equal to nothing".
+///
+/// A `bool` rather than a synthesised finding, and the choice is not laziness: a
+/// finding needs an identity, and the identities this event is about are exactly
+/// the ones that can no longer be derived. `run_dispositions` already folds a
+/// multiset that `decision::fold` turns into a code, so the honest shape is one
+/// more disposition rather than a record whose fingerprint would be a fiction.
+fn reconcile_secret_custody(repo: &Path, store_dir: &Path, err: &mut dyn Write) -> Result<bool> {
     let today = waiver::today()?;
     let key_file = secrets::key_path(repo)?;
     let ledger = secrets::ledger_path(repo)?;
@@ -11526,7 +11546,7 @@ fn reconcile_secret_custody(repo: &Path, store_dir: &Path, err: &mut dyn Write) 
     // running `enforce` once, and the orphan check's whole premise is that a key
     // file appearing is not the same as a generation existing.
     if !ledger.exists() {
-        return Ok(());
+        return Ok(false);
     }
 
     let joined = secrets::joins(&ledger)?;
@@ -11544,7 +11564,8 @@ fn reconcile_secret_custody(repo: &Path, store_dir: &Path, err: &mut dyn Write) 
     }
 
     let lost = secrets::orphaned_key_ids(repo, today)?;
-    if !lost.is_empty() {
+    let orphaned = !lost.is_empty();
+    if orphaned {
         // Every secret-class record EXCEPT the ones a join has already moved onto a
         // held generation. The exclusion is what keeps the event proportionate, and
         // the breadth of what remains is not a shortcut: the key id lives inside the
@@ -11606,7 +11627,7 @@ fn reconcile_secret_custody(repo: &Path, store_dir: &Path, err: &mut dyn Write) 
             )?;
         }
     }
-    Ok(())
+    Ok(orphaned)
 }
 
 /// Move one record from its pre-rotation identity to its post-rotation one.
@@ -12936,6 +12957,11 @@ fn run_rules(
     // here: `run_static` already refused the run for carrying a spawning kind,
     // so this is not a second gate on the same question, it is the surface that
     // is allowed to answer it.
+    // FALSE ON EVERY OTHER SURFACE, and that is a reading rather than a default:
+    // `check` reaches no store write at all, so it never runs custody and has
+    // nothing to say about a key. Only the surface that reconciles can report an
+    // orphan (CLOUD-311).
+    let mut custody_orphaned = false;
     if surface == Surface::Spawning {
         let raised = run_judges(err, mode, &config, &root)?;
         register_advisories(&raised, err)?;
@@ -12943,7 +12969,7 @@ fn run_rules(
         // run (CLOUD-529). Gated on the surface and not on the kind: `check` must
         // reach no store write at all, which is what keeps its `read` effect
         // honest, and `run_state_record` stays the read surface's recorder.
-        register_enforce_findings(&scan, mode, err)?;
+        custody_orphaned = register_enforce_findings(&scan, mode, err)?;
     }
 
     // The baseline filter (CLOUD-67), immediately before the waiver filter.
@@ -13065,6 +13091,7 @@ fn run_rules(
         &scan,
         config.fail_on_warning,
         &config.rules,
+        custody_orphaned,
     )))
 }
 
@@ -13087,13 +13114,25 @@ fn run_dispositions(
     scan: &rules::Scan,
     fail_on_warning: bool,
     rules: &[rules::Rule],
+    custody_orphaned: bool,
 ) -> Vec<decision::Outcome> {
-    let mut dispositions = Vec::with_capacity(scan.not_evaluated.len() + 1);
+    let mut dispositions = Vec::with_capacity(scan.not_evaluated.len() + 2);
     dispositions.push(if rules::any_blocking(findings, fail_on_warning, rules) {
         decision::Outcome::Violation
     } else {
         decision::Outcome::Pass
     });
+    // A LOST KEY IS A VERDICT, NOT A LOG LINE (CLOUD-311 §2(3)). It is a
+    // DISPOSITION rather than a finding for the reason `reconcile_secret_custody`
+    // states: the identities this is about are precisely the ones that can no
+    // longer be derived, so a finding here would need a fingerprint that is a
+    // fiction. Pushed unconditionally-when-true rather than folded into the
+    // clause above, because it is a different question from whether any finding
+    // blocks — a store with no secret-class records at all still loses its key,
+    // and that is the case the loud line reported into an exit code of `0`.
+    if custody_orphaned {
+        dispositions.push(decision::Outcome::Violation);
+    }
     for observation in scan.not_evaluated.values() {
         dispositions.push(match observation {
             findings::NotObserved::RuleErrored => decision::Outcome::Internal,
@@ -13884,6 +13923,42 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// CLOUD-311 §2(3): a lost key reaches the EXIT CODE, not just a log line.
+    ///
+    /// The decision is extracted rather than driven over a spawned binary, per
+    /// `.claude/rules/rust.md`: producing a real orphan end-to-end needs a minted
+    /// generation in the ledger and its key file removed underneath a run, and
+    /// asserting a conclusion over a precondition this harness would have to
+    /// fabricate is the shape that rule refuses. `secrets.rs` already pins the
+    /// orphan PREDICATE — `a_deleted_key_is_a_lost_generation_and_a_fresh_one_is_not`
+    /// — so what is missing, and what this asserts, is the link from that
+    /// predicate to the verdict.
+    ///
+    /// **The empty finding set is the whole point.** Where secret-class records
+    /// exist the re-opened ones raise the verdict on their own, so a case with
+    /// findings would pass whether or not the orphan contributed anything. The
+    /// discriminating input is a run with nothing to re-open — any clone that has
+    /// never matched a secret — which is the case that exited `0` before.
+    #[test]
+    fn an_orphaned_key_folds_to_a_violation_over_an_otherwise_clean_run() {
+        let scan = rules::Scan::default();
+
+        let clean = run_dispositions(&[], &scan, false, &[], false);
+        assert_eq!(
+            decision::fold(clean),
+            ExitCode::Success,
+            "no findings and no orphan is a clean run"
+        );
+
+        let orphaned = run_dispositions(&[], &scan, false, &[], true);
+        assert_eq!(
+            decision::fold(orphaned),
+            ExitCode::Violation,
+            "a lost key is the policy verdict — a refusal to mint identities that would \
+             compare equal to nothing"
+        );
+    }
 
     /// The whole decision as a table, because the branch that matters cannot be
     /// reached over a spawned process: this sandbox gives a test no TTY, so
