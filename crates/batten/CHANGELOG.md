@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.142](https://github.com/button-inc/batten/compare/v0.0.141...v0.0.142) - 2026-09-05
+
+### Fixed
+
+- *(policy)* unfreeze the one suite this campaign can never retire
+- *(install)* bypass a proxy only when it is the thing refusing
+
 ## [0.0.141](https://github.com/button-inc/batten/compare/v0.0.140...v0.0.141) - 2026-09-05
 
 ### Added
