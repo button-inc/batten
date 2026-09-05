@@ -2193,16 +2193,27 @@ fn tracked_paths(config: &Config) -> Vec<String> {
         .map_or_else(Vec::new, |epoch| epoch.tracked.clone())
 }
 
-/// The `receipt.verified_by` set, or an empty one when the table is absent.
+/// The `receipt.verified_by` set AS THE VERB WILL READ IT — the declaration, or
+/// the compiled default where a config declares none.
 ///
-/// Absent and empty read alike, which is the same reading `landing_paths` takes
-/// beside it: a config declaring nothing has removed nothing, and the verb's own
-/// refusal is what handles an empty set at the point of use.
+/// **The default has to be resolved HERE or the comparison lies.** `verified`
+/// falls back to it, so a config that drops the whole table still demands the
+/// same two checks; comparing raw declarations would call that a weakening and
+/// price a consumer for deleting a row that changed nothing. What this must
+/// catch is a declaration that demands LESS than the reading it replaces, and
+/// that is what comparing effective sets does.
 fn verified_by(config: &Config) -> Vec<String> {
     config
         .receipt
         .as_ref()
-        .map_or_else(Vec::new, |receipt| receipt.verified_by.clone())
+        .map(|receipt| receipt.verified_by.clone())
+        .filter(|declared| !declared.is_empty())
+        .unwrap_or_else(|| {
+            crate::receipt::VERIFIED_BY
+                .iter()
+                .map(|check| (*check).to_owned())
+                .collect()
+        })
 }
 
 /// The `lease.landing_paths` set, or an empty one when the table is absent.
@@ -3700,30 +3711,32 @@ mod tests {
         assert!(weakenings(&working, &base).is_empty());
     }
 
-    /// And the table's removal names every check it declared, rather than
-    /// collapsing to no finding — the limit case its sibling also carries,
-    /// because absent and empty read alike on the way in.
+    /// **DROPPING THE TABLE FALLS BACK TO THE DEFAULT, so what it reports is
+    /// what the reading actually loses — not the row.**
+    ///
+    /// `verified` resolves an undeclared set to its compiled default, so a
+    /// config that deletes the table still demands those checks. Comparing raw
+    /// declarations would price that as a weakening and charge a consumer for
+    /// removing a row that changed nothing; comparing EFFECTIVE sets reports
+    /// only the checks the successor no longer demands.
     #[test]
-    fn dropping_the_receipt_table_reports_every_check_it_declared() {
-        let base = config("[receipt]\nverified_by = [\"one\", \"two\"]\n");
+    fn dropping_the_table_is_priced_against_the_default_it_falls_back_to() {
+        let base = config("[receipt]\nverified_by = [\"verify\", \"linear-check\", \"extra\"]\n");
         let working = config("");
         assert_eq!(
             weakenings(&base, &working),
-            vec![
-                Weakening::new(
-                    WeakeningKind::VerifiedCheckRemoved,
-                    "receipt.verified_by[one]",
-                    "present",
-                    "absent",
-                ),
-                Weakening::new(
-                    WeakeningKind::VerifiedCheckRemoved,
-                    "receipt.verified_by[two]",
-                    "present",
-                    "absent",
-                ),
-            ]
+            vec![Weakening::new(
+                WeakeningKind::VerifiedCheckRemoved,
+                "receipt.verified_by[extra]",
+                "present",
+                "absent",
+            )],
+            "only the check the fallback does not carry is lost"
         );
+
+        // And a table that declares exactly the default loses nothing at all.
+        let same = config("[receipt]\nverified_by = [\"verify\", \"linear-check\"]\n");
+        assert!(weakenings(&same, &config("")).is_empty());
     }
 
     /// CLOUD-472. The direction is the whole of it, so all four arms are here:

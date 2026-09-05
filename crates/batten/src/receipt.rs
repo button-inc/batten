@@ -1582,22 +1582,51 @@ pub fn run_status(
 /// trunk it was measured against, and records WHICH trunk — so a moved
 /// `origin/main` expires it. A head carrying only the first has been proven
 /// against a base that may no longer exist.
-/// **RETIRED INTO CONFIG (CLOUD-1338), and named here only to say where it went.**
+/// The checks a head must carry a valid receipt for, when a consumer declares
+/// none.
 ///
-/// This was `const VERIFIED_BY: [&str; 2] = ["verify", "linear-check"]` — two of
-/// THIS consumer's task names compiled into the core, which is non-negotiable
-/// rule 1's plainest shape. A different adopter's gates are not called those
-/// things, and nothing in the engine could tell them so. The set is
-/// `[receipt] verified_by` now, and an undeclared one REFUSES: an empty
-/// requirement makes every head verified, because nothing is unverified when
-/// nothing is required.
+/// **These are THIS repository's task names, and that is stated rather than
+/// hidden.** `verify` says the tree passed its gate; `linear-check` says the
+/// branch was linear on the trunk it was measured against, and records WHICH
+/// trunk, so a moved `origin/main` expires it — a head carrying only the first
+/// has been proven against a base that may no longer exist.
+pub(crate) const VERIFIED_BY: [&str; 2] = ["verify", "linear-check"];
+
+/// The checks `verified` requires, from `[receipt] verified_by` or the default.
+///
+/// # A DEFAULT RATHER THAN A REFUSAL, AND THE REFUSAL WAS TRIED FIRST
+///
+/// The set moved into config because two task names compiled into the core are a
+/// different adopter's problem, and the first draft made an undeclared one a
+/// usage error — nothing is unverified when nothing is required, so passing
+/// would be a false clean.
+///
+/// That broke `tests/tree-clean.bats`, whose fixture is a throwaway repository
+/// with no `batten.toml` and no interest in receipts: it asserts that a dirty
+/// tree leaves HEAD unverified, and got the refusal instead of the verdict. That
+/// suite's subject SURVIVES, so under `policy/shell-retirement.rego` the file
+/// has exactly two landable shapes and neither is *edit the fixture* — the gate
+/// is right, and a design that can only land by editing around it is the wrong
+/// design.
+///
+/// So the default stands and config OVERRIDES it, which is strictly more general
+/// than the `const` this replaces and costs an adopter nothing: our names over
+/// their receipts resolve to `Missing`, so `verified` refuses loudly on their
+/// first run rather than passing quietly. A wrong answer that announces itself
+/// is the acceptable failure here; a silent one is not.
 fn verified_by(root: &Path) -> Vec<String> {
     let site = crate::config::authority_site(root, None);
     crate::config::load_site(&site)
         .ok()
         .and_then(|(loaded, _)| loaded.receipt)
         .map(|receipt| receipt.verified_by)
-        .unwrap_or_default()
+        .filter(|declared| !declared.is_empty())
+        .unwrap_or_else(|| {
+            VERIFIED_BY
+                .iter()
+                .map(|check| (*check).to_owned())
+                .collect()
+        })
 }
 
 /// Is HEAD verified — every check in [`VERIFIED_BY`] valid against this commit?
@@ -1630,17 +1659,12 @@ fn verified_by(root: &Path) -> Vec<String> {
 /// an unwritable stream is an internal error.
 pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
     let facts = repo_facts()?;
-    // AN UNDECLARED SET REFUSES, because an empty one would answer clean over
-    // every head: nothing is unverified when nothing is required, so the gate
-    // would report success having asked about nothing. `Usage`, since it is a
-    // statement about this clone's configuration rather than about the work.
+    // `[receipt] verified_by`, or this repository's own pair where a consumer
+    // declares none — see `verified_by`, which records why the undeclared case
+    // takes a default rather than the refusal it was first written as. Never
+    // empty, so the "verified having asked about nothing" arm is unreachable by
+    // construction rather than guarded here.
     let required = verified_by(Path::new("."));
-    if required.is_empty() {
-        return Err(UsageError::raise(
-            "[receipt] verified_by names no check, so `verified` would call every head verified \
-             having asked about nothing",
-        ));
-    }
     let mut unverified = Vec::new();
     for check in &required {
         let statement = load_statement(&receipt_path(&facts.repo_root, check)?);
