@@ -107,6 +107,7 @@ pub mod semver;
 pub mod session;
 pub mod severity;
 pub mod sink;
+pub mod source;
 pub mod spec;
 /// Resolved-symbol facts, from a delegated analyser's structured output
 /// (CLOUD-760). The first occupant of `Cost::Effect`: resolving it runs a

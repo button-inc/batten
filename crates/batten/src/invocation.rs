@@ -132,7 +132,11 @@ impl<'ast> syn::visit::Visit<'ast> for Sites {
 pub fn invocations(source: &str) -> crate::facts::Look<Vec<Invocation>> {
     use syn::visit::Visit;
 
-    let Ok(file) = syn::parse_file(source) else {
+    // THE ONE PARSE (CLOUD-1008). This read `syn::parse_file` directly, as did
+    // two sites in `uses.rs`; three call sites are three error mappings that
+    // agreed only by luck, which is CLOUD-849's measured argument one grammar
+    // over.
+    let crate::facts::Look::Is(file) = crate::source::rust_or_could_not_look(source) else {
         return crate::facts::Look::CouldNotLook;
     };
     let mut sites = Sites::default();

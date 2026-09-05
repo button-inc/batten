@@ -124,7 +124,8 @@ pub type RootExports = BTreeMap<String, Option<String>>;
 /// re-exports nothing.
 #[must_use]
 pub fn root_exports(source: &str) -> Look<RootExports> {
-    let Ok(file) = syn::parse_file(source) else {
+    // THE ONE PARSE (CLOUD-1008); see `crate::source`.
+    let Look::Is(file) = crate::source::rust_or_could_not_look(source) else {
         return Look::CouldNotLook;
     };
     // THE ROOT'S OWN `mod` DECLARATIONS, COLLECTED FIRST, and they are what makes
@@ -252,7 +253,8 @@ impl<'ast> syn::visit::Visit<'ast> for Edges {
 pub fn use_edges(source: &str) -> Look<Vec<UseEdge>> {
     use syn::visit::Visit;
 
-    let Ok(file) = syn::parse_file(source) else {
+    // THE ONE PARSE (CLOUD-1008); see `crate::source`.
+    let Look::Is(file) = crate::source::rust_or_could_not_look(source) else {
         return Look::CouldNotLook;
     };
     let mut edges = Edges::default();

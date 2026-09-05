@@ -596,6 +596,24 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   removing the row is what stops the tree watching. An unreadable manifest
   reports NOTHING — the could-not-look direction for a verb that only adds
   refusals.
+- `source.rs` — the ONE `syn::parse_file` in the crate (CLOUD-1008). Not a new
+  capability: `invocation.rs` and `uses.rs` each parsed for themselves, three
+  call sites and three identical-by-luck error mappings, and a file declared for
+  both `Fact::Uses` and `Fact::Invocations` parsed twice for one answer. The
+  argument is `rules.rs`'s own, one grammar over — `parse_node` is the single
+  `Format::read` because **a second call site is a second error mapping, and two
+  mappings diverge**, measured when `Fact::Document` had three and one could not
+  tell a non-UTF-8 file from a missing one. `tests::one_rust_parse_exists` holds
+  it at one, needle-on-the-CALL so the module's own prose does not match, and
+  anti-vacuous so zero fails as loudly as two. `Refused` is the GRAMMAR, never
+  the bytes — the caller has already read them — and a parse failure is
+  `CouldNotLook` while a file that parses and contains nothing is `Is(empty)`.
+  **Carries the measurement for the half CLOUD-1008 does NOT build**: `syn` drops
+  a `//` comment as trivia (asserted structurally — a `///` becomes a `#[doc]`
+  attribute and an ordinary comment reaches no node), so canonical comment spans
+  are unreachable through the backend CLOUD-1009's D4 pins, and a comment-span
+  fact here would answer for doc comments while silently reporting nothing for
+  every other line.
 - `lint.rs` — `batten config lint` (CLOUD-87): the policy smells a _valid_
   config can still carry. Complements `trust.rs` rather than replacing it —
   `--config-from` makes a weakening ineffective, this makes it visible. Two
