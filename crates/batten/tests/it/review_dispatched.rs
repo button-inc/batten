@@ -194,6 +194,83 @@ fn a_dispatched_review_reaches_the_predicate_and_is_clean() {
     assert_eq!(calls(&root), 1, "the miss dispatched exactly once");
 }
 
+/// THE SURFACE GATE, and it is the pair rather than either half (CLOUD-1480).
+///
+/// `Fact::Review` is `Cost::Effect x Surface::Check`, so the mediated boundary
+/// may not resolve it: dispatching an agent from an end-of-turn hook is minutes
+/// and tokens inside a 100ms budget. The engine barred it, and nothing asserted
+/// the bar — a revert, or a widening of the class, would have gone unnoticed
+/// exactly as the original defect did.
+///
+/// TWO ARMS, BECAUSE ONE DISCRIMINATES NOTHING. An arm that only asserts the
+/// hook surface dispatches nothing passes just as happily over an engine that
+/// dispatches on NO surface, which is the dead gate this repository keeps
+/// finding. The `Check` arm is what proves the fact still resolves where its
+/// class admits it.
+///
+/// AND THE WITHHOLDING IS ASSERTED, not just the absence of a dispatch. A rule
+/// that declared a fact the surface could not resolve must land in
+/// `not_evaluated` rather than be evaluated against a `null`: the module refuses
+/// on could-not-look, so evaluating it would write a spurious deny at every end
+/// of turn — measured on this branch, and caught by review rather than by the
+/// suite.
+#[test]
+fn the_mediated_surface_resolves_no_effect_fact_and_withholds_the_rule() {
+    let root = repo("review-dispatched-surface", "body\n", "", 0);
+    let verdicts = common::verdicts_in(&root);
+    let vocabulary = batten::policy::Vocabulary {
+        patterns: &[],
+        verdicts: &verdicts,
+        recorders: &[],
+    };
+    let rows = [row(&root, true)];
+
+    let hook = rules::run_recorded(
+        &rows,
+        &[],
+        vocabulary,
+        &root,
+        batten::policy::ModuleChecks::SkipOnHotPath,
+        batten::facts::Surface::Hook,
+    )
+    .expect("the mediated surface runs");
+    assert_eq!(
+        calls(&root),
+        0,
+        "the hook surface must dispatch no agent: `Fact::Review` is classed \
+         `Surface::Check`, and a mediated call cannot afford one"
+    );
+    assert!(
+        hook.not_evaluated.contains_key(RULE),
+        "a rule declaring a fact this surface cannot resolve is WITHHELD, not \
+         evaluated against a null — otherwise it refuses on could-not-look and \
+         writes a spurious deny every turn. not_evaluated: {:?}",
+        hook.not_evaluated
+    );
+
+    let check = rules::run_recorded(
+        &rows,
+        &[],
+        vocabulary,
+        &root,
+        batten::policy::ModuleChecks::Run,
+        batten::facts::Surface::Check,
+    )
+    .expect("the tree surface runs");
+    assert_eq!(
+        calls(&root),
+        1,
+        "the tree surface still dispatches — `Surface::Check` is the surface the \
+         fact's own class admits, and barring it everywhere would be the dead \
+         gate this pair exists to refuse"
+    );
+    assert!(
+        !check.not_evaluated.contains_key(RULE),
+        "the rule evaluates where its fact resolves: {:?}",
+        check.not_evaluated
+    );
+}
+
 /// A REVIEW THAT POINTED AT SOMETHING STILL RAN. Refusing here would price
 /// finding something, and the cheapest way past such a gate is an agent that
 /// reports nothing.
