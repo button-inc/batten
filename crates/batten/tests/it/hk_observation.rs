@@ -72,10 +72,26 @@ fn the_three_states_are_distinct_and_unknown_is_not_drifted() {
         hk::capability(Some(&committed), Some(&same)),
         Capability::Available
     );
+    // **A VERSION SKEW IS COULD-NOT-LOOK, and this case asserted the opposite.**
+    // It read `Drifted`, "a different runner is readable disagreement" — which
+    // contradicts `Contract::agrees_with`, whose doc says a plan taken at
+    // another tool version "does not answer this artifact's question at all",
+    // and contradicts `Capability`'s own header, which calls reading it as drift
+    // "a verdict about the ENVIRONMENT [turned] into one about the REPOSITORY".
+    //
+    // So the doc said one thing, this case asserted its opposite, and the
+    // implementation followed the case. `hk drift` honoured the doc and exited
+    // 3 on the same input, so one session produced two answers to one question:
+    // the gate could-not-look, the record beside it "the repository drifted".
+    // A reader following that record looks for a config change nobody made.
+    //
+    // Worth the paragraph because this case is titled "The discriminator" and
+    // was the thing that made the collapse invisible rather than the thing that
+    // caught it.
     assert_eq!(
         hk::capability(Some(&committed), Some(&other_version)),
-        Capability::Drifted,
-        "a different runner is readable disagreement"
+        Capability::Unknown,
+        "a differently-pinned runner does not answer this artifact's question"
     );
     assert_eq!(
         hk::capability(Some(&committed), Some(&other_step)),

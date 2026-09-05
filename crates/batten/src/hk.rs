@@ -1029,8 +1029,25 @@ pub fn capability(committed: Option<&Contract>, current: Option<&Contract>) -> C
         // strength of an environment fault.
         return Capability::Unknown;
     };
-    if committed.tool_version != current.tool_version {
-        return Capability::Drifted;
+    // A DIFFERENTLY-PINNED RUNNER IS COULD-NOT-LOOK, NOT DRIFT, and this
+    // returned `Drifted` — the exact collapse the two doc comments above forbid,
+    // written by the same hand that wrote them.
+    //
+    // `Contract::agrees_with` states the reason and `hk drift` already honours
+    // it: a plan taken at another tool version "does not answer this artifact's
+    // question at all", because it may differ because the RUNNER changed rather
+    // than because the config did. `Capability`'s own header calls reading that
+    // as drift "a verdict about the ENVIRONMENT [turned] into one about the
+    // REPOSITORY", and names it "the discriminator an implementation that
+    // collapsed them would fail while passing every other case".
+    //
+    // It was collapsed here and no case discriminated it, so the two authorities
+    // over one question disagreed: `hk drift` exited 3 on a version skew while
+    // the observation record written in the same session asserted the repository
+    // had drifted. A reader following that record looks for a config change
+    // nobody made.
+    if !committed.agrees_with(current) {
+        return Capability::Unknown;
     }
     if compare(committed, current).is_empty() {
         Capability::Available
