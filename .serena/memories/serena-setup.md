@@ -86,7 +86,18 @@ mcp-timeout-budget`, which carries the floor, the measurement behind it, and the
    been approving `find_symbol` and `get_symbols_overview` by hand, and the agent's
    first instinct was to stop using Serena and reach for the shell utilities
    instead — the substitution `.claude/rules/scanning.md` and `no-tool-substitution`
-   exist to refuse, arrived at as a workaround for a one-line config bug.</repl>
+   exist to refuse, arrived at as a workaround for a one-line config bug.
+
+   **AND THE SERVER-LEVEL GRANT IS NOT ENOUGH FOR THE WRITE TOOLS.** Measured the
+   same day, immediately after: with `mcp__serena` alone in `permissions.allow`,
+   `list_memories` and `read_memory` ran silently and `edit_memory` still stopped
+   for a human. So `mcp__<server>` covers the reads and does not cover every tool
+   the server exposes, whatever the shorthand suggests. The fix is to ENUMERATE:
+   one `mcp__serena__<tool>` entry per tool, all twenty-one, which is the form
+   with no ambiguity in it. Do not replace those with the server-level line
+   because it looks tidier — that is the same shape as the wildcard above, one
+   step less wrong.</repl>
+   </repl>
 
 3. **A scoped launch (CLOUD-316).** The one that actually cost a whole session.
    `.mcp.json` ran a bare `mise exec`, which provisions **every** tool in the
