@@ -314,10 +314,16 @@ EOF
 	# it, and records the config it was handed — so this asserts WHAT THE SCRIPT
 	# DECIDED TO SEND rather than a transfer outcome, which is the same reason the
 	# CA-bundle cases above are written this way.
+	#
+	# IT ALSO EMITS THE CHAIN, because a refusal alone no longer earns the bypass:
+	# the script asks who signed the certificate that refused it, and only goes
+	# around an authority under the declared organisation. `%{certs}` follows the
+	# status on its own line, which is the shape curl writes.
 	seen="$BATS_TEST_TMPDIR/curl-config"
 	stub="$BATS_TEST_TMPDIR/stub"
 	mkdir -p "$stub"
-	printf '#!/bin/sh\ncat >>%s\nprintf 403\nexit 22\n' "$seen" >"$stub/curl"
+	printf '#!/bin/sh\ncat >>%s\nprintf "403\\nIssuer:CN = Egress Gateway CA, O = Anthropic\\n"\nexit 22\n' \
+		"$seen" >"$stub/curl"
 	chmod +x "$stub/curl"
 
 	PATH="$stub:$PATH" BATTEN_RETRIES=1 GH_TOKEN=proxy-placeholder \
@@ -340,6 +346,45 @@ EOF
 	chmod +x "$stub/curl"
 
 	PATH="$stub:$PATH" BATTEN_RETRIES=1 GH_TOKEN=proxy-placeholder \
+		GITHUB_PERSONAL_ACCESS_TOKEN=operator-pat run "$INSTALL"
+	run cat "$seen"
+	[[ "$output" != *"noproxy = "* ]]
+}
+
+@test "a refusal from an authority the operator chose is honoured, not bypassed" {
+	# THE DISCRIMINATING ARM, and the one the previous revision could not express.
+	# It bypassed on any 401 or 403, so an operator's own proxy declining a request
+	# — which is what a proxy is FOR — was answered by routing around it. Same
+	# status, same credentials, same everything except who signed the certificate:
+	# here it is a CA the operator chose, and the script must stay on the proxy.
+	seen="$BATS_TEST_TMPDIR/curl-config"
+	stub="$BATS_TEST_TMPDIR/stub"
+	mkdir -p "$stub"
+	printf '#!/bin/sh\ncat >>%s\nprintf "403\\nIssuer:CN = Acme Corporate Proxy CA, O = Acme\\n"\nexit 22\n' \
+		"$seen" >"$stub/curl"
+	chmod +x "$stub/curl"
+
+	PATH="$stub:$PATH" BATTEN_RETRIES=1 GH_TOKEN=proxy-placeholder \
+		GITHUB_PERSONAL_ACCESS_TOKEN=operator-pat run "$INSTALL"
+	[ "$status" -ne 0 ]
+	run cat "$seen"
+	[[ "$output" != *"noproxy = "* ]]
+	[[ "$output" != *"operator-pat"* ]]
+}
+
+@test "the fallback can be switched off entirely" {
+	# The escape an operator needs when the detection is right and the answer is
+	# still no: an empty `BATTEN_INTERCEPT_ORG` means never leave the proxy,
+	# whoever signed the refusal. Same input as the bypass case above.
+	seen="$BATS_TEST_TMPDIR/curl-config"
+	stub="$BATS_TEST_TMPDIR/stub"
+	mkdir -p "$stub"
+	printf '#!/bin/sh\ncat >>%s\nprintf "403\\nIssuer:CN = Egress Gateway CA, O = Anthropic\\n"\nexit 22\n' \
+		"$seen" >"$stub/curl"
+	chmod +x "$stub/curl"
+
+	PATH="$stub:$PATH" BATTEN_RETRIES=1 BATTEN_INTERCEPT_ORG= \
+		GH_TOKEN=proxy-placeholder \
 		GITHUB_PERSONAL_ACCESS_TOKEN=operator-pat run "$INSTALL"
 	run cat "$seen"
 	[[ "$output" != *"noproxy = "* ]]

@@ -154,6 +154,26 @@ API_RETRIES="${BATTEN_RETRIES:-3}"
 # machine talks to keeps going the way the operator configured it.
 NOPROXY_HOSTS='api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com,github.com'
 
+# The organisation an intercepting authority names in its certificate subject.
+#
+# A refusal says somebody declined; this says WHO answered. Together they are the
+# only combination that earns going around a proxy — see the retry below.
+#
+# Overridable so an operator can point this at their own interceptor, or set it
+# empty to disable the fallback entirely and always honour the proxy.
+INTERCEPT_ORG="${BATTEN_INTERCEPT_ORG-Anthropic}"
+
+# Whether the chain curl recorded in `$1` was issued under `$INTERCEPT_ORG`.
+#
+# Reads the `%{certs}` block curl already wrote, so there is no second request
+# and no dependency on `openssl` — which a minimal build image need not carry.
+# An `Issuer:` line rather than a `Subject:` one: the question is who SIGNED the
+# certificate presented for GitHub, not what the leaf calls itself.
+intercepted() {
+	[ -n "$INTERCEPT_ORG" ] || return 1
+	grep -q "^Issuer:.*O = ${INTERCEPT_ORG}" "$1" 2>/dev/null
+}
+
 api_get() {
 	ag_url=$1
 	ag_accept=$2
@@ -183,7 +203,10 @@ api_get() {
 			if [ -n "$ag_direct" ]; then
 				printf 'noproxy = "%s"\n' "$NOPROXY_HOSTS"
 			fi
-			printf 'write-out = "%%{http_code}"\n'
+			# `%{certs}` is the chain the peer actually presented, in plain text.
+			# It is what decides the retry below, and it costs nothing here: the
+			# request is being made anyway.
+			printf 'write-out = "%%{http_code}\\n%%{certs}"\n'
 			printf 'output = "%s"\n' "$ag_out"
 			printf 'url = "%s"\n' "$ag_url"
 		} | curl --config - >"$ag_out.code" 2>/dev/null; then
@@ -191,12 +214,20 @@ api_get() {
 		fi
 		# Read before the retry decision: a refusal earns a different next step
 		# from a timeout, and the status is the only thing that tells them apart.
-		ag_code=$(cat "$ag_out.code" 2>/dev/null || true)
+		ag_code=$(head -n 1 "$ag_out.code" 2>/dev/null || true)
 		if [ -z "$ag_direct" ] && { [ -n "$TOKEN" ] || [ -n "${TOKEN_DIRECT:-}" ]; } &&
-			{ [ "$ag_code" = "403" ] || [ "$ag_code" = "401" ]; }; then
-			# Something answered and declined. On a build host that is the
-			# intercepting proxy speaking for GitHub, so try once around it with
-			# our own credential before spending any more of the retry budget.
+			{ [ "$ag_code" = "403" ] || [ "$ag_code" = "401" ]; } &&
+			intercepted "$ag_out.code"; then
+			# Something answered and declined, AND the certificate it presented
+			# was issued by the interceptor rather than by a CA the operator
+			# chose. Try once around it with our own credential.
+			#
+			# BOTH CONJUNCTS ARE LOAD-BEARING. A refusal alone is not evidence of
+			# interception — a real proxy declines things too, and routing around
+			# one because it said no is the behaviour this script must not have.
+			# Interception alone is not evidence of a problem either: the
+			# certificate is substituted on every connection here, including the
+			# ones that work.
 			ag_direct=1
 			continue
 		fi
