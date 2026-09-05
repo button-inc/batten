@@ -276,11 +276,28 @@ process_probes contains i if {
 # a plausible operand of a process probe. That was a workaround for a token
 # stream that did not know what a loop was.
 #
-# A condition is its own segment now, tagged `role == "condition"`, carrying only
-# the test's own words. There is nothing to filter, and the rule selects the
-# segments it is about instead of every segment that happens to lack a keyword.
+# A condition is its own segment now, carrying only the test's own words. There
+# is nothing to filter, and the rule selects the segments it is about instead of
+# every segment that happens to lack a keyword.
+#
+# **KIND, NOT ROLE, AND NARROWING TO `role == "condition"` WAS A MEASURED
+# BYPASS.** The probe does not have to be in the test: a loop can poll from its
+# BODY and break, which is the same wait spelled one line down. Before the
+# construct projection this rule ran over every segment and `keywords` stepped
+# past `do`, so a body probe resolved; keying on the role lost it. Measured over
+# both compiled binaries, backgrounded --
+# `while true; do pgrep -f mise >/dev/null || break; sleep 20; done` and
+# `while :; do sleep 20; pgrep -f mise; done` were exit 2 `task watch duplicate`
+# before and exit 0 after. Moving the probe from the condition to the body was a
+# one-edit bypass of the gate AGENTS.md cites the "490 in one session"
+# measurement for, and the nested spelling still denied, which is what would
+# have kept it hidden.
+#
+# So the selector is the loop NODE, either half of it. `for` stays excluded
+# because it is a different kind, which is the narrowing that was actually
+# wanted.
 condition_program(segment) := name if {
-	segment.construct.role == "condition"
+	segment.construct.kind in {"until", "while"}
 	name := basename(segment.words[words_program_index(segment.words)])
 }
 
@@ -783,9 +800,7 @@ test_a_backgrounded_counting_loop_is_a_timer if {
 	some v in violation with input as {"call": {
 		"command": "for i in $(seq 60); do sleep 10; done",
 		"run-in-background": true,
-		"segments": [
-			inner(["sleep", "10"], "for", "body", null),
-		],
+		"segments": [inner(["sleep", "10"], "for", "body", null)],
 	}}
 	v.rule == "background-timer"
 }

@@ -6580,10 +6580,16 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
     let crate::facts::Look::Is(parsed) = segments(command) else {
         return Vec::new();
     };
+    // PER LINE, never the fused words (CLOUD-1287). A segment may span a
+    // newline, and `input.call.programs` is the anchor every module is told to
+    // use -- so reading the fused list here left the over-deny alive on exactly
+    // the surface the rules mandate, while `protected_mutation` was fixed.
+    // Measured: `cd /tmp` then `git push --force origin main` exited 0.
     parsed
         .iter()
-        .filter_map(|segment| {
-            let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+        .flat_map(|segment| segment.lines.iter())
+        .filter_map(|words| {
+            let tokens: Vec<&str> = words.iter().map(String::as_str).collect();
             let index = effective_program(&tokens)?;
             let program = program_token(tokens[index]);
             Some(serde_json::json!({
@@ -7788,7 +7794,33 @@ fn covered(nodes: &[rable::Node], command: &str) -> bool {
     // true vacuously, and the dropped-tail case reads clean instead of
     // abstaining. Asserted rather than reasoned — see the unterminated-quote
     // case, which carries a multi-byte operand for this reason.
-    command.chars().skip(end).all(char::is_whitespace)
+    // **THE TAIL IS JUDGED BY WHETHER IT COULD HOLD A DROPPED WORD, NOT BY
+    // WHETHER IT IS EMPTY**, and requiring emptiness was a total bypass.
+    //
+    // `rable` does not extend a node's span over the separator that follows it,
+    // so `rm batten.toml;` leaves `;` after the last span. Requiring the tail to
+    // be whitespace therefore made every command ending in a separator or a
+    // comment could-not-look -- and could-not-look ALLOWS on this surface.
+    // Measured over the shipped binary: `git push --force origin main;` exited
+    // 0 where the same command without the semicolon exited 2, and likewise for
+    // `rm batten.toml;`, `mise run verify | tail -1;` and `sleep 60;`. One
+    // keystroke disabled every mediated gate -- strictly worse than the
+    // character walk this row replaced, and introduced by the guard meant to
+    // make it safer.
+    //
+    // What the guard is actually for is narrow and stays: `rable` 0.2.1 returns
+    // Ok for `rm "unclosed path` with the operand silently GONE, so a protected
+    // path written with an unbalanced quote would be judged as a bare `rm`. A
+    // word is dropped because its QUOTE never closed, so a tail carrying a
+    // quote character is the signal; a tail of separators and comment text is
+    // not.
+    //
+    // The residue, stated rather than absorbed: a trailing comment that itself
+    // contains a quote (`echo x # say "hi"`) abstains where it could be read.
+    // That is an under-deny, it is recorded rather than silent, and it is many
+    // orders narrower than the one it replaces.
+    let tail: String = command.chars().skip(end).collect();
+    !tail.contains('"') && !tail.contains('\'')
 }
 
 /// Does this node, anywhere inside it, open a heredoc?
