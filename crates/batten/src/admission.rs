@@ -98,6 +98,101 @@ pub enum State {
     Spent,
 }
 
+/// What an admission's answer was given ABOUT (CLOUD-1125).
+///
+/// **`head` was the wrong object, and it made the mechanism unusable on a moving
+/// `main`.** `land`'s loop is fetch → rebase → `verify` → push: the rebase is step
+/// two and the gate reading this runs inside step three, so on any lap where
+/// `main` moved, every admission minted before `land` started was already dead.
+/// Measured landing PR #726 — seven subjects minted and spent FOUR times, and the
+/// lap that succeeded only because `main` happened not to move in the seconds
+/// between. The race is not winnable: the mint has to land after the rebase and
+/// before the verify, and there is no point between them a caller can reach.
+///
+/// **Two arms because there are two callers of [`admitted`], not for symmetry.**
+/// `apply_admissions` is suppressing a stored FINDING and has its fingerprint in
+/// hand; `admit_mediated` is suppressing a refusal of a CALL, where no finding
+/// exists to address. Collapsing them would force one of the two to invent an
+/// object it does not have.
+///
+/// Serialized as its [`Anchor::token`] — one tagged scalar — so the stored record
+/// stays a flat map of strings and `canonical` needs no nested rendering.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
+pub enum Anchor {
+    /// A tree finding, by [`crate::identity::Fingerprint`]'s lowercase hex.
+    ///
+    /// Rebase-INVARIANT by construction — a fingerprint takes no commit — and it
+    /// still moves when the cited span is edited, which is the expiry `head` was
+    /// approximating. A `Code`-kind finding hashes its span, so editing the
+    /// citation mints a different one; a `Scope`-kind finding hashes only
+    /// `(rule, path)`, so an admission over one survives edits to that path. That
+    /// is the same identity the findings store already dedups by, so it is this
+    /// repository's own definition of "the same finding" rather than a weaker one
+    /// chosen here.
+    Finding(String),
+    /// A mediated call, by the HEAD it was refused at.
+    ///
+    /// Unchanged from what every binding carried before, and deliberately: a hook
+    /// refusal is answered and spent inside one call, so the rebase window the
+    /// `Finding` arm exists to close never opens on this path.
+    Call {
+        /// The commit the call was refused at.
+        head: String,
+    },
+}
+
+impl Anchor {
+    /// The anchor as one tagged token, which is what the record and the address
+    /// carry.
+    ///
+    /// A tagged string rather than a nested object because the address is a
+    /// digest over a canonical rendering: a scalar keeps `canonical` a flat map
+    /// of strings, and the tag is what stops a fingerprint and a sha colliding
+    /// as the same value.
+    #[must_use]
+    pub fn token(&self) -> String {
+        match self {
+            Anchor::Finding(fingerprint) => format!("finding:{fingerprint}"),
+            Anchor::Call { head } => format!("call:{head}"),
+        }
+    }
+
+    /// Read a token back, or `None` when it carries no known tag.
+    ///
+    /// An unknown tag is `None` rather than a lenient fallback: a record whose
+    /// anchor this build cannot interpret must not be matched against anything,
+    /// which is the fail-closed direction for a suppression.
+    #[must_use]
+    pub fn parse(token: &str) -> Option<Anchor> {
+        if let Some(rest) = token.strip_prefix("finding:") {
+            return Some(Anchor::Finding(rest.to_owned()));
+        }
+        token.strip_prefix("call:").map(|rest| Anchor::Call {
+            head: rest.to_owned(),
+        })
+    }
+}
+
+impl From<Anchor> for String {
+    fn from(anchor: Anchor) -> String {
+        anchor.token()
+    }
+}
+
+impl TryFrom<String> for Anchor {
+    type Error = String;
+
+    /// An unrecognised tag is an error rather than a lenient default, for
+    /// [`Anchor::parse`]'s reason: a record this build cannot interpret must not
+    /// be matched against anything.
+    fn try_from(token: String) -> std::result::Result<Anchor, String> {
+        Anchor::parse(&token).ok_or_else(|| {
+            format!("`{token}` names no anchor kind; expected `finding:` or `call:`")
+        })
+    }
+}
+
 /// Everything the address binds, and nothing else.
 ///
 /// Field order here is the struct's; the ADDRESS does not depend on it, because
@@ -114,8 +209,8 @@ pub struct Binding {
     /// The gate's canonical subject. Each gate owns its own spelling; see
     /// [`crate::admission`]'s consumers.
     pub subject: String,
-    /// The HEAD the override was articulated against.
-    pub head: String,
+    /// What the answer was given ABOUT — see [`Anchor`] (CLOUD-1125).
+    pub anchor: Anchor,
     /// The config generation. An admission does not survive the policy change
     /// that would have made it unnecessary.
     pub epoch: String,
@@ -184,7 +279,7 @@ pub enum Refused {
     Tampered,
     /// Already consumed.
     Spent,
-    /// Bound to a different `(rule, verdict, subject, head, epoch)`.
+    /// Bound to a different `(rule, verdict, subject, anchor, epoch)`.
     Unbound,
     /// The `prev` chain does not terminate — it cycles, or a link is missing.
     ChainBroken,
@@ -249,6 +344,8 @@ pub fn address(binding: &Binding) -> String {
 #[must_use]
 pub fn canonical(binding: &Binding) -> String {
     let mut out = String::from("{");
+    out.push_str(&member("anchor", &string(&binding.anchor.token())));
+    out.push(',');
     // Sorted by key, spelled out rather than derived from the struct's field
     // order: the address must not move when a field is reordered.
     out.push_str(&member("answers", &object(&binding.answers)));
@@ -256,8 +353,6 @@ pub fn canonical(binding: &Binding) -> String {
     out.push_str(&member("author", &string(&binding.author)));
     out.push(',');
     out.push_str(&member("epoch", &string(&binding.epoch)));
-    out.push(',');
-    out.push_str(&member("head", &string(&binding.head)));
     out.push(',');
     out.push_str(&member(
         "prev",
@@ -356,7 +451,7 @@ fn string(text: &str) -> String {
 /// Admits-rule: protected-mutation
 /// Admits-verdict: path write refused
 /// Admits-subject: .claude/rules/toolchain.md
-/// Admits-head: <sha>
+/// Admits-anchor: finding:<fingerprint> | call:<sha>
 /// Admits-epoch: <generation>
 /// Admits-author: <git identity>
 /// Admits-prev: -
@@ -427,12 +522,13 @@ pub fn block(record: &Record) -> String {
     use std::fmt::Write as _;
 
     let binding = &record.binding;
+    let anchor_token = binding.anchor.token();
     let mut out = format!("{BLOCK_PREFIX}: {}\n", record.admission);
     for (key, value) in [
         ("rule", binding.rule.as_str()),
         ("verdict", binding.verdict.as_str()),
         ("subject", binding.subject.as_str()),
-        ("head", binding.head.as_str()),
+        ("anchor", anchor_token.as_str()),
         ("epoch", binding.epoch.as_str()),
         ("author", binding.author.as_str()),
         ("prev", binding.prev.as_deref().unwrap_or(NO_PREV)),
@@ -512,7 +608,7 @@ fn assemble(claimed: &str, fields: &BTreeMap<String, String>) -> Option<Articula
             rule: take("rule")?,
             verdict: take("verdict")?,
             subject: take("subject")?,
-            head: take("head")?,
+            anchor: Anchor::parse(&take("anchor")?)?,
             epoch: take("epoch")?,
             answers,
             prev: (prev != NO_PREV).then_some(prev),
@@ -708,8 +804,8 @@ pub struct Situation<'a> {
     pub verdict: &'a str,
     /// The gate's canonical subject.
     pub subject: &'a str,
-    /// The HEAD being judged.
-    pub head: &'a str,
+    /// The anchor being judged, as [`Anchor::token`] renders it.
+    pub anchor: &'a str,
     /// The config generation.
     pub epoch: &'a str,
 }
@@ -725,7 +821,7 @@ impl Situation<'_> {
         binding.rule == self.rule
             && binding.verdict == self.verdict
             && binding.subject == self.subject
-            && binding.head == self.head
+            && binding.anchor.token() == self.anchor
             && binding.epoch == self.epoch
     }
 }
@@ -837,7 +933,7 @@ pub fn admitted(
     rule: &str,
     verdict: &str,
     subject: &str,
-    head: &str,
+    anchor: &str,
     epoch: &str,
 ) -> Result<Option<String>> {
     let dir = store_dir(repo_root)?;
@@ -865,7 +961,7 @@ pub fn admitted(
         if binding.rule == rule
             && binding.verdict == verdict
             && binding.subject == subject
-            && binding.head == head
+            && binding.anchor.token() == anchor
             && binding.epoch == epoch
         {
             return Ok(Some(record.admission));
@@ -979,7 +1075,9 @@ mod tests {
             rule: "prose-only".to_owned(),
             verdict: "diff ship early".to_owned(),
             subject: "a.rs,b.rs".to_owned(),
-            head: "0123456789abcdef".to_owned(),
+            anchor: Anchor::Call {
+                head: "0123456789abcdef".to_owned(),
+            },
             epoch: "epoch-1".to_owned(),
             answers: BTreeMap::from([
                 (

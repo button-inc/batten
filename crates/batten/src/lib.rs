@@ -4895,13 +4895,14 @@ fn run_override_spend(
 ) -> Result<ExitCode> {
     let root = Path::new(".");
     // Resolved rather than taken, exactly as `request` resolves them.
-    let head = git::head_commit(root)?;
+    let config = resolve::resolve(root, overrides)?;
+    let anchor = admission_anchor(root, &config, rule, subject).token();
     let (epoch, _) = epoch::describe(root, overrides.config_from.as_deref())?;
     let situation = admission::Situation {
         rule,
         verdict: token,
         subject,
-        head: &head,
+        anchor: &anchor,
         epoch: &epoch,
     };
     match admission::consume(root, admission, &situation)? {
@@ -4978,6 +4979,72 @@ fn run_override_spend(
 ///
 /// Returns a [`error::UsageError`] for an unknown class or a class that declares
 /// no override route, and an internal error when the store cannot be written.
+/// The [`admission::Anchor`] a `(rule, subject)` pair is answered about
+/// (CLOUD-1125).
+///
+/// **Resolved by running the rule, not read from a store and not taken as an
+/// argument.** A store is the wrong source — findings reach it only once `state
+/// record` has run, so a mint would depend on a step nobody performs before
+/// answering a refusal — and an argument would mean widening the CLI to carry an
+/// address the caller did not choose and would have to transcribe. This is the
+/// same scan the gate does, so the two cannot disagree about which finding is
+/// being answered, which is the property the row buys.
+///
+/// **Falls back to [`admission::Anchor::Call`] rather than failing**, and the
+/// fallback is never weaker than what shipped before: a situation with no tree
+/// finding behind it — a mediated refusal, or a protocol-level mint — binds the
+/// HEAD exactly as every binding did, so nothing that worked stops working. What
+/// it cannot do is suppress a tree finding, because `apply_admissions` builds a
+/// `Finding` anchor and the two tokens are tagged apart.
+///
+/// Ambiguity resolves to the fallback for the same reason: two findings sharing
+/// `(rule, path)` mean the pair does not address one of them, and binding either
+/// would suppress something nobody answered about.
+fn admission_anchor(
+    root: &Path,
+    config: &resolve::Resolved,
+    rule: &str,
+    subject: &str,
+) -> admission::Anchor {
+    let head = || admission::Anchor::Call {
+        head: git::head_commit(root).unwrap_or_default(),
+    };
+    // `RunOverSelection`, never `Run`: this is a NARROWED read — one rule, one
+    // subject — and registry equality's exhausted half is a property of the whole
+    // authority. Asking it here would let a mint refuse because some other
+    // module's class is unraised, which is a verdict about the config reported at
+    // a verb that is answering a refusal.
+    let Ok(scan) = rules::run_all_over(
+        &config.rules,
+        &config.provisions,
+        policy::Vocabulary {
+            patterns: &config.patterns,
+            verdicts: &config.verdicts,
+            recorders: &config.recorders,
+        },
+        root,
+        rules::RunOptions {
+            checks: policy::ModuleChecks::RunOverSelection,
+            scope: &rules::Scope::Tree,
+            now: None,
+        },
+    ) else {
+        return head();
+    };
+    let mut matched: Vec<String> = scan
+        .findings
+        .iter()
+        .filter(|finding| finding.rule == rule && finding.path == subject)
+        .map(|finding| finding.identity.fingerprint.to_hex())
+        .collect();
+    matched.sort_unstable();
+    matched.dedup();
+    match matched.len() {
+        1 => admission::Anchor::Finding(matched.remove(0)),
+        _ => head(),
+    }
+}
+
 fn run_override_request(
     rule: &str,
     token: &str,
@@ -5024,7 +5091,7 @@ fn run_override_request(
         return Ok(ExitCode::Usage);
     }
 
-    let head = git::head_commit(root)?;
+    let anchor = admission_anchor(root, &config, rule, subject);
     // The SAME epoch `config epoch` reports, resolved through the same function,
     // so an admission cannot bind a generation the caller could not look up.
     let (epoch, _) = epoch::describe(root, None)?;
@@ -5043,7 +5110,7 @@ fn run_override_request(
         rule: rule.to_owned(),
         verdict: resolved.id.clone(),
         subject: subject.to_owned(),
-        head,
+        anchor,
         epoch,
         answers,
         prev,
@@ -8273,7 +8340,8 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
     let Ok((epoch, _)) = epoch::describe(root, None) else {
         return Ok(decision);
     };
-    let Some(address) = admission::admitted(root, refusal.rule(), class, subject, &head, &epoch)?
+    let anchor = admission::Anchor::Call { head }.token();
+    let Some(address) = admission::admitted(root, refusal.rule(), class, subject, &anchor, &epoch)?
     else {
         return Ok(decision);
     };
@@ -12316,8 +12384,10 @@ fn apply_admissions(
     // COULD NOT LOOK ADMITS NOTHING. Both are resolved exactly as `override
     // request` and `override spend` resolve them, because an admission binds the
     // values those verbs saw and a third spelling here could only disagree.
-    let (Ok(head), Ok((epoch, _))) = (git::head_commit(root), epoch::describe(root, config_from))
-    else {
+    // The HEAD term is gone from this path (CLOUD-1125): a tree finding is
+    // anchored by its own fingerprint, which no commit enters. `epoch` still
+    // resolves here, and could-not-look still admits nothing.
+    let Ok((epoch, _)) = epoch::describe(root, config_from) else {
         return Ok(findings);
     };
 
@@ -12328,8 +12398,9 @@ fn apply_admissions(
             kept.push(finding);
             continue;
         };
+        let anchor = admission::Anchor::Finding(fingerprint.clone()).token();
         let admitted =
-            admission::admitted(root, &finding.rule, class, &finding.path, &head, &epoch)?;
+            admission::admitted(root, &finding.rule, class, &finding.path, &anchor, &epoch)?;
         match admitted {
             Some(address) => output::message(
                 mode,

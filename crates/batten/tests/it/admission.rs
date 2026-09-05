@@ -114,12 +114,14 @@ fn answers(reason: &str) -> BTreeMap<String, String> {
 /// reasoning IS the same admission — but it makes cases interfere, which is how
 /// `a_crash_between_issuance_and_consumption_leaves_the_record_consumable` first
 /// read `Spent`. Every caller below passes a distinct reason.
-fn binding(subject: &str, head: &str, epoch: &str, reason: &str) -> Binding {
+fn binding(subject: &str, anchor: &str, epoch: &str, reason: &str) -> Binding {
     Binding {
         rule: "prose-only".to_owned(),
         verdict: "diff ship early".to_owned(),
         subject: subject.to_owned(),
-        head: head.to_owned(),
+        anchor: batten::admission::Anchor::Call {
+            head: anchor.to_owned(),
+        },
         epoch: epoch.to_owned(),
         answers: answers(reason),
         prev: None,
@@ -128,12 +130,12 @@ fn binding(subject: &str, head: &str, epoch: &str, reason: &str) -> Binding {
 }
 
 /// The situation the binding above was minted for.
-fn situation<'a>(subject: &'a str, head: &'a str, epoch: &'a str) -> Situation<'a> {
+fn situation<'a>(subject: &'a str, anchor: &'a str, epoch: &'a str) -> Situation<'a> {
     Situation {
         rule: "prose-only",
         verdict: "diff ship early",
         subject,
-        head,
+        anchor,
         epoch,
     }
 }
@@ -155,25 +157,25 @@ fn an_admission_bound_to_another_subject_is_refused() {
     )
     .expect("issued");
     assert_eq!(
-        refusal(&root, &issued, &situation("c.rs", "head1", "epoch1")),
+        refusal(&root, &issued, &situation("c.rs", "call:head1", "epoch1")),
         Refused::Unbound
     );
 }
 
 #[test]
-fn an_admission_bound_to_another_head_is_refused() {
+fn an_admission_bound_to_another_anchor_is_refused() {
     // A branch that keeps committing keeps changing what it is asking to
     // release. Without HEAD in the binding, one articulation would cover every
     // later commit on the branch — which is the standing password again, with a
     // longer name.
-    let root = fixture("other-head");
+    let root = fixture("other-anchor");
     let issued = admission::issue(
         &root,
         binding("a.rs", "head1", "epoch1", "the notes wait for a head"),
     )
     .expect("issued");
     assert_eq!(
-        refusal(&root, &issued, &situation("a.rs", "head2", "epoch1")),
+        refusal(&root, &issued, &situation("a.rs", "call:head2", "epoch1")),
         Refused::Unbound
     );
 }
@@ -192,7 +194,7 @@ fn an_admission_does_not_survive_the_config_generation_it_was_taken_under() {
     )
     .expect("issued");
     assert_eq!(
-        refusal(&root, &issued, &situation("a.rs", "head1", "epoch2")),
+        refusal(&root, &issued, &situation("a.rs", "call:head1", "epoch2")),
         Refused::Unbound
     );
 }
@@ -205,7 +207,7 @@ fn a_spent_admission_is_refused_and_the_same_words_reproduce_it() {
     // exist, and overriding the same situation twice costs genuinely different
     // text rather than a second attempt.
     let root = fixture("spent");
-    let situation = situation("a.rs", "head1", "epoch1");
+    let situation = situation("a.rs", "call:head1", "epoch1");
     let issued = admission::issue(&root, binding("a.rs", "head1", "epoch1", "the notes wait"))
         .expect("issued");
 
@@ -230,7 +232,7 @@ fn genuinely_different_answers_are_a_different_address_and_are_issuable() {
     // simply refused every second request for a situation would pass — and
     // re-articulation would be impossible rather than merely expensive.
     let root = fixture("re-articulated");
-    let situation = situation("a.rs", "head1", "epoch1");
+    let situation = situation("a.rs", "call:head1", "epoch1");
     let first = admission::issue(&root, binding("a.rs", "head1", "epoch1", "the notes wait"))
         .expect("issued");
     admission::consume(&root, &first, &situation)
@@ -276,7 +278,7 @@ fn a_record_edited_after_issuance_no_longer_recomputes_and_is_refused() {
     .expect("write");
 
     assert_eq!(
-        refusal(&root, &issued, &situation("a.rs", "head1", "epoch1")),
+        refusal(&root, &issued, &situation("a.rs", "call:head1", "epoch1")),
         Refused::Tampered
     );
 }
@@ -330,7 +332,7 @@ fn a_cycle_cannot_be_constructed_without_breaking_an_address() {
         rule: "prose-only",
         verdict: "diff ship early",
         subject: "a.rs",
-        head: "head1",
+        anchor: "call:head1",
         epoch: "epoch1",
     };
     assert_eq!(
@@ -350,7 +352,7 @@ fn a_prev_that_resolves_to_nothing_is_refused_rather_than_treated_as_a_terminus(
     orphan.prev = Some("0".repeat(64));
     let issued = admission::issue(&root, orphan).expect("issued");
     assert_eq!(
-        refusal(&root, &issued, &situation("a.rs", "head1", "epoch1")),
+        refusal(&root, &issued, &situation("a.rs", "call:head1", "epoch1")),
         Refused::ChainBroken
     );
 }
@@ -363,7 +365,7 @@ fn an_unknown_admission_is_refused_rather_than_minted_on_presentation() {
     let root = fixture("unknown");
     let computed = admission::address(&binding("a.rs", "head1", "epoch1", "never issued"));
     assert_eq!(
-        refusal(&root, &computed, &situation("a.rs", "head1", "epoch1")),
+        refusal(&root, &computed, &situation("a.rs", "call:head1", "epoch1")),
         Refused::Unknown
     );
 }
@@ -397,7 +399,7 @@ fn two_concurrent_consumes_resolve_to_exactly_one_winner() {
                             rule: "prose-only",
                             verdict: "diff ship early",
                             subject: "a.rs",
-                            head: "head1",
+                            anchor: "call:head1",
                             epoch: "epoch1",
                         },
                     )
@@ -439,7 +441,7 @@ fn a_crash_between_issuance_and_consumption_leaves_the_record_consumable() {
     // fresh read of the store finds the record where it was.
     let record = admission::load(&root, &issued).expect("the record survived");
     assert_eq!(record.state, State::Issued);
-    admission::consume(&root, &issued, &situation("a.rs", "head1", "epoch1"))
+    admission::consume(&root, &issued, &situation("a.rs", "call:head1", "epoch1"))
         .expect("the store answered")
         .expect("still consumable after the crash");
 }
@@ -599,7 +601,7 @@ fn a_correctly_answered_override_completes_end_to_end() {
 
 #[test]
 fn an_admission_for_one_class_is_not_presentable_against_another() {
-    // THE ONE BINDING TERM THE CASES ABOVE LEAVE OPEN. Subject, head and epoch
+    // THE ONE BINDING TERM THE CASES ABOVE LEAVE OPEN. Subject, anchor and epoch
     // each have their own case; the class did not, and it is the term that makes
     // `verdict` a required flag rather than something derived from the rule —
     // one rule can refuse under more than one class, and an override earned for
@@ -989,6 +991,14 @@ fn an_issued_admission_that_was_never_spent_admits_nothing() {
 fn an_admission_for_another_subject_admits_nothing() {
     // The harvesting case at the suppression surface: one legitimate override
     // must not clear every finding the same rule raises.
+    //
+    // Under CLOUD-1125's anchor this holds for a second reason worth naming:
+    // `always-refuses` names `a.rs` in the module itself, so its finding is
+    // `Scope`-kind — `(rule, path)`, no span — and a mint for `b.rs` resolves no
+    // finding at all, falling back to a `Call` anchor the tree path cannot match.
+    // Editing `a.rs` is deliberately NOT expected to expire an admission over it:
+    // a scope finding's identity carries no content, which is the identity the
+    // findings store already dedups by rather than a weaker one chosen here.
     let root = admits_fixture("other-subject");
     spend_for(&root, "b.rs", "this case is about the subject term");
 
@@ -1002,29 +1012,61 @@ fn an_admission_for_another_subject_admits_nothing() {
 }
 
 #[test]
-fn an_admission_does_not_survive_the_commit_it_was_taken_against() {
-    // HEAD is in the binding so an override cannot outlive the tree it was
-    // reasoned about. Asserted here at the surface that consumes it, because the
-    // protocol half above proves only that `consume` refuses the presentation.
-    let root = admits_fixture("moved-head");
-    spend_for(&root, "a.rs", "this case is about the head term");
+fn an_admission_does_not_survive_a_change_to_the_finding_it_was_taken_against() {
+    // CLOUD-1125. This case asserted the COMMIT term and is rewritten rather than
+    // deleted, because the guarantee it protects is still wanted — it was bound to
+    // the wrong object. A case deleted to make a change pass is what `mutant` and
+    // the `// carried:` ledger exist to refuse.
+    //
+    // The commit term made the mechanism unusable on a moving `main`: `land`
+    // rebases at step two and runs the gate reading this at step three, so every
+    // admission minted before `land` started was dead before it could be read.
+    // Measured landing PR #726 — seven subjects minted and spent four times.
+    let root = admits_fixture("moved-finding");
+    spend_for(&root, "a.rs", "this case is about the anchor term");
     let admitted = common::run(&root, &["check"]);
     assert_eq!(
         admitted.status.code(),
         Some(batten::exit::ExitCode::Success.code()),
-        "admitted at the head it was taken against: {}",
+        "admitted at the finding it was taken against: {}",
         common::stderr(&admitted)
     );
 
+    // THE REPRODUCTION, and the arm that is red before this change: an unrelated
+    // commit no longer expires it. Nothing about the finding moved, so the answer
+    // is exactly as true as when it was given.
     common::write(&root, "c.rs", "fn later() {}\n");
     common::git_in(&root, &["add", "-A"]);
-    common::git_in(&root, &["commit", "-qm", "move head"]);
-
-    let after = common::run(&root, &["check"]);
+    common::git_in(&root, &["commit", "-qm", "an unrelated commit"]);
+    let moved = common::run(&root, &["check"]);
     assert_eq!(
-        after.status.code(),
-        Some(batten::exit::ExitCode::Violation.code()),
-        "and refuses again once the tree has moved: {}",
-        common::stderr(&after)
+        moved.status.code(),
+        Some(batten::exit::ExitCode::Success.code()),
+        "an unrelated commit is not a change to the finding: {}",
+        common::stderr(&moved)
     );
+}
+
+#[test]
+fn a_mediated_anchor_and_a_finding_anchor_are_not_interchangeable() {
+    // The two arms exist because there are two callers of `admitted`, and the tag
+    // is what stops one answering for the other: a hook refusal answered at a HEAD
+    // must not suppress a tree finding that happens to share its rule and subject.
+    use batten::admission::Anchor;
+
+    let finding = Anchor::Finding("abc123".to_owned());
+    let call = Anchor::Call {
+        head: "abc123".to_owned(),
+    };
+    assert_ne!(
+        finding.token(),
+        call.token(),
+        "the same hex under two kinds must not collide"
+    );
+    assert_eq!(Anchor::parse(&finding.token()), Some(finding));
+    assert_eq!(Anchor::parse(&call.token()), Some(call));
+    // An unreadable tag matches nothing rather than defaulting, which is the
+    // fail-closed direction for a suppression.
+    assert_eq!(Anchor::parse("abc123"), None);
+    assert_eq!(Anchor::parse("sha:abc123"), None);
 }
