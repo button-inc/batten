@@ -867,9 +867,18 @@ pub enum WeakeningKind {
     ///
     /// Monotone by construction: `run_verified` reports a head verified when NO
     /// declared check is unverified, so dropping a name can only remove a way to
-    /// fail. Emptying the table is that move at its limit — and there the verb
-    /// refuses outright rather than passing, which is why the empty case is a
-    /// usage error and this kind covers the shrink above it.
+    /// fail. Emptying the table is that move at its limit — and there
+    /// [`crate::receipt::verified_by`] FALLS BACK to
+    /// [`crate::receipt::VERIFIED_BY`] rather than refusing, so the empty case
+    /// demands the default body of evidence instead of none.
+    ///
+    /// **This said the empty case was a usage error** (review of #848), which was
+    /// the first draft's behaviour and not the landed one. The correction does
+    /// not move this kind's boundary: emptying the table still weakens the set
+    /// this consumer declared, and the fallback is what stops that weakening
+    /// reaching a vacuous pass.
+    ///
+    /// So this kind covers the shrink, and the fallback covers the limit.
     VerifiedCheckRemoved,
 }
 

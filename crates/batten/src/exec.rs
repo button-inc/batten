@@ -1678,25 +1678,37 @@ impl Diagnostics {
 /// `None` is could-not-look, collapsed for [`piped`]'s reason: unresolvable, a
 /// broken pipe, and a child that died without a code are all "no answer", and no
 /// caller can act differently on which.
-pub(crate) fn piped_argv(root: &Path, argv: &[String], stdin: &str) -> Option<(i32, String)> {
+///
+/// # [`Diagnostics`] IS THE CALLER'S, and hardcoding it here was the same defect
+/// one layer up
+///
+/// This entry point pinned [`Diagnostics::Keep`] because the LANDING GATES need
+/// their refusal reason: their verdict is the exit code and the coordinate is on
+/// stderr, so dropping it left `Readied::Refused { detail }` empty and the
+/// operator reading a refusal with nowhere to look.
+///
+/// **But the same entry point also fetches the pull request's BODY** (review of
+/// #848), and there the returned string is PARSED rather than shown. A forge
+/// client's notice on stderr — an auth warning, a deprecation, a proxy line —
+/// was folded into the body, which defeats `land::ready`'s empty-body pass and
+/// runs the body gates over text nobody wrote. [`Diagnostics`]' own doc forbids
+/// `Keep` for a caller that parses.
+///
+/// That is [`piped`]'s history repeated: one shared spawn changed to fix one
+/// caller's symptom, breaking the callers that read the stream. The answer is the
+/// same both times — the call site says which it wants.
+pub(crate) fn piped_argv(
+    root: &Path,
+    argv: &[String],
+    stdin: &str,
+    diagnostics: Diagnostics,
+) -> Option<(i32, String)> {
     let (program, operands) = argv.split_first()?;
     // `Some(root)`, where [`piped`] passes `None`: the first word here is a NAME
     // the ladder resolves, so rung 3 needs a directory to read a shebang out of.
     // That one argument IS the difference between the two entry points, which is
     // why they share [`piped_through`] and not a signature.
-    // `Keep`: this entry point serves the LANDING GATES, whose refusal reason is
-    // written to stderr and is the whole of what the operator needs. Both
-    // consumer gates on this path do that (their verdict is the exit code), so a
-    // dropped stderr left `Readied::Refused { detail }` empty and the operator
-    // reading a refusal with no coordinate.
-    piped_through(
-        root,
-        Some(root),
-        program,
-        operands,
-        stdin,
-        Diagnostics::Keep,
-    )
+    piped_through(root, Some(root), program, operands, stdin, diagnostics)
 }
 
 /// This process's next dispatch number, for the live-capture key.

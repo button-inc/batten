@@ -152,7 +152,17 @@ pub(crate) fn advance(
 /// One spelling, because [`tracking_ref`] writes into it and [`prune`] deletes
 /// out of it: a prune keyed to a different prefix than the writer uses either
 /// deletes nothing or deletes the writer's own refs.
-const TRACKING_PREFIX: &str = "refs/remotes/origin/";
+///
+/// **THE PREFIX AND THE ADVERTISEMENT MUST NAME THE SAME REMOTE** (review of
+/// #848). This was a `const` reading `origin` while `advance` fetched from
+/// `$LAND_LOCK_REMOTE`, so a consumer whose landing remote is not `origin` had
+/// its FIRST lap delete every `origin/*` tracking ref that other remote does not
+/// advertise — a prune is destructive, so the mismatch is not a no-op in the
+/// forgiving direction. [`crate::lease::remote_name`] is the one authority on
+/// which remote that is, and every sibling already reads it.
+fn tracking_prefix() -> String {
+    format!("refs/remotes/{}/", crate::lease::remote_name())
+}
 
 /// Delete the tracking refs the remote no longer advertises.
 ///
@@ -175,7 +185,7 @@ fn prune(root: &Path, advertised: &[String]) {
     let Ok(local) = crate::git::refs(root) else {
         return;
     };
-    for reference in stale_tracking(&local, advertised, TRACKING_PREFIX) {
+    for reference in stale_tracking(&local, advertised, &tracking_prefix()) {
         let _ = gitwrite::delete_ref(root, &reference);
     }
 }
@@ -267,7 +277,7 @@ pub fn replay(root: &Path, remote: &str, reference: &str, branch: &str) -> Resul
 /// PREFIX, NEVER EVERY LEADING ONE" — and uses `strip_prefix` for it. A short
 /// name passes through unchanged, which is what the driver hands in.
 pub(crate) fn tracking_ref(reference: &str) -> String {
-    format!("{TRACKING_PREFIX}{}", short_ref(reference))
+    format!("{}{}", tracking_prefix(), short_ref(reference))
 }
 
 /// A branch's SHORT name — the whole of it, slashes included.
@@ -1260,7 +1270,9 @@ pub fn ready(root: &Path, gates: &[Vec<String>], body: &str) -> Readied {
         // is identical across every possible finding is not a pointer (review of
         // #848).
         let gate = argv.join(" ");
-        let Some((code, output)) = crate::exec::piped_argv(root, argv, body) else {
+        let Some((code, output)) =
+            crate::exec::piped_argv(root, argv, body, crate::exec::Diagnostics::Keep)
+        else {
             return Readied::Unrunnable { gate };
         };
         if code != 0 {
@@ -1447,7 +1459,9 @@ pub fn admits_the_landing(root: &Path, gates: &[Vec<String>], pr: &str) -> Admit
         // run rather than as this engine's own spelling (review of #848).
         let gate = with_pr.join(" ");
         with_pr.push(pr.to_owned());
-        let Some((code, output)) = crate::exec::piped_argv(root, &with_pr, "") else {
+        let Some((code, output)) =
+            crate::exec::piped_argv(root, &with_pr, "", crate::exec::Diagnostics::Keep)
+        else {
             // AN ADVISORY GATE THAT WILL NOT RUN IS NOT A REFUSAL EITHER, which
             // is the same reading one line down rather than a separate decision:
             // `|| true` swallowed an unrunnable command exactly as it swallowed a

@@ -791,13 +791,29 @@ pub struct Receipt {
     /// core, which is the rule's plainest shape. A different adopter's gates are
     /// not called those things, and nothing in the engine could tell them so.
     ///
-    /// # UNDECLARED REFUSES, and it must
+    /// # UNDECLARED FALLS BACK, and this doc said it refused
     ///
-    /// An empty set would make `receipt verified` pass over every head, since
-    /// *nothing is unverified* when nothing is required — a gate that answers
-    /// clean because it was never told what to ask. `LAND_WORKFLOW` takes the
-    /// same posture at its own site and for the same reason: the optional thing
-    /// is a body-gate list, and this is the step.
+    /// The hazard is real and unchanged: an empty set would make
+    /// `receipt verified` pass over every head, since *nothing is unverified*
+    /// when nothing is required — a gate that answers clean because it was never
+    /// told what to ask. What closes it is a fallback rather than a refusal.
+    /// [`crate::receipt::verified_by`] resolves an undeclared or empty table to
+    /// [`crate::receipt::VERIFIED_BY`], and its own header records why the first
+    /// draft's usage error could not stand: it refused over a fixture repository
+    /// with no `batten.toml` and no interest in receipts, and that suite's
+    /// subject survives, so the only way to land the refusal was to edit around
+    /// a gate that was right.
+    ///
+    /// The fallback is strictly more general than the `const` it replaced and
+    /// costs an adopter nothing — our names over their receipts resolve to
+    /// `Missing`, so `verified` refuses loudly on their first run rather than
+    /// passing quietly. A wrong answer that announces itself is the acceptable
+    /// failure; a silent one is not.
+    ///
+    /// **Stated here because a field's doc is where a reader looks for what an
+    /// absent key does** (review of #848), and this one asserted a refusal the
+    /// code does not make — with `trust.rs`'s `VerifiedCheckRemoved` repeating
+    /// it, which is how one false premise became two.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verified_by: Vec<String>,
 }

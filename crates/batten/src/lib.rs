@@ -7338,8 +7338,22 @@ fn run_land_verify(
 /// [`land::Refusal::Tree`], which is the advice that was always given and is
 /// right in the common case. A config this cannot read must not turn a refused
 /// gate into a second failure on top of it.
+///
+/// **ANCHORED AT THE REPOSITORY ROOT, never at the caller's directory** (review
+/// of #848). `root` is the cwd the verb was invoked from, so anchoring there
+/// looked for `batten.toml` beside wherever the operator happened to stand — and
+/// `authority_site` with no `config_in` is `required: false`, so a miss is an
+/// EMPTY TABLE at exit 0 rather than a refusal. Every `[[verify_environment_pattern]]`
+/// row then silently did not load and every refusal classified as
+/// `Refusal::Tree`, which is CLOUD-861's misattribution restored by the safe
+/// direction above. `land::verify` next door already resolves the root, and this
+/// PR fixed the same class for `receipt::run_verified`.
+///
+/// A root that will not resolve falls back to the anchor: this function's whole
+/// posture is that a reading it cannot take yields no rows rather than an error.
 fn verify_environment(root: &Path) -> Vec<outputs::OutputPattern> {
-    let site = config::authority_site(root, None);
+    let anchor = git::repo_root(root).unwrap_or_else(|_| root.to_path_buf());
+    let site = config::authority_site(&anchor, None);
     config::load_site(&site)
         .ok()
         .map(|(loaded, _)| loaded.verify_environment_patterns)
@@ -7721,7 +7735,10 @@ fn run_land_ready(
         let source = std::env::var("LAND_BODY_SOURCE").unwrap_or_default();
         let body = land::body_gates(&source)
             .first()
-            .and_then(|argv| exec::piped_argv(root, argv, ""))
+            // `Drop`: this string is PARSED as the body, so a client's notice
+            // on stderr would become text the author never wrote. The gates
+            // below take `Keep`, because their stderr IS their reason.
+            .and_then(|argv| exec::piped_argv(root, argv, "", exec::Diagnostics::Drop))
             .filter(|(code, _)| *code == 0)
             .map(|(_, body)| body)
             .unwrap_or_default();
@@ -8949,7 +8966,7 @@ fn note_release(root: &Path) {
     let Some(argv) = land::body_gates(&declared).into_iter().next() else {
         return;
     };
-    let _ = exec::piped_argv(root, &argv, "");
+    let _ = exec::piped_argv(root, &argv, "", exec::Diagnostics::Keep);
 }
 
 /// `lease release`: a tombstone, never a delete.
