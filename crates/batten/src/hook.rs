@@ -6942,8 +6942,14 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
         return Decision::Allow;
     };
     for segment in parsed {
-        {
-            let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+        // PER CONSTITUENT COMMAND, never per segment (CLOUD-1287). A segment may
+        // span a newline, and `cd /tmp` on line one must not be resolved as the
+        // program owning line two's operands — measured over the shipped binary
+        // as `stat -c %s batten.toml` allowed bare and REFUSED after a `cd`,
+        // naming `cd`. `lines` is the parse's own split, so this needs no
+        // re-tokenizing of `raw`.
+        for words in &segment.lines {
+            let tokens: Vec<&str> = words.iter().map(String::as_str).collect();
             // Operands of the effective program, plus any redirect target. Both are
             // candidates; a redirect needs no program at all.
             let mut candidates: Vec<Target<'_>> = Vec::new();
@@ -7431,6 +7437,25 @@ struct Segment {
     /// is not a redirection — and heredoc BODIES are gone by the time this is
     /// set, so prose in a body cannot set it either.
     input_redirect: bool,
+    /// Each CONSTITUENT command's own words, where a newline joined several into
+    /// this one segment.
+    ///
+    /// **Two things need to stay apart here and collapsing them is a defect in
+    /// both directions** (CLOUD-1287, and CLOUD-1381 which re-made the mistake).
+    /// A newline is whitespace for SEGMENT identity, because promoting it would
+    /// move every landed `verdict-not-discarded` verdict — `mise run verify` and
+    /// `| tail -1` on the next line is one segment, so the pager still discards
+    /// the status and the call is still refused. But it is a boundary for
+    /// PROGRAM identity, because `cd /tmp` on line one must not own line two's
+    /// operands; that was measured as `stat` refused while naming `cd`.
+    ///
+    /// So the segment spans the newline and this carries the per-command split
+    /// the mutation and unknown-program walks read. It is derived from the parse
+    /// rather than by re-splitting `raw`, which is what the walk had to do.
+    ///
+    /// Not projected to the policy input: no module asks this, and adding a key
+    /// no predicate reads would be schema surface with no consumer.
+    lines: Vec<Vec<String>>,
 }
 
 /// The shell operator between two segments — what happens to the first one's
@@ -7470,6 +7495,22 @@ impl Separator {
             Self::And => "&&",
             Self::Background => "&",
         }
+    }
+}
+
+impl Segment {
+    /// Fold a command a NEWLINE joined to this one into it.
+    ///
+    /// `words` concatenates, because segment identity spans the newline; `lines`
+    /// keeps them apart, because program identity does not. That asymmetry is
+    /// the whole reason both fields exist — see [`Segment::lines`].
+    fn absorb(&mut self, other: Self) {
+        self.words.extend(other.words);
+        self.lines.extend(other.lines);
+        self.raw.push('\n');
+        self.raw.push_str(&other.raw);
+        self.terminator = other.terminator;
+        self.input_redirect = self.input_redirect || other.input_redirect;
     }
 }
 
@@ -7542,9 +7583,29 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
     if !covered(&nodes, command) {
         return crate::facts::Look::CouldNotLook;
     }
-    let mut out = Vec::new();
+    let mut out: Vec<Segment> = Vec::new();
     for node in &nodes {
-        flatten(node, command, None, &mut out);
+        let mut produced: Vec<Segment> = Vec::new();
+        flatten(node, command, None, &mut produced);
+        // A NEWLINE IS WHITESPACE FOR SEGMENT IDENTITY, and this is where that
+        // is preserved across the swap. `rable` returns one top-level node per
+        // line, which is what bash does and what this engine deliberately does
+        // NOT do: promoting a newline to a `Separator::Semi` moves every landed
+        // `verdict-not-discarded` verdict, and `mediated_verbs`'s
+        // `a_newline_did_not_become_a_separator` is the case that notices.
+        //
+        // Only the FIRST command of each node joins: a node's own `&&`, `|` and
+        // `;` already made real segments below, and folding those together would
+        // undo the structure the parser just recovered.
+        match (out.last_mut(), produced.first()) {
+            (Some(previous), Some(_)) if previous.terminator.is_none() => {
+                let mut rest = produced.split_off(1);
+                let head = produced.remove(0);
+                previous.absorb(head);
+                out.append(&mut rest);
+            }
+            _ => out.append(&mut produced),
+        }
     }
     crate::facts::Look::Is(out)
 }
@@ -7647,6 +7708,7 @@ fn flatten(node: &rable::Node, source: &str, after: Option<Separator>, out: &mut
                 spelled.extend(redirect_words(redirect, source));
             }
             let mut segment = Segment {
+                lines: vec![spelled.clone()],
                 words: spelled,
                 raw: node.source_text(source).to_owned(),
                 terminator: after,
@@ -13859,22 +13921,37 @@ deny contains "refused by themodule" if {
         }
     }
 
-    /// **CLOUD-1287's over-deny, gone by construction.**
+    /// **The two halves of a newline, which must not be collapsed either way.**
     ///
-    /// Measured over the shipped binary at the time: `stat -c %s batten.toml`
-    /// was allowed and the identical `stat` written on line two after `cd /tmp`
-    /// was REFUSED, naming `cd` — because a segment was a text span, so one
-    /// segment resolved the FIRST line's program for every operand on every
-    /// line. `line_bounded_words` existed to paper over exactly that, and is
-    /// deleted with this change: a parser gives each command its own operands,
-    /// so there is nothing left to re-split.
+    /// CLOUD-1287 measured the first half over the shipped binary:
+    /// `stat -c %s batten.toml` was allowed and the identical `stat` written on
+    /// line two after `cd /tmp` was REFUSED, naming `cd` — because a segment was
+    /// a text span, so one segment resolved the FIRST line's program for every
+    /// operand on every line. So program identity is per line.
+    ///
+    /// And `mediated_verbs::a_newline_did_not_become_a_separator` pins the
+    /// second half: segment identity is NOT per line, because promoting a
+    /// newline moves every landed `verdict-not-discarded` verdict.
+    ///
+    /// Both are asserted here together because the tempting simplification —
+    /// one segment per parsed line — satisfies the first and breaks the second,
+    /// and is exactly what this change did before the suite caught it.
     #[test]
-    fn each_line_of_a_multi_line_call_keeps_its_own_program() {
+    fn a_newline_splits_the_program_but_not_the_segment() {
         let parsed = parsed_ok("cd /tmp\nstat -c %s batten.toml");
-        assert_eq!(parsed.len(), 2, "two commands, two segments");
-        assert_eq!(parsed[0].words[0], "cd");
         assert_eq!(
-            parsed[1].words[0], "stat",
+            parsed.len(),
+            1,
+            "a newline is whitespace for segment identity: {parsed:?}"
+        );
+        assert_eq!(
+            parsed[0].lines.len(),
+            2,
+            "and a boundary for program identity"
+        );
+        assert_eq!(parsed[0].lines[0][0], "cd");
+        assert_eq!(
+            parsed[0].lines[1][0], "stat",
             "the second line's operand belongs to the second line's program"
         );
     }
