@@ -3808,6 +3808,56 @@ fields = [
   "project",
 ]
 
+# THE LIST-SIDE REDUCTION (CLOUD-1380). `list_issues` had no row and the verb said
+# so on every call — `undeclared — stored 17,313 bytes, emitted 20,366`. MORE OUT
+# THAN IN, because an undeclared result is handed back re-serialised rather than
+# reduced, and a list response is inherently the widest of the three.
+#
+# `reduce = "each"` RATHER THAN `project`, and the arm had to be built before this
+# row could be written. `project` does one flat field-pick against the node it is
+# given: naming `issues` selects an ARRAY, every field lookup against it misses,
+# and the projection is empty; leaving `node` at the root keeps `issues` whole and
+# reduces nothing. `acknowledge` refuses a container outright, so it would drop the
+# array and leave the verb unable to answer the one question a search asks.
+#
+# THE FIELD SET IS NOT CHOSEN FOR SIZE, which is the constraint that decides it.
+# `graph-check` reads `id`, `status`, `description`, `projectMilestone` and
+# `parentId`, and CLOUD-1151's wave ports it onto the capture store — so a
+# projection trimmed to the smallest thing that still looks like a search result
+# would leave that gate quietly unjudgeable rather than red.
+#
+# `description` EARNS ITS PLACE FOR THE SAME REASON, against the obvious objection.
+# `.claude/rules/toolchain.md` records that a list response TRUNCATES it, which
+# makes a projected `list_issues` an invalid input to `spec-ref-check` — that is a
+# statement about CLAUSE citation, which needs the whole body, and says nothing
+# about the presence-and-shape reads every other consumer does. Reading it as a
+# prohibition is the generalisation CLOUD-1380's own body records itself making.
+#
+# `title` and `url` are the identity half — what a human reads to know which row
+# matched — and `filing-needs-a-search` is the consumer that must not be blinded: a
+# reduction emitting only `hasNextPage` would satisfy every size predicate and
+# destroy the verb's purpose.
+#
+# `hasNextPage` AND `cursor` ARE NOT DECLARED AND ARRIVE ANYWAY. They are scalar
+# siblings of the array, carried by the arm itself, because they are what make the
+# page size a thing the caller controls — and this arm's bound is the page rather
+# than the declaration. Declaring them as `fields` would instead look them up on
+# every ELEMENT, where they do not exist, and they would be absent from every row.
+[[mcp.result]]
+method = "list_issues"
+reduce = "each"
+node = "issues"
+fields = [
+  "id",
+  "title",
+  "status",
+  "description",
+  "projectMilestone",
+  "parentId",
+  "url",
+  "updatedAt",
+]
+
 # CLOSING THE RAW READ PATH, as the gate `connector-not-granted` structurally
 # cannot be (CLOUD-1264). That row asserts what this repository's own committed
 # `.claude/settings.json` grants, and its module says in as many words that

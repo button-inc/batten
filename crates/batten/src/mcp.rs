@@ -456,6 +456,42 @@ pub enum Reduce {
     /// bound borrowed from a surface with a different threat model is how a
     /// reduction quietly stops answering the question it was built for.
     Acknowledge,
+    /// [`Reduce::Project`], applied to EVERY element of an array node.
+    ///
+    /// The list-side answer (CLOUD-1380). The other two arms do one flat
+    /// field-pick against the node a row names, so a response whose payload is an
+    /// array of objects is unreducible by either: naming the array as `node` makes
+    /// every field lookup miss, and leaving `node` at the root keeps the array
+    /// whole and reduces nothing. Measured before this arm existed, a
+    /// `list_issues` call reported `undeclared` and **emitted 20,366 bytes against
+    /// 17,313 stored** — more out than in, because an undeclared result is handed
+    /// back re-serialised rather than reduced.
+    ///
+    /// `node` names the array and the declared `fields` are read from each
+    /// element, so one row describes both halves and no second field vocabulary
+    /// appears. The projected elements come back under the array's own key, which
+    /// is what lets a consumer read the reduction by the path it reads the
+    /// response by.
+    ///
+    /// # Its bound is a different KIND from the other two, stated rather than
+    /// absorbed
+    ///
+    /// `project` and `acknowledge` are bounded by the DECLARATION alone: a field
+    /// nobody named never leaves the store, so the reduction's size is fixed
+    /// whatever the payload holds. This arm is bounded per element by the
+    /// declaration and **in count by the page the caller asked for** — a function
+    /// of the request rather than of the response. That is weaker than the other
+    /// two, and it is the enum's contract met rather than dodged: no row can
+    /// declare a reduction that yields the payload back, but a caller asking for a
+    /// thousand rows does get a thousand projected rows.
+    ///
+    /// Which is why the scalar siblings are carried and containers are not:
+    /// `hasNextPage` and `cursor` are what make the page size a thing the caller
+    /// controls, so dropping them would leave paging unanswerable — the reduction
+    /// would satisfy every size predicate by destroying the one mechanism that
+    /// bounds it. A container sibling is refused for [`Reduce::Acknowledge`]'s
+    /// reason exactly: a shape whose size the caller did not bound.
+    Each,
 }
 
 /// Refuse a `[mcp.source.credential]` row that cannot mean one thing.
@@ -1214,6 +1250,14 @@ pub fn reduce(
         at
     };
 
+    // THE ARRAY ARM RETURNS EARLY, because its subject is the node's ELEMENTS
+    // where every other arm's is the node itself. Folding it into the field loop
+    // below would mean iterating fields at the top and elements underneath, which
+    // is the same projection written twice.
+    if row.reduce == Reduce::Each {
+        return each(row, payload, &document);
+    }
+
     let mut kept = serde_json::Map::new();
     for field in &row.fields {
         let Look::Is(node) = payload.at(field) else {
@@ -1238,9 +1282,95 @@ pub fn reduce(
                 }
                 kept.insert(field.clone(), serde_json::Value::String(text));
             }
+            // UNREACHABLE — the array arm returned before this loop. `continue`
+            // rather than a panic: library code may not panic on a reachable
+            // path, and an impossible branch that keeps nothing is the safe
+            // direction if this ever stops being impossible.
+            Reduce::Each => continue,
         }
     }
     Some(kept)
+}
+
+/// [`Reduce::Each`]: the declared fields projected over every element of `at`.
+///
+/// **A node that is not a list yields `None`**, which the caller reports as
+/// could-not-look and answers by passing the response through whole. That is the
+/// same fail-open-loudly posture [`reduce`] documents, and it matters more here:
+/// a row whose `node` names a map would otherwise reduce to an empty array, and
+/// an empty page is a perfectly ordinary answer — so the broken row and the
+/// genuinely empty search would be byte-identical on the decision surface.
+///
+/// The projected elements come back under the array's own final path segment, so
+/// a row declaring `node = "issues"` answers under `issues`. A row whose `node`
+/// is empty — the payload IS the array — has no key to borrow and answers under
+/// [`ITEMS`], because inventing a name from nothing is worse than declaring one.
+fn each(
+    row: &ResultRow,
+    at: &Node,
+    document: &Node,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let Node::List(items) = at else {
+        return None;
+    };
+    let projected = items
+        .iter()
+        .map(|item| {
+            let mut kept = serde_json::Map::new();
+            for field in &row.fields {
+                // ABSENT RATHER THAN NULL, per element, which is the same
+                // contract `reduce` holds for a whole payload — so a caller
+                // reading one projected element cannot tell whether it came from
+                // here or from a `project` row over a single result.
+                if let Look::Is(node) = item.at(field) {
+                    kept.insert(field.clone(), node.to_json());
+                }
+            }
+            serde_json::Value::Object(kept)
+        })
+        .collect();
+
+    let mut out = serde_json::Map::new();
+    out.insert(items_key(&row.node), serde_json::Value::Array(projected));
+
+    // THE SCALAR SIBLINGS, from the array's PARENT rather than from the array.
+    // Paging lives beside the page — `{cursor, hasNextPage, issues: [...]}` — so
+    // a reduction that returned only the projected array would answer the search
+    // and lose the means to ask for the rest of it.
+    //
+    // Read from `document` rather than from `at`, and only where the row named a
+    // node inside it: `embedded` re-parses a scalar into a tree of its own, whose
+    // parent is not addressable from here, and a row whose `node` is empty has no
+    // parent at all. Both answer no siblings rather than a guess.
+    if !row.embedded && !row.node.is_empty() {
+        let parent = row.node.rsplit_once('.').map_or("", |(head, _)| head);
+        if let Look::Is(Node::Map(map)) = document.at(parent) {
+            for (key, node) in map {
+                // Scalars only, and bounded, for `Reduce::Acknowledge`'s reason:
+                // a container beside the page is a shape whose size the caller
+                // did not bound, and this arm has no declaration covering it —
+                // the row's `fields` describe an ELEMENT, not the envelope.
+                let Some(text) = node.scalar() else { continue };
+                if text.is_empty() || text.len() > TOKEN_MAX {
+                    continue;
+                }
+                out.insert(key.clone(), node.to_json());
+            }
+        }
+    }
+    Some(out)
+}
+
+/// The key a [`Reduce::Each`] row's projected elements come back under when its
+/// `node` names no path.
+const ITEMS: &str = "items";
+
+/// The final segment of `node`, or [`ITEMS`] where it names nothing.
+fn items_key(node: &str) -> String {
+    node.rsplit('.')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(ITEMS)
+        .to_owned()
 }
 
 /// The JSON-RPC version every request carries.
