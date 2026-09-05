@@ -270,3 +270,47 @@ fn this_repositorys_own_list_issues_row_loads_and_declares_each() {
         );
     }
 }
+
+#[test]
+fn an_undeclared_scalar_sibling_is_not_emitted() {
+    // CodeRabbit on #879, and it is rule 4 decided by a byte count. The sibling
+    // walk kept every scalar beside the array that was non-empty and under
+    // `TOKEN_MAX` — but bounded-and-scalar is a SIZE test, not an authorization,
+    // and the row's `fields` declare an ELEMENT, so nothing in a consumer's config
+    // covers the envelope at all. A connector putting `account_email` beside its
+    // page had it emitted on the strength of being short.
+    //
+    // The allowlist is what makes the envelope a reviewable set. Adding a paging
+    // key is a diff; a server adding a field is not.
+    let mut document = page();
+    let map = document.as_object_mut().expect("the page is an object");
+    map.insert(
+        "account_email".to_owned(),
+        serde_json::json!("someone@example.test"),
+    );
+    map.insert("workspaceId".to_owned(), serde_json::json!("ws-1"));
+
+    let payload = mcp::payload(&framed(&document));
+    let reduced = mcp::reduce(&row(LIST_ROW), &payload.value).expect("the row reaches its node");
+
+    assert!(
+        !reduced.contains_key("account_email"),
+        "an undeclared sibling must not ride out on the envelope: {reduced:?}"
+    );
+    assert!(!reduced.contains_key("workspaceId"));
+
+    let rendered = serde_json::to_string(&reduced).expect("the reduction renders");
+    assert!(
+        !rendered.contains("someone@example.test"),
+        "and it must not appear anywhere in the rendered reduction"
+    );
+
+    // THE ANTI-VACUITY HALF, in the same case because the two are one property:
+    // an allowlist that dropped the paging keys too would pass every assertion
+    // above and silently break paging, which arm 3 exists to prevent.
+    assert_eq!(reduced.get("hasNextPage"), Some(&serde_json::json!(true)));
+    assert_eq!(
+        reduced.get("cursor"),
+        Some(&serde_json::json!("eyJvIjoyfQ"))
+    );
+}
