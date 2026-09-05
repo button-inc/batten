@@ -6764,8 +6764,8 @@ root = "target"
 keep = 2
 
 [prune.warm]
-mb = 9472
-worst_mb = 9472
+mb = 15898
+worst_mb = 15898
 multiplier = 1
 measured = "2026-09-05"
 
@@ -6835,6 +6835,29 @@ measured = "2026-09-05"
 # trust this line. Warm: 8971 at 197 stems is 45.54 per stem, and 45.54 x 208 is
 # 9472. Cold: 21455 at 197 is 108.91 per stem, and 108.91 x 208 is 22653. Neither
 # is an independent measurement.
+#
+# AND ON THE SAME DAY THE WARM FLOOR BECAME AN OBSERVED ONE, which is the first
+# time any entry in this block has been able to write that sentence. Every move
+# above scales the stem model and then says plainly that it took no measurement;
+# the ratchet took one. A lap on `80d25ece` consumed 15898MB and the journal
+# raised its warm observation to that, uncapped — so the derived 9472 above was
+# 6426MB low, and low is the direction this block already names as the one that
+# fails silently.
+#
+# The declared floor is a SEED and a lower bound rather than the whole answer, and
+# the journal that holds the observation is per-clone: it lives in
+# `$GIT_DIR/batten-prune/laps.json`, which no clone inherits. So leaving 9472
+# committed does not mean "the ratchet handles it" — it means every fresh
+# container is admitted under a floor 6.4GB below what a lap here actually
+# consumes, and re-learns it only after a lap has already run under it. Promoting
+# the observation is what makes the seed agree with the instrument.
+#
+# Cold does NOT move with it and the asymmetry is deliberate: the journal carries
+# `"cold": null`, because cold is judged only when the escalation drops the cache
+# and no lap here reached that. Scaling cold to keep the two in the stem model's
+# proportion would be re-deriving a number FROM an observation that says nothing
+# about it — the same staleness wearing a newer basis. Cold keeps its derivation
+# and its disclosure until a lap measures it.
 #
 # THE 2026-09-02 MOVE, 164 -> 175, and it is DERIVED like the two before it.
 # `[[startup]]`'s two suites plus `obligations_bound` took the live count 11 past
