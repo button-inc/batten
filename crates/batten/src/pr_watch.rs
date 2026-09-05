@@ -173,7 +173,15 @@ pub fn interval_for(configured: u64, floor: Option<f64>) -> f64 {
         // the answer would be an infinite wait, which is the hang the
         // predecessor's `+0` coercion existed to refuse. A floor nobody can
         // satisfy is no floor.
-        Some(floor) if floor.is_finite() && floor > configured => floor.min(MAX_FLOOR),
+        // AND THE CEILING NEVER REDUCES THE CONFIGURED INTERVAL. `MAX_FLOOR` is a
+        // bound on what the SERVER may add, not a bound on what the caller asked
+        // for: with `configured` above it, a raw `min(MAX_FLOOR)` answered BELOW
+        // the interval this poll was told to use — the one direction this
+        // function must never take, since `Config::interval` is the caller's
+        // floor and nothing here is entitled to lower it.
+        Some(floor) if floor.is_finite() && floor > configured => {
+            floor.min(MAX_FLOOR.max(configured))
+        }
         _ => configured,
     }
 }
@@ -297,27 +305,6 @@ impl Poll {
         line.clone_into(&mut self.announced);
         Ok(())
     }
-}
-
-/// The request this poll makes, as argv.
-///
-/// Built rather than formatted at the call site so the page size and the
-/// conditional header are one object a test can read.
-#[must_use]
-pub fn request(config: &Config, etag: Option<&str>) -> Vec<String> {
-    let mut args = vec![
-        String::from("api"),
-        String::from("-i"),
-        format!(
-            "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}",
-            config.repo, config.sha
-        ),
-    ];
-    if let Some(etag) = etag {
-        args.push(String::from("-H"));
-        args.push(format!("If-None-Match: {etag}"));
-    }
-    args
 }
 
 /// Poll until the required checks answer.
@@ -764,6 +751,19 @@ mod tests {
     fn a_floor_beyond_the_ceiling_is_clamped_and_one_at_it_is_honoured() {
         assert!(is(interval_for(1, Some(MAX_FLOOR)), MAX_FLOOR));
         assert!(is(interval_for(1, Some(MAX_FLOOR * 100.0)), MAX_FLOOR));
+
+        // AND THE CEILING NEVER CUTS BELOW WHAT THE CALLER CONFIGURED. With an
+        // interval above `MAX_FLOOR`, a raw `min` answered 300 for a poll told
+        // to wait 600 — the ceiling reducing the caller's own floor, which is
+        // the one direction this function may never take. Found in review.
+        assert!(
+            is(interval_for(600, Some(700.0)), 600.0),
+            "a configured interval above the ceiling is never reduced by it"
+        );
+        assert!(
+            is(interval_for(600, None), 600.0),
+            "and the same interval with no floor at all is unchanged"
+        );
         // And an ordinary floor is untouched, so the clamp discriminates.
         assert!(is(interval_for(1, Some(4.0)), 4.0));
     }

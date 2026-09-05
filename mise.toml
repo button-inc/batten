@@ -352,9 +352,21 @@ CARGO_TERM_COLOR = "always"
 #
 # A path entry rather than `cargo run --quiet -p batten --` in each body, which
 # was the other candidate: `alive` exists to answer WHILE something else is
-# building, and `cargo run` would block on the target-dir lock exactly then. A
-# clean checkout with no build still fails loudly — `batten: command not found`
-# is an honest report, where the wrong binary is not.
+# building, and `cargo run` would block on the target-dir lock exactly then.
+#
+# WHAT THIS DOES NOT DO, and the previous wording claimed the opposite. It said a
+# clean checkout with no build "still fails loudly — `batten: command not found`
+# is an honest report". That is FALSE: `_.path` PREPENDS, so an absent
+# `target/release/batten` falls through to whatever `~/.local/bin` holds — the
+# stale binary this entry exists to stop being reached. A false assurance is
+# worse than a stated gap, which is this repository's own recurring lesson.
+#
+# The compensating control is provisioning rather than resolution:
+# `[tasks."session:batten"]` runs `install:local`, which BUILDS the release
+# binary at session start and reports an `::error::` with a log pointer when it
+# cannot. So the ordinary session has the tree's own binary before any task runs,
+# and a session that does not has already said so out loud. Making the fallback
+# itself refuse needs a mechanism `_.path` has no spelling for. Found in review.
 _.path = ["tests/bats/bin", "target/release"]
 # The checks that carry a verdict about THIS repository, named exactly as GitHub
 # names their check-runs (the matrix leg's suffix included). Shared by `ci-wait`
@@ -3085,7 +3097,13 @@ case "$rc" in
   echo "  Run \`mise run verify\` and read its exit status directly; never through a pipe, which reports the pipe's status. Then re-run \`mise run verified\`." >&2
   exit 1
   ;;
-1) exit 2 ;;
+# BOTH ENGINE FAILURE CODES REACH THE PREDECESSOR'S ONE. The old table had no
+# usage code of its own — `2` was could-not-look and covered every way the
+# question went unanswered — so the engine's `1` (usage) and `3` (internal /
+# could-not-look) both land there. Leaving `3` to the catch-all below handed a
+# legacy caller a code its own table never defined, which is the translation
+# this shim exists to do. Found in review.
+1 | 3) exit 2 ;;
 *) exit "$rc" ;;
 esac
 '''

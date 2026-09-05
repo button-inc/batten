@@ -833,6 +833,12 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   after it, and a composition with no commit point at all — and returns every
   finding rather than the first. `Step::FastForward` is the commit point and
   needs no undo, which is what makes everything before it need one.
+  **THE PRODUCTION ENTRY POINTS ARE NAMED, because a composition nothing calls
+  is a test fixture** (PR #848's review): `run_land_lap` walks the declared rows
+  rather than an array literal, dispatches `Precheck::BetSettled` through
+  `settle_the_bet`/`place_the_bet`, and every path that leaves the lap early
+  goes through `unwind_lap` — the one caller of `Pipeline::unwind`, so a step
+  that entered cannot exit uncompensated down a branch nobody wired.
 - `rest.rs` — the forge's REST tier, IN PROCESS, over `fetch.rs` (CLOUD-1338).
   One client, one credential reader (`GH_TOKEN` then `GITHUB_TOKEN`, the forge
   CLI's own precedence), and a typed `Answer` carrying the status, the `ETag`

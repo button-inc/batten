@@ -223,7 +223,18 @@ fn a_checkout_that_cannot_be_judged_is_not_reported_as_an_unverified_head() {
     // lives under `target/`, so a directory there still has this checkout above
     // it and `git rev-parse` climbs to it — which is a repository, and the case
     // would then be asserting the opposite of what it says.
-    let dir = std::env::temp_dir().join("batten-receipt-verified-not-a-repo");
+    //
+    // AND UNIQUE PER PROCESS. A fixed name under `temp_dir()` is shared by every
+    // concurrent run — nextest runs each case in its own process, and two of them
+    // racing meant one `remove_dir_all` deleting the directory the other had just
+    // created. The lane keeps runs on one machine apart and the pid keeps the
+    // processes within a lane apart; both are needed, since a lane is reused.
+    // Found in review.
+    let lane = std::env::var("BATTEN_TEST_SCRATCH_LANE").unwrap_or_else(|_| String::from("0"));
+    let dir = std::env::temp_dir().join(format!(
+        "batten-receipt-verified-not-a-repo-{lane}-{}",
+        std::process::id()
+    ));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("create the fixture");
 

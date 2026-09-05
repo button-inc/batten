@@ -1575,13 +1575,6 @@ pub fn run_status(
     })
 }
 
-/// The checks a head must carry a valid receipt for to be called verified.
-///
-/// **Two, and the second is what the predecessor existed for.** `verify` says
-/// the tree passed its gate; `linear-check` says the branch was linear on the
-/// trunk it was measured against, and records WHICH trunk — so a moved
-/// `origin/main` expires it. A head carrying only the first has been proven
-/// against a base that may no longer exist.
 /// The checks a head must carry a valid receipt for, when a consumer declares
 /// none.
 ///

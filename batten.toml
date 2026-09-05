@@ -6486,7 +6486,14 @@ severity = "deny"
 # delta null, so the module reports could-not-look on every run and decides
 # nothing. Measured here against a seeded escape it did not catch, which is why
 # the seeding was the acceptance step rather than reading a clean exit as proof.
-delta_sources = ["crates/batten/src/*.rs", "policy/spawn-adapters.rego"]
+#
+# RECURSIVE, because a single-level glob is a hole that arms itself. There is no
+# nested Rust module under `src/` today, so `crates/batten/src/*.rs` matches
+# every file that exists — and the day somebody adds one, this row stops seeing
+# it, both clauses run over a map that never held its lines, and the gate reports
+# clean. That is the same silence the two paragraphs above record being caught by
+# seeding rather than by reading. Found in review of PR #848.
+delta_sources = ["crates/batten/src/**/*.rs", "policy/spawn-adapters.rego"]
 # AND `line_sources` FOR THE WORKING SIDE, because the two keys fill different
 # halves and the module subtracts one from the other. `delta_sources` alone gave
 # a base with nothing to compare against it: `input.tree.lines` was filled by
@@ -6494,7 +6501,12 @@ delta_sources = ["crates/batten/src/*.rs", "policy/spawn-adapters.rego"]
 # clean. That is the second time in ten minutes this row read as passing while
 # deciding nothing — which is why the acceptance step is a SEEDED escape and not
 # a clean exit.
-line_sources = ["crates/batten/src/*.rs", "policy/spawn-adapters.rego"]
+#
+# Recursive for `delta_sources`' reason, one paragraph up: the two keys fill the
+# two halves the module subtracts, so a glob that reached one and not the other
+# would leave a nested module's lines on one side only — which is the same read
+# as not seeing it at all.
+line_sources = ["crates/batten/src/**/*.rs", "policy/spawn-adapters.rego"]
 
 # CLOUD-316's gate, ported off `mise-tasks/mise-pin-agreement.sh` under CLOUD-910
 # — the wave's first gate, and the one whose end-to-end cost sizes the rest.

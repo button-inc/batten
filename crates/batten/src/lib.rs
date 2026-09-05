@@ -5857,10 +5857,17 @@ fn run_land_lap(
                 }
                 land::Step::FastForward => run_land_fast_forward(branch, out, err)?,
             };
-            // ENTERED ONLY ON SUCCESS, and that is the discrimination the undo
-            // rests on: a `Ready` that REFUSED bought no matrix, so re-drafting
-            // over it would draft a pull request the lap never made ready.
-            if code == ExitCode::Success && row.effectful {
+            // ENTERED ON SUCCESS, OR ON THE ATTEMPT WHERE THE UNDO SAYS SO. The
+            // first half is the discrimination the undo rests on: a `Ready` that
+            // REFUSED bought no matrix, so re-drafting over it would draft a pull
+            // request the lap never made ready. The second half is what that rule
+            // gets wrong on its own — `Wait` answers `Success` only when it is
+            // GREEN, so red, stale and unanswered recorded nothing and
+            // `Compensation::Abandon` ran only after a green wait whose
+            // fast-forward then lapped. `owed_on_attempt` carries the reason and
+            // keeps it off this loop, where a `step == Wait` arm would be the
+            // `step == Verify` exception `pipeline` exists to have removed.
+            if row.entered(code == ExitCode::Success) {
                 entered.push(step);
             }
             match land::progress_of(step, code, seen) {
@@ -5975,15 +5982,17 @@ fn unwind_lap(
                     )?;
                     continue;
                 };
-                // THE WORKFLOW, NEVER THE CHECK, and the two are different
-                // consumer values a line apart in `mise.toml`: `CI_FANIN_CHECK`
-                // is `final` and `CI_FANIN_WORKFLOW` is
-                // `.github/workflows/ci.yml`. `land::worthless` compares against
-                // a run's `path`, so reading the check name here made the
-                // comparison unsatisfiable — `spared` was always 0 and the
-                // fan-in's own run was cancelled with the rest, which is exactly
-                // the wedge this whole arm exists to prevent: an ungraded `final`
-                // is the one context branch protection requires.
+                // THE WORKFLOW, NEVER THE CHECK, and the two are distinct
+                // consumer values: `CI_FANIN_CHECK` names a CHECK and
+                // `CI_FANIN_WORKFLOW` names a workflow PATH. What either one
+                // holds is that consumer's own config and is deliberately not
+                // written down here (non-negotiable rule 1). `land::worthless`
+                // compares against a run's `path`, so reading the check name
+                // here made the comparison unsatisfiable — `spared` was always
+                // 0 and the fan-in's own run was cancelled with the rest, which
+                // is exactly the wedge this whole arm exists to prevent: the
+                // fan-in is the one context branch protection requires, so
+                // cancelling it leaves it ungraded and the pull request stuck.
                 //
                 // Found by reading `tests/abandon-matrix.bats`'s own titles while
                 // retiring it (CLOUD-1148) — *"THE ROW THAT MATTERS: the run
@@ -6441,11 +6450,19 @@ fn run_land_fast_forward(
         )?;
         return Ok(ExitCode::Usage);
     }
-    // THE PLACEHOLDER, resolved by the client that used to be spawned and now by
-    // the endpoint itself: `pr_watch::REPO_PLACEHOLDER` is what every request in
-    // this family already carries, so naming it once here keeps the lookup and
-    // the ask asking about one repository.
-    let repo = String::from(pr_watch::REPO_PLACEHOLDER);
+    // `GH_REPO` FIRST, AND THE PLACEHOLDER ONLY AS THE FALLBACK EVERY SIBLING
+    // SITE USES. This line read `String::from(REPO_PLACEHOLDER)` and the comment
+    // above it said the placeholder was "resolved by the client that used to be
+    // spawned and now by the endpoint itself" — which was true of the first half
+    // and false of the second. `{owner}/{repo}` is the FORGE CLI's own
+    // substitution, performed before the request left the process; `rest::get`
+    // sends the path it is given, so the literal braces reached the endpoint, the
+    // forge answered 404, `open_pull_request` returned `None`, and every
+    // `land fast-forward` — the lap's commit point included — stopped with "no
+    // open pull request for <branch>". A retirement that moves a spawn in-process
+    // inherits the caller's substitutions or it inherits nothing, and this is the
+    // one site in the family that did not carry the read across.
+    let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
     let Some(pr) = fast_forward::open_pull_request(&repo, branch) else {
         writeln!(
             err,
@@ -7168,9 +7185,26 @@ fn head_verdict(root: &Path, repo: &str) -> Option<checks_green::Verdict> {
         progress: None,
     };
     let mut poll = pr_watch::Poll::default();
-    let raw = pr_watch::read(&config, None);
+    let raw = pr_watch::read(&config, None)?;
+    // THE STATUS IS READ, AND A NON-`200` IS A COULD-NOT-LOOK RATHER THAN AN
+    // EMPTY HEAD (PR #848's review). `rest::get` answers `Some(Answer)` for a
+    // 401, a 403 or a 5xx as readily as for a reading — the transport worked, the
+    // forge declined — and the body is then not the array `runs_from_body`
+    // parses, so `absorb` leaves `runs` EMPTY. Downstream that is
+    // indistinguishable from a head no workflow has registered for:
+    // `checks_green::decide` answers `Pending::Unregistered`, `land::buys_a_matrix`
+    // reads that as `Refire`, and one forge blip re-drafts and re-readies the pull
+    // request — cancelling the very matrix this arm is documented to protect.
+    //
+    // `rest::Answer::is_reading` rather than a comparison written here, because a
+    // second spelling of *which statuses are answers* is a second authority over
+    // it. Every other failure in this function already answers `None` because
+    // `buys_a_matrix` spends nothing on one, and this is that direction.
+    if !raw.is_reading() {
+        return None;
+    }
     // The interval it returns is for a LOOP to honour, and this is one read.
-    let _pace = poll.absorb(raw.as_ref(), config.interval);
+    let _pace = poll.absorb(Some(&raw), config.interval);
     checks_green::decide(poll.runs(), &roster).ok()
 }
 

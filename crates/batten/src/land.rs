@@ -1195,10 +1195,17 @@ impl Ledger {
 /// verdict means the branch was judged, and re-running would spend jobs to
 /// re-learn a real refusal.
 ///
-/// `None` for could-not-look, and the three causes are deliberately one reading:
-/// no failed runs, a scan that produced nothing, and a scan that answered. A
-/// caller cannot act differently on which, and inventing a distinction would
-/// invite one to.
+/// `None` for could-not-look, and the causes are deliberately one reading: no
+/// failed runs, a scan that produced nothing, a scan that answered with a
+/// verdict, and a record this reader does not recognise. A caller cannot act
+/// differently on which, and inventing a distinction would invite one to.
+///
+/// **AN UNRECOGNISED RECORD IS COULD-NOT-LOOK, NOT AN ABSENT VERDICT.** The
+/// filter used to keep the `nonverdict` lines and DROP everything else, so a
+/// scanner error, a truncated record or a shape added later read as *every
+/// record is a non-verdict* — the permissive answer, which re-runs the matrix on
+/// a head that may well have been judged. Absorbing is the expensive direction,
+/// so the reading that cannot be justified must not reach it.
 #[must_use]
 pub fn absorbed(records: &[String]) -> Option<Vec<String>> {
     let lines: Vec<&str> = records
@@ -1213,13 +1220,13 @@ pub fn absorbed(records: &[String]) -> Option<Vec<String>> {
     if lines.iter().any(|line| line.starts_with("verdict")) {
         return None;
     }
-    Some(
-        lines
-            .iter()
-            .filter(|line| line.starts_with("nonverdict"))
-            .map(|line| (*line).to_owned())
-            .collect(),
-    )
+    // EVERY line must be one this reader knows. `nonverdict` does not begin with
+    // `verdict`, so the two prefixes partition cleanly and anything outside the
+    // pair is a record nobody here can classify.
+    if !lines.iter().all(|line| line.starts_with("nonverdict")) {
+        return None;
+    }
+    Some(lines.iter().map(|line| (*line).to_owned()).collect())
 }
 
 // ---------------------------------------------------------------------------

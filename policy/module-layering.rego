@@ -504,8 +504,14 @@ forbidden[from] contains to if {
 		# cover today's lap route TRANSITIVELY, and this file states its own
 		# standard for that case one paragraph up: a guarantee routable around by
 		# one hop is not one (CLOUD-1260), so the direct edges are listed.
+		#
+		# `rest` IS THAT ONE HOP, and listing `fetch` without it was the gap.
+		# `rest` is the REST tier OVER `fetch` — it resolves the forge
+		# credential and makes the call — so `hook -> rest` reached the network
+		# by exactly the route the `fetch` entry refuses, one name later. Found
+		# in review.
 		"hook": {
-			"fetch", "mcp", "lease", "gitwrite", "land",
+			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
 			"pr_watch", "fast_forward", "main_watch",
 		},
 		# `check` NAMES NO MODULE TODAY, so this row is INERT — and that is worth
@@ -793,6 +799,18 @@ test_the_mediated_path_must_not_reach_the_transport if {
 	count(violation) == 1 with input as judging(
 		"crates/batten/src/hook.rs",
 		[internal("fetch", 31)],
+	)
+}
+
+# AND NOT THE TIER OVER IT. `rest` resolves the forge credential and makes the
+# call, so listing `fetch` alone left `hook -> rest` reaching the network by the
+# same route one name later — the one-hop escape this file's own standard
+# refuses. Found in review; without this case the table can lose the row again
+# and every other assertion here stays green.
+test_the_mediated_path_must_not_reach_the_tier_over_the_transport if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("rest", 31)],
 	)
 }
 

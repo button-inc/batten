@@ -137,6 +137,38 @@ pub struct Answer {
     pub body: String,
 }
 
+impl Answer {
+    /// Whether this answer's body is a READING, rather than the forge declining.
+    ///
+    /// # `Some(Answer)` is not the same claim as *the forge answered the question*
+    ///
+    /// [`get`] answers `None` only where the exchange could not happen at all. A
+    /// `401`, a `403`, a `404` or a `5xx` is a completed exchange carrying a
+    /// refusal, so it arrives as `Some` — and its body is an error document
+    /// rather than the collection a caller parses. A caller that reads the body
+    /// without reading the status therefore gets an EMPTY parse, which is
+    /// byte-identical on the decision surface to a genuinely empty collection.
+    ///
+    /// Measured on this crate (PR #848's review): the lap's ready step read the
+    /// head's check-runs without this test, so a forge blip parsed as zero runs,
+    /// `checks_green::decide` answered *unregistered*, `land::buys_a_matrix` read
+    /// that as `Refire`, and the lap re-drafted and re-readied the pull request —
+    /// cancelling the in-flight matrix the arm exists to protect.
+    ///
+    /// # `304` is deliberately NOT a reading
+    ///
+    /// A not-modified says *your cached copy still stands*, which is an answer
+    /// only to a caller that HAS one. A one-shot read sends no validator and holds
+    /// no cache, so treating it as a reading would report the empty cache as the
+    /// forge's answer — the same defect one status along. A polling caller does
+    /// not use this: [`crate::pr_watch::Poll::absorb`] keeps its own runs across a
+    /// `304` precisely because it is the one that has something to keep.
+    #[must_use]
+    pub const fn is_reading(&self) -> bool {
+        self.status == 200
+    }
+}
+
 /// One GET against the REST tier, or `None` where it could not be reached.
 ///
 /// **`None` is could-not-look and never a verdict.** Every caller here polls in a
@@ -203,7 +235,7 @@ const FIXTURE: &str = "BATTEN_REST_FIXTURE";
 /// The protocol is the stubbed program's, conserved exactly so the cases that
 /// read it back need no rewrite: `resp.<n>` for the n-th call and `resp.last`
 /// once they run out, the count in `calls`, and the request appended to `args`.
-fn from_fixture(dir: &std::path::Path, url: &str, etag: Option<&str>) -> Option<Answer> {
+fn from_fixture(dir: &std::path::Path, url: &str, etag: Option<&str>, now: u64) -> Option<Answer> {
     let calls = dir.join("calls");
     let n = std::fs::read_to_string(&calls)
         .ok()
@@ -235,14 +267,14 @@ fn from_fixture(dir: &std::path::Path, url: &str, etag: Option<&str>) -> Option<
     let raw = std::fs::read_to_string(dir.join(format!("resp.{n}")))
         .or_else(|_| std::fs::read_to_string(dir.join("resp.last")))
         .ok()?;
-    Some(canned(&raw))
+    Some(canned(&raw, now))
 }
 
 /// One `-i`-style response text, as an [`Answer`].
 ///
 /// The fixtures are written in the shape the forge's own client printed, which
 /// is what lets a case that predates this seam keep its bytes.
-fn canned(raw: &str) -> Answer {
+fn canned(raw: &str, now: u64) -> Answer {
     let clean = raw.replace('\r', "");
     let (head, body) = clean.split_once("\n\n").unwrap_or((clean.as_str(), ""));
     let mut lines = head.split('\n');
@@ -263,7 +295,7 @@ fn canned(raw: &str) -> Answer {
         poll_floor: header("x-poll-interval")
             .and_then(|raw| raw.trim().parse::<f64>().ok())
             .filter(|seconds| seconds.is_finite() && *seconds > 0.0),
-        backoff: header("retry-after").and_then(|raw| raw.trim().parse::<u64>().ok()),
+        backoff: backoff_of(header, now),
         body: body.to_owned(),
     }
 }
@@ -272,7 +304,7 @@ fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>) -> Option<Answe
     let now = crate::now_unix();
     let url = format!("{API}/{path}");
     if let Some(dir) = std::env::var_os(FIXTURE) {
-        return from_fixture(std::path::Path::new(&dir), &url, etag);
+        return from_fixture(std::path::Path::new(&dir), &url, etag, now);
     }
     let headers = headers(etag, body.is_some_and(|bytes| !bytes.is_empty()));
     let mut answers = fetch::spend(&[Call {
@@ -307,10 +339,21 @@ fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>) -> Option<Answe
 /// this crate: the clock belongs to the boundary, so one exchange yields one
 /// answer whoever asks and whenever they ask again.
 fn backoff_from(response: &fetch::Response, now: u64) -> Option<u64> {
+    backoff_of(|name| response.header(name).map(str::to_owned), now)
+}
+
+/// The backoff a response states, over a header accessor rather than a response.
+///
+/// **ONE READER FOR BOTH PATHS, and this module's header names the class the
+/// split belonged to: two readings of one header block.** The fixture seam
+/// parsed `Retry-After` alone, so a fixture stating the RATE-LIMIT headers
+/// yielded `backoff: None` — and a case asserting rate-limit backoff passed
+/// without exercising the behaviour, which is coverage that has stopped testing
+/// the thing it names. Found in review.
+fn backoff_of(header: impl Fn(&str) -> Option<String>, now: u64) -> Option<u64> {
     // `Retry-After` FIRST, because a forge that states one has stated it about
     // this exact refusal. The reset instant below is a property of the window.
-    if let Some(seconds) = response
-        .header("retry-after")
+    if let Some(seconds) = header("retry-after")
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .filter(|seconds| *seconds > 0)
     {
@@ -318,15 +361,10 @@ fn backoff_from(response: &fetch::Response, now: u64) -> Option<u64> {
     }
     // ONLY AT ZERO REMAINING. The reset instant rides every response, so reading
     // it unconditionally would back off after each successful call.
-    if response
-        .header("x-ratelimit-remaining")
-        .and_then(|raw| raw.trim().parse::<u64>().ok())
-        != Some(0)
-    {
+    if header("x-ratelimit-remaining").and_then(|raw| raw.trim().parse::<u64>().ok()) != Some(0) {
         return None;
     }
-    response
-        .header("x-ratelimit-reset")
+    header("x-ratelimit-reset")
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .filter(|reset| *reset > now)
         .map(|reset| reset - now)
@@ -335,6 +373,37 @@ fn backoff_from(response: &fetch::Response, now: u64) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A REFUSAL IS AN ANSWER THAT ARRIVED, AND IT IS NOT A READING.**
+    ///
+    /// `get` answers `Some` for every completed exchange, so a `401`, a `403` and
+    /// a `5xx` all reach a caller carrying an error document where a collection
+    /// was expected. A caller reading the body alone parses that as EMPTY, which
+    /// is indistinguishable from a genuinely empty collection — the defect
+    /// measured on the lap's ready step, where it re-drafted a pull request over
+    /// a forge blip.
+    ///
+    /// The `200` arm is what keeps this from being satisfied by a predicate that
+    /// refuses everything, and the `304` arm pins the deliberate exclusion rather
+    /// than leaving it to be re-argued: a one-shot read holds no cache, so
+    /// not-modified answers a question it never asked.
+    #[test]
+    fn only_a_two_hundred_carries_a_reading() {
+        let with = |status: u16| Answer {
+            status,
+            etag: None,
+            poll_floor: None,
+            backoff: None,
+            body: String::new(),
+        };
+        assert!(with(200).is_reading());
+        for status in [304, 401, 403, 404, 422, 500, 502] {
+            assert!(
+                !with(status).is_reading(),
+                "{status} is the forge declining, not a reading"
+            );
+        }
+    }
 
     /// Every endpoint a caller hands over is API-relative.
     ///

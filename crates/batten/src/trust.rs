@@ -537,25 +537,6 @@ pub enum WeakeningKind {
     /// A path is gone from `epoch.tracked`, so the `config_epoch` attributes
     /// less than it did (CLOUD-32).
     EpochPathRemoved,
-    /// A path is gone from `lease.landing_paths`, so the staleness read asks
-    /// about less of the landing mechanism than it did (CLOUD-1148 §2).
-    ///
-    /// Monotone in the direction that matters: [`crate::lease::decide`] resolves
-    /// the newest commit touching ANY declared path, so dropping one can only
-    /// move that answer backwards or leave it put — and a head stale in a way
-    /// the shrunken set no longer reaches passes clean. Emptying the table
-    /// altogether is that move at its limit, where the reader takes
-    /// could-not-look and the guard fails open on every head.
-    LandingPathRemoved,
-    /// A check is gone from `receipt.verified_by`, so `verified` demands a
-    /// smaller body of evidence than it did (CLOUD-1338).
-    ///
-    /// Monotone by construction: `run_verified` reports a head verified when NO
-    /// declared check is unverified, so dropping a name can only remove a way to
-    /// fail. Emptying the table is that move at its limit — and there the verb
-    /// refuses outright rather than passing, which is why the empty case is a
-    /// usage error and this kind covers the shrink above it.
-    VerifiedCheckRemoved,
     /// The prose-dialect cutover moved LATER, or stopped being declared, so
     /// Ready blocks that owed the claims object no longer do (CLOUD-472).
     ///
@@ -865,6 +846,31 @@ pub enum WeakeningKind {
     /// to `StartupRowRemoved`. `cli::Command` states the same rule for the same
     /// reason.
     PerfExemptionAdded,
+    /// A path is gone from `lease.landing_paths`, so the staleness read asks
+    /// about less of the landing mechanism than it did (CLOUD-1148 §2).
+    ///
+    /// Monotone in the direction that matters: [`crate::lease::decide`] resolves
+    /// the newest commit touching ANY declared path, so dropping one can only
+    /// move that answer backwards or leave it put — and a head stale in a way
+    /// the shrunken set no longer reaches passes clean. Emptying the table
+    /// altogether is that move at its limit, where the reader takes
+    /// could-not-look and the guard fails open on every head.
+    ///
+    /// **APPENDED, NEVER INSERTED**, and the reason is this enum's `Ord`: the
+    /// declaration order IS the sort order, so a variant added in the middle
+    /// silently reorders every finding after it. That costs byte-stable output
+    /// (house-style §6) for no gain — a new kind belongs at the end, where it
+    /// can only appear after the ones that already existed. Found in review.
+    LandingPathRemoved,
+    /// A check is gone from `receipt.verified_by`, so `verified` demands a
+    /// smaller body of evidence than it did (CLOUD-1338).
+    ///
+    /// Monotone by construction: `run_verified` reports a head verified when NO
+    /// declared check is unverified, so dropping a name can only remove a way to
+    /// fail. Emptying the table is that move at its limit — and there the verb
+    /// refuses outright rather than passing, which is why the empty case is a
+    /// usage error and this kind covers the shrink above it.
+    VerifiedCheckRemoved,
 }
 
 impl WeakeningKind {
@@ -886,8 +892,6 @@ impl WeakeningKind {
         WeakeningKind::RulePredicateChanged,
         WeakeningKind::MinVersionLowered,
         WeakeningKind::EpochPathRemoved,
-        WeakeningKind::LandingPathRemoved,
-        WeakeningKind::VerifiedCheckRemoved,
         WeakeningKind::ReadyCutoverRelaxed,
         WeakeningKind::VerbRemoved,
         WeakeningKind::PatternRemoved,
@@ -929,6 +933,8 @@ impl WeakeningKind {
         WeakeningKind::ProtectedReaderAdded,
         WeakeningKind::VocabularyAbandoned,
         WeakeningKind::PerfExemptionAdded,
+        WeakeningKind::LandingPathRemoved,
+        WeakeningKind::VerifiedCheckRemoved,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
