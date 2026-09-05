@@ -5863,6 +5863,7 @@ fn run_land_lap(
                 land::Step::Verify => {
                     run_land_verify(root, &bet, branch, Some(reference), out, err)?
                 }
+                land::Step::Lease => run_land_lease(root, branch, out, err)?,
                 land::Step::Ready => run_land_ready(root, branch, &mut ledger, out, err)?,
                 land::Step::Push => run_land_push(root, url, branch, out)?,
                 land::Step::Wait => {
@@ -6420,6 +6421,60 @@ fn drop_the_bet(root: &Path, bet: &mut speculation::Bet) {
     bet.forget();
     let _ = gitwrite::delete_ref(root, speculation::BASE_REF);
     let _ = gitwrite::delete_ref(root, speculation::LIVE_REF);
+}
+
+/// The lap's own lease acquisition, so one branch at a time buys a matrix.
+///
+/// # NOTHING CALLED THIS, AND THE WHOLE CLUSTER DEPENDED ON IT
+///
+/// `run_lease_acquire` had exactly two callers before this: the `batten lease`
+/// CLI dispatch, and `lease_hand_back` releasing what nobody took. So under
+/// `mise run land` the lease was never held, `unwind_lap`'s `mine` was always
+/// false, `Tap { singleton_held: mine }` was false, and `land::closes_the_tap`
+/// returned before `land::redraft` could be reached. After a red wait the pull
+/// request stayed READY and every later push bought another matrix on a failure
+/// nobody had fixed — which is verbatim the leak `closes_the_tap`'s own header
+/// says it exists to plug (review of #848).
+///
+/// `land::push`'s receive-pack CAS is not this: it excludes two writers of one
+/// BRANCH REF, and the lease excludes two branches of one FLEET. Reading the
+/// first as the second is what made the gap invisible.
+///
+/// # It is a thin adapter, deliberately
+///
+/// Every decision is [`lease`]'s and every code is `run_lease_acquire`'s
+/// already: `Success` took it or already held it, `Violation` somebody else
+/// holds it, `Internal` it would not read. `land::progress` maps the second to a
+/// LAP — the holder is landing, so this branch waits and asks again, which is
+/// what makes the mechanism a queue — and the third to a STOP.
+///
+/// # Errors
+///
+/// Only for a stream that will not accept output; a lease that cannot be
+/// resolved is a code rather than an error, for the reason above.
+fn run_land_lease(
+    root: &Path,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let terms = match lease::terms(root) {
+        Ok(terms) => terms,
+        Err(missing) => {
+            // `say` rather than `Display`, which this type deliberately does not
+            // implement: the diagnostic needs the remote's NAME to be readable
+            // and the enum does not carry it.
+            let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
+            writeln!(
+                err,
+                "::error:: land: the landing lease has no terms in this clone ({}), so nothing serialises which branch spends a matrix",
+                missing.say(&name)
+            )?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+    run_lease_acquire(root, &terms, branch, now, out, err)
 }
 
 /// The repository this lap is landing in, as the forge spells it.
