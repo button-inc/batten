@@ -5801,7 +5801,7 @@ fn run_land_lap(
             let code = match step {
                 land::Step::Replay => run_land_replay(root, url, reference, branch, out)?,
                 land::Step::Verify => run_land_verify(root, branch, out, err)?,
-                land::Step::Ready => run_land_ready(root, out, err)?,
+                land::Step::Ready => run_land_ready(root, branch, out, err)?,
                 land::Step::Push => run_land_push(root, url, branch, out)?,
                 land::Step::Wait => {
                     let (code, verdict) = run_land_wait(root, reference, branch, out, err)?;
@@ -6519,55 +6519,187 @@ fn trunk_watch(reference: &str, base: &str, repo: &str, interval: u64) -> main_w
 /// Readying is what starts CI, so this is the ONE site that increments the
 /// ledger's paid count. `land::Ledger`'s own header records why that cannot be
 /// inferred from the lap counter instead.
-fn run_land_ready(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+fn run_land_ready(
+    root: &Path,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
     let declared = std::env::var("LAND_BODY_GATES").unwrap_or_default();
     let gates = land::body_gates(&declared);
+    // AN UNDECLARED GATE SET IS A PASS AND NOT AN EARLY RETURN, which is the
+    // correction this step needed most: returning here skipped the ready itself,
+    // so a consumer declaring no body gates got a lap that pushed and then waited
+    // out its whole ask count on a matrix nobody had started.
     if gates.is_empty() {
         writeln!(out, "land: no body gates declared; nothing to ask")?;
-        return Ok(ExitCode::Success);
+    } else {
+        // FAIL OPEN ON THE FETCH, and only on the fetch. A body this never saw is
+        // not evidence about what the author wrote, which is the predecessor's
+        // posture spelled `[[ -n "$body" ]] &&`. An unreadable source therefore
+        // yields an empty body and `land::ready` treats that as clear.
+        let source = std::env::var("LAND_BODY_SOURCE").unwrap_or_default();
+        let body = land::body_gates(&source)
+            .first()
+            .and_then(|argv| exec::piped_argv(root, argv, ""))
+            .filter(|(code, _)| *code == 0)
+            .map(|(_, body)| body)
+            .unwrap_or_default();
+
+        match land::ready(root, &gates, &body) {
+            land::Readied::Clear => {
+                writeln!(out, "land: {} body gate(s) clear", gates.len())?;
+            }
+            land::Readied::Refused { gate, detail } => {
+                writeln!(
+                    err,
+                    "::error:: land: {gate} refused this pull request's body"
+                )?;
+                if !detail.is_empty() {
+                    writeln!(err, "{detail}")?;
+                }
+                return Ok(ExitCode::Violation);
+            }
+            // INTERNAL RATHER THAN A VIOLATION, because the subject differs: a
+            // refusal is about the body and this is about the clone.
+            // `land::progress` stops on both for this step, so the lap behaves
+            // identically — what the split buys is a reader who can tell "the
+            // author must fix this" from "this checkout cannot ask".
+            land::Readied::Unrunnable { gate } => {
+                writeln!(
+                    err,
+                    "::error:: land: {gate} is declared in LAND_BODY_GATES and will not run, so \
+                     its verdict is unknown rather than clean"
+                )?;
+                return Ok(ExitCode::Internal);
+            }
+        }
     }
 
-    // FAIL OPEN ON THE FETCH, and only on the fetch. A body this never saw is not
-    // evidence about what the author wrote, which is the predecessor's posture
-    // spelled `[[ -n "$body" ]] &&`. An unreadable source therefore yields an
-    // empty body and `land::ready` treats that as clear.
-    let source = std::env::var("LAND_BODY_SOURCE").unwrap_or_default();
-    let body = land::body_gates(&source)
-        .first()
-        .and_then(|argv| exec::piped_argv(root, argv, ""))
-        .filter(|(code, _)| *code == 0)
-        .map(|(_, body)| body)
-        .unwrap_or_default();
+    spend_the_matrix(root, branch, out, err)
+}
 
-    match land::ready(root, &gates, &body) {
-        land::Readied::Clear => {
-            writeln!(out, "land: {} body gate(s) clear", gates.len())?;
+/// Fire the ready, which is the event that starts CI.
+///
+/// # THIS IS THE STEP, AND THE GATES ABOVE ARE ITS PRECONDITION
+///
+/// The step was named `Ready` and ran only the body gates: nothing in this crate
+/// performed the ready itself, so `Compensation::Redraft` undid a state the
+/// driver never created and the whole `push → wait → fast-forward` tail waited on
+/// a matrix nobody had bought. Found reading `tests/land.bats`'s own case titles
+/// against the successor — eight of them describe this economy and not one had a
+/// call site here.
+///
+/// # `Refire` is a draft-then-ready, and it is why this is not one call
+///
+/// A pull request already ready cannot be readied again, so the only way to mint
+/// a fresh run on one whose head can never grade is to put it back to draft
+/// first. [`land::buys_a_matrix`] is where the three states are told apart, and
+/// it reads the CHECKS verdict rather than a run count so that a lap arriving
+/// while this lap's own run is still in flight leaves it alone — cancelling the
+/// matrix it had just bought is the failure that arm exists to refuse.
+fn spend_the_matrix(
+    root: &Path,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
+    let Some(pr) = fast_forward::open_pull_request(&repo, branch) else {
+        writeln!(
+            err,
+            "::error:: land: no open pull request for {branch}, so there is nothing to ready and no run to buy"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    let Some((is_draft, node)) = land::draft_state(&repo, &pr) else {
+        writeln!(
+            err,
+            "::error:: land: the pull request's draft state will not read, so whether a ready would buy a run is unknown"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+
+    // THE READING THIS LAP ALREADY OWNS. A verdict that cannot be taken is
+    // `None`, which `buys_a_matrix` answers `Nothing` to — the same posture the
+    // tap takes one direction over, and for the same reason.
+    let reading = head_verdict(root, &repo);
+    match land::buys_a_matrix(Some(is_draft), reading.as_ref()) {
+        land::Spend::Nothing => {
+            writeln!(
+                out,
+                "land: {branch} needs no ready; a run on this head has answered or is on its way"
+            )?;
             Ok(ExitCode::Success)
         }
-        land::Readied::Refused { gate, detail } => {
-            writeln!(
-                err,
-                "::error:: land: {gate} refused this pull request's body"
-            )?;
-            if !detail.is_empty() {
-                writeln!(err, "{detail}")?;
+        land::Spend::Ready => fired(land::mark_ready(&node), out, err),
+        land::Spend::Refire => {
+            // DRAFT FIRST, and a draft that will not happen is a stop: readying an
+            // already-ready pull request is a no-op the forge reports as success,
+            // so proceeding would report a matrix it never bought.
+            if !land::redraft(&node) {
+                writeln!(
+                    err,
+                    "::error:: land: {branch} is ready over a head that can never grade, and it \
+                     would not go back to draft, so no fresh run can be minted for it"
+                )?;
+                return Ok(ExitCode::Internal);
             }
-            Ok(ExitCode::Violation)
-        }
-        // INTERNAL RATHER THAN A VIOLATION, because the subject differs: a
-        // refusal is about the body and this is about the clone. `land::progress`
-        // stops on both for this step, so the lap behaves identically — what the
-        // split buys is a reader who can tell "the author must fix this" from
-        // "this checkout cannot ask".
-        land::Readied::Unrunnable { gate } => {
             writeln!(
-                err,
-                "::error:: land: {gate} is declared in LAND_BODY_GATES and will not run, so its \
-                 verdict is unknown rather than clean"
+                out,
+                "land: {branch} carried no answer and no run in flight; re-firing its ready"
             )?;
-            Ok(ExitCode::Internal)
+            fired(land::mark_ready(&node), out, err)
         }
     }
+}
+
+/// One report for both places a ready is fired.
+///
+/// **A ready that did not fire STOPS the lap**, which is the one place this
+/// family does not swallow a forge failure: pushing after it would spend the
+/// wait's whole ask count on a matrix nobody started. `tests/land.bats` states
+/// it as *"a ready that fails stops before the push rather than pushing into
+/// silence"*.
+fn fired(happened: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    if happened {
+        writeln!(out, "land: the pull request is ready; the matrix is bought")?;
+        return Ok(ExitCode::Success);
+    }
+    writeln!(
+        err,
+        "::error:: land: the ready did not fire, so no run was started; pushing now would wait out the whole count on a matrix that does not exist"
+    )?;
+    Ok(ExitCode::Internal)
+}
+
+/// What the required checks say about this clone's HEAD, or `None`.
+///
+/// Every way this fails is a could-not-look — an unreadable HEAD, a roster that
+/// can decide nothing, a reading the forge would not give — and each answers
+/// `None` rather than a verdict, because [`land::buys_a_matrix`] spends nothing
+/// on one and that is the safe direction here.
+fn head_verdict(root: &Path, repo: &str) -> Option<checks_green::Verdict> {
+    let sha = git::head_commit(root).ok()?;
+    let roster = checks_green::Roster {
+        required: roster_field(std::env::var("CI_REQUIRED_CHECKS").ok().as_deref()),
+        absent_ok: roster_field(std::env::var("CI_ABSENT_OK").ok().as_deref()),
+        answered: roster_field(std::env::var("CI_ANSWERED_CONCLUSIONS").ok().as_deref()),
+        fanin: std::env::var("CI_FANIN_CHECK")
+            .ok()
+            .filter(|name| !name.is_empty()),
+    };
+    let config = pr_watch::Config {
+        sha,
+        repo: repo.to_owned(),
+        interval: 1,
+        progress: None,
+    };
+    let mut poll = pr_watch::Poll::default();
+    let raw = pr_watch::read(&config, None);
+    // The interval it returns is for a LOOP to honour, and this is one read.
+    let _pace = poll.absorb(raw.as_ref(), config.interval);
+    checks_green::decide(poll.runs(), &roster).ok()
 }
 
 /// `batten land wait` (CLOUD-1338): the lap's raced wait, and the record it
@@ -6627,10 +6759,20 @@ fn run_land_wait(
         "refs/remotes/origin/{}",
         reference.rsplit('/').next().unwrap_or(reference)
     );
-    let base = git::resolve_ref(root, &tracking)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    // NO BASE IS A REFUSAL, NOT A SILENT BLOCK, and this is `main-watch.bats`'s
+    // last case conserved. `Poll::moved` reads an empty base as *nothing to
+    // compare against* and answers `None` for every reading — correct there, and
+    // a wait entered with one has silently lost its staleness arm: it would poll
+    // out its whole ask count on a base that moved under it on the first second.
+    // Could-not-look about this CLONE, so `Internal`, and `land::progress` laps
+    // on it — the next lap re-fetches, which is the one thing that fixes it.
+    let Some(base) = git::resolve_ref(root, &tracking).ok().flatten() else {
+        writeln!(
+            err,
+            "::error:: land wait: {tracking} will not resolve, so this wait has no base to judge staleness against and would race with one arm"
+        )?;
+        return Ok((ExitCode::Internal, None));
+    };
 
     let config = pr_watch::Config {
         sha: sha.clone(),

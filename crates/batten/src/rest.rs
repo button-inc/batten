@@ -101,9 +101,11 @@ fn headers(conditional: Option<&str>, json_body: bool) -> Vec<(String, String)> 
 ///
 /// **Typed at the boundary, which is the half the spawn could not give.** A child
 /// process hands back bytes, so every caller had to re-parse a status line and a
-/// header block out of `gh api -i` output. Here the transport has already read
-/// them, and `pr_watch::parse_response` — the parser three modules shared to undo
-/// that framing — has one caller fewer for each site that moves.
+/// header block out of `gh api -i` output. `pr_watch` carried the parser three
+/// modules shared to undo that framing; with the last spawn gone the transport
+/// has already read them, and that second parser is **retired** rather than left
+/// standing beside this one. Two readings of one status line is the disagreement
+/// class, not a duplication to tidy up later.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Answer {
     /// The HTTP status. `304` is the reading that did not change.

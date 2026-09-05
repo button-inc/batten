@@ -222,6 +222,14 @@ declared_modules := {
 	# is not one (CLOUD-1260), which is why the edge is listed rather than left
 	# to follow.
 	"land",
+	# `pipeline` arrived with CLOUD-1338's declared composition, and this rule
+	# named it before a human did. It sits ABOVE `land` and reaches it alone: the
+	# composition is a list of that module's `Step`s with a compensation per row,
+	# and it decides only whether such a list is walkable. Nothing in it resolves a
+	# reading, spawns, or touches the forge — which is what keeps the invariant
+	# ("an effectful step before the commit point must declare an undo") a
+	# load-time property of a table rather than something a lap discovers.
+	"pipeline",
 	# `forge`, `tools`, `captured`, `taskset` arrived with CLOUD-843's substrate
 	# wave, and this rule named all four before a human did — the eighth time the
 	# absence-is-an-error clause has earned its keep, and the first on a batch.
