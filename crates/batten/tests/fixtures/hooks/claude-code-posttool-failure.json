@@ -1,0 +1,17 @@
+{
+  "hook_event_name": "PostToolUse",
+  "session_id": "sess-posttool-failure",
+  "cwd": "/repo",
+  "tool_name": "Bash",
+  "tool_use_id": "call-failure-1",
+  "tool_input": {
+    "command": "example-program --version"
+  },
+  "tool_response": {
+    "stdout": "",
+    "stderr": "sh: 1: example-program: not found",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  }
+}

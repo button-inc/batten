@@ -154,6 +154,7 @@ mod mutate;
 mod mutation_declared_case;
 mod narrow_adoption;
 mod obligations_bound;
+mod outcome_advice;
 mod perf_assert;
 mod perf_compare;
 mod perf_pair;

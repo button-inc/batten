@@ -760,6 +760,7 @@ mod tests {
             "hk".to_owned(),
             "hk contract".to_owned(),
             "hk drift".to_owned(),
+            "hk observe".to_owned(),
             "hook".to_owned(),
             // §2 already reserved this row (`init [-n] … (write)`); CLOUD-206
             // landed the verb behind it, so the document needed no edit.

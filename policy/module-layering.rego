@@ -238,6 +238,13 @@ declared_modules := {
 	# They sit below the engine and their back-edges are forbidden for `symbols`'
 	# reason.
 	"forge", "tools", "captured", "taskset",
+	# `outcome` arrived with CLOUD-945 and this rule named it too. It is a PURE
+	# NORMALIZER and a LEAF: it reads a value the boundary already holds and
+	# returns a closed class, reaching `tools` for the one digest the rate-limit
+	# key needs and nothing else. It decides nothing and refuses nothing — the
+	# advisory channel carries no verdict — so it sits below the engine with the
+	# acquisition modules and its back-edges are forbidden for their reason.
+	"outcome",
 	# `hk` arrived with CLOUD-947 and this rule named it too — the coverage clause
 	# earning its keep again, on a module whose two test tiers were already green.
 	#

@@ -240,6 +240,13 @@
         "null"
       ]
     },
+    "outcome": {
+      "description": "The post-tool outcome signatures this repository recognises (CLOUD-945).\n\n**Consumer config, and that is non-negotiable rule 1 rather than a\npreference**: which codes and which program-specific patterns count as a\nclass is the repository's answer, and `crates/batten` holds the matcher\nonly. An empty table recognises nothing, which is the honest default —\nan advisory channel that fires on a signature nobody declared is noise\nthat nobody chose.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Signature"
+      }
+    },
     "pattern": {
       "description": "The named-regex table (CLOUD-885): every expression a policy module may\napply, declared once and referenced by id.\n\nConsumer-specific by nature for exactly [`Config::verbs`]'s reason — a\ntracker-key expression is a consumer identifier, so it lives here and\nnever in the crate (non-negotiable rule 1). A module reaches it at\n`data.batten.patterns[\"<id>\"]`; writing one inline is refused at load,\nwhich is what prices a one-off pattern against a field access over an\nalready-parsed document. The type and its validation are\n[`crate::pattern`].",
       "type": "array",
@@ -3751,6 +3758,31 @@
           "type": "string",
           "const": "deny"
         }
+      ]
+    },
+    "Signature": {
+      "description": "A declared signature: what makes a class exact.\n\n**Consumer config, and none of its content may be a literal in this crate**\n(non-negotiable rule 1). The engine holds the matcher; which codes and which\nprogram-specific patterns are recognised is the repository's own answer.",
+      "type": "object",
+      "properties": {
+        "class": {
+          "description": "The class this signature establishes.",
+          "type": "string"
+        },
+        "code": {
+          "description": "The structured exit code it requires.\n\nREQUIRED, and that is the anchoring. A signature with no code would match\non text alone, which is the unanchored matcher the row forbids by name.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "family": {
+          "description": "The OS family it applies to.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "class",
+        "code",
+        "family"
       ]
     },
     "Sink": {

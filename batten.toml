@@ -4072,6 +4072,39 @@ max_tokens = 24
 [advisory]
 max_tokens = 1024
 
+# The post-tool outcome signatures this repository recognises (CLOUD-945).
+#
+# THE `code` COLUMN IS THE ANCHORING, AND IT IS REQUIRED. A signature with no
+# code would match on diagnostic TEXT, which recognises `sh: 1: x: not found`
+# and equally every echo, log line and commit message that contains the phrase.
+# The row's own words: an unanchored matcher is what makes an advisory channel
+# noise, and a signature that fires on prose is worse than one that never fires,
+# because the first teaches a reader to ignore the channel.
+#
+# MEASURED, AND THESE ARMS ARE THEREFORE UNREACHED ON THIS HOST. Over 364 real
+# post-tool payloads from one Claude Code session, the Bash result carries
+# `stdout`, `stderr`, `interrupted`, `isImage`, `noOutputExpected` and five
+# optional siblings — and NO exit code. `returnCodeInterpretation` occurred once
+# and carried a human sentence ("Files differ"), not a number. So
+# `outcome::classify` reads no code, answers could-not-look, and nothing is
+# advised: the row's own "absent exit status fails open with no advice" working,
+# rather than a gap in it.
+#
+# They are declared anyway, and that is the point of declaring them: a host that
+# supplies a code is recognised the day it arrives, with no change to the engine
+# and no second authority over what 127 means.
+# `crates/batten/tests/fixtures/hooks/claude-code-posttool-failure.json` is the
+# measured shape, sanitized.
+[[outcome]]
+class = "command-not-found"
+code = 127
+family = "unix"
+
+[[outcome]]
+class = "permission-denied"
+code = 126
+family = "unix"
+
 # What THIS REPOSITORY'S OWN HOOKS may cost one session (CLOUD-417).
 #
 # The three thresholds above bound one thing each: what loads once per session,

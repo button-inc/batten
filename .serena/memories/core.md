@@ -288,6 +288,21 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   exactly like one backed by evidence. The three routes that would manufacture
   it — scraping stderr, wrapping steps individually, inferring execution from an
   exit — are excluded by name.
+- `outcome.rs` — the post-tool outcome, normalized (CLOUD-945). A bare pinned tool
+  can fail loudly after the agent starts it, and this is the loud counterpart to
+  the pre-admission rule's silent case. It **advises rather than decides**: no arm
+  reaches a verdict, so nothing here can deny, retry, mutate, probe or write.
+  **The structured exit code is read FIRST**, before any diagnostic text, which is
+  what keeps a signature from firing on the phrase inside an echo, a log line or a
+  commit message — the unanchored matcher that makes an advisory channel noise.
+  MEASURED over 364 real Claude Code post-tool results: that host's Bash payload
+  carries `stdout`, `stderr`, `interrupted` and five optional siblings and NO exit
+  code, so the declared 127/126 arms are unreached there and nothing is advised —
+  the row's own fail-open, not a gap. The signatures are `batten.toml`'s
+  `[[outcome]]` rows (rule 1); the crate holds only the matcher. An `Outcome`
+  carries a closed class, an optional code, an OS family and the program token —
+  never a byte of stdout or stderr, which is the field likeliest in the whole
+  envelope to hold a secret.
 - `handler.rs` — the `[[hook.handler]]` dispatch surface (CLOUD-898), the door
   that lets `batten hook` be the ONLY registration on every surface while a
   repository still runs whatever it likes behind it. A **second noun beside
