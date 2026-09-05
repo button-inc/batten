@@ -221,7 +221,7 @@ pub fn replay(root: &Path, remote: &str, reference: &str, branch: &str) -> Resul
 /// a function rather than formatted at the call site so the one place that
 /// decides this is greppable, and so a caller cannot pass a tracking ref where a
 /// remote one belongs.
-fn tracking_ref(reference: &str) -> String {
+pub(crate) fn tracking_ref(reference: &str) -> String {
     let leaf = reference.rsplit('/').next().unwrap_or(reference);
     format!("refs/remotes/origin/{leaf}")
 }
@@ -695,12 +695,24 @@ impl Verified {
 /// An empty one is a usage error rather than a default, because guessing a
 /// consumer's gate would put that consumer's vocabulary in this crate.
 ///
+/// `published` reaches the gate's environment and is the caller's too. The
+/// landed use is `speculation::PUBLISHED_AS`: a gate cannot otherwise tell a
+/// commit this branch authored from one the lap speculatively adopted, and
+/// CLOUD-748 measured the consequence twice in one session — the consumer's own
+/// race check reported the waiter as racing the very PR the bet was placed on.
+/// The NAME is the consumer's and nothing in this crate reads it back.
+///
 /// # Errors
 ///
 /// An empty command, a HEAD this clone cannot resolve, or a boundary that cannot
 /// start the program. A gate that RAN and refused is [`Verified::Refused`], not
 /// an error: that is an answer about the tree.
-pub fn verify(root: &Path, branch: &str, command: &[String]) -> Result<Verified> {
+pub fn verify(
+    root: &Path,
+    branch: &str,
+    command: &[String],
+    published: &[(String, String)],
+) -> Result<Verified> {
     if command.is_empty() {
         return Err(crate::error::UsageError::raise(String::from(
             "land: no verify command is configured, and this engine does not know what verifying means here",
@@ -728,7 +740,7 @@ pub fn verify(root: &Path, branch: &str, command: &[String]) -> Result<Verified>
     // to pass a child's status through to the caller. Here it is an ANSWER, so
     // the two are told apart rather than collapsed: a code that came back at all
     // is the gate speaking, and only a failure to START is this lap's problem.
-    let verified = match crate::exec::run_in(&started, command) {
+    let verified = match crate::exec::run_in_env(&started, command, published) {
         Ok(crate::exit::ExitCode::Success) => Verified::Clean(head),
         Ok(_) => Verified::Refused(head),
         Err(problem) => match problem.downcast_ref::<crate::error::Passthrough>() {
@@ -1828,7 +1840,7 @@ mod tests {
     /// because a lap would report a gate as clean having run something else.
     #[test]
     fn an_unconfigured_verify_command_refuses_rather_than_guessing() {
-        let Err(problem) = verify(Path::new("."), "work", &[]) else {
+        let Err(problem) = verify(Path::new("."), "work", &[], &[]) else {
             panic!("an empty command must refuse rather than run something");
         };
         assert!(

@@ -415,12 +415,15 @@ mod tests {
         let settles = shipped
             .steps
             .iter()
-            .position(|row| row.precheck == Some(Precheck::BetSettled))
-            .expect("the shipped composition settles an outstanding bet");
+            .position(|row| row.precheck == Some(Precheck::BetSettled));
+        assert!(
+            settles.is_some(),
+            "the shipped composition settles an outstanding bet"
+        );
         let first_spend = shipped.steps.iter().position(|row| row.effectful);
         assert!(
-            first_spend.is_none_or(|spend| settles <= spend),
-            "the settle is at row {settles} and the first spend at {first_spend:?}"
+            settles.is_some_and(|at| first_spend.is_none_or(|spend| at <= spend)),
+            "the settle is at row {settles:?} and the first spend at {first_spend:?}"
         );
     }
 

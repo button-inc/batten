@@ -1359,11 +1359,34 @@ pub fn run_with(
 ///
 /// As [`run`].
 pub fn run_in(repo_root: &Path, command: &[String]) -> Result<ExitCode> {
-    run_in_with(
+    run_in_env(repo_root, command, &[])
+}
+
+/// [`run_in`], with variables published into the child's environment.
+///
+/// **A PARAMETER RATHER THAN `std::env::set_var`, and the workspace forbids the
+/// alternative outright.** Setting a variable on this process would be `unsafe`,
+/// would outlive the call, and would reach every later child whether or not the
+/// fact is still true — a bet unwound two laps ago would still be published.
+///
+/// It is also not an [`ExecConfig`] field: that struct is deserialized from
+/// committed configuration, and these pairs are resolved per call from the state
+/// of the run. A consumer must not be able to declare one.
+///
+/// # Errors
+///
+/// As [`run`].
+pub fn run_in_env(
+    repo_root: &Path,
+    command: &[String],
+    published: &[(String, String)],
+) -> Result<ExitCode> {
+    run_in_with_env(
         repo_root,
         command,
         &[],
         &ExecConfig::DEFAULT,
+        published,
         &mut std::io::sink(),
     )
 }
@@ -1380,8 +1403,24 @@ pub fn run_in_with(
     settings: &ExecConfig,
     report: &mut dyn Write,
 ) -> Result<ExitCode> {
+    run_in_with_env(repo_root, command, patterns, settings, &[], report)
+}
+
+/// [`run_in_with`], with variables published into the child's environment.
+///
+/// # Errors
+///
+/// As [`run`].
+pub fn run_in_with_env(
+    repo_root: &Path,
+    command: &[String],
+    patterns: &[OutputPattern],
+    settings: &ExecConfig,
+    published: &[(String, String)],
+    report: &mut dyn Write,
+) -> Result<ExitCode> {
     let bundle = split_bundle(command)?;
-    let outcomes = dispatch(repo_root, &bundle, settings, next_run())?;
+    let outcomes = dispatch(repo_root, &bundle, settings, published, next_run())?;
     report_bundle(&bundle, &outcomes, patterns, settings, report)
 }
 
@@ -1578,6 +1617,7 @@ fn dispatch(
     repo_root: &Path,
     bundle: &[&[String]],
     settings: &ExecConfig,
+    published: &[(String, String)],
     run: u64,
 ) -> Result<Vec<Outcome>> {
     let jobs = settings.jobs.max(1);
@@ -1592,7 +1632,7 @@ fn dispatch(
             // The single-command path stays a plain call, so a bare `batten exec`
             // spawns no thread it does not need — and so the ordinary case is not
             // paying for the bundle case.
-            vec![run_one(repo_root, run, first, wave[0], settings)]
+            vec![run_one(repo_root, run, first, wave[0], settings, published)]
         } else {
             std::thread::scope(|scope| {
                 let handles: Vec<_> = wave
@@ -1600,7 +1640,7 @@ fn dispatch(
                     .enumerate()
                     .map(|(offset, command)| {
                         scope.spawn(move || {
-                            run_one(repo_root, run, first + offset, command, settings)
+                            run_one(repo_root, run, first + offset, command, settings, published)
                         })
                     })
                     .collect();
@@ -1638,6 +1678,7 @@ fn run_one(
     index: usize,
     command: &[String],
     settings: &ExecConfig,
+    published: &[(String, String)],
 ) -> Result<Outcome> {
     let Some((program, args)) = command.split_first() else {
         return Err(UsageError::raise(
@@ -1677,7 +1718,8 @@ fn run_one(
             .args(extra.iter().map(OsString::from))
             .args(args.iter().map(OsString::from))
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .envs(published.iter().map(|(name, value)| (name, value)));
         group_at_spawn(&mut builder, decision);
         builder.spawn()
     });
