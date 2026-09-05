@@ -989,3 +989,46 @@ fn the_verdict_never_carries_the_values_it_read() {
     assert!(!seen.contains("proxy.internal"), "{seen}");
     assert_eq!(seen.trim(), "egress failed egress-partial");
 }
+
+/// AGENTS.md MUST NOT EQUATE `doctor session` WITH "SAFE TO END?" (CLOUD-1476).
+///
+/// The verb answers whether declared tasks are open — a real object, and it
+/// answers it correctly. What it cannot answer is whether landed work FUNCTIONS,
+/// which is not an object a gate resolves over at all (non-negotiable rule 3).
+/// So a line promising it settles "safe to end?" promises something no mechanism
+/// here can deliver, and the failure is in the promise rather than in the verb.
+///
+/// Measured 2026-09-05: asked whether it was safe to archive, an agent ran this
+/// verb, read `0 of 16 declared task(s) open`, and reported safe over work that
+/// was merged and broken — `main` declared config keys the released binary could
+/// not parse, so the one-line Setup script's second half failed. The owner's own
+/// container diagnostic found it; this verb reported clean and was cited.
+///
+/// This case is the wording only. Whether a reader draws the right conclusion is
+/// a judgement and is deliberately ungated — the same bound
+/// `.claude/rules/scanning.md` records for its own suitability axis.
+#[test]
+fn agents_md_does_not_promise_that_this_verb_answers_whether_the_work_works() {
+    let agents = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("AGENTS.md"),
+    )
+    .expect("AGENTS.md is readable");
+
+    assert!(
+        !agents.contains(r#""safe to end?" is"#),
+        "AGENTS.md equates `batten doctor session` with the broadest question a \
+         session can ask. It answers whether declared work is unsaved; it has no \
+         object to decide `does it work?` over, and a reader arriving on the \
+         reclaim question reads the quoted phrase as the general one."
+    );
+    // THE ANTI-VACUITY HALF. Without it the assertion above is satisfied by
+    // deleting the sentence, which loses the reclaim-survival answer the
+    // paragraph exists to give — so the file must still route the question the
+    // verb DOES answer to the verb.
+    assert!(
+        agents.contains(r#""unsaved?" is `batten doctor session`"#),
+        "the paragraph must still send the unsaved question to the verb that answers it"
+    );
+}

@@ -146,7 +146,7 @@ command, never on a launcher that returns at once. Gated by `verdict-not-discard
 **Never** use a foreground `sleep`, spin a foreground busy-poll, or end a turn idle
 "to watch" something — background it, act on its exit, and commit first, since
 **committed-and-pushed is the only state surviving a reclaim, and that is the TREE's
-half**: declared work dies too, so **"safe to end?" is `batten doctor session`**.
+half**: declared work dies too, so **"unsaved?" is `batten doctor session`**.
 
 ## Non-negotiable project rules
 
