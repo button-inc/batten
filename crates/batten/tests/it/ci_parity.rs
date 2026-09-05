@@ -198,8 +198,7 @@ fn row() -> Rule {
         ],
         "line_sources": [
             ".github/workflows/*.yml",
-            "mise-tasks/abandon-matrix.sh",
-            "mise-tasks/land.sh",
+            "crates/batten/src/lib.rs",
         ],
         "module": "policy/ci-parity.rego",
         "severity": "deny",
@@ -376,15 +375,15 @@ fn sound(name: &str) -> PathBuf {
     common::write(&root, "mise.toml", MANIFEST);
     common::write(&root, "renovate.json5", RENOVATE);
     common::write(&root, "release-plz.toml", "[pr]\npr_draft = true\n");
+    // THE COMPENSATION'S OWN SITE, since CLOUD-1148 retired the two shell
+    // programs this used to stand in for. Both fan-in clauses read one file
+    // now — the site that resolves the declaration and the site that reaches
+    // `land::abandon` are the same lines — so the sound fixture carries both.
     common::write(
         &root,
-        "mise-tasks/abandon-matrix.sh",
-        "#!/usr/bin/env bash\nrun=\"$CI_FANIN_WORKFLOW\"\n",
-    );
-    common::write(
-        &root,
-        "mise-tasks/land.sh",
-        "#!/usr/bin/env bash\nmise run abandon-matrix\n",
+        "crates/batten/src/lib.rs",
+        "let fanin = std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default();\n\
+         let report = land::abandon(&repo, &sha, &fanin);\n",
     );
     install_module(&root);
     root
@@ -726,10 +725,15 @@ fn a_fanin_workflow_declaring_no_such_job_is_refused() {
 #[test]
 fn an_abandon_that_restates_the_path_is_refused() {
     let root = sound("abandon-literal");
+    // A LITERAL WHERE THE DECLARATION BELONGS. This also covers the
+    // sibling-variable defect CLOUD-1148 measured: reading `CI_FANIN_CHECK`
+    // here compiles, runs, and cancels the fan-in's own run, because that value
+    // is a check NAME and `land::worthless` compares against a workflow PATH.
     common::write(
         &root,
-        "mise-tasks/abandon-matrix.sh",
-        "#!/usr/bin/env bash\nrun=.github/workflows/ci.yml\n",
+        "crates/batten/src/lib.rs",
+        "let fanin = String::from(\".github/workflows/ci.yml\");\n\
+         let report = land::abandon(&repo, &sha, &fanin);\n",
     );
     assert!(
         !findings(&root).is_empty(),
@@ -743,10 +747,13 @@ fn a_lander_that_never_abandons_is_refused() {
     // THE ANTI-VACUITY TERM. Every other fan-in clause makes the abandon SAFE;
     // none of them notices it is never called.
     let root = sound("abandon-uncalled");
+    // The declaration is read and the abandon is never reached — which is what a
+    // compensation arm deleted, renamed, or left behind a `match` that no longer
+    // dispatches it looks like from here.
     common::write(
         &root,
-        "mise-tasks/land.sh",
-        "#!/usr/bin/env bash\nmise run ci-wait\n",
+        "crates/batten/src/lib.rs",
+        "let fanin = std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default();\n",
     );
     assert!(
         !findings(&root).is_empty(),

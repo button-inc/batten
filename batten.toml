@@ -6230,8 +6230,13 @@ sources = [
 ]
 line_sources = [
   ".github/workflows/*.yml",
-  "mise-tasks/abandon-matrix.sh",
-  "mise-tasks/land.sh",
+  # THE ENGINE, NOT THE RETIRED SHELL (CLOUD-1148). The fan-in clauses used to
+  # read `mise-tasks/abandon-matrix.sh` and `mise-tasks/land.sh`; both are
+  # retired, and a deleted path makes `input.tree.lines[…]` UNDEFINED rather
+  # than empty — so both helpers go false and both violations fire. Repointed at
+  # the compensation's own site, which is where the declaration is now read and
+  # where the abandon is now reached.
+  "crates/batten/src/lib.rs",
 ]
 module = "policy/ci-parity.rego"
 severity = "deny"
@@ -10183,7 +10188,7 @@ would not.
 [[verdict.route]]
 id = "task read first"
 kind = "document"
-target = "mise-tasks/abandon-matrix.sh"
+target = "crates/batten/src/lib.rs"
 
 [[verdict]]
 id = "job reach dead"
@@ -10198,7 +10203,7 @@ fan-in is declared, and the matrix still bills out in full after the first red.
 [[verdict.route]]
 id = "task read first"
 kind = "document"
-target = "mise-tasks/land.sh"
+target = "crates/batten/src/lib.rs"
 
 [[verdict]]
 id = "cargo spelling other"

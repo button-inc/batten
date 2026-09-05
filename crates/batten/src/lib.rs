@@ -5975,11 +5975,24 @@ fn unwind_lap(
                     )?;
                     continue;
                 };
-                // The fan-in by the consumer's own name, and an unset one cancels
-                // NOTHING — `land::abandon` holds that guard, because cancelling
-                // the fan-in's own run leaves the one required context
-                // `cancelled`, which is not an answer and wedges the branch.
-                let fanin = std::env::var("CI_FANIN_CHECK").unwrap_or_default();
+                // THE WORKFLOW, NEVER THE CHECK, and the two are different
+                // consumer values a line apart in `mise.toml`: `CI_FANIN_CHECK`
+                // is `final` and `CI_FANIN_WORKFLOW` is
+                // `.github/workflows/ci.yml`. `land::worthless` compares against
+                // a run's `path`, so reading the check name here made the
+                // comparison unsatisfiable — `spared` was always 0 and the
+                // fan-in's own run was cancelled with the rest, which is exactly
+                // the wedge this whole arm exists to prevent: an ungraded `final`
+                // is the one context branch protection requires.
+                //
+                // Found by reading `tests/abandon-matrix.bats`'s own titles while
+                // retiring it (CLOUD-1148) — *"THE ROW THAT MATTERS: the run
+                // carrying the fan-in is never cancelled"* — and by nothing else.
+                // Every suite in this crate was green over it.
+                //
+                // An unset one cancels NOTHING rather than guessing;
+                // `land::abandon` holds that guard.
+                let fanin = std::env::var("CI_FANIN_WORKFLOW").unwrap_or_default();
                 let report = land::abandon(&repo, &sha, &fanin);
                 // COUNTS AND AN ABBREVIATED SHA, never a line from a cancelled
                 // run (non-negotiable rule 4). The predecessor carried the
