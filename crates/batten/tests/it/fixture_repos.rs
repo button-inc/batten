@@ -120,8 +120,22 @@ fn fixture_names() -> Vec<String> {
 /// Every committed file has its `.in` stripped; `expected.in` is the
 /// specification and is not written into the tree.
 fn materialize(name: &str) -> PathBuf {
+    materialize_into(name, "run")
+}
+
+/// The same, into a caller-named slot.
+///
+/// **The slot exists because the scratch path is shared state and the runner now
+/// has three consumers** (CLOUD-313). It had one, so `fixture-repos/<name>` was
+/// unambiguous; a second test materializing the same fixture concurrently reads
+/// a tree the first is still writing, and scores the rule as `missing` over a
+/// file that is not there yet. Measured while landing the scoring runner: green
+/// alone, red beside its sibling. Process-per-test does not fix it — nextest
+/// isolates processes and they still share a filesystem path — so the slot is
+/// part of the address rather than something a runner setting can paper over.
+fn materialize_into(name: &str, slot: &str) -> PathBuf {
     let source = corpus_root().join(name);
-    let dir = common::scratch(&format!("fixture-repos/{name}"));
+    let dir = common::scratch(&format!("fixture-repos/{slot}/{name}"));
     for entry in fs::read_dir(&source).expect("read a fixture directory") {
         let entry = entry.expect("read a fixture entry");
         let file_name = entry.file_name().to_string_lossy().into_owned();
@@ -179,6 +193,284 @@ fn run_fixture(dir: &Path, expected: &Expectation) -> (Option<i32>, String, Stri
         common::stdout(&output),
         common::stderr(&output),
     )
+}
+
+// --- rule-case scoring (CLOUD-313) -------------------------------------------
+//
+// A `[[rule]]` row is a classifier with TWO failure modes and `expected.in`
+// observes one. It pins the whole of stdout, so a rule that stops firing changes
+// those bytes and the fixture fails — but it fails as a stdout diff, which names
+// the fixture and not the rule, and it says nothing at all about a rule that
+// fires on a line nobody meant it to. The four instances in `batten.toml`'s own
+// history are all that untested half: a comment narrating a banned command,
+// literals dropped because they fired on ordinary prose, a leading quote carried
+// purely to suppress a false positive, and a self-match hazard nothing pins.
+// Measured (CLOUD-310): of 40 lines a literal row reported across `mise-tasks/`,
+// 8 were comments — 20% noise the suite could not see.
+//
+// So a case says what it expects, IN the case file, and scores into one of four
+// outcomes. The marker declares the line that FOLLOWS it, which is `#MUTANT`'s
+// shape for the same reason: one authority, adjacent to its subject, with no
+// second file to keep in agreement.
+
+/// The marker a case file carries, declaring what the next line expects.
+///
+/// Naming a rule id is safe by the convention already in force — a rule id does
+/// not name its own literals, precisely because a finding's `path:line rule-id`
+/// output lands in a fixture inside the rule's own glob. That convention had
+/// nothing pinning it until `a_marker_naming_a_rule_does_not_trip_it` below.
+const CASE_MARKER: &str = "batten-case: ";
+
+/// What a marked line claims about one rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Polarity {
+    /// The line violates the rule, so the rule must report it.
+    Violating,
+    /// The line is clean, so the rule must ignore it.
+    Clean,
+}
+
+/// How a case turned out. Two of the four are failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    /// A violating case was flagged.
+    Reported,
+    /// A clean case was ignored.
+    Validated,
+    /// A clean case was flagged — a false positive.
+    Noisy,
+    /// A violating case was not flagged — a false negative.
+    Missing,
+}
+
+impl Outcome {
+    /// The token the runner prints, and the name a failure is reported under.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Outcome::Reported => "reported",
+            Outcome::Validated => "validated",
+            Outcome::Noisy => "noisy",
+            Outcome::Missing => "missing",
+        }
+    }
+
+    /// Whether this outcome fails the suite.
+    const fn is_failure(self) -> bool {
+        matches!(self, Outcome::Noisy | Outcome::Missing)
+    }
+}
+
+/// One declared case: a rule, a pointer, and what the pointer claims.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Case {
+    rule: String,
+    path: String,
+    line: usize,
+    polarity: Polarity,
+}
+
+impl Case {
+    /// The pointer a failure is reported under — `path:line rule-id`, the same
+    /// shape a finding takes, and never the matched bytes (rule 4).
+    fn pointer(&self) -> String {
+        format!("{}:{} {}", self.path, self.line, self.rule)
+    }
+}
+
+/// Every case a fixture's committed files declare.
+///
+/// Read from the CORPUS rather than the materialized tree, so the marker's line
+/// numbering is the one a reader sees in the committed file — materialization
+/// only strips a suffix from the name, never a line from the body, so the two
+/// agree, and reading the source keeps that assumption visible.
+fn cases_in(name: &str) -> Vec<Case> {
+    let mut cases = Vec::new();
+    let mut files: Vec<PathBuf> = fs::read_dir(corpus_root().join(name))
+        .expect("read a fixture directory")
+        .map(|entry| entry.expect("read a fixture entry").path())
+        .collect();
+    files.sort();
+    for file in files {
+        let file_name = file
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if file_name == EXPECTED_FILE {
+            continue;
+        }
+        let Some(stripped) = file_name.strip_suffix(INERT_SUFFIX) else {
+            continue;
+        };
+        let Ok(text) = fs::read_to_string(&file) else {
+            continue;
+        };
+        for (index, line) in text.lines().enumerate() {
+            let Some((_, declared)) = line.split_once(CASE_MARKER) else {
+                continue;
+            };
+            let mut fields = declared.split_whitespace();
+            let rule = fields
+                .next()
+                .unwrap_or_else(|| panic!("{name}/{file_name}: a case marker names no rule"));
+            let polarity = match fields.next() {
+                Some("violating") => Polarity::Violating,
+                Some("clean") => Polarity::Clean,
+                other => panic!(
+                    "{name}/{file_name}: a case marker's outcome is `violating` or `clean`, got {other:?}"
+                ),
+            };
+            cases.push(Case {
+                rule: rule.to_owned(),
+                path: stripped.to_owned(),
+                // The marker declares the line that FOLLOWS it. `enumerate` is
+                // 0-based and findings are 1-based, so the next line is
+                // `index + 2`.
+                line: index + 2,
+                polarity,
+            });
+        }
+    }
+    cases
+}
+
+/// The `path:line rule-id` pointers a run reported.
+///
+/// Parsed rather than matched as a substring: a case is scored on whether the
+/// rule fired at THAT pointer, and a `contains` check would let a finding on one
+/// line satisfy a case about another.
+fn reported_pointers(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| line.trim().to_owned())
+        .collect()
+}
+
+/// Score one case against what the run reported.
+///
+/// A pure function so it can be negatively self-tested, exactly as `mismatches`
+/// is: a scorer nothing exercises in both directions is the status quo with more
+/// code.
+fn score(case: &Case, reported: &[String]) -> Outcome {
+    let flagged = reported.iter().any(|line| line == &case.pointer());
+    match (case.polarity, flagged) {
+        (Polarity::Violating, true) => Outcome::Reported,
+        (Polarity::Violating, false) => Outcome::Missing,
+        (Polarity::Clean, false) => Outcome::Validated,
+        (Polarity::Clean, true) => Outcome::Noisy,
+    }
+}
+
+#[test]
+fn every_declared_case_scores_reported_or_validated() {
+    // The runner CLOUD-313 asks for. `expected.in` keeps pinning the whole of
+    // stdout; this says, per line, which rule was meant to fire there and which
+    // was meant to stay quiet — so a false positive fails by name as `noisy` and
+    // a false negative as `missing`, rather than as a diff a reader has to
+    // interpret.
+    let mut failures: Vec<String> = Vec::new();
+    let mut scored = 0usize;
+    for name in fixture_names() {
+        let cases = cases_in(&name);
+        if cases.is_empty() {
+            continue;
+        }
+        let expected = expectation(&name);
+        let dir = materialize_into(&name, "cases");
+        let (_, stdout, _) = run_fixture(&dir, &expected);
+        let reported = reported_pointers(&stdout);
+        for case in cases {
+            scored += 1;
+            let outcome = score(&case, &reported);
+            if outcome.is_failure() {
+                // Pointer-only: the case's own `path:line rule-id` and the
+                // outcome token. Never the matched bytes — a false-positive
+                // report whose subject is a matched literal is exactly where a
+                // checker leaks what it was scanning.
+                failures.push(format!("{name}/{} {}", case.pointer(), outcome.as_str()));
+            }
+        }
+    }
+    assert!(
+        scored > 0,
+        "no fixture declares a case — this test would pass vacuously"
+    );
+    assert!(
+        failures.is_empty(),
+        "{} of {scored} case(s) failed: {}",
+        failures.len(),
+        failures.join("; ")
+    );
+}
+
+#[test]
+fn the_scorer_names_a_false_positive_and_a_false_negative() {
+    // The negative self-test, in both directions, because a scorer that only
+    // ever returned the two passing outcomes would satisfy the case above over
+    // any behaviour at all.
+    let clean = Case {
+        rule: "no-timeout".to_owned(),
+        path: "run.sh".to_owned(),
+        line: 1,
+        polarity: Polarity::Clean,
+    };
+    let violating = Case {
+        polarity: Polarity::Violating,
+        ..clean.clone()
+    };
+    let flagged = vec![clean.pointer()];
+
+    assert_eq!(score(&clean, &[]), Outcome::Validated);
+    assert_eq!(score(&violating, &flagged), Outcome::Reported);
+    assert_eq!(
+        score(&clean, &flagged),
+        Outcome::Noisy,
+        "a clean line the rule flagged is a false positive"
+    );
+    assert_eq!(
+        score(&violating, &[]),
+        Outcome::Missing,
+        "a violating line the rule missed is a false negative"
+    );
+    assert!(Outcome::Noisy.is_failure() && Outcome::Missing.is_failure());
+    assert!(!Outcome::Reported.is_failure() && !Outcome::Validated.is_failure());
+
+    // A finding on a DIFFERENT line must not satisfy a case: the pointer is
+    // compared whole, so a rule firing one line off reads as both `missing` here
+    // and `noisy` there rather than as a pass.
+    let elsewhere = Case { line: 2, ..clean };
+    assert_eq!(score(&elsewhere, &flagged), Outcome::Validated);
+}
+
+#[test]
+fn a_marker_naming_a_rule_does_not_trip_it() {
+    // The self-match hazard, which was a convention with nothing behind it: rule
+    // ids deliberately do not name their own literals, because a finding's
+    // pointer output lands in a fixture inside the rule's own glob. A marker
+    // names a rule id, so if a later id reintroduced the self-match, every case
+    // file carrying that marker would start reporting itself.
+    //
+    // Asserted over the corpus rather than argued: no declared case's own marker
+    // line is reported by the rule it names.
+    for name in fixture_names() {
+        let cases = cases_in(&name);
+        if cases.is_empty() {
+            continue;
+        }
+        let expected = expectation(&name);
+        let dir = materialize_into(&name, "self-match");
+        let (_, stdout, _) = run_fixture(&dir, &expected);
+        let reported = reported_pointers(&stdout);
+        for case in cases {
+            let marker_line = case.line - 1;
+            let marker_pointer = format!("{}:{marker_line} {}", case.path, case.rule);
+            assert!(
+                !reported.contains(&marker_pointer),
+                "{name}: the marker declaring {} is reported by the rule it names",
+                case.pointer()
+            );
+        }
+    }
 }
 
 // --- (a) discovery is non-empty AND exact ------------------------------------
