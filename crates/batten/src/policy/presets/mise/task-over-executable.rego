@@ -74,6 +74,28 @@ defined[name] := argv if {
 #
 # Binding `name` in the comprehension yields one finding per (call, task) pair
 # instead, so several tasks reaching one program each name themselves.
+# THE WHOLE ARGV MUST MATCH, NOT JUST THE PROGRAM. Matching the program alone
+# is the defect `policy/task-substitution.rego`'s own header records for its
+# first life (CLOUD-1222: "compared `words[0] == argv[0]` ... unsound for this
+# manifest, where most tasks are a shared tool plus a subcommand"), reintroduced
+# here in a preset that ships to every consumer.
+#
+# Measured live against the shipped binary with the receipt minted:
+# `batten doctor session` -- the command AGENTS.md mandates -- was told to run
+# `mise run alive`, because a task named `alive` happens to begin with `batten`;
+# `actionlint` was told to run `lint:actions`. A refusal naming the wrong remedy
+# is worse than no refusal, and `severity = "warn"` bounds that to noise rather
+# than making it right.
+#
+# So the call must reproduce the task's argv, which is what "running the task's
+# program directly reproduces the argv" always meant.
+#
+# AND IT COMPARES `program`, NOT `name`. `name` is the basename, so a task
+# spelled with a path -- `./scripts/build.sh`, `node_modules/.bin/eslint` --
+# could never match any entry, and the predicate was silently dead for exactly
+# those tasks while loading and testing clean. The sibling `weaker_than_program`
+# uses `program` for this reason. No task here is path-spelled, so nothing in
+# this repository exercised it.
 violation contains {
 	"rule": "task-over-executable",
 	"verdict": "task reach loose",
@@ -82,7 +104,15 @@ violation contains {
 	some entry in input.call.programs
 	not entry.mediated
 	some name, argv in defined
-	argv[0] == entry.name
+	reaches(entry, argv)
+}
+
+# Does this call reproduce the task's whole argv -- program, then arguments in
+# order at the front of what that program was handed?
+reaches(entry, argv) if {
+	argv[0] == entry.program
+	rest := array.slice(argv, 1, count(argv))
+	rest == array.slice(entry.arguments, 0, count(rest))
 }
 
 deny contains finding if some finding in violation
@@ -92,7 +122,7 @@ deny contains finding if some finding in violation
 test_a_tasks_own_program_reached_directly_is_refused if {
 	some finding in violation with input as {
 		"facts": {"tasks": {"a-task": ["a-program", "--flag"]}},
-		"call": {"programs": [{"name": "a-program", "mediated": false}]},
+		"call": {"programs": [{"name": "a-program", "program": "a-program", "arguments": ["--flag"], "mediated": false}]},
 	}
 
 	finding.rule == "task-over-executable"
@@ -103,7 +133,7 @@ test_a_tasks_own_program_reached_directly_is_refused if {
 test_the_refusal_names_the_task_rather_than_the_program if {
 	some finding in violation with input as {
 		"facts": {"tasks": {"a-task": ["a-program"]}},
-		"call": {"programs": [{"name": "a-program", "mediated": false}]},
+		"call": {"programs": [{"name": "a-program", "program": "a-program", "arguments": ["--flag"], "mediated": false}]},
 	}
 
 	finding.subjects[0].artifact == "a-task"
@@ -119,10 +149,10 @@ test_the_refusal_names_the_task_rather_than_the_program if {
 test_two_tasks_sharing_a_program_still_decide if {
 	findings := violation with input as {
 		"facts": {"tasks": {
-			"first-task": ["a-program", "--one"],
-			"second-task": ["a-program", "--two"],
+			"first-task": ["a-program"],
+			"second-task": ["a-program"],
 		}},
-		"call": {"programs": [{"name": "a-program", "mediated": false}]},
+		"call": {"programs": [{"name": "a-program", "program": "a-program", "arguments": [], "mediated": false}]},
 	}
 
 	count(findings) == 2
@@ -131,17 +161,50 @@ test_two_tasks_sharing_a_program_still_decide if {
 	names == {"first-task", "second-task"}
 }
 
+# A call that merely shares the task's PROGRAM is not the task.
+#
+# The measured defect: `batten doctor session` was told to run `mise run alive`
+# because a task named `alive` begins with `batten`. A refusal naming the wrong
+# remedy is worse than none, and it is the CLOUD-1222 shape the sibling module's
+# header already records -- "most tasks are a shared tool plus a subcommand".
+test_a_call_sharing_only_the_program_is_not_the_task if {
+	count(violation) == 0 with input as {
+		"facts": {"tasks": {"a-task": ["a-program", "sub"]}},
+		"call": {"programs": [{
+			"name": "a-program",
+			"program": "a-program",
+			"arguments": ["other"],
+			"mediated": false,
+		}]},
+	}
+}
+
+# A task spelled with a PATH is still reachable, which `name` could never match.
+test_a_path_spelled_task_is_still_reached if {
+	some finding in violation with input as {
+		"facts": {"tasks": {"a-task": ["./scripts/build.sh"]}},
+		"call": {"programs": [{
+			"name": "build.sh",
+			"program": "./scripts/build.sh",
+			"arguments": [],
+			"mediated": false,
+		}]},
+	}
+
+	finding.subjects[0].artifact == "a-task"
+}
+
 test_a_mediated_call_of_the_same_program_is_allowed if {
 	count(violation) == 0 with input as {
 		"facts": {"tasks": {"a-task": ["a-program"]}},
-		"call": {"programs": [{"name": "a-program", "mediated": true}]},
+		"call": {"programs": [{"name": "a-program", "program": "a-program", "arguments": ["--flag"], "mediated": true}]},
 	}
 }
 
 test_a_program_no_task_defines_is_not_judged if {
 	count(violation) == 0 with input as {
 		"facts": {"tasks": {"a-task": ["a-program"]}},
-		"call": {"programs": [{"name": "another-program", "mediated": false}]},
+		"call": {"programs": [{"name": "another-program", "program": "another-program", "arguments": [], "mediated": false}]},
 	}
 }
 
@@ -150,7 +213,7 @@ test_a_program_no_task_defines_is_not_judged if {
 test_an_unanswerable_receipt_refuses_nothing if {
 	count(violation) == 0 with input as {
 		"facts": {"tasks": null},
-		"call": {"programs": [{"name": "a-program", "mediated": false}]},
+		"call": {"programs": [{"name": "a-program", "program": "a-program", "arguments": ["--flag"], "mediated": false}]},
 	}
 }
 
@@ -158,7 +221,7 @@ test_an_unanswerable_receipt_refuses_nothing if {
 test_a_task_that_is_not_one_command_is_skipped if {
 	count(violation) == 0 with input as {
 		"facts": {"tasks": {"a-pipeline": null}},
-		"call": {"programs": [{"name": "a-program", "mediated": false}]},
+		"call": {"programs": [{"name": "a-program", "program": "a-program", "arguments": ["--flag"], "mediated": false}]},
 	}
 }
 
@@ -181,8 +244,8 @@ test_a_program_in_the_second_half_of_a_compound_command_is_judged if {
 				{"words": ["a-program", "--flag"], "raw": "a-program --flag", "terminator": null},
 			],
 			"programs": [
-				{"name": "cd", "mediated": false},
-				{"name": "a-program", "mediated": false},
+				{"name": "cd", "program": "cd", "arguments": ["/tmp"], "mediated": false},
+				{"name": "a-program", "program": "a-program", "arguments": ["--flag"], "mediated": false},
 			],
 		},
 	}
