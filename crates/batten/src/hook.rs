@@ -4753,9 +4753,16 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
             let Some(program_index) = effective_program(&tokens) else {
                 continue;
             };
+            // NORMALISED (CLOUD-1381). The closing paren of a grouped command
+            // lands on the LAST token, which is a MATCHED OPERAND whenever the
+            // command takes no trailing argument. Measured: `(gh pr merge 42)`
+            // denied because the paren landed on `42)`, while `(gh pr merge)`,
+            // `(gh pr ready)` and `(gh run watch)` were ALLOWED because it landed
+            // on `merge)`, `ready)` and `watch)`. The receipt row is the worst of
+            // the three: its precondition was silently not demanded.
             let words: Vec<&str> = tokens[program_index + 1..]
                 .iter()
-                .copied()
+                .map(|token| program_token(token))
                 .filter(|token| !token.starts_with('-'))
                 .collect();
             for rule in &policy.shapes {
@@ -5136,9 +5143,10 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
                 let Some(program_index) = effective_program(&tokens) else {
                     continue;
                 };
+                // Normalised for the reason the two windows above state.
                 let words: Vec<&str> = tokens[program_index + 1..]
                     .iter()
-                    .copied()
+                    .map(|token| program_token(token))
                     .filter(|token| !token.starts_with('-'))
                     .collect();
                 if verdicts
@@ -5271,9 +5279,23 @@ fn substitution_decision(
             // target it read instead of reaching for a tool. `grep pat >
             // out.txt` is stdin-fed and must allow, which a scan that merely
             // skipped the `>` would not do.
+            // NORMALISED, like the program above (CLOUD-1381). The scan read raw
+            // tokens while the program was resolved, so the closing paren of a
+            // grouped command made the path unrecognisable to
+            // `names_a_repository_path`: measured, `(grep needle
+            // crates/batten/src/lib.rs)` was ALLOWED because the operand read as
+            // `crates/batten/src/lib.rs)`, while the bare form denied. Half a
+            // normalisation is its own bug — the program matched, so the row
+            // selected, and then the target it selected on could not be found.
+            //
+            // The redirection guard runs on the RAW token, because `>` and `<`
+            // are shell syntax that `program_token` is entitled to strip: reading
+            // the stop condition off the normalised form could walk the scan past
+            // a redirect and refuse a destination this call writes.
             let Some(target) = tokens[program_index + 1..]
                 .iter()
                 .take_while(|token| !token.contains('>') && !token.contains('<'))
+                .map(|token| program_token(token))
                 .find(|token| !token.starts_with('-') && names_a_repository_path(token, root, cwd))
             else {
                 continue;
@@ -6751,9 +6773,16 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
             // value behind, but the blocked words are adjacent, so that never hides
             // a real match (`gh -R o/r pr merge` still matches; `gh pr view
             // merge-fix` never does).
+            // NORMALISED (CLOUD-1381). The closing paren of a grouped command
+            // lands on the LAST token, which is a MATCHED OPERAND whenever the
+            // command takes no trailing argument. Measured: `(gh pr merge 42)`
+            // denied because the paren landed on `42)`, while `(gh pr merge)`,
+            // `(gh pr ready)` and `(gh run watch)` were ALLOWED because it landed
+            // on `merge)`, `ready)` and `watch)`. The receipt row is the worst of
+            // the three: its precondition was silently not demanded.
             let words: Vec<&str> = tokens[program_index + 1..]
                 .iter()
-                .copied()
+                .map(|token| program_token(token))
                 .filter(|token| !token.starts_with('-'))
                 .collect();
             for rule in &policy.shapes {

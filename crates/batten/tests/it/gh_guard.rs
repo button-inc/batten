@@ -173,6 +173,28 @@ fn the_ci_watch_shapes_are_refused() {
     denied_by("gh run watch 12345", "gh-run-watch");
 }
 
+/// THE PAREN LANDS ON A MATCHED OPERAND ONLY WHEN THE COMMAND TAKES NO TRAILING
+/// ARGUMENT (CLOUD-1381) — which is why the obvious probe misses this entirely.
+///
+/// The operand window was built from un-normalised tokens, so a grouped command
+/// failed `operands_match`'s exact comparison. But only sometimes. Measured:
+/// `(gh pr merge 42)` DENIED, because the closing paren landed on `42)` and left
+/// the `pr merge` window intact; `(gh pr merge)` and `(gh run watch)` were
+/// ALLOWED, because it landed on `merge)` and `watch)`.
+///
+/// The argument-bearing form is the one a reproduction reaches for first, and it
+/// is the one that already worked. Testing it alone certifies the bypass as
+/// absent — which is exactly what happened when this was first probed.
+///
+/// The trailing-argument case is kept here beside the others so the pair records
+/// WHY the first probe passed, rather than leaving that to be rediscovered.
+#[test]
+fn a_grouped_lifecycle_command_is_still_refused() {
+    denied_by("(gh pr merge)", "gh-pr-merge");
+    denied_by("(gh run watch)", "gh-run-watch");
+    denied_by("(gh pr merge 42)", "gh-pr-merge");
+}
+
 #[test]
 fn a_blocked_verb_in_a_later_segment_is_still_refused() {
     // CLOUD-857's class: a real agent command is compound most of the time, and

@@ -314,6 +314,24 @@ fn a_utility_behind_a_program_less_element_is_still_refused() {
     assert_denied("echo hi\nFOO=1 head -5 AGENTS.md");
 }
 
+/// HALF A NORMALISATION IS ITS OWN BUG (CLOUD-1381).
+///
+/// `substitution_decision` resolved the PROGRAM through `program_token` and then
+/// scanned RAW tokens for the target, so a grouped command selected the row and
+/// then could not find the path it had selected on: the operand read as
+/// `crates/batten/src/lib.rs)`, which `names_a_repository_path` rejects.
+/// Measured — the bare form denied, `(grep needle crates/batten/src/lib.rs)`
+/// allowed.
+///
+/// Worse than normalising neither half, and for the reason this branch has now
+/// met four times: the two readings disagree, so the row fires on one and misses
+/// on the other.
+#[test]
+fn a_grouped_utility_is_still_refused() {
+    assert_denied("(grep needle crates/batten/src/lib.rs)");
+    assert_denied("(head -5 AGENTS.md)");
+}
+
 /// The anti-vacuity half: the three clauses that must still allow, or the row
 /// refuses ordinary work rather than substitution.
 ///
