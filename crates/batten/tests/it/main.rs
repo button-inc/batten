@@ -124,6 +124,7 @@ mod guardrail_bypass;
 mod harness_grant;
 mod harness_wiring;
 mod history_facts;
+mod hk_contract;
 mod hk_fix_selection;
 mod hook_cost;
 mod hook_profile;

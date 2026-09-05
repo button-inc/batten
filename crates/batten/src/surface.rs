@@ -3099,6 +3099,51 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Unclassified,
         flags: &[],
     },
+    // The adopted gate runner's surface contract (CLOUD-947). Two verbs and two
+    // effects, because the row specifies them separately: "the generator is a
+    // `write` … the gate is `read`. Both are declared on the command surface —
+    // the generator is not a read verb that happens to write."
+    //
+    // That is the one place this pair departs from the `generate` family above,
+    // which emits on stdout and leaves the redirect to the caller. Here the
+    // artifact is not the output: the generator runs a program three times and
+    // replaces one committed file, and a caller redirecting a stream could not
+    // tell a partial acquisition from a complete one.
+    CommandDecl {
+        path: "hk",
+        id: "hk",
+        about: "The adopted gate runner's surface contract",
+        data_channel: false,
+        // UNCLASSIFIED, for `claim`'s and `record`'s reason: the subtree carries
+        // one `write` arm and one `read` arm, and a consumer treating an entry as
+        // a prefix must not pick the generator up off the read-only allowlist
+        // (CLOUD-90). The noun acts on nothing itself.
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    CommandDecl {
+        path: "hk contract",
+        id: "hk.contract",
+        about: "Regenerate the committed plan projection from the pinned runner",
+        // The pointer it emits is one path; a JSON document of one field would
+        // be a second shape for the same answer, and byte-stability is not a
+        // claim a mutating verb can make about two consecutive runs.
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
+    CommandDecl {
+        path: "hk drift",
+        id: "hk.drift",
+        about: "Whether the committed plan projection still matches the pinned runner",
+        // NO DATA CHANNEL, for `landed`'s reason: a `-J` verb must emit its
+        // document unconditionally, and this verb's could-not-look arms — an
+        // absent runner, an empty plan, another pin — have no document to emit.
+        // The answer is one pointer line per drifted step.
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[],
+    },
     // `read`, structurally: it reads a payload on stdin and three caller-supplied
     // files, and starts no program. The `claimed-keys` half its predecessor
     // spawned is supplied as `--merged-prs` evidence instead, which is what keeps

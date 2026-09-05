@@ -1031,6 +1031,13 @@ pub enum Native {
     ProvisionTableRefused,
     /// The `[[startup]]` table would not load.
     StartupTableRefused,
+    /// The committed plan projection no longer matches the pinned runner.
+    ///
+    /// Batten's OWN word about a generic concept — an adopted tool's contract
+    /// and the artifact that records it — which is what puts it here rather
+    /// than in a consumer `[[verdict]]` row. No consumer can name the class,
+    /// because the engine is what takes the plan and what compares it.
+    PlanReadStale,
 }
 
 impl Native {
@@ -1074,6 +1081,7 @@ impl Native {
         Native::RecorderTableRefused,
         Native::ProvisionTableRefused,
         Native::StartupTableRefused,
+        Native::PlanReadStale,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1111,6 +1119,7 @@ impl Native {
         match self {
             Native::ProtectedMutation => "path write refused",
             Native::InitWouldOverwrite => "config write refused",
+            Native::PlanReadStale => "plan read stale",
             Native::HandlerDenied => "handler answer denied",
             Native::ScannerUnpinned => "scanner pin missing",
             Native::ScannerUnprovisioned => "scanner install missing",
@@ -1292,6 +1301,16 @@ writes it. Overwriting an existing one would replace a reviewed policy with a de
 set, silently, in a verb whose whole purpose is that there was nothing there before. \
 Edit the file that exists, or move it aside deliberately.",
         routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "plan read stale",
+        gloss: "the committed plan projection no longer matches the pinned runner",
+        class: "An adopted runner decides which steps a gate runs, in what order, under \
+which profiles and in which parallel group, and the committed projection is the reviewed \
+answer to that. A live plan that differs means the gate now enforces something nobody \
+read a diff of. Regenerate the projection and review the diff — the difference is the \
+decision, and absorbing it silently is what this refuses.",
+        routes: &[run("contract run first", "batten hk contract")],
     },
     VendoredVerdict {
         id: "handler answer denied",
@@ -1926,6 +1945,7 @@ mod tests {
                 | Native::CeilingExceeded
                 | Native::ShapeRefused
                 | Native::ContentRefused
+                | Native::PlanReadStale
                 | Native::KeyMissing
                 | Native::VerbTableRefused
                 | Native::PatternTableRefused

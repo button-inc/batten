@@ -500,6 +500,11 @@ mod tests {
                 "generate man".to_owned(),
                 "generate markdown".to_owned(),
                 "generate schema".to_owned(),
+                // The gate half of the adopted runner's contract (CLOUD-947).
+                // Its sibling `hk contract` is a `write` and is deliberately
+                // absent: the generator replaces a committed artifact, which is
+                // the one thing a read-only entry must never reach.
+                "hk drift".to_owned(),
                 // The board sweep (CLOUD-186, CLOUD-1127). It reads a payload on
                 // stdin and three caller-supplied evidence files and starts no
                 // program — the `claimed-keys` spawn its shell predecessor made
@@ -576,14 +581,6 @@ mod tests {
                 // claiming otherwise would advertise a writing verb as read-only.
                 "ready lint".to_owned(),
                 "receipt status".to_owned(),
-                // CLOUD-1180's recovered `agent` slice. BOTH the noun and its
-                // leaf are read, and that is the row's §2 predicate rather than
-                // an accident: `show` is the read band under CLOUD-1184's
-                // grammar, and `surface::tests::every_leaf_under_show_is_read`
-                // is what keeps a writer from ever reaching this list through
-                // the noun's own `read` (CLOUD-170's prefix hazard).
-                "show".to_owned(),
-                "show agent".to_owned(),
                 "spec".to_owned(),
                 "state list".to_owned(),
                 // The verb, never the `worktree` noun: the noun stays
@@ -683,12 +680,6 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn committed_rows() -> Vec<String> {
         vec![
-            // The mediation entrypoint, renamed from the noun `hook` under
-            // CLOUD-1192: every top-level token on an imperative surface is a
-            // verb, and this row was the last noun at the head of one. The
-            // stable id stays `hook` — a rename moves the spelling, never the
-            // identity.
-            "adjudicate".to_owned(),
             "attribution".to_owned(),
             "attribution check".to_owned(),
             "attribution identity".to_owned(),
@@ -763,6 +754,13 @@ mod tests {
             "generate man".to_owned(),
             "generate markdown".to_owned(),
             "generate schema".to_owned(),
+            // The adopted runner's surface contract (CLOUD-947): a noun and two
+            // arms, the generator a `write` and the gate a `read`. §2 reserved
+            // no row for them, so nothing above needed an edit.
+            "hk".to_owned(),
+            "hk contract".to_owned(),
+            "hk drift".to_owned(),
+            "hook".to_owned(),
             // §2 already reserved this row (`init [-n] … (write)`); CLOUD-206
             // landed the verb behind it, so the document needed no edit.
             "init".to_owned(),
@@ -951,12 +949,6 @@ mod tests {
             // allowlist above: `acquire` READS to decide and WRITES the lock it
             // hands out, and a row claiming `read` would put a writing verb on
             // the derived allowlist.
-            // CLOUD-1180's first landable slice of the recovered `agent`
-            // subtree, spelled in CLOUD-1184's `VERB OBJECT` grammar rather than
-            // as `agent instructions` — the row's own 2026-08-30 amendment, on
-            // `record <object>`'s precedent.
-            "show".to_owned(),
-            "show agent".to_owned(),
             "singleton".to_owned(),
             "singleton acquire".to_owned(),
             "singleton release".to_owned(),

@@ -603,6 +603,7 @@ mise run completions
 mise run man
 mise run schema
 mise run snapshots
+mise run hk-contract
 hk fix --all
 echo "fix: clippy autofixes applied, derived artifacts regenerated, every fixer run"
 '''
@@ -681,9 +682,11 @@ shell = "bash -c"
 #
 # THE EXCLUSIONS ARE THREE CLASSES, none of them tidiness:
 #   generator-owned — `schema/*.json` is diffed byte-for-byte by `schema-check`,
-#     `CHANGELOG.md` by release-plz, both `RESULTS.md` by their benches. Format
-#     them and every regeneration lands unformatted, gets rewritten, and has to
-#     be regenerated again to stay byte-stable.
+#     `contracts/*.json` by `hk-drift` (CLOUD-947), `CHANGELOG.md` by release-plz,
+#     both `RESULTS.md` by their benches. Format them and every regeneration lands
+#     unformatted, gets rewritten, and has to be regenerated again to stay
+#     byte-stable — the fixer and the drift gate would be two authorities over one
+#     file's bytes, which is the fight `completions/*` is excluded from shfmt for.
 #   byte-significant fixtures — `cursor-bom.json` exists to carry a byte-order
 #     mark and a fuzz corpus entry is an INPUT, not a document. Reformatting
 #     either destroys the thing the test is testing.
@@ -700,7 +703,7 @@ shell = "bash -c"
 run = '''
 set -euo pipefail
 git ls-files -z '*.json' '*.jsonc' '*.yaml' '*.yml' \
-	':!:.github/workflows/*' ':!:schema/*.json' \
+	':!:.github/workflows/*' ':!:schema/*.json' ':!:contracts/*.json' \
 	':!:crates/batten/tests/fixtures/*' ':!:fuzz/corpus/*' ':!:tests/fixtures/*' |
 	xargs -0 -r deno fmt --check --prose-wrap=preserve
 echo "lint:deno: every tracked JSON and non-workflow YAML file parses and is formatted"
@@ -735,7 +738,7 @@ shell = "bash -c"
 run = '''
 set -euo pipefail
 git ls-files -z '*.json' '*.jsonc' '*.yaml' '*.yml' \
-	':!:.github/workflows/*' ':!:schema/*.json' \
+	':!:.github/workflows/*' ':!:schema/*.json' ':!:contracts/*.json' \
 	':!:crates/batten/tests/fixtures/*' ':!:fuzz/corpus/*' ':!:tests/fixtures/*' |
 	xargs -0 -r deno fmt --prose-wrap=preserve
 '''
@@ -2453,6 +2456,23 @@ for shell in bash zsh fish; do
 done
 echo "completions: regenerated for bash, zsh, fish"
 '''
+
+[tasks.hk-contract]
+description = "Regenerate the committed plan projection from the pinned gate runner (CLOUD-947)"
+# A WRITE VERB, so there is no redirect here and none is possible: the generator
+# runs the pinned runner once per surface and replaces one committed file. That
+# is the row's own specification and the one place this pair departs from the
+# `generate` family above, where the artifact IS the stream and the caller owns
+# the redirect. A stream could not tell a partial acquisition from a complete
+# one, and a partial contract commits clean for the surface it lost.
+run = "cargo run --quiet -p batten -- hk contract"
+
+[tasks.hk-drift]
+description = "Gate: the committed plan projection still matches the pinned gate runner (CLOUD-947)"
+# `cargo run` rather than an installed binary, for `completions`' reason: the
+# artifact must track the WORKING TREE's projection, or the gate answers about a
+# canonicaliser nobody is landing.
+run = "cargo run --quiet -p batten -- hk drift"
 
 [tasks.man]
 description = "Regenerate the committed man pages from the command surface"

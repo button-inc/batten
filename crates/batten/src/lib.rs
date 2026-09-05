@@ -49,6 +49,7 @@ pub mod forge;
 pub mod git;
 pub mod gitwrite;
 pub mod handler;
+pub mod hk;
 pub mod hook;
 pub mod hookcost;
 pub mod identity;
@@ -141,9 +142,10 @@ use anyhow::Result;
 
 pub use cli::{
     AttributionCommand, ChecksCommand, ClaimCommand, Cli, Command, CommitCommand, ConfigCommand,
-    DefectsCommand, DesignCommand, GenerateCommand, LandedCommand, LintCommand, OverrideCommand,
-    PolicyCommand, PrCommand, ProvisionCommand, ReadyCommand, ReceiptCommand, SemverCommand,
-    SingletonCommand, SpecFormat, StateCommand, TaskCommand, WiringCommand, WorktreeCommand,
+    DefectsCommand, DesignCommand, GenerateCommand, HkCommand, LandedCommand, LintCommand,
+    OverrideCommand, PolicyCommand, PrCommand, ProvisionCommand, ReadyCommand, ReceiptCommand,
+    SemverCommand, SingletonCommand, SpecFormat, StateCommand, TaskCommand, WiringCommand,
+    WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -311,6 +313,11 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // the caller supplies, and the verdict is the predicate's alone.
         Some(Command::Landed { command }) => run_landed(command, mode, out, err),
         Some(Command::Claim { command }) => run_claim(command, mode, &overrides, out, err),
+        // The adopted runner's surface contract (CLOUD-947). No config chain and
+        // no rule set: the subject is the pinned binary's own answer about
+        // itself, and a `batten.toml` row could only say where the artifact is —
+        // which the engine already states, because the engine writes it.
+        Some(Command::Hk { command }) => run_hk(command, mode, out, err),
         // The green verdict (CLOUD-1143). Reads a reading, never the network:
         // the fetch stays with the poller that already holds the body.
         Some(Command::Checks { command }) => run_checks(command, out, err),
@@ -588,6 +595,113 @@ fn run_init(
                     "edit {file} in place, or move it aside and run `batten init` again",
                     file = config::CONFIG_FILE
                 )),
+            );
+            output::verdict(err, &refusal.render())?;
+            Ok(ExitCode::Violation)
+        }
+    }
+}
+
+/// The adopted gate runner's surface contract: regenerate it, or diff it
+/// (CLOUD-947).
+///
+/// # The exit table, with no per-verb exception (§7)
+///
+/// `0` the contract matches, `1` a committed artifact that will not parse, `2`
+/// the drift verdict, and `3` every arm in which the answer could not be
+/// obtained: the runner is absent or failed, its plan is not readable, the plan
+/// is EMPTY, the committed artifact is missing, or it was taken at another pin.
+///
+/// **An empty plan is `3` rather than `0`, deliberately.** A generator that found
+/// nothing looks exactly like a gate that passed, and this repository already
+/// records that failure for a scanner pointed at an extensionless tree.
+///
+/// **Another pin is `3` rather than `2`, for the symmetric reason.** A
+/// differently-pinned runner may plan differently because the RUNNER changed
+/// rather than because the config did, so reporting drift would send a reader
+/// hunting a change nobody made. Could-not-look is the honest answer, and
+/// regenerating at the new pin is the remedy the message names.
+fn run_hk(
+    command: HkCommand,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let root = Path::new(".");
+    let artifact = root.join(hk::ARTIFACT);
+    let facts::Look::Is(current) = hk::resolve(root) else {
+        writeln!(
+            err,
+            "::error:: hk: the pinned `{tool}` produced no readable plan, so the contract could not be taken",
+            tool = hk::TOOL
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    match command {
+        HkCommand::Contract => {
+            if let Some(parent) = artifact.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&artifact, current.render()?)?;
+            writeln!(out, "{}", hk::ARTIFACT)?;
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!("wrote {}", hk::ARTIFACT),
+            )?;
+            Ok(ExitCode::Success)
+        }
+        HkCommand::Drift => {
+            let Ok(text) = std::fs::read_to_string(&artifact) else {
+                writeln!(
+                    err,
+                    "::error:: hk: no committed contract at {path}, so there is nothing to compare — run `batten hk contract`",
+                    path = hk::ARTIFACT
+                )?;
+                return Ok(ExitCode::Internal);
+            };
+            // A malformed committed artifact is `1`: the input the caller
+            // supplied is invalid, which is a different answer from having been
+            // unable to look at the runner.
+            let committed = hk::Contract::parse(&text)?;
+            if !committed.agrees_with(&current) {
+                writeln!(
+                    err,
+                    "::error:: hk: the committed contract was taken at another pin or shape, so it does not answer this one — run `batten hk contract`",
+                )?;
+                return Ok(ExitCode::Internal);
+            }
+            let drifts = hk::compare(&committed, &current);
+            if drifts.is_empty() {
+                output::message(
+                    mode,
+                    Verbosity::Normal,
+                    err,
+                    &format!("{} matches the pinned runner", hk::ARTIFACT),
+                )?;
+                return Ok(ExitCode::Success);
+            }
+            // The pointers first, one per line, in the order `compare` walks the
+            // plan — so the output is byte-stable and a reader can pipe it. Each
+            // is a class token, a hook and a step NAME; rule 4 is what keeps a
+            // step's command, glob and matched files out of it.
+            for drift in &drifts {
+                writeln!(err, "{}", drift.render())?;
+            }
+            // Unprefixed and ungated: this is the verdict, not a message about
+            // one. Built through `Refusal` rather than a `format!` of its own —
+            // this is a deny site, and CLOUD-122's contract is that every deny
+            // points to a fix structurally rather than because its author
+            // remembered to name one. `Fix::None` takes the class's own declared
+            // route rather than re-choosing a remedy here.
+            let refusal = Refusal::declared(
+                hk::DRIFT_RULE,
+                verdict::Native::PlanReadStale,
+                &[verdict::Subject::Path {
+                    path: hk::ARTIFACT.to_owned(),
+                }],
+                Fix::None,
             );
             output::verdict(err, &refusal.render())?;
             Ok(ExitCode::Violation)

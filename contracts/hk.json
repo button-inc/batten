@@ -1,0 +1,894 @@
+{
+  "version": 1,
+  "toolVersion": "hk 1.56.1",
+  "surfaces": [
+    {
+      "hook": "check",
+      "runType": "check",
+      "profiles": [
+        "slow"
+      ],
+      "groups": [
+        {
+          "id": "group_0",
+          "stepIds": [
+            "hk-version",
+            "ci-tools-check",
+            "rust-paths-check",
+            "suite-bench-check",
+            "mcp-timeout-budget",
+            "msrv-pin-agreement",
+            "cap-drift",
+            "digest-major-agreement",
+            "report-only-check",
+            "no-docs-tree",
+            "no-doctests",
+            "license-table-check",
+            "coderabbit-config-check",
+            "hook-profile-check",
+            "hk-contract-check",
+            "module-map-check",
+            "hook-pin-check",
+            "mutant-census",
+            "rules-drift",
+            "hooks-wiring-check",
+            "reference-check",
+            "token-bench-check",
+            "config-lint",
+            "renovate-config-validator",
+            "schema-check",
+            "sbom-check",
+            "install-check",
+            "publish-credential-check",
+            "release-tracking-check",
+            "mcp-allow-check",
+            "hook-matcher-check",
+            "awk-regex-check",
+            "pipefail-grep-check",
+            "lock-complete",
+            "timeout-check",
+            "mise-action-floor",
+            "policy-budget",
+            "batten-glob-check",
+            "skill-check",
+            "macos-link-check",
+            "shfmt",
+            "shellcheck",
+            "test:bats",
+            "taplo",
+            "taplo-format",
+            "pkl",
+            "pkl-format",
+            "prettier",
+            "deno-fmt",
+            "rego",
+            "actionlint",
+            "cargo-fmt",
+            "cargo-clippy",
+            "test",
+            "batten-check",
+            "policy-test",
+            "memories-check"
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "name": "hk-version",
+          "status": "included",
+          "orderIndex": 0,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "ci-tools-check",
+          "status": "included",
+          "orderIndex": 1,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "rust-paths-check",
+          "status": "included",
+          "orderIndex": 2,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "suite-bench-check",
+          "status": "included",
+          "orderIndex": 3,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "mcp-timeout-budget",
+          "status": "included",
+          "orderIndex": 4,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "msrv-pin-agreement",
+          "status": "included",
+          "orderIndex": 5,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "cap-drift",
+          "status": "included",
+          "orderIndex": 6,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "digest-major-agreement",
+          "status": "included",
+          "orderIndex": 7,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "report-only-check",
+          "status": "included",
+          "orderIndex": 8,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "no-docs-tree",
+          "status": "included",
+          "orderIndex": 9,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "no-doctests",
+          "status": "included",
+          "orderIndex": 10,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "license-table-check",
+          "status": "included",
+          "orderIndex": 11,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "coderabbit-config-check",
+          "status": "included",
+          "orderIndex": 12,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "hook-profile-check",
+          "status": "included",
+          "orderIndex": 13,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "hk-contract-check",
+          "status": "included",
+          "orderIndex": 14,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "module-map-check",
+          "status": "included",
+          "orderIndex": 15,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "hook-pin-check",
+          "status": "included",
+          "orderIndex": 16,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "mutant-census",
+          "status": "included",
+          "orderIndex": 17,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "rules-drift",
+          "status": "included",
+          "orderIndex": 18,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "hooks-wiring-check",
+          "status": "included",
+          "orderIndex": 19,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "reference-check",
+          "status": "included",
+          "orderIndex": 20,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "token-bench-check",
+          "status": "included",
+          "orderIndex": 21,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "config-lint",
+          "status": "included",
+          "orderIndex": 22,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "renovate-config-validator",
+          "status": "included",
+          "orderIndex": 23,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "schema-check",
+          "status": "included",
+          "orderIndex": 24,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "sbom-check",
+          "status": "included",
+          "orderIndex": 25,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "install-check",
+          "status": "included",
+          "orderIndex": 26,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "publish-credential-check",
+          "status": "included",
+          "orderIndex": 27,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "release-tracking-check",
+          "status": "included",
+          "orderIndex": 28,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "mcp-allow-check",
+          "status": "included",
+          "orderIndex": 29,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "hook-matcher-check",
+          "status": "included",
+          "orderIndex": 30,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "awk-regex-check",
+          "status": "included",
+          "orderIndex": 31,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "pipefail-grep-check",
+          "status": "included",
+          "orderIndex": 32,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "lock-complete",
+          "status": "included",
+          "orderIndex": 33,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "timeout-check",
+          "status": "included",
+          "orderIndex": 34,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "mise-action-floor",
+          "status": "included",
+          "orderIndex": 35,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "policy-budget",
+          "status": "included",
+          "orderIndex": 36,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "batten-glob-check",
+          "status": "included",
+          "orderIndex": 37,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "skill-check",
+          "status": "included",
+          "orderIndex": 38,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "macos-link-check",
+          "status": "included",
+          "orderIndex": 39,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "shfmt",
+          "status": "included",
+          "orderIndex": 40,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "shellcheck",
+          "status": "included",
+          "orderIndex": 41,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "test:bats",
+          "status": "included",
+          "orderIndex": 42,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "taplo",
+          "status": "included",
+          "orderIndex": 43,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "taplo-format",
+          "status": "included",
+          "orderIndex": 44,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "pkl",
+          "status": "included",
+          "orderIndex": 45,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "pkl-format",
+          "status": "included",
+          "orderIndex": 46,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "prettier",
+          "status": "included",
+          "orderIndex": 47,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "deno-fmt",
+          "status": "included",
+          "orderIndex": 48,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "rego",
+          "status": "included",
+          "orderIndex": 49,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "actionlint",
+          "status": "included",
+          "orderIndex": 50,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "cargo-fmt",
+          "status": "included",
+          "orderIndex": 51,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "cargo-clippy",
+          "status": "included",
+          "orderIndex": 52,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "test",
+          "status": "included",
+          "orderIndex": 53,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "batten-check",
+          "status": "included",
+          "orderIndex": 54,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "policy-test",
+          "status": "included",
+          "orderIndex": 55,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "memories-check",
+          "status": "included",
+          "orderIndex": 56,
+          "parallelGroupId": "group_0"
+        }
+      ]
+    },
+    {
+      "hook": "fix",
+      "runType": "fix",
+      "profiles": [
+        "slow"
+      ],
+      "groups": [
+        {
+          "id": "group_0",
+          "stepIds": [
+            "shfmt",
+            "taplo-format",
+            "pkl-format",
+            "prettier",
+            "deno-fmt",
+            "rego",
+            "cargo-fmt"
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "name": "shfmt",
+          "status": "included",
+          "orderIndex": 0,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "taplo-format",
+          "status": "included",
+          "orderIndex": 1,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "pkl-format",
+          "status": "included",
+          "orderIndex": 2,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "prettier",
+          "status": "included",
+          "orderIndex": 3,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "deno-fmt",
+          "status": "included",
+          "orderIndex": 4,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "rego",
+          "status": "included",
+          "orderIndex": 5,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "cargo-fmt",
+          "status": "included",
+          "orderIndex": 6,
+          "parallelGroupId": "group_0"
+        }
+      ]
+    },
+    {
+      "hook": "pre-commit",
+      "runType": "check",
+      "profiles": [
+        "slow"
+      ],
+      "groups": [
+        {
+          "id": "group_0",
+          "stepIds": [
+            "hk-version",
+            "ci-tools-check",
+            "rust-paths-check",
+            "suite-bench-check",
+            "mcp-timeout-budget",
+            "msrv-pin-agreement",
+            "cap-drift",
+            "digest-major-agreement",
+            "report-only-check",
+            "no-docs-tree",
+            "no-doctests",
+            "license-table-check",
+            "coderabbit-config-check",
+            "hook-profile-check",
+            "hk-contract-check",
+            "module-map-check",
+            "hook-pin-check",
+            "mutant-census",
+            "rules-drift",
+            "hooks-wiring-check",
+            "reference-check",
+            "token-bench-check",
+            "config-lint",
+            "renovate-config-validator",
+            "schema-check",
+            "sbom-check",
+            "install-check",
+            "publish-credential-check",
+            "release-tracking-check",
+            "mcp-allow-check",
+            "hook-matcher-check",
+            "awk-regex-check",
+            "pipefail-grep-check",
+            "lock-complete",
+            "timeout-check",
+            "mise-action-floor",
+            "policy-budget",
+            "batten-glob-check",
+            "skill-check",
+            "macos-link-check",
+            "shfmt",
+            "shellcheck",
+            "test:bats",
+            "taplo",
+            "taplo-format",
+            "pkl",
+            "pkl-format",
+            "prettier",
+            "deno-fmt",
+            "rego",
+            "actionlint",
+            "cargo-fmt",
+            "cargo-clippy",
+            "test",
+            "batten-check",
+            "policy-test"
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "name": "hk-version",
+          "status": "included",
+          "orderIndex": 0,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "ci-tools-check",
+          "status": "included",
+          "orderIndex": 1,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "rust-paths-check",
+          "status": "included",
+          "orderIndex": 2,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "suite-bench-check",
+          "status": "included",
+          "orderIndex": 3,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "mcp-timeout-budget",
+          "status": "included",
+          "orderIndex": 4,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "msrv-pin-agreement",
+          "status": "included",
+          "orderIndex": 5,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "cap-drift",
+          "status": "included",
+          "orderIndex": 6,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "digest-major-agreement",
+          "status": "included",
+          "orderIndex": 7,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "report-only-check",
+          "status": "included",
+          "orderIndex": 8,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "no-docs-tree",
+          "status": "included",
+          "orderIndex": 9,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "no-doctests",
+          "status": "included",
+          "orderIndex": 10,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "license-table-check",
+          "status": "included",
+          "orderIndex": 11,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "coderabbit-config-check",
+          "status": "included",
+          "orderIndex": 12,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "hook-profile-check",
+          "status": "included",
+          "orderIndex": 13,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "hk-contract-check",
+          "status": "included",
+          "orderIndex": 14,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "module-map-check",
+          "status": "included",
+          "orderIndex": 15,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "hook-pin-check",
+          "status": "included",
+          "orderIndex": 16,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "mutant-census",
+          "status": "included",
+          "orderIndex": 17,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "rules-drift",
+          "status": "included",
+          "orderIndex": 18,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "hooks-wiring-check",
+          "status": "included",
+          "orderIndex": 19,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "reference-check",
+          "status": "included",
+          "orderIndex": 20,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "token-bench-check",
+          "status": "included",
+          "orderIndex": 21,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "config-lint",
+          "status": "included",
+          "orderIndex": 22,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "renovate-config-validator",
+          "status": "included",
+          "orderIndex": 23,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "schema-check",
+          "status": "included",
+          "orderIndex": 24,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "sbom-check",
+          "status": "included",
+          "orderIndex": 25,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "install-check",
+          "status": "included",
+          "orderIndex": 26,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "publish-credential-check",
+          "status": "included",
+          "orderIndex": 27,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "release-tracking-check",
+          "status": "included",
+          "orderIndex": 28,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "mcp-allow-check",
+          "status": "included",
+          "orderIndex": 29,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "hook-matcher-check",
+          "status": "included",
+          "orderIndex": 30,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "awk-regex-check",
+          "status": "included",
+          "orderIndex": 31,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "pipefail-grep-check",
+          "status": "included",
+          "orderIndex": 32,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "lock-complete",
+          "status": "included",
+          "orderIndex": 33,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "timeout-check",
+          "status": "included",
+          "orderIndex": 34,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "mise-action-floor",
+          "status": "included",
+          "orderIndex": 35,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "policy-budget",
+          "status": "included",
+          "orderIndex": 36,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "batten-glob-check",
+          "status": "included",
+          "orderIndex": 37,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "skill-check",
+          "status": "included",
+          "orderIndex": 38,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "macos-link-check",
+          "status": "included",
+          "orderIndex": 39,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "shfmt",
+          "status": "included",
+          "orderIndex": 40,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "shellcheck",
+          "status": "included",
+          "orderIndex": 41,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "test:bats",
+          "status": "included",
+          "orderIndex": 42,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "taplo",
+          "status": "included",
+          "orderIndex": 43,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "taplo-format",
+          "status": "included",
+          "orderIndex": 44,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "pkl",
+          "status": "included",
+          "orderIndex": 45,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "pkl-format",
+          "status": "included",
+          "orderIndex": 46,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "prettier",
+          "status": "included",
+          "orderIndex": 47,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "deno-fmt",
+          "status": "included",
+          "orderIndex": 48,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "rego",
+          "status": "included",
+          "orderIndex": 49,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "actionlint",
+          "status": "included",
+          "orderIndex": 50,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "cargo-fmt",
+          "status": "included",
+          "orderIndex": 51,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "cargo-clippy",
+          "status": "included",
+          "orderIndex": 52,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "test",
+          "status": "included",
+          "orderIndex": 53,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "batten-check",
+          "status": "included",
+          "orderIndex": 54,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "policy-test",
+          "status": "included",
+          "orderIndex": 55,
+          "parallelGroupId": "group_0"
+        }
+      ]
+    }
+  ]
+}

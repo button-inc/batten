@@ -6296,6 +6296,27 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "add the missing step to `fixers` in hk.pkl, or remove the one that carries no fixer; which of the two a name needs is a reading of the gate that no command can make"
 
+# The adopted runner's surface contract (CLOUD-947). The row is here because
+# house style §1 says the committed authority declares what runs; hk and CI
+# schedule it. The gate itself decides nothing about this repository — it diffs
+# the pinned runner's own plan against the reviewed projection of it.
+#
+# THE GLOB NAMES THE TOOL'S OWN CONFIG, NEVER THE CORPUS, which is the idiom
+# `no-conflict-markers` and `fix-selection-complete` already carry: globbing the
+# corpus would make the row fire inside test fixtures, where `mise exec` cannot
+# resolve and the runner is not the one this repository pinned.
+#
+# Tree-scoped and spawning, which is the right side of the CLOUD-170 split: it
+# runs under `enforce` and the hk gate, never on the mediated path.
+[[rule]]
+id = "hk-contract-drift"
+kind = "command"
+glob = "hk.pkl"
+check = "mise run hk-drift"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "regenerate the projection with `mise run hk-contract` and read the diff: which of an added, removed, reordered or regrouped step is intended is a decision, and a gate that applied it would be absorbing the change nobody reviewed"
+
 [[rule]]
 id = "hk-fix-selection"
 kind = "policy"
