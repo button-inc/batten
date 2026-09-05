@@ -1,0 +1,124 @@
+name: cache-sweep
+
+# Delete the Actions cache entries no run can ever read again (CLOUD-1453).
+#
+# A `pull_request` run writes its cache under `refs/pull/N/merge`, and GitHub
+# scopes a read to the run's own ref plus the base branch — so that entry is
+# readable only by later runs of that same pull request. The moment the PR
+# merges or closes there are no later runs, and the bytes are dead. Nothing
+# deletes them, and the store is capped at 10 GiB with LRU eviction, so dead
+# entries evict the live ones.
+#
+# MEASURED 2026-09-05, and the ratio is the whole argument. 59 entries,
+# 10.77 GiB against the ceiling:
+#
+#   refs/pull/860/merge   2.327 GiB   MERGED
+#   refs/pull/859/merge   2.327 GiB   MERGED
+#   refs/pull/858/merge   2.327 GiB   MERGED
+#   refs/pull/857/merge   1.782 GiB   MERGED
+#   refs/heads/main       2.008 GiB   <- the only scope a pull request can read
+#
+# 81% of the store belonged to four merged pull requests, crowding the 2 GiB
+# that every branch depends on. Sweeping them by hand took it to 3.16 GiB.
+#
+# WHY THIS IS THE FIX RATHER THAN A SECOND WARMER. `ci.yml`'s `batten-check`
+# comment declines the x64 warm writer it needs — the job cannot move to arm64
+# because ripsecrets publishes no linux-aarch64 artifact — on the grounds that
+# doing so would double the cache families "against a store measured at
+# 10.72 GiB over a 10 GiB ceiling". That figure is not a fixed cost. It is four
+# dead pull requests, and under the ceiling the trade it refused is affordable.
+#
+# WHY A CLOCK AND NOT `pull_request: closed`. `.claude/rules/toolchain.md` draws
+# the line this file sits on: a property of the COMMIT belongs in a gate, a
+# property of the WORLD belongs on a clock. What this asks — "does the store
+# hold entries whose pull request is finished?" — is a question about the
+# store, not about any tree, exactly as `lock-currency` asks about upstream.
+# A `pull_request` trigger would also put this workflow inside `ci-parity`'s
+# judged set, which requires a landing-lease precondition and a draft guard on
+# a job that spends seconds and judges nothing.
+#
+# Not a push-to-`main` trigger, for the reason every scheduled workflow here
+# gives: `main` only ever advances by fast-forward to a commit a PR already
+# tested, so a push trigger re-runs work that is by construction already done.
+
+on:
+  schedule:
+    # Daily, 03:30 UTC. Ahead of the 04:30 `mutant` sweep and the 05:00 `perf`
+    # measurement, both of which want a store with room in it — `perf` writes
+    # the `perf-` entry every pull request then reads, and an eviction between
+    # its write and the next PR's read is the failure this exists to stop.
+    #
+    # Daily rather than weekly because the refill rate is measured: ~2.3 GiB per
+    # merged pull request, so three merges refill the ceiling. Weekly would let
+    # it be full most of the time, which is the state this is fixing.
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: cache-sweep
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  cache-sweep:
+    name: cache-sweep
+    runs-on: ubuntu-latest
+    # `grandfathered`: this job has no run history, so any number here would be
+    # the asserted-instead-of-measured claim `timeout-drift` exists to delete.
+    # It is one API listing plus a `pr view` and a delete per dead entry;
+    # 42 deletions by hand took well under a minute.
+    timeout-minutes: 10 # budget: grandfathered measured=2026-09-05
+    permissions:
+      # The two claims this needs and no others: `actions: write` to delete a
+      # cache entry, `pull-requests: read` to ask whether its PR is finished.
+      # No `contents` — nothing is checked out, because nothing in the tree is
+      # read.
+      actions: write
+      pull-requests: read
+    steps:
+      # NO CHECKOUT, deliberately. This job decides over the cache store and the
+      # pull-request list, neither of which is in the tree, so cloning would be
+      # 500 MB of nothing. `gh` is on the runner image.
+      - name: Sweep entries whose pull request is finished
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # A DEAD ENTRY IS DEFINED BY ITS PR'S STATE, never by age. An open PR's
+        # entry is live however old it is — 56% of branches here get a second
+        # run, so age would delete exactly what is still being read.
+        #
+        # `--limit 100` is one page, which is the API's maximum. That is a
+        # deliberate bound rather than an oversight: the sweep is daily and the
+        # store holds ~16 entries when healthy, so a run that hit the page limit
+        # would be reporting a store this job is already failing to keep up
+        # with. It says so rather than paging silently.
+        #
+        # A `pr view` that cannot answer leaves the entry alone: an unreadable
+        # state is could-not-look, and deleting on it would turn a lost API call
+        # into destroyed bytes.
+        run: |
+          set -euo pipefail
+          listed=$(gh cache list --limit 100 --json id,ref \
+            --jq '.[] | select(.ref | startswith("refs/pull/")) | [.id, (.ref | capture("refs/pull/(?<n>[0-9]+)/merge").n)] | @tsv')
+          total=$(gh cache list --limit 100 --json id --jq 'length')
+          if [ "$total" -eq 100 ]; then
+            echo "::warning::cache-sweep: the listing hit its 100-entry page limit, so this run swept a prefix of the store"
+          fi
+          swept=0
+          while IFS=$'\t' read -r id pr; do
+            [ -n "$id" ] || continue
+            state=$(gh pr view "$pr" --json state --jq .state 2>/dev/null) || {
+              echo "cache-sweep: PR #$pr unreadable, entry $id left alone"
+              continue
+            }
+            case "$state" in
+              MERGED | CLOSED)
+                if gh cache delete "$id" >/dev/null 2>&1; then
+                  swept=$((swept + 1))
+                  echo "cache-sweep: deleted $id (PR #$pr $state)"
+                fi
+                ;;
+            esac
+          done <<<"$listed"
+          echo "cache-sweep: $swept entr(ies) deleted"
