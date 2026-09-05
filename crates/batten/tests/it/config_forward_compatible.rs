@@ -350,6 +350,43 @@ reason = "an ordinary row whose pattern contains a triple quote"
     );
 }
 
+/// A HEADER MAY CARRY A TRAILING COMMENT, AND `[[ rule ]]` IS A HEADER.
+///
+/// The scan matched a line that EQUALS `[[name]]` after trimming, so an
+/// ordinary `[[rule]] # note` was invisible: no header was seen, the prune could
+/// not localise the fault, and the whole file was refused at exit `1` — which
+/// under this repository's exit contract does not block a mediated call.
+/// Measured over the compiled binary, one keystroke apart: with the comment,
+/// exit 1 and no deny over `rm /`; without it, exit 0 and the deny.
+///
+/// Both spellings in one fixture, because the trimming and the bracket search
+/// are the same defect from two sides.
+#[test]
+fn a_header_with_a_trailing_comment_is_still_a_header() {
+    let spaced = r#"
+[[ rule ]]   # a header written the other legal way
+id = "spaced-row"
+kind = "shape"
+scope = "mediated_call"
+pattern = "nevermatches /"
+severity = "deny"
+reason = "a row whose header carries whitespace and a comment"
+"#;
+    let dir = repo(
+        "config-forward-header-comment",
+        &format!(
+            "{}{spaced}{FROM_A_NEWER_SCHEMA}",
+            GOOD.replace("[[rule]]", "[[rule]] # trailing comment")
+        ),
+    );
+    let (code, stdout, stderr) = adjudicate(&dir);
+    assert_eq!(code, Some(0), "the hook answered: {stdout} {stderr}");
+    assert!(
+        stdout.contains(r#""permissionDecision":"deny""#) && stdout.contains("good-row"),
+        "a row whose header carries a comment must still decide: {stdout}"
+    );
+}
+
 /// MALFORMED TOML STAYS A HARD REFUSAL. A file that is not TOML is a different
 /// fault from a well-formed row naming a key from a newer schema, and collapsing
 /// the two is what produced the defect — a prune that swallowed a syntax error

@@ -431,7 +431,13 @@ resolve_via_web() {
 	# `BATTEN_VERSION` naming a tag from before `SHA256SUMS` was published while
 	# the API is rate-limited. Review caught the disagreement between the two
 	# routes.
-	want=$(awk -v n="$asset" '$2 == n { print $1; exit }' "$tmp/SHA256SUMS")
+	# GUARDED LIKE ITS SIBLING IN `resolve_via_api`, and for the reason the block
+	# at the call site states: `set -e` is suspended inside a function called as
+	# a condition, so an `awk` that cannot run here would otherwise leave `want`
+	# empty and return `3` — reporting a fault on THIS MACHINE as a release that
+	# publishes no digest. Review caught the missing guard.
+	want=$(awk -v n="$asset" '$2 == n { print $1; exit }' "$tmp/SHA256SUMS") ||
+		die 2 "could not read the published checksums on this machine."
 	[ -n "$want" ] || return 3
 
 	asset_url="$WEB/$REPO/releases/download/$tag/$asset"

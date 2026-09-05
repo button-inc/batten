@@ -218,7 +218,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             rules::run_all_over,
             RunRequest::spawning(flags.json, &flags.rule),
         ),
-        Some(Command::Config { command }) => run_config(&command, &overrides, out, err),
+        Some(Command::Config { command }) => run_config(&command, &overrides, mode, out, err),
         Some(Command::Spec { format }) => run_spec(format, out),
         Some(Command::ShowAgent { json }) => run_show_agent(json, &overrides, out),
         Some(Command::Doctor { command }) => run_doctor(&command, out),
@@ -13212,7 +13212,7 @@ fn announce_config(mode: Mode, err: &mut dyn Write, config: &resolve::Resolved) 
     // which is the silence this whole change exists to remove, reintroduced one
     // layer along. Review caught it. This is the one place both verbs already
     // pass through with `err` in hand.
-    report_unresolvable(&config.unresolvable, err)?;
+    report_unresolvable(&config.unresolvable, mode, err)?;
     announce_degrade(mode, err, config.base.as_ref())
 }
 
@@ -13972,14 +13972,26 @@ fn run_config_deprecations(json: bool, against: &str, out: &mut dyn Write) -> Re
 /// # Errors
 ///
 /// Propagates a write failure on `err`.
-fn report_unresolvable(rows: &[config::Unresolvable], err: &mut dyn Write) -> Result<()> {
+fn report_unresolvable(
+    rows: &[config::Unresolvable],
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<()> {
+    // THROUGH THE VERBOSITY LADDER, like both lines it stands beside in
+    // `announce_config`. A bare `writeln!` ignored `--log-level silent`, so
+    // `check` and `config show` printed a line per dropped row on a channel the
+    // caller had switched off — review measured both.
     for row in rows {
-        writeln!(
+        output::message(
+            mode,
+            Verbosity::Normal,
             err,
-            "batten: config: unresolved row {} — this build may predate the key \
-             (rebuild with `mise run install:local`), or the key is a typo. Either \
-             way the row enforces nothing",
-            row.line()
+            &format!(
+                "config: unresolved row {} — this build may predate the key \
+                 (rebuild with `mise run install:local`), or the key is a typo. \
+                 Either way the row enforces nothing",
+                row.line()
+            ),
         )?;
     }
     Ok(())
@@ -13988,6 +14000,7 @@ fn report_unresolvable(rows: &[config::Unresolvable], err: &mut dyn Write) -> Re
 fn run_config(
     command: &ConfigCommand,
     overrides: &Overrides,
+    mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -14021,7 +14034,7 @@ fn run_config(
                     )?;
                 }
             }
-            report_unresolvable(&config.unresolvable, err)?;
+            report_unresolvable(&config.unresolvable, mode, err)?;
             Ok(ExitCode::Success)
         }
         // The alarm beside `--config-from`'s control (CLOUD-87): a smell is a

@@ -1810,13 +1810,77 @@ impl<'a> Header<'a> {
 }
 
 /// Read one line as a table header, if it is one.
+///
+/// **A HEADER IS NOT A LINE THAT EQUALS `[[name]]`, and requiring that was a
+/// fail-open.** The first version matched `strip_prefix`/`strip_suffix` on the
+/// trimmed line, so an ordinary `[[rule]] # note` — or `[[ rule ]]` — was
+/// invisible: the scan saw no header, the prune could not localise the fault,
+/// and the whole file was refused at exit `1`, which under this repository's
+/// exit contract does not block a mediated call. Measured over the compiled
+/// binary, one keystroke apart: `[[rule]] # trailing comment` gave exit 1 and no
+/// deny over `rm /`, and deleting only the comment gave exit 0 and the deny.
+///
+/// So the close bracket is FOUND rather than assumed final: everything after it
+/// must be whitespace or a comment, and the name is trimmed.
+///
+/// A quoted name carrying a dot (`["a.b"]`) still reads as dotted here, which
+/// would misclassify it. That bound is left rather than lexed further because
+/// `prune_unresolvable`'s exactness guard turns any such mistake into an
+/// abandoned prune rather than a wrong blank — the same reason this scan is
+/// allowed to be simple at all.
 fn header_of(line: &str) -> Option<Header<'_>> {
     let line = line.trim();
-    if let Some(name) = line.strip_prefix("[[").and_then(|r| r.strip_suffix("]]")) {
-        return (!name.is_empty()).then_some(Header::Row(name));
+    let double = line.starts_with("[[");
+    let open = if double {
+        2
+    } else {
+        usize::from(line.starts_with('['))
+    };
+    if open == 0 {
+        return None;
     }
-    let name = line.strip_prefix('[').and_then(|r| r.strip_suffix(']'))?;
-    (!name.is_empty()).then_some(Header::Table(name))
+    let closing = if double { "]]" } else { "]" };
+    let rest = line.get(open..)?;
+
+    // Find the closing bracket that is not inside a quoted key.
+    let bytes = rest.as_bytes();
+    let mut at = 0;
+    let mut quote: Option<u8> = None;
+    let close = loop {
+        let byte = *bytes.get(at)?;
+        if let Some(open_quote) = quote {
+            if byte == b'\\' && open_quote == b'"' {
+                at += 2;
+                continue;
+            }
+            if byte == open_quote {
+                quote = None;
+            }
+            at += 1;
+        } else if byte == b'"' || byte == b'\'' {
+            quote = Some(byte);
+            at += 1;
+        } else if rest.get(at..)?.starts_with(closing) {
+            break at;
+        } else {
+            at += 1;
+        }
+    };
+
+    // Only whitespace or a comment may follow the header on its line.
+    let after = rest.get(close + closing.len()..)?.trim();
+    if !after.is_empty() && !after.starts_with('#') {
+        return None;
+    }
+    let name = rest.get(..close)?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some(if double {
+        Header::Row(name)
+    } else {
+        Header::Table(name)
+    })
 }
 
 /// Where a scan of the document stands at a line boundary.
