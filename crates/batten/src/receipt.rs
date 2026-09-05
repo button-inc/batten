@@ -1657,7 +1657,17 @@ pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
     // takes a default rather than the refusal it was first written as. Never
     // empty, so the "verified having asked about nothing" arm is unreachable by
     // construction rather than guarded here.
-    let required = verified_by(Path::new("."));
+    //
+    // **THE REPO ROOT, NOT THE PROCESS CWD** (review of #848). This read
+    // `Path::new(".")` while the very next line uses `facts.repo_root`, and
+    // `config::authority_site` performs no directory walk by design — so run from
+    // a subdirectory it found no `batten.toml`, silently fell through to the
+    // compiled default, and told a consumer who had declared
+    // `verified_by = ["ci", "fmt"]` that they were "NOT verified: <head> verify
+    // missing" about checks they never named, while the ones they did name were
+    // never asked about. It passes in this repository only because the two sets
+    // happen to coincide.
+    let required = verified_by(Path::new(&facts.repo_root));
     let mut unverified = Vec::new();
     for check in &required {
         let statement = load_statement(&receipt_path(&facts.repo_root, check)?);

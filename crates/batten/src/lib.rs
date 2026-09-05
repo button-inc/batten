@@ -5708,6 +5708,93 @@ fn run_land(
     }
 }
 
+/// Has the base moved while the previous step ran? `true` means lap.
+///
+/// The last free moment before a step spends, extracted from the driver because
+/// it is one decision with its own could-not-look and the driver is a sequencer.
+///
+/// **THE SLUG OR NO PROBE, never the placeholder** (review of #848). This read
+/// goes on the wire: `main_watch::read` interpolates the repo straight into the
+/// endpoint and no client-side `{owner}/{repo}` substitution exists any more, so
+/// the placeholder 404s every request — `is_reading()` false, `Poll::head` never
+/// set, and `moved()` answers `None`, which this reads as STILL LANDABLE. The
+/// probe would be permanently dead while looking exactly like a quiet trunk, and
+/// each lap would buy a matrix the fast-forward then refuses.
+///
+/// Skipping it on an unresolvable slug is the same fail-open reading
+/// `land::stale` already takes for a forge that did not answer. The difference is
+/// that it is a decision here rather than a silent consequence of a string that
+/// cannot work.
+///
+/// # Errors
+///
+/// Only for a stream that will not accept output.
+fn base_moved(
+    root: &Path,
+    trunk_poll: &mut main_watch::Poll,
+    reference: &str,
+    lap: u32,
+    step: land::Step,
+    out: &mut dyn Write,
+) -> Result<bool> {
+    let Some(slug) = repo_slug(root) else {
+        return Ok(false);
+    };
+    let trunk = trunk_watch(reference, "", &slug, 1);
+    if let Some(moved) = land::stale(root, trunk_poll, &trunk, reference) {
+        writeln!(
+            out,
+            "land: lap {lap} — {reference} moved to {moved} before {step:?}; lapping before a matrix is spent"
+        )?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Charge a lap that is about to go round again, refunding the ones that spent
+/// nothing. `Some(bound)` means stop.
+///
+/// **`Ledger`'s refund had no production caller at all** (review of #848), so a
+/// lap lost to another branch holding the lease consumed one of the two the
+/// runaway backstop allows — and a contended fleet exhausted the budget and then
+/// announced "a conflict, a failed gate or red CI will lose again". That is
+/// precisely the mis-diagnosis `Bound::LeaseWaits` exists to prevent, and the one
+/// CLOUD-413 measured being wrong twice across 24 laps.
+///
+/// **Only the lease arm is wired, and the other two are deliberately not.** The
+/// bot's unreadable answer no longer reaches the lap — `run_land_fast_forward`'s
+/// poll absorbs it now — and the transient re-run has no producer in this engine
+/// yet. A call site for a condition nothing raises is the dead code this finding
+/// was about, one layer over.
+fn charge_the_lap(step: land::Step, ledger: &mut land::Ledger) -> Option<land::Bound> {
+    if step != land::Step::Lease {
+        return None;
+    }
+    match ledger.waited(lease_wait_bound()) {
+        land::Charge::Lap => None,
+        land::Charge::Stop(bound) => Some(bound),
+    }
+}
+
+/// How many lease waits a landing absorbs before it stops.
+///
+/// **Separate from `$LAND_MAX_LAPS`, which is the point.** A lap lost to another
+/// branch holding the lease has spent nothing — no matrix, no gate, no push — so
+/// charging it against a budget that exists to catch "main moves faster than a
+/// lap takes" reports the wrong diagnosis at exhaustion. `Ledger::waited`
+/// refunds the lap and charges here instead.
+///
+/// Generous, because waiting is free and the thing being waited for is another
+/// branch finishing: the cost of too many is conditional requests, and the cost
+/// of too few is giving up on a queue that was moving.
+fn lease_wait_bound() -> u32 {
+    std::env::var("LAND_MAX_LEASE_WAITS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .filter(|waits| *waits > 0)
+        .unwrap_or(60)
+}
+
 /// How many laps before the loop gives up, when the caller names none.
 ///
 /// TWO, matching the predecessor. It is a RUNAWAY BACKSTOP rather than a budget:
@@ -5847,16 +5934,14 @@ fn run_land_lap(
                 // speculative.
                 place_the_bet(root, &mut bet, reference, branch, out)?;
             }
-            if let Some(pipeline::Precheck::BaseMoved) = row.precheck {
-                let trunk = trunk_watch(reference, "", &repo_or_placeholder(root), 1);
-                if let Some(moved) = land::stale(root, &mut trunk_poll, &trunk, reference) {
-                    writeln!(
-                        out,
-                        "land: lap {lap} — {reference} moved to {moved} before {step:?}; lapping before a matrix is spent"
-                    )?;
-                    unwind_lap(root, branch, &pipeline, &entered, seen, out, err)?;
-                    continue 'laps;
-                }
+            // THE ROW'S OWN QUESTION. Only the row declaring `BaseMoved` asks it:
+            // running the probe before every step would be a forge read per step
+            // rather than per lap, and a precheck the composition never asked for.
+            if row.precheck == Some(pipeline::Precheck::BaseMoved)
+                && base_moved(root, &mut trunk_poll, reference, lap, step, out)?
+            {
+                unwind_lap(root, branch, &pipeline, &entered, seen, out, err)?;
+                continue 'laps;
             }
             let code = match step {
                 land::Step::Replay => run_land_replay(root, url, reference, branch, out)?,
@@ -5898,6 +5983,28 @@ fn run_land_lap(
                     continue 'laps;
                 }
                 land::Progress::Lap => {
+                    // **A LAP THAT SPENT NOTHING IS REFUNDED, and nothing called
+                    // this** (review of #848). `Ledger::waited` and its siblings
+                    // had no production caller at all, so a lap lost to a lease
+                    // another branch holds consumed one of the two — and a
+                    // contended fleet exhausted the budget and then reported "a
+                    // conflict, a failed gate or red CI will lose again", which
+                    // is exactly the mis-diagnosis `Bound::LeaseWaits` exists to
+                    // prevent and which CLOUD-413 measured being wrong twice
+                    // across 24 laps.
+                    //
+                    // Only the lease arm is wired here. The bot's unreadable
+                    // answer no longer reaches this point — the poll absorbs it
+                    // — and the transient re-run has no producer yet, so wiring
+                    // either would be a call site for a condition nothing raises.
+                    if let Some(bound) = charge_the_lap(step, &mut ledger) {
+                        writeln!(
+                            err,
+                            "::error:: land: gave up waiting for the landing lease ({bound:?}); the fleet is saturated and this branch has spent no CI at all"
+                        )?;
+                        unwind_lap(root, branch, &pipeline, &entered, seen, out, err)?;
+                        return Ok(ExitCode::Internal);
+                    }
                     writeln!(
                         out,
                         "land: lap {lap} — {step:?} says lap; rebasing and retrying"
@@ -6514,6 +6621,21 @@ fn landed_for_real(
     match merged {
         fast_forward::Merged::Yes => {
             writeln!(out, "land: landed")?;
+            // **THE LEASE IS HANDED BACK ON THE WAY OUT, and the successful path
+            // never did it** (review of #848). `Compensation::ReleaseLease` runs
+            // only from `unwind_lap`, and this arm returns before reaching it —
+            // so a branch that landed cleanly held its lease until the TTL
+            // expired, and every waiter behind it sat out that TTL before it
+            // could spend a matrix. That is the exact cost the compensation's own
+            // doc says it exists to avoid, paid on the one path where the lease
+            // is certainly finished with. The predecessor released
+            // unconditionally from its exit handler, which the merged path
+            // reached too.
+            //
+            // Before the retirement rather than after: a hand-back that fails is
+            // best-effort either way, and doing it first means a slow remote
+            // delete cannot widen the window another branch waits through.
+            hand_back_the_lease(root, branch, out);
             // THE BRANCH HAS DONE ITS WHOLE JOB (CLOUD-349, CLOUD-1471). Only
             // here, never on a stop: an abandoned branch is evidence and has to
             // survive, while a landed one left behind is how a short-lived branch
@@ -7622,6 +7744,30 @@ fn run_land_entry_gates(
             Ok(Some(ExitCode::Internal))
         }
     }
+}
+
+/// Hand the landing lease back, best-effort, on the path that landed.
+///
+/// **`Compensation::ReleaseLease` cannot reach this path**: it runs from
+/// `unwind_lap`, and a landing returns before any unwind. That left the one
+/// outcome where the lease is definitively finished with as the one outcome that
+/// never released it, so every waiter behind a successful landing paid the full
+/// TTL (review of #848).
+///
+/// Silent in every failure, which is [`retire_the_branch`]'s posture and its
+/// reason: the landing already succeeded, and a cleanup step reported as failure
+/// makes a good outcome look broken. A lease this clone does not hold is not an
+/// error either — `lease_hand_back` already decides that.
+fn hand_back_the_lease(root: &Path, branch: &str, out: &mut dyn Write) {
+    let Ok(terms) = lease::terms(root) else {
+        return;
+    };
+    let Ok((_, holder)) = lease_identity(root) else {
+        return;
+    };
+    let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+    lease_hand_back(root, &terms, &holder, now);
+    let _ = writeln!(out, "land: handed the landing lease back after {branch}");
 }
 
 /// Retire the branch a lap has just landed, reporting what went.

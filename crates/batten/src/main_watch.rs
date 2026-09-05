@@ -49,7 +49,7 @@
 //! raced without becoming a second authority over when to stop asking, which is
 //! the mistake `pr_watch::read` was made public to avoid (CLOUD-1338).
 
-use crate::pr_watch::{interval_for, longer_of};
+use crate::pr_watch::{interval_for, wait_for};
 
 /// What the staleness poll needs.
 #[derive(Debug, Clone)]
@@ -142,9 +142,9 @@ impl Poll {
         if answer.is_reading() {
             self.head = head_from_body(&answer.body);
         }
-        // The server's own backoff outranks the configured floor, for the reason
-        // `pr_watch::Poll::absorb` states beside the same call.
-        interval_for(configured, longer_of(answer.poll_floor, answer.backoff))
+        // The cadence is clamped and the backoff is not — `wait_for` carries the
+        // reason, and it is the same reading the sibling arm takes.
+        wait_for(configured, answer.poll_floor, answer.backoff)
     }
 
     /// The validator for the next request.

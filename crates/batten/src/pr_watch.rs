@@ -145,29 +145,36 @@ fn string_at(row: &serde_json::Value, key: &str) -> String {
         .to_owned()
 }
 
-/// The wait to honour when the server sent BOTH a cadence and a backoff.
+/// How long to wait before the next request, honouring BOTH server bounds.
 ///
-/// **They are different things and `rest.rs` says so at the field** —
-/// `poll_floor` is *how often to ask*, `backoff` is *stop asking until*. Taking
-/// one `or` the other would drop whichever arrived second; taking the larger is
-/// the only combination that satisfies both, because a backoff is a lower bound
-/// on the wait exactly as a floor is.
+/// **THE BACKOFF DOES NOT GO THROUGH `interval_for`, AND ROUTING IT THERE WAS A
+/// DEFECT** (review of #848). The two are different things and `rest.rs` says so
+/// at the field: `poll_floor` is *how often to ask*, `backoff` is *stop asking
+/// until*. `MAX_FLOOR` is a ceiling on the first — its own doc justifies it
+/// purely as a guard on `X-Poll-Interval`, "larger than any interval this forge
+/// has been observed to ask for, so it clamps nothing real" — and it is
+/// meaningless as a ceiling on the second.
 ///
-/// Written because `Answer::backoff` had **no consumer at all** outside
-/// `rest.rs` (review of #848): a `403` carrying `Retry-After: 60` was answered by
-/// continuing at the configured one-second cadence, which is the predecessor
-/// defect `rest.rs` names as the reason the field exists — a poll responding to
-/// being rate-limited by generating more of the request that was just refused.
+/// Measured consequence of conflating them: `rest::backoff_of` resolves
+/// `x-ratelimit-reset - now` once `x-ratelimit-remaining` is `0`, so a primary
+/// limit resetting fifty minutes out yields `3000`. Clamped to `300`, the poll
+/// waits five minutes and re-issues the same request, ten more times, each
+/// answered `403` — which is verbatim the "responding to being rate-limited by
+/// generating more of the request that had just been refused" behaviour
+/// `Answer::backoff` was added to stop.
+///
+/// So the cadence is clamped and the backoff is not, and the answer is whichever
+/// is longer: a backoff is a lower bound on the wait exactly as a floor is, and
+/// satisfying only one of them satisfies neither.
 #[must_use]
-pub(crate) fn longer_of(floor: Option<f64>, backoff: Option<u64>) -> Option<f64> {
+pub(crate) fn wait_for(configured: u64, floor: Option<f64>, backoff: Option<u64>) -> f64 {
+    let paced = interval_for(configured, floor);
     // Narrowed the way `interval_for` narrows its own argument, and for the same
-    // reason: the conversion is then exact for every value that survives it.
-    let backoff = backoff.map(|secs| f64::from(u32::try_from(secs).unwrap_or(u32::MAX)));
-    match (floor, backoff) {
-        (Some(floor), Some(backoff)) => Some(floor.max(backoff)),
-        (Some(only), None) | (None, Some(only)) => Some(only),
-        (None, None) => None,
-    }
+    // reason: the conversion is exact for every value that survives it.
+    let backoff = backoff.map_or(0.0, |secs| {
+        f64::from(u32::try_from(secs).unwrap_or(u32::MAX))
+    });
+    paced.max(backoff)
 }
 
 /// The interval to honour: the configured one unless the server asked for more.
@@ -303,7 +310,7 @@ impl Poll {
         // said "wait 60 seconds" was answered by continuing at the configured
         // 1s cadence, which is the predecessor defect `rest.rs` names as the
         // reason the field exists.
-        interval_for(configured, longer_of(answer.poll_floor, answer.backoff))
+        wait_for(configured, answer.poll_floor, answer.backoff)
     }
 
     /// The reading this poll currently holds.
