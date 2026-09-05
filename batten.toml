@@ -3196,6 +3196,41 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "pin an attested binary in mise.toml instead; what to pin is a supply-chain decision, not a rewrite"
 
+# THE COUNTERWEIGHT TO THE ONE EXEMPTION, and it exists because the exemption
+# just widened.
+#
+# `install.sh` is the single named exception to the bash moratorium: it reaches a
+# host that has no binary yet, so it runs before the engine exists and cannot be a
+# policy module by construction. `policy/shell-retirement.rego` now also exempts
+# its suite, because refusing edits to `tests/install.bats` froze the tests of the
+# one script that must stay bash.
+#
+# That pair is a hatch unless something says what the script may DO. Otherwise any
+# predicate an author declines to write in Rust can be dropped into the one file no
+# rule refuses — which is not hypothetical: `mise.toml`'s inline `run` bodies
+# reached 1188 lines across 36 bodies with only a COUNT ratchet watching them, so
+# folding two bodies into one bigger one read as an improvement.
+#
+# THE PREDICATE IS WHAT IT INVOKES, not how long it is. A length ceiling would
+# refuse honest install work — a new platform, a better error — while admitting a
+# short line that provisions a toolchain. What is banned is reaching for a package
+# manager, a task runner or a shell profile: fetch, verify, unpack, place, report,
+# and nothing else.
+#
+# Measured against the file as it stands: zero matches, so this lands green and
+# fires on the first line that changes what the installer is for. `regex` rather
+# than `pattern` because the discriminator is a word in COMMAND position — a
+# comment mentioning `mise` is prose about the ecosystem, and `\bmise\b` in a
+# sentence is exactly the false positive that gets a gate switched off.
+[[rule]]
+id = "install-does-one-thing"
+kind = "forbid"
+glob = "install.sh"
+regex = '^\s*(mise|cargo|apt|apt-get|npm|pipx|uv|brew|rustup)\s|>>\s*"?\$?\{?HOME\}?/\.(bashrc|profile|zshrc)'
+severity = "deny"
+scope = "tree"
+no_fix_reason = "the installer installs the binary and nothing else; a toolchain, a package manager or a shell profile belongs behind `batten` once it is on PATH — a `[[provision]]` row or a `[[startup]]` row, both of which a gate can read"
+
 [[rule]]
 id = "no-cargo-install-in-ci"
 kind = "forbid"

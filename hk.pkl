@@ -990,6 +990,14 @@ local gate = new Mapping<String, Step> {
         // is meant to judge. `batten-glob-check` refused the rule until this
         // followed it, which is the coupling working rather than a chore.
         "mise-tasks/**",
+        // CLOUD-1457's `install-does-one-thing` row scopes a `forbid` to
+        // `install.sh`, so the installer is an input to `batten check` — the same
+        // coupling as `mise-tasks/**` above, and `batten-glob-check` refused the
+        // rule until this followed it. The consequence of omitting it is sharper
+        // here than elsewhere: `install.sh` is the one file exempt from the bash
+        // moratorium, so a commit touching only it is exactly the commit the rule
+        // exists for, and exactly the one the step would have skipped.
+        "install.sh",
         // CLOUD-876's `no-rego-metadata` row scopes a `forbid` to
         // `policy/**/*.rego`, so the modules are an input to `batten check` too
         // — the same coupling as `mise-tasks/**` above, and refused by

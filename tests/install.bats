@@ -301,3 +301,62 @@ EOF
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"cannot read the release"* ]]
 }
+
+@test "a proxy refusal is retried around the proxy with the operator's own credential" {
+	# THE ARM THE OUTAGE NEEDED (CLOUD-1457). A container-BUILD host has no session
+	# for the intercepting proxy to scope a credential to, so the proxy answers for
+	# GitHub with one of its own and returns 403 — measured, with the body "GitHub
+	# access to this repository is not enabled for this session", which is the proxy
+	# speaking and not GitHub. Retrying changes nothing; the second attempt has to
+	# leave the proxy.
+	#
+	# The stub reports the status on stdout because that is where `write-out` puts
+	# it, and records the config it was handed — so this asserts WHAT THE SCRIPT
+	# DECIDED TO SEND rather than a transfer outcome, which is the same reason the
+	# CA-bundle cases above are written this way.
+	seen="$BATS_TEST_TMPDIR/curl-config"
+	stub="$BATS_TEST_TMPDIR/stub"
+	mkdir -p "$stub"
+	printf '#!/bin/sh\ncat >>%s\nprintf 403\nexit 22\n' "$seen" >"$stub/curl"
+	chmod +x "$stub/curl"
+
+	PATH="$stub:$PATH" BATTEN_RETRIES=1 GH_TOKEN=proxy-placeholder \
+		GITHUB_PERSONAL_ACCESS_TOKEN=operator-pat run "$INSTALL"
+	[ "$status" -ne 0 ]
+	run cat "$seen"
+	[[ "$output" == *"noproxy = "* ]]
+	[[ "$output" == *"operator-pat"* ]]
+}
+
+@test "an ordinary failure never leaves the proxy" {
+	# THE ANTI-VACUITY HALF, and what keeps the case above honest. Without it the
+	# script could satisfy that assertion by bypassing on every failure — routing
+	# around an operator's legitimate proxy on a flaky network, which is the
+	# opposite of what a proxy is for. A connect failure reports no status.
+	seen="$BATS_TEST_TMPDIR/curl-config"
+	stub="$BATS_TEST_TMPDIR/stub"
+	mkdir -p "$stub"
+	printf '#!/bin/sh\ncat >>%s\nprintf 000\nexit 7\n' "$seen" >"$stub/curl"
+	chmod +x "$stub/curl"
+
+	PATH="$stub:$PATH" BATTEN_RETRIES=1 GH_TOKEN=proxy-placeholder \
+		GITHUB_PERSONAL_ACCESS_TOKEN=operator-pat run "$INSTALL"
+	run cat "$seen"
+	[[ "$output" != *"noproxy = "* ]]
+}
+
+@test "the ordinary token order still wins on the first attempt" {
+	# The precedence is unchanged and that is deliberate: on a machine with no
+	# intercepting proxy, GH_TOKEN IS the operator's credential and must win. The
+	# PAT is a fallback tried once the first has been REFUSED, never a replacement.
+	seen="$BATS_TEST_TMPDIR/curl-config"
+	stub="$BATS_TEST_TMPDIR/stub"
+	mkdir -p "$stub"
+	printf '#!/bin/sh\ncat >>%s\nprintf 403\nexit 22\n' "$seen" >"$stub/curl"
+	chmod +x "$stub/curl"
+
+	PATH="$stub:$PATH" BATTEN_RETRIES=1 GH_TOKEN=proxy-placeholder \
+		GITHUB_PERSONAL_ACCESS_TOKEN=operator-pat run "$INSTALL"
+	run head -20 "$seen"
+	[[ "$output" == *"proxy-placeholder"* ]]
+}

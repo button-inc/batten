@@ -129,7 +129,6 @@ mod hook_worktree_root;
 mod identity_churn;
 mod identity_precedence;
 mod init;
-mod install_proxy_fallback;
 mod inverted_board_cases;
 mod issue_key;
 mod judge_kind;

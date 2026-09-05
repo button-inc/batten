@@ -170,7 +170,41 @@ authored_shell(path) if {
 # The governed set on the head side.
 governed_at_head(path) if authored_shell(path)
 
-governed_at_head(path) if is_bats(path)
+governed_at_head(path) if {
+	is_bats(path)
+	not suite_of_an_immortal_subject(path)
+}
+
+# THE ONE SUITE THIS CAMPAIGN MAY NEVER RETIRE, AND THEREFORE MAY NEVER FREEZE.
+#
+# `install.sh` is the single named exception to the bash moratorium — it is how
+# the binary reaches a host that does not have it yet, so it runs before the
+# engine exists and cannot become a policy module by construction. It is
+# therefore absent from `authored_shell` and editing it passes.
+#
+# Its suite was not. Measured 2026-09-05: appending one line to
+# `tests/install.bats` gives `tests/install.bats shell-rule-retired` at exit 2,
+# while editing `install.sh` itself exits 0. So the one script that must stay
+# bash could grow without bound and its only tests were frozen — an exemption
+# applied to the code and withheld from its coverage, which is the wrong half.
+#
+# The harm is not theoretical: that refusal sent a proxy-fallback test for
+# `install.sh` into a Rust module beside none of the code it exercises, and the
+# workaround was written up as a design rather than reported as this defect.
+#
+# BY PATH RATHER THAN BY SUBJECT, and the bound is this module's own. A suite's
+# `# subject:` header is unreadable from here — `line_sources` does not carry
+# `tests/**/*.bats` at head, which the `carried`-arm comment below already states
+# — so "exempt a suite whose subject is immortal" is not expressible, and a rule
+# that read one would be reading a fact the engine does not build. One path, named
+# for one reason, is what this surface can actually decide.
+#
+# NARROW ON PURPOSE. This admits editing the suite; it admits nothing about
+# `install.sh` growing. The opposite bound is `install-does-one-thing`'s, which
+# refuses an installer that does anything but install the binary — the two are a
+# pair, and without the second this arm would be the open-ended hatch the
+# moratorium exists to prevent.
+suite_of_an_immortal_subject(path) if path == "tests/install.bats"
 
 # The governed set on the deleted side, where there is nothing to read.
 governed_when_deleted(path) if under_mise_tasks(path)
