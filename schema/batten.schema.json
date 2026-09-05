@@ -1083,6 +1083,13 @@
           "description": "What the record is filed under.",
           "$ref": "#/$defs/MintKey"
         },
+        "key_base": {
+          "description": "The base ref the change is measured against, for [`MintKey::Delta`].\n\nDeclared rather than defaulted: which ref a branch is *a change against*\nis the consumer's fact, and an engine that assumed one would be naming a\nbranch in a repo-agnostic core (non-negotiable rule 1).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "key_from": {
           "description": "The path whose value is the subject, for [`MintKey::Named`].",
           "type": [
@@ -1104,6 +1111,20 @@
           "items": {
             "type": "string"
           }
+        },
+        "selects": {
+          "description": "The value [`Declared::selects_at`] must hold. Compared for EQUALITY,\nnever as a substring: a prefix match would let a longer name a consumer\nnever declared mint under a shorter one's row.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selects_at": {
+          "description": "The path whose value must equal [`Declared::selects`] for this row to\nmint at all (CLOUD-1484).\n\n# Why presence could not do this job\n\n[`Declared::requires`] asserts a path is present and non-null, which is\nthe right shape for a SUCCESS predicate and the wrong one for a\nSELECTION. A harness that dispatches every one of its skills, agents or\ncommands through one tool name gives [`Declared::tool`] nothing to\ndiscriminate on: the row would mint on every invocation of that tool and\nthe receipt would attest that *something* ran. That is a false green in\nthe one direction a dispatch gate exists to refuse, and no amount of\n`requires` reaches it, because the field is present either way — it just\nholds another value.\n\n**The shape is adopted, not invented.** [`crate::capture`] already\nresolves a stored response by `key_at`/`key` through [`scalar`], the same\nselector this uses, so a path spelled here means what it means there.\n\nAbsent leaves the row judged exactly as it was before this column\nexisted: [`Declared::tool`] alone decides, which is every landed row's\nbehaviour.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "tool": {
           "description": "Which tool's result mints it, matched by [`crate::rules::selects_tool_name`].\n\n**A tool name, never a field shape.** A write response and a read payload\nare shape-identical across the fields either carries, so duck-typing lets\nthe later, poorer payload win; and the match is on the whole name or its\nwhole final `__`-delimited segment because a connector is exposed under\nmore than one name over its lifetime (CLOUD-178).",
@@ -1947,6 +1968,11 @@
           "description": "Filed under the current branch, so every commit on it continues to serve\nthe same record.",
           "type": "string",
           "const": "branch"
+        },
+        {
+          "description": "Filed under the identity of the branch's whole CHANGE against\n[`Declared::key_base`] (CLOUD-1484).\n\n**The third keying, and it exists because neither of the two above can\nkey a receipt to the bytes a review actually read.** [`MintKey::Named`]\ntakes its subject from the tool result, which knows nothing about the\nrepository; [`MintKey::Branch`] takes a name that outlives every commit\nunder it, which is the staleness defeat\n[`crate::receipt::branch_validity`] already had to be written to patch\naround (CLOUD-516).\n\nThe identity is [`crate::git::branch_patch_id`], so it moves when the\nchange moves and does NOT move when a rebase merely relocates it. Both\nhalves are load-bearing: without the first a receipt would outlive the\ncode it attests to, and without the second the landing loop would re-buy\nthe attested work on every lap, which is the shape that gets a gate\nswitched off rather than satisfied.",
+          "type": "string",
+          "const": "delta"
         }
       ]
     },
