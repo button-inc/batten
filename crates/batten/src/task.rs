@@ -591,12 +591,6 @@ pub fn singleton_release(git_dir: &Path, task: &str) {
     let _ = std::fs::remove_dir_all(singleton_lock(git_dir, task));
 }
 
-/// Take a task's lock for `pid`, or report who holds it.
-///
-/// `recheck` is the pause between the two sightings a reclaim requires. It is an
-/// argument rather than a constant so a test can drive the second case with a
-/// wide margin instead of racing the default; nothing in production sets it.
-#[must_use]
 /// Who holds the singleton lock for `task`, WITHOUT taking or reclaiming it
 /// (CLOUD-438).
 ///
@@ -637,6 +631,12 @@ pub fn singleton_holder(git_dir: &Path, task: &str) -> Option<String> {
     pid_exists(&holder).then_some(holder)
 }
 
+/// Take a task's lock for `pid`, or report who holds it.
+///
+/// `recheck` is the pause between the two sightings a reclaim requires. It is an
+/// argument rather than a constant so a test can drive the second case with a
+/// wide margin instead of racing the default; nothing in production sets it.
+#[must_use]
 pub fn singleton_acquire(
     git_dir: &Path,
     task: &str,

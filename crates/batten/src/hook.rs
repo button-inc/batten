@@ -2613,13 +2613,18 @@ pub enum Decision {
     /// once, at the boundary that consults the capability table, rather than
     /// guessed at each deny site.
     ///
-    /// **Nothing in `batten.toml` produces this yet, deliberately.** CLOUD-45 owns
-    /// the degradation — this value, [`encode_ask`], and the capability row they
-    /// consult — and CLOUD-340 owns the *vocabulary* a consumer reaches it with,
-    /// which its refinement records as an `ask` severity accepted only for
-    /// `mediated_call` scope. Inventing a second column here would give one
-    /// question two config surfaces and contradict a decision already taken
-    /// (non-negotiable rule 6).
+    /// **The vocabulary that reaches this is `severity = "ask"`, and it landed
+    /// with CLOUD-340.** CLOUD-45 owned the degradation — this value,
+    /// [`encode_ask`], and the capability row they consult — and shipped it with
+    /// no producer at all: the variant was matched everywhere and constructed
+    /// nowhere, which every exhaustive consumer reported as green. [`disposed`]
+    /// is the one site that constructs it, and it reads the row's own severity
+    /// column rather than a second one, because inventing a column here would
+    /// give one question two config surfaces (non-negotiable rule 6).
+    ///
+    /// It is accepted only for `scope = "mediated_call"` and only with a
+    /// `reason`; `rules::validate` refuses both otherwise, rather than rendering
+    /// an escalation nobody can answer as a deny nobody wrote down.
     Ask(Refusal),
     /// A deny a live waiver suppressed, carrying the record it owes (CLOUD-610).
     ///
@@ -5266,7 +5271,7 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
             // Orphaned first: it discards the verdict AND the supervision, so it
             // is the more complete failure of the two a detached pipeline commits.
             if detached_here || segment.terminator == Some(Separator::Background) {
-                return Decision::Deny(pipeline_refusal(rule, Discard::Orphaned));
+                return disposed(rule, pipeline_refusal(rule, Discard::Orphaned));
             }
             if segment.terminator == Some(Separator::Pipe) {
                 // Every stage downstream of the verdict, not merely the next: a
@@ -5289,13 +5294,13 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
                         })
                     });
                 if piped_into_filter {
-                    return Decision::Deny(pipeline_refusal(rule, Discard::Piped));
+                    return disposed(rule, pipeline_refusal(rule, Discard::Piped));
                 }
             }
             if matches!(segment.terminator, Some(Separator::Semi | Separator::Or))
                 && parsed.get(index + 1).is_some()
             {
-                return Decision::Deny(pipeline_refusal(rule, Discard::Trailing));
+                return disposed(rule, pipeline_refusal(rule, Discard::Trailing));
             }
         }
     }
@@ -5614,7 +5619,7 @@ fn tool_rules(policy: &Policy, envelope: &Envelope) -> Decision {
         if !modifier_admits(rule, envelope) {
             continue;
         }
-        return Decision::Deny(shape_refusal(rule));
+        return disposed(rule, shape_refusal(rule));
     }
     Decision::Allow
 }
@@ -5761,7 +5766,7 @@ fn ceiling_rules(policy: &Policy, envelope: &Envelope, measured: &mut usize) -> 
         // `>`, so exactly at the cap passes — `budget::Report::over_budget`'s
         // boundary, inherited rather than re-decided (CLOUD-925 §1).
         if count > max {
-            return Decision::Deny(ceiling_refusal(rule, count, max));
+            return disposed(rule, ceiling_refusal(rule, count, max));
         }
     }
     Decision::Allow
@@ -5790,7 +5795,7 @@ fn manifest_ceiling(policy: &Policy, envelope: &Envelope, counted: ManifestFacts
     };
     // `>`, so exactly at the cap passes — the boundary `budget::Report` owns.
     if count > max {
-        return Decision::Deny(ceiling_refusal(rule, count, max));
+        return disposed(rule, ceiling_refusal(rule, count, max));
     }
     Decision::Allow
 }
@@ -5855,11 +5860,47 @@ fn shape_rules(policy: &Policy, envelope: &Envelope, command: &str, keys: &KeyFa
             if key_present(expression, command, keys) {
                 continue;
             }
-            return Decision::Deny(unkeyed_refusal(rule));
+            return disposed(rule, unkeyed_refusal(rule));
         }
-        return Decision::Deny(shape_refusal(rule));
+        return disposed(rule, shape_refusal(rule));
     }
     Decision::Allow
+}
+
+/// Carry a composed refusal out under the disposition its row declares
+/// (CLOUD-340).
+///
+/// **THE ONE SITE WHERE `severity = "ask"` BECOMES A [`Decision::Ask`], AND
+/// UNTIL THIS EXISTED NOTHING COULD PRODUCE ONE.** [`Decision::Ask`],
+/// [`Capability::Ask`] and [`encode_ask`] all shipped with CLOUD-45 — the
+/// degradation was decided, the capability row was consulted, and the encoder
+/// was tested — over a variant that was only ever *matched* and never
+/// constructed. A vocabulary with no producer is the dead-gate shape one layer
+/// up from `.claude/rules/policy-modules.md`'s, and it survived precisely
+/// because every consumer of it was exhaustive and therefore green.
+///
+/// **EVERY rule-driven refusal on this surface goes through it**, not just the
+/// shape ones: `pipeline`, `ceiling` and `content` rows carry the same severity
+/// column and answer to the same caller. The first draft routed only the two
+/// shape sites, and review caught what that leaves — a mediated `pipeline` row
+/// declaring `severity = "ask"` loaded clean and hard-denied, so the config said
+/// ask and the runtime blocked with no route. That is precisely the downgrade
+/// nobody wrote down that `rules::validate_ask_disposition` refuses across
+/// scopes, reappearing across KINDS because the disposition was read per site
+/// instead of per row.
+///
+/// So it is a function rather than a match at each site: the disposition is the
+/// ROW's, read once, and seven sites each deciding it again is the
+/// second-authority shape this file already refuses for its own tokenizer.
+///
+/// Every other severity keeps [`Decision::Deny`]: `allow` and `warn` never reach
+/// here (`matching_shape_rows` filters on [`blocks`]), so the remaining arm is
+/// `deny` itself.
+fn disposed(rule: &Rule, refusal: Refusal) -> Decision {
+    if rule.severity() == RuleSeverity::Ask {
+        return Decision::Ask(refusal);
+    }
+    Decision::Deny(refusal)
 }
 
 /// Judge the content a write would land (CLOUD-758).
@@ -5902,7 +5943,7 @@ fn content_rules(policy: &Policy, envelope: &Envelope, prospective: &Prospective
             continue;
         };
         if pattern.is_match(content) {
-            return Decision::Deny(content_refusal(rule, envelope));
+            return disposed(rule, content_refusal(rule, envelope));
         }
     }
     Decision::Allow

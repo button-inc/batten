@@ -3707,6 +3707,11 @@
           "const": "warn"
         },
         {
+          "description": "A match blocks the call and hands the decision to a human (CLOUD-340).\n\n**A DISPOSITION AT `Deny`'S RANK, NOT A FOURTH RANK.** It blocks exactly\nas `deny` does; what differs is who decides, which is orthogonal to how\nbad the finding is. That is why it maps to `deny`'s row rather than\ngetting one of its own — see the module header, where the bijection this\nbreaks is corrected rather than quietly widened.\n\nMediated-call rules only. A tree-scoped rule has no caller to ask, so\n`ask` there is a config error rather than a silent downgrade, refused by\n`rules::validate`.",
+          "type": "string",
+          "const": "ask"
+        },
+        {
           "description": "A match fails the run.",
           "type": "string",
           "const": "deny"

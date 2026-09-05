@@ -48,6 +48,7 @@ mod advisory_drain;
 mod agent_capabilities;
 mod agent_facts;
 mod ambient_authority;
+mod ask_disposition;
 mod attribution;
 mod authority_replay;
 mod baseline;
