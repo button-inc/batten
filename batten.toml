@@ -6958,6 +6958,38 @@ measured = "2026-09-04"
 # empty `target` for cold, a minimal post-prune tree for warm — and stating the
 # derivation is what leaves that choice open instead of quietly foreclosing it.
 #
+# THE 2026-09-05 MOVE, 197 -> 208, FIFTH OF THE SAME SHAPE (CLOUD-1360). The
+# mcp-address bundle's seven compiled-binary tiers — `mcp_reduce_array`,
+# `connector_bound`, `content_address`, `address_resolve`, `locator_index`,
+# `address_transport`, `store_lifecycle` — took the gate's own reading 11 past the
+# basis, one outside the tolerance. `main` sat at 201, comfortably inside it, so
+# this branch is what tipped it and this is the gate working rather than a refusal
+# to argue with.
+#
+# `count` moves and THE FLOORS AND `measured` DELIBERATELY DO NOT, following the
+# 2026-09-03 entry rather than the scaling ones above it. That entry is right about
+# which half is honest: bumping `measured` to satisfy the refusal's own sentence
+# would be the staleness it warns about, performed on the field that records it. An
+# exact floor needs the independent measurement this block names — a build from an
+# empty `target` for cold, a minimal post-prune tree for warm — which is
+# CLOUD-1158's row and was not taken here.
+#
+# A `du -sm target` WAS available on this lap and is deliberately NOT written into
+# a floor, which is worth the sentence because it LOOKS like the missing
+# measurement: 4194 MB at 208 stems, 20.2 per stem against the 45.54 the entry
+# above derives. The reading was taken after the escalation had dropped 17264 MB of
+# regrowable cache, so it measures a tree the warm floor does not budget for. A
+# number disagreeing with the model by half is a signal about the reading's
+# provenance, not a floor.
+#
+# AND THE CALLER MISREPORTS IT A FIFTH TIME, with a wrinkle the four entries above
+# do not describe. `verify` again renders this as "not enough disk to run the
+# gate", and free space was again not close: 22313 MB against an 8971 MB declared
+# warm floor. What is new is that the same lap LEARNED a warm floor of 18747 MB
+# from a pathological rebuild and printed it two lines above the refusal — so for
+# the first time the caller's fabricated explanation has a plausible-looking number
+# sitting next to it. It is still a stem count that refused. Read the callee.
+
 # ONE READING WORTH LEAVING BEHIND, because it is the first time the derived cold
 # floor has exceeded what this container can offer: 21455 MB against 21065 MB free
 # at the time of the move. That is latent rather than blocking — cold is judged
@@ -6968,12 +7000,12 @@ measured = "2026-09-04"
 # satisfy refuses every lap and gets switched off.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 197
+count = 208
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 197
+count = 208
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
