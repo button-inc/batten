@@ -1274,6 +1274,12 @@ mod outcome_tests {
                 patterns: &patterns,
                 programs: &programs,
                 grammar: None,
+                // FIXED, because this row grades no lifetime. `now` reached
+                // `Context` on trunk while this case was on a branch, and the
+                // rebase merged the two without a textual conflict; the value
+                // is unread here, so a clock would only make the case
+                // non-deterministic for nothing.
+                now: 0,
             };
         let _ = &context;
 
@@ -1285,6 +1291,7 @@ mod outcome_tests {
             patterns: &patterns,
             programs: &programs,
             grammar: None,
+            now: 0,
         };
         assert_eq!(
             outcome(&row, &blocked),
@@ -1300,6 +1307,7 @@ mod outcome_tests {
             patterns: &patterns,
             programs: &programs,
             grammar: None,
+            now: 0,
         };
         assert_eq!(
             outcome(&row, &missed),
@@ -1316,6 +1324,7 @@ mod outcome_tests {
             patterns: &patterns,
             programs: &programs,
             grammar: None,
+            now: 0,
         };
         assert_eq!(outcome(&row, &applies), Outcome::Applies);
         assert!(satisfied(&row, &applies));

@@ -75,7 +75,28 @@ pub(crate) fn credential() -> Option<String> {
 /// a private one answers `401` — which every caller here already reports as
 /// could-not-look rather than as a verdict about the work.
 fn headers(conditional: Option<&str>, json_body: bool) -> Vec<(String, String)> {
-    let mut headers = vec![(String::from("Accept"), ACCEPT.to_owned())];
+    let mut headers = vec![
+        (String::from("Accept"), ACCEPT.to_owned()),
+        // **REQUIRED, AND ITS ABSENCE IS A 403 ON EVERY CALL.** The forge
+        // documents it: *"All API requests MUST include a valid User-Agent
+        // header. Requests with no User-Agent header will be rejected."* The
+        // client this tier replaced sent one for free, so nothing in the port
+        // noticed it was gone — and the failure does not look like a missing
+        // header. It looks like a permission problem, which is where a reader
+        // goes first: measured on this repository with a token whose
+        // `pull_requests=read` claim `gh-preflight` reports as `ok`, the same
+        // request answered `200` from `curl` and `403` from here, and the only
+        // difference was this line.
+        //
+        // A NAME AND A VERSION, which is what the forge asks for and what makes
+        // a rate-limit conversation possible at all. No URL and nothing about
+        // the consumer: a header is sent on every request, so it is the last
+        // place a repository's identity should leak (non-negotiable rule 1).
+        (
+            String::from("User-Agent"),
+            format!("batten/{}", env!("CARGO_PKG_VERSION")),
+        ),
+    ];
     if json_body {
         headers.push((
             String::from("Content-Type"),
