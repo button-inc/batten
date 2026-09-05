@@ -415,6 +415,30 @@ CI_REQUIRED_CHECKS = "ci,batten-check,bats,cross,commit-lint,zizmor,darwin-link 
 # only caller — which is what slice 7's deletion would orphan.
 LAND_BODY_SOURCE = "gh pr view --json body --jq .body"
 LAND_BODY_GATES = "mise run deferral-check|mise run closing-key-check"
+# THE ENTRY GATES, ASKED ONCE BEFORE THE FIRST LAP (CLOUD-1471). Same grammar and
+# same asymmetry as `LAND_BODY_GATES`, and one difference that matters: the engine
+# appends THE PULL REQUEST NUMBER to each argv, because which task drops a
+# subscription is this consumer's vocabulary and which pull request is being
+# landed is a fact the engine already resolved. A gate reading the number from its
+# own environment would be a second authority over it.
+#
+# WHY THIS PAIR. AGENTS.md bans PR-webhook babysitting and the harness arms a
+# subscription on every pull request this repo opens anyway, with no tool call
+# behind it on two of the three measured (CLOUD-518) — so a deny rule on the tool
+# closes only the path nobody used. `drop` FAILS OPEN and `check` does not, which
+# is what keeps the pair safe on the critical path: off harness, no token or any
+# non-200 mints nothing, `check` refuses exactly as before, and the manual
+# `record` is still the way through (CLOUD-790).
+#
+# `land.sh` ran these two as its first act and nothing in the engine carried them,
+# so retiring the lander would have dropped a live gate on the floor. Declared
+# here, they survive the deletion with their caller intact.
+# The `?` marks the drop ADVISORY, which is the pair's own asymmetry rather than
+# a softening: the bash ran `drop … || true` and only `check` as an `if !`. Drop
+# it and a `drop` that answers 1 (not dropped) or 2 (could not look) would stop
+# the landing where the predecessor carried on to `check` — whose refusal is the
+# one that names `record` as the way through.
+LAND_ENTRY_GATES = "?mise run pr-unsubscribed drop|mise run pr-unsubscribed check"
 # THE RECLAIM CENSUS'S STOP NOTE (CLOUD-451), declared here because the program
 # is this consumer's and a census name inside `crates/batten` is non-negotiable
 # rule 1's plainest violation. `batten lease release` spawns it when a release

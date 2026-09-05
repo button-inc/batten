@@ -1060,6 +1060,205 @@ pub fn ready(root: &Path, gates: &[Vec<String>], body: &str) -> Readied {
     Readied::Clear
 }
 
+/// The prefix marking an entry gate whose verdict does not stop the landing.
+///
+/// One character on the gate's own first word, so the marker travels with the
+/// gate it qualifies rather than in a second list somebody has to keep in step.
+/// [`admits_the_landing`] carries the measurement it conserves.
+pub const ADVISORY: char = '?';
+
+/// What retiring a landed branch actually removed.
+///
+/// **COUNTS AND BOOLEANS, never a name or a path** (non-negotiable rule 4). The
+/// caller already knows which branch it landed, and the receipt store's contents
+/// are the findings a branch filed — the one thing this family may not echo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Retired {
+    /// The branch is gone from the remote — deleted here, or already absent.
+    pub remote: bool,
+    /// This clone's remote-tracking ref for it is gone.
+    pub tracking: bool,
+    /// How many branch-keyed receipts were dropped.
+    pub receipts: usize,
+}
+
+/// The receipt families keyed by BRANCH NAME rather than by sha.
+///
+/// **A sha-keyed receipt dies with its sha and needs no sweep; these do not.**
+/// Each of these records something about a branch's whole filing history, so the
+/// next piece of work to reuse the name would be judged against rows that belong
+/// to the last one (CLOUD-774).
+///
+/// `filed-set-nudged` is here and was NOT in the predecessor's pair, which is a
+/// correction rather than a port: `Suppression::PerSet` writes a third store
+/// under the same key shape, and it landed after the bash cleanup was written. A
+/// port that copied the two literals would have left one family accumulating
+/// forever, which is the drift a named list exists to stop.
+const BRANCH_KEYED_RECEIPTS: &[&str] = &["board-writes", "filed-here-nudged", "filed-set-nudged"];
+
+/// Retire a branch whose pull request has merged.
+///
+/// # This is only ever reached from the LANDED path, and that is the whole guard
+///
+/// `mise-tasks/land.sh` states it: *"ONLY here, never on a `die` path — an
+/// abandoned branch is evidence and has to survive."* Trunk-based development is
+/// explicit that a short-lived branch should not outlive its pull request
+/// (CLOUD-349), and a name left behind is how one becomes long-lived; but a
+/// branch that did NOT land is the record of why it did not.
+///
+/// # Every failure is silent, because the landing already succeeded
+///
+/// Reporting a cleanup failure as the landing's exit code would make a successful
+/// landing look broken. So this returns what it managed rather than a `Result`,
+/// and the caller prints the counts — which is also what makes the difference
+/// between *deleted* and *could not* visible without it changing a verdict.
+///
+/// # The tracking ref goes too, and that half is not cosmetic
+///
+/// [`stale_tracking`]'s header carries the measurement: a stale
+/// `origin/<branch>` left after a merge makes a later `--force-with-lease`
+/// reject **permanently**, because the lease compares against a ref naming a
+/// commit the remote deleted. Deleting the remote branch without pruning the
+/// tracking ref manufactures exactly that state.
+#[must_use]
+pub fn retire_branch(root: &Path, remote: &str, branch: &str) -> Retired {
+    let reference = format!("refs/heads/{branch}");
+    let remote_gone = matches!(
+        crate::lease::delete_ref(remote, &reference),
+        Ok(crate::lease::Outcome::Applied)
+    );
+    let tracking = format!("refs/remotes/origin/{branch}");
+    let tracking_gone = crate::gitwrite::delete_ref(root, &tracking).is_ok();
+
+    // THE SLUG IS THE STORE'S OWN SPELLING, not a second one. Every writer under
+    // `.git/batten-receipts` keys a branch as `branch.replace('/', "-")`, so a
+    // sweep spelling it differently would delete nothing and report a clean
+    // count — the silent-empty-answer shape this repository refuses everywhere.
+    let slug = branch.replace('/', "-");
+    let store = crate::git::git_dir(root).map(|dir| dir.join("batten-receipts"));
+    let receipts = store.map_or(0, |dir| {
+        BRANCH_KEYED_RECEIPTS
+            .iter()
+            .filter(|family| std::fs::remove_file(dir.join(format!("{family}.{slug}"))).is_ok())
+            .count()
+    });
+
+    Retired {
+        remote: remote_gone,
+        tracking: tracking_gone,
+        receipts,
+    }
+}
+
+/// What an entry gate decided, before the lap spends anything.
+///
+/// A separate type from [`Readied`] rather than a reuse of it, because the two
+/// answer about different subjects: `Readied` judges the pull request's BODY and
+/// takes it on stdin, and this judges a precondition of the SESSION and takes the
+/// pull request's number on argv. One type over both would have to carry a body
+/// that half its callers do not have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Admitted {
+    /// Every declared gate passed, or none was declared.
+    Clear,
+    /// A gate refused, naming itself.
+    Refused {
+        /// The gate's own first word, which is the pointer a reader follows.
+        gate: String,
+        /// What the gate printed — its own report, forwarded rather than
+        /// summarised, for [`Readied::Refused`]'s reason.
+        detail: String,
+    },
+    /// A declared gate could not be run at all.
+    ///
+    /// **A REFUSAL, NOT A PASS**, for exactly [`Readied::Unrunnable`]'s reason: a
+    /// declared gate that cannot run is the dead-gate class this engine exists to
+    /// refuse, and an undeclared set is the only legitimate way to have none.
+    Unrunnable {
+        /// The gate that would not run.
+        gate: String,
+    },
+}
+
+/// Run the consumer's entry gates over this landing's pull request.
+///
+/// # What this is for, and why it is not an ordinary body gate
+///
+/// `mise-tasks/land.sh` opened with a pair of calls the lap could not proceed
+/// past — a drop and then a check — over a precondition that is about the SESSION
+/// rather than about the branch: this repository's contract forbids PR-webhook
+/// babysitting, the harness arms a subscription on every pull request it opens
+/// anyway, and the lander is the one place that runs at the moment it matters
+/// (CLOUD-518, CLOUD-790). Nothing in the engine carried it, so the retirement
+/// would have dropped a live gate on the floor (CLOUD-1471).
+///
+/// # The pull request's number is the engine's fact and the command is not
+///
+/// Each declared argv is run with the pull request number appended as its LAST
+/// argument. That split is non-negotiable rule 1 as a mechanism: which task drops
+/// a subscription is this consumer's vocabulary and is never compiled in, while
+/// *which pull request this landing is about* is a fact the engine already
+/// resolved and must not ask a consumer to spell a second time. A gate reading it
+/// from its own environment would be a second authority over which pull request a
+/// lap is landing, and the two could name different ones.
+///
+/// # It runs ONCE, before the first lap
+///
+/// The predecessor ran it before the singleton and the lease, so a refusal cost
+/// nothing at all. Per lap it would re-ask a question whose answer cannot change
+/// under a rebase, and each ask spends a process on the critical path.
+///
+/// **An UNDECLARED set is a pass**, on [`ready`]'s asymmetry: naming no entry
+/// gates is a legitimate configuration, and naming one that cannot run is a dead
+/// gate.
+#[must_use]
+pub fn admits_the_landing(root: &Path, gates: &[Vec<String>], pr: &str) -> Admitted {
+    for argv in gates {
+        let Some(first) = argv.first() else {
+            continue;
+        };
+        // THE ADVISORY MARKER, and it exists because the predecessor's pair is
+        // not two enforcers. `mise-tasks/land.sh` ran the drop as
+        // `… || true` and only the check as an `if !`, deliberately: the drop
+        // makes the call and FAILS OPEN — off harness, no token, any non-200 —
+        // while the check reads the receipt and refuses. Without a spelling for
+        // that, porting the pair either drops the call or promotes its exit code
+        // into a stop the bash never had.
+        //
+        // Consumer-facing and one character, because the alternative was a second
+        // environment variable listing which of the gates are advisory — two
+        // authorities over one list, and a drift the moment a name changes in
+        // only one of them.
+        let advisory = first.starts_with(ADVISORY);
+        let gate = first.trim_start_matches(ADVISORY).to_owned();
+        if gate.is_empty() {
+            continue;
+        }
+        let mut with_pr: Vec<String> = std::iter::once(gate.clone())
+            .chain(argv.iter().skip(1).cloned())
+            .collect();
+        with_pr.push(pr.to_owned());
+        let Some((code, output)) = crate::exec::piped_argv(root, &with_pr, "") else {
+            // AN ADVISORY GATE THAT WILL NOT RUN IS NOT A REFUSAL EITHER, which
+            // is the same reading one line down rather than a separate decision:
+            // `|| true` swallowed an unrunnable command exactly as it swallowed a
+            // refusing one, and a marker that covered only one of the two would
+            // be a promotion the predecessor never made.
+            if advisory {
+                continue;
+            }
+            return Admitted::Unrunnable { gate };
+        };
+        if code != 0 && !advisory {
+            return Admitted::Refused {
+                gate,
+                detail: output.trim().to_owned(),
+            };
+        }
+    }
+    Admitted::Clear
+}
+
 /// Which bound a charge ran into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Bound {

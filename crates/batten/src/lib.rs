@@ -5777,6 +5777,19 @@ fn run_land_lap(
         return Ok(ExitCode::Usage);
     }
 
+    // THE ENTRY GATES, ONCE, BEFORE ANY LAP CAN SPEND (CLOUD-1471). The bash
+    // lander opened with a pair of calls no lap could proceed past, over a
+    // precondition about the SESSION rather than about the branch — this
+    // repository's ban on PR-webhook babysitting, which the harness arms anyway
+    // (CLOUD-518, CLOUD-790). Nothing in the engine carried it, so retiring the
+    // lander would have dropped a live gate on the floor.
+    //
+    // BEFORE the lease and the singleton, which is where the predecessor put it
+    // and for its reason: a refusal here has spent nothing at all.
+    if let Some(code) = run_land_entry_gates(root, branch, out, err)? {
+        return Ok(code);
+    }
+
     // ONE POLL FOR THE WHOLE LANDING, held outside the lap loop so lap 2 onward
     // send the validator lap 1 was given. Rebuilt per lap it was a fresh
     // unconditional ask every time — see `land::stale`'s own header, which
@@ -5874,6 +5887,13 @@ fn run_land_lap(
                 land::Progress::Proceed => {}
                 land::Progress::Landed => {
                     writeln!(out, "land: landed on lap {lap}")?;
+                    // THE BRANCH HAS DONE ITS WHOLE JOB (CLOUD-349, CLOUD-1471).
+                    // Only here, never on a stop: an abandoned branch is evidence
+                    // and has to survive, while a landed one left behind is how a
+                    // short-lived branch becomes a long-lived one — and reusing
+                    // the name afterwards is the stale-tracking-ref deadlock
+                    // `land::stale_tracking` records.
+                    retire_the_branch(root, url, branch, out)?;
                     return Ok(ExitCode::Success);
                 }
                 land::Progress::Lap => {
@@ -7160,6 +7180,91 @@ fn fired(
         "::error:: land: the ready did not fire, so no run was started; pushing now would wait out the whole count on a matrix that does not exist"
     )?;
     Ok(ExitCode::Internal)
+}
+
+/// Run `$LAND_ENTRY_GATES` over this landing's pull request, once.
+///
+/// `Some(code)` stops the landing; `None` lets it proceed.
+///
+/// # The consumer names the gate and the engine supplies the pull request
+///
+/// `LAND_ENTRY_GATES` is a `|`-separated list of argvs, each run with the pull
+/// request number appended. Undeclared is a pass and declared-but-unrunnable is a
+/// refusal, which is [`run_land_ready`]'s asymmetry and is stated there.
+///
+/// # A pull request that will not resolve is a REFUSAL rather than a pass
+///
+/// Every other read in this family answers could-not-look and carries on, because
+/// spending nothing is the safe direction for a question about CI. Here it is the
+/// other way round: a gate declared over a pull request nobody could name has not
+/// run, and letting the lap proceed is precisely the dead-gate reading. The lap
+/// cannot finish without a pull request anyway — `run_land_fast_forward` stops on
+/// the same absence — so this refuses at the cheap end instead of after a matrix.
+fn run_land_entry_gates(
+    root: &Path,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    let declared = std::env::var("LAND_ENTRY_GATES").unwrap_or_default();
+    let gates = land::body_gates(&declared);
+    if gates.is_empty() {
+        return Ok(None);
+    }
+    let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
+    let Some(pr) = fast_forward::open_pull_request(&repo, branch) else {
+        writeln!(
+            err,
+            "::error:: land: {} entry gate(s) are declared and no open pull request for {branch} will resolve, so they cannot be asked",
+            gates.len()
+        )?;
+        return Ok(Some(ExitCode::Internal));
+    };
+    match land::admits_the_landing(root, &gates, &pr) {
+        land::Admitted::Clear => {
+            writeln!(out, "land: {} entry gate(s) clear", gates.len())?;
+            Ok(None)
+        }
+        land::Admitted::Refused { gate, detail } => {
+            // THE GATE'S OWN WORDS REACH THE OPERATOR (CLOUD-407). The
+            // predecessor's `die` added only the landing's context, because the
+            // gate is the authority on its own remedy and a summary here would be
+            // a second, staler copy of it.
+            writeln!(err, "::error:: land: {gate} refused this landing")?;
+            if !detail.is_empty() {
+                writeln!(err, "{detail}")?;
+            }
+            writeln!(
+                err,
+                "::error:: nothing has been spent — the refusal above says how to clear it, then run the landing again"
+            )?;
+            Ok(Some(ExitCode::Violation))
+        }
+        land::Admitted::Unrunnable { gate } => {
+            writeln!(
+                err,
+                "::error:: land: the declared entry gate {gate} will not run, so this landing's precondition is unasked rather than met"
+            )?;
+            Ok(Some(ExitCode::Internal))
+        }
+    }
+}
+
+/// Retire the branch a lap has just landed, reporting what went.
+///
+/// Every failure is silent in the exit code and visible in the line, which is
+/// [`land::retire_branch`]'s posture and its reason: the landing already
+/// succeeded, so reporting cleanup as failure would make it look broken.
+fn retire_the_branch(root: &Path, url: &str, branch: &str, out: &mut dyn Write) -> Result<()> {
+    let retired = land::retire_branch(root, url, branch);
+    // COUNTS AND BOOLEANS. `Retired` has nowhere to put a finding's text, which
+    // is non-negotiable rule 4 held in the TYPE rather than in this call site.
+    writeln!(
+        out,
+        "land: retired {branch} — remote:{} tracking:{} receipts:{}",
+        retired.remote, retired.tracking, retired.receipts
+    )?;
+    Ok(())
 }
 
 /// What the required checks say about this clone's HEAD, or `None`.
