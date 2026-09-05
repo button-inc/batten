@@ -444,7 +444,7 @@ pub fn wait(
                 // and the empty-string-on-failure posture stay its business and
                 // this arm only decides when to ask.
                 let raw = crate::pr_watch::read(config, poll.etag());
-                let interval = poll.absorb(&raw, config.interval);
+                let interval = poll.absorb(raw.as_ref(), config.interval);
                 if let Ok(crate::checks_green::Verdict::Green) =
                     crate::checks_green::decide(poll.runs(), roster)
                 {
@@ -1411,6 +1411,105 @@ pub fn redraft(node: &str) -> bool {
     document.get("errors").is_none()
 }
 
+/// Mark a pull request ready for review — the event that buys the matrix.
+///
+/// The exact mirror of [`redraft`], and it is the same endpoint for the same
+/// reason: `markPullRequestReadyForReview` is the only mutation that moves a
+/// draft, so this is one POST through [`crate::rest`] rather than a second
+/// client.
+///
+/// `false` where it did not happen. Unlike the tap's, this failure is NOT
+/// swallowed by its caller: a ready that did not fire buys no run, so pushing
+/// afterwards would wait out the whole ask count on a matrix nobody started —
+/// `tests/land.bats`'s *"a ready that fails stops before the push rather than
+/// pushing into silence"* is the case, and the successor conserves it.
+#[must_use]
+pub fn mark_ready(node: &str) -> bool {
+    let body = serde_json::json!({
+        "query": "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){clientMutationId}}",
+        "variables": { "id": node },
+    });
+    let Some(answer) = crate::rest::post_json("graphql", &body) else {
+        return false;
+    };
+    if !(200..300).contains(&answer.status) {
+        return false;
+    }
+    // A GRAPHQL ERROR IS A 200 here too, for the reason `redraft` states.
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(&answer.body) else {
+        return false;
+    };
+    document.get("errors").is_none()
+}
+
+/// What readying this head would buy.
+///
+/// **`Refire` is a state, not a retry**, which is the distinction the shell's
+/// eight ready cases exist to hold: a pull request already ready cannot be
+/// readied again, so the only way to mint a fresh run on it is to draft it and
+/// ready it back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Spend {
+    /// Ready it. It is a draft, and readying is what starts CI.
+    Ready,
+    /// Draft it and ready it back. It is already ready and the runs on this head
+    /// will never become an answer, so without this the branch waits forever on
+    /// a matrix that cannot grade.
+    Refire,
+    /// Neither. An answer exists, or one is on its way, or nobody could look.
+    Nothing,
+}
+
+/// Whether a ready on this head buys a run, spelled over readings already taken.
+///
+/// # THE IDEMPOTENCE IS WHY THIS READS THE VERDICT RATHER THAN THE RUN COUNT
+///
+/// *"A DRAFT whose push moves nothing readies once, not once and then again"* is
+/// the predecessor's own case, and a predicate over *"are there runs"* fails it:
+/// the lap that readied leaves a run that is **in flight**, and a second lap
+/// reading only presence would draft and ready it again, cancelling the very
+/// matrix it just bought. [`crate::checks_green::Pending`] is what tells the
+/// three apart, so no conclusion name is spelled here — the consumer's
+/// `answered` set already decided which of them is an answer, and a forge's
+/// vocabulary under `crates/batten` is non-negotiable rule 1's violation.
+///
+/// * `Running` — in flight. Leave it; this is the arm idempotence rests on.
+/// * `NoVerdict` — a draft-era `skipped` or a cancelled set: terminal, and never
+///   going to answer. Re-fire.
+/// * `Unregistered` — a fresh sha carrying no run at all. Re-fire.
+///
+/// # A READING NOBODY TOOK SPENDS NOTHING
+///
+/// `None` on either argument is could-not-look, and the answer is [`Spend::
+/// Nothing`] — the same posture [`closes_the_tap`] takes, one direction over.
+/// There it refuses to strand a head on a failure to look; here it refuses to
+/// buy a matrix on one.
+#[must_use]
+pub fn buys_a_matrix(
+    is_draft: Option<bool>,
+    reading: Option<&crate::checks_green::Verdict>,
+) -> Spend {
+    let Some(is_draft) = is_draft else {
+        return Spend::Nothing;
+    };
+    // A DRAFT IS READIED WHATEVER ITS RUNS SAY, and the case that forces it is
+    // the tap's own leftover: a pull request the tap drafted carries a cancelled
+    // set, and reading the runs first would leave it stuck as a draft forever.
+    if is_draft {
+        return Spend::Ready;
+    }
+    match reading {
+        None | Some(crate::checks_green::Verdict::Green | crate::checks_green::Verdict::Red(_)) => {
+            Spend::Nothing
+        }
+        Some(crate::checks_green::Verdict::Pending(pending)) => match pending {
+            crate::checks_green::Pending::Running { .. } => Spend::Nothing,
+            crate::checks_green::Pending::NoVerdict(_)
+            | crate::checks_green::Pending::Unregistered(_) => Spend::Refire,
+        },
+    }
+}
+
 /// The runs on a head that failed, as ids.
 ///
 /// **NO PAGE SIZE, deliberately, and the predecessor says why in a sentence
@@ -2242,6 +2341,83 @@ mod tests {
             base: String::from("0000000"),
         });
         assert!(!closes_the_tap(&tap(false, true, Some(false), stale)));
+    }
+
+    /// **A DRAFT IS READIED WHATEVER ITS RUNS SAY**, and the case that forces it
+    /// is the tap's own leftover: a pull request the tap drafted carries a
+    /// cancelled set, and reading the runs first would leave it a draft forever.
+    /// `tests/land.bats` states it as *"the re-drafted PR a cancelled set left
+    /// behind is readied, not stuck"*.
+    #[test]
+    fn a_draft_is_readied_whatever_its_head_carries() {
+        use crate::checks_green::{Pending, Verdict};
+
+        for reading in [
+            None,
+            Some(Verdict::Green),
+            Some(Verdict::Red(Vec::new())),
+            Some(Verdict::Pending(Pending::NoVerdict(Vec::new()))),
+        ] {
+            assert_eq!(buys_a_matrix(Some(true), reading.as_ref()), Spend::Ready);
+        }
+    }
+
+    /// **THE IDEMPOTENCE ARM, and it is the one a run count gets wrong.**
+    ///
+    /// *"A DRAFT whose push moves nothing readies once, not once and then
+    /// again"*: the lap that readied leaves a run IN FLIGHT, so a later lap
+    /// reading only *are there runs* would draft and ready it again — cancelling
+    /// the matrix it had just bought. `Pending::Running` is what tells that from
+    /// a set that will never grade.
+    #[test]
+    fn a_run_still_in_flight_buys_nothing_and_a_set_that_cannot_grade_refires() {
+        use crate::checks_green::{Pending, Verdict};
+
+        let running = Verdict::Pending(Pending::Running {
+            pending: 1,
+            graded: 0,
+        });
+        assert_eq!(
+            buys_a_matrix(Some(false), Some(&running)),
+            Spend::Nothing,
+            "re-firing here cancels the run this lap just paid for"
+        );
+
+        let cancelled = Verdict::Pending(Pending::NoVerdict(Vec::new()));
+        assert_eq!(
+            buys_a_matrix(Some(false), Some(&cancelled)),
+            Spend::Refire,
+            "a skipped or cancelled set is terminal and will never answer"
+        );
+        let fresh = Verdict::Pending(Pending::Unregistered(Vec::new()));
+        assert_eq!(
+            buys_a_matrix(Some(false), Some(&fresh)),
+            Spend::Refire,
+            "and a head carrying no run at all has nothing to wait for"
+        );
+    }
+
+    /// An answer that exists buys nothing, and a reading nobody took buys
+    /// nothing either — the same could-not-look posture [`closes_the_tap`] takes
+    /// one direction over.
+    #[test]
+    fn an_answered_head_and_an_unread_one_both_spend_nothing() {
+        use crate::checks_green::Verdict;
+
+        assert_eq!(
+            buys_a_matrix(Some(false), Some(&Verdict::Green)),
+            Spend::Nothing
+        );
+        assert_eq!(
+            buys_a_matrix(Some(false), Some(&Verdict::Red(Vec::new()))),
+            Spend::Nothing
+        );
+        assert_eq!(buys_a_matrix(Some(false), None), Spend::Nothing);
+        assert_eq!(
+            buys_a_matrix(None, Some(&Verdict::Green)),
+            Spend::Nothing,
+            "a draft state nobody could read is not a licence to spend"
+        );
     }
 
     /// The narrowing keeps every verdict's arm and drops only the findings, so a

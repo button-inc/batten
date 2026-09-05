@@ -56,9 +56,6 @@ use crate::exit::ExitCode;
 /// TOOL's vocabulary, the same standing `semver.rs` gives its analyser.
 pub const REPO_PLACEHOLDER: &str = "{owner}/{repo}";
 
-/// The client this poll reads through.
-const CLIENT: &str = "gh";
-
 /// Seconds between requests when the caller names none.
 ///
 /// One second, because the poll is CONDITIONAL: an unchanged reading answers
@@ -99,102 +96,6 @@ pub struct Progress {
     pub program: String,
     /// The identity the recorder keys on.
     pub id: String,
-}
-
-/// One response, split into the three things a conditional poll reads.
-///
-/// `PartialEq` without `Eq` since the floor became numeric: a header carrying
-/// `NaN` has no reflexive equality, and claiming one would be a lie the compiler
-/// is right to refuse rather than a derive to force.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Response {
-    /// The status line's code. `0` where there was no status line at all, which
-    /// is what a client that could not answer looks like.
-    pub status: u16,
-    /// The validator to send back on the next request.
-    pub etag: Option<String>,
-    /// A floor the server asked for, in seconds.
-    ///
-    /// **NUMERIC, NEVER AN INTEGER, AND THAT IS CLOUD-390 ONE LAYER OVER.** This
-    /// field was `Option<u64>`, so `value.parse()` over a fractional
-    /// `X-Poll-Interval` yielded `None` — which is byte-identical to "the server
-    /// asked for no floor at all". A floor the endpoint is entitled to set was
-    /// therefore dropped silently, on exactly the responses where it matters most.
-    ///
-    /// The predecessor had the same defect and fixed it: `main-watch.sh` compared
-    /// with `-gt`, which is integer-only, and the `2>/dev/null` beside it turned
-    /// "this interval is not an integer" into "no floor was asked for". CLOUD-390
-    /// found it by setting the suite's interval to `0.2`. The port reproduced the
-    /// bug the port was supposed to carry the fix for.
-    pub poll_floor: Option<f64>,
-    /// Everything past the header block.
-    pub body: String,
-}
-
-/// Split a raw `-i` response into status, headers and body.
-///
-/// Carriage returns are dropped first, because a header block arrives CRLF-
-/// terminated and a trailing `\r` would ride along inside every value — an
-/// `ETag` echoed back with one is not the `ETag` the server issued.
-#[must_use]
-pub fn parse_response(raw: &str) -> Response {
-    let clean = raw.replace('\r', "");
-    let mut status = 0u16;
-    let mut etag = None;
-    let mut poll_floor = None;
-    let mut body = String::new();
-    let mut in_body = false;
-
-    for (index, line) in clean.split('\n').enumerate() {
-        if in_body {
-            body.push_str(line);
-            body.push('\n');
-            continue;
-        }
-        if line.is_empty() {
-            in_body = true;
-            continue;
-        }
-        if index == 0 {
-            status = line
-                .split_whitespace()
-                .nth(1)
-                .and_then(|code| code.parse().ok())
-                .unwrap_or(0);
-            continue;
-        }
-        if let Some(value) = header(line, "etag") {
-            etag = Some(value.to_owned());
-        } else if let Some(value) = header(line, "x-poll-interval") {
-            // A NON-FINITE READING IS NO FLOOR, which is the fail-open direction
-            // the predecessor's `+0` coercion took: a header nobody can compare
-            // must not become a floor nobody can satisfy. `NaN` would lose every
-            // comparison in `interval_for` and read as "no floor" anyway; an
-            // infinity would win every one and hang the lap.
-            poll_floor = value
-                .parse::<f64>()
-                .ok()
-                .filter(|seconds| seconds.is_finite() && *seconds >= 0.0);
-        }
-    }
-
-    Response {
-        status,
-        etag,
-        poll_floor,
-        body,
-    }
-}
-
-/// The value of `name` on `line`, matched case-insensitively — header names are
-/// not case-sensitive and this endpoint has spelled `ETag` both ways.
-fn header<'a>(line: &'a str, name: &str) -> Option<&'a str> {
-    let (key, value) = line.split_once(':')?;
-    if key.trim().to_ascii_lowercase() == name {
-        Some(value.trim())
-    } else {
-        None
-    }
 }
 
 /// Project a check-runs document into the rows the decision reads.
@@ -264,7 +165,15 @@ fn string_at(row: &serde_json::Value, key: &str) -> String {
 pub fn interval_for(configured: u64, floor: Option<f64>) -> f64 {
     let configured = f64::from(u32::try_from(configured).unwrap_or(u32::MAX));
     match floor {
-        Some(floor) if floor > configured => floor,
+        // FINITE OR IT IS NOT A FLOOR, and the guard belongs HERE rather than
+        // only at the boundary that parses one. `crate::rest` already filters a
+        // header to a finite positive, so nothing unusable arrives from the real
+        // path today — but this function is public and takes an `f64`, so a
+        // caller constructing one reaches it, and `INFINITY > configured` holds:
+        // the answer would be an infinite wait, which is the hang the
+        // predecessor's `+0` coercion existed to refuse. A floor nobody can
+        // satisfy is no floor.
+        Some(floor) if floor.is_finite() && floor > configured => floor,
         _ => configured,
     }
 }
@@ -306,17 +215,28 @@ impl Poll {
     /// A `304` is the server saying nothing moved: the previous reading stands
     /// and the signature is not recomputed, because re-hashing an unchanged
     /// string per poll is a cost spent to learn what the status line said.
-    pub fn absorb(&mut self, raw: &str, configured: u64) -> f64 {
+    /// **`None` is a poll that could not look**, and it is folded rather than
+    /// skipped: the count still advances, the previous reading still stands, and
+    /// the caller waits its configured interval. Dropping it would let an
+    /// unreachable forge make a bounded loop unbounded — the same fold
+    /// [`crate::main_watch::Poll::absorb`] makes, and deliberately the same
+    /// shape, since the two are the arms of one race.
+    pub fn absorb(&mut self, answer: Option<&crate::rest::Answer>, configured: u64) -> f64 {
         self.polls += 1;
-        let response = parse_response(raw);
-        if let Some(etag) = response.etag {
-            self.etag = Some(etag);
+        let Some(answer) = answer else {
+            return interval_for(configured, None);
+        };
+        // AN ETAG SURVIVES A RESPONSE THAT CARRIES NONE, which is what keeps a
+        // single unvalidated answer from turning every later request
+        // unconditional.
+        if let Some(etag) = &answer.etag {
+            self.etag = Some(etag.clone());
         }
-        if response.status != 304 {
-            self.runs = runs_from_body(&response.body);
-            self.signature = signature(&response.body);
+        if answer.status != 304 {
+            self.runs = runs_from_body(&answer.body);
+            self.signature = signature(&answer.body);
         }
-        interval_for(configured, response.poll_floor)
+        interval_for(configured, answer.poll_floor)
     }
 
     /// The reading this poll currently holds.
@@ -415,7 +335,7 @@ pub fn watch(
     let mut poll = Poll::default();
     loop {
         let raw = read(config, poll.etag.as_deref());
-        let wait_for = poll.absorb(&raw, config.interval);
+        let wait_for = poll.absorb(raw.as_ref(), config.interval);
         // EVERY poll pushes, including the ones that learned nothing: proving
         // the loop turned is the tick's whole job.
         push_progress(config, poll.polls(), poll.signature());
@@ -509,25 +429,32 @@ fn render(findings: &[checks_green::Finding]) -> String {
 /// authority over the request, the argv and the failure posture. The loop is the
 /// caller's; the read stays here.
 ///
-/// An unreadable answer is the empty string, never an error: every failure to
+/// An answer that could not be taken is `None`, never an error: every failure to
 /// reach the forge is a could-not-look that the caller's own poll must survive.
+///
+/// # THE SPAWN IS GONE, AND THE REASON IT CARRIED WAS FALSE
+///
+/// This read was a `gh api -i` child process under
+/// `#[expect(clippy::disallowed_types)]` with the reason *"this crate carries no
+/// HTTP client, so the forge's own client IS the read"*. It does —
+/// [`crate::fetch`] is a vendored hyper client and [`crate::rest`] is the tier
+/// over it, both already in the crate — so the annotation recorded a decision
+/// nobody had the facts for. It is [`crate::rest::get`] now, the same one
+/// [`crate::main_watch::read`] takes, which is what makes the two arms of a lap's
+/// race one client rather than two.
+///
+/// The header parsing went with it. `-i` handed back a raw response that this
+/// module then parsed itself for the status, the `ETag` and `X-Poll-Interval` —
+/// a second header parser beside [`crate::rest::Answer`]'s, which is exactly the
+/// second authority that split does not survive.
 #[must_use]
-pub fn read(config: &Config, etag: Option<&str>) -> String {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: reading check runs is a network call and this crate carries no HTTP client, so the forge's own client IS the read (CLOUD-1143)"
-    )]
-    let output =
-        crate::rules::spawn_resolving(Some(std::path::Path::new(".")), CLIENT, |program, extra| {
-            std::process::Command::new(program)
-                .args(extra)
-                .args(request(config, etag))
-                .stderr(std::process::Stdio::null())
-                .output()
-        });
-    output.map_or_else(
-        |_| String::new(),
-        |output| String::from_utf8_lossy(&output.stdout).into_owned(),
+pub fn read(config: &Config, etag: Option<&str>) -> Option<crate::rest::Answer> {
+    crate::rest::get(
+        &format!(
+            "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}",
+            config.repo, config.sha
+        ),
+        etag,
     )
 }
 
@@ -632,28 +559,51 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_status_line_and_two_headers_are_read_off_a_raw_response() {
-        let parsed =
-            parse_response("HTTP/2.0 200 OK\r\nETag: W/\"a\"\r\nX-Poll-Interval: 4\r\n\r\n{}\n");
-        assert_eq!(parsed.status, 200);
-        assert_eq!(parsed.etag.as_deref(), Some("W/\"a\""));
-        assert_eq!(parsed.poll_floor, Some(4.0));
-        assert_eq!(parsed.body.trim(), "{}");
+    /// One answer, as `rest::get` hands it back.
+    ///
+    /// **THE HEADERS ARE ALREADY OFF IT, which is the point of the port.** These
+    /// cases used to build a raw `-i` response and drive this module's own header
+    /// parser; that parser is gone, and `crate::rest::Answer` is the one reading
+    /// of a status, an `ETag` and a poll floor in this crate.
+    fn answer(status: u16, etag: Option<&str>, body: &str) -> crate::rest::Answer {
+        crate::rest::Answer {
+            status,
+            etag: etag.map(str::to_owned),
+            poll_floor: None,
+            backoff: None,
+            body: body.to_owned(),
+        }
     }
 
+    /// **A POLL THAT COULD NOT LOOK IS FOLDED, NEVER SKIPPED.** The count still
+    /// advances and the previous reading still stands, which is what keeps an
+    /// unreachable forge from making a bounded loop unbounded — the arm the raw
+    /// empty string used to spell, now typed.
     #[test]
-    fn a_header_name_is_matched_whatever_its_case() {
-        let parsed = parse_response("HTTP/2.0 200 OK\netag: W/\"b\"\nx-poll-interval: 2\n\n{}\n");
-        assert_eq!(parsed.etag.as_deref(), Some("W/\"b\""));
-        assert_eq!(parsed.poll_floor, Some(2.0));
-    }
+    fn a_poll_that_could_not_look_keeps_the_reading_and_still_counts() {
+        let mut poll = Poll::default();
+        poll.absorb(
+            Some(&answer(
+                200,
+                Some("W/\"a\""),
+                r#"{"check_runs":[{"status":"completed","conclusion":"success","name":"ci"}]}"#,
+            )),
+            1,
+        );
+        assert_eq!(poll.runs().len(), 1);
 
-    #[test]
-    fn a_response_with_no_status_line_is_status_zero_and_an_empty_body() {
-        let parsed = parse_response("");
-        assert_eq!(parsed.status, 0);
-        assert!(parsed.body.trim().is_empty());
+        poll.absorb(None, 1);
+        assert_eq!(
+            poll.runs().len(),
+            1,
+            "a reading nobody took must not clear the one that stands"
+        );
+        assert_eq!(poll.polls(), 2, "and it is still a poll that turned");
+        assert_eq!(
+            poll.etag(),
+            Some("W/\"a\""),
+            "nor may it drop the validator, which would turn every later request unconditional"
+        );
     }
 
     #[test]
@@ -690,13 +640,17 @@ mod tests {
     fn a_304_keeps_the_previous_reading_instead_of_clearing_it() {
         let mut poll = Poll::default();
         poll.absorb(
-            "HTTP/2.0 200 OK\nETag: W/\"a\"\n\n{\"check_runs\":[{\"status\":\"completed\",\"conclusion\":\"success\",\"name\":\"ci\"}]}\n",
+            Some(&answer(
+                200,
+                Some("W/\"a\""),
+                r#"{"check_runs":[{"status":"completed","conclusion":"success","name":"ci"}]}"#,
+            )),
             1,
         );
         let before = poll.signature();
         assert_eq!(poll.runs().len(), 1);
 
-        poll.absorb("HTTP/2.0 304 Not Modified\nETag: W/\"a\"\n\n", 1);
+        poll.absorb(Some(&answer(304, Some("W/\"a\""), "")), 1);
         assert_eq!(poll.runs().len(), 1, "a 304 must not clear the reading");
         assert_eq!(
             poll.signature(),
@@ -710,12 +664,20 @@ mod tests {
     fn a_reading_that_changes_moves_the_signature() {
         let mut poll = Poll::default();
         poll.absorb(
-            "HTTP/2.0 200 OK\n\n{\"check_runs\":[{\"status\":\"in_progress\",\"conclusion\":null,\"name\":\"ci\"}]}\n",
+            Some(&answer(
+                200,
+                None,
+                r#"{"check_runs":[{"status":"in_progress","conclusion":null,"name":"ci"}]}"#,
+            )),
             1,
         );
         let before = poll.signature();
         poll.absorb(
-            "HTTP/2.0 200 OK\n\n{\"check_runs\":[{\"status\":\"completed\",\"conclusion\":\"success\",\"name\":\"ci\"}]}\n",
+            Some(&answer(
+                200,
+                None,
+                r#"{"check_runs":[{"status":"completed","conclusion":"success","name":"ci"}]}"#,
+            )),
             1,
         );
         assert_ne!(poll.signature(), before);
@@ -724,8 +686,8 @@ mod tests {
     #[test]
     fn an_etag_survives_a_response_that_carries_none() {
         let mut poll = Poll::default();
-        poll.absorb("HTTP/2.0 200 OK\nETag: W/\"a\"\n\n{}\n", 1);
-        poll.absorb("HTTP/2.0 200 OK\n\n{}\n", 1);
+        poll.absorb(Some(&answer(200, Some("W/\"a\""), "{}")), 1);
+        poll.absorb(Some(&answer(200, None, "{}")), 1);
         assert_eq!(poll.etag.as_deref(), Some("W/\"a\""));
     }
 
@@ -749,12 +711,7 @@ mod tests {
     #[test]
     fn a_fractional_server_floor_is_not_silently_dropped() {
         assert!(is(interval_for(1, Some(2.5)), 2.5));
-        let parsed = parse_response("HTTP/2.0 200 OK\nX-Poll-Interval: 0.5\n\n{}\n");
-        assert_eq!(
-            parsed.poll_floor,
-            Some(0.5),
-            "the header parses as the number it is"
-        );
+        assert!(is(interval_for(1, Some(0.5)), 1.0), "and only upward");
     }
 
     // ...and only upward. A floor read as an absolute would let a server asking
@@ -766,37 +723,29 @@ mod tests {
         assert!(is(interval_for(5, None), 5.0));
     }
 
-    /// A header nobody can compare must not become a floor nobody can satisfy:
-    /// `NaN` loses every comparison and an infinity wins every one, so both read
-    /// as no floor at all — the fail-open direction the predecessor's `+0`
-    /// coercion took.
+    /// A floor nobody can compare must not become one nobody can satisfy: `NaN`
+    /// loses every comparison and an infinity wins every one, so both read as no
+    /// floor at all — the fail-open direction the predecessor's `+0` coercion
+    /// took.
+    ///
+    /// **The PARSE half of this case is `crate::rest`'s now**, and moving it is
+    /// what found the defect this case now pins. `exchange` filters a header to a
+    /// finite positive, so nothing unusable arrives from the real path — and
+    /// `interval_for` did not guard it at all, so `INFINITY > configured` held
+    /// and the answer was an infinite wait. The boundary's filter was the only
+    /// thing standing between a public `f64` parameter and a hang.
     #[test]
     fn a_non_finite_floor_reads_as_no_floor_rather_than_as_a_hang() {
-        for raw in ["nan", "inf", "-1", "not-a-number", ""] {
-            let parsed = parse_response(&format!(
-                "HTTP/2.0 200 OK\nX-Poll-Interval: {raw}\n\n{{}}\n"
-            ));
-            assert_eq!(parsed.poll_floor, None, "unusable floor {raw:?}");
-        }
+        assert!(is(interval_for(5, Some(f64::NAN)), 5.0));
+        assert!(is(interval_for(5, Some(f64::INFINITY)), 5.0));
+        assert!(is(interval_for(5, Some(-1.0)), 5.0));
     }
 
     // The request IS part of the predicate (CLOUD-337): this endpoint returns a
     // run per event per name, and nothing here fetches page 2.
     #[test]
     fn the_request_asks_for_a_full_page() {
-        let args = request(&config(), None);
-        assert!(
-            args.iter().any(|arg| arg.contains("per_page=100")),
-            "{args:?}"
-        );
-    }
-
-    #[test]
-    fn a_held_etag_becomes_a_conditional_header_and_nothing_else_moves() {
-        let plain = request(&config(), None);
-        let conditional = request(&config(), Some("W/\"a\""));
-        assert_eq!(conditional.len(), plain.len() + 2);
-        assert!(conditional.contains(&String::from("If-None-Match: W/\"a\"")));
+        assert_eq!(PER_PAGE, 100);
     }
 
     #[test]

@@ -65,25 +65,6 @@ pub struct Config {
     pub interval: u64,
 }
 
-/// The request this poll makes, as argv.
-///
-/// Built rather than formatted at the call site so the endpoint and the
-/// conditional header are one object a test can read — the same reason
-/// [`crate::pr_watch::request`] is a function.
-#[must_use]
-pub fn request(config: &Config, etag: Option<&str>) -> Vec<String> {
-    let mut args = vec![
-        String::from("api"),
-        String::from("-i"),
-        format!("repos/{}/git/ref/heads/{}", config.repo, config.branch),
-    ];
-    if let Some(etag) = etag {
-        args.push(String::from("-H"));
-        args.push(format!("If-None-Match: {etag}"));
-    }
-    args
-}
-
 /// The sha a ref-object body names.
 ///
 /// A body that will not parse yields `None` rather than an error, which is the
@@ -209,15 +190,6 @@ mod tests {
     const BASE: &str = "1111111111111111111111111111111111111111";
     const MOVED: &str = "2222222222222222222222222222222222222222";
 
-    fn config() -> Config {
-        Config {
-            repo: String::from(crate::pr_watch::REPO_PLACEHOLDER),
-            branch: String::from("main"),
-            base: String::from(BASE),
-            interval: 1,
-        }
-    }
-
     fn ref_body(sha: &str) -> crate::rest::Answer {
         crate::rest::Answer {
             status: 200,
@@ -255,30 +227,25 @@ mod tests {
         );
     }
 
-    /// The request is conditional from the second ask, and the endpoint is the
-    /// single ref object rather than the commit.
+    /// **THE POLL IS CONDITIONAL FROM THE SECOND ASK**, which is what makes a
+    /// one-second interval affordable at all: an unchanged ref answers `304`
+    /// with no body and costs no rate limit.
+    ///
+    /// Asserted over the VALIDATOR the poll carries rather than over a rendered
+    /// request. This case used to build `gh` argv through a `request` function,
+    /// and once `read` became `crate::rest::get` that argv reached no endpoint —
+    /// a test pinning the shape of a call nothing makes, which is the dead gate
+    /// this repository exists to refuse. The function is retired with it.
     #[test]
-    fn the_second_request_carries_the_etag_the_first_was_given() {
-        let config = config();
-        let first = request(&config, None);
-        assert!(
-            !first.iter().any(|arg| arg.starts_with("If-None-Match")),
-            "nothing to validate against yet: {first:?}"
-        );
-        assert!(
-            first
-                .iter()
-                .any(|arg| arg == "repos/{owner}/{repo}/git/ref/heads/main"),
-            "the smallest body that answers the question: {first:?}"
-        );
-
+    fn the_second_ask_carries_the_etag_the_first_was_given() {
         let mut poll = Poll::default();
-        poll.absorb(Some(&ref_body(BASE)), 1);
-        let second = request(&config, poll.etag());
-        assert!(
-            second.contains(&String::from("If-None-Match: W/\"a\"")),
-            "a 304 is what makes a one-second poll affordable: {second:?}"
+        assert_eq!(
+            poll.etag(),
+            None,
+            "nothing to validate against before the first answer"
         );
+        poll.absorb(Some(&ref_body(BASE)), 1);
+        assert_eq!(poll.etag(), Some("W/\"a\""));
     }
 
     /// A `304` leaves the reading alone, so an unchanged trunk costs no parse and
