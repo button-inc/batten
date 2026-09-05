@@ -221,9 +221,22 @@ pub fn replay(root: &Path, remote: &str, reference: &str, branch: &str) -> Resul
 /// a function rather than formatted at the call site so the one place that
 /// decides this is greppable, and so a caller cannot pass a tracking ref where a
 /// remote one belongs.
+/// **THE `refs/heads/` PREFIX, NEVER THE LAST SEGMENT** (review of #848). This
+/// read `reference.rsplit('/').next()`, which is the leaf — so a consumer whose
+/// trunk is `release/1.x` got `refs/remotes/origin/1.x`, and `advance` then wrote
+/// the trunk's head into the tracking ref belonging to an unrelated branch named
+/// `1.x` while `stale` compared this branch's freshness against it. A slashed
+/// branch name is ordinary, not exotic.
+///
+/// `lease::lands_by_fast_forward` states the rule in this same crate — "ONE
+/// PREFIX, NEVER EVERY LEADING ONE" — and uses `strip_prefix` for it. A short
+/// name passes through unchanged, which is what the driver hands in.
 pub(crate) fn tracking_ref(reference: &str) -> String {
-    let leaf = reference.rsplit('/').next().unwrap_or(reference);
-    format!("refs/remotes/origin/{leaf}")
+    let name = reference
+        .strip_prefix("refs/heads/")
+        .unwrap_or(reference)
+        .trim_start_matches('/');
+    format!("refs/remotes/origin/{name}")
 }
 
 /// Append this lap's outcome to the branch's record.

@@ -63,10 +63,23 @@ const ACCEPT: &str = "application/vnd.github+json";
 /// a second answer to "which variable holds the credential", and the four spawns
 /// this module replaces existed because nobody looked for the first.
 pub(crate) fn credential() -> Option<String> {
+    // **THE EMPTINESS TEST IS INSIDE THE CLOSURE, and outside it the fallback
+    // above was a sentence the code did not implement** (review of #848).
+    // `find_map` commits to the first variable that EXISTS, so a trailing
+    // `.filter` judged only the already-chosen value: an exported-but-EMPTY
+    // `GH_TOKEN` yielded `None` rather than falling through to `GITHUB_TOKEN`.
+    //
+    // That is the ordinary shape rather than a corner: Actions substitutes the
+    // empty string for an unset secret, so `GH_TOKEN: ${{ secrets.PAT }}` with no
+    // PAT configured exports an empty one beside a perfectly good job token — and
+    // this repository's own `mise.toml` sets `GH_TOKEN` to the empty string
+    // whenever neither of its two declared sources is present. Every REST read
+    // then goes out unauthenticated, and every caller reads the resulting 403/404
+    // as could-not-look, so a landing reports "no in-flight runs" at exit 0 while
+    // knowing nothing at all.
     ["GH_TOKEN", "GITHUB_TOKEN"]
         .into_iter()
-        .find_map(|name| std::env::var(name).ok())
-        .filter(|token| !token.is_empty())
+        .find_map(|name| std::env::var(name).ok().filter(|token| !token.is_empty()))
 }
 
 /// The request headers for one exchange.
@@ -353,6 +366,22 @@ fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>) -> Option<Answe
     })
 }
 
+/// The longest backoff this tier will honour, in seconds.
+///
+/// **A CEILING ON THE FORGE'S OWN NUMBER, which `MAX_FLOOR` deliberately is
+/// not.** That one bounds `X-Poll-Interval` — a cadence — and its doc says so;
+/// putting a backoff through it would truncate a genuine rate-limit wait into a
+/// retry loop against the refusal that caused it. But unbounded is not the other
+/// option: `Retry-After` is a number off the wire and a reset instant is a
+/// subtraction, so both can arrive absurd, and the consumer is a `thread::sleep`
+/// inside a loop with no wall clock of its own.
+///
+/// One hour, which is longer than any window this forge resets on, so it clamps
+/// nothing a healthy exchange produces — and a landing that has waited an hour
+/// has a caller who wants to hear about it rather than a process that should
+/// still be asleep.
+const MAX_BACKOFF: u64 = 3600;
+
 /// The backoff a response asks for, in seconds, or `None`.
 ///
 /// **`now` is the CALLER'S instant rather than a clock read here**, which is the
@@ -378,17 +407,27 @@ fn backoff_of(header: impl Fn(&str) -> Option<String>, now: u64) -> Option<u64> 
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .filter(|seconds| *seconds > 0)
     {
-        return Some(seconds);
+        return Some(seconds.min(MAX_BACKOFF));
     }
     // ONLY AT ZERO REMAINING. The reset instant rides every response, so reading
     // it unconditionally would back off after each successful call.
     if header("x-ratelimit-remaining").and_then(|raw| raw.trim().parse::<u64>().ok()) != Some(0) {
         return None;
     }
+    // **A CLOCK THAT DID NOT READ IS NOT AN INSTANT** (review of #848).
+    // `now_unix` answers `0` when `SystemTime::now` fails, and `0` passes the
+    // `reset > now` filter — so the subtraction yielded the raw absolute epoch,
+    // about 1.79e9 seconds, and `pr_watch::wait_for` deliberately does not clamp
+    // a backoff. One failed clock read therefore put a loop this crate documents
+    // as unbounded to sleep for roughly fifty-seven years, holding the landing
+    // lease and looking exactly like a slow bot.
+    if now == 0 {
+        return None;
+    }
     header("x-ratelimit-reset")
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .filter(|reset| *reset > now)
-        .map(|reset| reset - now)
+        .map(|reset| (reset - now).min(MAX_BACKOFF))
 }
 
 #[cfg(test)]
