@@ -1096,7 +1096,7 @@ impl Comparison {
 /// Forwards to [`Comparison::summary`] rather than restating it.
 impl crate::output::Line for Comparison {
     fn line(&self) -> String {
-        Comparison::summary(self).to_string()
+        Comparison::summary(self)
     }
 }
 

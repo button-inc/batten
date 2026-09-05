@@ -270,7 +270,7 @@ impl Report {
 /// types may reach the data channel, never what any of them renders.
 impl crate::output::Line for Report {
     fn line(&self) -> String {
-        Report::summary(self).to_string()
+        Report::summary(self)
     }
 }
 
@@ -290,7 +290,7 @@ impl FileCount {
 /// the bytes here are the bytes this type already emitted.
 impl crate::output::Line for FileCount {
     fn line(&self) -> String {
-        FileCount::line(self).to_string()
+        FileCount::line(self)
     }
 }
 

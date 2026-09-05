@@ -197,7 +197,7 @@ impl Reading {
 /// the bytes here are the bytes this type already emitted.
 impl crate::output::Line for Reading {
     fn line(&self) -> String {
-        Reading::line(self).to_string()
+        Reading::line(self)
     }
 }
 

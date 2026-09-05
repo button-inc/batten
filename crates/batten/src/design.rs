@@ -389,7 +389,7 @@ impl Problem {
 /// the bytes here are the bytes this type already emitted.
 impl crate::output::Line for Problem {
     fn line(&self) -> String {
-        Problem::line_text(self).to_string()
+        Problem::line_text(self)
     }
 }
 

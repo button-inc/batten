@@ -1356,7 +1356,7 @@ impl Weakening {
 /// the bytes here are the bytes this type already emitted.
 impl crate::output::Line for Weakening {
     fn line(&self) -> String {
-        Weakening::line(self).to_string()
+        Weakening::line(self)
     }
 }
 

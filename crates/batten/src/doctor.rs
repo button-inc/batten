@@ -129,7 +129,7 @@ impl Check {
 /// the bytes here are the bytes this type already emitted.
 impl crate::output::Line for Check {
     fn line(&self) -> String {
-        Check::line(self).to_string()
+        Check::line(self)
     }
 }
 
@@ -337,7 +337,7 @@ impl Mediator {
 /// types may reach the data channel, never what any of them renders.
 impl crate::output::Line for Mediator {
     fn line(&self) -> String {
-        Mediator::line(self).to_string()
+        Mediator::line(self).to_owned()
     }
 }
 
@@ -444,7 +444,7 @@ impl Egress {
 /// types may reach the data channel, never what any of them renders.
 impl crate::output::Line for Egress {
     fn line(&self) -> String {
-        Egress::line(self).to_string()
+        Egress::line(self).to_owned()
     }
 }
 

@@ -249,7 +249,7 @@ impl Outcome {
 /// the bytes here are the bytes this type already emitted.
 impl crate::output::Line for Outcome {
     fn line(&self) -> String {
-        Outcome::line(self).to_string()
+        Outcome::line(self)
     }
 }
 

@@ -146,7 +146,7 @@ impl Smell {
 /// the bytes here are the bytes this type already emitted.
 impl crate::output::Line for Smell {
     fn line(&self) -> String {
-        Smell::line_text(self).to_string()
+        Smell::line_text(self)
     }
 }
 
