@@ -5964,14 +5964,27 @@ fn run_land_lap(
     // the fleet was saturated rather than blaming a conflict — and the budget is
     // unchanged from what shipped. `LAND_MAX_LEASE_WAITS` bounds the charge, not
     // the loop.
+    // WHAT HAS BEEN ENTERED AND NOT YET UNDONE, which is what an undo is owed
+    // for. A lap that stopped at `verify` never readied, so it owes no re-draft
+    // — computing the owed set from the composition alone would compensate
+    // effects nobody caused.
+    //
+    // **DECLARED OUTSIDE THE LOOP, and that is the whole of `Landing::Unconfirmed`
+    // working** (review of #848). This was a per-lap binding, so `continue 'laps`
+    // DROPPED it — and the one arm that laps WITHOUT unwinding is the unconfirmed
+    // merge, whose entire argument is that the undos are deferred rather than
+    // forgotten. Measured against the comment that claimed exactly that: an
+    // unconfirmed lap discarded its ready and its live runs, so a lap stopping
+    // afterwards handed back no lease, re-drafted nothing and abandoned nothing.
+    //
+    // `unwind_lap` is what clears it, so every path that DOES compensate starts
+    // the next lap owing nothing and the deferring path starts it owing what it
+    // deferred. `pipeline::unwind` already dedupes, so a step entered twice
+    // across two laps is still compensated once.
+    let mut entered: Vec<land::Step> = Vec::new();
     'laps: for lap in 1..=laps {
         ledger.attempt();
         writeln!(out, "land: lap {lap} of {laps}")?;
-        // WHAT THIS LAP HAS ENTERED, which is what it owes an undo for. A lap
-        // that stopped at `verify` never readied, so it owes no re-draft —
-        // computing the owed set from the composition alone would compensate
-        // effects nobody caused.
-        let mut entered: Vec<land::Step> = Vec::new();
         // WHAT THE WAIT SAW, or `None` where no lap took a reading. The tap
         // refuses to draft on `None` deliberately — see `land::closes_the_tap`.
         let mut seen: Option<land::TapVerdict> = None;
@@ -5987,8 +6000,10 @@ fn run_land_lap(
             // THE BET IS SETTLED BEFORE ANYTHING IS SPENT, and before the
             // replay that would otherwise build on somebody else's commits.
             if let Some(pipeline::Precheck::BetSettled) = row.precheck {
-                if let Some(code) = settle_the_bet(root, &mut bet, reference, branch, out, err)? {
-                    unwind_lap(root, branch, &pipeline, &entered, seen, out, err)?;
+                if let Some(code) =
+                    settle_the_bet(root, url, &mut bet, reference, branch, out, err)?
+                {
+                    unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
                     return Ok(code);
                 }
                 // AND ONLY THEN IS A NEW ONE PLACED. Placing before settling would
@@ -6003,7 +6018,7 @@ fn run_land_lap(
             if row.precheck == Some(pipeline::Precheck::BaseMoved)
                 && base_moved(root, &mut trunk_poll, reference, lap, step, out)?
             {
-                unwind_lap(root, branch, &pipeline, &entered, seen, out, err)?;
+                unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
                 continue 'laps;
             }
             let code = match step {
@@ -6034,6 +6049,7 @@ fn run_land_lap(
             if row.entered(code == ExitCode::Success) {
                 entered.push(step);
             }
+            note_the_push(step, code, &mut bet);
             match land::progress_of(step, code, seen) {
                 land::Progress::Proceed => {}
                 // `None` is not merged, or nobody could say. Either way this is
@@ -6043,7 +6059,7 @@ fn run_land_lap(
                     // The forge says it did NOT merge, so this head is not trunk
                     // and the lap's own effects are still this lap's to undo.
                     Landing::NotMerged => {
-                        unwind_lap(root, branch, &pipeline, &entered, seen, out, err)?;
+                        unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
                         continue 'laps;
                     }
                     // **NOBODY COULD SAY, SO NOTHING IS CANCELLED** (review of
@@ -6057,32 +6073,15 @@ fn run_land_lap(
                     // Lapping without compensating is the cheap direction: the
                     // next lap re-reads the merge state, and a lap that really
                     // did not land still has its ready and its runs, which the
-                    // NEXT unwind owes. `entered` is not cleared, so nothing is
-                    // forgotten — only deferred.
+                    // NEXT unwind owes. `entered` outlives the lap and only
+                    // `unwind_lap` drains it, so nothing is forgotten — only
+                    // deferred.
                     Landing::Unconfirmed => continue 'laps,
                 },
                 land::Progress::Lap => {
-                    // **A LAP THAT SPENT NOTHING IS REFUNDED, and nothing called
-                    // this** (review of #848). `Ledger::waited` and its siblings
-                    // had no production caller at all, so a lap lost to a lease
-                    // another branch holds consumed one of the two — and a
-                    // contended fleet exhausted the budget and then reported "a
-                    // conflict, a failed gate or red CI will lose again", which
-                    // is exactly the mis-diagnosis `Bound::LeaseWaits` exists to
-                    // prevent and which CLOUD-413 measured being wrong twice
-                    // across 24 laps.
-                    //
-                    // Only the lease arm is wired here. The bot's unreadable
-                    // answer no longer reaches this point — the poll absorbs it
-                    // — and the transient re-run has no producer yet, so wiring
-                    // either would be a call site for a condition nothing raises.
-                    if let Some(bound) = charge_the_lap(step, &mut ledger) {
-                        writeln!(
-                            err,
-                            "::error:: land: gave up waiting for the landing lease ({bound:?}); the fleet is saturated and this branch has spent no CI at all"
-                        )?;
-                        unwind_lap(root, branch, &pipeline, &entered, seen, out, err)?;
-                        return Ok(ExitCode::Internal);
+                    if let Some(code) = charge_or_refuse(step, &mut ledger, err)? {
+                        unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
+                        return Ok(code);
                     }
                     writeln!(
                         out,
@@ -6092,7 +6091,7 @@ fn run_land_lap(
                     // `Progress::Compensate` variant would have done: a lap that
                     // readied, spent and then laps has a ready pull request and a
                     // live matrix for a SHA about to be replaced.
-                    unwind_lap(root, branch, &pipeline, &entered, seen, out, err)?;
+                    unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
                     continue 'laps;
                 }
                 // CARRYING THE STEP'S OWN CODE rather than a code of the loop's.
@@ -6101,7 +6100,7 @@ fn run_land_lap(
                 // answer it would have got running that step by hand, which is
                 // what keeps the loop from becoming a second exit vocabulary.
                 land::Progress::Stop => {
-                    unwind_lap(root, branch, &pipeline, &entered, seen, out, err)?;
+                    unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
                     return Ok(code);
                 }
             }
@@ -6149,12 +6148,17 @@ fn unwind_lap(
     root: &Path,
     branch: &str,
     pipeline: &pipeline::Pipeline,
-    entered: &[land::Step],
+    entered: &mut Vec<land::Step>,
     seen: Option<land::TapVerdict>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<()> {
+    // **DRAINED HERE RATHER THAN AT EACH CALL SITE**, because there are five of
+    // them and the one that must NOT drain is the arm that does not call this at
+    // all. Clearing where the compensation happens is what keeps the two facts —
+    // "these were undone" and "these are still owed" — from drifting apart.
     let owed = pipeline.unwind(entered);
+    entered.clear();
     if owed.is_empty() {
         return Ok(());
     }
@@ -6325,6 +6329,7 @@ fn unwind_lap(
 /// unwound here rather than pushed, whether or not anything ever places one.
 fn settle_the_bet(
     root: &Path,
+    url: &str,
     bet: &mut speculation::Bet,
     reference: &str,
     branch: &str,
@@ -6382,7 +6387,7 @@ fn settle_the_bet(
         // because it takes the same action if the guard ever moves: no bet is
         // nothing to unwind.
         speculation::Settle::Pending | speculation::Settle::Nothing => Ok(None),
-        speculation::Settle::Lost => unwind_the_bet(root, branch, bet, &base, &tracking, out, err),
+        speculation::Settle::Lost => unwind_the_bet(root, url, branch, bet, reference, out, err),
     }
 }
 
@@ -6429,15 +6434,70 @@ fn bet_liveness(root: &Path, branch: &str, base: &str) -> speculation::Live {
 /// replay is for one inherited from a dead run, which has only the base — and
 /// `origin/main..HEAD` minus the borrowed range is precisely this branch's own
 /// commits.
+/// Charge this lap against the budget it spent, or refuse having said which one
+/// is exhausted.
+///
+/// **A LAP THAT SPENT NOTHING IS REFUNDED, and nothing called this** (review of
+/// #848). `Ledger::waited` and its siblings had no production caller at all, so
+/// a lap lost to a lease another branch holds consumed one of the two — and a
+/// contended fleet exhausted the budget and then reported "a conflict, a failed
+/// gate or red CI will lose again", which is exactly the mis-diagnosis
+/// [`land::Bound::LeaseWaits`] exists to prevent and which CLOUD-413 measured
+/// being wrong twice across 24 laps.
+///
+/// Only the lease arm is wired. The bot's unreadable answer no longer reaches
+/// this point — the poll absorbs it — and the transient re-run has no producer
+/// yet, so wiring either would be a call site for a condition nothing raises.
+///
+/// `Some(code)` is the refusal and the caller still owes its unwind: the undos
+/// are the driver's, and performing them here would put the compensation cluster
+/// behind two call sites instead of one.
+fn charge_or_refuse(
+    step: land::Step,
+    ledger: &mut land::Ledger,
+    err: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    let Some(bound) = charge_the_lap(step, ledger) else {
+        return Ok(None);
+    };
+    writeln!(
+        err,
+        "::error:: land: gave up waiting for the landing lease ({bound:?}); the fleet is saturated and this branch has spent no CI at all"
+    )?;
+    Ok(Some(ExitCode::Internal))
+}
+
+/// Record that the speculative range reached the remote.
+///
+/// **THE ONE WRITER OF [`speculation::Bet::pushed`], which had none** (review of
+/// #848). The field was declared with its consequence written on it — an unwind
+/// then owes the remote a correction — and was neither set nor read, so the
+/// correction never came due and origin kept another branch's commits under an
+/// open pull request.
+///
+/// A successful push under an outstanding bet is the only event that puts the
+/// range there, so the write is here rather than in `run_land_push`: that is a
+/// standalone verb and holds no bet.
+fn note_the_push(step: land::Step, code: ExitCode, bet: &mut speculation::Bet) {
+    if step == land::Step::Push && code == ExitCode::Success && bet.live() {
+        bet.pushed = true;
+    }
+}
+
 fn unwind_the_bet(
     root: &Path,
+    url: &str,
     branch: &str,
     bet: &mut speculation::Bet,
-    base: &str,
-    tracking: &str,
+    reference: &str,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {
+    // DERIVED HERE rather than handed in, which is one argument and one
+    // duplicated derivation fewer: both are functions of what this already
+    // holds, and the caller's copies are the same two calls.
+    let base = bet.published().unwrap_or_default().to_owned();
+    let tracking = land::tracking_ref(reference);
     // FULLY QUALIFIED, because both writers end in `gitwrite::set_ref` and its
     // `FullName::try_from` does not reject a SHORT name — it rejects a slashless
     // lowercase one and takes a slashed one VERBATIM as a full name. `branch`
@@ -6460,10 +6520,41 @@ fn unwind_the_bet(
             out,
             "land: an earlier run bet on a base that is no longer landing; replaying this branch's own commits onto {tracking} rather than carrying another branch's"
         )?;
-        gitwrite::replay_onto(root, &full, base, tracking)
+        gitwrite::replay_onto(root, &full, &base, &tracking)
             .map(|replayed| !matches!(replayed, gitwrite::Rebase::Conflicted { .. }))
     };
     if let Ok(true) = outcome {
+        // **THE REMOTE OWES A CORRECTION TOO, and nothing paid it** (review of
+        // #848). `Bet::pushed` was declared with this consequence written on it
+        // and was neither set nor read, so unwinding restored the LOCAL branch
+        // and left origin holding another branch's commits under this pull
+        // request — the measured two-PRs-at-one-sha state, and the one the field
+        // names in its own doc.
+        //
+        // The CAS makes this safe rather than merely correct: `lease::push`
+        // takes `old` from the advertisement, so a remote somebody else has since
+        // moved refuses and the lap reports a race instead of overwriting them.
+        //
+        // NOT FATAL, for `unwind_lap`'s reason: the caller is already leaving
+        // with an answer, and a correction that would not go through must not
+        // replace it. It is reported, and the next lap's own push re-attempts it
+        // from a tree that no longer carries the range.
+        if bet.pushed {
+            match land::push(root, url, branch) {
+                Ok(land::Pushed::Landed(head)) => writeln!(
+                    out,
+                    "land: the speculative range was pushed, so {branch} on the remote now reads {head} rather than another branch's commits"
+                )?,
+                Ok(land::Pushed::Raced) => writeln!(
+                    err,
+                    "::error:: land: {branch} moved on the remote, so the speculative range it carries was left in place; the next lap re-reads it"
+                )?,
+                Err(_) => writeln!(
+                    err,
+                    "::error:: land: the remote could not be corrected, so {branch} there may still carry another branch's commits"
+                )?,
+            }
+        }
         drop_the_bet(root, bet);
         return Ok(None);
     }
@@ -6550,8 +6641,7 @@ fn place_the_bet(
             let _ = gitwrite::delete_ref(root, speculation::BASE_REF);
             writeln!(
                 out,
-                "land: the branch holding the lease conflicts with this one, so this lap builds on {} rather than speculating",
-                short(&tracking)
+                "land: the branch holding the lease conflicts with this one, so this lap builds on {tracking} rather than speculating"
             )?;
             Ok(())
         }
@@ -7554,14 +7644,19 @@ fn run_lease_carries(
 /// the raced wait and the between-gate-and-push probe — cannot disagree about
 /// which ref, which repository or which interval they are asking about.
 ///
-/// The branch is the reference's LAST segment, because the endpoint path spells
-/// a ref by short name (`git/ref/heads/main`) where the caller carries a full
-/// one. Same derivation the tracking ref above takes, and deliberately the same
-/// line: two spellings of "which trunk" is how the two arms drift apart.
+/// The branch is the reference's SHORT NAME, because the endpoint path spells a
+/// ref that way (`git/ref/heads/main`) where the caller carries a full one.
+///
+/// **`land::short_ref`, never a second derivation here** (review of #848). This
+/// said it took "the same derivation the tracking ref above takes" while taking
+/// `rsplit('/')` — the leaf — after `tracking_ref` had been fixed off it. A
+/// consumer whose trunk is `release/1.x` therefore asked the forge for
+/// `git/ref/heads/1.x`, got a 404, and BOTH staleness arms went silently dead
+/// while the sentence claiming they could not drift stood over the drift.
 fn trunk_watch(reference: &str, base: &str, repo: &str, interval: u64) -> main_watch::Config {
     main_watch::Config {
         repo: repo.to_owned(),
-        branch: reference.rsplit('/').next().unwrap_or(reference).to_owned(),
+        branch: land::short_ref(reference).to_owned(),
         base: base.to_owned(),
         interval,
     }

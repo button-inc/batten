@@ -2301,6 +2301,7 @@ pub fn fetch(remote: &str, repo: &std::path::Path, reference: &str) -> Result<Fe
         return Ok(Fetched {
             head: want.to_owned(),
             objects: Vec::new(),
+            advertised: advertisement.refs.keys().cloned().collect(),
         });
     }
     let haves = crate::git::recent_commits(repo, HAVE_WINDOW);
@@ -2337,6 +2338,7 @@ pub fn fetch(remote: &str, repo: &std::path::Path, reference: &str) -> Result<Fe
     Ok(Fetched {
         head: want.to_owned(),
         objects: objects_in(tail)?,
+        advertised: advertisement.refs.keys().cloned().collect(),
     })
 }
 
@@ -2348,6 +2350,18 @@ pub struct Fetched {
     /// Every object the answer carried. **Empty means the odb already had it**,
     /// never that the fetch failed.
     pub objects: Vec<Object>,
+    /// Every ref the remote advertised on THIS exchange, by full name.
+    ///
+    /// Carried out rather than dropped because the fetch already read it, and
+    /// the one caller that needs it — the landing path's prune — would otherwise
+    /// have to take a second advertisement to learn what the first one said.
+    /// Two readings of "what does the remote carry" is two answers, and the
+    /// prune is exactly the decision that must not act on the staler one.
+    ///
+    /// **Never empty on a successful fetch**, because a fetch that found nothing
+    /// to want has already failed by then — so a caller may read emptiness as a
+    /// remote carrying no refs rather than as could-not-look.
+    pub advertised: Vec<String>,
 }
 
 /// How many local commits are offered as `have` lines.

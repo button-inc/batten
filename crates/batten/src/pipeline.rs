@@ -319,19 +319,39 @@ impl Pipeline {
     /// load: two steps owing one undo is a legitimate composition, and the
     /// alternative would make an adopter's pipeline unloadable for describing its
     /// effects accurately.
+    ///
+    /// **A SHARED UNDO IS OWED AT THE EARLIEST OWER'S POSITION, and getting that
+    /// backwards inverted the invariant this function's own header states**
+    /// (review of #848). Deduping newest-first keeps the NEWEST occurrence, so
+    /// `[Lease, Ready, Push, Wait]` released the lease at `Push`'s slot — before
+    /// the re-draft — which is precisely what
+    /// `the_unwind_runs_newest_first`'s rationale says must never happen: the
+    /// next branch gets a landing slot while this one's pull request is still
+    /// ready and still spending. The shipped test asserted the inversion, because
+    /// its entered set predates the `Lease` row and could not see it.
+    ///
+    /// Releasing a resource is safe only once every effect taken UNDER it is
+    /// undone, which is the same stack discipline read one level out: the lease
+    /// is acquired first, so it is released last.
     #[must_use]
     pub fn unwind(&self, entered: &[Step]) -> Vec<Compensation> {
-        let mut owed: Vec<Compensation> = Vec::new();
-        for step in entered.iter().rev() {
+        // Forward, so the first sighting of a compensation is its earliest ower.
+        let mut owed: Vec<(usize, Compensation)> = Vec::new();
+        for (index, step) in entered.iter().enumerate() {
             let Some(row) = self.steps.iter().find(|row| row.step == *step) else {
                 continue;
             };
-            if !row.compensate.undoes_something() || owed.contains(&row.compensate) {
+            if !row.compensate.undoes_something()
+                || owed.iter().any(|(_, seen)| *seen == row.compensate)
+            {
                 continue;
             }
-            owed.push(row.compensate);
+            owed.push((index, row.compensate));
         }
-        owed
+        owed.sort_by_key(|(index, _)| std::cmp::Reverse(*index));
+        owed.into_iter()
+            .map(|(_, compensation)| compensation)
+            .collect()
     }
 }
 
@@ -703,6 +723,45 @@ mod tests {
                 Compensation::Redraft,
             ],
             "the reverse of the order they took effect in"
+        );
+    }
+
+    /// **THE LEASE IS RELEASED LAST WHEN THE LAP ACTUALLY TOOK IT**, which is the
+    /// case the one above cannot see: its entered set predates the `Lease` row.
+    ///
+    /// `Lease` and `Push` share [`Compensation::ReleaseLease`], and deduping
+    /// newest-first kept `Push`'s slot — so a full lap released the lease BEFORE
+    /// re-drafting, the exact ordering the case above says must not happen. This
+    /// is the mirror that makes that rationale enforced rather than merely
+    /// written down.
+    #[test]
+    fn a_shared_undo_is_owed_at_the_earliest_owers_position() {
+        let pipeline = Pipeline::default();
+        assert_eq!(
+            pipeline.unwind(&[Step::Lease, Step::Ready, Step::Push, Step::Wait]),
+            vec![
+                Compensation::Abandon,
+                Compensation::Redraft,
+                Compensation::ReleaseLease,
+            ],
+            "the lease is acquired first, so it is handed back last — after the \
+             re-draft that stops this pull request spending under it"
+        );
+    }
+
+    /// AND IT IS STILL OWED ONCE. Without this the case above is satisfied by a
+    /// walk that emitted the hand-back at both slots and happened to end on the
+    /// right one.
+    #[test]
+    fn a_shared_undo_is_owed_exactly_once() {
+        let pipeline = Pipeline::default();
+        let owed = pipeline.unwind(&[Step::Lease, Step::Ready, Step::Push, Step::Wait]);
+        assert_eq!(
+            owed.iter()
+                .filter(|compensation| **compensation == Compensation::ReleaseLease)
+                .count(),
+            1,
+            "a compensation is what is owed, never a count of who owes it"
         );
     }
 
