@@ -176,10 +176,17 @@ const DENY_EXIT: i64 = crate::ExitCode::Violation.code() as i64;
 /// ([`crate::completion`]). This module owns the vocabulary; the detector owns
 /// the token set.
 ///
-/// [`StopReason::Other`] absorbs both truncation (`max_tokens`) and any token a
-/// later host ships. Collapsing them is right for every predicate this
-/// vocabulary serves — neither is a turn the model chose to end — and the
-/// forward-compatibility law above forbids failing on the second.
+/// **Truncation and an unknown token are two facts, and this vocabulary keeps
+/// them apart** (CLOUD-1464). [`StopReason::Other`] used to absorb both, which
+/// was harmless while [`crate::completion`] was the only reader — neither is a
+/// turn the model chose to end, so the collapse moved no verdict. It is not
+/// harmless for a predicate that wants to tell a HOST's token ceiling from THIS
+/// BUILD's currency: the first is a fact about the run, the second about the
+/// vocabulary, and one variant cannot answer both questions.
+///
+/// [`StopReason::Other`] therefore carries one meaning now, and the
+/// forward-compatibility law above is unchanged: an unrecognized token is
+/// `Other` rather than a failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -190,8 +197,19 @@ pub enum StopReason {
     StopSequence,
     /// It ended to make a tool call — the model is **continuing**, not finished.
     ToolUse,
-    /// Truncation, or a token this build does not know. Never a completion.
+    /// A token this build does not know. Never a completion.
     Other,
+    /// The host stopped the turn at a token ceiling.
+    ///
+    /// Never a completion, and never the model's choice: the turn was cut off
+    /// with whatever it was doing unfinished.
+    ///
+    /// **Last rather than beside [`StopReason::ToolUse`], where it reads
+    /// better.** This enum carries no `repr`, so inserting a variant mid-list
+    /// shifts every later discriminant, and `cargo semver-checks` counts that as
+    /// a break the row's patch bump does not declare. Appending is what keeps
+    /// adding a variant the non-event `#[non_exhaustive]` promises it is.
+    Truncated,
 }
 
 impl StopReason {
@@ -206,6 +224,14 @@ impl StopReason {
             "end_turn" => StopReason::EndTurn,
             "stop_sequence" => StopReason::StopSequence,
             "tool_use" => StopReason::ToolUse,
+            // One ceiling, four spellings of it. Each literal is one host's,
+            // named so a reader can look it up rather than infer a family:
+            // `max_tokens` is Anthropic's, `length` OpenAI's, `MAX_TOKENS`
+            // Gemini's, `max_output_tokens` Vertex's. Exact and case-sensitive,
+            // as every arm here is — a case-folding or prefix match would be a
+            // second authority over the token set, and an unrecognized spelling
+            // falling to `Other` is the sanctioned direction.
+            "max_tokens" | "length" | "MAX_TOKENS" | "max_output_tokens" => StopReason::Truncated,
             _ => StopReason::Other,
         }
     }
@@ -1526,10 +1552,11 @@ mod tests {
             vec![
                 StopReason::EndTurn,
                 StopReason::ToolUse,
-                // Truncation and an unknown token collapse: neither is a turn
-                // the model chose to end, and failing on the second would make
-                // every host release a red gate.
-                StopReason::Other,
+                // Two facts, two variants (CLOUD-1464). Truncation is the
+                // host's ceiling; `Other` is a token this build has never seen,
+                // and failing on the second would make every host release a red
+                // gate.
+                StopReason::Truncated,
                 StopReason::Other,
             ]
         );
