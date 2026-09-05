@@ -6513,7 +6513,16 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
                 // re-find the program inside a segment's words, which is the
                 // second authority over one argv that CLOUD-857 measured and
                 // this whole projection exists to refuse.
-                "arguments": &tokens[index + 1..],
+                // NORMALISED THE SAME WAY THE PROGRAM IS, and for the same
+                // measured reason: the closing paren of a grouped command lands
+                // on the LAST argument, which is exactly the token an exact-match
+                // predicate is decided on. `(git push origin main --force)` was
+                // allowed with `--force)` here while the same flag written
+                // earlier denied.
+                "arguments": tokens[index + 1..]
+                    .iter()
+                    .map(|token| program_token(token))
+                    .collect::<Vec<_>>(),
                 "mediated": mediator_present(
                     crate::rules::RequireVia::Mise,
                     &tokens[..index],
@@ -6955,7 +6964,15 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
                 if let Some(matched) =
                     crate::verbs::qualify(&policy.verbs, program, &tokens[index + 1..])
                 {
-                    let operands = operands(&tokens, index + 1 + matched.consumed);
+                    // The OPERANDS as the program was handed them, with a
+                    // group's closing punctuation off (CLOUD-1382): measured,
+                    // `(rm batten.toml)` was allowed because the operand read
+                    // `batten.toml)` and no protected path matches that, while
+                    // `rm batten.toml` and `time rm batten.toml` both refuse.
+                    let operands: Vec<&str> = operands(&tokens, index + 1 + matched.consumed)
+                        .into_iter()
+                        .map(program_token)
+                        .collect();
                     // `Last` is the destination-only narrowing. An empty operand
                     // list has no last element and therefore no target, which is the
                     // same answer as before for a program invoked with none.
@@ -7046,7 +7063,7 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
                     // thing the program was handed; a substring of a quoted argument
                     // is not, and argv cannot tell a path being WRITTEN inside an
                     // interpreter's program text from one being TALKED ABOUT.
-                    for path in operands(&tokens, index + 1) {
+                    for path in operands(&tokens, index + 1).into_iter().map(program_token) {
                         // CLOUD-1141's arm asks the same membership question, so it
                         // had the same hole: an absolute operand was not recognised as
                         // protected here either, and the unknown program was allowed
@@ -7870,17 +7887,43 @@ const SHELL_GRAMMAR: [&str; 9] = [
 /// The token with any GROUPING punctuation it was written against removed.
 ///
 /// `(git` is one word to [`segments`], because `(` is not a separator and a
-/// grouping construct needs no space after it. So the program identity and the
-/// token are different strings here in exactly the way they are for
-/// `/usr/bin/git`, and [`program_name`] is the precedent: the boundary answers
-/// which PROGRAM this is, and a module comparing the raw token would answer no
-/// for the spelling that produced the bypass.
+/// grouping construct needs no space after it. So the identity and the token are
+/// different strings here in exactly the way they are for `/usr/bin/git`, and
+/// [`program_name`] is the precedent: the boundary answers what this IS, and a
+/// caller comparing the raw token answers no for the spelling that carries the
+/// bypass.
 ///
-/// Only the opening side. A trailing `)` belongs to whichever operand it was
-/// written against, and rewriting operands is a claim about paths this function
-/// has no business making.
+/// # BOTH ENDS, and the opening-only version was a bypass of its own
+///
+/// This stripped `(` and said a trailing `)` *"belongs to whichever operand it
+/// was written against"*. That reasoning holds for a path and is false for the
+/// LAST token of a grouped command, which is where the closing paren actually
+/// lands — and every predicate matching an exact flag or an exact path is
+/// decided on exactly that token. Measured over the shipped binary, this
+/// repository's committed config:
+///
+/// * `(git push origin main --force)` — allowed, because `arguments` ended
+///   `--force)` and `no-force-push` compares for equality. The same command with
+///   the flag written earlier denied, so the bypass was a matter of word order.
+/// * `(rm batten.toml)` — allowed, because the operand was `batten.toml)` and no
+///   protected path matches it. That one predates this row and is the same
+///   defect one gate over: `rm batten.toml` and `time rm batten.toml` both
+///   refuse.
+///
+/// # The bound, stated
+///
+/// Leading `(`/`{` are stripped unconditionally; trailing `)`/`}` are stripped
+/// only where the remainder carries no opener of its own. That keeps a command
+/// substitution intact — `binary=$(which gh)` is ONE word to [`segments`], and
+/// its `)` closes the `$(` inside it rather than a group around it — while
+/// reaching every case above. It is a rule about two characters, not a parser,
+/// and CLOUD-1381 is still what replaces it.
 fn program_token(token: &str) -> &str {
-    token.trim_start_matches(['(', '{'])
+    let opened = token.trim_start_matches(['(', '{']);
+    if opened.contains(['(', '{']) {
+        return opened;
+    }
+    opened.trim_end_matches([')', '}'])
 }
 
 /// Is this token shell grammar standing where a program is written?

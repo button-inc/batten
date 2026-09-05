@@ -204,3 +204,33 @@ fn a_token_before_the_program_does_not_invent_a_deny_either() {
     // The prefix must make the program VISIBLE, never make it guilty.
     assert_allowed("time git status");
 }
+
+#[test]
+fn a_groups_closing_paren_does_not_hide_the_last_argument() {
+    // CodeRabbit's finding on #868, verified against the shipped binary before
+    // it was fixed: `program_token` stripped the OPENING grouping punctuation
+    // only, so the closing paren stayed glued to the last token — which is
+    // exactly the token an exact-match predicate is decided on.
+    //
+    // Measured, and the word ORDER is the whole tell: with the flag written
+    // early the group already denied, and with the flag written last it exited
+    // 0, because `arguments` ended `--force)` and this preset compares for
+    // equality.
+    assert_preset_denies("(git push origin main --force)");
+    assert_preset_denies("(git push origin main -f)");
+    assert_preset_denies("{ git push origin main --force; }");
+    // The flag early, which denied before the fix too — kept so the pair reads
+    // as one measurement rather than two unrelated cases.
+    assert_preset_denies("(git push --force origin main)");
+}
+
+#[test]
+fn a_closing_paren_does_not_invent_a_deny_either() {
+    // The mirror. Stripping a group's punctuation must not make an ordinary
+    // grouped command guilty, and must not reach INSIDE a command substitution:
+    // `binary=$(which gh)` is ONE word to `hook::segments`, and its `)` closes
+    // the `$(` within it rather than a group around it.
+    assert_allowed("(git push origin feature)");
+    assert_allowed("(hg push --force)");
+    assert_allowed("binary=$(which gh)");
+}
