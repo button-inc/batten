@@ -141,6 +141,7 @@ mod judge_kind;
 mod land;
 mod landed_check;
 mod lease_record;
+mod locator_index;
 mod lock_complete;
 mod mcp_dispatch;
 mod mcp_reduce_array;
