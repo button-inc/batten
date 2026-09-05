@@ -1499,6 +1499,60 @@ pub fn commits_in_range(dir: &Path, base: &str, head: &str) -> Result<Vec<String
     Ok(out)
 }
 
+/// The commits `<target>..HEAD` that are reachable from NO remote-tracking ref
+/// (CLOUD-462).
+///
+/// The predicate a destructive-reset gate is decided by, and it is deliberately
+/// **not** the verb's spelling. `git reset --hard` onto a ref whose commits are
+/// all on a remote loses nothing, and refusing that would be the false-positive
+/// rate that gets a guard switched off — the row says so in as many words. What
+/// can lose work is a commit that exists in this clone and nowhere else.
+///
+/// `git rev-list <target>..HEAD --not --remotes` is the shape, spelled here as a
+/// gix walk from `HEAD` hiding the target **and every `refs/remotes` tip**. That
+/// is one walk rather than a reachability test per commit, which matters because
+/// this runs on the mediated path.
+///
+/// # Merges are NOT skipped, unlike [`commits_in_range`]
+///
+/// That function drops merges because it is enumerating patches and a merge has
+/// none of its own. Here the question is what would become unreferenced, and a
+/// merge commit that exists only in this clone is exactly that. Skipping one
+/// would under-count the loss, which is the direction this gate must not fail in.
+///
+/// # Errors
+///
+/// A target that will not resolve, or a directory that is not a repository. Both
+/// are could-not-look at the boundary rather than a refusal: a gate that denies
+/// because it could not run its own query is the wall this class must not be.
+pub fn unpushed_in_range(dir: &Path, target: &str) -> Result<Vec<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the reset target".to_owned());
+    let head = repo.rev_parse_single("HEAD").map_err(|_| refused())?;
+    let target_id = repo.rev_parse_single(target).map_err(|_| refused())?;
+    let mut hidden = vec![target_id.detach()];
+    if let Ok(references) = repo.references()
+        && let Ok(remotes) = references.prefixed("refs/remotes")
+    {
+        for reference in remotes.flatten() {
+            if let Some(id) = reference.target().try_id() {
+                hidden.push(id.to_owned());
+            }
+        }
+    }
+    let walk = repo
+        .rev_walk([head.detach()])
+        .with_hidden(hidden)
+        .all()
+        .map_err(|_| refused())?;
+    let mut out = Vec::new();
+    for step in walk {
+        let info = step.map_err(|_| refused())?;
+        out.push(info.id().to_hex_with_len(12).to_string());
+    }
+    Ok(out)
+}
+
 /// Open the repository for a WRITE.
 ///
 /// **A separate door from [`open`], and the difference is the point.** `open`

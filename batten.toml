@@ -6661,13 +6661,13 @@ keep = 2
 mb = 8971
 worst_mb = 8971
 multiplier = 1
-measured = "2026-09-04"
+measured = "2026-09-05"
 
 [prune.cold]
 mb = 21455
 worst_mb = 21455
 multiplier = 1
-measured = "2026-09-04"
+measured = "2026-09-05"
 
 # THE BASIS EACH FLOOR WAS MEASURED AGAINST (CLOUD-1158), because `measured` is a
 # pointer to a basis and not the basis itself.
@@ -6840,6 +6840,30 @@ measured = "2026-09-04"
 # not a worse measurement of the same set but a measurement of a DIFFERENT one;
 # the sentence is stated in the gate's reading instead.
 
+# THE 2026-09-05 MOVE, 197 -> 210, AND IT IS THE SAME SHAPE AND THE SAME HALF AS
+# THE FOUR ENTRIES ABOVE. The BUNDLE-boundary branch added four compiled-binary
+# tiers — `ask_disposition.rs`, `history_drop.rs`, `singleton_gate.rs` and
+# `bypass_precondition.rs` — which took the live count thirteen past the basis and
+# three outside the tolerance. This gate catching that is it working; the four
+# were also what tipped it, since the tree stood at 206 without them and 206 is
+# inside the tolerance.
+#
+# `count` moves to the gate's own reading of 210 with `measured`, and THE FLOORS
+# AGAIN DELIBERATELY DO NOT MOVE. The reason is unchanged and is restated rather
+# than assumed: the lap that tripped this reported 22006MB free against an 8971MB
+# declared warm floor, so free space was never what refused, and a floor too high
+# only refuses laps while one too low fails silently inside a test run. Moving
+# either down needs the independent measurement this block names — a build from an
+# empty `target` for cold, a minimal post-prune tree for warm — which is
+# CLOUD-1158's and was NOT taken here. Refreshing the count without claiming a
+# floor measurement I did not take is the honest half of the remedy.
+#
+# The count is the GATE's reading rather than a scan's, and the two disagree by one
+# here: `git ls-files 'crates/batten/tests/**/*.rs'` returns 209 where the refusal
+# names 210. That gap is why the entry above says to take the gate's number — a
+# basis refreshed from a differently-taken count is a second authority over the
+# same quantity, which is the drift this whole block exists to record.
+
 # THE 2026-09-03 MOVE, FOURTH OF THE SAME SHAPE, and the repetition is now the
 # reading rather than an aside: the basis drifts once per bundle, and every entry
 # above says so. `main`'s test files plus CLOUD-1321's three tiers took the live
@@ -6891,12 +6915,12 @@ measured = "2026-09-04"
 # satisfy refuses every lap and gets switched off.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 197
+count = 210
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 197
+count = 210
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops

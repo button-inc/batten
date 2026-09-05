@@ -7767,6 +7767,62 @@ fn unsupported_event_note(
     }
 }
 
+/// The pinned programs (CLOUD-1028), read from the record rather than resolved:
+/// asking the pin is `Cost::Effect` and this surface may not spend one.
+///
+/// Behind the same narrowing as [`prospective_for`] and [`manifest_for`], and
+/// spelled as a `*_for` beside them for the same reason: a repository with no
+/// mediated module has no consumer for the fact and opens no file, and that
+/// narrowing is the fact's whole cost story rather than a detail of the
+/// dispatch. `CouldNotLook` is the unread arm and it allows.
+fn pinned_for(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+) -> facts::Look<std::collections::BTreeSet<String>> {
+    if policy.reads_pinned(envelope) {
+        pinned::cached(hook_authority_root())
+    } else {
+        facts::Look::CouldNotLook
+    }
+}
+
+/// The two facts a DESTRUCTIVE mediated call resolves, and nothing else does
+/// (CLOUD-462, CLOUD-438).
+///
+/// Extracted from [`run_hook`] because that function is at its line ceiling and
+/// these two are the same shape: an argv reading over an already-decoded
+/// envelope, then a filesystem look that runs ONLY when the reading finds its
+/// subject. Every other mediated call — which is nearly all of them — opens
+/// nothing here.
+fn destructive_call_facts(
+    envelope: &hook::Envelope,
+) -> (facts::Look<Vec<String>>, Option<(String, String)>) {
+    // What a `git reset --hard` in this call would leave unreferenced (CLOUD-462).
+    //
+    // Could-not-look on any failure, and it ALLOWS. A target that will not
+    // resolve, a clone with no remote, a repository this process cannot open:
+    // none of those is evidence that work would be lost, and refusing on them
+    // would refuse hardest exactly where the answer is least knowable.
+    let discards =
+        hook::destructive_reset_target(envelope).map_or(facts::Look::CouldNotLook, |target| {
+            git::unpushed_in_range(hook_authority_root(), &target)
+                .map_or(facts::Look::CouldNotLook, facts::Look::Is)
+        });
+    // The singleton collision (CLOUD-438), resolved here because a lock is a file
+    // and a pid is a process, and `adjudicate` is pure.
+    //
+    // No list of guarded task names exists anywhere — the lock's own presence is
+    // the answer, which is what keeps this consumer's task names out of the core
+    // (non-negotiable rule 1).
+    let singleton = hook::singleton_task_started(envelope).and_then(|task| {
+        git::git_dir(hook_authority_root())
+            .ok()
+            .and_then(|git_dir| task::singleton_holder(&git_dir, &task))
+            .map(|holder| (task, holder))
+    });
+    (discards, singleton)
+}
+
 fn run_hook(
     harness: hook::Harness,
     // Resolved by the dispatch (CLOUD-1170) — see `Recency::now`.
@@ -8076,18 +8132,13 @@ fn run_hook(
     // `tracked-artifacts` ceiling — which is every repository today — spawns no
     // git and opens nothing. `None` is could-not-look and allows.
     let manifest = manifest_for(&policy, &envelope);
-    // The pinned programs (CLOUD-1028), read from the record rather than
-    // resolved: asking the pin is `Cost::Effect` and this surface may not spend
-    // one. Behind the same narrowing as `prospective_for` — a repository with no
-    // mediated module has no consumer for the fact and opens no file.
-    let pinned = if policy.reads_pinned(&envelope) {
-        pinned::cached(hook_authority_root())
-    } else {
-        facts::Look::CouldNotLook
-    };
+    let pinned = pinned_for(&policy, &envelope);
     let (tasks, extracted) = session_facts(&policy, &envelope);
+    let (discards, singleton) = destructive_call_facts(&envelope);
     let facts = hook::Facts {
         bypass,
+        singleton: &singleton,
+        discards: &discards,
         receipts: &receipts,
         keys: &keys,
         stop: &stop,

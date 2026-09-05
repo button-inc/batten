@@ -591,6 +591,46 @@ pub fn singleton_release(git_dir: &Path, task: &str) {
     let _ = std::fs::remove_dir_all(singleton_lock(git_dir, task));
 }
 
+/// Who holds the singleton lock for `task`, WITHOUT taking or reclaiming it
+/// (CLOUD-438).
+///
+/// **The read half of [`singleton_acquire`], and it exists because that function
+/// is a write.** `singleton_acquire` creates the lock, sleeps, and may reclaim a
+/// corpse — every one of which is wrong on the mediated path, where the question
+/// is only "would starting a second one be a mistake". A hook that called the
+/// acquiring verb would take the lock the call it is judging is about to want.
+///
+/// The four answers are the same four the acquiring path already distinguishes,
+/// so this adds no second predicate and no second bookkeeping:
+///
+/// * **no lock at all** — `None`. Nothing is running.
+/// * **a lock whose pid file is empty or unreadable** — `Some("unknown")`. A
+///   holder caught between its create and its write is a holder, not a corpse:
+///   absence of evidence is "held", never "free", which is the direction
+///   `singleton_acquire` already takes and states.
+/// * **a live pid** — `Some(pid)`.
+/// * **a dead pid** — `None`. A corpse holds nothing; the acquiring path
+///   reclaims it, and refusing here would refuse against a process that no
+///   longer exists.
+///
+/// No sleep and no second sighting, deliberately. The recheck in
+/// `singleton_acquire` exists to make RECLAIMING safe — it must not rob a holder
+/// that took the lock between two reads. Nothing is reclaimed here, so there is
+/// nothing to be careful about, and a pause on the hot path would be the timer
+/// standing in for an exit condition that CLOUD-1177 refuses.
+#[must_use]
+pub fn singleton_holder(git_dir: &Path, task: &str) -> Option<String> {
+    let lock = singleton_lock(git_dir, task);
+    if !lock.exists() {
+        return None;
+    }
+    let Some(holder) = holder_of(&lock) else {
+        // The lock directory exists and says nothing readable. Held.
+        return Some("unknown".to_owned());
+    };
+    pid_exists(&holder).then_some(holder)
+}
+
 /// Take a task's lock for `pid`, or report who holds it.
 ///
 /// `recheck` is the pause between the two sightings a reclaim requires. It is an

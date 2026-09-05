@@ -635,13 +635,23 @@ fn every_disposition_maps_to_a_declared_exit_code() {
 /// status, so a verdict delivered anywhere OTHER than the exit code shows up as
 /// a `0` here.
 ///
-/// Enumerated from `RuleSeverity::ALL` crossed with the `--fail-on-warning`
-/// setting rather than written out, so a new severity is covered by this loop on
+/// Enumerated from `RuleSeverity::RANKS` crossed with the `--fail-on-warning`
+/// setting rather than written out, so a new RANK is covered by this loop on
 /// the day it is declared, and a change to `TABLE` that moves which levels block
 /// makes the binary and the table disagree.
+///
+/// **`RANKS` RATHER THAN `ALL`, AND THE DISTINCTION IS THIS TEST'S SUBJECT**
+/// (CLOUD-340). The fixture below is a tree-scoped `forbid` row, and
+/// `severity = "ask"` on one is refused at LOAD — a repository walk has no
+/// caller to hand a decision to. So an `ask` arm here would exit `1` on a config
+/// fault rather than reaching the verdict path this test is about, which is
+/// exactly what it did when the variant landed. The escalation's own exit
+/// contract, on the surface that can carry it, is
+/// `ask_disposition.rs::the_exit_code_table_gained_no_third_verdict`; the two
+/// files split the token between them rather than either one covering both.
 #[test]
 fn every_severity_reaches_the_exit_the_table_declares() {
-    for severity in RuleSeverity::ALL {
+    for severity in RuleSeverity::RANKS {
         for fail_on_warning in [false, true] {
             // The expectation comes from the declared table, never from a
             // literal: this asserts the binary AGREES with `severity::TABLE`,

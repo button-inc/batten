@@ -2613,13 +2613,18 @@ pub enum Decision {
     /// once, at the boundary that consults the capability table, rather than
     /// guessed at each deny site.
     ///
-    /// **Nothing in `batten.toml` produces this yet, deliberately.** CLOUD-45 owns
-    /// the degradation — this value, [`encode_ask`], and the capability row they
-    /// consult — and CLOUD-340 owns the *vocabulary* a consumer reaches it with,
-    /// which its refinement records as an `ask` severity accepted only for
-    /// `mediated_call` scope. Inventing a second column here would give one
-    /// question two config surfaces and contradict a decision already taken
-    /// (non-negotiable rule 6).
+    /// **The vocabulary that reaches this is `severity = "ask"`, and it landed
+    /// with CLOUD-340.** CLOUD-45 owned the degradation — this value,
+    /// [`encode_ask`], and the capability row they consult — and shipped it with
+    /// no producer at all: the variant was matched everywhere and constructed
+    /// nowhere, which every exhaustive consumer reported as green. [`disposed`]
+    /// is the one site that constructs it, and it reads the row's own severity
+    /// column rather than a second one, because inventing a column here would
+    /// give one question two config surfaces (non-negotiable rule 6).
+    ///
+    /// It is accepted only for `scope = "mediated_call"` and only with a
+    /// `reason`; `rules::validate` refuses both otherwise, rather than rendering
+    /// an escalation nobody can answer as a deny nobody wrote down.
     Ask(Refusal),
     /// A deny a live waiver suppressed, carrying the record it owes (CLOUD-610).
     ///
@@ -3710,6 +3715,46 @@ impl Policy {
             .unwrap_or(BYPASS_ENV)
     }
 
+    /// Whether [`BYPASS_ENV`] may suppress a refusal of this class (CLOUD-1357).
+    ///
+    /// **False for any class that declares an override route carrying a
+    /// precondition**, which is the generalisation of the carve-out `path write
+    /// refused` has had since CLOUD-1051. A class with such a route already has a
+    /// way through that leaves a record — `batten override request` generates its
+    /// questions from exactly this field, and `admit_mediated` honours the spent
+    /// admission — so taking the password away is a repair rather than a wall.
+    ///
+    /// **True for a class with no such route, and that is the row's own bound.**
+    /// Removing the hatch where nothing replaces it is the wall CLOUD-1357
+    /// explicitly refuses; each such class is a migration row of its own, which is
+    /// the tracking CLOUD-1051's scoping sentence owed and never got.
+    ///
+    /// A refusal carrying no class token at all keeps the hatch by construction: a
+    /// consumer `[[rule]]`-composed refusal is "deliberately not a Batten class …
+    /// no token an admission could bind", so it can declare no precondition and
+    /// there is nothing for an admission to bind against.
+    ///
+    /// Reads the same field [`crate::admission::questions_for`] does, so the two
+    /// cannot disagree about which classes have a route — a disagreement here
+    /// would mean a class the hatch stopped opening and no admission could open
+    /// either, which is the wall in its worst form.
+    ///
+    /// Pure: a registry lookup over the policy already in hand, which is what lets
+    /// [`adjudicate`] stay free of I/O, environment and clock.
+    #[must_use]
+    pub fn honours_hatch(&self, class: Option<&str>) -> bool {
+        let Some(class) = class else {
+            return true;
+        };
+        !self.verdicts.iter().any(|entry| {
+            entry.id == class
+                && entry.routes.iter().any(|route| {
+                    route.kind == crate::verdict::RouteKind::Override
+                        && route.precondition.is_some()
+                })
+        })
+    }
+
     /// This policy with every row whose declared hatch is in `set` removed
     /// (CLOUD-437).
     ///
@@ -3820,6 +3865,62 @@ pub fn adjudicate(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> De
 /// instead of a check repeated at each of the deny arms below. A deny site that
 /// forgot it would be a rule quietly unwaivable, which is exactly the asymmetry
 /// CLOUD-293 found and CLOUD-606 decided against.
+/// Adjudicate, then apply the hatch to the OUTCOME rather than to the chain.
+///
+/// # What CLOUD-1357 changed
+///
+/// `BATTEN_HOOK_BYPASS` used to suppress every refusal class but one. The
+/// argument against that shape was already written at [`BYPASS_ENV`] and applied
+/// to `path write refused` alone: *a refusal whose only way through is a string
+/// somebody knows is a password rather than a gate*. Nothing in it is specific to
+/// protected paths.
+///
+/// It is general now. A class declaring an override route with a precondition is
+/// not suppressed, because it already has a way through that leaves a record —
+/// `batten override request` generates its questions from that field and
+/// `admit_mediated` honours the spent admission. A class with no such route keeps
+/// the hatch, which is the bound CLOUD-1357 draws for itself: taking the password
+/// away where nothing replaces it is a wall, and each such class is a migration
+/// row of its own.
+///
+/// # The chain now RUNS on a bypassed call, and that retires an argument
+///
+/// The previous arm ran the two `protected_write` stages and nothing else,
+/// explaining that adjudicating there "rather than by hoisting the two gates"
+/// avoided reordering every refusal a caller sees. **That constraint is gone
+/// rather than worked around**: filtering the OUTCOME moves no gate, so every
+/// refusal is still raised by the row a reviewer would see quoted back, in the
+/// order it always was. The hoisting objection was correct about hoisting and
+/// does not reach this shape.
+///
+/// **The cost, stated rather than left for a profile to find.** A bypassed
+/// adjudicable call now walks the whole chain instead of two stages. That is pure
+/// CPU over an envelope already decoded and a policy already in hand —
+/// [`adjudicate`] is contractually free of I/O, environment and clock, and the
+/// config load this arm already paid since the protected gate stopped being
+/// bypassable is unchanged. A call with nothing to adjudicate still returns
+/// before any of it.
+///
+/// # `Ask` stays suppressible, deliberately
+///
+/// Only a `Deny` is held back. `admit_mediated` does not filter `Ask` — "an
+/// escalation is a question put to a person, and a record the asker wrote
+/// themselves is not an answer to it" — so an `Ask` has no admission route, and
+/// refusing to suppress one would be the wall this row refuses, not the repair it
+/// makes.
+fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decision {
+    let decision = adjudicated_gates(policy, envelope, facts);
+    if !facts.bypass {
+        return decision;
+    }
+    match decision {
+        Decision::Deny(refusal) if !policy.honours_hatch(refusal.verdict()) => {
+            Decision::Deny(refusal)
+        }
+        _ => Decision::Allow,
+    }
+}
+
 // `match_same_arms` would collapse the eight event arms below into one
 // `_ => Decision::Allow`. Refused for the reason `capabilities` and `encode_ask`
 // refuse it, and here the refusal IS the feature: the arms agree on the ANSWER
@@ -3829,15 +3930,20 @@ pub fn adjudicate(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> De
 // nobody wrote for it, which is what registering on every surface makes likely
 // rather than hypothetical.
 #[allow(clippy::match_same_arms)]
-fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decision {
+fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decision {
     // Destructured once so the chain below reads as it always has. The bundle is
     // about how the fact set TRAVELS; each gate still names the single fact it
     // decides on, which is what keeps a reader able to see that `shape_rules`
     // cannot see a receipt.
+    //
+    // `bypass` is deliberately NOT among them (CLOUD-1357). No gate in this chain
+    // reads the hatch any more: the chain decides what the policy says, and
+    // [`adjudicated`] decides which of those refusals the hatch may suppress. A
+    // gate that could still see it would be a second place the answer is made.
     let Facts {
-        bypass,
         receipts,
         keys,
+        discards,
         ..
     } = *facts;
     // The end-of-turn gate (CLOUD-85), and it no longer DENIES (CLOUD-889).
@@ -3928,40 +4034,44 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
     if policy.is_empty() {
         return Decision::Allow;
     }
-    // THE HATCH NO LONGER ANSWERS FOR THE PROTECTED-PATH GATE, and that is the
-    // whole of what `BATTEN_HOOK_BYPASS` stops being able to do.
+    // THE DESTRUCTIVE-RESET GATE (CLOUD-462), and its predicate is REACHABILITY
+    // rather than the verb's spelling.
     //
-    // It was the only way through a `path write refused` refusal, which made
-    // that refusal a password: a knowable string the guarded party can set, so it
-    // recorded nothing and stopped nobody. §8's property — "an agent's context can
-    // never influence the rules it is judged by" — was already false, because the
-    // agent could set the variable. This repository ruled on exactly that shape
-    // for `issue file same`: *the point of the admission mechanism is that
-    // the bare variable stops working*. The class declares an override route now
-    // (`articulate the write`) and the boundary honours a spent admission
-    // (`admit_mediated`), so there is a way through that leaves a record — which
-    // is what makes taking this one away a repair rather than a wall.
+    // `git reset --hard` onto a ref whose commits are all on a remote loses
+    // nothing, and refusing that would be the false-positive rate that gets a
+    // guard switched off — the row says exactly that. What can lose work is a
+    // commit that exists in this clone and nowhere else, which the boundary
+    // answered in `Facts::discards` because reachability is a property of the
+    // repository and this function is pure.
     //
-    // ADJUDICATED HERE RATHER THAN BY HOISTING THE TWO GATES, because their
-    // placement below is argued: `CommandParsed` runs after the explicit `[[rule]]`
-    // rows so "a row a reviewer wrote by hand should be the one they see quoted
-    // back". Hoisting would reorder every refusal a caller sees. Inside this branch
-    // there is no ordering to disturb — the alternative was allowing everything.
+    // FIRST AMONG THE GATES, because it is the only one whose subject is already
+    // gone by the time any other could speak: every refusal below is about a call
+    // that has not happened, and so is this, but the recovery it names —
+    // `git reflog` — is the one a caller needs before they run the next thing.
     //
-    // BOTH STAGES, so the hatch closes on both surfaces. Covering only the write
-    // tool would leave `tee batten.toml` bypassable while `Write` was not, which is
-    // the kind of half-closed gate that reads as closed.
-    if bypass {
-        for stage in [WriteStage::ToolNamed, WriteStage::CommandParsed] {
-            match protected_write(policy, envelope, stage) {
-                decided @ Decision::Deny(_) => return decided,
-                Decision::Allow
-                | Decision::Ask(_)
-                | Decision::Waived(_)
-                | Decision::Preapproved(_) => {}
-            }
-        }
-        return Decision::Allow;
+    // Measured 2026-08-12, which is why the row exists: a `git reset --hard
+    // HEAD~1` meant to undo a probe also discarded `mise-tasks/semver`, a pin and
+    // 39 lines of lockfile whose only copy was that commit. Nothing warned and
+    // nothing refused.
+    if let crate::facts::Look::Is(unreferenced) = discards
+        && !unreferenced.is_empty()
+    {
+        return Decision::Deny(history_drop_refusal(unreferenced));
+    }
+    // THE SINGLETON GATE (CLOUD-438), the earliest computable moment for
+    // "one `land` per clone".
+    //
+    // The in-task lock is and stays the load-bearing enforcement — a hook can be
+    // unwired, unloaded or bypassed, so this may never be the only thing between
+    // a clone and a second landing loop. What it buys is the ~200 ms and one
+    // process spawn between `mise run land` starting and the lock refusing, plus
+    // a refusal that arrives as a denied tool call rather than buried in a task's
+    // output.
+    //
+    // The same lock, read the same way (`task::singleton_holder`), so there is no
+    // second predicate to drift.
+    if let Some((task, holder)) = facts.singleton {
+        return Decision::Deny(singleton_held_refusal(task, holder));
     }
     // The write gate, before the command gate and not inside it: a write tool
     // carries no command, so every path below this point used to return Allow
@@ -4543,6 +4653,38 @@ pub struct Facts<'a> {
     pub stop: &'a crate::stop::StopFacts,
     /// The rules a live waiver suppresses today, with the expiry each claims.
     pub waived: &'a crate::waiver::Live,
+    /// The task and live holder of a singleton lock this call would collide with
+    /// (CLOUD-438).
+    ///
+    /// **Resolved at the boundary, because a lock is a file and a pid is a
+    /// process** — neither is answerable from a pure function. `task::
+    /// singleton_holder` is the READ half of the same lock `batten task
+    /// singleton` takes, so there is no second predicate and no second
+    /// bookkeeping scheme; the acquiring verb stays the load-bearing enforcement
+    /// and this is the fast feedback CLOUD-428 §3 called the earliest computable
+    /// moment.
+    ///
+    /// `None` is both "this call starts no guarded task" and "nothing holds the
+    /// lock", which are the same answer to the only question asked here.
+    pub singleton: &'a Option<(String, String)>,
+    /// The commits a `git reset --hard` in this call would leave unreferenced,
+    /// as short SHAs, and only those reachable from no remote (CLOUD-462).
+    ///
+    /// **Resolved at the boundary, because reachability is a property of the
+    /// repository rather than of the envelope** — `adjudicate` is contractually
+    /// pure, so it cannot ask git anything. `git::unpushed_in_range` is the one
+    /// query, and it runs only when the call actually makes such a reset, so a
+    /// session that never resets pays nothing.
+    ///
+    /// Could-not-look ALLOWS, which for this fact is the only honest direction: a
+    /// target that will not resolve, a detached head, a clone with no remote at
+    /// all. A gate that refused because it could not run its own query would be
+    /// the wall the row refuses, and would refuse hardest in exactly the
+    /// repositories where the answer is least knowable.
+    ///
+    /// **Empty is a real answer and it allows**: every commit in range is on a
+    /// remote, which is the ordinary undo the row insists must not be refused.
+    pub discards: &'a crate::facts::Look<Vec<String>>,
     /// What the agent reported for each agent-sourced check.
     pub sourced: &'a AgentFacts,
     /// What this call's write would land, before it happens (CLOUD-758).
@@ -4609,6 +4751,13 @@ impl<'a> Facts<'a> {
             stop,
             waived,
             sourced: &None,
+            // No collision resolved, which for this fact is the same answer a
+            // caller that looked and found a free lock would give.
+            singleton: &None,
+            // Could-not-look, never an empty list: "this reset discards nothing"
+            // is a claim about a repository's remotes, and a caller that resolved
+            // nothing is not making it (CLOUD-462).
+            discards: &crate::facts::Look::CouldNotLook,
             // Could-not-look, never "an empty write". A `Facts::none` caller has
             // resolved nothing, which is a different claim from having looked
             // and found no content.
@@ -5122,7 +5271,7 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
             // Orphaned first: it discards the verdict AND the supervision, so it
             // is the more complete failure of the two a detached pipeline commits.
             if detached_here || segment.terminator == Some(Separator::Background) {
-                return Decision::Deny(pipeline_refusal(rule, Discard::Orphaned));
+                return disposed(rule, pipeline_refusal(rule, Discard::Orphaned));
             }
             if segment.terminator == Some(Separator::Pipe) {
                 // Every stage downstream of the verdict, not merely the next: a
@@ -5145,13 +5294,13 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
                         })
                     });
                 if piped_into_filter {
-                    return Decision::Deny(pipeline_refusal(rule, Discard::Piped));
+                    return disposed(rule, pipeline_refusal(rule, Discard::Piped));
                 }
             }
             if matches!(segment.terminator, Some(Separator::Semi | Separator::Or))
                 && parsed.get(index + 1).is_some()
             {
-                return Decision::Deny(pipeline_refusal(rule, Discard::Trailing));
+                return disposed(rule, pipeline_refusal(rule, Discard::Trailing));
             }
         }
     }
@@ -5470,7 +5619,7 @@ fn tool_rules(policy: &Policy, envelope: &Envelope) -> Decision {
         if !modifier_admits(rule, envelope) {
             continue;
         }
-        return Decision::Deny(shape_refusal(rule));
+        return disposed(rule, shape_refusal(rule));
     }
     Decision::Allow
 }
@@ -5617,7 +5766,7 @@ fn ceiling_rules(policy: &Policy, envelope: &Envelope, measured: &mut usize) -> 
         // `>`, so exactly at the cap passes — `budget::Report::over_budget`'s
         // boundary, inherited rather than re-decided (CLOUD-925 §1).
         if count > max {
-            return Decision::Deny(ceiling_refusal(rule, count, max));
+            return disposed(rule, ceiling_refusal(rule, count, max));
         }
     }
     Decision::Allow
@@ -5646,7 +5795,7 @@ fn manifest_ceiling(policy: &Policy, envelope: &Envelope, counted: ManifestFacts
     };
     // `>`, so exactly at the cap passes — the boundary `budget::Report` owns.
     if count > max {
-        return Decision::Deny(ceiling_refusal(rule, count, max));
+        return disposed(rule, ceiling_refusal(rule, count, max));
     }
     Decision::Allow
 }
@@ -5711,11 +5860,47 @@ fn shape_rules(policy: &Policy, envelope: &Envelope, command: &str, keys: &KeyFa
             if key_present(expression, command, keys) {
                 continue;
             }
-            return Decision::Deny(unkeyed_refusal(rule));
+            return disposed(rule, unkeyed_refusal(rule));
         }
-        return Decision::Deny(shape_refusal(rule));
+        return disposed(rule, shape_refusal(rule));
     }
     Decision::Allow
+}
+
+/// Carry a composed refusal out under the disposition its row declares
+/// (CLOUD-340).
+///
+/// **THE ONE SITE WHERE `severity = "ask"` BECOMES A [`Decision::Ask`], AND
+/// UNTIL THIS EXISTED NOTHING COULD PRODUCE ONE.** [`Decision::Ask`],
+/// [`Capability::Ask`] and [`encode_ask`] all shipped with CLOUD-45 — the
+/// degradation was decided, the capability row was consulted, and the encoder
+/// was tested — over a variant that was only ever *matched* and never
+/// constructed. A vocabulary with no producer is the dead-gate shape one layer
+/// up from `.claude/rules/policy-modules.md`'s, and it survived precisely
+/// because every consumer of it was exhaustive and therefore green.
+///
+/// **EVERY rule-driven refusal on this surface goes through it**, not just the
+/// shape ones: `pipeline`, `ceiling` and `content` rows carry the same severity
+/// column and answer to the same caller. The first draft routed only the two
+/// shape sites, and review caught what that leaves — a mediated `pipeline` row
+/// declaring `severity = "ask"` loaded clean and hard-denied, so the config said
+/// ask and the runtime blocked with no route. That is precisely the downgrade
+/// nobody wrote down that `rules::validate_ask_disposition` refuses across
+/// scopes, reappearing across KINDS because the disposition was read per site
+/// instead of per row.
+///
+/// So it is a function rather than a match at each site: the disposition is the
+/// ROW's, read once, and seven sites each deciding it again is the
+/// second-authority shape this file already refuses for its own tokenizer.
+///
+/// Every other severity keeps [`Decision::Deny`]: `allow` and `warn` never reach
+/// here (`matching_shape_rows` filters on [`blocks`]), so the remaining arm is
+/// `deny` itself.
+fn disposed(rule: &Rule, refusal: Refusal) -> Decision {
+    if rule.severity() == RuleSeverity::Ask {
+        return Decision::Ask(refusal);
+    }
+    Decision::Deny(refusal)
 }
 
 /// Judge the content a write would land (CLOUD-758).
@@ -5758,7 +5943,7 @@ fn content_rules(policy: &Policy, envelope: &Envelope, prospective: &Prospective
             continue;
         };
         if pattern.is_match(content) {
-            return Decision::Deny(content_refusal(rule, envelope));
+            return disposed(rule, content_refusal(rule, envelope));
         }
     }
     Decision::Allow
@@ -6724,6 +6909,16 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
 /// refusal and its tests, which is what stops the two from drifting.
 pub const PROTECTED_MUTATION: &str = "protected-mutation";
 
+/// The rule id the destructive-reset gate refuses under (CLOUD-462).
+///
+/// A declared constant rather than a `[[rule]]` row, for the reason the row
+/// states: `forbid` matches a literal, and this predicate is over VCS state. The
+/// same reason `must_land_on` is a top-level key rather than a rule.
+pub const HISTORY_DROP: &str = "history-drop";
+
+/// The rule id the singleton gate refuses under (CLOUD-438).
+pub const SINGLETON_HELD: &str = "singleton-held";
+
 /// The pseudo-programs a shell redirect is reported as.
 ///
 /// A truncating redirect mutates a file with no program to classify: in
@@ -7170,6 +7365,68 @@ fn unknown_program_refusal(program: &str, path: &str) -> Refusal {
         Fix::declared(Some(
             "declare it in `protected_readers` if it only reads, or take the hatch",
         )),
+    )
+}
+
+/// Refuse a reset that would leave work referenced by nothing (CLOUD-462).
+///
+/// **Pointer-only, and this class is where that rule earns its keep** (rule 4).
+/// The subjects are a COUNT and the short SHAs — never a diff, never a message,
+/// never a path. A refusal that quoted what was about to be lost would print the
+/// very bytes the caller is about to discard, which is both the largest payload
+/// on this surface and the one most likely to carry something private.
+///
+/// The count first, because it is the number that decides whether the caller
+/// stops: "3 commits" is actionable where three SHAs are a lookup. The SHAs
+/// follow so `git show` has something to take, and they are what makes the
+/// remedy reachable rather than a suggestion.
+///
+/// The remedy is the RECOVERY rather than the refusal, per the row's §5: a
+/// caller who reads this has not lost anything yet, and the thing they need to
+/// know is that `git reflog` still holds what a second attempt would not.
+fn history_drop_refusal(unreferenced: &[String]) -> Refusal {
+    let mut subjects = vec![crate::verdict::Subject::Count {
+        count: unreferenced.len() as u64,
+    }];
+    subjects.extend(
+        unreferenced
+            .iter()
+            .map(|commit| crate::verdict::Subject::Artifact {
+                artifact: commit.clone(),
+            }),
+    );
+    Refusal::declared(
+        HISTORY_DROP,
+        crate::verdict::Native::HistoryDropUnpushed,
+        &subjects,
+        Fix::declared(Some(
+            "these commits are on no remote; `git reflog` still holds them",
+        )),
+    )
+}
+
+/// Refuse starting a task a live process already holds the lock for (CLOUD-438).
+///
+/// Pointer-only (rule 4): the task name and the holder — a pid, or `unknown`
+/// where the lock says nothing readable. Never the holder's command line and
+/// never its output.
+///
+/// The remedy names the reader rather than the lock, because a caller who hits
+/// this wants to know what the other one is DOING, and `batten task alive` is
+/// the verb that answers without disturbing it.
+fn singleton_held_refusal(task: &str, holder: &str) -> Refusal {
+    Refusal::declared(
+        SINGLETON_HELD,
+        crate::verdict::Native::SingletonHeld,
+        &[
+            crate::verdict::Subject::Artifact {
+                artifact: task.to_owned(),
+            },
+            crate::verdict::Subject::Artifact {
+                artifact: holder.to_owned(),
+            },
+        ],
+        Fix::declared(Some("`batten task alive` reports what the holder is doing")),
     )
 }
 
@@ -7901,6 +8158,178 @@ const LOOKTHROUGH_WRAPPERS: [&str; 9] = [
 #[must_use]
 pub(crate) fn is_lookthrough_wrapper(token: &str) -> bool {
     LOOKTHROUGH_WRAPPERS.contains(&token)
+}
+
+/// Git's global options that CONSUME the next argument, so a subcommand scan
+/// does not mistake their value for the verb.
+///
+/// **A DECLARED STOPGAP, exactly as [`SHELL_GRAMMAR`] is, and behind the same
+/// row.** A list cannot enumerate git's option grammar either, and the next
+/// value-taking global nobody wrote down puts its value where this scan looks
+/// for a verb. The miss then lands in the UNDER-deny direction — the scan finds
+/// a word that is not `reset` and the gate stays silent — which is this file's
+/// declared fail-open posture and is why the list is admissible while CLOUD-1381
+/// is open. It is not why it is right.
+const GIT_VALUE_OPTIONS: [&str; 6] = [
+    "-C",
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--config-env",
+];
+
+/// The index of git's SUBCOMMAND in the argv git itself was handed, skipping the
+/// global options that precede it.
+///
+/// `None` where the argv is all options — `git --version`, or a value-taking
+/// global whose value never arrived — because there is no verb to judge.
+///
+/// A `--foo=bar` spelling carries its value inline, so it consumes nothing; only
+/// the separated form does, which is why the set above is matched on equality
+/// rather than as a prefix.
+fn git_subcommand(arguments: &[&str]) -> Option<usize> {
+    let mut index = 0;
+    while index < arguments.len() {
+        let word = arguments[index];
+        if !word.starts_with('-') {
+            return Some(index);
+        }
+        index += if GIT_VALUE_OPTIONS.contains(&word) {
+            2
+        } else {
+            1
+        };
+    }
+    None
+}
+
+/// `mise run`'s own options that CONSUME the next word, so a task scan does not
+/// mistake an option's value for the task.
+///
+/// **A DECLARED STOPGAP, exactly as [`GIT_VALUE_OPTIONS`] and [`SHELL_GRAMMAR`]
+/// are, and behind the same row.** The miss direction is the same too and is
+/// worth naming because this gate's is the *quieter* one: reading `dev` out of
+/// `mise run -E dev land` resolves a task no lock is held for, so the gate looks
+/// up nothing and ALLOWS — an under-deny that leaves a second `land` running
+/// beside the first, which is the collision the row exists to stop.
+const MISE_VALUE_OPTIONS: [&str; 10] = [
+    "-C", "--cd", "-E", "--env", "-j", "--jobs", "-s", "--shell", "-t", "--tool",
+];
+
+/// The singleton task this call would start a second copy of (CLOUD-438).
+///
+/// `mise run <task>` and nothing else. `effective_program` resolves `mise` for
+/// `mise run` deliberately — only `mise exec`/`mise x` reach another program —
+/// so the runner is the program here and the task is its first non-flag
+/// argument.
+///
+/// **Read off `programs`, so a compound command is reached.** The row asks for
+/// `input.call.segments` rather than `command`, on CLOUD-857's measurement; that
+/// is superseded by CLOUD-1382, which found `words[0]` is the first WORD and not
+/// the first program, and moved every program anchor here. Same intent, one
+/// construct further along.
+pub(crate) fn singleton_task_started(envelope: &Envelope) -> Option<String> {
+    for entry in &program_reach(&envelope.command) {
+        if entry.get("name").and_then(serde_json::Value::as_str) != Some("mise") {
+            continue;
+        }
+        let arguments: Vec<&str> = entry
+            .get("arguments")
+            .and_then(serde_json::Value::as_array)
+            .map(|list| list.iter().filter_map(serde_json::Value::as_str).collect())
+            .unwrap_or_default();
+        if arguments.first() != Some(&"run") {
+            continue;
+        }
+        // NO LIST OF GUARDED TASK NAMES, and that is non-negotiable rule 1
+        // rather than economy: `land` is THIS consumer's task, and a constant
+        // naming it would put a consumer identifier in the core. The lock
+        // directory already answers which tasks are guarded — one exists only
+        // because something took it — so the boundary asks about the task this
+        // call names and lets the absence of a lock be the allow.
+        // THE TASK IS THE FIRST BARE WORD PAST `run`'S OWN OPTIONS, not the first
+        // bare word (review). `-E dev` puts `dev` where this scan looked, and the
+        // gate then asked about a task nothing holds.
+        let mut index = 1;
+        while index < arguments.len() {
+            let word = arguments[index];
+            if !word.starts_with('-') {
+                return Some(word.to_owned());
+            }
+            index += if MISE_VALUE_OPTIONS.contains(&word) {
+                2
+            } else {
+                1
+            };
+        }
+    }
+    None
+}
+
+/// The target of a `git reset --hard` in this call, if it makes one (CLOUD-462).
+///
+/// **Read off `programs`, which is the argv the boundary already resolved** — so
+/// `(git reset --hard HEAD~1)`, `time git reset …` and a reset in the second half
+/// of a list are all seen, for the same reason CLOUD-1382 moved every other
+/// program anchor there. A second parser here would be the second authority this
+/// module refuses to grow.
+///
+/// The target defaults to `HEAD` when none is written, which is git's own
+/// default and the case that discards only the working tree. That still resolves
+/// to an empty range, so the gate is silent on it without needing an arm.
+///
+/// `--hard` specifically, and the row's own scope is why. A mixed or soft reset
+/// leaves the work in the tree; `--hard` discards the working tree *and* the
+/// index with no "you have unstaged changes" refusal, which is what removes the
+/// compensating control people assume git provides.
+pub(crate) fn destructive_reset_target(envelope: &Envelope) -> Option<String> {
+    let reach = program_reach(&envelope.command);
+    for entry in &reach {
+        let name = entry.get("name").and_then(serde_json::Value::as_str);
+        if name != Some("git") {
+            continue;
+        }
+        let arguments: Vec<&str> = entry
+            .get("arguments")
+            .and_then(serde_json::Value::as_array)
+            .map(|list| list.iter().filter_map(serde_json::Value::as_str).collect())
+            .unwrap_or_default();
+        // GIT'S OWN OPTIONS COME BEFORE THE SUBCOMMAND, so `arguments[0]` is not
+        // the verb (CLOUD-462, caught in review). `git -C . reset --hard HEAD~1`
+        // and `git --no-pager reset --hard HEAD~1` both run the reset and both
+        // put a flag first — measured against the version this shipped with,
+        // every such spelling exited 0 while the bare one exited 2. That is the
+        // same under-deny `SHELL_GRAMMAR` records one layer out, reached by the
+        // same mistake: taking the first token for the thing.
+        let Some(verb) = git_subcommand(&arguments) else {
+            continue;
+        };
+        if arguments[verb] != "reset" || !arguments.contains(&"--hard") {
+            continue;
+        }
+        // The first operand that is not a flag and not the subcommand. `--` ends
+        // option parsing for a PATHSPEC reset, which discards no commits at all,
+        // so a `--` means there is no range to judge.
+        //
+        // `continue`, NEVER `return`, and review caught it the other way round.
+        // The `--` answers for THIS entry and not for the command: a pathspec
+        // reset written in front of a real one — `git reset --hard -- path &&
+        // git reset --hard HEAD~1` — ended the whole walk, so the reset that
+        // discards was never looked at. One innocent segment silencing the scan
+        // is the same one-keystroke bypass `SHELL_GRAMMAR` above records.
+        if arguments.contains(&"--") {
+            continue;
+        }
+        let target = arguments
+            .iter()
+            .skip(verb + 1)
+            .find(|word| !word.starts_with('-'))
+            .copied()
+            .unwrap_or("HEAD");
+        return Some(target.to_owned());
+    }
+    None
 }
 
 /// Shell GRAMMAR that may stand where a program is written — CLOUD-1382's
@@ -8690,6 +9119,11 @@ mod tests {
                 stop,
                 waived: &crate::waiver::Live::new(),
                 sourced: &None,
+                singleton: &None,
+                // Could-not-look: these unit cases resolve no repository, so
+                // they make no claim about what a reset would discard. The
+                // compiled tier `history_drop.rs` is where that fact is real.
+                discards: &crate::facts::Look::CouldNotLook,
                 prospective: &crate::facts::Look::CouldNotLook,
                 manifest: None,
                 tasks: &crate::facts::Look::CouldNotLook,
@@ -8852,7 +9286,20 @@ mod tests {
             patterns: Vec::new(),
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
-            verdicts: Vec::new(),
+            // THE VENDORED REGISTRY, because every real `Policy` carries it and a
+            // case built on an empty one tests a shape the engine cannot produce
+            // (CLOUD-1357). `Policy::from_resolved` builds this field with
+            // `policy::registry_for`, which merges the vendored classes into
+            // whatever the consumer declared — so `path write refused` and its
+            // `articulate the write` route are present in every loaded policy.
+            //
+            // It became load-bearing when the hatch's carve-out stopped being a
+            // branch naming one gate and became a property of the CLASS: with an
+            // empty registry `honours_hatch` cannot see the precondition, reads
+            // the class as bare, and suppresses a refusal production never
+            // suppresses. Found by `the_bypass_hatch_does_not_reach_the_protected_gate`
+            // going red — the fixture was the thing that was wrong.
+            verdicts: crate::verdict::vendored(),
             root: None,
             shapes: Vec::new(),
             fail_on_warning: false,
