@@ -215,10 +215,23 @@ sleeps if {
 # rather than testing a condition, so it exits on the clock like any timer; the
 # bash names it a deliberate non-catch "because narrowing that costs a real
 # parser", and it costs none now.
+# DECIDED FROM THE NODE, never from a keyword (CLOUD-1381).
+#
+# This read `word in {"until", "while"}` over a segment's words, and that only
+# ever worked because the character walk split on `;` and had no idea what a loop
+# was -- so `until` and `do` and `done` fell out as ordinary words. A real parse
+# has no such token: the keyword IS the node type. `input.call.segments[_]
+# .construct` carries it, `null` at the top level.
+#
+# Reading the node is also a tightening rather than a translation. `for` is
+# excluded because it is a DIFFERENT NODE, not because a list of words happens to
+# omit it -- `for i in $(seq 60); do sleep 10; done` counts iterations and exits
+# on the clock like any timer. And a `!` between the keyword and the test needed
+# filtering out by hand before; it is inside the condition now and never reaches
+# this predicate.
 waits_on_condition if {
 	some segment in input.call.segments
-	some word in segment.words
-	word in {"until", "while"}
+	segment.construct.kind in {"until", "while"}
 }
 
 # Every reader of the LOCAL process table in this call.
@@ -250,22 +263,20 @@ process_probes contains i if {
 
 # The program a LOOP CONDITION segment invokes.
 #
-# `keywords` looks through `do`/`then`/… — which is what lets `sleeps` reach a
-# loop BODY — and a condition segment begins with `until` or `while`, often with
-# `!` after it. Neither is in that set, so `words_program_index` resolves the
-# keyword itself and every probe below would miss.
+# **The keyword filter this used to carry is gone, and its absence is the point**
+# (CLOUD-1381). A condition segment used to begin with `until` or `while`, often
+# with a `!` after, so this had to strip those three tokens before
+# `words_program_index` could resolve anything -- and it stripped them ANYWHERE
+# rather than in a leading run, which was safe only because none of the three is
+# a plausible operand of a process probe. That was a workaround for a token
+# stream that did not know what a loop was.
 #
-# A NARROWER LOOK-THROUGH HERE RATHER THAN A WIDER `keywords`, deliberately:
-# `sleeps` shares that set, so adding `until`/`while` to it would change which
-# program every landed call resolves to. This rule is new and may carry its own;
-# the shared authority stays where it is.
-#
-# The filter drops those tokens ANYWHERE rather than only in a leading run, which
-# is the cheaper predicate and is safe here because none of the three is a
-# plausible operand of a process probe.
+# A condition is its own segment now, tagged `role == "condition"`, carrying only
+# the test's own words. There is nothing to filter, and the rule selects the
+# segments it is about instead of every segment that happens to lack a keyword.
 condition_program(segment) := name if {
-	rest := [w | some w in segment.words; not w in {"until", "while", "!"}]
-	name := basename(rest[words_program_index(rest)])
+	segment.construct.role == "condition"
+	name := basename(segment.words[words_program_index(segment.words)])
 }
 
 # `git commit`, resolved over WORDS the engine split rather than a string this

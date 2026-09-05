@@ -6510,6 +6510,18 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                         // HERE" — and a heredoc opener present in the command
                         // string says nothing about which element got it.
                         "input-redirect": segment.input_redirect,
+                        // THE CONTROL-FLOW NODE THIS SEGMENT SITS INSIDE, and
+                        // which half of it (CLOUD-1381). `null` at the top
+                        // level, which Rego reads as undefined — so a predicate
+                        // over `construct` cannot fire on an ordinary command.
+                        //
+                        // Projected because the alternative is a module hunting
+                        // for the literal word `until`, which only ever worked
+                        // because the character walk split on `;` and had no
+                        // idea what a loop was. A parse has no such token.
+                        "construct": segment.construct.map(|(kind, role)| {
+                            serde_json::json!({"kind": kind, "role": role})
+                        }),
                     })
                 })
                 .collect::<Vec<_>>()),
@@ -7456,6 +7468,22 @@ struct Segment {
     /// Not projected to the policy input: no module asks this, and adding a key
     /// no predicate reads would be schema surface with no consumer.
     lines: Vec<Vec<String>>,
+    /// The control-flow node this segment sits inside, and which half of it.
+    ///
+    /// `None` at the top level. `Some(("until", "condition"))` for the test of
+    /// an `until` loop, `Some(("until", "body"))` for a command in its body.
+    ///
+    /// **This exists so a module can decide from STRUCTURE rather than from a
+    /// keyword** (CLOUD-1381). `run-shape.rego` used to establish "this call
+    /// waits on a condition" by finding the literal word `until` or `while` in
+    /// some segment's `words` — which the character walk supplied only because
+    /// it split on `;` and had no idea what a loop was. A parse has no such
+    /// token: the keyword IS the node type. Projecting the node type is both
+    /// what makes the module expressible again and a tightening — `for` is
+    /// excluded because it is a different node rather than because a list of
+    /// words happens to omit it, and a `!` between the keyword and the test no
+    /// longer has to be filtered out by hand.
+    construct: Option<(&'static str, &'static str)>,
 }
 
 /// The shell operator between two segments — what happens to the first one's
@@ -7734,6 +7762,17 @@ fn redirect_words(redirect: &rable::Node, source: &str) -> Vec<String> {
 /// the LAST command of a nested structure carries it — `(a; b) && c` gives `b`
 /// the `&&`, which is where the status a rule reasons about actually flows.
 fn flatten(node: &rable::Node, source: &str, after: Option<Separator>, out: &mut Vec<Segment>) {
+    flatten_in(node, source, after, None, out);
+}
+
+/// [`flatten`], carrying the control-flow node the walk is currently inside.
+fn flatten_in(
+    node: &rable::Node,
+    source: &str,
+    after: Option<Separator>,
+    construct: Option<(&'static str, &'static str)>,
+    out: &mut Vec<Segment>,
+) {
     match &node.kind {
         rable::NodeKind::Command {
             assignments,
@@ -7769,6 +7808,7 @@ fn flatten(node: &rable::Node, source: &str, after: Option<Separator>, out: &mut
                 raw: node.source_text(source).to_owned(),
                 terminator: after,
                 input_redirect: redirects.iter().any(binds_stdin),
+                construct,
             };
             // A word may CONTAIN commands: `rm $(cat list)` runs `cat`. The
             // walk this replaces could not see them at all (CLOUD-1257).
@@ -7800,7 +7840,7 @@ fn flatten(node: &rable::Node, source: &str, after: Option<Separator>, out: &mut
                 } else {
                     after
                 };
-                flatten(command, source, follows, out);
+                flatten_in(command, source, follows, construct, out);
             }
         }
         rable::NodeKind::List { items } => {
@@ -7814,40 +7854,95 @@ fn flatten(node: &rable::Node, source: &str, after: Option<Separator>, out: &mut
                     _ if index + 1 == items.len() => after,
                     _ => None,
                 };
-                flatten(&item.command, source, follows, out);
+                flatten_in(&item.command, source, follows, construct, out);
             }
         }
         // A GROUPING runs its body in this call's own right, so it is walked.
         rable::NodeKind::Subshell { body, .. } | rable::NodeKind::BraceGroup { body, .. } => {
-            flatten(body, source, after, out);
+            flatten_in(body, source, after, construct, out);
         }
-        // **A CONTROL-FLOW BODY IS DELIBERATELY NOT WALKED, and that is a scope
-        // decision rather than a limit of the parser.** `if`, `while`, `until`,
-        // `for`, `select` and `case` all carry real commands, and the parser
-        // hands them over — an earlier draft here walked them.
+        // **A CONTROL-FLOW BODY IS WALKED AND TAGGED**, which is what makes a
+        // module able to decide from structure (CLOUD-1381).
         //
-        // Landed rules are not written for it. `run-shape-guard` exempts a
-        // `sleep` inside a condition loop, and it decides that from the segment
-        // the loop occupies; lifting the body's `sleep 1` out into a segment of
-        // its own strips exactly the context the exemption reads, so
-        // `until [ -f /tmp/done ]; do sleep 1; done` — the sanctioned wait —
-        // started being refused as a bare timer. Measured, in
-        // `run_shape::a_loop_body_is_reached_and_the_exemption_decides_it`.
+        // An earlier revision walked these UNTAGGED and it was an over-deny:
+        // `run-shape-guard` exempts a `sleep` inside a condition loop, and a
+        // body command lifted into a bare segment carries nothing saying it was
+        // in a loop, so `until [ -f /tmp/done ]; do sleep 1; done` -- the wait
+        // this repository's own rules recommend -- was refused as a bare timer.
+        // A second revision withdrew the walk entirely, which stopped that
+        // over-deny and left the module unable to see the loop at all.
         //
-        // That is an OVER-deny on the shape the guard exists to recommend, which
-        // is the direction that gets a guard switched off. Reaching these bodies
-        // is worth doing and is its own row: every module deciding over
-        // `segments` has to be re-read against the new reading first. CLOUD-1257
-        // is about `$(…)`, which IS reached — see `descend_word`.
-        rable::NodeKind::Function { .. }
-        | rable::NodeKind::If { .. }
-        | rable::NodeKind::While { .. }
-        | rable::NodeKind::Until { .. }
-        | rable::NodeKind::For { .. }
-        | rable::NodeKind::ForArith { .. }
-        | rable::NodeKind::Select { .. }
-        | rable::NodeKind::Case { .. } => {}
+        // Tagging is the answer both attempts were missing. The condition and
+        // the body are DIFFERENT roles and a module needs them apart: the
+        // condition is where a process probe lives, the body is where a sleep
+        // does.
+        rable::NodeKind::While { condition, body, .. } => {
+            flatten_in(condition, source, None, Some(("while", "condition")), out);
+            flatten_in(body, source, after, Some(("while", "body")), out);
+        }
+        rable::NodeKind::Until { condition, body, .. } => {
+            flatten_in(condition, source, None, Some(("until", "condition")), out);
+            flatten_in(body, source, after, Some(("until", "body")), out);
+        }
+        rable::NodeKind::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            flatten_in(condition, source, None, Some(("if", "condition")), out);
+            flatten_in(then_body, source, None, Some(("if", "body")), out);
+            if let Some(body) = else_body {
+                flatten_in(body, source, after, Some(("if", "body")), out);
+            }
+        }
+        // `for` COUNTS rather than tests, so it is a different node and a
+        // different answer: `for i in $(seq 60); do sleep 10; done` exits on the
+        // clock like any timer. The bash guard named that a deliberate
+        // non-catch "because narrowing that costs a real parser"; it costs none
+        // now, and the narrowing is that this is not a `while`.
+        rable::NodeKind::For { body, .. } | rable::NodeKind::ForArith { body, .. } => {
+            flatten_in(body, source, after, Some(("for", "body")), out);
+        }
+        rable::NodeKind::Select { body, .. } => {
+            flatten_in(body, source, after, Some(("select", "body")), out);
+        }
+        rable::NodeKind::Case { patterns, .. } => {
+            for arm in patterns {
+                if let Some(body) = arm.body.as_ref() {
+                    flatten_in(body, source, None, Some(("case", "body")), out);
+                }
+            }
+        }
+        rable::NodeKind::Function { body, .. } => {
+            flatten_in(body, source, after, Some(("function", "body")), out);
+        }
+        // `! cmd` and `time cmd` WRAP a pipeline rather than being one, so the
+        // command is one level down. Missing these is an under-deny and was
+        // measured: `until ! pgrep -f '<pattern>'; do sleep 20; done` is the
+        // canonical process-polling wait `run-shape-guard` exists to refuse, and
+        // with the negation unwalked its `pgrep` reached no segment at all, so
+        // the guard allowed the exact command it was written for.
+        rable::NodeKind::Negation { pipeline } | rable::NodeKind::Time { pipeline, .. } => {
+            flatten_in(pipeline, source, after, construct, out);
+        }
+        rable::NodeKind::Coproc { command, .. } => {
+            flatten_in(command, source, after, construct, out);
+        }
         // Anything else contains no command position.
+        //
+        // **A CATCH-ALL HERE IS AN UNDER-DENY GENERATOR, which is why the arms
+        // above are enumerated rather than left to it.** A node kind this walk
+        // does not name produces no segment, and no segment is byte-identical to
+        // a clean command on the decision surface — the same silence CLOUD-1381
+        // replaced a character walk to remove, arriving through an unhandled
+        // variant instead. `Negation` was exactly that, found by a landed case
+        // rather than by reading the enum.
+        //
+        // What remains here genuinely holds no command position: words and their
+        // expansions, the `[[ ]]` conditional family, arithmetic, and the
+        // separator tokens. A `$(...)` inside any of them is still reached, by
+        // `descend_word`.
         _ => {}
     }
 }
@@ -13945,46 +14040,81 @@ deny contains "refused by themodule" if {
         assert_eq!(count, 2, "both substituted commands are segments");
     }
 
-    /// A GROUPING's body is reached; a control-flow body deliberately is not.
+    /// A control-flow body is walked and TAGGED with the node it sits in.
     ///
-    /// The asymmetry is a scope decision and is asserted so it stays one. A
-    /// subshell or brace group runs its commands in this call's own right, and
-    /// nothing reads those segments for context. A loop or conditional body is
-    /// different: `run-shape-guard` exempts a `sleep` inside a condition loop
-    /// and decides that from the segment the loop occupies, so lifting the
-    /// body's commands out strips the context the exemption reads — measured as
-    /// `until [ -f /tmp/done ]; do sleep 1; done`, the sanctioned wait, being
-    /// refused as a bare timer.
+    /// The tag is what makes a module able to decide from structure rather than
+    /// from a keyword, and both halves matter. Walking untagged was an
+    /// over-deny: `run-shape-guard` exempts a `sleep` inside a condition loop,
+    /// and a body command lifted into a bare segment carries nothing saying it
+    /// was in a loop, so the sanctioned `until … do sleep 1; done` wait was
+    /// refused as a bare timer. Not walking at all left the module unable to see
+    /// the loop.
     ///
-    /// Reaching control-flow bodies is worth doing and is its own row: every
-    /// module deciding over `segments` has to be re-read against the new
-    /// reading first. This case is what will go red when that row lands, which
-    /// is the point of writing it as an equality rather than a one-way check.
+    /// The condition and the body are separate roles because a module needs them
+    /// apart: a process probe lives in the condition, a sleep in the body.
     #[test]
-    fn a_grouping_is_walked_and_a_control_flow_body_is_not() {
+    fn a_control_flow_body_is_walked_and_tagged_with_its_node() {
+        let parsed = parsed_ok("until [ -f /tmp/done ]; do sleep 1; done");
+        let sleep = parsed
+            .iter()
+            .find(|segment| segment.words.first().is_some_and(|word| word == "sleep"))
+            .expect("the body is reached");
+        assert_eq!(
+            sleep.construct,
+            Some(("until", "body")),
+            "a body command says which node it was in, and which half"
+        );
+        let condition = parsed
+            .iter()
+            .find(|segment| segment.construct == Some(("until", "condition")))
+            .expect("the condition is its own segment");
+        assert!(
+            !condition.words.iter().any(|word| word == "until"),
+            "the keyword is the NODE, not a word: {:?}",
+            condition.words
+        );
+
+        // `for` COUNTS rather than tests, and is a different node — which is how
+        // `waits_on_condition` excludes it without a list of words.
+        let counted = parsed_ok("for i in 1 2; do sleep 10; done");
+        assert_eq!(
+            counted
+                .iter()
+                .find(|segment| segment.words.first().is_some_and(|w| w == "sleep"))
+                .and_then(|segment| segment.construct),
+            Some(("for", "body"))
+        );
+
+        // A grouping is walked too, and carries no construct: nothing reads a
+        // subshell for context.
         for command in ["( cd /tmp && rm guarded.md )", "{ rm guarded.md; }"] {
             let parsed = parsed_ok(command);
             assert!(
                 parsed.iter().any(|segment| {
                     segment.words.first().is_some_and(|word| word == "rm")
-                        && segment.words.iter().any(|word| word == "guarded.md")
+                        && segment.construct.is_none()
                 }),
                 "the write inside the grouping `{command}` was not reached"
             );
         }
+    }
 
-        for command in [
-            "if [ -f x ]; then rm guarded.md; fi",
-            "while read line; do rm guarded.md; done",
-            "until [ -f /tmp/done ]; do sleep 1; done",
-            "for f in a b; do rm guarded.md; done",
-            "case $x in a) rm guarded.md;; esac",
-        ] {
-            assert!(
-                parsed_ok(command).is_empty(),
-                "a control-flow body is not walked yet: `{command}`"
-            );
-        }
+    /// A NEGATED condition still reaches its program.
+    ///
+    /// `! cmd` wraps a pipeline rather than being one, so the command is a level
+    /// down and an unhandled node kind drops it silently. Measured on the
+    /// canonical polling wait this repository refuses: with `Negation` unwalked,
+    /// `until ! pgrep -f '<pattern>'; do sleep 20; done` reached no `pgrep`
+    /// segment at all and `run-shape-guard` allowed the exact command it exists
+    /// for.
+    #[test]
+    fn a_negated_condition_still_reaches_its_program() {
+        let parsed = parsed_ok("until ! pgrep -f 'a pattern' >/dev/null; do sleep 20; done");
+        let condition = parsed
+            .iter()
+            .find(|segment| segment.construct == Some(("until", "condition")))
+            .expect("the condition is reached through the negation");
+        assert_eq!(condition.words.first().map(String::as_str), Some("pgrep"));
     }
 
     /// An env-assignment prefix stays a word, where the parser files it apart.
