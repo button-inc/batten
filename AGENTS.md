@@ -186,7 +186,7 @@ so the routing table lives there, not in this budgeted file (CLOUD-683's own cap
 | `rust.md`        | editing `crates/**` — library/binary split, lints, test shape, layout                                                                                          |
 | `toolchain.md`   | editing `mise.toml`, `mise-tasks/`, `hk.pkl`, `tests/**/*.bats`, workflows — a governed gate has two landable shapes; setup, the gate, lifecycle tasks, guards |
 | `commits.md`     | touching release config — Conventional Commits detail, fast-forward landing, release-plz                                                                       |
-| `scanning.md`    | asking a whole-tree question — text vs syntax vs names, and which instrument answers which                                                                     |
+| `scanning.md`    | asking a whole-tree question, or asserting one is answered — text, syntax, names, or whether the board already says so                                         |
 
 ## Scope reminder
 

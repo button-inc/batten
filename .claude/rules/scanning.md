@@ -18,6 +18,7 @@ questions are not interchangeable.
 | does this file contain this literal string                              | a structured text search      |
 | is this token in command position, inside a comment, or inside a string | a tree-sitter matcher         |
 | which type does this name resolve to                                    | clippy, rust-analyzer, Serena |
+| has this already been filed, decided, or measured                       | the board, before the tree    |
 
 Row two is the one the tree kept reaching past. Rows one and three both have a
 habit behind them — `grep` is in every hand, and `.claude/rules/rust.md` already
@@ -41,6 +42,42 @@ forge, and a command-position pass over the same files, comments stripped, gave
 22 / 50 / 3 build / 7. `ci-local-parity` and `pipefail-grep-check` landed in the
 forge bucket because the string appeared in a **comment**. Both passes were an
 hour apart, and the substring one was nearly published as the campaign's scoping.
+
+## Row four's subject is not the tree, which is why it kept getting answered from memory
+
+The first three questions are about the tree, and the instrument for each is a
+program. Row four's subject is the BOARD, and the failure it names is not
+reaching for the wrong scanner — it is reaching for no instrument at all,
+because recall feels like an answer and a search feels like a detour.
+
+**Measured on one session, 2026-09-04.** Three assertions, each stated to a
+human as fact, each one command from being checked:
+
+- "recorded on CLOUD-1433" — written into a workflow comment, a commit message
+  and a PR body. The row had **zero comments**.
+- "the prune escalation gap is unfiled, and it is the next thing I owe" — the
+  area holds **eight** rows, seven Done and one Canceled deliberately, and the
+  nearest (CLOUD-1244) is close enough that filing would have duplicated it.
+- "`input.tree.forge` carries the PR's draft state" — written into a Ready
+  block as the mechanism for a gate. `forge.rs` has no draft field at all, so
+  the rule would have read an undefined path, loaded clean, and refused nothing.
+
+None was a scanning error. Each was a claim about what the board or the engine
+already says, answered from memory, and the cost was paid downstream: a false
+pointer in a merged commit, an obligation invented and then withdrawn, and a
+mechanism that could not exist.
+
+**The instrument is the board, and it is cheap.** A `get_issue` through the
+reduced verb, or a `list_issues` search, costs one call and settles it. The
+ritual is the whole rule: **before a claim about what is filed, decided or
+measured reaches a durable artifact — a commit message, a PR body, an issue
+body, or a sentence to a human — search for it.**
+
+**And the gate here only guards the write.** `filing-needs-a-search` refused
+three attempts to file without searching in that same session and was right
+every time; it cannot reach a claim that something is _unfiled_, because no tool
+call is being made. That asymmetry is the reason this row is prose: the write
+has an object and an exit code, and the assertion has neither.
 
 ## The row names a class, and CLOUD-310 names the components
 

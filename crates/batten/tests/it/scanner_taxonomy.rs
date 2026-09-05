@@ -76,6 +76,19 @@ const INSTRUMENTS: &[(&str, &[&str])] = &[
         "which type does this name resolve to",
         &["clippy", "rust-analyzer", "Serena"],
     ),
+    // ROW FOUR'S SUBJECT IS THE BOARD, NOT THE TREE, and it is here because the
+    // failure it names is not picking the wrong scanner — it is reaching for no
+    // instrument at all, since recall feels like an answer where a search feels
+    // like a detour. Measured over one session: three assertions stated as fact
+    // to a human, each one command from being checked, and each wrong.
+    //
+    // Its instrument cell names the board rather than a product for row one's
+    // reason — which connector answers is a property of the session — so
+    // `row_one_names_no_bare_product` reaches this cell too by construction.
+    (
+        "has this already been filed, decided, or measured",
+        &["the board, before the tree"],
+    ),
 ];
 
 /// The issue that owns the per-component disposition this file must point at
