@@ -277,6 +277,17 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   session runs no program, and stores no raw session token, no command and no
   path. Three questions, three authorities: a merged one would answer none of
   them, because a mismatch could mean the contract is wrong or the runtime is.
+
+  A fourth authority sits beside them and is DATA rather than a type:
+  `contracts/hk-evidence.json` (CLOUD-950) is the one statement of what the
+  pinned runner can evidence about a RUN, and its value today is
+  `executionEvents: none`. `attest` reads it first and unconditionally, so a
+  step-level execution receipt is unwritable rather than discouraged — the
+  absence was previously undocumented, which is the dangerous state: nothing
+  stopped a receipt inferred from a process exit, and such a receipt reads
+  exactly like one backed by evidence. The three routes that would manufacture
+  it — scraping stderr, wrapping steps individually, inferring execution from an
+  exit — are excluded by name.
 - `handler.rs` — the `[[hook.handler]]` dispatch surface (CLOUD-898), the door
   that lets `batten hook` be the ONLY registration on every surface while a
   repository still runs whatever it likes behind it. A **second noun beside

@@ -667,7 +667,7 @@ fn hook_of(argv: &[&str]) -> String {
 
 /// One step as the FACT carries it — the projection's four fields plus the two
 /// a decision about a required step turns on.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct PlannedStep {
@@ -695,7 +695,7 @@ pub struct PlannedStep {
 /// answers about a tree that is not the one being judged — the discriminator
 /// CLOUD-949 names, and the one an implementation keyed on HEAD passes every
 /// other case and fails.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Planned {
@@ -1078,6 +1078,278 @@ pub fn observe(
     text.push('\n');
     std::fs::write(&path, text)?;
     Ok(Look::Is(record))
+}
+
+// ─── CLOUD-950: what a run can be evidenced to have done ─────────────────────
+//
+// The runner provides machine-readable PLANNING and no trustworthy structured
+// per-step LIFECYCLE stream. That absence was undocumented, which is the
+// dangerous state: nothing stopped a step-level execution receipt inferred from
+// a process exit, and such a receipt reads exactly like one backed by evidence.
+//
+// **The absence is committed data now, not a comment**, and it is the one
+// authority on what the pinned runner can evidence. `attest` reads it, so a
+// step attestation under `ExecutionEvents::None` is unwritable rather than
+// merely discouraged — which is the half that makes this a gate.
+//
+// THE THREE ROUTES THAT WOULD MANUFACTURE THE EVIDENCE ARE EXCLUDED BY NAME:
+// scraping stderr, wrapping steps individually, and inferring execution from a
+// process exit. Each produces a claim about a step nobody watched, and each is
+// exactly what the fixture exists to say does not exist.
+
+/// Where the committed capability fixture lives.
+pub const EVIDENCE: &str = "contracts/hk-evidence.json";
+
+/// What the pinned runner emits about a run's steps.
+///
+/// **A two-valued enum rather than a boolean**, because the fixture must be able
+/// to express the state that does NOT hold today: a format that could only say
+/// "none" would be a comment with a schema, and nothing would prove it able to
+/// carry the answer that arrives when the runner gains a stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum ExecutionEvents {
+    /// No structured per-step lifecycle stream exists.
+    None,
+    /// A structured stream exists and binds to a plan and a run.
+    Structured,
+}
+
+/// The committed capability fixture: what can be evidenced, per surface of the
+/// question, at one pinned version.
+///
+/// **Seven flags rather than a summary, and the lint is expected rather than
+/// obeyed.** CLOUD-950 names each row separately because they move separately: a
+/// runner could gain step terminals without run identity, or skipped-step
+/// announcements without a final exit, and a fixture that carried only the
+/// summary could not say which. Collapsing them into an enum would delete the
+/// granularity the row exists to record, and `execution_events` is already the
+/// summary a gate reads.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "stays: each flag is a separately-moving capability CLOUD-950 names, and `execution_events` is the summary a gate reads"
+)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Evidence {
+    /// The fixture's own shape version.
+    pub version: u32,
+    /// The runner version this was established against. A capability is a
+    /// property of a BUILD, so a fixture that named no version would answer for
+    /// a runner nobody measured.
+    pub tool_version: String,
+    /// Whether the plan is machine-readable. It is, which is why the other rows
+    /// are worth stating: the contrast is the finding.
+    pub plan_schema: bool,
+    /// Whether a run carries an identity events could bind to.
+    pub run_identity: bool,
+    /// Whether events bind to the digest of the plan they ran.
+    pub plan_digest_binding: bool,
+    /// Whether a step's start is observable.
+    pub step_start_events: bool,
+    /// Whether a step's terminal outcome is observable.
+    pub step_terminal_events: bool,
+    /// Whether a skipped step is announced.
+    pub skipped_step_events: bool,
+    /// Whether the run's final exit is observable as an event.
+    pub final_exit_events: bool,
+    /// The summary the gate reads.
+    pub execution_events: ExecutionEvents,
+}
+
+/// Why a step attestation is not available.
+///
+/// Pointer-shaped: a kind token and, where there is one, a step NAME. Never a
+/// byte of the runner's output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Incomplete {
+    /// The declared capability says no such stream exists.
+    ///
+    /// **The arm that is true today**, and the one an implementation that only
+    /// validated event streams would never reach — it would accept a perfect
+    /// fixture stream and emit a receipt for a step nobody watched.
+    Uncapable,
+    /// The events name a plan that is not the one asked about.
+    PlanMismatch,
+    /// The events name a run that is not the one asked about.
+    RunMismatch,
+    /// A planned step has no terminal event.
+    Missing {
+        /// The step's name.
+        step: String,
+    },
+    /// A step carries more than one terminal event.
+    Duplicated {
+        /// The step's name.
+        step: String,
+    },
+    /// A step terminated before it started.
+    OutOfOrder {
+        /// The step's name.
+        step: String,
+    },
+    /// The stream has no final exit, so it may have been cut off.
+    Truncated,
+    /// A step ran that the plan does not contain.
+    Unplanned {
+        /// The step's name.
+        step: String,
+    },
+}
+
+impl Incomplete {
+    /// The stable token this kind is reported under (§6).
+    #[must_use]
+    pub fn render(&self) -> String {
+        match self {
+            Incomplete::Uncapable => "uncapable".to_owned(),
+            Incomplete::PlanMismatch => "plan-mismatch".to_owned(),
+            Incomplete::RunMismatch => "run-mismatch".to_owned(),
+            Incomplete::Missing { step } => format!("missing {step}"),
+            Incomplete::Duplicated { step } => format!("duplicated {step}"),
+            Incomplete::OutOfOrder { step } => format!("out-of-order {step}"),
+            Incomplete::Truncated => "truncated".to_owned(),
+            Incomplete::Unplanned { step } => format!("unplanned {step}"),
+        }
+    }
+}
+
+/// One lifecycle event, as a capable runner would emit it.
+///
+/// Defined even though nothing emits it, which is the point: the fixture format
+/// is proven able to express the capable shape rather than only the state that
+/// happens to hold today.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct Event {
+    /// The run this belongs to.
+    pub run: String,
+    /// The digest of the plan it ran.
+    pub plan_digest: String,
+    /// The step, or `None` for the run's own final exit.
+    pub step: Option<String>,
+    /// `start`, `terminal`, `skipped`, or `exit`.
+    pub kind: String,
+    /// Position in the stream, as the emitter ordered it.
+    pub sequence: u64,
+}
+
+/// Whether a step-level attestation may be made for one run.
+///
+/// **`Err` is the only answer available today, and that is the row's whole
+/// claim.** The capability fixture is read FIRST, so no stream — however
+/// well-formed — can produce a pass while the pinned runner declares no
+/// lifecycle events. An implementation that reached for the stream first would
+/// accept a fabricated one, which is exactly the misleading receipt this exists
+/// to prevent.
+///
+/// # Errors
+///
+/// Never returns `Err` in the `Result` sense; the refusals are values. This
+/// returns `Result<(), Incomplete>` because a caller must handle the refusal to
+/// obtain the pass, which is what keeps the pass from being the default.
+pub fn attest(
+    evidence: &Evidence,
+    plan: &Planned,
+    run: &str,
+    plan_digest: &str,
+    events: &[Event],
+) -> Result<(), Incomplete> {
+    // THE CAPABILITY GATE, FIRST AND UNCONDITIONALLY.
+    if evidence.execution_events == ExecutionEvents::None {
+        return Err(Incomplete::Uncapable);
+    }
+    if events.iter().any(|event| event.run != run) {
+        return Err(Incomplete::RunMismatch);
+    }
+    if events.iter().any(|event| event.plan_digest != plan_digest) {
+        return Err(Incomplete::PlanMismatch);
+    }
+    if !events.iter().any(|event| event.kind == "exit") {
+        return Err(Incomplete::Truncated);
+    }
+    for event in events {
+        let Some(step) = event.step.as_deref() else {
+            continue;
+        };
+        if !plan.steps.iter().any(|planned| planned.name == step) {
+            return Err(Incomplete::Unplanned {
+                step: step.to_owned(),
+            });
+        }
+    }
+    for planned in &plan.steps {
+        if planned.status != "included" {
+            continue;
+        }
+        let terminals: Vec<&Event> = events
+            .iter()
+            .filter(|event| {
+                event.step.as_deref() == Some(planned.name.as_str()) && event.kind == "terminal"
+            })
+            .collect();
+        let start = events.iter().find(|event| {
+            event.step.as_deref() == Some(planned.name.as_str()) && event.kind == "start"
+        });
+        match (start, terminals.len()) {
+            (_, 0) => {
+                return Err(Incomplete::Missing {
+                    step: planned.name.clone(),
+                });
+            }
+            (_, count) if count > 1 => {
+                return Err(Incomplete::Duplicated {
+                    step: planned.name.clone(),
+                });
+            }
+            (None, _) => {
+                return Err(Incomplete::OutOfOrder {
+                    step: planned.name.clone(),
+                });
+            }
+            (Some(start), _) => {
+                if terminals
+                    .iter()
+                    .any(|terminal| terminal.sequence < start.sequence)
+                {
+                    return Err(Incomplete::OutOfOrder {
+                        step: planned.name.clone(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+impl Evidence {
+    /// Read the committed fixture.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::UsageError`] when the bytes are not this shape — a malformed
+    /// fixture is an invalid input the caller can fix, and it must never read as
+    /// a capability nobody declared.
+    pub fn parse(text: &str) -> anyhow::Result<Self> {
+        serde_json::from_str(text).map_err(|error| crate::UsageError::raise(error.to_string()))
+    }
+
+    /// Render the fixture's bytes, in the artifact's own shape.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::UsageError`] only if the value cannot be serialised, which the
+    /// types make unreachable.
+    pub fn render(&self) -> anyhow::Result<String> {
+        let mut text = serde_json::to_string_pretty(self)
+            .map_err(|error| crate::UsageError::raise(error.to_string()))?;
+        text.push('\n');
+        Ok(text)
+    }
 }
 
 #[cfg(test)]

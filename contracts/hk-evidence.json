@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "toolVersion": "hk 1.56.1",
+  "planSchema": true,
+  "runIdentity": false,
+  "planDigestBinding": false,
+  "stepStartEvents": false,
+  "stepTerminalEvents": false,
+  "skippedStepEvents": false,
+  "finalExitEvents": false,
+  "executionEvents": "none"
+}
