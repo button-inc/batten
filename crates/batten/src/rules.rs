@@ -6063,7 +6063,16 @@ fn run_static_inner(
             ));
         }
     }
-    run(rules, &[], root, &bundles, vocabulary, scope, now)
+    run(
+        rules,
+        &[],
+        root,
+        &bundles,
+        vocabulary,
+        scope,
+        now,
+        RunKind::Static,
+    )
 }
 
 /// Run only the rules that cannot spawn a process, and report the ones that can
@@ -6087,13 +6096,19 @@ fn run_static_inner(
 /// so there the only honest answer is to refuse. Same omission, two surfaces,
 /// two correct answers.
 ///
-/// Nothing here spawns: the withheld rules are partitioned out *before*
-/// [`run`] sees them, so the no-user-code-behind-a-store-write property is a
-/// property of the argument list rather than a promise. The partition asks
-/// [`RuleKind::carries_ambient_authority`] — the same question [`run_static`]
-/// refuses on, deliberately the identical call rather than a second predicate,
-/// so the two surfaces can disagree about what to DO with such a kind and never
-/// about which kinds they are.
+/// Nothing here spawns, and **the argument list is only half of why**
+/// (CLOUD-1480). The withheld rules are partitioned out *before* [`run`] sees
+/// them, which the previous revision of this paragraph called "a property of
+/// the argument list rather than a promise" — true of every spawning KIND and
+/// false of the two `Cost::Effect` FACTS, which no partition over
+/// [`RuleKind`] can reach. `symbols` spawned `cargo clippy` from this surface
+/// for as long as that sentence stood. The surface is passed to [`run`] now and
+/// the facts are gated on it, so the property holds on both halves.
+///
+/// The partition asks [`RuleKind::carries_ambient_authority`] — the same
+/// question [`run_static`] refuses on, deliberately the identical call rather
+/// than a second predicate, so the two surfaces can disagree about what to DO
+/// with such a kind and never about which kinds they are.
 ///
 /// # Errors
 ///
@@ -6126,6 +6141,7 @@ pub fn run_recorded(
         // The Stop-surface recorder supplies none, and `None` is the honest
         // answer rather than a clock read this module may not make.
         None,
+        RunKind::Static,
     )?;
     for rule in withheld {
         // `RuleSkipped`, not a variant of its own. The distinction between "the
@@ -6196,7 +6212,16 @@ fn run_all_inner(
         }
     }
     let bundles = crate::policy::load(root, rules, vocabulary, checks, None)?;
-    run(rules, provisions, root, &bundles, vocabulary, scope, now)
+    run(
+        rules,
+        provisions,
+        root,
+        &bundles,
+        vocabulary,
+        scope,
+        now,
+        RunKind::All,
+    )
 }
 
 /// Run every rule in `rules` against the tree rooted at `root`, returning all
@@ -6223,6 +6248,14 @@ fn run(
     // The instant the BOUNDARY read, threaded to `minted_facts` rather than
     // read here — see `RunOptions::now` for why this module may not read one.
     now: Option<u64>,
+    // WHICH EFFECT SURFACE THIS RUN IS ON, threaded here rather than left with
+    // the caller (CLOUD-1480). `run_static` refuses a spawning KIND before any
+    // work, and that read as the whole of §5's read-only promise — but a
+    // `Cost::Effect` FACT is not a kind, so `symbols_fact` and `review_fact`
+    // below were guarded by DECLARATION alone and spawned on the read surface.
+    // Measured: `batten hook` on a Stop payload exec'd `cargo clippy` and took
+    // 114.8s against a published 100ms budget.
+    kind: RunKind,
 ) -> anyhow::Result<Scan> {
     let recorders = vocabulary.recorders;
     let files = tree_files(root)?;
@@ -6295,8 +6328,28 @@ fn run(
     // The one acquisition of the `Cost::Effect` fact (CLOUD-760), beside the git
     // family and for the same reason: a projection must not spawn, so the spend
     // happens once here and only when a row declared it.
-    let symbols = symbols_fact(rules, root);
-    let review = review_fact(rules, root);
+    // THE TWO `Cost::Effect` FACTS, AND THE SURFACE IS THE OTHER HALF OF THE
+    // GUARD (CLOUD-1480). Declaration alone was never enough: `Fact::Symbols`
+    // is classed `Cost::Effect` x `Surface::Check`, and `Surface::Check` names
+    // the NARROWEST surface it may be resolved on — so resolving it from the
+    // read-effect surface contradicts the class the fact already carries.
+    //
+    // COULD-NOT-LOOK RATHER THAN A SKIP, for the reason both facts' own headers
+    // give: an empty census would read as "resolved, found nothing", which is a
+    // measured answer about a crate nobody analysed. `IsNot` is what the
+    // undeclared arm already returns and it is the honest one here too — the
+    // projection emits `null`, and a module reads undefined.
+    let effects_admitted = matches!(kind, RunKind::All);
+    let symbols = if effects_admitted {
+        symbols_fact(rules, root)
+    } else {
+        crate::facts::Look::IsNot
+    };
+    let review = if effects_admitted {
+        review_fact(rules, root)
+    } else {
+        crate::facts::Look::IsNot
+    };
     // THE OUT-OF-ROOT FILES (CLOUD-1167), acquired once for the whole run beside
     // the families above and, like every one of them, ONLY FOR WHAT A ROW
     // DECLARED. A ruleset naming no `[[rule.external]]` reads no environment
