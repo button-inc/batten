@@ -328,6 +328,13 @@ fn string_list(value: Option<&serde_json::Value>) -> Option<Vec<String>> {
         .collect()
 }
 
+/// The plan's parallel groups, or `None` where the key is absent or misshapen.
+///
+/// `None` rather than an empty vector, and the distinction is the projection's
+/// whole discipline: a plan carrying no `groups` key is one this build could not
+/// read, where a plan carrying an empty one is a runner with nothing grouped.
+/// Collapsing them would commit a contract that compares clean against every
+/// later plan.
 fn groups_in(value: Option<&serde_json::Value>) -> Option<Vec<Group>> {
     value?
         .as_array()?
@@ -341,6 +348,13 @@ fn groups_in(value: Option<&serde_json::Value>) -> Option<Vec<Group>> {
         .collect()
 }
 
+/// The plan's steps, or `None` where the key is absent or misshapen.
+///
+/// Only the four fields that decide WHAT RUNS survive: `name`, `status`,
+/// `orderIndex` and `parallelGroupId`. `generatedAt`, `fileCount`, `reasons` and
+/// `metadata` are dropped by construction rather than filtered at compare time,
+/// because a volatile field that never enters the projection cannot flap — two
+/// back-to-back plans of an unchanged tree differ in `generatedAt` alone.
 fn steps_in(value: Option<&serde_json::Value>) -> Option<Vec<Step>> {
     value?
         .as_array()?
@@ -440,6 +454,13 @@ pub fn compare(committed: &Contract, current: &Contract) -> Vec<Drift> {
     drifts
 }
 
+/// The drift between one committed surface and the live one, as pointers.
+///
+/// Step-level findings are raised before the group-level one, and a `Groups`
+/// finding is SUPPRESSED where any step finding already accounts for it: a step
+/// added, removed, moved or regrouped necessarily moves a group's membership, so
+/// reporting both names one cause twice. A run-type or profile change does not
+/// suppress it, because neither implies the other.
 fn compare_surface(committed: &Surface, current: &Surface) -> Vec<Drift> {
     let mut drifts = Vec::new();
     let hook = committed.hook.clone();
