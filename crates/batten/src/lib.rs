@@ -1562,6 +1562,13 @@ fn file_and_report(
     mint_receipts(
         mints,
         method,
+        // NO REQUEST INPUT REACHES HERE, so a row declaring a `selects_at`
+        // selects NOTHING on this path — fail-closed, and stated rather than
+        // papered over. `file_and_report` is handed the answer and not the call,
+        // and synthesising an input would be the boundary certifying a selection
+        // it never read. A row that declares no selector is unaffected, which is
+        // every landed row.
+        &serde_json::Value::Null,
         &payload.value,
         repo,
         ready::Grammar::from_compiled(&crate::pattern::compiled(patterns))
@@ -10337,6 +10344,7 @@ fn recover_spilled(result: &serde_json::Value) -> Option<serde_json::Value> {
 fn mint_receipts(
     declared: &[crate::mint::Declared],
     tool: &str,
+    input: &serde_json::Value,
     result: &serde_json::Value,
     root: &Path,
     grammar: Option<&ready::Grammar>,
@@ -10350,6 +10358,20 @@ fn mint_receipts(
     let resolve = |reference: &str| git::resolve_ref(root, reference).ok().flatten();
     for mint in declared {
         if !rules::selects_tool_name(&mint.tool, tool) {
+            continue;
+        }
+        // THE ROW'S OWN SELECTOR, and it is checked before any git work
+        // (CLOUD-1484). A harness that dispatches every skill, agent or command
+        // through one tool name gives the name above nothing to discriminate on,
+        // so without this a row would mint on every invocation of that tool and
+        // the receipt would attest that *something* ran.
+        // THE SELECTOR READS THE INPUT, NEVER THE RESULT, and the split is the
+        // point rather than an accident of what was to hand. A dispatch names
+        // ITSELF in its arguments — which skill, which agent, which command —
+        // while its result is whatever came back, and on most hosts that is
+        // prose. `requires` asks the result whether the call succeeded; this asks
+        // the input whether it is the call at all.
+        if !crate::mint::selects(mint, input) {
             continue;
         }
         // The branch is resolved only for a row that asked, which is the same
@@ -10367,6 +10389,39 @@ fn mint_receipts(
                     continue;
                 };
                 format!("{}.{}", mint.name, branch.replace('/', "-"))
+            }
+            // KEYED TO THE CHANGE (CLOUD-1484).
+            //
+            // `branch_patch_id` reads COMMITTED bytes — `HEAD` against the merge
+            // base — so an uncommitted edit cannot move the key, which is what
+            // makes the receipt survive the landing loop's per-lap rebase.
+            //
+            // THIS ASKED `uncommitted == 0` AND THE CONJUNCT WAS UNSATISFIABLE
+            // IN THIS REPOSITORY, which is worth recording rather than quietly
+            // deleting. The intent was sound: a receipt keyed to committed bytes
+            // should not be taken in a session looking at something else. What it
+            // ran into is that `git::uncommitted` reimplements status and does not
+            // skip a GITLINK, where `walk_blob_ids` explicitly does — so an
+            // uninitialised submodule is counted as changed forever, `Ok(0)` never
+            // holds, and the mint could never fire. Measured here: `git status`
+            // reports the tree clean while `changed_paths` returns
+            // `{"tests/bats"}`, a mode-160000 entry.
+            //
+            // So the condition is withdrawn rather than repaired in place, on two
+            // grounds beyond the defect. It was a SECOND AUTHORITY over a question
+            // `tree-clean` already owns for the landing path, and nothing reaches
+            // `main` without passing that. And it was the wrong subject anyway: a
+            // reviewer reads the WORKING TREE, so refusing to record a dispatch
+            // taken over uncommitted work attests less than actually happened
+            // rather than more. The gitlink defect is its own row.
+            crate::mint::MintKey::Delta => {
+                let Some(base) = mint.key_base.as_deref() else {
+                    continue;
+                };
+                let Ok(Some(delta)) = git::branch_patch_id(root, base) else {
+                    continue;
+                };
+                format!("{}.{delta}", mint.name)
             }
         };
         // `root` is the ANCHOR the block above resolved, never the cwd — a
@@ -10409,11 +10464,23 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     // blocks, so reading fields off `envelope.result` directly matches nothing in
     // production while passing every fixture, which hands the engine a bare
     // object. `facts::payload_in` is the one authority on that unwrap.
-    let Some(result) =
-        facts::payload_in(&envelope.result).or_else(|| recover_spilled(&envelope.result))
-    else {
-        return;
-    };
+    //
+    // A RESULT THAT CARRIES NO JSON IS `null` HERE, NOT AN EARLY RETURN
+    // (CLOUD-1484). This used to give up, on the sound premise that every landed
+    // row reads a field of the result — and that premise stopped being true when
+    // a row arrived whose whole reading is of the INPUT and the repository.
+    // Measured on the live host: this harness answers a skill dispatch with the
+    // bare string `Launching skill: <name>`, which is not JSON, so the row would
+    // have loaded clean, matched its tool, and minted nothing — a gate switched
+    // off by the shape of somebody else's stdout.
+    //
+    // Nothing is loosened for a row that DOES read the result: `select` over
+    // `null` resolves nothing, so `requires` still refuses and every body piece
+    // over a path still records its could-not-look token. What changes is only
+    // that a row reading none of it is no longer stopped on the way.
+    let result = facts::payload_in(&envelope.result)
+        .or_else(|| recover_spilled(&envelope.result))
+        .unwrap_or(serde_json::Value::Null);
     let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
         return;
     };
@@ -10436,6 +10503,7 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     mint_receipts(
         declared,
         &envelope.raw_tool,
+        &envelope.input,
         &result,
         root,
         grammar.as_ref(),

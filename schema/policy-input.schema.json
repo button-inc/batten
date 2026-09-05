@@ -49,6 +49,12 @@
                 "type": "string"
               },
               "type": "array"
+            },
+            "patch-id": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "type": [

@@ -2552,6 +2552,33 @@ pub struct BaseDelta {
     /// must not collapse.
     #[serde(rename = "base-lines")]
     pub base_lines: BTreeMap<String, Vec<String>>,
+    /// The identity of the branch's whole CHANGE against the base
+    /// (CLOUD-1484) — [`branch_patch_id`], as a bare hex string.
+    ///
+    /// # Why a receipt-shaped value belongs on this fact
+    ///
+    /// A module asking *was this change reviewed* has to name the change, and a
+    /// digest is the only spelling of it that fits non-negotiable rule 4: the
+    /// three path lists above already say WHICH files moved, and a module that
+    /// re-derived an identity from them would be a second notion of *the same
+    /// change* — free to disagree with [`landing`]'s about a rebase, which is
+    /// the one property such a receipt turns on.
+    ///
+    /// # It answers a DIFFERENT question from the lists beside it, deliberately
+    ///
+    /// The path lists are a tip diff over the WORKING TREE. This is a merge-base
+    /// diff over COMMITTED bytes. They disagree on a stale branch and on a dirty
+    /// one, and that is not a defect in either: a module asking which files this
+    /// branch touched wants the first, and one asking which change was attested
+    /// wants the second, because an attestation must not move when somebody
+    /// saves a file.
+    ///
+    /// `None` is could-not-look and covers the empty diff too — a branch that
+    /// changed nothing has no identity, and [`cumulative_patch_id`] refuses to
+    /// mint one so two empty changes cannot compare equal. A predicate must not
+    /// read that as *unreviewed*; there is nothing to review.
+    #[serde(rename = "patch-id")]
+    pub patch_id: Option<String>,
 }
 
 /// A file's content with its comment and blank lines removed.
@@ -2821,6 +2848,12 @@ pub fn base_delta(dir: &Path, base: &str, globs: &[String]) -> Result<Option<Bas
     delta.edited.sort();
     delta.deleted.sort();
     delta.code_changed.sort();
+    // THE CHANGE'S OWN IDENTITY (CLOUD-1484), resolved here because this is the
+    // function that already holds the base. Failure leaves `None` — the field is
+    // could-not-look and the three path lists above are still answered, which is
+    // `base_date`'s posture one field down and for its reason: collapsing the
+    // whole fact over one unreadable field is the opposite error.
+    delta.patch_id = branch_patch_id(dir, base).ok().flatten();
     // THE BASE'S OWN TIMESTAMP, resolved here because this is where the base rev
     // has already been resolved. Every failure leaves `None` rather than a
     // fabricated instant: a consumer comparing against could-not-look must skip
@@ -3192,6 +3225,46 @@ pub fn merge_base(dir: &Path, base_ref: &str) -> Result<Option<String>> {
         .merge_base(base_id, head_id)
         .ok()
         .map(|found| found.detach().to_string()))
+}
+
+/// The patch identity of the branch's whole change against a declared base REF
+/// (CLOUD-1484), as a bare hex string.
+///
+/// **A wrapper over [`cumulative_patch_id`] and deliberately not a second
+/// computation.** What a review-dispatch receipt is keyed by has to be *the same
+/// change* in exactly the sense the rest of this module already means it: line
+/// numbers excluded, so a rebase onto a moved base still matches, and the merge
+/// base used for RANGE SELECTION rather than as a merged-ness answer
+/// (`no_ancestry_decides_merged_ness`). A digest computed here over a diff of
+/// this function's own devising would be a second notion of *the same change*,
+/// free to disagree with [`landing`]'s about a rebase — which is the one property
+/// the receipt turns on.
+///
+/// `None` for every could-not-look: a base ref that does not resolve, a HEAD that
+/// does not, two histories that share none, and — the one worth naming — an
+/// **empty diff**. A branch that changed nothing has no identity, and
+/// [`cumulative_patch_id`] refuses to mint one precisely so two empty changes
+/// cannot compare equal. A caller must not read that `None` as *not reviewed*;
+/// there is nothing to review.
+///
+/// The value is over COMMITTED bytes — `HEAD` against the merge base — so an
+/// uncommitted edit cannot move it. That is what makes the key stable, and it is
+/// also why a caller that cares whether the reviewed bytes are the ones that will
+/// land must ask [`uncommitted`] separately: this function cannot see the working
+/// tree at all.
+///
+/// # Errors
+///
+/// When the repository cannot be opened.
+pub fn branch_patch_id(dir: &Path, base_ref: &str) -> Result<Option<String>> {
+    let Some(base) = resolve_ref(dir, base_ref)? else {
+        return Ok(None);
+    };
+    let head = head_commit(dir)?;
+    Ok(cumulative_patch_id(dir, &base, &head)
+        .ok()
+        .flatten()
+        .map(|id| id.as_str().to_owned()))
 }
 
 /// The patch identity of the branch's whole change: the diff from where the two
