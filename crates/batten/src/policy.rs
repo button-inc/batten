@@ -220,11 +220,40 @@ pub struct Violation {
 // is not the OCI distribution CLOUD-129 rejected, and why rule 1 is most
 // inviting to break at a preset — moved with it.
 //
-// CLOUD-129's VERDICT IS UNCHANGED and the manifest is not permission to fetch
-// one: `include_str!` at build time, no network, no registry, no
+// CLOUD-129's VERDICT IS UNCHANGED TODAY and the manifest is not permission to
+// fetch one: `include_str!` at build time, no network, no registry, no
 // trust-on-first-use. `crate::preset`'s own header says so at length, because a
 // reader arriving at a "manifest" reasonably wonders whether something resolves
 // it, and the answer is that nothing does.
+//
+// AND THE VERDICT IS NOW AMENDED RATHER THAN ABSOLUTE (CLOUD-970, 2026-09-05).
+// The rejection's stated GROUND was "there is no network here", and that ground
+// is not what CLOUD-129 actually objected to — `provision apply` has fetched
+// pinned artifacts over the network since CLOUD-90, under an operator-run `write`
+// verb, against a digest in the committed authority, into an out-of-tree cache.
+// A preset is data with the same properties, so a rejection resting on the
+// absence of any fetch at all would refuse the thing it already sanctions one
+// table over.
+//
+// So the standing verdict is option 2 of CLOUD-970's three: what stays refused is
+// UNPINNED, EVALUATION-TIME, TRUST-ON-FIRST-USE resolution — a module arriving
+// because something looked it up while deciding. What is permitted, if and when a
+// resolver lands, is the `provision apply` shape: a deliberate `write` verb, a
+// digest the consumer committed, a cache read offline thereafter, and `batten
+// hook` and evaluation reaching no socket.
+//
+// **This is a decision about what MAY be built, and nothing is built yet.**
+// CLOUD-970 landed the backend indirection and the `native` backend only, so the
+// property below still holds by construction rather than by policy: `Backend`
+// declares exactly one variant, it resolves a URL the consumer pinned, and there
+// is no code path by which a preset can arrive from anywhere but `include_str!`.
+// The boundary test option 2 owes — that `hook` and evaluation cannot reach the
+// network — belongs to the row that lands a resolver, because a test asserting it
+// today would assert its own premise (`.claude/rules/rust.md`).
+//
+// The reason this comment says so at all is the failure CLOUD-970 names: a
+// resolver landing while this text still claims no network exists, so the next
+// reader inherits a guarantee nobody is holding.
 
 /// Every vendored preset's name, in a stable order.
 ///

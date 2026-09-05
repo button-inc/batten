@@ -552,6 +552,16 @@
         "identity"
       ]
     },
+    "Backend": {
+      "description": "Which resolver a [`Provision`] row is turned into a cached binary by\n(CLOUD-970).\n\n**One variant today, and that is the deliverable rather than a placeholder.**\nThe indirection is what makes a second resolver a row rather than a branch;\na real second backend is the row that proves it was worth having, and landing\none here would be two changes wearing one commit.",
+      "oneOf": [
+        {
+          "description": "Fetch a pinned URL, verify its SHA-256, unpack it, place the binary.\n\nThe behaviour every committed row already has, named so it can be one of\nseveral rather than the only thing a row can mean.",
+          "type": "string",
+          "const": "native"
+        }
+      ]
+    },
     "Base": {
       "description": "A directory the crate can name on its own, for a source whose file does not\nlive under the repository or under a directory an operator exports.\n\nA closed set of ONE, deliberately. Every member has to be a location the\nplatform itself defines, because the alternative is this crate learning a\nharness's layout — non-negotiable rule 1's violation — and because a member\nnobody can predict is a scan wearing an enum's clothes.",
       "oneOf": [
@@ -2290,6 +2300,11 @@
       "description": "One provisioned tool.\n\nThe `oneOf` mirrors [`validate_artifact_spelling`]'s xor into the derived\nschema, the same way [`crate::rules::Rule`] mirrors its severity conditional:\nan author editing `batten.toml` against the published schema gets the refusal\nin their editor rather than on the next run. It is a **second expression of\none rule, never a second authority** — the loader's check is what decides, and\nit is what the error message comes from.",
       "type": "object",
       "properties": {
+        "backend": {
+          "description": "Which resolver turns this row into a cached binary (CLOUD-970).\n\n**The row names what it wants; a backend resolves it.** Every entry was\nimplicitly one resolver — fetch a URL, verify a checksum, unpack, place a\nbinary — and that shape is right but was not named, so a second one could\nnot be added without a compatibility branch beside every read of `url`.\nmise's answer to the same problem is the backend (`ubi:`, `aqua:`,\n`cargo:`), and it is the pinned toolchain here, so this is adopting prior\nart rather than expanding the core.\n\n**Absent is [`Backend::Native`], which is what makes this additive.** Every\ncommitted row keeps its meaning and its bytes; `expand → migrate →\ncontract` needs no migrate step when the expansion has a default that IS\nthe old behaviour. An unknown backend is a load-time config error naming\nit — never a silent skip, which is the direction a row that resolved to\nnothing would fail in.\n\nNon-negotiable rule 1 draws the boundary: the backend VOCABULARY is\ngeneric and lives here, while which backend a consumer picks and what it\nresolves lives in that consumer's `batten.toml`.",
+          "$ref": "#/$defs/Backend",
+          "default": "native"
+        },
         "binary": {
           "description": "The binary's name inside the artifact, and the name it is cached under.",
           "type": "string"

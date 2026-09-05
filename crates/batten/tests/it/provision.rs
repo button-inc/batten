@@ -264,6 +264,72 @@ fn an_unknown_manifest_key_is_exit_1() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("bogus"));
 }
 
+/// CLOUD-970's no-regression case, and the one that fails if the indirection
+/// changes what already works.
+///
+/// Every committed row omits `backend`, so `Backend::Native` is what `#[serde(
+/// default)]` supplies — and this asserts the row still resolves through the same
+/// fetch-verify-unpack-place path with byte-identical behaviour. An `expand →
+/// migrate → contract` change needs no migrate step exactly when the default IS
+/// the old meaning, and this is the assertion that says so rather than the
+/// comment claiming it.
+#[test]
+fn a_row_naming_the_native_backend_behaves_exactly_as_one_naming_none() {
+    let implicit = Env::new("provision-backend-implicit");
+    let (url, sha) = implicit.artifact("demo", BINARY);
+    implicit.config(&manifest(&url, &sha));
+    let without = implicit.run(&["provision", "status"]);
+
+    let explicit = Env::new("provision-backend-explicit");
+    let (url, sha) = explicit.artifact("demo", BINARY);
+    explicit.config(
+        &manifest(&url, &sha).replace("name = \"demo\"", "name = \"demo\"\nbackend = \"native\""),
+    );
+    let with = explicit.run(&["provision", "status"]);
+
+    assert_eq!(
+        without.status.code(),
+        with.status.code(),
+        "naming the default backend cannot change the verdict"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&without.stdout),
+        String::from_utf8_lossy(&with.stdout),
+        "nor a byte of the report (§6)"
+    );
+}
+
+/// An unknown backend is a named config error, never a silent skip.
+///
+/// The direction matters more here than the exit code: a row that resolved to
+/// nothing would provision nothing and say nothing, which is the shape
+/// `.claude/rules/policy-modules.md` calls a dead gate — byte-identical to a
+/// clean run on the decision surface.
+#[test]
+fn an_unknown_backend_is_refused_at_load_and_named() {
+    let env = Env::new("provision-backend-unknown");
+    let (url, sha) = env.artifact("demo", BINARY);
+    env.config(
+        &manifest(&url, &sha).replace("name = \"demo\"", "name = \"demo\"\nbackend = \"nix\""),
+    );
+
+    let output = env.run(&["provision", "status"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a config fault, not a verdict"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("nix"),
+        "the refusal names the backend it could not resolve: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("native"),
+        "and what it could have been: {stderr:?}"
+    );
+}
+
 #[test]
 fn a_pin_that_could_never_match_is_refused_at_load() {
     // Refused here rather than at fetch time, where the mismatch would blame the

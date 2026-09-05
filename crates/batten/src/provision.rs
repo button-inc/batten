@@ -81,6 +81,25 @@ const ARTIFACT: &str = "artifact";
 /// The subdirectory the unpacked binary lands in.
 const BIN_DIR: &str = "bin";
 
+/// Which resolver a [`Provision`] row is turned into a cached binary by
+/// (CLOUD-970).
+///
+/// **One variant today, and that is the deliverable rather than a placeholder.**
+/// The indirection is what makes a second resolver a row rather than a branch;
+/// a real second backend is the row that proves it was worth having, and landing
+/// one here would be two changes wearing one commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
+pub enum Backend {
+    /// Fetch a pinned URL, verify its SHA-256, unpack it, place the binary.
+    ///
+    /// The behaviour every committed row already has, named so it can be one of
+    /// several rather than the only thing a row can mean.
+    #[default]
+    Native,
+}
+
 /// One provisioned tool.
 ///
 /// The `oneOf` mirrors [`validate_artifact_spelling`]'s xor into the derived
@@ -99,6 +118,28 @@ const BIN_DIR: &str = "bin";
     ] } }
 ])))]
 pub struct Provision {
+    /// Which resolver turns this row into a cached binary (CLOUD-970).
+    ///
+    /// **The row names what it wants; a backend resolves it.** Every entry was
+    /// implicitly one resolver — fetch a URL, verify a checksum, unpack, place a
+    /// binary — and that shape is right but was not named, so a second one could
+    /// not be added without a compatibility branch beside every read of `url`.
+    /// mise's answer to the same problem is the backend (`ubi:`, `aqua:`,
+    /// `cargo:`), and it is the pinned toolchain here, so this is adopting prior
+    /// art rather than expanding the core.
+    ///
+    /// **Absent is [`Backend::Native`], which is what makes this additive.** Every
+    /// committed row keeps its meaning and its bytes; `expand → migrate →
+    /// contract` needs no migrate step when the expansion has a default that IS
+    /// the old behaviour. An unknown backend is a load-time config error naming
+    /// it — never a silent skip, which is the direction a row that resolved to
+    /// nothing would fail in.
+    ///
+    /// Non-negotiable rule 1 draws the boundary: the backend VOCABULARY is
+    /// generic and lives here, while which backend a consumer picks and what it
+    /// resolves lives in that consumer's `batten.toml`.
+    #[serde(default)]
+    pub backend: Backend,
     /// The entry's name, unique within the manifest. Also the first cache path
     /// segment, so two tools never share a directory.
     pub name: String,
@@ -1393,6 +1434,7 @@ mod tests {
 
     fn entry(name: &str, sha: &str) -> Provision {
         Provision {
+            backend: Backend::Native,
             name: name.to_owned(),
             version: "1.2.3".to_owned(),
             url: Some("file:///dev/null".to_owned()),
