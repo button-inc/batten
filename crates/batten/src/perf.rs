@@ -555,6 +555,74 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str) -> Result<()> {
     Ok(())
 }
 
+/// The row carrying `id`, anywhere in a `spec` document's subcommand tree.
+///
+/// Recursive because the surface is a tree and the mediation row's DEPTH is not
+/// this module's business: it is top-level today and a rename that nested it
+/// would still leave the id intact, which is the property being relied on.
+fn surface_row<'a>(node: &'a serde_json::Value, id: &str) -> Option<&'a serde_json::Value> {
+    if node.get("id").and_then(serde_json::Value::as_str) == Some(id) {
+        return Some(node);
+    }
+    node.get("subcommands")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .find_map(|child| surface_row(child, id))
+}
+
+/// The mediation verb THIS binary declares, read from its own `spec` document.
+///
+/// **The two arms of a pair are two different builds, so the spelling is not
+/// shared and must not be assumed** (CLOUD-1192). `hook_argv` used to write
+/// `"hook"` for both, which is fine until a head renames the verb: the base
+/// binary then has no `adjudicate`, or the head no `hook`, clap exits `1`,
+/// hyperfine aborts on its first warmup, and `perf-gate` answers could-not-look
+/// — produced by the gate's own setup, on exactly the class of change it exists
+/// to judge. `arms`' own doc records the identical failure arriving through a
+/// config key; this is it arriving through the argv.
+///
+/// The row is found by its STABLE `id` rather than by its path, which is the
+/// whole point of the id existing: a rename moves the spelling and leaves the
+/// identity, so this keeps answering across the boundary a rename creates.
+/// [`crate::surface::MEDIATION_ID`] is that id, and it is read from the surface
+/// rather than restated — the fourth unlinked literal for this spelling is what
+/// CLOUD-1191 removed three of.
+fn mediation_verb(bin: &Path) -> Result<String> {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: asking a binary what it declares is this module's effect, exactly as the two release builds beside it are (CLOUD-875). A pair spans two builds, so the answer cannot come from the compiled-in surface"
+    )]
+    let mut command = std::process::Command::new(bin);
+    let output = command
+        .args(["spec", "--format", "json"])
+        .output()
+        .with_context(|| format!("perf-pair: could not ask {} for its surface", bin.display()))?;
+    if !output.status.success() {
+        bail!(
+            "perf-pair: {} could not report its surface, so the mediation verb is unknown. No measurement.",
+            bin.display()
+        );
+    }
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .with_context(|| format!("perf-pair: {} emitted no surface document.", bin.display()))?;
+
+    // ABSENT IS AN ERROR, NEVER A DEFAULT. Falling back to a literal here would
+    // reintroduce the assumption this function exists to remove, and would do it
+    // silently — the one shape a measurement must never take.
+    surface_row(&document, crate::surface::MEDIATION_ID)
+        .and_then(|row| row.get("path"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "perf-pair: {} declares no `{}` row, so the mediated arms cannot be spelled. No measurement.",
+                bin.display(),
+                crate::surface::MEDIATION_ID
+            )
+        })
+}
+
 /// The command this tree's harness settings file actually invokes, with this
 /// arm's tree and binary substituted in.
 ///
@@ -750,10 +818,15 @@ fn arms(
 
     let base = base_bin.to_string_lossy().into_owned();
     let head = head_bin.to_string_lossy().into_owned();
-    let hook_argv = |bin: &str| {
+    // ONE VERB PER BINARY, asked of that binary. `--harness` is deliberately
+    // still a literal: CLOUD-1192's §2 puts the flag out of scope, and it is the
+    // verb position alone that the imperative grammar moves.
+    let base_verb = mediation_verb(base_bin)?;
+    let head_verb = mediation_verb(head_bin)?;
+    let hook_argv = |bin: &str, verb: &str| {
         vec![
             bin.to_owned(),
-            String::from("hook"),
+            verb.to_owned(),
             String::from("--harness"),
             String::from("claude-code"),
         ]
@@ -778,8 +851,8 @@ fn arms(
         (
             "hook",
             Some(hooks.join("claude-code.json")),
-            hook_argv(&base),
-            hook_argv(&head),
+            hook_argv(&base, &base_verb),
+            hook_argv(&head, &head_verb),
         ),
         // The pass-through arm (CLOUD-777): under match-all the engine is handed
         // every tool call, so the case a regression would hurt most is the one no
@@ -787,8 +860,8 @@ fn arms(
         (
             "passthrough",
             Some(hooks.join("claude-code-passthrough.json")),
-            hook_argv(&base),
-            hook_argv(&head),
+            hook_argv(&base, &base_verb),
+            hook_argv(&head, &head_verb),
         ),
         // The POST-TOOL path (CLOUD-919): the arm that prices the per-call
         // capture write, and the one where the two binaries genuinely differ in
@@ -796,8 +869,8 @@ fn arms(
         (
             "posttool",
             Some(hooks.join("claude-code-posttool.json")),
-            hook_argv(&base),
-            hook_argv(&head),
+            hook_argv(&base, &base_verb),
+            hook_argv(&head, &head_verb),
         ),
         // THE WIRED PATH (CLOUD-697): what the settings file actually invokes —
         // the number an agent waits on, and CLOUD-875's whole subject.
