@@ -70,7 +70,28 @@ fn repo(name: &str) -> PathBuf {
         .build();
     install_module(&root);
     write_code(&root, "fn a() {}\n");
+    seed_store(&root);
     root
+}
+
+/// Make the receipt store LISTABLE while holding nothing for this mint.
+///
+/// **Every fixture that expects a refusal needs this, and that is the module's
+/// three-valued read rather than test scaffolding.** An id is absent from
+/// `input.tree.minted` when the engine could not list the store at all, which is
+/// could-not-look and abstains; it is present-and-empty when the engine looked
+/// and found no receipt, which is the finding. A fixture with no store directory
+/// would take the first arm, so a refusal case built on one would fail — and a
+/// clean case built on one would pass for the wrong reason.
+fn seed_store(root: &Path) {
+    let store = batten::git::git_dir(root)
+        .expect("a git dir")
+        .join("batten-receipts");
+    fs::create_dir_all(&store).expect("the receipt store");
+    // A receipt belonging to no declared mint: it makes the directory listable
+    // and `subject_of` skips it, so the `code-review` id is present with an empty
+    // subject map.
+    fs::write(store.join("unrelated.subject"), "x 0\n").expect("seed the store");
 }
 
 /// The one config every fixture here writes, so the shape is stated once.
@@ -273,6 +294,7 @@ fn a_prose_only_branch_owes_no_code_review() {
         .base_commit()
         .build();
     install_module(&root);
+    seed_store(&root);
 
     fs::write(root.join(CODE), "// a comment\nfn a() {}\n").expect("the source");
     common::git_in(&root, &["add", "-A"]);
@@ -303,16 +325,22 @@ fn a_prose_only_branch_owes_no_code_review() {
     );
 }
 
-/// A CHANGE WITH NO IDENTITY OWES NO REVIEW.
+/// A CHANGE WITH NO IDENTITY OWES NO REVIEW, and the fixture has to make `owed`
+/// TRUE or the case proves nothing.
 ///
-/// An empty diff has nothing to review, and `cumulative_patch_id` refuses to mint
-/// an identity for one precisely so two empty changes cannot compare equal.
-/// Reading that absence as `unreviewed` would refuse a branch with nothing on it.
-/// Declared mutation: `no-identity-priced`.
+/// **The first version of this case was non-discriminating and the code review
+/// caught it.** It built a branch whose base already carried the code, so
+/// `code-changed` was empty, `owed` excluded the arm, and the declared
+/// `no-identity-priced` mutation would have SURVIVED — which is the shape
+/// `.claude/rules/policy-modules.md` warns about: a mutation over a conjunct some
+/// other conjunct already excludes.
+///
+/// The state that separates them is an UNCOMMITTED edit. `base_delta` is a tip
+/// diff over the working tree, so it reports the code as changed and `owed`
+/// holds; `branch_patch_id` reads `HEAD` against the merge base, which are the
+/// same commit, so there is no identity. Declared mutation: `no-identity-priced`.
 #[test]
 fn a_change_with_no_identity_owes_no_review() {
-    // The base already CARRIES the code, and the branch adds nothing on top, so
-    // the diff is empty and there is no identity to key a receipt by.
     let root = common::Fixture::new("code-review-empty")
         .config(CONFIG)
         .file(CODE, "fn a() {}\n")
@@ -320,16 +348,71 @@ fn a_change_with_no_identity_owes_no_review() {
         .base_commit()
         .build();
     install_module(&root);
+    seed_store(&root);
+
+    // UNCOMMITTED, deliberately: this is the one state where the working-tree
+    // delta says code moved and the committed range says nothing did.
+    fs::write(root.join(CODE), "fn a() {}\nfn b() {}\n").expect("the source");
 
     assert!(
         batten::git::branch_patch_id(&root, "refs/remotes/origin/main")
             .expect("the repository opens")
             .is_none(),
-        "the fixture's premise: an empty diff has no identity"
+        "the fixture's premise: nothing is committed beyond the base, so there is no identity"
+    );
+    let delta = batten::git::base_delta(
+        &root,
+        "refs/remotes/origin/main",
+        &[String::from("crates/**")],
+    )
+    .expect("the repository opens")
+    .expect("the base resolves");
+    assert!(
+        !delta.code_changed.is_empty(),
+        "the fixture's other premise: `owed` must HOLD, or the mutation this case \
+         pins is excluded by a different conjunct and survives"
+    );
+
+    assert!(
+        verdicts(&root).is_empty(),
+        "a change with no identity has nothing to key a receipt by and must not be refused"
+    );
+}
+
+/// AN UNLISTABLE RECEIPT STORE IS COULD-NOT-LOOK, NOT A REFUSAL.
+///
+/// **The defect the code review caught, over the engine that produces it.**
+/// `minted::fields` leaves a declared id ABSENT from the map when it cannot list
+/// the store, so the map is EMPTY rather than `null` — and the first draft guarded
+/// on `is_object(input.tree.minted)`, which holds for an empty object. Every fresh
+/// clone and every CI runner would have been refused, which is the arm both the
+/// module METADATA and `batten.toml` promise is silent.
+///
+/// A module suite cannot reach this: it would have to fabricate the empty map,
+/// which is exactly the shape a `with input as` case cannot prove the engine
+/// produces. Declared mutation: `store-unreadable-refused`.
+#[test]
+fn an_unlistable_store_is_could_not_look_and_never_a_refusal() {
+    // NOT `repo`, which seeds the store: the whole subject here is a checkout
+    // where no receipt has ever been written.
+    let root = common::Fixture::new("code-review-no-store")
+        .config(CONFIG)
+        .file("README.md", "base\n")
+        .git()
+        .base_commit()
+        .build();
+    install_module(&root);
+    write_code(&root, "fn a() {}\n");
+    let store = batten::git::git_dir(&root)
+        .expect("a git dir")
+        .join("batten-receipts");
+    assert!(
+        !store.exists(),
+        "the fixture's premise: no receipt store has ever been written here"
     );
     assert!(
         verdicts(&root).is_empty(),
-        "a branch with nothing to review must not be refused for not reviewing it"
+        "a checkout whose receipt store cannot be listed must abstain, not refuse"
     );
 }
 

@@ -10390,28 +10390,34 @@ fn mint_receipts(
                 };
                 format!("{}.{}", mint.name, branch.replace('/', "-"))
             }
-            // KEYED TO THE CHANGE, AND ONLY FROM A CLEAN TREE (CLOUD-1484).
+            // KEYED TO THE CHANGE (CLOUD-1484).
             //
             // `branch_patch_id` reads COMMITTED bytes — `HEAD` against the merge
-            // base — so an uncommitted edit cannot move the key. That is what
-            // makes the key stable and it is also the hole: a receipt minted
-            // while the tree is dirty attests a review of `HEAD` taken in a
-            // session that was looking at something else, and it would file under
-            // the digest of bytes nobody reviewed.
+            // base — so an uncommitted edit cannot move the key, which is what
+            // makes the receipt survive the landing loop's per-lap rebase.
             //
-            // So the tree is asked, and anything but a clean answer mints
-            // NOTHING. `uncommitted` failing is could-not-look and takes the same
-            // arm as dirty: a boundary that cannot see the tree must not certify
-            // what is in it. Silence is this whole function's posture — the gate
-            // reading the receipt denies again with the same remedy, which is the
-            // direction the agent can see.
+            // THIS ASKED `uncommitted == 0` AND THE CONJUNCT WAS UNSATISFIABLE
+            // IN THIS REPOSITORY, which is worth recording rather than quietly
+            // deleting. The intent was sound: a receipt keyed to committed bytes
+            // should not be taken in a session looking at something else. What it
+            // ran into is that `git::uncommitted` reimplements status and does not
+            // skip a GITLINK, where `walk_blob_ids` explicitly does — so an
+            // uninitialised submodule is counted as changed forever, `Ok(0)` never
+            // holds, and the mint could never fire. Measured here: `git status`
+            // reports the tree clean while `changed_paths` returns
+            // `{"tests/bats"}`, a mode-160000 entry.
+            //
+            // So the condition is withdrawn rather than repaired in place, on two
+            // grounds beyond the defect. It was a SECOND AUTHORITY over a question
+            // `tree-clean` already owns for the landing path, and nothing reaches
+            // `main` without passing that. And it was the wrong subject anyway: a
+            // reviewer reads the WORKING TREE, so refusing to record a dispatch
+            // taken over uncommitted work attests less than actually happened
+            // rather than more. The gitlink defect is its own row.
             crate::mint::MintKey::Delta => {
                 let Some(base) = mint.key_base.as_deref() else {
                     continue;
                 };
-                if !matches!(git::uncommitted(root), Ok(0)) {
-                    continue;
-                }
                 let Ok(Some(delta)) = git::branch_patch_id(root, base) else {
                     continue;
                 };
