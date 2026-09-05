@@ -96,8 +96,36 @@ mcp-timeout-budget`, which carries the floor, the measurement behind it, and the
    one `mcp__serena__<tool>` entry per tool, all twenty-one, which is the form
    with no ambiguity in it. Do not replace those with the server-level line
    because it looks tidier — that is the same shape as the wildcard above, one
-   step less wrong.</repl>
-   </repl>
+   step less wrong.
+
+   **AND A CORRECT, COMMITTED GRANT STILL PROMPTS IF THE SERVER ATTACHES LATE**
+   (2026-09-05, same day, hours after the enumeration landed). Permissions are
+   read at STARTUP. This session began with serena reported
+   `CONNECTION_CLOSED` — the system prompt said so in as many words — so at the
+   moment the grant was read there were no serena tools to attach it to. The
+   server bound later in the session, its 21 tools appeared, and every call
+   prompted anyway, against a `.claude/settings.json` that already enumerated
+   all of them correctly (`5a50e031`).
+
+   **So a prompt is not evidence the spelling is wrong**, which is what the two
+   paragraphs above will otherwise send the next reader to check — and they
+   would find the file already right and have nowhere to go. Check the ATTACH
+   TIME first: the mcp log's `Successfully connected` record against session
+   start. A server that attached mid-session is the timing case, not a config
+   case, and no edit to the committed file fixes it for the session in progress.
+
+   The one-session repair is a user-level `~/.claude/settings.json` carrying the
+   same entries — AGENTS.md's "a `$HOME` repair in a disposable container is a
+   yes". Verified here: `list_memories` and `read_memory` ran silently
+   afterwards where `read_memory` had prompted before. **Nothing is committed
+   for this**, and nothing should be: the repository's file is already correct,
+   and a second copy of a correct grant is a second authority that drifts.
+
+   The durable question this leaves open is whether the client re-reads
+   permissions when a server attaches late. If it does, this was something else;
+   if it does not, the fix belongs upstream and every cold container that loses
+   the serena race pays a session of hand-approvals. Unmeasured — do not assume
+   either.
 
 3. **A scoped launch (CLOUD-316).** The one that actually cost a whole session.
    `.mcp.json` ran a bare `mise exec`, which provisions **every** tool in the
