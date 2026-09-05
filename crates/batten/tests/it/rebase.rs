@@ -477,7 +477,7 @@ fn a_published_bet_reaches_the_gate_and_an_absent_one_publishes_nothing() {
     )];
     assert!(
         matches!(
-            batten::land::verify(&dir, "work", &command, &published).expect("run the gate"),
+            batten::land::verify(&dir, "work", &command, &published, &[]).expect("run the gate"),
             batten::land::Verified::Clean(_)
         ),
         "the published pair did not reach the gate"
@@ -488,8 +488,8 @@ fn a_published_bet_reaches_the_gate_and_an_absent_one_publishes_nothing() {
     // source, which would make a settled bet stay visible to every later gate.
     assert!(
         matches!(
-            batten::land::verify(&dir, "work", &command, &[]).expect("run the gate"),
-            batten::land::Verified::Refused(_)
+            batten::land::verify(&dir, "work", &command, &[], &[]).expect("run the gate"),
+            batten::land::Verified::Refused { .. }
         ),
         "the variable reached the gate with no bet outstanding"
     );

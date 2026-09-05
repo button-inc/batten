@@ -667,7 +667,45 @@ pub enum Verified {
     Clean(String),
     /// The gate refused. The lap stops here — this is a failed `verify`, which
     /// the design names as one of the three things that end a lap.
-    Refused(String),
+    Refused {
+        /// The head the gate was run over.
+        sha: String,
+        /// What KIND of refusal it was, which decides the advice.
+        cause: Refusal,
+    },
+}
+
+/// What kind of refusal a gate returned.
+///
+/// # A refusal is not always about the tree, and reporting it as one misattributes
+///
+/// The lap's stop used to be one unconditional line. Two of the sentences it
+/// carried are wrong for a refusal the branch did not cause, and both were
+/// measured rather than imagined (CLOUD-861): a `verify` killed by a full disk
+/// was reported as a defect to reproduce, over a tree with nothing wrong in it.
+/// *"Reproduce and fix locally"* is correct advice for [`Self::Tree`] and a wasted
+/// cycle for [`Self::Environment`].
+///
+/// # It does NOT reach the record
+///
+/// [`Verified::line`] is byte-identical across both arms. The record is a
+/// predicate's input and stays pointer-only; the cause is advice to an operator,
+/// which is a different channel with a different reader. Widening the record to
+/// carry it would put a test runner's diagnosis where a module looks for a
+/// verdict — and `crates/batten/tests/it/land_verify_advice.rs` pins the two
+/// lines equal so the next reader cannot helpfully merge them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refusal {
+    /// The gate refused about this tree. The ordinary case, and the one whose
+    /// advice was always right.
+    Tree,
+    /// The gate died of something that is not this branch's doing, matching a
+    /// declared `[[verify_environment_pattern]]`.
+    Environment {
+        /// The consumer's own remedy, from the matching row's `reason`. Never
+        /// composed here: which reclaim to run is that repository's vocabulary.
+        remedy: String,
+    },
 }
 
 impl Verified {
@@ -680,11 +718,17 @@ impl Verified {
     /// POINTER-ONLY. The gate's own output is not carried at any width — it went
     /// to the caller's terminal where it belongs, and a record read by a
     /// predicate is no place for a test runner's stdout.
+    ///
+    /// **AND THE CAUSE DOES NOT REACH IT EITHER.** Both [`Refusal`] arms render
+    /// the same four columns, deliberately: a module deciding over this store
+    /// asks whether the head verified, and a second verdict column would be a
+    /// diagnosis it has no way to act on. The advice goes to the operator, on
+    /// stderr, where a person reads it.
     #[must_use]
     pub fn line(&self) -> String {
         match self {
             Self::Clean(sha) => format!("verify clean {sha} -"),
-            Self::Refused(sha) => format!("verify refused {sha} -"),
+            Self::Refused { sha, .. } => format!("verify refused {sha} -"),
         }
     }
 }
@@ -712,6 +756,7 @@ pub fn verify(
     branch: &str,
     command: &[String],
     published: &[(String, String)],
+    environment: &[crate::outputs::OutputPattern],
 ) -> Result<Verified> {
     if command.is_empty() {
         return Err(crate::error::UsageError::raise(String::from(
@@ -740,14 +785,47 @@ pub fn verify(
     // to pass a child's status through to the caller. Here it is an ANSWER, so
     // the two are told apart rather than collapsed: a code that came back at all
     // is the gate speaking, and only a failure to START is this lap's problem.
-    let verified = match crate::exec::run_in_env(&started, command, published) {
-        Ok(crate::exit::ExitCode::Success) => Verified::Clean(head),
-        Ok(_) => Verified::Refused(head),
-        Err(problem) => match problem.downcast_ref::<crate::error::Passthrough>() {
-            Some(_) => Verified::Refused(head),
-            None => return Err(problem.context("land: run the configured verify command")),
-        },
+    // TEE, AND THIS LINE IS A FIX RATHER THAN A SETTING. `Verified`'s own header
+    // says the gate's output "went to the caller's terminal where it belongs" —
+    // which was FALSE for this call's whole life. `run_in_env` takes
+    // `ExecConfig::DEFAULT`, whose `tee` is `false` by CLOUD-429's design, so the
+    // child's bytes went to the capture store and nowhere a person could see
+    // them. An operator whose lap stopped on a refused gate was told the gate
+    // refused and shown nothing about why.
+    //
+    // CLOUD-429's default is right for `batten exec`, where the bytes are
+    // addressable and the caller can go and read them. It is wrong here: the lap
+    // is interactive, it has just stopped, and the reason is the next thing its
+    // caller needs.
+    let settings = crate::exec::ExecConfig {
+        tee: true,
+        ..crate::exec::ExecConfig::DEFAULT
     };
+    // CLASSIFIED, NEVER PROMOTED. `run_in_with_env` scans patterns only on a
+    // `0`, because its question is whether a green run is lying; the question
+    // here is what kind of failure a red one was, and `classify_in_env` is the
+    // sibling that answers it. Both readings from one function would produce
+    // opposite verdicts over identical bytes.
+    let verified =
+        match crate::exec::classify_in_env(&started, command, environment, &settings, published) {
+            Ok((0, _)) => Verified::Clean(head),
+            Ok((_, found)) => Verified::Refused {
+                sha: head,
+                // THE FIRST DECLARED ROW THAT MATCHED, in declaration order, and one
+                // remedy rather than a concatenation: `outputs::reasons` already
+                // dedupes per pattern for the reason it states — a tool that emitted
+                // the same warning forty times should say what to do about it once.
+                // An empty set is `Tree`, which is the common case and the one whose
+                // advice was always right.
+                cause: crate::outputs::reasons(environment, &found).first().map_or(
+                    Refusal::Tree,
+                    |remedy| Refusal::Environment {
+                        remedy: remedy.clone(),
+                    },
+                ),
+            },
+            Err(problem) => return Err(problem.context("land: run the configured verify command")),
+        };
     append(root, branch, std::slice::from_ref(&verified.line()))?;
     Ok(verified)
 }
@@ -2027,17 +2105,47 @@ mod tests {
     use super::*;
 
     /// The verify family writes the same four columns every other family does.
+    ///
+    /// **AND BOTH REFUSAL CAUSES WRITE THE SAME LINE**, which is the assertion
+    /// that stops the operator's diagnosis leaking into a predicate's input. The
+    /// two arms are here for that rather than for coverage.
     #[test]
     fn every_verify_outcome_writes_four_columns_led_by_the_kind() {
         for outcome in [
             Verified::Clean(String::from("abc1234")),
-            Verified::Refused(String::from("abc1234")),
+            Verified::Refused {
+                sha: String::from("abc1234"),
+                cause: Refusal::Tree,
+            },
+            Verified::Refused {
+                sha: String::from("abc1234"),
+                cause: Refusal::Environment {
+                    remedy: String::from("disk-full: reclaim something"),
+                },
+            },
         ] {
             let line = outcome.line();
             let columns: Vec<&str> = line.split(' ').collect();
             assert_eq!(columns.len(), 4, "four columns exactly, got {line:?}");
             assert_eq!(columns[0], "verify", "the kind column leads: {line:?}");
         }
+        // THE CAUSE IS NOT IN THE RECORD, stated as an equality rather than left
+        // to the shape check above — which four arbitrary columns would satisfy.
+        assert_eq!(
+            Verified::Refused {
+                sha: String::from("abc1234"),
+                cause: Refusal::Tree,
+            }
+            .line(),
+            Verified::Refused {
+                sha: String::from("abc1234"),
+                cause: Refusal::Environment {
+                    remedy: String::from("disk-full: reclaim something"),
+                },
+            }
+            .line(),
+            "the operator's diagnosis must not reach a predicate's input"
+        );
     }
 
     /// NO DEFAULT COMMAND, asserted rather than described. A default would be a
@@ -2046,7 +2154,7 @@ mod tests {
     /// because a lap would report a gate as clean having run something else.
     #[test]
     fn an_unconfigured_verify_command_refuses_rather_than_guessing() {
-        let Err(problem) = verify(Path::new("."), "work", &[], &[]) else {
+        let Err(problem) = verify(Path::new("."), "work", &[], &[], &[]) else {
             panic!("an empty command must refuse rather than run something");
         };
         assert!(
