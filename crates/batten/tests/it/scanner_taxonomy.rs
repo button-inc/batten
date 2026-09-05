@@ -61,7 +61,7 @@ const INDEX: &str = "AGENTS.md";
 /// wrong answer in place. Naming a first-class tool instead would have been the
 /// same defect one layer over: which instruments a session carries varies, so
 /// any product name is wrong in the sessions that have the other one. See
-/// [`row_one_names_no_bare_product`], which is the half that stops it
+/// [`a_capability_row_names_no_bare_product`], which is the half that stops it
 /// regressing.
 const INSTRUMENTS: &[(&str, &[&str])] = &[
     (
@@ -83,8 +83,14 @@ const INSTRUMENTS: &[(&str, &[&str])] = &[
     // to a human, each one command from being checked, and each wrong.
     //
     // Its instrument cell names the board rather than a product for row one's
-    // reason — which connector answers is a property of the session — so
-    // `row_one_names_no_bare_product` reaches this cell too by construction.
+    // reason — which connector answers is a property of the session — so it is
+    // the SECOND row `a_capability_row_names_no_bare_product` iterates. That
+    // was claimed here as holding "by construction" while the test read row one
+    // alone, which is the shape this file exists to catch, committed in its own
+    // margin: a coverage claim nothing checked.
+    //
+    // CAPABILITY_ROWS is what makes it true rather than asserted, so a fifth row
+    // naming a capability joins it there rather than inheriting the guarantee.
     (
         "has this already been filed, decided, or measured",
         &["the board, before the tree"],
@@ -109,6 +115,14 @@ const SUBSTITUTION_GATE: &str = "no-tool-substitution";
 /// tools that are absent in some sessions. Row one names the capability, so
 /// neither belongs in that cell.
 const BARE_PRODUCTS: &[&str] = &["`grep`", "`rg`", "`Grep`", "`Read`", "`Glob`"];
+
+/// The [`INSTRUMENTS`] rows whose instrument cell answers with a CAPABILITY.
+///
+/// Row one, because which search surface a session carries varies; and row four,
+/// because which connector answers the board does. Rows two and three are
+/// deliberately absent: row two names a class whose winner CLOUD-310 owns, and
+/// row three names the three tools that do name resolution here.
+const CAPABILITY_ROWS: &[usize] = &[0, 3];
 
 fn rules_text() -> String {
     fs::read_to_string(at_root(RULES)).expect("`.claude/rules/scanning.md` is committed")
@@ -173,29 +187,39 @@ fn the_rules_name_the_gate_over_the_substitution_axis() {
     );
 }
 
-/// Row one's cell names the capability; a product name there is the CLOUD-998
-/// defect returning.
+/// A capability row's cell names the capability; a product name there is the
+/// CLOUD-998 defect returning.
 ///
-/// Scoped to row one's own line rather than the whole file, because the file
+/// Scoped to those rows' own lines rather than the whole file, because the file
 /// legitimately discusses `grep` elsewhere — as the habit behind the wrong reach,
 /// and as what a tree-sitter matcher beats on a syntax question. Only the
 /// instrument cell is the answer a reader acts on.
+///
+/// TWO ROWS, NOT ONE, AND THAT WAS A COVERAGE CLAIM NOTHING CHECKED. Row four's
+/// own margin said this test reached its cell "by construction" while the body
+/// read `INSTRUMENTS[0]` alone — the file's subject committed inside the file.
+/// The rows are named rather than inferred, because "the ones that name a
+/// capability" is a judgement and an index is not.
 #[test]
-fn row_one_names_no_bare_product() {
+fn a_capability_row_names_no_bare_product() {
     let text = rules_text();
-    let (question, _) = INSTRUMENTS[0];
-    let row = text
-        .lines()
-        .find(|line| line.contains(question) && line.starts_with('|'))
-        .expect("the taxonomy table still carries row one");
-    for product in BARE_PRODUCTS {
-        assert!(
-            !row.contains(product),
-            "{RULES} row one answers with the product {product}, which is what CLOUD-998 \
-             corrected: a shell utility there is the call the gate refuses, and a first-class \
-             tool there is absent in the sessions that carry only the utility. Name the \
-             capability"
-        );
+    for index in CAPABILITY_ROWS {
+        let (question, _) = INSTRUMENTS[*index];
+        let row = text
+            .lines()
+            .find(|line| line.contains(question) && line.starts_with('|'))
+            .unwrap_or_else(|| {
+                panic!("the taxonomy table still carries the row asking {question}")
+            });
+        for product in BARE_PRODUCTS {
+            assert!(
+                !row.contains(product),
+                "{RULES} answers `{question}` with the product {product}, which is what CLOUD-998 \
+                 corrected: a shell utility there is the call the gate refuses, and a first-class \
+                 tool there is absent in the sessions that carry only the utility. Name the \
+                 capability"
+            );
+        }
     }
 }
 
