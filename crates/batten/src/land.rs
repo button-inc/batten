@@ -930,6 +930,23 @@ pub enum Step {
     Replay,
     /// Run the consumer's gate over this head.
     Verify,
+    /// Take the landing lease, so one branch at a time spends a matrix.
+    ///
+    /// **NOTHING TOOK IT, AND THE WHOLE COMPENSATION CLUSTER ASSUMED SOMETHING
+    /// DID** (review of #848). `Compensation::ReleaseLease` was declared on
+    /// `Push`, `unwind_lap` computed `mine` from `lease::observe`, and
+    /// `closes_the_tap` refused to re-draft unless `singleton_held` — but the
+    /// only callers of `run_lease_acquire` were the `batten lease` CLI and the
+    /// hand-back. So `mine` was always false, the tap never closed, and after a
+    /// red wait the pull request stayed READY: every later push bought another
+    /// matrix on a failure nobody had fixed, which is the exact leak
+    /// `closes_the_tap`'s own header says it exists to plug.
+    ///
+    /// **BEFORE `Ready`, which is the predecessor's placement.** `land.sh` ran
+    /// `land-lock acquire` before readying, for the reason `Ready`'s own doc
+    /// gives: readying is the site that buys the matrix, so the serialisation
+    /// has to be upstream of it or it serialises nothing that costs money.
+    Lease,
     /// Ask the gates that read the pull request's BODY, then commit to review.
     ///
     /// **A step of its own rather than a clause inside the push**, because it is
@@ -1045,11 +1062,12 @@ pub const fn progress_of(
 pub const fn progress(step: Step, code: crate::exit::ExitCode) -> Progress {
     use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
     match (step, code) {
-        // Four of the five steps answering cleanly only means the lap may go on;
-        // the fifth is the one that ends it.
-        (Step::Replay | Step::Verify | Step::Ready | Step::Push | Step::Wait, Success) => {
-            Progress::Proceed
-        }
+        // Five of the six steps answering cleanly only means the lap may go on;
+        // the sixth is the one that ends it.
+        (
+            Step::Replay | Step::Verify | Step::Lease | Step::Ready | Step::Push | Step::Wait,
+            Success,
+        ) => Progress::Proceed,
         (Step::FastForward, Success) => Progress::Landed,
 
         // LAPS. A raced push is the first place the base can move under a lap
@@ -1058,9 +1076,14 @@ pub const fn progress(step: Step, code: crate::exit::ExitCode) -> Progress {
         // the same lap for different reasons, and a refused fast-forward joins
         // them because the bot refuses on a head that stopped descending, which
         // is a fact about the base.
-        (Step::Push, Violation) | (Step::Wait | Step::FastForward, Violation | Internal) => {
-            Progress::Lap
-        }
+        // A LEASE ANOTHER BRANCH HOLDS IS A LAP, NEVER A STOP, and it is the
+        // arm that makes the whole mechanism a queue rather than a race. The
+        // holder is landing; this branch waits, replays onto whatever they land,
+        // and asks again. Stopping instead would make every waiter a human
+        // decision, and lapping is what lets the speculation path find a holder
+        // to bet on at all.
+        (Step::Push | Step::Lease, Violation)
+        | (Step::Wait | Step::FastForward, Violation | Internal) => Progress::Lap,
 
         // STOPS. The replay and the gate both answer about THIS tree, so a
         // refusal from either is a decision no rebase clears. A push that could
@@ -1071,8 +1094,15 @@ pub const fn progress(step: Step, code: crate::exit::ExitCode) -> Progress {
         // statement about what the author wrote — a deferral with no ticket, a
         // key the merge will not close. No rebase clears prose, which puts it
         // beside the replay and the gate rather than beside the push.
+        // A LEASE THAT WILL NOT READ STOPS, where a lease another branch HOLDS
+        // laps. The two are not the same answer: a holder is a queue this branch
+        // joins, and an unreadable lease is a clone that cannot serialise at all.
+        // Lapping on it would spend the whole budget re-asking a question the
+        // environment cannot answer and then exit `3` anyway, which is the same
+        // outcome later and less legibly — so it joins `Push`'s could-not-look
+        // rather than `Wait`'s.
         (Step::Replay | Step::Verify | Step::Ready, Violation | Internal)
-        | (Step::Push, Internal)
+        | (Step::Push | Step::Lease, Internal)
         | (_, Usage) => Progress::Stop,
     }
 }

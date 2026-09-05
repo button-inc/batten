@@ -354,6 +354,19 @@ impl Default for Pipeline {
                     compensate: Compensation::Nothing,
                     precheck: None,
                 },
+                // THE LEASE IS TAKEN BEFORE THE MATRIX IS BOUGHT, and the row
+                // exists because nothing took it at all until review of #848.
+                // `Push` below already declared `ReleaseLease`, so this
+                // composition asserted a lease was held that no step acquired —
+                // the compensation cluster was complete and its precondition was
+                // not. Effectful, because acquiring publishes a claim other
+                // clones read; its compensation is handing that claim back.
+                StepRow {
+                    step: Step::Lease,
+                    effectful: true,
+                    compensate: Compensation::ReleaseLease,
+                    precheck: None,
+                },
                 StepRow {
                     step: Step::Ready,
                     effectful: true,
