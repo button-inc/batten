@@ -140,6 +140,7 @@ mod landed_check;
 mod lease_record;
 mod lock_complete;
 mod mcp_dispatch;
+mod mcp_reduce_array;
 mod mediated_admission;
 mod mediated_verbs;
 mod memories;
