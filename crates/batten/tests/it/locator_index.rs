@@ -224,3 +224,76 @@ fn freshness_and_resolution_are_separate_vocabularies() {
         "and it carries the one the resolver cannot express"
     );
 }
+
+// --- the writer honours the reader's could-not-look (review of this bundle) ---
+
+#[test]
+fn an_unreadable_index_refuses_the_write_rather_than_discarding_what_it_cannot_see() {
+    // FOUND IN REVIEW OF THIS BUNDLE, and it is a data-loss class rather than a
+    // wrong answer. `record` rewrites the whole file from what it read, so a
+    // could-not-look folded into "empty" does not degrade one comparison — it
+    // deletes every mapping the index held.
+    //
+    // `compare` already reports this case as `Unavailable` rather than `Absent`.
+    // A writer collapsing the same distinction would make that care pointless:
+    // afterwards every prior locator answers `Absent`, correctly, about a mapping
+    // the writer had just destroyed.
+    let dir = Fixture::new("locator-index-unreadable").git().build();
+
+    // A DIRECTORY where the index file goes: `read_to_string` fails with
+    // something that is neither `Ok` nor `NotFound`, which is the shape an
+    // unreadable index has. Spelled this way because this sandbox runs as root,
+    // so a permission bit would never bite — the premise has to be created by
+    // something other than access control (`.claude/rules/rust.md`).
+    let at = dir.join("index");
+    std::fs::create_dir(&at).expect("a directory standing where the file goes");
+
+    let index = Index::at(at);
+    let address = ContentAddress::of(AddressDomain::Capture, b"x");
+
+    assert_eq!(
+        index.compare(&Locator::IssueKey("CLOUD-1".to_owned()), &address),
+        Freshness::Unavailable,
+        "the reader's premise: this index cannot be looked at"
+    );
+    assert!(
+        index
+            .record(&Locator::IssueKey("CLOUD-1".to_owned()), &address)
+            .is_err(),
+        "so the writer must refuse rather than rewrite the file from an empty set"
+    );
+}
+
+#[test]
+fn an_absent_index_still_records_because_absent_is_not_unreadable() {
+    // The anti-vacuity half. A repository that has recorded nothing has an empty
+    // index, and a fix that refused on `None` AND on absent would make the first
+    // record of every repository fail — turning a data-loss bug into a
+    // never-works bug. The two causes stay distinct in the writer exactly as they
+    // do in the reader.
+    let dir = Fixture::new("locator-index-absent").git().build();
+    let index = Index::at(dir.join("nested").join("index"));
+    let address = ContentAddress::of(AddressDomain::Capture, b"x");
+    let locator = Locator::IssueKey("CLOUD-1".to_owned());
+
+    index.record(&locator, &address).expect("a first record");
+    assert_eq!(index.compare(&locator, &address), Freshness::Unchanged);
+}
+
+#[test]
+fn a_record_preserves_every_entry_it_did_not_replace() {
+    // The property the bug broke, asserted directly rather than through the
+    // failure that revealed it: recording one locator must not disturb another.
+    let dir = Fixture::new("locator-index-preserves").git().build();
+    let index = Index::at(dir.join("index"));
+    let first = Locator::IssueKey("CLOUD-1".to_owned());
+    let second = Locator::Handle("h-2".to_owned());
+    let one = ContentAddress::of(AddressDomain::Capture, b"one");
+    let two = ContentAddress::of(AddressDomain::Capture, b"two");
+
+    index.record(&first, &one).expect("the first record");
+    index.record(&second, &two).expect("the second record");
+
+    assert_eq!(index.compare(&first, &one), Freshness::Unchanged);
+    assert_eq!(index.compare(&second, &two), Freshness::Unchanged);
+}
