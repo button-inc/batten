@@ -69,14 +69,14 @@ pub(crate) fn credential() -> Option<String> {
     // `.filter` judged only the already-chosen value: an exported-but-EMPTY
     // `GH_TOKEN` yielded `None` rather than falling through to `GITHUB_TOKEN`.
     //
-    // That is the ordinary shape rather than a corner: Actions substitutes the
-    // empty string for an unset secret, so `GH_TOKEN: ${{ secrets.PAT }}` with no
-    // PAT configured exports an empty one beside a perfectly good job token — and
-    // this repository's own `mise.toml` sets `GH_TOKEN` to the empty string
-    // whenever neither of its two declared sources is present. Every REST read
-    // then goes out unauthenticated, and every caller reads the resulting 403/404
-    // as could-not-look, so a landing reports "no in-flight runs" at exit 0 while
-    // knowing nothing at all.
+    // That is the ordinary shape rather than a corner: a forge's own CI
+    // substitutes the empty string for an unset secret, so a job naming a
+    // personal token that was never configured exports an empty one beside a
+    // perfectly good job token — and a task runner that resolves the variable
+    // from a chain of fallbacks emits an empty one when the chain runs out. Every
+    // REST read then goes out unauthenticated, and every caller reads the
+    // resulting 403/404 as could-not-look, so a landing reports "no in-flight
+    // runs" at exit 0 while knowing nothing at all.
     ["GH_TOKEN", "GITHUB_TOKEN"]
         .into_iter()
         .find_map(|name| std::env::var(name).ok().filter(|token| !token.is_empty()))

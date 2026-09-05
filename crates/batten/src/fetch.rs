@@ -524,11 +524,27 @@ const PROXY_HEAD_LIMIT: usize = 8192;
 /// URL it is HANDED, and a 302 hands it a new one.
 async fn exchange(call: &Call<'_>) -> Result<Response> {
     let mut target = call.url.to_owned();
+    // **THE HEADERS NARROW WHEN THE HOST CHANGES** (review of #848). This replayed
+    // `call.headers` verbatim on every hop, and `redirect_target` constrains only
+    // the SCHEME — so a `Location` naming another host received whatever the
+    // caller attached, `Authorization: Bearer <token>` included. `curl`, the
+    // client this transport replaced, strips credentials on a cross-host redirect
+    // unless `--location-trusted` is passed; the port kept the redirect-following
+    // and dropped that protection silently.
+    //
+    // Latent rather than live today — no current call site reaches a redirecting
+    // endpoint — which is exactly why it is worth closing now: the next asset or
+    // download endpoint added here would leak the credential to a CDN host with
+    // nothing in the code saying it could.
+    let mut carried: Vec<(String, String)> = call.headers.to_vec();
     for _hop in 0..=MAX_REDIRECTS {
-        let (answer, location) = one_exchange(&target, call.headers, call.body).await?;
+        let (answer, location) = one_exchange(&target, &carried, call.body).await?;
         let Some(next) = redirect_target(&target, answer.status, location.as_deref())? else {
             return Ok(answer);
         };
+        if !same_host(&target, &next) {
+            carried.retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
+        }
         target = next;
     }
     Err(anyhow::anyhow!(
@@ -566,6 +582,25 @@ fn redirect_target(from: &str, status: u16, location: Option<&str>) -> Result<Op
         ));
     }
     Ok(Some(next))
+}
+
+/// Do two URLs name the same host, so a credential may follow?
+///
+/// **A HOST COMPARISON, NOT AN ORIGIN ONE, and the difference is deliberate.**
+/// The scheme is already pinned to `https` by [`redirect_target`] and the port is
+/// not what a credential is scoped to in practice; the host is. A URL that will
+/// not parse, or that names no host, answers `false` — a redirect this cannot
+/// reason about is one the credential does not follow.
+fn same_host(from: &str, to: &str) -> bool {
+    let host_of = |raw: &str| {
+        raw.parse::<hyper::Uri>()
+            .ok()
+            .and_then(|uri| uri.host().map(str::to_ascii_lowercase))
+    };
+    match (host_of(from), host_of(to)) {
+        (Some(from), Some(to)) => from == to,
+        _ => false,
+    }
 }
 
 /// A `Location` resolved against the URL that produced it.

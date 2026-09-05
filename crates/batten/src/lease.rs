@@ -2099,11 +2099,29 @@ pub fn health(observed: &Observed, terms: &Terms, now: i64) -> Health {
     if body.released() {
         return Health::Free(format!("free — released by {}{behind}", body.holder));
     }
-    let left = body.expires - now;
+    // **CHECKED, because `expires` is parsed straight out of a ref body somebody
+    // may have written by hand** — which is the very case the `Wedged` arm below
+    // exists for (review of #848). `i64::MIN` parses fine, is not `released()`,
+    // and then this subtraction overflows: a panic under overflow checks, and in
+    // release a wrap to a large positive `left`, so a lease that lapsed decades
+    // ago reports as wedged for another nine billion seconds and blocks the fleet
+    // on a lease that is actually free. `expired()` and `released()` above are
+    // total; only this was not.
+    //
+    // A body whose arithmetic will not close is garbage rather than a duration,
+    // and garbage is the state this module already refuses to read as an
+    // occupancy.
+    let Some(left) = body.expires.checked_sub(now) else {
+        return Health::Wedged(format!(
+            "held by {}{behind} with an expiry that will not compare — the body is not a lease this can read",
+            body.holder
+        ));
+    };
     if left <= 0 {
         return Health::Free(format!(
             "free — lapsed by {} {}s ago{behind}",
-            body.holder, -left
+            body.holder,
+            left.saturating_neg()
         ));
     }
     if left > terms.ttl {

@@ -388,7 +388,13 @@ pub fn answer_request(ask: &Ask, since: &str, page: u32) -> String {
 /// **The loop is the caller's, never this module's**, for the reason
 /// [`crate::main_watch`]'s header gives about its own: a module holding an
 /// unbounded loop becomes a second authority over when to stop asking.
-pub const ANSWER_POLL_SECONDS: u64 = 2;
+///
+/// Spelled `f64` because the one sleep in this crate is
+/// [`crate::pr_watch::pause_until`] and that is what it takes. A second timer
+/// here would need a second `disallowed_methods` escape, which is the widening
+/// `spawn-widening` refuses and which `land.rs`'s stale arm already declines for
+/// the same reason.
+pub const ANSWER_POLL_SECONDS: f64 = 2.0;
 
 #[must_use]
 pub fn answer(ask: &Ask, since: &str, comment: &str) -> Answer {

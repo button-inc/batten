@@ -633,7 +633,11 @@ fn run_baseline(
 ) -> Result<ExitCode> {
     let root = anchor();
     let config = resolve::resolve(&root, overrides)?;
-    let scan = rules::run_static(
+    // AN INSTANT, for `filed_here_pointers`' reason at its own site: this runs
+    // the WHOLE rule set, so a `[[rule.minted]]` `max_age` bound evaluated here
+    // against epoch 0 would record a baseline over findings `check` does not
+    // produce.
+    let scan = rules::run_static_over(
         &config.rules,
         &config.provisions,
         policy::Vocabulary {
@@ -642,6 +646,11 @@ fn run_baseline(
             recorders: &config.recorders,
         },
         &root,
+        rules::RunOptions {
+            checks: policy::ModuleChecks::Run,
+            scope: &rules::Scope::Tree,
+            now: Some(now_unix()),
+        },
     )?;
 
     if prune {
@@ -3208,7 +3217,9 @@ fn run_claim_race(
         );
     };
     let grammar = board_grammar(overrides)?;
-    let log = bot::forge::commit_messages(&slug, &me.number).unwrap_or_default();
+    // Taken by value before the listing is rebuilt below: `me` borrows it.
+    let mine_number = me.number.clone();
+    let log = bot::forge::commit_messages(&slug, &mine_number).unwrap_or_default();
     let mine = race::claimed(&me.head_ref, &me.title, &log, &me.body, &grammar);
     if mine.is_empty() {
         return clean(
@@ -3216,7 +3227,35 @@ fn run_claim_race(
             "claim race: this branch claims no issue — nothing to race",
         );
     }
-    let races = race::races(&mine, &pulls, Some(&me.number), &grammar);
+    // **EVERY COMPETITOR IS JUDGED BY THE SAME SOURCES THIS BRANCH IS** (review
+    // of #848). `bot::forge::open_pulls` builds each competitor with an EMPTY
+    // log, and `race::claimed`'s third source is the `Refs:` trailer — read out
+    // of the log. So the comparison was asymmetric: this branch's claim resolved
+    // through a trailer and a rival's could not, and a rival whose only statement
+    // of the key is that trailer was invisible. `commit-lint` requires the
+    // trailer on every commit here and a closing keyword on almost none, so the
+    // unreachable source was the one that actually resolves claims — the gate
+    // reported "no races" at exit 0 on precisely the collision it exists to
+    // refuse.
+    //
+    // ONLY WHERE THE CHEAP SOURCES FOUND NOTHING, which is what keeps this from
+    // becoming a round trip per open pull request: a competitor whose branch,
+    // title or body already names a key has been answered, and the trailer can
+    // only agree. A fetch that fails leaves the log empty, which is the reading
+    // this had before — worse than the truth, and never better than it.
+    let pulls: Vec<race::Pull> = pulls
+        .into_iter()
+        .map(|pull| {
+            if pull.number == mine_number
+                || !race::claimed(&pull.head_ref, &pull.title, "", &pull.body, &grammar).is_empty()
+            {
+                return pull;
+            }
+            let log = bot::forge::commit_messages(&slug, &pull.number).unwrap_or_default();
+            race::Pull { log, ..pull }
+        })
+        .collect();
+    let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
     if races.is_empty() {
         return clean(
             out,
@@ -5999,13 +6038,29 @@ fn run_land_lap(
                 land::Progress::Proceed => {}
                 // `None` is not merged, or nobody could say. Either way this is
                 // a lap rather than a retirement — see `landed_for_real`.
-                land::Progress::Landed => {
-                    if let Some(code) = landed_for_real(root, url, branch, out)? {
-                        return Ok(code);
+                land::Progress::Landed => match landed_for_real(root, url, branch, out)? {
+                    Landing::Retired(code) => return Ok(code),
+                    // The forge says it did NOT merge, so this head is not trunk
+                    // and the lap's own effects are still this lap's to undo.
+                    Landing::NotMerged => {
+                        unwind_lap(root, branch, &pipeline, &entered, seen, out, err)?;
+                        continue 'laps;
                     }
-                    unwind_lap(root, branch, &pipeline, &entered, seen, out, err)?;
-                    continue 'laps;
-                }
+                    // **NOBODY COULD SAY, SO NOTHING IS CANCELLED** (review of
+                    // #848). Under fast-forward landing this branch's head IS
+                    // trunk's new tip the moment the merge happens, and
+                    // `Compensation::Abandon` reads `git::head_commit` and cancels
+                    // every run carrying that sha — so unwinding on an unread
+                    // answer cancels `main`'s own post-merge runs. The bot said
+                    // `Accepted`; the only thing missing is confirmation.
+                    //
+                    // Lapping without compensating is the cheap direction: the
+                    // next lap re-reads the merge state, and a lap that really
+                    // did not land still has its ready and its runs, which the
+                    // NEXT unwind owes. `entered` is not cleared, so nothing is
+                    // forgotten — only deferred.
+                    Landing::Unconfirmed => continue 'laps,
+                },
                 land::Progress::Lap => {
                     // **A LAP THAT SPENT NOTHING IS REFUNDED, and nothing called
                     // this** (review of #848). `Ledger::waited` and its siblings
@@ -6606,6 +6661,26 @@ fn run_land_lease(
     run_lease_acquire(root, &terms, branch, now, out, err)
 }
 
+/// What the merge confirmation decided, and the third arm is why it is a type.
+///
+/// **`Some`/`None` COLLAPSED TWO ANSWERS THAT MUST COMPENSATE DIFFERENTLY**
+/// (review of #848). A pull request the forge says did NOT merge leaves this
+/// lap's ready and its runs this lap's to undo. A pull request nobody could ASK
+/// about may already be merged — and under fast-forward landing that means this
+/// branch's head is trunk's new tip, so `Compensation::Abandon`, which reads
+/// `git::head_commit` and cancels every run carrying that sha, would cancel
+/// `main`'s own post-merge runs. One 403 between the bot's `success` and the
+/// confirming read was enough.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Landing {
+    /// It merged and the branch is retired. The landing is over.
+    Retired(ExitCode),
+    /// The forge answered: not merged. Lap, and undo what this lap did.
+    NotMerged,
+    /// The forge did not answer. Lap, and cancel NOTHING.
+    Unconfirmed,
+}
+
 /// Retire the branch only if the pull request actually merged.
 ///
 /// # `Progress::Landed` IS NOT "MERGED", AND READING IT AS ONE DELETED BRANCHES
@@ -6629,12 +6704,7 @@ fn run_land_lease(
 /// # Errors
 ///
 /// Only for a stream that will not accept output.
-fn landed_for_real(
-    root: &Path,
-    url: &str,
-    branch: &str,
-    out: &mut dyn Write,
-) -> Result<Option<ExitCode>> {
+fn landed_for_real(root: &Path, url: &str, branch: &str, out: &mut dyn Write) -> Result<Landing> {
     let repo = repo_or_placeholder(root);
     // ANY STATE, because a merged pull request is CLOSED and the open-only
     // lookup can therefore never confirm one — see `pull_request_in_any_state`.
@@ -6669,21 +6739,21 @@ fn landed_for_real(
             // becomes a long-lived one — and reusing the name afterwards is the
             // stale-tracking-ref deadlock `land::stale_tracking` records.
             retire_the_branch(root, url, branch, out)?;
-            Ok(Some(ExitCode::Success))
+            Ok(Landing::Retired(ExitCode::Success))
         }
         fast_forward::Merged::No => {
             writeln!(
                 out,
                 "land: the bot's run finished but the pull request has not merged; lapping rather than retiring a branch that is still open"
             )?;
-            Ok(None)
+            Ok(Landing::NotMerged)
         }
         fast_forward::Merged::Unreadable(status) => {
             writeln!(
                 out,
-                "land: could not read whether the pull request merged ({status}); lapping rather than deleting on an unread answer"
+                "land: could not read whether the pull request merged ({status}); lapping without cancelling, because this head may already be the trunk"
             )?;
-            Ok(None)
+            Ok(Landing::Unconfirmed)
         }
     }
 }
@@ -6912,6 +6982,10 @@ fn run_land_fast_forward(
                 .and_then(|raw| raw.trim().parse::<u32>().ok())
                 .unwrap_or(120);
             let mut verdict = fast_forward::Answer::Pending;
+            // `pause_until` slices its wait so a RACING arm can cut it short.
+            // Nothing races this one — the lap is serial here — so the flag is
+            // permanently false and the slicing is the only thing borrowed.
+            let answer_poll_stop = std::sync::atomic::AtomicBool::new(false);
             for attempt in 0..asks.max(1) {
                 verdict = fast_forward::answer(&ask, &since, &comment);
                 // **A COULD-NOT-LOOK IS NOT AN ANSWER, and breaking on it undid
@@ -6934,19 +7008,19 @@ fn run_land_fast_forward(
                     break;
                 }
                 if attempt + 1 < asks.max(1) {
-                    #[expect(
-                        clippy::disallowed_methods,
-                        reason = "an inventory row (CLOUD-1177): the bound is `LAND_ANSWER_MAX_UNKNOWNS` \
-                                  asks over `fast_forward::answer`, whose terminal states are \
-                                  `Accepted`, `Refused` and `Unknown` — the loop breaks on any of \
-                                  them, so this delay paces a poll rather than standing in for an \
-                                  exit condition. Exhausting the count reports `Pending`, which is \
-                                  the same answer the single read gave and leaves the lap's own \
-                                  budget as the outer bound"
-                    )]
-                    std::thread::sleep(std::time::Duration::from_secs(
+                    // `pr_watch`'s pause, never a second timer: there is ONE
+                    // sleep in this crate and it carries the one
+                    // `disallowed_methods` escape, which is what `land.rs`'s
+                    // stale arm says at its own site and what `spawn-widening`
+                    // refuses a second copy of. The bound is `LAND_ANSWER_ASKS`
+                    // asks over `fast_forward::answer` — the loop breaks on
+                    // `Accepted` or `Refused`, so this paces a poll rather than
+                    // standing in for an exit condition, and exhausting the
+                    // count reports whatever the last read said (CLOUD-1177).
+                    crate::pr_watch::pause_until(
                         fast_forward::ANSWER_POLL_SECONDS,
-                    ));
+                        &answer_poll_stop,
+                    );
                 }
             }
             match verdict {
@@ -7825,7 +7899,18 @@ fn head_verdict(root: &Path, repo: &str) -> Option<checks_green::Verdict> {
     let roster = checks_green::Roster {
         required: roster_field(std::env::var("CI_REQUIRED_CHECKS").ok().as_deref()),
         absent_ok: roster_field(std::env::var("CI_ABSENT_OK_CHECKS").ok().as_deref()),
-        answered: roster_field(std::env::var("CI_ANSWERED_CONCLUSIONS").ok().as_deref()),
+        // THE SAME DEFAULT `run_land_wait` USES, and the asymmetry was a silent
+        // disable (review of #848). `checks_green::decide` REFUSES an empty
+        // `answered` set, and this reads the verdict through `.ok()`, so a
+        // consumer who set a required roster and left the conclusions to the
+        // default got `None` here — could-not-look — which `buys_a_matrix` reads
+        // as "needs no ready". The step that buys CI then did nothing, `Push`
+        // updated a branch nobody had readied, and every later line said "no
+        // answer yet".
+        answered: roster_field(Some(
+            &std::env::var("CI_ANSWERED_CONCLUSIONS")
+                .unwrap_or_else(|_| String::from("success,failure,timed_out,action_required")),
+        )),
         fanin: std::env::var("CI_FANIN_CHECK")
             .ok()
             .filter(|name| !name.is_empty()),
@@ -8435,18 +8520,42 @@ fn run_lease_acquire(
             Ok(ExitCode::Success)
         }
         lease::Turn::Wait => {
-            let lease::Observed::Held { body, .. } = &observed else {
-                // Unreachable: `Absent` is always a `Take`. Reported rather than
-                // unwrapped, because a `Wait` over an absent lease would mean the
-                // decision table had changed underneath this arm.
-                writeln!(
-                    err,
-                    "::error:: lease: no lease is held, yet the turn was not taken"
-                )?;
-                return Ok(ExitCode::Internal);
-            };
-            writeln!(out, "lease: held by {}", body.holder)?;
-            Ok(ExitCode::Violation)
+            match &observed {
+                lease::Observed::Held { body, .. } => {
+                    writeln!(out, "lease: held by {}", body.holder)?;
+                    Ok(ExitCode::Violation)
+                }
+                // **A REF THAT IS NOT A LEASE IS A WAIT, NOT AN INTERNAL ERROR**
+                // (review of #848). `turn` maps `Garbage` to `Wait` deliberately
+                // — a body nothing can parse stays held to every decision — but
+                // this arm assumed `Wait` implied `Held`, printed a message
+                // asserting an unreachable state, and returned `Internal`, which
+                // `land::progress` maps to `Stop`. So one stray commit pushed to
+                // the lease ref stopped EVERY lander in the fleet instead of
+                // making them wait it out, and told each operator the wrong cause.
+                //
+                // `Violation` is the same code the held case answers with,
+                // because it is the same answer to the caller's question: not
+                // this clone's turn. What differs is the line, which names the
+                // real state so somebody can go and delete the ref.
+                lease::Observed::Garbage { .. } => {
+                    writeln!(
+                        out,
+                        "lease: the lease ref carries something that is not a lease, so nothing may take it until that is cleared"
+                    )?;
+                    Ok(ExitCode::Violation)
+                }
+                // Genuinely unreachable — `Absent` is always a `Take` — and
+                // reported rather than unwrapped, because reaching it would mean
+                // the decision table changed underneath this arm.
+                lease::Observed::Absent => {
+                    writeln!(
+                        err,
+                        "::error:: lease: no lease is held, yet the turn was not taken"
+                    )?;
+                    Ok(ExitCode::Internal)
+                }
+            }
         }
         lease::Turn::Take(why) => {
             let body = lease::claim(terms, &holder, branch, &head, now);
@@ -12277,7 +12386,25 @@ fn filed_here_pointers(
         verdicts: &config.verdicts,
         recorders: &config.recorders,
     };
-    let scan = rules::run_static(&selected, &config.provisions, vocabulary, root).ok()?;
+    // `run_static_over` WITH AN INSTANT, because the four-argument wrapper hands
+    // `now: None` to `minted_facts`, which reads it as epoch 0 — so every receipt
+    // looks ancient, every `[[rule.minted]]` `max_age` bound refuses, and this
+    // path disagrees with `check` over the same tree (review of #848). The
+    // wrapper's `None` is the honest answer for a caller that has no clock; this
+    // one is a boundary and does. Latent here only because no `[[rule.minted]]`
+    // row is declared today.
+    let scan = rules::run_static_over(
+        &selected,
+        &config.provisions,
+        vocabulary,
+        root,
+        rules::RunOptions {
+            checks: policy::ModuleChecks::Run,
+            scope: &rules::Scope::Tree,
+            now: Some(now_unix()),
+        },
+    )
+    .ok()?;
     let flagged: std::collections::BTreeSet<String> = scan
         .findings
         .iter()

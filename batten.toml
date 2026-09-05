@@ -2107,14 +2107,23 @@ regex = '^\s*(?:#!?\[\s*(?:expect|allow)\(\s*)?clippy::(?:expect_used|unwrap_use
 # ONE MEMBER OF THE SPAWN PLACEMENT SET (CLOUD-1338).
 #
 # `policy/spawn-adapters.rego`'s `adapters` is a Rego set of bare module names,
-# one per line, tab-indented. The row is deliberately narrow: it matches a quoted
-# lower-snake word alone on its line, which is that set's shape and nothing
+# tab-indented. The row is deliberately narrow: it matches a line made ENTIRELY
+# of quoted lower-snake words with commas, which is that set's shape and nothing
 # else's in the file. Widening it to any quoted string would catch the module's
 # own test fixtures and its prose, and a rule refusing those is a rule somebody
 # switches off.
+#
+# **IT SAID "ONE PER LINE" AND THE FILE IS NOT WRITTEN THAT WAY** (review of
+# #848). The pattern was `^\s*"[a-z_]+",\s*$` — one name ALONE on its line — and
+# `spawn-adapters.rego` packs four to six per line, which is its dominant style.
+# So the whole gate was evaded by appending to an existing line rather than
+# adding one: the added line failed the anchor, clause B never fired, and
+# widening the placement table cost a keystroke instead of the argument
+# `spawn-adapters` says it should cost. A premise about formatting, asserted in a
+# comment and true of nothing.
 [[pattern]]
 id = "spawn-placement-entry"
-regex = '^\s*"[a-z_]+",\s*$'
+regex = '^\s*(?:"[a-z_]+",\s*)+$'
 
 # THE SUBCOMMAND TAIL of a task-name invocation (CLOUD-1299).
 #
