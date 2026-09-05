@@ -296,6 +296,60 @@ and that line is prose, not a section.
     );
 }
 
+/// A SINGLE-LINE STRING CONTAINING `'''` MUST NOT OPEN A MULTI-LINE STRING.
+///
+/// The line scan toggled on any `"""`/`'''` byte-triple wherever it appeared, so
+/// `batten.toml:4383` — `pattern = "run = '''"`, an ordinary row — opened a
+/// literal-string state that never closed. Every header after it went unseen,
+/// an unknown key anywhere past it resolved to the last row BEFORE it,
+/// `row_end` returned the end of the file, and the prune blanked 349 KB: 646
+/// sections, the whole `[[verdict]]` registry and `[attribution]`'s
+/// `identity_deny` among them, while reporting exactly one dropped row.
+///
+/// **The discriminating assertion is that the LATER good row still decides.** A
+/// case checking only that the file loads would pass against the truncation,
+/// because a document cut at a section boundary is valid TOML — which is
+/// precisely why the old "does it still parse" guard did not fire.
+#[test]
+fn a_single_line_string_holding_a_triple_quote_does_not_swallow_the_file() {
+    let quoting = r#"
+[[rule]]
+id = "quotes-a-delimiter"
+kind = "shape"
+scope = "mediated_call"
+pattern = "run = '''"
+severity = "deny"
+reason = "an ordinary row whose pattern contains a triple quote"
+"#;
+    // The unresolvable row comes FIRST, and the good row LAST, so the scan has
+    // to stay synchronised across the quoting row to find either.
+    let dir = repo(
+        "config-forward-triple",
+        &format!("{FROM_A_NEWER_SCHEMA}{quoting}{GOOD}"),
+    );
+    let (code, stdout, stderr) = adjudicate(&dir);
+    assert_eq!(code, Some(0), "the hook answered: {stdout} {stderr}");
+    assert!(
+        stdout.contains(r#""permissionDecision":"deny""#) && stdout.contains("good-row"),
+        "a row after the quoting one must still be enforced: {stdout}"
+    );
+
+    let out = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten config show");
+    let said = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        said.contains("newer-schema-row"),
+        "the one unresolvable row is still named: {said}"
+    );
+    assert!(
+        !said.contains("quotes-a-delimiter"),
+        "and no other row may be taken with it: {said}"
+    );
+}
+
 /// MALFORMED TOML STAYS A HARD REFUSAL. A file that is not TOML is a different
 /// fault from a well-formed row naming a key from a newer schema, and collapsing
 /// the two is what produced the defect — a prune that swallowed a syntax error

@@ -423,8 +423,16 @@ resolve_via_web() {
 	# Exact field equality rather than a substring: one asset's name is a prefix
 	# of nothing else here today, and a route that depends on that staying true
 	# is a route that breaks on the next asset somebody adds.
+	# A RELEASE THAT PUBLISHES NO DIGEST FOR THIS ASSET IS A REFUSAL, NOT A
+	# COULD-NOT-LOOK, and `3` is how that reaches the caller. `resolve_via_api`
+	# already classifies the same absence as `die 1` — the release is readable
+	# and does not carry what it must — so returning `1` here reported the
+	# identical fault as exit 2 with a rate-limit remedy, reachable with
+	# `BATTEN_VERSION` naming a tag from before `SHA256SUMS` was published while
+	# the API is rate-limited. Review caught the disagreement between the two
+	# routes.
 	want=$(awk -v n="$asset" '$2 == n { print $1; exit }' "$tmp/SHA256SUMS")
-	[ -n "$want" ] || return 1
+	[ -n "$want" ] || return 3
 
 	asset_url="$WEB/$REPO/releases/download/$tag/$asset"
 	asset_anon=1
@@ -521,8 +529,14 @@ main() {
 	if ! resolve_via_api; then
 		[ -n "$WEB_FALLBACK" ] ||
 			die 2 "cannot read the release list from $REPO at $API. If you are being rate-limited, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN."
-		resolve_via_web ||
+		resolve_via_web || case $? in
+		3)
+			die 1 "release $tag publishes no sha256 for $asset in SHA256SUMS, and this script does not install unverified bytes."
+			;;
+		*)
 			die 2 "cannot read release metadata for $REPO from either $API or $WEB. If the API is rate-limiting this address, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN; if the repository is private, a token is required."
+			;;
+		esac
 	fi
 
 	api_get "$asset_url" "application/octet-stream" "$tmp/$asset" "$asset_anon" ||

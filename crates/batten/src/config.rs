@@ -1819,33 +1819,105 @@ fn header_of(line: &str) -> Option<Header<'_>> {
     (!name.is_empty()).then_some(Header::Table(name))
 }
 
-/// Advance the multi-line-string state across one line.
+/// Where a scan of the document stands at a line boundary.
 ///
-/// `open` carries the delimiter a previous line left unclosed — `"` for `"""`,
-/// `'` for `'''` — and is updated in place.
-fn scan_delimiters(line: &str, open: &mut Option<char>) {
-    let bytes = line.as_bytes();
-    let mut at = 0;
-    while at + 3 <= bytes.len() {
-        let found = if &bytes[at..at + 3] == b"\"\"\"" {
-            Some('"')
-        } else if &bytes[at..at + 3] == b"'''" {
-            Some('\'')
+/// Only three states can survive a newline: a single-line string and a comment
+/// both end at one, so they are consumed within [`scan_line`] and never
+/// reported here.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lex {
+    /// Outside any string.
+    Code,
+    /// Inside `"""…"""`.
+    MultiBasic,
+    /// Inside `'''…'''`.
+    MultiLiteral,
+}
+
+/// Index just past a single-line basic string that opened at `at`.
+fn skip_basic(bytes: &[u8], mut at: usize) -> usize {
+    while at < bytes.len() {
+        if bytes[at] == b'\\' {
+            at += 2;
+        } else if bytes[at] == b'"' {
+            return at + 1;
         } else {
-            None
-        };
-        match (found, *open) {
-            (Some(delimiter), None) => {
-                *open = Some(delimiter);
-                at += 3;
-            }
-            (Some(delimiter), Some(current)) if delimiter == current => {
-                *open = None;
-                at += 3;
-            }
-            _ => at += 1,
+            at += 1;
         }
     }
+    at
+}
+
+/// Index just past a single-line literal string that opened at `at`.
+///
+/// A literal string processes no escapes, which is the whole of the difference.
+fn skip_literal(bytes: &[u8], mut at: usize) -> usize {
+    while at < bytes.len() {
+        if bytes[at] == b'\'' {
+            return at + 1;
+        }
+        at += 1;
+    }
+    at
+}
+
+/// Advance the scan across one line, returning the state at its end.
+///
+/// **A SINGLE-LINE STRING IS CONSUMED, and skipping that is what made the
+/// previous version catastrophic.** It toggled on any `"""`/`'''` byte-triple
+/// wherever it appeared, so `batten.toml:4383` — `pattern = "run = '''"`, a
+/// perfectly ordinary row — opened a literal-string state that never closed.
+/// Every header after it went unseen, an unknown key anywhere past it resolved
+/// to the last row before it, `row_end` returned the end of the file, and the
+/// prune blanked 349 KB: 646 sections, the whole `[[verdict]]` registry, and
+/// `[attribution]`'s `identity_deny` among them, while reporting exactly one
+/// dropped row. That is CLOUD-1428's fail-open arriving through its own fix.
+fn scan_line(line: &str, state: Lex) -> Lex {
+    let bytes = line.as_bytes();
+    let mut state = state;
+    let mut at = 0;
+    while at < bytes.len() {
+        match state {
+            Lex::Code => {
+                if bytes[at] == b'#' {
+                    // A comment runs to the newline, and nothing in it is a
+                    // delimiter.
+                    return Lex::Code;
+                } else if bytes[at..].starts_with(b"\"\"\"") {
+                    state = Lex::MultiBasic;
+                    at += 3;
+                } else if bytes[at..].starts_with(b"'''") {
+                    state = Lex::MultiLiteral;
+                    at += 3;
+                } else if bytes[at] == b'"' {
+                    at = skip_basic(bytes, at + 1);
+                } else if bytes[at] == b'\'' {
+                    at = skip_literal(bytes, at + 1);
+                } else {
+                    at += 1;
+                }
+            }
+            Lex::MultiBasic => {
+                if bytes[at] == b'\\' {
+                    at += 2;
+                } else if bytes[at..].starts_with(b"\"\"\"") {
+                    state = Lex::Code;
+                    at += 3;
+                } else {
+                    at += 1;
+                }
+            }
+            Lex::MultiLiteral => {
+                if bytes[at..].starts_with(b"'''") {
+                    state = Lex::Code;
+                    at += 3;
+                } else {
+                    at += 1;
+                }
+            }
+        }
+    }
+    state
 }
 
 /// Every header in `text`, as `(byte offset of its line, header)`.
@@ -1862,20 +1934,25 @@ fn scan_delimiters(line: &str, open: &mut Option<char>) {
 /// **This lexes ONE thing — where a line begins — and never a value.** That is
 /// what keeps it from being the second authority `.claude/rules/policy-modules.md`
 /// refuses: no key, no value and no type is read here; `toml::from_str` remains
-/// the only thing that interprets the document. The bound is stated rather than
-/// hidden: an unbalanced `"""` inside a `#` comment or inside a single-line
-/// string would desynchronise this, and `prune_unresolvable`'s re-parse guard is
-/// what makes that degrade to refusing the file rather than to mangling it.
+/// the only thing that interprets the document.
+///
+/// **AND IT IS NOT TRUSTED.** A lexer is exactly the kind of thing that is
+/// subtly wrong — this one already was, catastrophically — so
+/// `prune_unresolvable` does not rely on it being right. Every blank is checked
+/// against the PARSER: the result must equal the original table with exactly
+/// the named row removed, or the prune is abandoned whole. That guard is what
+/// makes this safe, and the previous one — "does the result still parse" — was
+/// not, because truncating a document to a section boundary leaves valid TOML.
 fn headers(text: &str) -> impl Iterator<Item = (usize, Header<'_>)> {
     let base = text.as_ptr() as usize;
-    let mut open: Option<char> = None;
+    let mut state = Lex::Code;
     text.lines().filter_map(move |line| {
         // `lines()` yields subslices of `text`, so the offset is exact and no
         // second scan can disagree with it.
         let at = line.as_ptr() as usize - base;
-        let inside = open.is_some();
-        scan_delimiters(line, &mut open);
-        if inside {
+        let began_in_code = state == Lex::Code;
+        state = scan_line(line, state);
+        if !began_in_code {
             return None;
         }
         header_of(line).map(|header| (at, header))
@@ -2011,6 +2088,11 @@ fn row_id(body: &str) -> Option<String> {
 /// reporting an expired waiver. Preserving offsets is what makes all three
 /// unwritable rather than each separately guarded.
 fn prune_unresolvable(source: &str) -> (String, Vec<Unresolvable>) {
+    // The parser's own reading of the document, carried across the loop so each
+    // blank can be checked against what removing the row SHOULD produce.
+    let Ok(mut current) = toml::from_str::<toml::Table>(source) else {
+        return (source.to_owned(), Vec::new());
+    };
     let mut text = source.to_owned();
     let mut dropped = Vec::new();
     while dropped.len() < UNRESOLVABLE_CEILING {
@@ -2038,43 +2120,88 @@ fn prune_unresolvable(source: &str) -> (String, Vec<Unresolvable>) {
             break;
         }
         let id = row_id(&source[at..end]);
-        blank(&mut text, at, end);
-        // A PRUNE MAY NEVER PRODUCE A DOCUMENT THE PARSER REJECTS FOR A NEW
-        // REASON, and this guard holds that however wrong the line scan above
-        // is. Blanking a range that was not a whole row leaves TOML that no
-        // longer lexes, and the refusal then quotes a line the author's file
-        // does not have — measured in review as a fabricated `invalid
-        // multi-line basic string`. Degrading to the untouched source means the
-        // file is refused carrying its OWN parse error, which is exactly the
-        // behaviour before this change: safe, and honest about what was read.
-        if toml::from_str::<toml::Table>(&text).is_err() {
-            return (source.to_owned(), Vec::new());
+
+        // WHAT REMOVING THIS ROW MUST PRODUCE, computed by the PARSER rather
+        // than by the scan. `index` is the row's ordinal in the SOURCE, which is
+        // what a reader is given and what `lint` filters on; earlier drops have
+        // shifted the live array, so the position in `current` is that ordinal
+        // less the drops from this section that precede it.
+        let shift = dropped
+            .iter()
+            .filter(|row: &&Unresolvable| row.section == section && row.index < index)
+            .count();
+        let mut expected = current.clone();
+        let Some(rows) = expected
+            .get_mut(&section)
+            .and_then(toml::Value::as_array_mut)
+        else {
+            break;
+        };
+        let Some(position) = index.checked_sub(shift).filter(|at| *at < rows.len()) else {
+            break;
+        };
+        rows.remove(position);
+        // A section whose last row goes leaves no header at all, so the parsed
+        // document loses the key rather than keeping an empty array.
+        if rows.is_empty() {
+            expected.remove(&section);
         }
+
+        let mut candidate = text.clone();
+        blank(&mut candidate, at, end);
+
+        // THE GUARD, AND IT IS EXACT. The blanked document must parse to the
+        // table this loop already holds, minus precisely the row being dropped
+        // — anything else means the scan chose the wrong bytes, and the prune is
+        // abandoned whole rather than trusted.
+        //
+        // **The previous guard was "does the result still parse", and it was
+        // worthless.** A desynchronised scan made `row_end` return the end of
+        // the file, so blanking TRUNCATED the document at a section boundary —
+        // which is perfectly valid TOML. It passed while 646 sections vanished,
+        // including the `[[verdict]]` registry and `[attribution]`'s
+        // `identity_deny`, with one dropped row reported. A guard that a
+        // catastrophic failure satisfies is worse than none, because it is also
+        // an argument for not looking further.
+        match toml::from_str::<toml::Table>(&candidate) {
+            Ok(after) if after == expected => {}
+            _ => return (source.to_owned(), Vec::new()),
+        }
+
+        text = candidate;
+        current = expected;
         dropped.push(Unresolvable { section, id, index });
     }
     (text, dropped)
 }
 
 fn parse_ungated(text: &str, source: &str) -> Result<Config> {
-    // MALFORMED TOML IS UNTOUCHED AND STILL REFUSED. A file that is not TOML is
-    // a different fault from a well-formed row naming a key from a newer schema,
-    // and collapsing the two is what produced the defect this repairs.
-    toml::from_str::<toml::Table>(text).map_err(|err| config_error(source, &err))?;
-    // THE COMMON CASE IS UNTOUCHED. A config every row of which this build
-    // understands parses on the first attempt and never enters the prune, so
-    // neither its behaviour nor its cost changes.
-    let (pruned, dropped) = match toml::from_str::<Config>(text) {
-        Ok(_) => (text.to_owned(), Vec::new()),
-        Err(_) => prune_unresolvable(text),
-    };
+    // THE COMMON CASE COSTS ONE PARSE, and it used to cost three.
+    //
+    // A config this build fully understands succeeds here and is DONE — it
+    // never enters the prune and is never re-parsed. The earlier shape probed
+    // with a `toml::Table` parse first, threw that away, then parsed `Config`
+    // twice more; over a 583 KB authority on `batten adjudicate`'s per-call path
+    // that is two full parses bought for nothing. The Table probe existed to
+    // make malformed TOML a hard refusal before the prune, and it is redundant:
+    // a syntax error is not an unknown key, so the prune declines it and the
+    // same `config_error` is raised below over the same bytes (review caught
+    // this; `a_file_that_is_not_toml_is_still_refused` is what holds it).
+    //
     // `config_error` STILL WORDS WHAT IS LEFT, and the two changes compose
     // rather than compete (CLOUD-1449 beside CLOUD-1428). That row made an
     // unknown key SAY it might be a stale binary; this one makes an unknown key
-    // cost its own row instead of the file. What reaches here is a failure the
-    // prune could not localise to a row — a key on the top-level table, or one
-    // inside a plain `[section]` — and for exactly those the skew reading is
-    // still the most useful thing to say.
-    let mut config: Config = toml::from_str(&pruned).map_err(|err| config_error(source, &err))?;
+    // cost its own row instead of the file. What reaches the error arm is a
+    // failure the prune could not localise to a row — a key on the top-level
+    // table, or one inside a plain `[section]` — and for exactly those the skew
+    // reading is still the most useful thing to say.
+    let (mut config, dropped) = if let Ok(config) = toml::from_str::<Config>(text) {
+        (config, Vec::new())
+    } else {
+        let (pruned, dropped) = prune_unresolvable(text);
+        let config: Config = toml::from_str(&pruned).map_err(|err| config_error(source, &err))?;
+        (config, dropped)
+    };
     config.unresolvable = dropped;
     if config.version != SUPPORTED_VERSION {
         return Err(UsageError::raise(format!(

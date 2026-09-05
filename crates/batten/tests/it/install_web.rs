@@ -34,6 +34,12 @@
 //! installed. `provision.rs` stands up loopback listeners for the same reason.
 //! Nothing leaves the machine.
 
+// UNIX ONLY, and `rust.yml`'s `windows` job is why rather than a preference:
+// the subject is a POSIX shell program, driven here through `sh` with
+// `.env_clear()` (which drops `SystemRoot` and `ComSpec`), against a hard-coded
+// `x86_64-unknown-linux-musl` target, and needing `mktemp`, `curl`, `tar` and
+// `sha256sum`. `run_shape_guard_door.rs` guards for the same reason.
+#![cfg(unix)]
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -66,7 +72,13 @@ fn tarball(dir: &std::path::Path) -> Vec<u8> {
         reason = "stays, and test-only: the installer untars what it downloads, so the fixture payload has to be a real gzipped tar and `tar` is what writes one"
     )]
     let status = Command::new("tar")
-        .args(["-czf", archive.to_str().unwrap(), "-C", stage.to_str().unwrap(), "batten"])
+        .args([
+            "-czf",
+            archive.to_str().unwrap(),
+            "-C",
+            stage.to_str().unwrap(),
+            "batten",
+        ])
         .status()
         .expect("run tar");
     assert!(status.success(), "the fixture archive must build");
@@ -139,7 +151,9 @@ fn serve(mut stream: TcpStream, routes: &[Route]) {
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             route.body.len()
         ),
-        None => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned(),
+        None => {
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned()
+        }
     };
     let _ = stream.write_all(response.as_bytes());
     if let Some(route) = answer
@@ -268,7 +282,11 @@ fn a_sha256sums_that_disagrees_with_the_bytes_installs_nothing() {
     });
 
     let (code, stdout, stderr, installed) = install("install-web-bad", &web, TARGET);
-    assert_eq!(code, Some(1), "a digest mismatch is a refusal: {stdout}{stderr}");
+    assert_eq!(
+        code,
+        Some(1),
+        "a digest mismatch is a refusal: {stdout}{stderr}"
+    );
     assert!(
         !installed.exists(),
         "a refused install must leave the destination empty"
