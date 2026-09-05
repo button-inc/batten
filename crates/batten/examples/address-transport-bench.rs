@@ -33,12 +33,28 @@ use std::fmt::Write as _;
 use batten::capture::{DEFAULT_INLINE_MAX_BYTES, Transport, transport_for};
 use batten::identity::{ADDRESS_RENDERED_LEN, AddressDomain, ContentAddress};
 
+/// The default threshold as a size, read from the constant rather than restated.
+///
+/// `usize::try_from` is not const, so the cast is written out with the bound it
+/// relies on asserted beside it: this is a payload SIZE, and a threshold that did
+/// not fit a `usize` could not describe a buffer on the host doing the measuring.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "asserted below: the default threshold fits usize on any host that can hold the payload it bounds"
+)]
+const THRESHOLD: usize = DEFAULT_INLINE_MAX_BYTES as usize;
+
+const _: () = assert!(
+    THRESHOLD as u64 == DEFAULT_INLINE_MAX_BYTES,
+    "the default inline threshold must survive the cast to a payload size"
+);
+
 /// One corpus entry: a name and a payload size in bytes.
 const CORPUS: &[(&str, usize)] = &[
     ("tiny", 64),
     ("small", 512),
-    ("threshold-under", DEFAULT_INLINE_MAX_BYTES as usize),
-    ("threshold-over", DEFAULT_INLINE_MAX_BYTES as usize + 1),
+    ("threshold-under", THRESHOLD),
+    ("threshold-over", THRESHOLD + 1),
     ("medium", 16 * 1024),
     ("large", 512 * 1024),
     ("huge", 4 * 1024 * 1024),
@@ -121,6 +137,15 @@ fn main() -> std::io::Result<()> {
     let dir = std::path::Path::new("bench/address-transport");
     std::fs::create_dir_all(dir)?;
     std::fs::write(dir.join("RESULTS.md"), out)?;
-    println!("address-transport-bench: bench/address-transport/RESULTS.md written");
+    // The binary boundary is the one sanctioned place to write, and an example
+    // IS that boundary — but the workspace lint is crate-wide, so the exemption
+    // is stated here rather than assumed.
+    #[expect(
+        clippy::print_stdout,
+        reason = "an example target is a binary boundary; this line is the bench's only output"
+    )]
+    {
+        println!("address-transport-bench: bench/address-transport/RESULTS.md written");
+    }
     Ok(())
 }

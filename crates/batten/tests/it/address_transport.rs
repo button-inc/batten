@@ -100,16 +100,21 @@ fn both_routes_carry_the_same_semantic_result() {
 
 #[test]
 fn the_priced_grammar_is_the_rendered_address_and_not_a_hash_length() {
+    // A CONST assertion, because the claim is about the grammar rather than about
+    // this run: the constant is known at compile time, so a runtime `assert!` over
+    // it is a check that can never observe anything (`clippy::assertions_on_constants`).
+    // Stated first, because an item after a statement is its own lint.
+    const _: () = assert!(
+        ADDRESS_RENDERED_LEN > 64,
+        "the grammar costs more than a bare digest, and that difference is what must be priced"
+    );
+
     // §2 rules out "a generic hash length or a bytes-over-four approximation".
     // The rendered address is longer than its digest — the tag, the version and
     // both separators are part of what an address costs — so a bench pricing 64
     // characters would understate every addressed row.
     let address = ContentAddress::of(AddressDomain::Capture, b"x");
     assert_eq!(address.render().len(), ADDRESS_RENDERED_LEN);
-    assert!(
-        ADDRESS_RENDERED_LEN > 64,
-        "the grammar costs more than a bare digest, and that difference is what must be priced"
-    );
 }
 
 #[test]

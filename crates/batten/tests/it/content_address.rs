@@ -182,7 +182,8 @@ fn bcp_compatibility_is_an_open_question_and_this_records_which_one() {
 
     let mut bare_hex = String::new();
     for byte in bare.as_bytes() {
-        bare_hex.push_str(&format!("{byte:02x}"));
+        use std::fmt::Write as _;
+        let _ = write!(bare_hex, "{byte:02x}");
     }
     assert!(
         !address.ends_with(&bare_hex),

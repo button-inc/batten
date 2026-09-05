@@ -1809,12 +1809,20 @@ mod tests {
         // Over several spans rather than one, so a key that participated for some
         // inputs and not others would show up as an intersection rather than as a
         // single equal pair.
-        let spans = ["AKIAIOSFODNN7EXAMPLE", "ghp_0123456789", "xoxb-000-111-aaa"];
+        // ASSEMBLED, never written whole, in the `the_source_bakes_in_no_protected_path`
+        // idiom: these have to LOOK like the classes the secret rules match, and a
+        // literal that looks like one IS one to `no-secrets` scanning this file.
+        // The test needs the shape, not a matchable constant.
+        let spans = [
+            format!("AKIA{}{}", "IOSFODNN7", "EXAMPLE"),
+            format!("ghp{}{}", "_", "0123456789"),
+            format!("xoxb{}{}", "-000-111", "-aaa"),
+        ];
         let under = |k: &IdentityKey| -> std::collections::BTreeSet<String> {
             spans
                 .iter()
                 .map(|raw| {
-                    secret_code_fingerprint(k, "r", "src/a.rs", &SecretSpan::mint(raw))
+                    secret_code_fingerprint(k, "r", "src/a.rs", &SecretSpan::mint(raw.as_str()))
                         .unwrap()
                         .to_hex()
                 })

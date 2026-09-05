@@ -721,7 +721,7 @@ impl Index {
     /// every prior locator would answer `Absent` afterwards, correctly, about a
     /// mapping this function had just deleted.
     /// **AND THE WHOLE READ-MODIFY-WRITE IS SERIALIZED AND PUBLISHED ATOMICALLY**,
-    /// which are two requirements rather than one (CodeRabbit on #879). The lock
+    /// which are two requirements rather than one (`CodeRabbit` on #879). The lock
     /// stops two concurrent records from reading the same prior contents and the
     /// later write discarding the earlier entry; it does nothing for a READER,
     /// because `std::fs::write` truncates before it writes and a `compare` landing
@@ -837,6 +837,12 @@ impl Index {
     }
 }
 
+/// Store `bytes` as a capture of `stream` for this repository.
+///
+/// # Errors
+///
+/// When the repository's capture directory cannot be resolved or written, as
+/// [`store_in`].
 pub fn store(repo_root: &Path, stream: Stream, bytes: &[u8]) -> Result<Capture> {
     store_in(&captures_dir(repo_root)?, stream, bytes)
 }
