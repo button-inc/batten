@@ -710,12 +710,25 @@ impl Index {
     ///
     /// # Errors
     ///
-    /// When the index cannot be written.
+    /// When the index cannot be READ, as well as when it cannot be written.
+    ///
+    /// **The read arm is the one worth stating.** This function rewrites the whole
+    /// file from what it read, so a could-not-look folded into "empty" does not
+    /// degrade a single answer — it DESTROYS every entry the index held and writes
+    /// a one-line file in its place. [`Index::compare`] already reports that case
+    /// as [`Freshness::Unavailable`] rather than `Absent`, and a writer that
+    /// collapsed the same distinction would make the reader's care pointless:
+    /// every prior locator would answer `Absent` afterwards, correctly, about a
+    /// mapping this function had just deleted.
     pub fn record(&self, locator: &Locator, address: &identity::ContentAddress) -> Result<()> {
-        let mut kept: Vec<String> = self
-            .lines()
+        let Some(existing) = self.lines() else {
+            anyhow::bail!(
+                "the locator index could not be read, so recording would discard entries it \
+                 cannot see"
+            );
+        };
+        let mut kept: Vec<String> = existing
             .into_iter()
-            .flatten()
             .filter(|line| !line.starts_with(&format!("{}\t", locator.render())))
             .collect();
         kept.push(format!("{}\t{}", locator.render(), address.render()));

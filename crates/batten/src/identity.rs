@@ -209,6 +209,25 @@ pub enum SpanNormalization {
 /// constant rather than two, because two would be free to disagree.
 const ADDRESS_VERSION: u8 = 1;
 
+/// The grammar renders the version as ONE digit and parses exactly one, so a
+/// two-digit version is unrepresentable rather than silently mis-rendered.
+///
+/// Held here as a compile error rather than at the render site, where the only
+/// available spelling was `char::from_digit(..).unwrap_or('0')` — a fallback that
+/// turns version 10 into the string `b3-0-…`, mis-stating in the RENDERING the
+/// very version that is bound into the preimage, and colliding with a hypothetical
+/// version 0 while parsing cleanly. A digest whose address lies about its own
+/// grammar is worse than one that fails to build.
+///
+/// Bumping past 9 is therefore a deliberate grammar change: it moves
+/// [`ADDRESS_RENDERED_LEN`], which the transport policy prices, so it cannot be
+/// done by editing one constant.
+const _: () = assert!(
+    ADDRESS_VERSION < 10,
+    "the address grammar renders one version digit; a wider version needs a new \
+     ADDRESS_RENDERED_LEN and a parser that reads it"
+);
+
 /// The rendered address's fixed length: `b3-1-` plus 64 hex characters.
 ///
 /// Public because the transport policy PRICES it (CLOUD-1367): what an address
@@ -336,6 +355,10 @@ impl ContentAddress {
     pub fn render(&self) -> String {
         let mut out = String::with_capacity(ADDRESS_LEN);
         out.push_str("b3-");
+        // The `unwrap_or` is unreachable for a version this crate mints: the
+        // const assertion beside `ADDRESS_VERSION` refuses a two-digit one at
+        // compile time. It survives only because `version` is a parsed field, and
+        // `parse` reads one digit — so no value reaching here can exceed 9.
         out.push(char::from_digit(u32::from(self.version), 10).unwrap_or('0'));
         out.push('-');
         for byte in self.digest {
