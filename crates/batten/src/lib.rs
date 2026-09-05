@@ -7353,11 +7353,31 @@ fn run_lease_check(
             return Ok(ExitCode::Internal);
         }
     };
-    match lease::health(&observed, terms, now) {
+    report_health(&lease::health(&observed, terms, now), out, err)
+}
+
+/// Write a health reading and answer with its exit code.
+///
+/// **SPLIT FROM THE READING SO THE MAPPING IS REACHABLE** (CLOUD-1148). Every
+/// state the retired `mise-tasks/land-lock-check.sh` reported needs a lease on a
+/// remote to observe, and `lease::observe` has no offline fixture seam — so with
+/// the reading and the mapping in one function, four of the six arms could be
+/// exercised only against a live remote, which is a test of the network.
+///
+/// A `Wedged` mapped to `Success` is the silent failure this is the sensor on: a
+/// wedged lease would be reported in prose and pass its own gate.
+fn report_health(
+    health: &lease::Health,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    match health {
         lease::Health::Free(why) | lease::Health::Held(why) => {
             writeln!(out, "lease: {why}")?;
             Ok(ExitCode::Success)
         }
+        // A VERDICT ABOUT THIS REPOSITORY, so `2` — never the `1` the predecessor
+        // spelled it. One table, no per-verb exception (non-negotiable rule 5).
         lease::Health::Wedged(why) => {
             writeln!(
                 err,
@@ -15374,6 +15394,51 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// **THE EXIT TABLE OVER EVERY `Health` ARM, AND THE PREDECESSOR'S NUMBERS
+    /// WERE DIFFERENT** (CLOUD-1148, retiring `mise-tasks/land-lock-check.sh`).
+    ///
+    /// That program answered `0` healthy, `1` wedged-or-garbage, `2` could not
+    /// look. The engine has one table with no per-verb exception, so a verdict
+    /// about this repository is `2` and a could-not-look is `3` — the two
+    /// non-zero answers with their numbers swapped. A port that carried the old
+    /// numbers over would report a wedged lease with the code the table reserves
+    /// for a reading nobody could take.
+    ///
+    /// Exhaustive over the four arms rather than over the two that refuse: a
+    /// `Wedged` mapped to `Success` is silent, and the healthy arms are what a
+    /// wrong mapping would have to hide behind.
+    #[test]
+    fn every_health_reading_maps_to_the_one_exit_table() {
+        let table = [
+            (lease::Health::Free(String::from("free")), ExitCode::Success),
+            (lease::Health::Held(String::from("held")), ExitCode::Success),
+            (
+                lease::Health::Wedged(String::from("wedged")),
+                ExitCode::Violation,
+            ),
+            (
+                lease::Health::Garbage(String::from("garbage")),
+                ExitCode::Violation,
+            ),
+        ];
+        for (health, expected) in table {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = report_health(&health, &mut out, &mut err).expect("report the reading");
+            assert_eq!(code, expected, "{health:?} maps to the wrong code");
+            // AND ONTO THE RIGHT CHANNEL. A refusal on stdout is invisible to a
+            // CI annotation reader, and a healthy reading on stderr reads as a
+            // problem in every log that colours it — so the code alone is only
+            // half of what a caller acts on.
+            let said = String::from_utf8_lossy(if expected == ExitCode::Success {
+                &out
+            } else {
+                &err
+            });
+            assert!(!said.is_empty(), "{health:?} said nothing on its channel");
+        }
+    }
 
     /// The whole decision as a table, because the branch that matters cannot be
     /// reached over a spawned process: this sandbox gives a test no TTY, so
