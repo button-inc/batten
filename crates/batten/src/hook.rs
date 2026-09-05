@@ -3710,6 +3710,46 @@ impl Policy {
             .unwrap_or(BYPASS_ENV)
     }
 
+    /// Whether [`BYPASS_ENV`] may suppress a refusal of this class (CLOUD-1357).
+    ///
+    /// **False for any class that declares an override route carrying a
+    /// precondition**, which is the generalisation of the carve-out `path write
+    /// refused` has had since CLOUD-1051. A class with such a route already has a
+    /// way through that leaves a record — `batten override request` generates its
+    /// questions from exactly this field, and `admit_mediated` honours the spent
+    /// admission — so taking the password away is a repair rather than a wall.
+    ///
+    /// **True for a class with no such route, and that is the row's own bound.**
+    /// Removing the hatch where nothing replaces it is the wall CLOUD-1357
+    /// explicitly refuses; each such class is a migration row of its own, which is
+    /// the tracking CLOUD-1051's scoping sentence owed and never got.
+    ///
+    /// A refusal carrying no class token at all keeps the hatch by construction: a
+    /// consumer `[[rule]]`-composed refusal is "deliberately not a Batten class …
+    /// no token an admission could bind", so it can declare no precondition and
+    /// there is nothing for an admission to bind against.
+    ///
+    /// Reads the same field [`crate::admission::questions_for`] does, so the two
+    /// cannot disagree about which classes have a route — a disagreement here
+    /// would mean a class the hatch stopped opening and no admission could open
+    /// either, which is the wall in its worst form.
+    ///
+    /// Pure: a registry lookup over the policy already in hand, which is what lets
+    /// [`adjudicate`] stay free of I/O, environment and clock.
+    #[must_use]
+    pub fn honours_hatch(&self, class: Option<&str>) -> bool {
+        let Some(class) = class else {
+            return true;
+        };
+        !self.verdicts.iter().any(|entry| {
+            entry.id == class
+                && entry.routes.iter().any(|route| {
+                    route.kind == crate::verdict::RouteKind::Override
+                        && route.precondition.is_some()
+                })
+        })
+    }
+
     /// This policy with every row whose declared hatch is in `set` removed
     /// (CLOUD-437).
     ///
@@ -3820,6 +3860,62 @@ pub fn adjudicate(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> De
 /// instead of a check repeated at each of the deny arms below. A deny site that
 /// forgot it would be a rule quietly unwaivable, which is exactly the asymmetry
 /// CLOUD-293 found and CLOUD-606 decided against.
+/// Adjudicate, then apply the hatch to the OUTCOME rather than to the chain.
+///
+/// # What CLOUD-1357 changed
+///
+/// `BATTEN_HOOK_BYPASS` used to suppress every refusal class but one. The
+/// argument against that shape was already written at [`BYPASS_ENV`] and applied
+/// to `path write refused` alone: *a refusal whose only way through is a string
+/// somebody knows is a password rather than a gate*. Nothing in it is specific to
+/// protected paths.
+///
+/// It is general now. A class declaring an override route with a precondition is
+/// not suppressed, because it already has a way through that leaves a record —
+/// `batten override request` generates its questions from that field and
+/// `admit_mediated` honours the spent admission. A class with no such route keeps
+/// the hatch, which is the bound CLOUD-1357 draws for itself: taking the password
+/// away where nothing replaces it is a wall, and each such class is a migration
+/// row of its own.
+///
+/// # The chain now RUNS on a bypassed call, and that retires an argument
+///
+/// The previous arm ran the two `protected_write` stages and nothing else,
+/// explaining that adjudicating there "rather than by hoisting the two gates"
+/// avoided reordering every refusal a caller sees. **That constraint is gone
+/// rather than worked around**: filtering the OUTCOME moves no gate, so every
+/// refusal is still raised by the row a reviewer would see quoted back, in the
+/// order it always was. The hoisting objection was correct about hoisting and
+/// does not reach this shape.
+///
+/// **The cost, stated rather than left for a profile to find.** A bypassed
+/// adjudicable call now walks the whole chain instead of two stages. That is pure
+/// CPU over an envelope already decoded and a policy already in hand —
+/// [`adjudicate`] is contractually free of I/O, environment and clock, and the
+/// config load this arm already paid since the protected gate stopped being
+/// bypassable is unchanged. A call with nothing to adjudicate still returns
+/// before any of it.
+///
+/// # `Ask` stays suppressible, deliberately
+///
+/// Only a `Deny` is held back. `admit_mediated` does not filter `Ask` — "an
+/// escalation is a question put to a person, and a record the asker wrote
+/// themselves is not an answer to it" — so an `Ask` has no admission route, and
+/// refusing to suppress one would be the wall this row refuses, not the repair it
+/// makes.
+fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decision {
+    let decision = adjudicated_gates(policy, envelope, facts);
+    if !facts.bypass {
+        return decision;
+    }
+    match decision {
+        Decision::Deny(refusal) if !policy.honours_hatch(refusal.verdict()) => {
+            Decision::Deny(refusal)
+        }
+        _ => Decision::Allow,
+    }
+}
+
 // `match_same_arms` would collapse the eight event arms below into one
 // `_ => Decision::Allow`. Refused for the reason `capabilities` and `encode_ask`
 // refuse it, and here the refusal IS the feature: the arms agree on the ANSWER
@@ -3829,17 +3925,17 @@ pub fn adjudicate(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> De
 // nobody wrote for it, which is what registering on every surface makes likely
 // rather than hypothetical.
 #[allow(clippy::match_same_arms)]
-fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decision {
+fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decision {
     // Destructured once so the chain below reads as it always has. The bundle is
     // about how the fact set TRAVELS; each gate still names the single fact it
     // decides on, which is what keeps a reader able to see that `shape_rules`
     // cannot see a receipt.
-    let Facts {
-        bypass,
-        receipts,
-        keys,
-        ..
-    } = *facts;
+    //
+    // `bypass` is deliberately NOT among them (CLOUD-1357). No gate in this chain
+    // reads the hatch any more: the chain decides what the policy says, and
+    // [`adjudicated`] decides which of those refusals the hatch may suppress. A
+    // gate that could still see it would be a second place the answer is made.
+    let Facts { receipts, keys, .. } = *facts;
     // The end-of-turn gate (CLOUD-85), and it no longer DENIES (CLOUD-889).
     //
     // It returned `Decision::Deny` here, which is exit 2 — the channel that
@@ -3926,41 +4022,6 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
         Event::Unrecognized => return Decision::Allow,
     }
     if policy.is_empty() {
-        return Decision::Allow;
-    }
-    // THE HATCH NO LONGER ANSWERS FOR THE PROTECTED-PATH GATE, and that is the
-    // whole of what `BATTEN_HOOK_BYPASS` stops being able to do.
-    //
-    // It was the only way through a `path write refused` refusal, which made
-    // that refusal a password: a knowable string the guarded party can set, so it
-    // recorded nothing and stopped nobody. §8's property — "an agent's context can
-    // never influence the rules it is judged by" — was already false, because the
-    // agent could set the variable. This repository ruled on exactly that shape
-    // for `issue file same`: *the point of the admission mechanism is that
-    // the bare variable stops working*. The class declares an override route now
-    // (`articulate the write`) and the boundary honours a spent admission
-    // (`admit_mediated`), so there is a way through that leaves a record — which
-    // is what makes taking this one away a repair rather than a wall.
-    //
-    // ADJUDICATED HERE RATHER THAN BY HOISTING THE TWO GATES, because their
-    // placement below is argued: `CommandParsed` runs after the explicit `[[rule]]`
-    // rows so "a row a reviewer wrote by hand should be the one they see quoted
-    // back". Hoisting would reorder every refusal a caller sees. Inside this branch
-    // there is no ordering to disturb — the alternative was allowing everything.
-    //
-    // BOTH STAGES, so the hatch closes on both surfaces. Covering only the write
-    // tool would leave `tee batten.toml` bypassable while `Write` was not, which is
-    // the kind of half-closed gate that reads as closed.
-    if bypass {
-        for stage in [WriteStage::ToolNamed, WriteStage::CommandParsed] {
-            match protected_write(policy, envelope, stage) {
-                decided @ Decision::Deny(_) => return decided,
-                Decision::Allow
-                | Decision::Ask(_)
-                | Decision::Waived(_)
-                | Decision::Preapproved(_) => {}
-            }
-        }
         return Decision::Allow;
     }
     // The write gate, before the command gate and not inside it: a write tool
@@ -8852,7 +8913,20 @@ mod tests {
             patterns: Vec::new(),
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
-            verdicts: Vec::new(),
+            // THE VENDORED REGISTRY, because every real `Policy` carries it and a
+            // case built on an empty one tests a shape the engine cannot produce
+            // (CLOUD-1357). `Policy::from_resolved` builds this field with
+            // `policy::registry_for`, which merges the vendored classes into
+            // whatever the consumer declared — so `path write refused` and its
+            // `articulate the write` route are present in every loaded policy.
+            //
+            // It became load-bearing when the hatch's carve-out stopped being a
+            // branch naming one gate and became a property of the CLASS: with an
+            // empty registry `honours_hatch` cannot see the precondition, reads
+            // the class as bare, and suppresses a refusal production never
+            // suppresses. Found by `the_bypass_hatch_does_not_reach_the_protected_gate`
+            // going red — the fixture was the thing that was wrong.
+            verdicts: crate::verdict::vendored(),
             root: None,
             shapes: Vec::new(),
             fail_on_warning: false,

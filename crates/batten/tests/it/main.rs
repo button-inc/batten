@@ -57,6 +57,7 @@ mod board_record;
 mod board_state_claim;
 mod bot_lane;
 mod bundle;
+mod bypass_precondition;
 mod bypass_scrub;
 mod call_arguments;
 mod call_background_flag;
