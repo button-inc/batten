@@ -36,6 +36,7 @@
 // the former per-file allowances are preserved on each module below.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod abandon_matrix;
 mod acceptance_corpus;
 mod acquisition_metric;
 mod acquisition_sweep;

@@ -389,19 +389,39 @@ fanin_job_declared if {
 	base_name(object.get(job, "name", key)) == base_name(fanin_check)
 }
 
-# THE DECLARATION IS READ, NOT RESTATED. A literal path in the abandon task would
+# THE DECLARATION IS READ, NOT RESTATED. A literal path in the abandon site would
 # be a second authority for one fact, and the one that drifts is always the copy
-# nobody edits. Read as LINES because these are shell programs, which no parser
-# here builds a document for.
+# nobody edits.
+#
+# REPOINTED AT THE ENGINE (CLOUD-1148), AND THE DELETION DOES NOT SILENCE THIS.
+# The subject was `mise-tasks/abandon-matrix.sh`, read as LINES because a shell
+# program has no parser here. Retiring it does not make these two rules go
+# quiet — `input.tree.lines[<gone>]` is undefined, so both helpers go FALSE and
+# both violations FIRE. A retirement that only deleted the files would have
+# reported two findings naming paths that no longer exist, which is why the
+# repoint lands in the same change.
+#
+# `crates/batten/src/lib.rs` is read as lines for the same reason its predecessor
+# was: this asks whether one identifier appears at the site, which is a text
+# question rather than a structural one, and building a Rust document for it
+# would be a parser this module does not need.
+#
+# AND THE IDENTIFIER IS THE ENGINE'S OWN. `CI_FANIN_WORKFLOW` is what the
+# compensation reads — the workflow PATH a run carries, which is what
+# `land::worthless` compares against. Its sibling `CI_FANIN_CHECK` is a check
+# NAME and belongs to `checks_green::Roster`; the engine read the wrong one of
+# the two for the whole of this branch, so `spared` was always 0 and the fan-in's
+# own run was cancelled with the rest. Naming the variable here rather than the
+# task is what makes that a finding next time.
 abandon_reads_declaration if {
-	some line in input.tree.lines["mise-tasks/abandon-matrix.sh"]
+	some line in input.tree.lines["crates/batten/src/lib.rs"]
 	contains(line, "CI_FANIN_WORKFLOW")
 }
 
 violation contains {
 	"rule": "fan-in-is-wired",
 	"verdict": "job declare duplicate",
-	"subjects": [{"path": "mise-tasks/abandon-matrix.sh"}],
+	"subjects": [{"path": "crates/batten/src/lib.rs"}],
 } if {
 	governed
 	fanin_workflow
@@ -411,15 +431,20 @@ violation contains {
 # ANTI-VACUITY. Every assertion above is about making the abandon SAFE; none of
 # them notices that it is never called. A mechanism nothing invokes passes each
 # of them and saves nothing.
+#
+# The predecessor asked whether `mise-tasks/land.sh` named `abandon-matrix`. The
+# successor's equivalent is whether the lap's compensation dispatch reaches
+# `land::abandon` at all — the same question about the same wiring, one layer
+# down, and still the only one of these rules that notices a dead mechanism.
 lander_calls_abandon if {
-	some line in input.tree.lines["mise-tasks/land.sh"]
-	contains(line, "abandon-matrix")
+	some line in input.tree.lines["crates/batten/src/lib.rs"]
+	contains(line, "land::abandon")
 }
 
 violation contains {
 	"rule": "fan-in-is-wired",
 	"verdict": "job reach dead",
-	"subjects": [{"path": "mise-tasks/land.sh"}],
+	"subjects": [{"path": "crates/batten/src/lib.rs"}],
 } if {
 	governed
 	fanin_workflow
@@ -830,8 +855,10 @@ sound_input := {"tree": {
 		"release-plz.toml": {"pr": {"pr_draft": true}},
 	},
 	"lines": {
-		"mise-tasks/abandon-matrix.sh": ["run=$CI_FANIN_WORKFLOW"],
-		"mise-tasks/land.sh": ["mise run abandon-matrix"],
+		"crates/batten/src/lib.rs": [
+			"let fanin = std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default();",
+			"let report = land::abandon(&repo, &sha, &fanin);",
+		],
 		# The foreign leg the anti-vacuity term needs a subject from: without it a
 		# clean fixture would be clean because nothing was looked at.
 		".github/workflows/rust.yml": ["      - run: mise exec -- cargo nextest run --workspace"],
@@ -1055,8 +1082,18 @@ test_a_fanin_workflow_declaring_no_such_job_is_refused if {
 	f.verdict == "workflow declare empty"
 }
 
+# A SITE THAT RESTATES THE PATH RATHER THAN READING THE DECLARATION. The literal
+# still reaches the abandon, so nothing observable breaks until somebody moves the
+# fan-in — which is why this is a gate and not a review note.
+#
+# It also covers the sibling-variable defect that shipped on this branch: reading
+# `CI_FANIN_CHECK` here compiles, runs, and cancels the fan-in's own run, and this
+# fixture is what a version doing that looks like.
 test_an_abandon_that_restates_the_path_is_refused if {
-	lines := object.union(sound_input.tree.lines, {"mise-tasks/abandon-matrix.sh": ["run=.github/workflows/ci.yml"]})
+	lines := object.union(sound_input.tree.lines, {"crates/batten/src/lib.rs": [
+		"let fanin = String::from(\".github/workflows/ci.yml\");",
+		"let report = land::abandon(&repo, &sha, &fanin);",
+	]})
 	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
 	some f in found
 	f.verdict == "job declare duplicate"
@@ -1065,7 +1102,7 @@ test_an_abandon_that_restates_the_path_is_refused if {
 # THE ANTI-VACUITY TERM. Every other fan-in clause makes the abandon SAFE; none
 # of them notices it is never called.
 test_a_lander_that_never_abandons_is_refused if {
-	lines := object.union(sound_input.tree.lines, {"mise-tasks/land.sh": ["mise run ci-wait"]})
+	lines := object.union(sound_input.tree.lines, {"crates/batten/src/lib.rs": ["let fanin = std::env::var(\"CI_FANIN_WORKFLOW\").unwrap_or_default();"]})
 	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
 	some f in found
 	f.verdict == "job reach dead"
