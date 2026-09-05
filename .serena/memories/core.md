@@ -581,6 +581,21 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   identity would re-mint on every unrelated append), which is what gets them
   waivers, `-J`, the exit contract and the store for free. Consumer #1 adoption
   is deliberately NOT here (the issue's own stated assumption 2).
+- `deferral.rs` — a deferred decision's REVERSAL CONDITION as data (CLOUD-759):
+  `[[deferral]]` carries the `issue` that owns it, the `fact` the condition
+  compares, the value it `reaches`, and a `reason` the gate deliberately does
+  not compare. `fact` is a CLOSED set — an open one would let a row name a fact
+  nothing produces and read as watched while nothing watched it. Answers
+  CLOUD-686's diagnosis, which had no mechanism: two deferrals were found
+  discharged-but-still-blocking by accident in one session, both reasoning from
+  a stale copy of one fact. The **bound is stated**: only conditions expressible
+  over facts the tree holds, and reporting the reachable half of a conjunction
+  is still the whole finding. The gate is `lint.rs`'s `deferral-reversible`;
+  dropping a row is `trust.rs`'s `deferral-unwatched`, keyed on the ISSUE
+  because restating a condition edits `reaches` and reports nothing while
+  removing the row is what stops the tree watching. An unreadable manifest
+  reports NOTHING — the could-not-look direction for a verb that only adds
+  refusals.
 - `lint.rs` — `batten config lint` (CLOUD-87): the policy smells a _valid_
   config can still carry. Complements `trust.rs` rather than replacing it —
   `--config-from` makes a weakening ineffective, this makes it visible. Two

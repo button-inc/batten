@@ -6688,6 +6688,33 @@ required_checks = ["final"]
 [host]
 delete_branch_on_merge = true
 
+# Decisions deferred on a condition this tree can check (CLOUD-759). The
+# condition lives here as DATA rather than as prose in a tracker body, which is
+# the whole mechanism: a reversal condition written in an issue is re-read by a
+# human or by nobody.
+#
+# THE TABLE IS EMPTY, AND IT IS EMPTY BECAUSE THE GATE CLEARED IT. Two deferrals
+# were live when this landed, both found by accident in one session on
+# 2026-08-20 while looking for something else. Declaring them here reported both
+# on the first run:
+#
+#   batten.toml:deferral[CLOUD-310].reaches deferral-reversible
+#   batten.toml:deferral[CLOUD-647].reaches deferral-reversible
+#
+# CLOUD-647 deferred regorus on `rust-version = 1.88.0` against a 1.85.0 pin.
+# The pin is 1.98 and regorus is a dependency: fully discharged.
+#
+# CLOUD-310 deferred ast-grep on a conjunction — "declares a stable public API
+# AND its rust-version is at or below this repo's pin". The MSRV half is
+# satisfied; the API half is not expressible over any fact this tree holds, so
+# the deferral no longer has a version-gated reversal and its row is RESTATED
+# out rather than left to refuse forever. That is the remedy §5 names, and both
+# issues carry the measurement.
+#
+# An empty table is therefore the honest state rather than a disabled gate — the
+# same reading `DEPRECATED_KEYS` carries one file over. A row added here is
+# checked on every `config lint`.
+
 # ---------------------------------------------------------------------------
 # The build tree this repository defends, and the two floors it defends it with
 # (CLOUD-766, re-measured under CLOUD-861, split in two under CLOUD-1030).

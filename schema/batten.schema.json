@@ -103,6 +103,13 @@
         }
       ]
     },
+    "deferral": {
+      "description": "Decisions deferred on a condition the tree can check (CLOUD-759).\n\nThe condition lives here as DATA rather than as prose in a tracker body,\nwhich is the whole mechanism: a reversal condition written in an issue is\nre-read by a human or by nobody, and both measured instances were found by\naccident while looking for something else.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Deferral"
+      }
+    },
     "design": {
       "description": "The design-evidence audit's one bound (CLOUD-53): how large a single\ncapture may be. Absent means the engine default — the corpus arrives on\nstdin and the predicates are the engine's, so a repository that declares\nnothing still gets the full gate. The type and the gates are\n[`crate::design`].",
       "anyOf": [
@@ -1266,6 +1273,35 @@
         "classes"
       ]
     },
+    "Deferral": {
+      "description": "One deferred decision and the condition that would reverse it.",
+      "type": "object",
+      "properties": {
+        "fact": {
+          "description": "The fact the condition compares. One name today, and a closed set on\npurpose: an open one would let a row name a fact nothing produces and\nread as watched while nothing watched it.",
+          "$ref": "#/$defs/Fact"
+        },
+        "issue": {
+          "description": "The row that owns the decision. A pointer, never the prose.",
+          "type": "string"
+        },
+        "reaches": {
+          "description": "The value at which the deferral reverses, as a version.\n\nRead as **at or above**: the condition holds once the fact reaches this.\nThat is the direction both measured deferrals are written in — *\"its\n`rust-version` is at or below this repo's pin\"* is this comparison with\nthe operands named the other way round.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why the decision was deferred, for the reader who meets the refusal.\n\nProse, and deliberately not compared: the gate decides on `reaches`, and\nthis is what tells a human which of the two remedies applies.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "issue",
+        "fact",
+        "reaches",
+        "reason"
+      ]
+    },
     "Design": {
       "description": "The `[design]` table: the one config key this gate reads.\n\nDeliberately a single key. The corpus is stdin's, the predicates are the\nengine's, and the only thing a repository gets to say is how large a single\ncapture may be before it is worth a second look.",
       "type": "object",
@@ -1486,6 +1522,16 @@
           "description": "The trailing run of assistant turns carrying no tool call — the monologue\nshape (CLOUD-1344), and deliberately the first member of this family\nbecause it needs no hashing: it reduces `Event::Turn`, which is already\ntyped, so no argument or result is read even internally.",
           "type": "string",
           "const": "agent-turn-run"
+        }
+      ]
+    },
+    "Fact": {
+      "description": "The facts a deferral may compare against.",
+      "oneOf": [
+        {
+          "description": "The workspace's `rust-version`.",
+          "type": "string",
+          "const": "rust-version"
         }
       ]
     },

@@ -710,6 +710,7 @@ pub enum WeakeningKind {
     /// A `[[provision]]` row is gone, so a pinned tool stops being verified.
     ProvisionRemoved,
     /// A required check is gone from the `[ci]` projection (CLOUD-54).
+    CiMergeCheckRemoved,
     /// A `[host]` key the authority projected and this tree no longer does
     /// (CLOUD-380).
     ///
@@ -718,7 +719,14 @@ pub enum WeakeningKind {
     /// `config lint --host-rules` asking about a setting at all, with no other
     /// trace. The same shape as `ci-merge-check-removed` one field over.
     HostSettingUnprojected,
-    CiMergeCheckRemoved,
+    /// A `[[deferral]]` row the authority declared and this tree no longer does
+    /// (CLOUD-759).
+    ///
+    /// Removing a row stops the tree watching a condition, which is the exact
+    /// failure the table exists to close — a deferral whose reversal nothing
+    /// notices. Removal is legitimate when the decision is DISCHARGED or its
+    /// condition restated, and both are things a reviewer should see said.
+    DeferralUnwatched,
     /// The merge-method constraint admits a method it did not, or stopped
     /// constraining methods at all.
     CiMergeMethodAdded,
@@ -891,6 +899,7 @@ impl WeakeningKind {
         WeakeningKind::MarkerRemoved,
         WeakeningKind::ExecPatternRemoved,
         WeakeningKind::ProvisionRemoved,
+        WeakeningKind::DeferralUnwatched,
         WeakeningKind::HostSettingUnprojected,
         WeakeningKind::CiMergeCheckRemoved,
         WeakeningKind::CiMergeMethodAdded,
@@ -954,6 +963,7 @@ impl WeakeningKind {
             WeakeningKind::ExecPatternRemoved => "exec-pattern-removed",
             WeakeningKind::ProvisionRemoved => "provision-removed",
             WeakeningKind::HostSettingUnprojected => "host-setting-unprojected",
+            WeakeningKind::DeferralUnwatched => "deferral-unwatched",
             WeakeningKind::CiMergeCheckRemoved => "ci-merge-check-removed",
             WeakeningKind::CiMergeMethodAdded => "ci-merge-method-added",
             WeakeningKind::AttributionDenyRemoved => "attribution-deny-removed",
@@ -1222,6 +1232,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "design",
         coverage: Coverage::Compared(&[WeakeningKind::DesignCaptureLimitRaised]),
+    },
+    FieldCoverage {
+        field: "deferrals",
+        coverage: Coverage::Compared(&[WeakeningKind::DeferralUnwatched]),
     },
     FieldCoverage {
         field: "host",
@@ -2122,6 +2136,7 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
 
     found.extend(ci_weakenings(base.ci.as_ref(), working.ci.as_ref()));
     found.extend(host_weakenings(base.host.as_ref(), working.host.as_ref()));
+    found.extend(deferral_weakenings(base, working));
     found.extend(attribution_weakenings(
         base.attribution.as_ref(),
         working.attribution.as_ref(),
@@ -2442,13 +2457,33 @@ fn embedded_entries(set: &crate::budget::BudgetSet) -> Vec<String> {
         .collect()
 }
 
-/// Required checks dropped, and merge methods admitted.
+/// A `[[deferral]]` row the base declared and the working tree no longer does
+/// (CLOUD-759).
 ///
-/// The projection is a copy of the host ruleset a gate polices (CLOUD-54), so
-/// dropping a check from it is how a branch would stop `config lint --host-rules`
-/// asking about that check at all. An absent `allowed_merge_methods` is
-/// *unconstrained*, which is why losing the key is a weakening on its own and
-/// carries a key of its own rather than one entry per method nobody listed.
+/// Extracted rather than inlined for `recorder_weakenings`' reason: `weakenings`
+/// is held to a line ceiling, and a comparison that grows a surface should grow
+/// a function rather than push its caller past a limit that exists to keep it
+/// readable.
+///
+/// Keyed on the ISSUE, which is the row's identity: restating a condition edits
+/// `reaches` and reports nothing, while dropping the row entirely is what stops
+/// the tree watching.
+fn deferral_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    let issues = |config: &Config| -> Vec<String> {
+        config
+            .deferrals
+            .iter()
+            .map(|deferral| deferral.issue.clone())
+            .collect()
+    };
+    removed_entries(
+        WeakeningKind::DeferralUnwatched,
+        &issues(base),
+        &issues(working),
+        "deferral",
+    )
+}
+
 /// A `[host]` key the base projected and the working tree no longer does
 /// (CLOUD-380).
 ///
@@ -2492,6 +2527,13 @@ fn host_weakenings(
     .collect()
 }
 
+/// Required checks dropped, and merge methods admitted.
+///
+/// The projection is a copy of the host ruleset a gate polices (CLOUD-54), so
+/// dropping a check from it is how a branch would stop `config lint --host-rules`
+/// asking about that check at all. An absent `allowed_merge_methods` is
+/// *unconstrained*, which is why losing the key is a weakening on its own and
+/// carries a key of its own rather than one entry per method nobody listed.
 fn ci_weakenings(base: Option<&crate::ci::Ci>, working: Option<&crate::ci::Ci>) -> Vec<Weakening> {
     let mut found = Vec::new();
     let Some(base) = base else {
@@ -4107,6 +4149,31 @@ mod tests {
                 "`{key}` is ranked as a narrowing without saying why"
             );
         }
+    }
+
+    #[test]
+    fn dropping_a_deferral_is_a_weakening_and_restating_its_condition_is_not() {
+        // CLOUD-759. Removing a row stops the tree watching a condition, which is
+        // the failure the table exists to close. Restating one — moving `reaches`
+        // because the condition changed — is the sanctioned remedy and reports
+        // nothing: the row is still watched, on different terms.
+        let row = |reaches: &str| {
+            format!(
+                "[[deferral]]\nissue = \"CLOUD-1\"\nfact = \"rust-version\"\n\
+                 reaches = \"{reaches}\"\nreason = \"why it waits\"\n"
+            )
+        };
+        let base = config(&row("1.88.0"));
+        let dropped = config("");
+        let found = only(&base, &dropped);
+        assert_eq!(found.kind, WeakeningKind::DeferralUnwatched);
+        assert!(found.key.contains("CLOUD-1"));
+
+        let restated = config(&row("1.99.0"));
+        assert!(
+            weakenings(&base, &restated).is_empty(),
+            "restating a condition is the remedy, not a weakening"
+        );
     }
 
     #[test]

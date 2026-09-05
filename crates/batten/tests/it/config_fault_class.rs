@@ -42,6 +42,16 @@ const FAULTS: &[(&str, &str, &str)] = &[
          [[verb]]\nverb = \"frobnicate\"\neffect = \"write\"\n",
     ),
     (
+        // CLOUD-759. A `reaches` that is not a version could never be compared,
+        // so the row would read as a watched condition while nothing watched it
+        // — the table's own defect, arriving through the table.
+        "deferral declare refused",
+        "deferral",
+        "version = 1\n\
+         [[deferral]]\nissue = \"CLOUD-1\"\nfact = \"rust-version\"\n\
+         reaches = \"whenever\"\nreason = \"why it waits\"\n",
+    ),
+    (
         "pattern declare refused",
         "pattern",
         "version = 1\n[[pattern]]\nid = \"unclosed\"\nregex = \"[\"\n",

@@ -269,6 +269,14 @@ pub fn smells(
 
     let mut found = Vec::new();
 
+    // A DEFERRAL WHOSE CONDITION NOW HOLDS (CLOUD-759). Reported here rather than
+    // as a rule of its own because the subject IS `batten.toml` — the row is the
+    // deferral — and because that makes it CLEARABLE IN THE TREE, which §5
+    // requires: discharging or restating the deferral is an edit to this file,
+    // where a refusal only a board action could clear would block every landing
+    // on a change that cannot affect it.
+    found.extend(deferral_smells(&config, source));
+
     // A set declared and empty: the config uses the feature and the feature
     // covers nothing. Absence is not flagged — see the module docs.
     for (declared, id) in [
@@ -612,6 +620,68 @@ pub fn host_drift(
             id: drift.id,
         })
         .collect())
+}
+
+/// The smell id a reversed deferral raises.
+pub const DEFERRAL_REVERSED: &str = "deferral-reversible";
+
+/// Deferrals whose reversal condition the tree can now show holds (CLOUD-759).
+///
+/// **The pin is read from the workspace manifest, and that is one authority
+/// rather than two.** The task runner's tool pin is the authority and the
+/// manifest's `rust-version` is a derived copy `msrv-pin-agreement` already
+/// holds to it, so the two cannot disagree without that gate firing first. This
+/// reads the derived copy because it is the one a Cargo consumer resolves
+/// against.
+///
+/// A manifest this cannot read reports NOTHING, which is the could-not-look
+/// direction for a gate that adds refusals: a deferral is raised only when the
+/// tree can show its condition holds.
+fn deferral_smells(config: &Config, source: &str) -> Vec<Smell> {
+    if config.deferrals.is_empty() {
+        return Vec::new();
+    }
+    // Resolved BESIDE THE CONFIG, never against the process's directory: `config
+    // lint` is routinely pointed at another tree, and reading `./Cargo.toml`
+    // there would compare a declared deferral against whatever manifest the
+    // caller happened to be standing in.
+    let Some(pin) = workspace_rust_version(source) else {
+        return Vec::new();
+    };
+    config
+        .deferrals
+        .iter()
+        .filter(|deferral| match deferral.fact {
+            crate::deferral::Fact::RustVersion => {
+                crate::deferral::satisfied(&deferral.reaches, &pin)
+            }
+        })
+        .map(|deferral| Smell {
+            // POINTER, NEVER THE PROSE (rule 4): the row that owns the decision
+            // and the fact that moved, never a line of the issue's reasoning.
+            at: Where::Key(format!("deferral[{}].reaches", deferral.issue)),
+            id: DEFERRAL_REVERSED,
+        })
+        .collect()
+}
+
+/// The workspace `rust-version`, or `None` when the manifest cannot be read.
+fn workspace_rust_version(source: &str) -> Option<String> {
+    let beside = std::path::Path::new(source)
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("Cargo.toml");
+    let manifest = std::fs::read_to_string(beside).ok()?;
+    // `toml::from_str`, never `str::parse`: the `FromStr` impl reads a single
+    // VALUE and rejects a document at its first table header, so parsing a
+    // manifest that way silently yields `None` and the gate reports nothing.
+    let value: toml::Value = toml::from_str(&manifest).ok()?;
+    value
+        .get("workspace")?
+        .get("package")?
+        .get("rust-version")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 /// The trailer key that declares a deliberate weakening.

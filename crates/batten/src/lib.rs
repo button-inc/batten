@@ -32,6 +32,7 @@ pub mod config;
 pub mod contract;
 pub mod decision;
 pub mod defects;
+pub mod deferral;
 pub mod design;
 pub mod doctor;
 pub mod drain;
@@ -4894,9 +4895,35 @@ fn run_override_spend(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let root = Path::new(".");
-    // Resolved rather than taken, exactly as `request` resolves them.
-    let config = resolve::resolve(root, overrides)?;
-    let anchor = admission_anchor(root, &config, rule, subject)?.token();
+    // READ FROM THE RECORD, NEVER RE-DERIVED, and the asymmetry with `request` is
+    // the whole point (CLOUD-1125). `Situation` is "the five fields a caller can
+    // know WITHOUT holding the record" — and this caller holds it: the address is
+    // its argument. The two other callers of `admitted` genuinely do not, which
+    // is why they resolve an anchor and this must not.
+    //
+    // Re-deriving here would reintroduce the defect one verb over. The anchor is
+    // resolved by running the rule, so a second resolution answers about the tree
+    // AT SPEND TIME, and any edit between the mint and the spend would refuse an
+    // admission that is exactly as valid as when it was issued. That is the race
+    // this row was opened to remove, and `land` mints and spends inside a loop
+    // that rebases between the two.
+    //
+    // It is not a weakening: `recomputes` re-hashes the WHOLE binding, the anchor
+    // included, so a forged one cannot hash to the address the caller presented.
+    // The address is the check, and re-running a tree scan adds nothing it does
+    // not already pin.
+    //
+    // It also stops `override spend` costing a full policy scan of the tree —
+    // measured at ~90s on this repository, on a verb whose entire job is to
+    // render a block it was handed the address for.
+    let anchor = admission::load(root, admission).map_or_else(
+        // No record under that address. Passing the empty token rather than
+        // failing keeps the refusal where it belongs: `consume` reports
+        // `Unknown`, which is what an unrecognised address IS, instead of this
+        // line inventing a different diagnostic for the same fact.
+        String::new,
+        |record| record.binding.anchor.token(),
+    );
     let (epoch, _) = epoch::describe(root, overrides.config_from.as_deref())?;
     let situation = admission::Situation {
         rule,
@@ -4945,40 +4972,6 @@ fn run_override_spend(
     }
 }
 
-/// `batten override request` — issue an admission for one situation
-/// (CLOUD-1051).
-///
-/// # What the caller supplies and what this resolves
-///
-/// The caller names the rule, the class and the gate's canonical subject; the
-/// other two binding terms — HEAD and the config epoch — are resolved HERE. That
-/// asymmetry is the point: an admission whose HEAD the caller could choose would
-/// bind nothing, and one whose epoch the caller could choose would survive the
-/// policy change that made it unnecessary.
-///
-/// # The questions, and the two-step this produces
-///
-/// They are generated from the class's own declared `override.precondition`, so
-/// a class that declares no override route cannot be overridden at all — the
-/// right default, and the one `verdict::validate` already composes with by
-/// refusing a class whose ONLY route is an override.
-///
-/// Run with nothing on stdin, this PRINTS the questions and exits `1`. That is
-/// the "an unanswered question yields no admission" clause and the
-/// re-presentation of the declined routes in one step, at the last cheap moment
-/// — which is what catches the reader who never received route 1 (CLOUD-1050
-/// defect B, measured).
-///
-/// # It never grades an answer
-///
-/// Non-negotiable rule 3. The predicate is presence and non-emptiness; anything
-/// stronger is a model verdict inside a gate, which would be worse than today's
-/// password.
-///
-/// # Errors
-///
-/// Returns a [`error::UsageError`] for an unknown class or a class that declares
-/// no override route, and an internal error when the store cannot be written.
 /// The [`admission::Anchor`] a `(rule, subject)` pair is answered about
 /// (CLOUD-1125).
 ///
@@ -4990,6 +4983,18 @@ fn run_override_spend(
 /// same scan the gate does, so the two cannot disagree about which finding is
 /// being answered, which is the property the row buys.
 ///
+/// **A MEDIATED REFUSAL REACHES THE FALLBACK BY CONSTRUCTION, and that is what
+/// keeps the two callers agreeing.** `admit_mediated` only ever looks up a
+/// `Call` anchor, so a `Finding` one minted for a hook refusal would be a silent
+/// no-op — answered, spent, and queried by nothing. It cannot be minted: a rule
+/// id is unique across the whole `[[rule]]` table ([`rules::validate`]) and each
+/// row declares ONE scope, so a mediated rule's id names no tree-scoped row, and
+/// the `Scope::Tree` run below skips a row whose scope is not `Tree` before it
+/// can produce a finding. The match count is therefore `0` for every mediated
+/// rule, whatever subject it carries.
+/// `a_mint_for_a_mediated_rule_anchors_the_call_not_a_tree_finding` pins it,
+/// because the property lives two files away from the code that relies on it.
+///
 /// **Falls back to [`admission::Anchor::Call`] rather than failing**, and the
 /// fallback is never weaker than what shipped before: a situation with no tree
 /// finding behind it — a mediated refusal, or a protocol-level mint — binds the
@@ -4997,9 +5002,14 @@ fn run_override_spend(
 /// it cannot do is suppress a tree finding, because `apply_admissions` builds a
 /// `Finding` anchor and the two tokens are tagged apart.
 ///
-/// Ambiguity resolves to the fallback for the same reason: two findings sharing
-/// `(rule, path)` mean the pair does not address one of them, and binding either
-/// would suppress something nobody answered about.
+/// **Ambiguity REFUSES rather than falling back**, and the asymmetry with the
+/// absent case is the point. Two findings sharing `(rule, path)` mean the pair
+/// does not address one of them — but falling back here would be a silent
+/// no-op rather than a weaker binding: `apply_admissions` queries a `Finding`
+/// anchor, so a `Call` one minted for a pair that DOES name tree findings is
+/// looked up by nothing. The caller would answer the questions, spend the
+/// address, and suppress none of them. A refusal that says how many findings
+/// the pair reaches beats an override that appears to work.
 fn admission_anchor(
     root: &Path,
     config: &resolve::Resolved,
@@ -5020,8 +5030,22 @@ fn admission_anchor(
     // authority. Asking it here would let a mint refuse because some other
     // module's class is unraised, which is a verdict about the config reported at
     // a verb that is answering a refusal.
+    // NARROWED TO THE ONE RULE, because the filter below discards every other
+    // finding anyway and running the rest is work whose result is thrown away.
+    // `RunOverSelection` narrows the CHECKS; this narrows the WORK, and the two
+    // are the same statement made at two levels — a mint answers about one rule
+    // over one subject, so every other module's evaluation is cost with no
+    // reader. Measured before this line existed: `override request` and
+    // `override spend` each ran a full policy scan of the tree, ~90s on this
+    // repository, on the path `land` mints inside.
+    let selected: Vec<_> = config
+        .rules
+        .iter()
+        .filter(|declared| declared.id == rule)
+        .cloned()
+        .collect();
     let Ok(scan) = rules::run_all_over(
-        &config.rules,
+        &selected,
         &config.provisions,
         policy::Vocabulary {
             patterns: &config.patterns,
@@ -5064,6 +5088,40 @@ fn admission_anchor(
     }
 }
 
+/// `batten override request` — issue an admission for one situation
+/// (CLOUD-1051).
+///
+/// # What the caller supplies and what this resolves
+///
+/// The caller names the rule, the class and the gate's canonical subject; the
+/// other two binding terms — HEAD and the config epoch — are resolved HERE. That
+/// asymmetry is the point: an admission whose HEAD the caller could choose would
+/// bind nothing, and one whose epoch the caller could choose would survive the
+/// policy change that made it unnecessary.
+///
+/// # The questions, and the two-step this produces
+///
+/// They are generated from the class's own declared `override.precondition`, so
+/// a class that declares no override route cannot be overridden at all — the
+/// right default, and the one `verdict::validate` already composes with by
+/// refusing a class whose ONLY route is an override.
+///
+/// Run with nothing on stdin, this PRINTS the questions and exits `1`. That is
+/// the "an unanswered question yields no admission" clause and the
+/// re-presentation of the declined routes in one step, at the last cheap moment
+/// — which is what catches the reader who never received route 1 (CLOUD-1050
+/// defect B, measured).
+///
+/// # It never grades an answer
+///
+/// Non-negotiable rule 3. The predicate is presence and non-emptiness; anything
+/// stronger is a model verdict inside a gate, which would be worse than today's
+/// password.
+///
+/// # Errors
+///
+/// Returns a [`error::UsageError`] for an unknown class or a class that declares
+/// no override route, and an internal error when the store cannot be written.
 fn run_override_request(
     rule: &str,
     token: &str,

@@ -822,6 +822,17 @@ scope = "tree"
 bundle = "policy-admits/"
 severity = "deny"
 
+# A SECOND ROW UNDER A SECOND SCOPE, and the subject deliberately names a file
+# the tree rule also refuses. That collision is what
+# `a_mint_for_a_mediated_rule_anchors_the_call_not_a_tree_finding` measures.
+[[rule]]
+id = "mediated-refuses"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "never-matches-anything"
+reason = "the fixture's mediated row; it exists to be minted against, never to fire"
+
 [[verdict]]
 id = "always probe probe"
 gloss = "the fixture's row refuses unconditionally"
@@ -1069,4 +1080,118 @@ fn a_mediated_anchor_and_a_finding_anchor_are_not_interchangeable() {
     // fail-closed direction for a suppression.
     assert_eq!(Anchor::parse("abc123"), None);
     assert_eq!(Anchor::parse("sha:abc123"), None);
+}
+
+#[test]
+fn a_mint_for_a_mediated_rule_anchors_the_call_not_a_tree_finding() {
+    // THE ROUTING THE MINT DOES NOT ASK ABOUT, pinned here because it holds by a
+    // property stated in another file. `admission_anchor` prefers a `Finding`
+    // anchor whenever the scan it runs matches `(rule, subject)`, while
+    // `admit_mediated` only ever looks up a `Call` one — so a mint that returned
+    // a `Finding` anchor for a mediated refusal would be a silent no-op: the
+    // caller answers the questions, spends the address, and the hook finds
+    // nothing.
+    //
+    // It cannot happen, and the reason is two rules away: a rule id is unique
+    // across the whole `[[rule]]` table (`rules::validate`) and each row declares
+    // ONE scope, so a mediated rule's id reaches no tree-scoped row, and
+    // `policy_rule` skips a row whose scope is not `Tree` before it can produce a
+    // finding. The subject here is `a.rs` — the very path the tree rule refuses —
+    // so the pair a naive scan would match on is present and the anchor is still
+    // the call's.
+    use batten::admission::{Anchor, Record};
+
+    let root = admits_fixture("mediated-scope");
+    let issued = common::run_with_stdin(
+        &root,
+        &[
+            "override",
+            "request",
+            "--rule",
+            "mediated-refuses",
+            "--verdict",
+            "always probe probe",
+            "--subject",
+            "a.rs",
+        ],
+        "precondition=the refusal is the fixture's point\nlost=the call is the subject\n\
+         rejected-route=admits fix probe has nothing to change\n",
+    );
+    let address = String::from_utf8_lossy(&issued.stdout).trim().to_owned();
+    assert_eq!(address.len(), 64, "an address was issued: {address:?}");
+
+    let path = batten::admission::record_path(&root, &address).expect("record path");
+    let record: Record =
+        serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("parse");
+    assert!(
+        matches!(record.binding.anchor, Anchor::Call { .. }),
+        "a mediated rule mints the arm the hook queries, not a tree finding's: {:?}",
+        record.binding.anchor
+    );
+}
+
+#[test]
+fn a_mediated_admission_spends_after_the_tree_moves_under_it() {
+    // THE RACE ONE VERB OVER, and it was live for four commits on the branch that
+    // removed the original. `run_override_spend` resolved its anchor by running
+    // the rule, exactly as the mint does — so a mediated admission minted against
+    // one tree and presented against another computed a DIFFERENT address and was
+    // refused as unknown, though nothing about the answer had changed.
+    //
+    // That is the same defect CLOUD-1125 was opened for: `land` rebases between
+    // the mint and the gate, and an admission whose address depends on the tree
+    // dies whenever `main` moves. Binding the finding fixed the gate and left the
+    // spend re-deriving.
+    //
+    // `spend` is handed the ADDRESS, so it holds the record and reads the anchor
+    // out of it. `recomputes` re-hashes the whole binding, the anchor included, so
+    // a forged one cannot hash to the address presented — the address is the
+    // check, and a tree scan adds nothing it does not already pin.
+    let root = admits_fixture("spend-after-move");
+    let issued = common::run_with_stdin(
+        &root,
+        &[
+            "override",
+            "request",
+            "--rule",
+            "mediated-refuses",
+            "--verdict",
+            "always probe probe",
+            "--subject",
+            "a.rs",
+        ],
+        "precondition=the refusal is the fixture's point\nlost=the spend must survive a rebase\n\
+         rejected-route=admits fix probe has nothing to change\n",
+    );
+    let address = String::from_utf8_lossy(&issued.stdout).trim().to_owned();
+    assert_eq!(address.len(), 64, "an address was issued: {address:?}");
+
+    // THE TREE MOVES, which is what `land` does between the two calls. A `Call`
+    // anchor names the HEAD it was minted at, so this is precisely the state a
+    // re-deriving spend could not reproduce.
+    common::write(&root, "c.rs", "fn later() {}\n");
+    common::git_in(&root, &["add", "-A"]);
+    common::git_in(&root, &["commit", "-qm", "an unrelated commit"]);
+
+    let spent = common::run(
+        &root,
+        &[
+            "override",
+            "spend",
+            "--admission",
+            &address,
+            "--rule",
+            "mediated-refuses",
+            "--verdict",
+            "always probe probe",
+            "--subject",
+            "a.rs",
+        ],
+    );
+    assert_eq!(
+        spent.status.code(),
+        Some(batten::exit::ExitCode::Success.code()),
+        "the answer is as true as when it was given, so it still spends: {}",
+        common::stderr(&spent)
+    );
 }

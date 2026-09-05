@@ -389,6 +389,14 @@ pub struct Config {
     /// [`crate::waiver`].
     #[serde(default, rename = "waiver", skip_serializing_if = "Vec::is_empty")]
     pub waivers: Vec<crate::waiver::Waiver>,
+    /// Decisions deferred on a condition the tree can check (CLOUD-759).
+    ///
+    /// The condition lives here as DATA rather than as prose in a tracker body,
+    /// which is the whole mechanism: a reversal condition written in an issue is
+    /// re-read by a human or by nobody, and both measured instances were found by
+    /// accident while looking for something else.
+    #[serde(default, rename = "deferral", skip_serializing_if = "Vec::is_empty")]
+    pub deferrals: Vec<crate::deferral::Deferral>,
     /// The thresholds this repository holds itself to (CLOUD-50). Today one:
     /// `[budget.instructions]`, the always-loaded instruction set and what it
     /// may cost. Absent means no budget is declared and none is enforced — a
@@ -1380,6 +1388,13 @@ fn validate_tables(config: &Config, text: &str, source: &str) -> Result<()> {
         Native::VerbTableRefused,
         crate::verbs::validate(&config.verbs),
     )?;
+    // The deferral table, at parse for the same reason (CLOUD-759): a row whose
+    // `reaches` is not a version could never be compared, so it would read as a
+    // watched condition while nothing watched it.
+    under(
+        Native::DeferralTableRefused,
+        crate::deferral::validate(&config.deferrals),
+    )?;
     // The named-regex table, at parse for the identical reason (CLOUD-885): a
     // malformed expression is a config fault, and refusing it here means
     // `config lint` and `doctor` catch it rather than a mediated call
@@ -1757,6 +1772,7 @@ impl Config {
     pub fn declaring_nothing() -> Self {
         Config {
             version: SUPPORTED_VERSION,
+            deferrals: Vec::new(),
             host: None,
             min_batten_version: None,
             strictness: None,
@@ -2177,6 +2193,11 @@ mod tests {
     /// classless `UsageError` again, which `batten policy explain` cannot
     /// resolve, and the test below fails naming the table.
     const VALIDATED_AT_LOAD: &[(&str, &str, Native)] = &[
+        (
+            "deferrals",
+            "crate::deferral::validate(",
+            Native::DeferralTableRefused,
+        ),
         ("verbs", "crate::verbs::validate(", Native::VerbTableRefused),
         (
             "patterns",

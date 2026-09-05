@@ -1102,6 +1102,76 @@ fn a_payload_that_is_not_a_ruleset_is_could_not_look_too() {
     );
 }
 
+/// CLOUD-759's anti-vacuity pair, and both halves are required or this ships as
+/// a sensor.
+///
+/// A deferral names the condition for its own reversal; the condition is later
+/// satisfied; nothing re-fires. Both instances this row was opened for were found
+/// by accident while looking for something else, which is the point — nothing was
+/// watching one fact that three issue bodies reasoned from.
+#[test]
+fn a_deferral_whose_condition_now_holds_is_reported_and_one_still_waiting_is_silent() {
+    let manifest = "[workspace.package]\nrust-version = \"1.98\"\n";
+    let row = |issue: &str, reaches: &str| {
+        format!(
+            "version = 1\n\n[[deferral]]\nissue = \"{issue}\"\nfact = \"rust-version\"\n\
+             reaches = \"{reaches}\"\nreason = \"why it waits\"\n"
+        )
+    };
+
+    // CLOUD-647's measured instance: deferred on `rust-version = 1.88.0` against
+    // a 1.85.0 pin, and the pin is now 1.98 — fully discharged and still carried.
+    let reached = repo_with_config("deferral-reached", &row("CLOUD-647", "1.88.0"));
+    std::fs::write(reached.join("Cargo.toml"), manifest).expect("write manifest");
+    let output = lint(&reached, &[]);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("deferral[CLOUD-647].reaches deferral-reversible"),
+        "the pointer names the row that owns the decision: {}",
+        stdout(&output)
+    );
+    // POINTER, NEVER THE PROSE (rule 4): the reason is config content and the
+    // finding carries none of it.
+    assert!(
+        !stdout(&output).contains("why it waits"),
+        "{}",
+        stdout(&output)
+    );
+
+    // The half that makes the first one mean something: a condition the tree
+    // cannot yet show is silent, not reported.
+    let waiting = repo_with_config("deferral-waiting", &row("CLOUD-999", "1.99.0"));
+    std::fs::write(waiting.join("Cargo.toml"), manifest).expect("write manifest");
+    let output = lint(&waiting, &[]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a deferral still waiting is not a finding: {}",
+        stdout(&output)
+    );
+}
+
+/// A manifest this cannot read reports nothing, rather than every deferral.
+///
+/// The could-not-look direction for a gate that ADDS refusals: a deferral is
+/// raised only when the tree can SHOW its condition holds. The opposite reading
+/// would refuse every deferral on a checkout whose manifest moved.
+#[test]
+fn a_deferral_over_an_unreadable_manifest_is_silent_rather_than_reported() {
+    let dir = repo_with_config(
+        "deferral-no-manifest",
+        "version = 1\n\n[[deferral]]\nissue = \"CLOUD-647\"\nfact = \"rust-version\"\n\
+         reaches = \"1.0.0\"\nreason = \"why it waits\"\n",
+    );
+    let output = lint(&dir, &[]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "no manifest is could-not-look, never a blanket refusal: {}",
+        stdout(&output)
+    );
+}
+
 /// A failed fetch must never read as agreement (CLOUD-380).
 ///
 /// The forge answers an error as a JSON OBJECT, and the repository response is an

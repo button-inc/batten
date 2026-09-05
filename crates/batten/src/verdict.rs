@@ -1011,6 +1011,8 @@ pub enum Native {
     VerdictTableRefused,
     /// The `[[redirect]]` table would not load.
     RedirectTableRefused,
+    /// The `[[deferral]]` table would not load.
+    DeferralTableRefused,
     /// A declared remedy names no command that exists (CLOUD-1189's class).
     RemedyUnresolved,
     /// The `[[marker]]` table would not load.
@@ -1064,6 +1066,7 @@ impl Native {
         Native::PatternTableRefused,
         Native::VerdictTableRefused,
         Native::RedirectTableRefused,
+        Native::DeferralTableRefused,
         Native::RemedyUnresolved,
         Native::MarkerTableRefused,
         Native::RuleTableRefused,
@@ -1093,6 +1096,7 @@ impl Native {
         Native::PatternTableRefused,
         Native::VerdictTableRefused,
         Native::RedirectTableRefused,
+        Native::DeferralTableRefused,
         Native::RemedyUnresolved,
         Native::MarkerTableRefused,
         Native::RuleTableRefused,
@@ -1133,6 +1137,7 @@ impl Native {
             Native::PatternTableRefused => "pattern declare refused",
             Native::VerdictTableRefused => "verdict declare refused",
             Native::RedirectTableRefused => "redirect declare refused",
+            Native::DeferralTableRefused => "deferral declare refused",
             Native::RemedyUnresolved => "remedy resolve missing",
             Native::MarkerTableRefused => "marker declare refused",
             Native::RuleTableRefused => "rule declare refused",
@@ -1526,6 +1531,15 @@ without a tree and belongs where a config fault is reported.",
 whether it fires -- which is why it needs no raise-only clamp and why a redefinition is \
 refused for coherence with the other append-only tables rather than because it lowers a \
 bar.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "deferral declare refused",
+        gloss: "the deferral table would not load",
+        class: "A `[[deferral]]` row whose `reaches` is not a version could never be \
+compared, so it would read as a watched condition while nothing watched it -- which is the \
+defect the table exists to close, arriving through the table itself. Refused at load rather \
+than at evaluation, because a row that can never fire is a config fault and not a finding.",
         routes: &[read("config read first", "batten.toml")],
     },
     VendoredVerdict {
@@ -1931,6 +1945,7 @@ mod tests {
                 | Native::PatternTableRefused
                 | Native::VerdictTableRefused
                 | Native::RedirectTableRefused
+                | Native::DeferralTableRefused
                 | Native::RemedyUnresolved
                 | Native::MarkerTableRefused
                 | Native::RuleTableRefused
