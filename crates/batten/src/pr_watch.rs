@@ -573,6 +573,44 @@ pub fn pause(seconds: f64) {
     sleep(seconds);
 }
 
+/// The longest a raced arm sleeps before it re-reads the stop flag.
+///
+/// Not a second interval — the wait is still the server's, and this only bounds
+/// how coarsely it is served. One second because that is the poll's own default
+/// cadence, so an arm that is NOT stopped behaves exactly as it did.
+const STOP_CHECK_SLICE: f64 = 1.0;
+
+/// [`pause`], abandoned early when `stop` is raised.
+///
+/// **THE LOSER OF A RACE HELD THE WHOLE WAIT** (review of #848). Both arms of
+/// `land::wait` check their stop flag at the top of the loop and then sleep the
+/// full interval, and `thread::scope` joins them before the verdict can be acted
+/// on — so a green answer sat unused for as long as the loser's last interval.
+/// That was survivable while the interval was the poll's one second. It stopped
+/// being survivable when `wait_for` started honouring a rate-limit backoff, which
+/// is measured in minutes: the arm that lost would hold a finished landing for
+/// the whole of somebody else's `Retry-After`.
+///
+/// **One clock still, which is the constraint that shapes this.** `clippy.toml`
+/// bans timers precisely so a second arm cannot grow one, and the crate's single
+/// exemption lives on [`sleep`] below. So this does not add a wait — it serves
+/// the same one in slices, checking between them. An arm that is never stopped
+/// sleeps the identical total.
+pub fn pause_until(seconds: f64, stop: &std::sync::atomic::AtomicBool) {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return;
+    }
+    let mut left = seconds;
+    while left > 0.0 {
+        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let slice = left.min(STOP_CHECK_SLICE);
+        sleep(slice);
+        left -= slice;
+    }
+}
+
 fn sleep(seconds: f64) {
     if seconds > 0.0 && seconds.is_finite() {
         #[expect(
