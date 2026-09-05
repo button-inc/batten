@@ -7484,6 +7484,17 @@ struct Segment {
     /// words happens to omit it, and a `!` between the keyword and the test no
     /// longer has to be filtered out by hand.
     construct: Option<(&'static str, &'static str)>,
+    /// Did this segment come from INSIDE a word rather than from command
+    /// position — a `$(…)`, a `` `…` `` or a `<(…)`?
+    ///
+    /// Private and unprojected, like [`Segment::lines`]: no module asks it. It
+    /// exists because the per-line split walks two readings of one command
+    /// positionally, and a nested segment lands at a DIFFERENT position in each
+    /// — the unjoined parse emits it between the lines it sits between, the
+    /// joined parse after the command that fused them. A nested command is also
+    /// not a LINE of the one containing it, so it is excluded from both sides of
+    /// that walk rather than merely tolerated.
+    nested: bool,
 }
 
 /// The shell operator between two segments — what happens to the first one's
@@ -7635,21 +7646,53 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
         flatten(node, source, None, &mut out);
     }
     // Where the join happened, `flatten` gave every segment one `lines` entry
-    // over the fused words. Replace that with the per-node reading, which is
-    // the split CLOUD-1287 needs.
-    if joined.is_some() && out.len() == 1 {
+    // over the FUSED words. Replace it with the per-line reading, segment by
+    // segment, which is the split CLOUD-1287 needs.
+    //
+    // **EVERY SEGMENT, and the `out.len() == 1` guard this replaces is why it is
+    // spelled out.** That guard was right for the case it was written against
+    // and silently wrong for the common one: a multi-line call carrying an
+    // operator, or one whose word holds a substitution, produces more than one
+    // segment and kept its fused list. `protected_mutation` then walked that
+    // single line, `effective_program` resolved the FIRST line's program, and
+    // line two's operand was judged as its own — CLOUD-1287's measured over-deny
+    // on a protected READ, re-introduced by the change that claimed to remove
+    // it. Measured on `cd /tmp\nstat -c %s batten.toml && echo hi`.
+    //
+    // An ordered consume rather than a match on content: both readings are the
+    // same parser's over the same text, and `joined_parse` refuses the join
+    // unless their total word counts agree, so taking lines until the running
+    // count reaches each segment's own length lands on a boundary every time.
+    // Matching by value would break on a command that repeats a word.
+    if joined.is_some() {
         let mut per_line: Vec<Vec<String>> = Vec::new();
         for node in &nodes {
             let mut produced: Vec<Segment> = Vec::new();
             flatten(node, command, None, &mut produced);
             for segment in produced {
-                per_line.push(segment.words);
+                if !segment.nested {
+                    per_line.push(segment.words);
+                }
             }
         }
-        if !per_line.is_empty()
-            && let Some(only) = out.first_mut()
-        {
-            only.lines = per_line;
+        let mut lines = per_line.into_iter().peekable();
+        for segment in out.iter_mut().filter(|segment| !segment.nested) {
+            let wanted = segment.words.len();
+            let mut taken: Vec<Vec<String>> = Vec::new();
+            let mut counted = 0;
+            while counted < wanted && lines.peek().is_some() {
+                if let Some(line) = lines.next() {
+                    counted += line.len();
+                    taken.push(line);
+                }
+            }
+            // A segment the consume could not fill exactly keeps what `flatten`
+            // gave it. Abstaining is the same posture as the rest of this path:
+            // a partial split would hand the mutation walk a line that is not a
+            // command.
+            if counted == wanted && !taken.is_empty() {
+                segment.lines = taken;
+            }
         }
     }
     crate::facts::Look::Is(out)
@@ -7723,9 +7766,7 @@ fn opens_heredoc(node: &rable::Node) -> bool {
         rable::NodeKind::HereDoc { .. } => true,
         rable::NodeKind::Command { redirects, .. } => redirects.iter().any(opens_heredoc),
         rable::NodeKind::Pipeline { commands, .. } => commands.iter().any(opens_heredoc),
-        rable::NodeKind::List { items } => {
-            items.iter().any(|item| opens_heredoc(&item.command))
-        }
+        rable::NodeKind::List { items } => items.iter().any(|item| opens_heredoc(&item.command)),
         rable::NodeKind::Subshell { body, .. } | rable::NodeKind::BraceGroup { body, .. } => {
             opens_heredoc(body)
         }
@@ -7822,6 +7863,7 @@ fn flatten_in(
                 terminator: after,
                 input_redirect: redirects.iter().any(binds_stdin),
                 construct,
+                nested: false,
             };
             // A word may CONTAIN commands: `rm $(cat list)` runs `cat`. The
             // walk this replaces could not see them at all (CLOUD-1257).
@@ -7835,6 +7877,12 @@ fn flatten_in(
             }
             if segment.words.iter().any(String::is_empty) {
                 segment.words.retain(|word| !word.is_empty());
+            }
+            // Everything the descent produced is nested, however deep: an inner
+            // `$(…)` inside an outer one is still not a line of the command that
+            // contains them.
+            for inner in &mut nested {
+                inner.nested = true;
             }
             out.push(segment);
             out.append(&mut nested);
@@ -7898,11 +7946,15 @@ fn flatten_in(
         // the body are DIFFERENT roles and a module needs them apart: the
         // condition is where a process probe lives, the body is where a sleep
         // does.
-        rable::NodeKind::While { condition, body, .. } => {
+        rable::NodeKind::While {
+            condition, body, ..
+        } => {
             flatten_in(condition, source, None, Some(("while", "condition")), out);
             flatten_in(body, source, after, Some(("while", "body")), out);
         }
-        rable::NodeKind::Until { condition, body, .. } => {
+        rable::NodeKind::Until {
+            condition, body, ..
+        } => {
             flatten_in(condition, source, None, Some(("until", "condition")), out);
             flatten_in(body, source, after, Some(("until", "body")), out);
         }
@@ -10117,7 +10169,10 @@ mod tests {
             crate::facts::Look::CouldNotLook,
             "the parse dropped the operand, so this build has not read the command"
         );
-        assert_eq!(segments("rm 'also unclosed"), crate::facts::Look::CouldNotLook);
+        assert_eq!(
+            segments("rm 'also unclosed"),
+            crate::facts::Look::CouldNotLook
+        );
 
         // The balanced spelling is unaffected, which is what keeps the guard
         // from being a refusal of quoting itself.
@@ -14121,6 +14176,69 @@ deny contains "refused by themodule" if {
         }
     }
 
+    /// **The per-line split holds for EVERY segment, not just a lone one.**
+    ///
+    /// `lines` was assigned under an `out.len() == 1` guard — right for the case
+    /// it was written against, silently wrong for the common one. A multi-line
+    /// call that also carries an operator, or one whose word holds a
+    /// substitution, yields more than one segment and kept its FUSED word list.
+    /// `protected_mutation` then walks that single line, `effective_program`
+    /// resolves the FIRST line's program, and line two's operand is judged as
+    /// its own: CLOUD-1287's measured over-deny on a protected READ,
+    /// re-introduced by the change whose message says it is gone by
+    /// construction.
+    #[test]
+    fn every_segment_keeps_its_own_per_line_split() {
+        let parsed = parsed_ok("cd /tmp\nstat -c %s batten.toml && echo hi");
+        assert_eq!(parsed.len(), 2, "the `&&` is a real boundary: {parsed:?}");
+        assert_eq!(
+            parsed[0].lines,
+            vec![
+                vec!["cd".to_owned(), "/tmp".to_owned()],
+                vec![
+                    "stat".to_owned(),
+                    "-c".to_owned(),
+                    "%s".to_owned(),
+                    "batten.toml".to_owned(),
+                ],
+            ],
+            "the newline is still a boundary for PROGRAM identity"
+        );
+        assert_eq!(
+            parsed[1].lines,
+            vec![vec!["echo".to_owned(), "hi".to_owned()]],
+            "a segment spanning no newline is its own single line"
+        );
+
+        // A NESTED segment pushes the count past one the same way, and is itself
+        // excluded from the walk: it is a command, not a line of one.
+        let nested = parsed_ok("rm $(cat list)\nstat -c %s batten.toml");
+        let outer = nested
+            .iter()
+            .find(|segment| !segment.nested)
+            .expect("the outer command is a segment");
+        assert_eq!(
+            outer.lines,
+            vec![
+                vec!["rm".to_owned(), "$(cat list)".to_owned()],
+                vec![
+                    "stat".to_owned(),
+                    "-c".to_owned(),
+                    "%s".to_owned(),
+                    "batten.toml".to_owned(),
+                ],
+            ],
+            "the substituted command is not a line of the command containing it"
+        );
+        assert!(
+            nested
+                .iter()
+                .any(|segment| segment.nested
+                    && segment.words.first().is_some_and(|word| word == "cat")),
+            "and it is still reached as its own segment (CLOUD-1257)"
+        );
+    }
+
     /// A NEGATED condition still reaches its program.
     ///
     /// `! cmd` wraps a pipeline rather than being one, so the command is a level
@@ -14150,7 +14268,13 @@ deny contains "refused by themodule" if {
         let parsed = parsed_ok("HK_SKIP_STEPS=hooks-wiring-check git commit -m x");
         assert_eq!(
             parsed[0].words,
-            ["HK_SKIP_STEPS=hooks-wiring-check", "git", "commit", "-m", "x"],
+            [
+                "HK_SKIP_STEPS=hooks-wiring-check",
+                "git",
+                "commit",
+                "-m",
+                "x"
+            ],
             "the assignment is where it was written, in front of the program"
         );
     }
@@ -14207,5 +14331,4 @@ deny contains "refused by themodule" if {
         );
         assert_eq!(parsed[0].terminator, Some(Separator::Background));
     }
-
 }

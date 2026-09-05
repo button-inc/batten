@@ -2060,8 +2060,42 @@ echo "install:local: batten -> $dest/batten"
 # mediated call fails open in silence. The caller already appends its own line, and
 # mise prints the non-zero exit.
 [tasks."deps-install"]
-description = "Provision the host dependencies mise does not: the released `batten`, before any hook fires (CLOUD-1085)"
-run = "./install.sh"
+description = "Provision the host dependencies mise does not: the released `batten`, before any hook fires (CLOUD-1085), and reclaim the wiring the launcher rewrote"
+# THE REAP BELONGS HERE AND NOWHERE EARLIER, which is CLOUD-1079's open half.
+#
+# `[[hook.handler]] session-wiring-reclaim` already runs this verb at session
+# start, and it loses a race it cannot win from there: the launcher rewrites
+# `~/.claude/launcher-settings.json` and its two scripts on container BOOT, and a
+# boot does not reliably fire `SessionStart`. Measured 2026-09-05 -- the settings
+# file and both scripts stamped 21:16:24, `~/.claude` itself 21:17:23, and
+# `wiring reclaim --check` reporting two live sibling registrations in a session
+# whose start handler had already run. That is the second recorded recurrence;
+# the first was a session that ran the verb by hand, watched the launcher
+# provision over it, and concluded permanent impossibility.
+#
+# This task is the seam that beats it, on a property rather than a hope: the
+# container's setup script calls `mise run deps-install` on every provision,
+# BEFORE Claude launches. So it is upstream of the rewrite and upstream of the
+# harness snapshot, where every hook-event surface is downstream of both.
+#
+# AND IT IS NOT WHAT `batten.toml` FORBIDS. That refusal -- "NEVER add `batten
+# wiring reclaim` to this handler" -- is scoped to the session-start handler, and
+# its reason does not carry: `batten hook` expires the at-load record on that
+# same event, so a reclaim dispatched from there puts the write and the clear in
+# one unordered batch. Nothing dispatches a hook event during provisioning, so
+# there is no record to race.
+#
+# NOT IN `install.sh`, which is the repo-agnostic install interface a consumer
+# with no launcher also runs (non-negotiable rule 1). The reap is this
+# consumer's, so it lives in this consumer's task.
+#
+# `-y` because a provisioning script has no terminal; after `install.sh` because
+# the verb is the binary that script installs.
+run = """
+set -eu
+./install.sh
+batten wiring reclaim -y
+"""
 
 # The report half of the same seam, and the setup script calls this one too.
 #

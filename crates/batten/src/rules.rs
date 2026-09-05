@@ -5339,9 +5339,7 @@ fn validate_rows(rules: &[Rule]) -> anyhow::Result<()> {
         // rows as often as within one — which is why it lives here beside
         // CLOUD-444's, whose reasoning it borrows wholesale.
         for query in &rule.plan {
-            let collides = |other: &crate::hk::PlanQuery| {
-                other.id == query.id && other != query
-            };
+            let collides = |other: &crate::hk::PlanQuery| other.id == query.id && other != query;
             if let Some(prior) = rules[..index]
                 .iter()
                 .find(|prior| prior.plan.iter().any(collides))
