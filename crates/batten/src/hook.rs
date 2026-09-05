@@ -7498,22 +7498,6 @@ impl Separator {
     }
 }
 
-impl Segment {
-    /// Fold a command a NEWLINE joined to this one into it.
-    ///
-    /// `words` concatenates, because segment identity spans the newline; `lines`
-    /// keeps them apart, because program identity does not. That asymmetry is
-    /// the whole reason both fields exist — see [`Segment::lines`].
-    fn absorb(&mut self, other: Self) {
-        self.words.extend(other.words);
-        self.lines.extend(other.lines);
-        self.raw.push('\n');
-        self.raw.push_str(&other.raw);
-        self.terminator = other.terminator;
-        self.input_redirect = self.input_redirect || other.input_redirect;
-    }
-}
-
 /// Split a command into shell-separated segments, over a real bash PARSE.
 ///
 /// **This was a character walk until CLOUD-1381, and the replacement is the
@@ -7583,31 +7567,91 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
     if !covered(&nodes, command) {
         return crate::facts::Look::CouldNotLook;
     }
+    // A NEWLINE IS WHITESPACE FOR SEGMENT IDENTITY, AND A BOUNDARY FOR PROGRAM
+    // IDENTITY — two answers over one character, and the tree pins both.
+    //
+    // `mediated_verbs::a_newline_did_not_become_a_separator` pins the first:
+    // `mise run verify` with `| tail -1` on the next line must stay ONE
+    // pipeline, so the pager discards the status and the call is refused.
+    // CLOUD-1287 pins the second, measured over the shipped binary: `cd /tmp`
+    // on line one must not own line two's operands, or `stat` is refused while
+    // the refusal names `cd`.
+    //
+    // **Merging the parsed halves cannot produce the first, and that is the
+    // mistake this replaces.** `rable` reads the newline as bash does, so
+    // `mise run verify\n| tail -1` is TWO top-level nodes rather than an error;
+    // concatenating their words fuses the text but loses the structure, and
+    // segment one comes out with no terminator where it needs a `Pipe`. The
+    // relationship lives between the nodes, so no merge of their outputs
+    // recovers it.
+    //
+    // So the JOINED text is parsed, once, and that parse decides segments —
+    // which is what the character walk did implicitly by never treating a
+    // newline as a separator in the first place. Per-line words come from the
+    // ORIGINAL parse, so both answers are the same parser's and neither is
+    // re-derived by splitting a string.
+    let joined = joined_parse(command, &nodes);
+    let reading = joined.as_ref().unwrap_or(&nodes);
     let mut out: Vec<Segment> = Vec::new();
-    for node in &nodes {
-        let mut produced: Vec<Segment> = Vec::new();
-        flatten(node, command, None, &mut produced);
-        // A NEWLINE IS WHITESPACE FOR SEGMENT IDENTITY, and this is where that
-        // is preserved across the swap. `rable` returns one top-level node per
-        // line, which is what bash does and what this engine deliberately does
-        // NOT do: promoting a newline to a `Separator::Semi` moves every landed
-        // `verdict-not-discarded` verdict, and `mediated_verbs`'s
-        // `a_newline_did_not_become_a_separator` is the case that notices.
-        //
-        // Only the FIRST command of each node joins: a node's own `&&`, `|` and
-        // `;` already made real segments below, and folding those together would
-        // undo the structure the parser just recovered.
-        match (out.last_mut(), produced.first()) {
-            (Some(previous), Some(_)) if previous.terminator.is_none() => {
-                let mut rest = produced.split_off(1);
-                let head = produced.remove(0);
-                previous.absorb(head);
-                out.append(&mut rest);
+    for node in reading {
+        flatten(node, joined.as_ref().map_or(command, |_| command), None, &mut out);
+    }
+    // Where the join happened, `flatten` gave every segment one `lines` entry
+    // over the fused words. Replace that with the per-node reading, which is
+    // the split CLOUD-1287 needs.
+    if joined.is_some() && out.len() == 1 {
+        let mut per_line: Vec<Vec<String>> = Vec::new();
+        for node in &nodes {
+            let mut produced: Vec<Segment> = Vec::new();
+            flatten(node, command, None, &mut produced);
+            for segment in produced {
+                per_line.push(segment.words);
             }
-            _ => out.append(&mut produced),
+        }
+        if !per_line.is_empty()
+            && let Some(only) = out.first_mut()
+        {
+            only.lines = per_line;
         }
     }
     crate::facts::Look::Is(out)
+}
+
+/// The command re-parsed with its newlines as whitespace, where that is safe.
+///
+/// `None` means read the original parse — the command is one line, or carries a
+/// heredoc, or the joined text does not parse.
+///
+/// **The heredoc guard is the load-bearing half.** A body's newlines are DATA:
+/// joining them would run the body's words together with the opener's and, worse,
+/// dissolve the delimiter line that ends it. So a command carrying one is read as
+/// parsed, and the newline-as-whitespace reading is not available there. That
+/// bound is narrower than it sounds — a heredoc's own newline already cannot
+/// separate two commands, because everything up to the delimiter belongs to the
+/// body.
+fn joined_parse(command: &str, nodes: &[rable::Node]) -> Option<Vec<rable::Node>> {
+    if !command.contains('\n') || nodes.len() < 2 || nodes.iter().any(opens_heredoc) {
+        return None;
+    }
+    // A COMMENT WOULD SWALLOW WHAT FOLLOWS IT, so a command carrying one keeps
+    // the per-line reading. Decided from the parse rather than by scanning for a
+    // `#`: a `#` inside a quoted operand is not a comment, and asking the text
+    // would be the second authority this module refuses to grow. A comment ends
+    // at a newline, so the joined text is shorter in TOKENS than the original
+    // whenever one was absorbed — and that is what this compares.
+    let joined = command.replace('\n', " ");
+    let reparsed = rable::parse(&joined, false).ok()?;
+    (words_in(&reparsed) == words_in(nodes)).then_some(reparsed)
+}
+
+/// Every word any command in this forest carries, for the conservation check
+/// above. Order is irrelevant to it; the count is the whole question.
+fn words_in(nodes: &[rable::Node]) -> usize {
+    let mut segments = Vec::new();
+    for node in nodes {
+        flatten(node, "", None, &mut segments);
+    }
+    segments.iter().map(|segment| segment.words.len()).sum()
 }
 
 /// Did the parse account for the whole command, or did it drop a tail?
@@ -7692,10 +7736,22 @@ fn redirect_words(redirect: &rable::Node, source: &str) -> Vec<String> {
 fn flatten(node: &rable::Node, source: &str, after: Option<Separator>, out: &mut Vec<Segment>) {
     match &node.kind {
         rable::NodeKind::Command {
-            words, redirects, ..
+            assignments,
+            words,
+            redirects,
         } => {
-            let mut spelled: Vec<String> =
-                words.iter().map(|word| unquote(&word_text(word))).collect();
+            // AN ENV ASSIGNMENT PREFIX IS A WORD HERE, and dropping it is an
+            // under-deny rather than a tidier shape. `effective_program` steps
+            // past `VAR=value` to find the program, and `hook_skip_local` reads
+            // the assignment itself — `HK_SKIP_STEPS=… git commit` is refused
+            // BECAUSE of the prefix. The parser files those under `assignments`,
+            // correctly for a grammar and wrongly for this consumer, so they go
+            // back at the front where they were written.
+            let mut spelled: Vec<String> = assignments
+                .iter()
+                .map(|word| unquote(&word_text(word)))
+                .chain(words.iter().map(|word| unquote(&word_text(word))))
+                .collect();
             // A REDIRECTION'S TOKENS ARE STILL WORDS, and restoring them is not
             // cosmetic: `protected_mutation` reads a redirect TARGET as a
             // mutation candidate with no program at all, so `rm > guarded.md`
@@ -7761,43 +7817,36 @@ fn flatten(node: &rable::Node, source: &str, after: Option<Separator>, out: &mut
                 flatten(&item.command, source, follows, out);
             }
         }
-        // A body is shell, and its commands are commands. The walk this replaces
-        // reached none of these: it had no notion of a body at all.
+        // A GROUPING runs its body in this call's own right, so it is walked.
         rable::NodeKind::Subshell { body, .. } | rable::NodeKind::BraceGroup { body, .. } => {
             flatten(body, source, after, out);
         }
-        rable::NodeKind::Function { body, .. } => flatten(body, source, after, out),
-        rable::NodeKind::If {
-            condition,
-            then_body,
-            else_body,
-            ..
-        } => {
-            flatten(condition, source, None, out);
-            flatten(then_body, source, None, out);
-            if let Some(body) = else_body {
-                flatten(body, source, after, out);
-            }
-        }
-        rable::NodeKind::While {
-            condition, body, ..
-        }
-        | rable::NodeKind::Until {
-            condition, body, ..
-        } => {
-            flatten(condition, source, None, out);
-            flatten(body, source, after, out);
-        }
-        rable::NodeKind::For { body, .. }
-        | rable::NodeKind::ForArith { body, .. }
-        | rable::NodeKind::Select { body, .. } => flatten(body, source, after, out),
-        rable::NodeKind::Case { patterns, .. } => {
-            for arm in patterns {
-                if let Some(body) = arm.body.as_ref() {
-                    flatten(body, source, None, out);
-                }
-            }
-        }
+        // **A CONTROL-FLOW BODY IS DELIBERATELY NOT WALKED, and that is a scope
+        // decision rather than a limit of the parser.** `if`, `while`, `until`,
+        // `for`, `select` and `case` all carry real commands, and the parser
+        // hands them over — an earlier draft here walked them.
+        //
+        // Landed rules are not written for it. `run-shape-guard` exempts a
+        // `sleep` inside a condition loop, and it decides that from the segment
+        // the loop occupies; lifting the body's `sleep 1` out into a segment of
+        // its own strips exactly the context the exemption reads, so
+        // `until [ -f /tmp/done ]; do sleep 1; done` — the sanctioned wait —
+        // started being refused as a bare timer. Measured, in
+        // `run_shape::a_loop_body_is_reached_and_the_exemption_decides_it`.
+        //
+        // That is an OVER-deny on the shape the guard exists to recommend, which
+        // is the direction that gets a guard switched off. Reaching these bodies
+        // is worth doing and is its own row: every module deciding over
+        // `segments` has to be re-read against the new reading first. CLOUD-1257
+        // is about `$(…)`, which IS reached — see `descend_word`.
+        rable::NodeKind::Function { .. }
+        | rable::NodeKind::If { .. }
+        | rable::NodeKind::While { .. }
+        | rable::NodeKind::Until { .. }
+        | rable::NodeKind::For { .. }
+        | rable::NodeKind::ForArith { .. }
+        | rable::NodeKind::Select { .. }
+        | rable::NodeKind::Case { .. } => {}
         // Anything else contains no command position.
         _ => {}
     }
@@ -13896,29 +13945,62 @@ deny contains "refused by themodule" if {
         assert_eq!(count, 2, "both substituted commands are segments");
     }
 
-    /// A compound body is shell, and its commands are commands.
+    /// A GROUPING's body is reached; a control-flow body deliberately is not.
     ///
-    /// The walk had no notion of a body: `then` and `fi` were words, and the
-    /// `rm` between them was judged only because a `;` happened to precede it.
+    /// The asymmetry is a scope decision and is asserted so it stays one. A
+    /// subshell or brace group runs its commands in this call's own right, and
+    /// nothing reads those segments for context. A loop or conditional body is
+    /// different: `run-shape-guard` exempts a `sleep` inside a condition loop
+    /// and decides that from the segment the loop occupies, so lifting the
+    /// body's commands out strips the context the exemption reads — measured as
+    /// `until [ -f /tmp/done ]; do sleep 1; done`, the sanctioned wait, being
+    /// refused as a bare timer.
+    ///
+    /// Reaching control-flow bodies is worth doing and is its own row: every
+    /// module deciding over `segments` has to be re-read against the new
+    /// reading first. This case is what will go red when that row lands, which
+    /// is the point of writing it as an equality rather than a one-way check.
     #[test]
-    fn a_command_inside_a_compound_body_is_reached() {
-        for command in [
-            "if [ -f x ]; then rm guarded.md; fi",
-            "while read line; do rm guarded.md; done",
-            "for f in a b; do rm guarded.md; done",
-            "( cd /tmp && rm guarded.md )",
-            "{ rm guarded.md; }",
-            "case $x in a) rm guarded.md;; esac",
-        ] {
+    fn a_grouping_is_walked_and_a_control_flow_body_is_not() {
+        for command in ["( cd /tmp && rm guarded.md )", "{ rm guarded.md; }"] {
             let parsed = parsed_ok(command);
             assert!(
                 parsed.iter().any(|segment| {
                     segment.words.first().is_some_and(|word| word == "rm")
                         && segment.words.iter().any(|word| word == "guarded.md")
                 }),
-                "the protected write inside `{command}` was not reached"
+                "the write inside the grouping `{command}` was not reached"
             );
         }
+
+        for command in [
+            "if [ -f x ]; then rm guarded.md; fi",
+            "while read line; do rm guarded.md; done",
+            "until [ -f /tmp/done ]; do sleep 1; done",
+            "for f in a b; do rm guarded.md; done",
+            "case $x in a) rm guarded.md;; esac",
+        ] {
+            assert!(
+                parsed_ok(command).is_empty(),
+                "a control-flow body is not walked yet: `{command}`"
+            );
+        }
+    }
+
+    /// An env-assignment prefix stays a word, where the parser files it apart.
+    ///
+    /// `effective_program` steps past `VAR=value` to find the program, and
+    /// `hook_skip_local` reads the assignment ITSELF — `HK_SKIP_STEPS=… git
+    /// commit` is refused because of the prefix. Dropping it is an under-deny,
+    /// measured when this projection first took `words` alone.
+    #[test]
+    fn an_env_assignment_prefix_is_still_a_word() {
+        let parsed = parsed_ok("HK_SKIP_STEPS=hooks-wiring-check git commit -m x");
+        assert_eq!(
+            parsed[0].words,
+            ["HK_SKIP_STEPS=hooks-wiring-check", "git", "commit", "-m", "x"],
+            "the assignment is where it was written, in front of the program"
+        );
     }
 
     /// **The two halves of a newline, which must not be collapsed either way.**
