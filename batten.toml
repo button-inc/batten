@@ -1377,12 +1377,23 @@ regex = '(?m)^[[:space:]]*>[^\n]*'
 # width is measured rather than chosen — see `policy/stop-posture.rego`'s header
 # for the witnessed miss (`worth naming`) and for why `calling out` stays out.
 #
+# THE INFINITIVE OPENER IS THE SAME LITERAL WITH ONE WORD REMOVED (CLOUD-487),
+# which is why it joins the pronoun alternation rather than arriving as a row of
+# its own: `one thing to flag` is the same act, in the same sentence position,
+# with the same consequence as `one thing I would flag` — and it is the MORE
+# natural spelling when the finding is handed to someone else, which is exactly
+# the case a Stop hedge is written in. Measured silent on a witnessed turn.
+#
+# The verb set is unmoved and that is the narrowness boundary: `to flag` and
+# `to note` join, `one thing to check` and `one thing to fix` stay silent,
+# because an entry here names an ACT OF FLAGGING rather than any use of the word.
+#
 # `(?i)` because a sentence is a sentence however it is capitalised. Both the
 # contracted and the expanded auxiliary, and both apostrophes: a straight one and
 # a typographic one are the same word to a reader.
 [[pattern]]
 id = "hedged-flag-framing"
-regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’]?d) (flag|note)|I['’]?d (flag|note) (that|one)|I would (flag|note) that|I should (note|flag)|(it|that)['’]?s worth (noting|flagging|mentioning|naming)|bears (noting|flagging|mentioning|naming)"
+regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’]?d|to) (flag|note)|I['’]?d (flag|note) (that|one)|I would (flag|note) that|I should (note|flag)|(it|that)['’]?s worth (noting|flagging|mentioning|naming)|bears (noting|flagging|mentioning|naming)"
 
 # The §1 span, narrowed before the paths are read (CLOUD-854).
 #

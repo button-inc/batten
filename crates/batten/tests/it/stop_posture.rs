@@ -139,7 +139,7 @@ regex = '(?m)^[[:space:]]*>[^\n]*'
 
 [[pattern]]
 id = "hedged-flag-framing"
-regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’]?d) (flag|note)|I['’]?d (flag|note) (that|one)|I would (flag|note) that|I should (note|flag)|(it|that)['’]?s worth (noting|flagging|mentioning|naming)|bears (noting|flagging|mentioning|naming)"
+regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’]?d|to) (flag|note)|I['’]?d (flag|note) (that|one)|I would (flag|note) that|I should (note|flag)|(it|that)['’]?s worth (noting|flagging|mentioning|naming)|bears (noting|flagging|mentioning|naming)"
 
 [[verdict]]
 id = "prose report duplicate"
@@ -411,6 +411,56 @@ fn a_hedged_final_message_reaches_the_host_advisory_channel() {
     assert!(
         stdout.contains("stop-posture"),
         "and it names the predicate: {stdout}"
+    );
+}
+
+/// THE INFINITIVE OPENER, over the engine rather than the module's own suite
+/// (CLOUD-487).
+///
+/// The witnessed miss: `one thing to flag` was silent where `one thing I would
+/// flag` fired — the same act, in the same sentence position, one word shorter,
+/// and the spelling an agent reaches for when the finding is addressed to
+/// somebody else. The load tier pins the predicate; this pins that the widened
+/// registry row is what the ENGINE hands the module, which is the half a
+/// `with input as` case cannot reach.
+#[test]
+fn the_infinitive_hedge_reaches_the_host_advisory_channel() {
+    let dir = repo("stop-posture-infinitive");
+    let output = hook(
+        &dir,
+        &stop_payload(
+            "One thing to flag for whoever owns the lease: it is stale.",
+            false,
+        ),
+    );
+    let stdout = stdout_of(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "an advisory never changes the exit code: {stdout}"
+    );
+    assert!(
+        stdout.contains("additionalContext") && stdout.contains("stop-posture"),
+        "the infinitive opener must reach the same channel as the pronoun one: {stdout}"
+    );
+}
+
+/// THE NARROWNESS BOUNDARY, at the engine (CLOUD-487).
+///
+/// The verb set did not widen with the opener, and this is what says so over the
+/// compiled binary: an entry names an act of FLAGGING, so a plan to do something
+/// is not one however the sentence opens. Without this case, widening the row to
+/// `one thing to (.*)` would pass every other case in this file.
+#[test]
+fn an_infinitive_that_is_not_a_flagging_verb_stays_silent() {
+    let dir = repo("stop-posture-infinitive-narrow");
+    let stdout = stdout_of(&hook(
+        &dir,
+        &stop_payload("One thing to check is whether the exit code is 2.", false),
+    ));
+    assert!(
+        !stdout.contains("stop-posture"),
+        "a plan to check is not an act of flagging: {stdout}"
     );
 }
 

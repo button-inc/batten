@@ -145,6 +145,31 @@ test_both_openers_share_one_verb_set if {
 	v.verdict == "prose report duplicate"
 }
 
+# THE INFINITIVE OPENER (CLOUD-487), and the three cases together are what make
+# the widening additive rather than a rewrite: the new form fires, the
+# first-person form it was derived from still fires, and the verb boundary that
+# keeps this from becoming "any use of the word" is unmoved.
+test_the_infinitive_opener_fires if {
+	# The witnessed miss: the same act, one word shorter, and the spelling an agent
+	# reaches for when the finding is addressed to somebody else.
+	some v in violation with input as ending("One thing to flag for whoever owns CLOUD-291: the lease is stale.")
+	v.verdict == "prose report duplicate"
+}
+
+test_the_first_person_opener_still_fires_beside_it if {
+	# ANTI-VACUITY for the widening: a rewrite that replaced the pronoun branch
+	# instead of joining it would pass the case above and lose this one.
+	some v in violation with input as ending("One thing I'd note is the exit code.")
+	v.verdict == "prose report duplicate"
+}
+
+test_an_infinitive_that_is_not_a_flagging_verb_is_silent if {
+	# THE NARROWNESS BOUNDARY, and the reason the verb set did not widen with the
+	# opener: an entry names an act of FLAGGING, so a plan to do something is not
+	# one however the sentence opens.
+	count(violation) == 0 with input as ending("One thing to check is whether the exit code is 2.")
+}
+
 # THE SCRUB, and each case is a span the shell's first version leaked through.
 test_a_tell_inside_a_code_span_is_a_report_of_it if {
 	count(violation) == 0 with input as ending("The gate fires on `worth noting`.")
