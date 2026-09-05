@@ -1563,7 +1563,7 @@ const UNKNOWN_KEY: [&str; 2] = ["unknown field", "unknown variant"];
 ///
 /// A rebase brings `main` forward under a live branch, `batten.toml` grows a key,
 /// and the binary built at session start predates it. Serde then reports
-/// `unknown field \`link\`` and the message says **invalid config** — so the
+/// ``unknown field `link` `` and the message says **invalid config** — so the
 /// whole file fails to load, EVERY rule stops evaluating at once, and the agent
 /// starts hunting a defect in a file that is exactly right. The remedy is a
 /// rebuild and nothing named it.
