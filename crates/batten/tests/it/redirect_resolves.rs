@@ -53,12 +53,22 @@ mutation = "{mutation}"
 /// (a) A remedy naming a verb the surface does not declare is reported.
 ///
 /// The row's own worked case: a verb that moves turns every remedy naming it
-/// into a lie, silently. `show config` is the spelling CLOUD-1184's rename
-/// retired, so this is the shape rather than an invented one.
+/// into a lie, silently.
+///
+/// **The fixture verb changed under CLOUD-1180 and the case did not.** It named
+/// `show config`, the spelling CLOUD-1184's rename retired — until CLOUD-1180
+/// re-declared the `show` NOUN in this same PR. `show` resolves now, so that
+/// spelling stopped reaching `validate_remedies`' FIRST arm and started
+/// reaching its second, which raises a different verdict. Loosening the
+/// assertions to straddle both would have destroyed the "this refusal, not any
+/// refusal" guard three lines down, so the fixture names a verb the surface
+/// declares nowhere and the nested arm gets its own case below. That the
+/// example verb could be re-declared out from under the case is the row's own
+/// thesis arriving on the test rather than on a remedy.
 #[test]
 fn a_remedy_naming_an_undeclared_command_is_refused() {
     let dir = Fixture::new("redirect-resolves-undeclared")
-        .config(&config_with("run `batten show config` instead"))
+        .config(&config_with("run `batten inspect` instead"))
         .build();
     let output = run(&dir, &["config", "show"]);
     assert!(
@@ -71,7 +81,7 @@ fn a_remedy_naming_an_undeclared_command_is_refused() {
         "the refusal names the remedy's own key: {text}"
     );
     assert!(
-        text.contains("show config"),
+        text.contains("inspect"),
         "the refusal names the unresolvable command: {text}"
     );
     // AND IT IS THIS REFUSAL, not any refusal. A fixture config that merely
@@ -84,6 +94,43 @@ fn a_remedy_naming_an_undeclared_command_is_refused() {
     );
     // POINTER-ONLY (rule 4): the key and the command, never the remedy prose
     // that carried them.
+    assert!(
+        !text.contains("instead"),
+        "the refusal must not echo the remedy's prose: {text}"
+    );
+}
+
+/// (a2) A remedy whose VERB resolves and whose next word does not.
+///
+/// The second arm of `validate_remedies`, and a distinct verdict: the engine
+/// names the prefix it walked and the token it failed on, because past a
+/// declared command the remaining words must be a rule id, a flag or a
+/// `<placeholder>`. `show config` is the live example — `show` is declared
+/// (CLOUD-1180) and `config` under it is not — which is what moved the case
+/// above off this arm and is why this one exists rather than the two sharing a
+/// loosened assertion.
+#[test]
+fn a_remedy_whose_trailing_word_names_no_rule_is_refused() {
+    let dir = Fixture::new("redirect-resolves-nested")
+        .config(&config_with("run `batten show config` instead"))
+        .build();
+    let output = run(&dir, &["config", "show"]);
+    assert!(
+        !output.status.success(),
+        "a remedy whose trailing word names no rule must not load"
+    );
+    let text = stderr(&output);
+    assert!(
+        text.contains("redirect[guarded/**].mutation"),
+        "the refusal names the remedy's own key: {text}"
+    );
+    // THE SECOND ARM'S OWN VERDICT, not the first's. Asserting only that
+    // something was refused would pass over the flat `not a declared command`
+    // message and prove the two arms are one.
+    assert!(
+        text.contains("neither a declared rule id nor a <placeholder>"),
+        "the refusal is the trailing-word arm's, not the unknown-command arm's: {text}"
+    );
     assert!(
         !text.contains("instead"),
         "the refusal must not echo the remedy's prose: {text}"

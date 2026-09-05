@@ -197,6 +197,17 @@ impl Capabilities {
     }
 }
 
+/// The summary reaches the data channel, so it declares itself (CLOUD-371).
+///
+/// Forwards to the inherent method rather than restating it: the emitted bytes
+/// are the same ones `summary` already produced, and the funnel is what makes
+/// "which types render on stdout" a compile-time answer instead of a grep.
+impl crate::output::Line for Capabilities {
+    fn line(&self) -> String {
+        self.summary()
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

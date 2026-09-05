@@ -13779,7 +13779,7 @@ fn run_show_agent(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Res
         output::lines(out, &reading.read_only)?;
         output::lines(out, &reading.exit_codes)?;
         output::lines(out, &reading.gates)?;
-        writeln!(out, "{}", reading.summary())?;
+        output::line(out, &reading)?;
     }
     // Always `0`: this verb reports a state and judges nothing, so there is no
     // finding for it to raise and no `2` it could honestly mint.

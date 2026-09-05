@@ -1778,11 +1778,19 @@ mod tests {
         );
 
         // The same shape with a verb the surface does not declare. This is what a
-        // half-done rename leaves in a committed wiring file. `adjudicate` is the
-        // path CLOUD-1192 proposes, so this is the exact string that row's
-        // rename would strand if it landed without this derivation.
+        // half-done rename leaves in a committed wiring file.
+        //
+        // **The verb here changed direction when CLOUD-1192 landed, and that is
+        // the row's own §7(b) rather than test maintenance.** It read
+        // `adjudicate` while that was the path CLOUD-1192 *proposed* — the
+        // string the rename would strand. The rename has landed, so `hook` is
+        // now the undeclared one, and this asserts the thing the row demanded
+        // be verified rather than assumed: a repository still carrying the OLD
+        // wiring reads as drift. Written the other way round it would assert
+        // that the CURRENT wiring is stale, which is the direction that reports
+        // a correctly wired tree as broken.
         let stale = format!(
-            "{} adjudicate --harness {}",
+            "{} hook --harness {}",
             crate::surface::BINARY,
             harness.as_str()
         );

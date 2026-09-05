@@ -213,6 +213,13 @@ use std::process::Output;
 
 use common::{at_root, batten, git_in, scratch, scratch_outside_tree, stderr, stdout, write};
 
+/// The finding id `doctor.rs` raises for a matcher on batten's own entry.
+///
+/// A literal here rather than a re-export: the constant is private to `doctor`,
+/// and a test asserting the RENDERED token is asserting what a reader actually
+/// sees. `doctor.rs`'s own tier pins the constant.
+const MATCHER_NARROWS: &str = "hook-wiring-matcher-narrows";
+
 /// The variable the fixture's merged row resolves under.
 ///
 /// The committed row names `HOME`, and a fixture must not: setting `HOME` for a
@@ -698,6 +705,38 @@ fn this_repository_is_wired_correctly() {
     );
 }
 
+/// `doctor hooks` in `repo`, as one string over both channels.
+///
+/// The EXIT STATUS is deliberately not what the two cases below read. A fixture
+/// declares one harness's wiring, so the other four are `file-missing` and the
+/// two events this repository's derivation emits beyond `PreToolUse`/`Stop` are
+/// `event-unregistered` — `doctor hooks` is non-zero there whatever the matcher
+/// does. Keying on the status would have let the positive case pass over a
+/// diagnosis that never looked at a matcher at all, which is exactly what
+/// `the_same_wiring_without_a_matcher_is_clean` caught when it was written.
+fn diagnosis(repo: &Path) -> String {
+    let output = batten()
+        .current_dir(repo)
+        .args(["doctor", "hooks"])
+        .output()
+        .expect("run batten doctor hooks");
+    format!("{}{}", stdout(&output), stderr(&output))
+}
+
+/// One wiring, with and without a matcher on batten's own `PreToolUse` entry.
+fn matcher_fixture(name: &str, matcher: Option<&str>) -> PathBuf {
+    let entry = match matcher {
+        Some(value) => format!(
+            r#"{{"matcher": "{value}", "hooks": [{{"type": "command", "command": "{MEDIATOR}"}}]}}"#
+        ),
+        None => format!(r#"{{"hooks": [{{"type": "command", "command": "{MEDIATOR}"}}]}}"#),
+    };
+    let committed = format!(
+        r#"{{"hooks": {{"PreToolUse": [{entry}], "Stop": [{{"hooks": [{{"type": "command", "command": "{MEDIATOR}"}}]}}]}}}}"#
+    );
+    fixture(name, &committed, None).0
+}
+
 /// The subsumption CLOUD-1192's retirement rests on, over the compiled binary.
 ///
 /// `mise-tasks/hook-matcher-check.sh` asked whether an enumerated matcher
@@ -709,44 +748,26 @@ fn this_repository_is_wired_correctly() {
 /// BINARY actually reaches.
 #[test]
 fn a_matcher_on_battens_own_entry_is_refused() {
-    let narrowed = format!(
-        r#"{{"hooks": {{"PreToolUse": [{{"matcher": "Bash", "hooks": [{{"type": "command", "command": "{MEDIATOR}"}}]}}], "Stop": [{{"hooks": [{{"type": "command", "command": "{MEDIATOR}"}}]}}]}}}}"#
-    );
-    let (repo, _outside) = fixture("matcher-narrows", &narrowed, None);
-    let output = batten()
-        .current_dir(&repo)
-        .args(["doctor", "hooks"])
-        .output()
-        .expect("run batten doctor hooks");
+    let repo = matcher_fixture("matcher-narrows", Some("Bash"));
     assert!(
-        !output.status.success(),
-        "a matcher on batten's own entry passed: {}",
-        stdout(&output)
-    );
-    let whole = format!("{}{}", stdout(&output), stderr(&output));
-    assert!(
-        whole.contains("hook-wiring-matcher-narrows"),
-        "the refusal did not name the narrowing: {whole}"
+        diagnosis(&repo).contains(MATCHER_NARROWS),
+        "a matcher on batten's own entry was not reported: {}",
+        diagnosis(&repo)
     );
 }
 
-/// The anti-vacuity half: the same fixture WITHOUT the matcher is clean.
+/// The anti-vacuity half, and it is what makes the case above mean anything.
 ///
-/// Without it the case above passes just as well over a `doctor hooks` that
-/// refuses every fixture, which is the shape that made the retired suite's own
-/// coverage claims unreadable.
+/// The SAME wiring with the matcher removed must not raise that finding. Without
+/// this, the positive case passes over any `doctor hooks` that reports something
+/// — which it does here for four absent harnesses and two unregistered events,
+/// none of which is about a matcher.
 #[test]
 fn the_same_wiring_without_a_matcher_is_clean() {
-    let (repo, _outside) = fixture("matcher-absent", &clean_committed(), None);
-    let output = batten()
-        .current_dir(&repo)
-        .args(["doctor", "hooks"])
-        .output()
-        .expect("run batten doctor hooks");
+    let repo = matcher_fixture("matcher-absent", None);
     assert!(
-        output.status.success(),
-        "an unmatched wiring reported: {}{}",
-        stdout(&output),
-        stderr(&output)
+        !diagnosis(&repo).contains(MATCHER_NARROWS),
+        "an unmatched wiring was reported as narrowing: {}",
+        diagnosis(&repo)
     );
 }
