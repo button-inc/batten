@@ -42,22 +42,58 @@ fn preset_row(id: &str, preset: &str) -> Rule {
 /// produces — CLOUD-845's defect, in the direction that makes a real deny look
 /// like a clean call.
 ///
+/// **`programs` is present for the same reason, and since CLOUD-1382 it is the
+/// key the presets actually read.** `segment.words[0]` is the first WORD of a
+/// segment, which six shell constructs occupy in their own right, so a preset
+/// anchoring a PROGRAM there was one keystroke from silence; they anchor on
+/// `programs[_].name` and read `programs[_].arguments` now. A fixture supplying
+/// only `segments` hands those predicates nothing at all — which is exactly the
+/// direction that makes a real deny look like a clean call, so it is written
+/// here rather than left to be discovered.
+///
 /// The whitespace split here is NOT a second tokenizer and must not grow into
-/// one: every command below is a single unquoted element, where splitting on
-/// spaces and `hook::segments` agree by inspection. Anything with a quote or a
-/// list operator belongs in `crates/batten/tests/it/preset_segments.rs`, which
-/// drives the real projection through the compiled binary over a real envelope
-/// — the tier `.claude/rules/policy-modules.md` says a `with input as` case
-/// cannot stand in for.
+/// one: every command below is a single unquoted element with the program in
+/// first position, no wrapper and no grammar token, where splitting on spaces
+/// and `hook::segments` agree by inspection. Anything with a quote, a list
+/// operator, a wrapper or a token before the program belongs in
+/// `crates/batten/tests/it/preset_segments.rs`, which drives the real projection
+/// through the compiled binary over a real envelope — the tier
+/// `.claude/rules/policy-modules.md` says a `with input as` case cannot stand in
+/// for, and the one that caught CLOUD-1382's six bypasses.
 fn call(command: &str) -> String {
     let words: Vec<&str> = command.split_whitespace().collect();
     assert!(
         !command.contains('"') && !command.contains('\''),
         "a quoted fixture needs the real projection: use tests/preset_segments.rs"
     );
+    let program = words.first().copied().unwrap_or_default();
+    // A FIXTURE GUARD, NOT A PROGRAM RESOLVER, and the difference is what makes
+    // the short list below tolerable where §"There is one parser" would refuse
+    // it. `hook::effective_program` is the one authority on what a call's
+    // program is; this only refuses to ACCEPT a fixture whose first word plainly
+    // is not it, and its failure mode is a test that declines a fixture — never
+    // a gate that decides wrongly. Anything it refuses has a home:
+    // `crates/batten/tests/it/preset_segments.rs` runs the real projection.
+    assert!(
+        program
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+            && !matches!(
+                program,
+                "" | "time" | "command" | "env" | "nohup" | "sudo" | "xargs" | "timeout" | "mise"
+            ),
+        "a fixture whose first word is not plainly the program needs the real \
+         projection: use tests/preset_segments.rs"
+    );
     serde_json::json!({"call": {
         "command": command,
         "segments": [{"words": words, "raw": command, "terminator": null}],
+        "programs": [{
+            "program": program,
+            "name": program,
+            "arguments": &words[1..],
+            "mediated": false,
+        }],
         "operation": "run",
         "event": "pre_tool",
     }})
