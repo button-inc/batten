@@ -5866,6 +5866,40 @@ tool = "hyperfine"
 version = "1.20.0"
 input = "target/release/batten"
 
+# The agentic trials protocol (CLOUD-1116). A completeness predicate over the two
+# records in `bench/agentic/`, and nothing else — it decides whether a row that
+# CLAIMS an outcome carries the arms, the fixture, the run count and the falsifier
+# that would let anyone else check the claim. Whether the treatment HELPED is a
+# judgement, and non-negotiable rule 3 keeps a judgement out of a verdict.
+#
+# `documents` RATHER THAN `sources`, and the difference is the could-not-look arm.
+# `sources` is the GLOB field: its entries are matched against the walked file
+# list, so an absent record matches nothing, is never declared, is never acquired,
+# and never reaches `input.tree.missing` — the arm simply cannot fire. `documents`
+# is the literal field and is unioned into the declared set unconditionally, so an
+# absent path is acquired, fails, and is named with its cause. That is what the
+# joint predicate needs, since either record absent leaves the other unjudgeable.
+#
+# MEASURED, NOT REASONED. This row's first spelling was `sources`, and over the
+# compiled binary a tree carrying NEITHER record answered nothing at all — a
+# deleted `method.toml` and a satisfied one, byte-identical on the decision
+# surface. `a_tree_with_no_records_at_all_is_silent` is the case that caught it;
+# every other case in that file passed over the broken spelling.
+#
+# `deny` RATHER THAN `warn`, and the row's own acceptance clause is what licenses
+# it: the mutation replay over the record set exists before this is set to `deny`.
+# It is `a_replay_over_the_committed_records_fires_on_every_required_key` in
+# `crates/batten/tests/it/agentic_record.rs` — a test rather than a paragraph, so
+# it re-runs whenever the record set grows. Measured 2026-09-05: 6 trial rows, 13
+# required keys, 78 mutations, 78 fired, 0 false positives.
+[[rule]]
+id = "agentic-experiment-record"
+kind = "policy"
+scope = "tree"
+documents = ["bench/agentic/trials.toml", "bench/agentic/method.toml"]
+module = "policy/agentic-experiment-record.rego"
+severity = "deny"
+
 [[rule]]
 id = "release-tag-shape"
 kind = "policy"
@@ -8796,6 +8830,55 @@ Could-not-look, never a verdict about the tree. The predecessor exited 2 here fo
 id = "module read first"
 kind = "document"
 target = "policy/perf-assert.rego"
+
+# The agentic record set (CLOUD-1116). Three classes, and the split is the record
+# set's own: a row that does not say enough to be checked, a row that says more
+# than it has checked, and a record the gate could not read.
+[[verdict]]
+id = "test declare partial"
+gloss = "a declared agentic trial names fewer than the fields an outcome can be read against"
+class = """
+The failure here is not an absent record, it is a HALF one -- a trial missing its baseline arm reads exactly like a trial that ran, and the write-up is the same length. CLOUD-1089 paid for that twice in one survey: two instruments returned exit 0 while measuring nothing, and both would have been written up as clean results had a human not looked. So a row owes its question and intended outcome, both arms, the model, fixture and run count that make a rerun a rerun, the intervention class, the governed action that bounds the attribution window, the evidence the treatment arm shows, its canary, and the falsifier's statement, downside and disposition. The method record beside it owes the window, what is held constant, what is measured, what deliberately is not, and how a measurement becomes a verdict. Add the field; do not delete the row to silence this.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/agentic-experiment-record.rego"
+
+[[verdict.route]]
+id = "source read first"
+kind = "document"
+target = "bench/agentic/method.toml"
+
+[[verdict]]
+id = "test state early"
+gloss = "a trial's disposition asserts a finding with no result recorded beside it"
+class = """
+`pending` is the honest state for a declared-but-unrun trial and asserts nothing. Every other disposition is a claim about a measurement, so it owes a `[trial.result]` -- and a disposition the method record does not declare at all owes one more thing than that, because a vocabulary invented at the row means nothing to a reader. This is CLOUD-680's laundering shape arriving through the record channel rather than through an override: the cheapest route to a finding is to write one down. The remedy is to run the arms and record the result, or to set the disposition back to `pending`.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/agentic-experiment-record.rego"
+
+[[verdict.route]]
+id = "source read first"
+kind = "document"
+target = "bench/agentic/trials.toml"
+
+[[verdict]]
+id = "input read absent"
+gloss = "a declared agentic record could not be read, so the joint predicate cannot decide"
+class = """
+Could-not-look, never a verdict about the tree. The two records are a JOINT predicate -- the method record owns what "improved" means and the workload record owns each experiment's arms -- so either one absent leaves the other unjudgeable, and reporting green over that would be a dead gate and a clean tree coming out byte-identical on the decision surface. Restore the file or fix the row's `documents`; nothing about any trial is being claimed.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/agentic-experiment-record.rego"
 
 [[verdict]]
 id = "tool judge dirty"

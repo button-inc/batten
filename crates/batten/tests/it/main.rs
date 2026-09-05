@@ -46,6 +46,7 @@ mod acquisition_sweep;
 mod admission;
 mod advisory_drain;
 mod agent_facts;
+mod agentic_record;
 mod ambient_authority;
 mod attribution;
 mod attribution_provenance;
