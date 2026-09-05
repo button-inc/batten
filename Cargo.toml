@@ -494,6 +494,22 @@ gix-packetline = { version = "0.22", default-features = false, features = [
 # `semver` IS NOT HERE, on the same rule (CLOUD-885): no module calls it, and a
 # feature nothing calls is `input.tree.tracked` documented and never built
 # (CLOUD-845). It lands with its first consumer.
+# The bash PARSER (CLOUD-1381). The mediation boundary decides denies over the
+# shape of a command line, and it used to derive that shape from a character
+# walk -- so a mis-split produced a confident wrong answer no gate could tell
+# from a correct one. CLOUD-857 measured that once (`cd /tmp && git push
+# --force` allowed while the bare form denied) and CLOUD-1257 names the half
+# that walk cannot reach at all: `$(...)`.
+#
+# `default-features = false` leaves `pyo3` out; what remains is `thiserror`, so
+# nothing here reaches the network, builds a runtime, or moves
+# `ambient_authority.rs`'s `AMBIENT_CRATES`. MIT, already on `deny.toml`'s list.
+#
+# It is a SYNTACTIC parser and not a shell: it delimits words and does not
+# remove quotes. That boundary is deliberate and is where `hook::unquote` picks
+# up -- a leaf operation over a token the parser has already delimited, which is
+# a different risk class from deciding where the token ended.
+rable = { version = "0.2", default-features = false }
 regorus = { version = "0.11", default-features = false, features = [
   "ast",
   "std",
