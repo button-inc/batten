@@ -14,6 +14,13 @@ use anyhow::Result;
 use batten::output::{self, Mode};
 
 fn main() -> ExitCode {
+    // BEFORE THE OUTPUT MODE, LET ALONE THE PARSER (CLOUD-1455). When the kernel
+    // runs a provisioned tool's launcher it re-enters this binary, and everything
+    // after the launcher's path is the tool's argv — so reading `-v` or `--quiet`
+    // out of it would answer a flag meant for somebody else's program.
+    if let Some(failure) = batten::provision::launched(std::env::args_os()) {
+        return report(&failure, Mode::default(), &mut io::stderr());
+    }
     // Resolved before parsing, and from the raw argument list, because a *usage*
     // error must still be reported — and at that point `clap` has refused to
     // produce any parsed value to read the mode from.

@@ -3671,6 +3671,23 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[DRY_RUN],
     },
+    // NOTE: `provision-exec` — the launcher entry point CLOUD-1455 added — is
+    // DELIBERATELY ABSENT from this table, and the absence is the design rather
+    // than an omission.
+    //
+    // It is not a verb a person or a config invokes; it is what the kernel
+    // re-enters this binary as when it reads a provisioned tool's `#!` line, and
+    // everything after it belongs to somebody else's program. So it is
+    // intercepted in `main` BEFORE any parsing, and clap never sees it. A row
+    // here would be a promise this table cannot keep: `every_leaf_verb_dispatches`
+    // asks that a declared leaf reach a typed arm, and this one must not — a
+    // clap-parsed launcher would claim the tool's own `--help`, `-v` and `--`.
+    //
+    // Its effect is unclassified in the only sense that matters: absent from this
+    // table it can never reach §5's agent read-only allowlist, which is derived
+    // from `effect == read`. `crate::provision::launched` is the authority, and
+    // `tests/it/provision.rs` pins that the interception happens rather than
+    // clap answering.
     // The container's own preconditions (CLOUD-1324), as `[[startup]]` rows
     // declare them. §9's check/fix pair again — `provision status`/`provision
     // apply` established the shape here first — with the two halves as one verb

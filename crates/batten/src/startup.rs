@@ -108,6 +108,12 @@ pub struct Startup {
     /// between what an operator wrote and what runs: no word splitting, no glob
     /// expansion, no `$(…)`.
     pub check: Vec<String>,
+    /// How the check's run becomes a verdict.
+    ///
+    /// Absent is [`Decided::ExitStatus`], which is the ordinary case and the one
+    /// every row before CLOUD-1454 assumed.
+    #[serde(default, skip_serializing_if = "Decided::is_default")]
+    pub decided_by: Decided,
     /// The command that fixes it, as argv. Absent means diagnose-only.
     ///
     /// A row with no repair is not a lesser row: some preconditions genuinely
@@ -115,6 +121,47 @@ pub struct Startup {
     /// use than a repair that silently does nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair: Option<Vec<String>>,
+}
+
+/// How a check's run is read as an answer.
+///
+/// **This exists because a program can be a perfectly good reporter and a
+/// useless gate**, and a row declaring one as its check is dead rather than
+/// wrong-looking (CLOUD-1454). Measured on the row this was added for:
+/// `mise ls --current` prints `(missing)` beside a tool that is not installed
+/// and exits `0`, so `toolchain-is-provisioned` reported `ok` over a container
+/// with nothing installed — and because a `[[startup]]` row only repairs when
+/// its check FAILS, the `mise install --yes` that would have fixed it never ran.
+/// A dead gate and a provisioned container were byte-identical on the report.
+///
+/// The remedy stays inside the argv bound rather than growing a shell: the same
+/// program has a spelling that says nothing when there is nothing to say
+/// (`mise ls --current --missing`), so what the row needed was a way to declare
+/// that SILENCE is the pass — not a pipeline, a `test`, or a wrapper task.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum Decided {
+    /// Exit `0` is provisioned. The default, and what every row means unless it
+    /// says otherwise.
+    #[default]
+    ExitStatus,
+    /// Exit `0` **and** nothing written to stdout is provisioned.
+    ///
+    /// Rule 4 holds here in the TYPE rather than by care: what crosses back is a
+    /// `bool` over the child's stdout, never a byte of it, so a check whose
+    /// output names paths, versions or hosts still cannot put any of that in a
+    /// report. That is the same bound [`Outcome`] already carries, one layer
+    /// earlier.
+    SilentExit,
+}
+
+impl Decided {
+    /// Whether this is the value an absent key means, so the derived schema and
+    /// the round-tripped config both stay quiet about the ordinary case.
+    #[must_use]
+    const fn is_default(&self) -> bool {
+        matches!(self, Self::ExitStatus)
+    }
 }
 
 /// What one row decided, in the §6 pointer shape.
@@ -202,26 +249,38 @@ impl Outcome {
 ///
 /// The child's streams are discarded, which is rule 4 holding at the boundary
 /// rather than by convention: there is no path by which a check's output can
-/// reach a report.
-fn ran_clean(root: &Path, argv: &[String]) -> Option<bool> {
+/// reach a report. Under [`Decided::SilentExit`] stdout is read rather than
+/// discarded, and the bound is unchanged — the only thing that leaves this
+/// function is still a `bool`.
+fn ran_clean(root: &Path, argv: &[String], decided_by: Decided) -> Option<bool> {
     let (program, operands) = argv.split_first()?;
     let rest: Vec<&str> = operands.iter().map(String::as_str).collect();
-    let status = crate::rules::spawn_resolving(Some(root), program, |program, extra| {
+    crate::rules::spawn_resolving(Some(root), program, |program, extra| {
         #[expect(
             clippy::disallowed_types,
             reason = "stays: a `[[startup]]` row IS a program the operator declared in the committed authority, so there is no in-process form of it to prefer (CLOUD-320)"
         )]
-        std::process::Command::new(program)
+        let mut command = std::process::Command::new(program);
+        command
             .args(extra)
             .args(&rest)
             .current_dir(root)
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
+            .stderr(std::process::Stdio::null());
+        match decided_by {
+            Decided::ExitStatus => command
+                .stdout(std::process::Stdio::null())
+                .status()
+                .map(|status| status.success()),
+            // `output()` rather than a piped `status()`: a check that writes more
+            // than a pipe buffer and is never drained deadlocks, and a gate that
+            // hangs is worse than one that answers wrong.
+            Decided::SilentExit => command.output().map(|out| {
+                out.status.success() && out.stdout.iter().all(u8::is_ascii_whitespace)
+            }),
+        }
     })
-    .ok()?;
-    Some(status.success())
+    .ok()
 }
 
 /// Decide every row without repairing anything.
@@ -233,7 +292,7 @@ fn ran_clean(root: &Path, argv: &[String]) -> Option<bool> {
 #[must_use]
 pub fn evaluate(root: &Path, rows: &[Startup]) -> Vec<Outcome> {
     rows.iter()
-        .map(|row| match ran_clean(root, &row.check) {
+        .map(|row| match ran_clean(root, &row.check, row.decided_by) {
             Some(true) => Outcome::passed(&row.id),
             // `not-provisioned` WHETHER OR NOT A REPAIR IS DECLARED, because
             // that is what is true: this path ran no repair, so it cannot report
@@ -263,7 +322,7 @@ pub fn evaluate(root: &Path, rows: &[Startup]) -> Vec<Outcome> {
 pub fn repair(root: &Path, rows: &[Startup]) -> Vec<Outcome> {
     rows.iter()
         .map(|row| {
-            let first = ran_clean(root, &row.check);
+            let first = ran_clean(root, &row.check, row.decided_by);
             if first == Some(true) {
                 return Outcome::passed(&row.id);
             }
@@ -277,7 +336,12 @@ pub fn repair(root: &Path, rows: &[Startup]) -> Vec<Outcome> {
                     },
                 );
             };
-            if ran_clean(root, fix).is_none() {
+            // A REPAIR IS ALWAYS READ BY ITS EXIT STATUS, whatever the row says
+            // about its check. `decided_by` is a statement about a program that
+            // reports rather than gates, and only the check has to gate; a repair
+            // that legitimately narrates what it installed would otherwise be
+            // read as having failed for having spoken.
+            if ran_clean(root, fix, Decided::ExitStatus).is_none() {
                 return Outcome::failed(&row.id, REPAIR_UNRUNNABLE);
             }
             // THE REPAIR'S OWN EXIT CODE IS DELIBERATELY NOT THE ANSWER. A repair
@@ -285,7 +349,7 @@ pub fn repair(root: &Path, rows: &[Startup]) -> Vec<Outcome> {
             // rule exists to catch, and one that exits non-zero having fixed the
             // thing anyway is not a failure worth reporting. The check decides,
             // both times.
-            if ran_clean(root, &row.check) == Some(true) {
+            if ran_clean(root, &row.check, row.decided_by) == Some(true) {
                 Outcome::repaired(&row.id)
             } else {
                 Outcome::failed(&row.id, REPAIR_FAILED)
@@ -349,6 +413,7 @@ mod tests {
             id: id.to_owned(),
             gloss: "a fixture row".to_owned(),
             check: check.iter().map(|s| (*s).to_owned()).collect(),
+            decided_by: Decided::ExitStatus,
             repair: repair.map(|argv| argv.iter().map(|s| (*s).to_owned()).collect()),
         }
     }
@@ -375,6 +440,98 @@ mod tests {
         // The load-bearing half: without it this passes over a build that runs
         // every repair unconditionally and reports the check afterwards.
         assert!(!marker.exists(), "a passing row's repair must not run");
+    }
+
+    /// A reporter that says something and exits `0` is what
+    /// [`Decided::SilentExit`] exists for, and this is the case the shipped
+    /// `toolchain-is-provisioned` row was failing in production: `echo` here
+    /// stands for `mise ls --current`, which names every missing tool and still
+    /// exits zero.
+    #[test]
+    fn a_check_that_speaks_and_exits_zero_is_a_pass_by_status_and_a_failure_by_silence() {
+        let dir = scratch("speaks");
+        let mut talkative = row("speaks", &["echo", "aqua:some/tool (missing)"], None);
+
+        assert_eq!(
+            evaluate(&dir, std::slice::from_ref(&talkative))[0].line(),
+            "speaks ok",
+            "read by exit status alone, a reporter is indistinguishable from a gate"
+        );
+
+        talkative.decided_by = Decided::SilentExit;
+        assert_eq!(
+            evaluate(&dir, std::slice::from_ref(&talkative))[0].line(),
+            "speaks failed not-provisioned"
+        );
+    }
+
+    /// The other arm, so the mode is not merely "always fails": a command that
+    /// exits `0` and says nothing still passes under it.
+    #[test]
+    fn silence_and_a_zero_exit_is_still_provisioned() {
+        let rows = [Startup {
+            decided_by: Decided::SilentExit,
+            ..row("quiet", &["true"], None)
+        }];
+        assert_eq!(evaluate(&scratch("quiet"), &rows)[0].line(), "quiet ok");
+    }
+
+    /// Trailing whitespace is not speech. `mise ls --current --missing` writes a
+    /// bare newline on some builds, and a row that failed on it would report a
+    /// provisioned container as broken and then repair it every session.
+    #[test]
+    fn a_check_writing_only_whitespace_is_silent() {
+        let rows = [Startup {
+            decided_by: Decided::SilentExit,
+            ..row("blank", &["echo", ""], None)
+        }];
+        assert_eq!(evaluate(&scratch("blank"), &rows)[0].line(), "blank ok");
+    }
+
+    /// A NON-ZERO EXIT IS STILL A FAILURE UNDER `SilentExit`, silence or not.
+    /// The mode ADDS a way to fail; reading it as "only stdout decides" would
+    /// turn a check that crashed before printing anything into a pass, which is
+    /// the could-not-look-as-green direction the whole module refuses.
+    #[test]
+    fn silence_does_not_rescue_a_non_zero_exit() {
+        let rows = [Startup {
+            decided_by: Decided::SilentExit,
+            ..row("failed-quietly", &["false"], None)
+        }];
+        assert_eq!(
+            evaluate(&scratch("failed-quietly"), &rows)[0].line(),
+            "failed-quietly failed not-provisioned"
+        );
+    }
+
+    /// A REPAIR IS READ BY ITS EXIT STATUS EVEN ON A `SilentExit` ROW. Installers
+    /// narrate; `mise install --yes` prints a line per tool. A build that carried
+    /// the row's mode into the repair would call every successful install a
+    /// failure.
+    #[test]
+    fn a_talkative_repair_still_satisfies_a_silent_exit_row() {
+        let dir = scratch("talkative-repair");
+        // `ls` over a directory is the same shape as the row this is for: it
+        // names what is outstanding, says nothing once nothing is, and exits `0`
+        // either way. `rm -v` is the narrating repair.
+        let staging = dir.join("outstanding");
+        std::fs::create_dir_all(&staging).unwrap();
+        let outstanding = staging.join("absent-tool");
+        std::fs::write(&outstanding, b"").unwrap();
+        let (staging, outstanding) = (
+            staging.to_str().unwrap().to_owned(),
+            outstanding.to_str().unwrap().to_owned(),
+        );
+
+        let rows = [Startup {
+            decided_by: Decided::SilentExit,
+            ..row(
+                "installs",
+                &["ls", staging.as_str()],
+                Some(&["rm", "-v", outstanding.as_str()]),
+            )
+        }];
+        assert_eq!(repair(&dir, &rows)[0].line(), "installs ok repaired");
     }
 
     #[test]

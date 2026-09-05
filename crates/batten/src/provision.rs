@@ -164,6 +164,64 @@ pub struct Provision {
     /// whatever directory the process happens to be in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
+    /// Environment this tool needs in its OWN process before it will work.
+    ///
+    /// **This is not `[env]` one layer over, and the difference is the whole
+    /// reason the key exists** (CLOUD-1455). A task runner applies its own `[env]`
+    /// to what it SPAWNS; its own resolver — the HTTP client that fetches what it
+    /// is being asked to install — reads the process environment it was started
+    /// with, and nothing a manifest says can reach back and change that. Measured
+    /// 2026-09-05, the same cold install of one pinned tool, the bypass declared
+    /// two ways: through the runner's `[env]` the install 403s, and with the same
+    /// two variables in the process environment it succeeds.
+    ///
+    /// So the environment has to be applied by whatever LAUNCHES the tool, which
+    /// is what this field is read by — [`link_onto_path`] for everything that
+    /// resolves the tool by bare name, and [`crate::rules::spawn_resolving`]'s
+    /// pinned rung for batten's own spawns. Both, because a row that fixed only
+    /// one would leave the other silently unfixed.
+    ///
+    /// Empty for every entry that needs nothing, which is the ordinary case: an
+    /// entry declaring no rows is copied onto `PATH` exactly as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<ProvisionEnv>,
+}
+
+/// One variable a provisioned tool's launcher sets, and how its value is found.
+///
+/// **Both spellings are DERIVED rather than literal, and that is deliberate.** A
+/// literal value would be wrong twice over here: the two things this exists to
+/// carry are a proxy exemption list, which must be added to whatever the host
+/// already exempts rather than replacing it, and a credential, which must never
+/// be written into a tracked file at all. Neither is expressible as a constant,
+/// so the row declares the RULE and the launcher resolves it against the
+/// environment it finds.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(extend("oneOf" = serde_json::json!([
+    { "required": ["prepend_list"], "not": { "required": ["from_first_set"] } },
+    { "required": ["from_first_set"], "not": { "required": ["prepend_list"] } }
+])))]
+pub struct ProvisionEnv {
+    /// The variable to set.
+    pub name: String,
+    /// Entries to add to the front of a comma-separated list, keeping whatever
+    /// the host already had and adding nothing twice.
+    ///
+    /// Idempotent by construction: an entry already present is not added again,
+    /// so a launcher that runs a launcher does not grow the value without bound.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prepend_list: Vec<String>,
+    /// Set from the first of these variables that is set and non-empty.
+    ///
+    /// A list rather than one name because the fallback is the point: the same
+    /// tool wants a session credential where one exists and the runner's own
+    /// where it does not, and a row naming one would be dead in whichever
+    /// environment does not have it. **Nothing is written when none is set** —
+    /// an empty credential is refused by some tools and accepted as anonymous by
+    /// others, and inventing one is a claim this row cannot make.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub from_first_set: Vec<String>,
 }
 
 /// One platform's artifact: where it comes from, and what it must hash to.
@@ -404,10 +462,21 @@ fn freshness_of(entry: &Provision, cache_root: &Path) -> Result<Freshness> {
     // `Missing` rather than a fourth verdict: what is missing is the binary at
     // the place this entry declares it must be, which is the same class as
     // nothing cached and takes the same repair.
-    if let Some(dest) = entry.link.as_deref()
-        && !expand_home(dest)?.join(&entry.binary).is_file()
-    {
-        return Ok(Freshness::Missing);
+    if let Some(dest) = entry.link.as_deref() {
+        let linked = expand_home(dest)?.join(&entry.binary);
+        if !linked.is_file() {
+            return Ok(Freshness::Missing);
+        }
+        // AND A LAUNCHER NAMING AN INTERPRETER THAT IS NO LONGER THERE IS STALE
+        // (CLOUD-1455), which is the one way this seam degrades that a plain copy
+        // never could. `launcher` writes an absolute path to the batten that ran
+        // `apply`; replace that binary elsewhere and the file on `PATH` is still
+        // present, still executable, and refuses to run with the kernel's own
+        // ENOENT — which names the interpreter, not the tool, and reads as the
+        // tool being broken. Answering `Missing` re-writes it on the next apply.
+        if !relaunches_a_present_interpreter(&linked) {
+            return Ok(Freshness::Missing);
+        }
     }
     let cached = match fs::read(dir.join(ARTIFACT)) {
         Ok(bytes) => bytes,
@@ -506,14 +575,15 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8]) -> Result<()> {
         Unpack::None => bytes.to_vec(),
         Unpack::TarGz => extract(bytes, &entry.binary)?,
     };
-    fs::write(bin_dir.join(&entry.binary), &binary).context("write the provisioned binary")?;
-    make_executable(&bin_dir.join(&entry.binary))?;
+    let cached = bin_dir.join(&entry.binary);
+    fs::write(&cached, &binary).context("write the provisioned binary")?;
+    make_executable(&cached)?;
     // BEFORE the artifact, so the same crash window that leaves the entry
     // reading `missing` also leaves the link unmade. A fresh entry whose link
     // never landed would be the silent half-install this ordering exists to
     // rule out.
     if let Some(dest) = entry.link.as_deref() {
-        link_onto_path(entry, dest, &binary)?;
+        link_onto_path(entry, dest, &cached, &binary)?;
     }
     // The artifact is written last, so a crash between the two leaves the entry
     // reading `missing` rather than `fresh` — the direction that re-applies.
@@ -536,6 +606,9 @@ fn cached_artifact_matching_pin(
     digest(&bytes).eq_ignore_ascii_case(pinned).then_some(bytes)
 }
 
+/// The first line of a launcher, so a reader and [`is_launcher`] agree.
+const LAUNCHER_VERB: &str = "provision-exec";
+
 /// Place the verified binary in the declared directory as well as the cache.
 ///
 /// A COPY rather than a symlink, deliberately. The cache is keyed by version, so
@@ -544,12 +617,264 @@ fn cached_artifact_matching_pin(
 /// `PATH` is what a shell, a git hook and a session handler get, and those must
 /// not change under a running session. A copy also survives the cache being
 /// pruned, which [`crate::target`] may do.
-fn link_onto_path(entry: &Provision, dest: &str, binary: &[u8]) -> Result<()> {
+///
+/// **An entry declaring [`Provision::env`] gets a LAUNCHER instead**, and the
+/// copy above is what it launches. See [`launcher`] for the shape and for why the
+/// environment cannot be baked in at this point.
+fn link_onto_path(entry: &Provision, dest: &str, cached: &Path, binary: &[u8]) -> Result<()> {
     let dir = expand_home(dest)?;
     fs::create_dir_all(&dir).context("create the linked binary's directory")?;
     let path = dir.join(&entry.binary);
-    fs::write(&path, binary).context("write the linked binary")?;
+    if entry.env.is_empty() {
+        fs::write(&path, binary).context("write the linked binary")?;
+    } else {
+        fs::write(&path, launcher(entry, cached)?).context("write the linked launcher")?;
+    }
     make_executable(&path)
+}
+
+/// The bytes of the launcher that stands in for a tool needing an environment.
+///
+/// Two lines, and no shell anywhere in them:
+///
+/// ```text
+/// #!/abs/path/to/batten provision-exec
+/// {"exec":"/abs/path/to/cache/bin/tool","env":[ … ]}
+/// ```
+///
+/// The kernel's `#!` handling passes the interpreter one argument and then the
+/// script's own path, so batten is re-entered as
+/// `batten provision-exec <this file> <the caller's arguments>` and reads its
+/// instructions out of the file it was handed. That is the whole mechanism: a
+/// data file the kernel knows how to run, rather than a program in a language
+/// this repository is retiring.
+///
+/// **The environment is stored as RULES and resolved when the launcher runs,
+/// never resolved here.** That is not a refinement, it is the case this exists
+/// for: provisioning happens while a container is being built, where there is no
+/// session and therefore no session credential, and the tool runs later, in a
+/// session that has one. A value captured at this moment would bake in the
+/// absence.
+///
+/// **The interpreter is an absolute path to the batten running right now**
+/// (`current_exe`), because a launcher naming a bare `batten` would resolve
+/// against the `PATH` of whoever ran it — including the empty-ish one a git hook
+/// gets, which is the environment this whole seam exists to survive. The cost is
+/// stated rather than hidden: move or delete that binary and the launcher stops
+/// working, where a plain copy would have kept running. `provision apply`
+/// rewrites it, and [`freshness_of`] treats a launcher naming a missing
+/// interpreter as stale so the next apply does.
+fn launcher(entry: &Provision, cached: &Path) -> Result<Vec<u8>> {
+    let batten = std::env::current_exe().context("locate the running batten for the launcher")?;
+    let instructions = serde_json::json!({
+        "exec": cached,
+        "env": entry.env,
+    });
+    Ok(format!("#!{} {LAUNCHER_VERB}\n{instructions}\n", batten.display()).into_bytes())
+}
+
+/// Become the tool, if this process was started as a launcher's interpreter.
+///
+/// **Read before batten parses anything of its own, and that ordering is the
+/// mechanism rather than an optimisation.** The arguments after the launcher's
+/// own path belong to somebody else's program, and batten's parser would claim
+/// them: `--help` would print batten's help instead of the tool's, `-v` would
+/// raise batten's verbosity instead of reaching the tool, and `--` would be
+/// eaten. There is nothing to configure here and nothing to validate — the
+/// kernel decided this shape when it read the `#!`.
+///
+/// `None` means an ordinary invocation, and the caller carries on. `Some` is a
+/// launcher run that FAILED, because a successful one never returns.
+pub fn launched(argv: impl Iterator<Item = std::ffi::OsString>) -> Option<anyhow::Error> {
+    let mut argv = argv.skip(1);
+    if argv.next()? != *LAUNCHER_VERB {
+        return None;
+    }
+    let script = PathBuf::from(argv.next()?);
+    let rest: Vec<std::ffi::OsString> = argv.collect();
+    Some(match exec_launcher(&script, &rest) {
+        Err(failure) => failure,
+        // Unreachable by type: `Infallible` has no value, so the success arm
+        // cannot be constructed. Spelled out rather than `unreachable!()`, which
+        // would be a panic on a path the library lints forbid one on.
+        Ok(never) => match never {},
+    })
+}
+
+/// What a launcher file carries, and the whole of what [`exec_launcher`] reads.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+struct Launch {
+    /// The cached binary to become.
+    exec: PathBuf,
+    /// The rules deciding this process's environment first.
+    env: Vec<ProvisionEnv>,
+}
+
+/// Whether `linked` is a launcher whose declared interpreter is still present.
+///
+/// `true` for a plain copy, which has no interpreter to lose — the question does
+/// not apply, and answering `false` there would make every ordinary linked
+/// binary permanently stale.
+fn relaunches_a_present_interpreter(linked: &Path) -> bool {
+    let Ok(bytes) = fs::read(linked) else {
+        // Unreadable is not this predicate's finding: the `is_file` check above
+        // already answered presence, and a read failure here is a permissions or
+        // races question that re-linking would not fix.
+        return true;
+    };
+    let Some(first) = bytes.split(|byte| *byte == b'\n').next() else {
+        return true;
+    };
+    let Ok(line) = std::str::from_utf8(first) else {
+        return true;
+    };
+    let Some(shebang) = line.strip_prefix("#!") else {
+        return true;
+    };
+    match shebang.rsplit_once(' ') {
+        Some((interpreter, verb)) if verb == LAUNCHER_VERB => Path::new(interpreter).is_file(),
+        _ => true,
+    }
+}
+
+/// Become the tool a launcher stands for, with the environment its row declares.
+///
+/// `script` is the launcher's own path, which the kernel supplies after the `#!`
+/// argument; `args` is what the caller actually typed. Nothing about the calling
+/// process survives except its environment, which is the point — the tool sees
+/// one it can work in, and every other property of the invocation is unchanged.
+///
+/// # Errors
+///
+/// A [`UsageError`] when the launcher cannot be read or does not carry the
+/// instructions this build knows how to follow — which is a batten and a
+/// launcher that disagree, and is repaired by `provision apply`. On Unix a
+/// successful `exec` never returns, so a returned error is always a real one.
+pub fn exec_launcher(
+    script: &Path,
+    args: &[std::ffi::OsString],
+) -> Result<std::convert::Infallible> {
+    let bytes = fs::read(script).with_context(|| {
+        format!(
+            "read the launcher at {} — `batten provision apply` rewrites it",
+            script.display()
+        )
+    })?;
+    // Everything after the first newline, because the first line is the kernel's
+    // and carries no instructions of its own.
+    let body = bytes
+        .split_once_newline()
+        .ok_or_else(|| UsageError::raise("the launcher carries no instructions"))?;
+    let launch: Launch = serde_json::from_slice(body).map_err(|err| {
+        UsageError::raise(format!(
+            "the launcher at {} does not carry instructions this batten understands ({err}); \
+             run `batten provision apply` to rewrite it",
+            script.display()
+        ))
+    })?;
+
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: this call IS the tool the operator asked for, and becoming it is the whole verb — there is no in-process form of somebody else's binary (CLOUD-320)"
+    )]
+    let mut command = std::process::Command::new(&launch.exec);
+    command.args(args);
+    for (name, value) in resolved_env(&launch.env) {
+        command.env(name, value);
+    }
+    become_process(command, &launch.exec)
+}
+
+/// Turn a launcher's declared rules into the variables to set, reading the
+/// environment this process was started with.
+///
+/// A rule that resolves to nothing sets nothing, which is what keeps an absent
+/// credential absent rather than empty.
+fn resolved_env(rules: &[ProvisionEnv]) -> Vec<(String, String)> {
+    rules
+        .iter()
+        .filter_map(|rule| {
+            let value = if rule.prepend_list.is_empty() {
+                rule.from_first_set
+                    .iter()
+                    .find_map(|from| std::env::var(from).ok().filter(|got| !got.is_empty()))?
+            } else {
+                prepended(
+                    &std::env::var(&rule.name).unwrap_or_default(),
+                    &rule.prepend_list,
+                )
+            };
+            Some((rule.name.clone(), value))
+        })
+        .collect()
+}
+
+/// Add every entry not already in `current`, in front and in declared order.
+///
+/// Idempotent, which the launcher needs rather than merely benefits from: a tool
+/// that re-invokes itself through the same `PATH` entry would otherwise grow the
+/// value once per generation.
+fn prepended(current: &str, additions: &[String]) -> String {
+    let held: Vec<&str> = current
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    let mut out: Vec<&str> = additions
+        .iter()
+        .map(String::as_str)
+        .filter(|entry| !held.contains(entry))
+        .collect();
+    out.extend(held);
+    out.join(",")
+}
+
+/// Replace this process with `command`, or say why it could not be.
+#[cfg(unix)]
+fn become_process(
+    mut command: std::process::Command,
+    exec: &Path,
+) -> Result<std::convert::Infallible> {
+    use std::os::unix::process::CommandExt as _;
+    // `exec` returns only on failure, so reaching the next line IS the error.
+    let failed = command.exec();
+    Err(UsageError::raise(format!(
+        "the launcher could not become {}: {failed}",
+        exec.display()
+    )))
+}
+
+/// The same, where a process cannot be replaced: run it and take its status.
+///
+/// Stated as a difference rather than hidden behind one name — the child is a
+/// real second process here, so a signal aimed at this one does not reach it.
+/// Nothing in this repository links on such a host today; the arm exists so the
+/// cross-target build is honest about it.
+#[cfg(not(unix))]
+fn become_process(
+    mut command: std::process::Command,
+    exec: &Path,
+) -> Result<std::convert::Infallible> {
+    let status = command.status().map_err(|err| {
+        UsageError::raise(format!(
+            "the launcher could not run {}: {err}",
+            exec.display()
+        ))
+    })?;
+    std::process::exit(status.code().unwrap_or(1));
+}
+
+/// A tiny helper so the split above reads as what it is.
+trait SplitOnceNewline {
+    /// Everything after the first `\n`, or `None` when there is not one.
+    fn split_once_newline(&self) -> Option<&[u8]>;
+}
+
+impl SplitOnceNewline for [u8] {
+    fn split_once_newline(&self) -> Option<&[u8]> {
+        let at = self.iter().position(|byte| *byte == b'\n')?;
+        self.get(at + 1..)
+    }
 }
 
 /// Expand a leading `~` and refuse anything that is not then absolute.
@@ -784,6 +1109,44 @@ fn validate_artifact_spelling(entry: &Provision) -> Result<()> {
         check_url(&entry.name, platform, &artifact.url)?;
         check_sha256(&entry.name, platform, &artifact.sha256)?;
     }
+    validate_env(entry)
+}
+
+/// The `prepend_list`-versus-`from_first_set` xor on every `[[provision.env]]` row.
+///
+/// Refused at LOAD, on the same argument the artifact xor above is: a row
+/// spelling neither sets nothing, and a launcher that silently sets nothing is
+/// byte-identical to one that was never written — which is the failure this whole
+/// field exists to end rather than to reproduce one layer down. A row spelling
+/// both would have two rules for one variable and no stated precedence.
+fn validate_env(entry: &Provision) -> Result<()> {
+    for rule in &entry.env {
+        if rule.name.trim().is_empty() {
+            return Err(UsageError::raise(format!(
+                "provision {}: an `[[provision.env]]` row must name a variable",
+                entry.name
+            )));
+        }
+        match (rule.prepend_list.is_empty(), rule.from_first_set.is_empty()) {
+            (false, false) => {
+                return Err(UsageError::raise(format!(
+                    "provision {}: env {} declares both `prepend_list` and \
+                     `from_first_set`; exactly one, or two rules decide one variable \
+                     with no stated order between them",
+                    entry.name, rule.name
+                )));
+            }
+            (true, true) => {
+                return Err(UsageError::raise(format!(
+                    "provision {}: env {} declares neither `prepend_list` nor \
+                     `from_first_set`, so it would set nothing — and a launcher that \
+                     sets nothing cannot be told from one that was never written",
+                    entry.name, rule.name
+                )));
+            }
+            _ => {}
+        }
+    }
     Ok(())
 }
 
@@ -900,6 +1263,7 @@ mod tests {
             unpack: Unpack::None,
             binary: "tool".to_owned(),
             link: None,
+            env: Vec::new(),
         }
     }
 

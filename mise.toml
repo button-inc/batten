@@ -2005,13 +2005,22 @@ echo "install:local: batten -> $dest/batten"
 # assume a Rust toolchain, a 141-second compile (measured, CLOUD-1085), or that the
 # checkout builds at all. One install interface (§1); this is the caller it lacked.
 #
-# WHY ROUTING THROUGH `mise run` IS LOAD-BEARING rather than incidental. The setup
-# script shadows `mise` with a wrapper that prepends the GitHub API and asset hosts
-# to NO_PROXY and sets MISE_GITHUB_TOKEN from the session PAT, because the agent
-# proxy answers 403 for third-party release repos. A task body inherits that
-# wrapper's environment, so the release API is reachable here and would NOT be from
-# a bare `./install.sh` in the setup script. The seam and the proxy fix are the same
+# WHY ROUTING THROUGH `mise run` IS LOAD-BEARING rather than incidental. The agent
+# proxy answers 403 for third-party release repos, so `mise` needs the GitHub API
+# and asset hosts prepended to NO_PROXY and MISE_GITHUB_TOKEN set from the session
+# PAT — in its OWN process, which `[env]` below cannot reach. A task body inherits
+# that environment, so the release API is reachable here and would NOT be from a
+# bare `./install.sh` in the setup script. The seam and the proxy fix are the same
 # mechanism.
+#
+# WHAT SUPPLIES IT CHANGED, AND THIS COMMENT NAMED THE DEAD ONE (CLOUD-1455). It
+# used to read "the setup script shadows `mise` with a wrapper", which was true of
+# the ~120-line provisioning script and false the moment that became a one-line
+# `curl … install.sh | sh && batten startup --repair`. Nothing replaced the
+# wrapper, so every third-party pinned tool 403'd in a fresh container while this
+# comment still explained why they would not. The `[[provision.env]]` rows on
+# `batten.toml`'s mise entry are what supplies it now, through a launcher
+# `provision apply` writes onto PATH.
 #
 # LOUD ON FAILURE, because the defect this closes is a SILENT absence: an absent
 # reference monitor and a passing one are indistinguishable from outside, and every

@@ -985,6 +985,21 @@
       },
       "additionalProperties": false
     },
+    "Decided": {
+      "description": "How a check's run is read as an answer.\n\n**This exists because a program can be a perfectly good reporter and a\nuseless gate**, and a row declaring one as its check is dead rather than\nwrong-looking (CLOUD-1454). Measured on the row this was added for:\n`mise ls --current` prints `(missing)` beside a tool that is not installed\nand exits `0`, so `toolchain-is-provisioned` reported `ok` over a container\nwith nothing installed — and because a `[[startup]]` row only repairs when\nits check FAILS, the `mise install --yes` that would have fixed it never ran.\nA dead gate and a provisioned container were byte-identical on the report.\n\nThe remedy stays inside the argv bound rather than growing a shell: the same\nprogram has a spelling that says nothing when there is nothing to say\n(`mise ls --current --missing`), so what the row needed was a way to declare\nthat SILENCE is the pass — not a pipeline, a `test`, or a wrapper task.",
+      "oneOf": [
+        {
+          "description": "Exit `0` is provisioned. The default, and what every row means unless it\nsays otherwise.",
+          "type": "string",
+          "const": "exit-status"
+        },
+        {
+          "description": "Exit `0` **and** nothing written to stdout is provisioned.\n\nRule 4 holds here in the TYPE rather than by care: what crosses back is a\n`bool` over the child's stdout, never a byte of it, so a check whose\noutput names paths, versions or hosts still cannot put any of that in a\nreport. That is the same bound [`Outcome`] already carries, one layer\nearlier.",
+          "type": "string",
+          "const": "silent-exit"
+        }
+      ]
+    },
     "Declared": {
       "description": "One agent-sourced fact a consumer declares: its name, and the command whose\noutput answers it.\n\n# Why the command is CONFIG rather than a crate constant\n\nNon-negotiable rule 1. `gh pr list --search …` names a forge, a query syntax\nand a workflow — all of them a consumer's facts, none of them the engine's.\nThe core knows that an agent-sourced fact has a name and a command; which\ncommand answers which question is `batten.toml`'s.\n\n# One value, read twice, which is the point\n\nThe same string is the command the deny asks the agent to run AND the command\nthe record is checked against. That is deliberate and is the lesson of the two\nissues this one follows: CLOUD-779 and CLOUD-601 were both a harness-level\ndeclaration kept in step BY HAND with the reachability it implied, and both\ndrifted. A fix text and a verification target that could disagree would be the\nsame defect a third time, on a surface where the disagreement is a forged\nfact rather than a silent allow.",
       "type": "object",
@@ -2279,6 +2294,13 @@
           "description": "The binary's name inside the artifact, and the name it is cached under.",
           "type": "string"
         },
+        "env": {
+          "description": "Environment this tool needs in its OWN process before it will work.\n\n**This is not `[env]` one layer over, and the difference is the whole\nreason the key exists** (CLOUD-1455). A task runner applies its own `[env]`\nto what it SPAWNS; its own resolver — the HTTP client that fetches what it\nis being asked to install — reads the process environment it was started\nwith, and nothing a manifest says can reach back and change that. Measured\n2026-09-05, the same cold install of one pinned tool, the bypass declared\ntwo ways: through the runner's `[env]` the install 403s, and with the same\ntwo variables in the process environment it succeeds.\n\nSo the environment has to be applied by whatever LAUNCHES the tool, which\nis what this field is read by — [`link_onto_path`] for everything that\nresolves the tool by bare name, and [`crate::rules::spawn_resolving`]'s\npinned rung for batten's own spawns. Both, because a row that fixed only\none would leave the other silently unfixed.\n\nEmpty for every entry that needs nothing, which is the ordinary case: an\nentry declaring no rows is copied onto `PATH` exactly as before.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProvisionEnv"
+          }
+        },
         "link": {
           "description": "A directory to ALSO place the binary in, so it reaches `PATH`.\n\nAbsent for every entry batten invokes itself: the cache path is resolved\nin-process, so `ripsecrets` needs no `PATH` presence and putting it there\nwould widen what a consumer's shell can reach for no gain.\n\n**It exists for the bootstrap case, which is the one entry the cache\ncannot serve** (CLOUD-1389). The container's Setup script is one line\nthat installs batten, so batten is the first thing present and the task\nrunner is not — and every gate in this repository is a `mise run`. A\nrunner resolved only inside batten's own process is unreachable from the\nsession handlers, the git hooks and the agent's own shell, all of which\ninvoke it by bare name.\n\n`~` is expanded, and nothing else is: no `$VAR`, no `$(…)`, no glob. The\nsame bound [`crate::startup::Startup::check`] states for argv, and for\nthe same reason — an operator reads the declared path and that is the\npath. A relative value is refused at load rather than resolved against\nwhatever directory the process happens to be in.",
           "type": [
@@ -2358,6 +2380,56 @@
         "name",
         "version",
         "binary"
+      ]
+    },
+    "ProvisionEnv": {
+      "description": "One variable a provisioned tool's launcher sets, and how its value is found.\n\n**Both spellings are DERIVED rather than literal, and that is deliberate.** A\nliteral value would be wrong twice over here: the two things this exists to\ncarry are a proxy exemption list, which must be added to whatever the host\nalready exempts rather than replacing it, and a credential, which must never\nbe written into a tracked file at all. Neither is expressible as a constant,\nso the row declares the RULE and the launcher resolves it against the\nenvironment it finds.",
+      "type": "object",
+      "properties": {
+        "from_first_set": {
+          "description": "Set from the first of these variables that is set and non-empty.\n\nA list rather than one name because the fallback is the point: the same\ntool wants a session credential where one exists and the runner's own\nwhere it does not, and a row naming one would be dead in whichever\nenvironment does not have it. **Nothing is written when none is set** —\nan empty credential is refused by some tools and accepted as anonymous by\nothers, and inventing one is a claim this row cannot make.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "name": {
+          "description": "The variable to set.",
+          "type": "string"
+        },
+        "prepend_list": {
+          "description": "Entries to add to the front of a comma-separated list, keeping whatever\nthe host already had and adding nothing twice.\n\nIdempotent by construction: an entry already present is not added again,\nso a launcher that runs a launcher does not grow the value without bound.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "not": {
+            "required": [
+              "from_first_set"
+            ]
+          },
+          "required": [
+            "prepend_list"
+          ]
+        },
+        {
+          "not": {
+            "required": [
+              "prepend_list"
+            ]
+          },
+          "required": [
+            "from_first_set"
+          ]
+        }
+      ],
+      "required": [
+        "name"
       ]
     },
     "Prune": {
@@ -3722,6 +3794,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "decided_by": {
+          "description": "How the check's run becomes a verdict.\n\nAbsent is [`Decided::ExitStatus`], which is the ordinary case and the one\nevery row before CLOUD-1454 assumed.",
+          "$ref": "#/$defs/Decided"
         },
         "gloss": {
           "description": "What this row is about, in one line, for a reader of the config.\n\nRequired rather than optional: a precondition nobody wrote the meaning of\ndown is one the next reader cannot decide whether to keep — and since the\nreport is pointer-only, this is the only place that meaning can live.",

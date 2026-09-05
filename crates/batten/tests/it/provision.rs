@@ -743,3 +743,287 @@ fn host_ca_configuration_reaches_the_fetch() {
         "the artifact fetched over https is what was installed"
     );
 }
+
+// ---------------------------------------------------------------------------
+// (g) `[[provision.env]]` and the launcher (CLOUD-1455).
+//
+// The measurement behind this section: a task runner's own `[env]` is applied to
+// what it SPAWNS, never to its own resolver, so a pinned tool the runner fetches
+// through a proxy 403s no matter what the manifest says. The environment has to
+// be supplied by whatever LAUNCHES the runner, which is what a launcher is.
+//
+// The installed "binary" here is a copy of `env(1)`, which prints the
+// environment it was given and nothing else. That is the whole reason it is the
+// fixture: asserting on what the CHILD saw is the only way to catch a launcher
+// that writes a plausible file and passes nothing on, and it needs no shell.
+
+/// Where this host keeps `env(1)`, or `None` if the fixture cannot run here.
+#[cfg(unix)]
+fn env_binary() -> Option<PathBuf> {
+    ["/usr/bin/env", "/bin/env"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+}
+
+/// A manifest whose one entry links, and optionally declares an environment.
+#[cfg(unix)]
+fn linking_manifest(url: &str, sha: &str, dest: &Path, env_rows: &str) -> String {
+    format!(
+        "version = 1\n\n[[provision]]\nname = \"demo\"\nversion = \"1.2.3\"\nurl = '{url}'\n\
+         sha256 = \"{sha}\"\nbinary = \"demo\"\nlink = '{}'\n{env_rows}",
+        dest.display()
+    )
+}
+
+/// The three rows the shipped manifest declares, in miniature.
+#[cfg(unix)]
+const ENV_ROWS: &str = "\n[[provision.env]]\nname = \"NO_PROXY\"\n\
+     prepend_list = [\"api.example.invalid\", \"assets.example.invalid\"]\n\
+     \n[[provision.env]]\nname = \"DEMO_TOKEN\"\n\
+     from_first_set = [\"DEMO_PRIMARY\", \"DEMO_FALLBACK\"]\n";
+
+/// AN ENTRY DECLARING NO ENVIRONMENT IS UNCHANGED, which is what keeps the
+/// launcher from being a tax every provisioned tool pays. `ripsecrets` declares
+/// none and must still be a plain copy a shell can run with no interpreter.
+#[cfg(unix)]
+#[test]
+fn an_entry_declaring_no_environment_is_still_a_plain_copy() {
+    let env = Env::new("provision-plain-copy");
+    let dest = env.repo.parent().unwrap().join("bin-plain");
+    let (url, sha) = env.artifact("demo.bin", b"#not-a-launcher\n");
+    env.config(&linking_manifest(&url, &sha, &dest, ""));
+
+    let out = env.run(&["provision", "apply"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(
+        fs::read(dest.join("demo")).unwrap(),
+        b"#not-a-launcher\n",
+        "an entry with no `env` rows must be linked byte-for-byte, as it always was"
+    );
+}
+
+/// THE CASE THE WHOLE SEAM EXISTS FOR: what the tool's own process sees.
+///
+/// Asserting on the launcher's TEXT would pass over a build that writes a
+/// correct-looking file and execs with the environment untouched — which is the
+/// same defect one layer down as the `[env]` one this replaces.
+#[cfg(unix)]
+#[test]
+fn a_launcher_hands_the_tool_an_environment_a_manifest_could_not() {
+    let Some(system_env) = env_binary() else {
+        return;
+    };
+    let env = Env::new("provision-launcher-env");
+    let dest = env.repo.parent().unwrap().join("bin-launcher");
+    let bytes = fs::read(&system_env).unwrap();
+    let (url, sha) = env.artifact("demo.bin", &bytes);
+    env.config(&linking_manifest(&url, &sha, &dest, ENV_ROWS));
+
+    let out = env.run(&["provision", "apply"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+
+    let linked = dest.join("demo");
+    let text = fs::read_to_string(&linked).unwrap();
+    assert!(
+        text.starts_with("#!") && text.lines().next().unwrap().ends_with(" provision-exec"),
+        "a row declaring an environment is linked as a launcher"
+    );
+
+    // Run what is on `PATH`, exactly as a shell, a git hook or a session handler
+    // would — no batten in the argv, because none of those know about one.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the fixture IS a spawn of the linked launcher; asserting on anything else would not exercise the kernel's `#!` handling (CLOUD-320)"
+    )]
+    let ran = std::process::Command::new(&linked)
+        .env("NO_PROXY", "localhost,pypi.example.invalid")
+        .env("DEMO_FALLBACK", "from-the-fallback")
+        .env_remove("DEMO_PRIMARY")
+        .env_remove("DEMO_TOKEN")
+        .output()
+        .expect("run the launcher");
+    assert_eq!(ran.status.code(), Some(0), "{ran:?}");
+    let seen = String::from_utf8_lossy(&ran.stdout);
+
+    assert!(
+        seen.lines().any(|line| line
+            == "NO_PROXY=api.example.invalid,assets.example.invalid,localhost,pypi.example.invalid"),
+        "the declared hosts are prepended and what the host already exempted is kept: {seen}"
+    );
+    assert!(
+        seen.lines()
+            .any(|line| line == "DEMO_TOKEN=from-the-fallback"),
+        "the credential is taken from the first source that carries one: {seen}"
+    );
+}
+
+/// Idempotent, which the launcher needs rather than merely benefits from: a tool
+/// that re-enters through the same `PATH` entry must not grow the value once per
+/// generation, and a host that already exempts one of the declared hosts must
+/// not get it twice.
+#[cfg(unix)]
+#[test]
+fn the_prepend_adds_nothing_it_already_carries() {
+    let Some(system_env) = env_binary() else {
+        return;
+    };
+    let env = Env::new("provision-launcher-idempotent");
+    let dest = env.repo.parent().unwrap().join("bin-idem");
+    let bytes = fs::read(&system_env).unwrap();
+    let (url, sha) = env.artifact("demo.bin", &bytes);
+    env.config(&linking_manifest(&url, &sha, &dest, ENV_ROWS));
+    assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
+
+    #[expect(
+        clippy::disallowed_types,
+        reason = "as above: the launcher must be spawned to be exercised (CLOUD-320)"
+    )]
+    let ran = std::process::Command::new(dest.join("demo"))
+        .env("NO_PROXY", "api.example.invalid,localhost")
+        .output()
+        .expect("run the launcher");
+    let seen = String::from_utf8_lossy(&ran.stdout);
+    assert!(
+        seen.lines()
+            .any(|line| line == "NO_PROXY=assets.example.invalid,api.example.invalid,localhost"),
+        "an entry already present is not added again: {seen}"
+    );
+}
+
+/// AN ABSENT CREDENTIAL STAYS ABSENT. Setting the variable to an empty string
+/// would be a different claim about the caller — some tools refuse an empty
+/// token where they would have proceeded anonymously — and the container-build
+/// case, where no session credential exists yet, is exactly this arm.
+#[cfg(unix)]
+#[test]
+fn a_credential_no_source_carries_is_left_unset() {
+    let Some(system_env) = env_binary() else {
+        return;
+    };
+    let env = Env::new("provision-launcher-no-token");
+    let dest = env.repo.parent().unwrap().join("bin-no-token");
+    let bytes = fs::read(&system_env).unwrap();
+    let (url, sha) = env.artifact("demo.bin", &bytes);
+    env.config(&linking_manifest(&url, &sha, &dest, ENV_ROWS));
+    assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
+
+    #[expect(
+        clippy::disallowed_types,
+        reason = "as above: the launcher must be spawned to be exercised (CLOUD-320)"
+    )]
+    let ran = std::process::Command::new(dest.join("demo"))
+        .env_remove("DEMO_PRIMARY")
+        .env_remove("DEMO_FALLBACK")
+        .env_remove("DEMO_TOKEN")
+        .output()
+        .expect("run the launcher");
+    let seen = String::from_utf8_lossy(&ran.stdout);
+    assert!(
+        !seen.lines().any(|line| line.starts_with("DEMO_TOKEN=")),
+        "no source set means the variable is not set at all: {seen}"
+    );
+}
+
+/// A LAUNCHER WHOSE INTERPRETER HAS GONE IS STALE, NOT FRESH. This is the one
+/// way the seam degrades that a plain copy never could, so `status` must see it
+/// — otherwise `provision apply` reports `AlreadyFresh` and never rewrites the
+/// file, and every invocation of the tool fails with the kernel naming a missing
+/// batten rather than anything about the tool.
+#[cfg(unix)]
+#[test]
+fn a_launcher_naming_a_missing_interpreter_is_reported_as_missing() {
+    let env = Env::new("provision-launcher-stale");
+    let dest = env.repo.parent().unwrap().join("bin-stale");
+    let (url, sha) = env.artifact("demo.bin", b"payload\n");
+    env.config(&linking_manifest(&url, &sha, &dest, ENV_ROWS));
+    assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
+    assert_eq!(
+        env.run(&["provision", "status"]).status.code(),
+        Some(0),
+        "a freshly applied entry is fresh"
+    );
+
+    fs::write(
+        dest.join("demo"),
+        "#!/nowhere/at/all/batten provision-exec\n{}\n",
+    )
+    .unwrap();
+    assert_eq!(
+        env.run(&["provision", "status"]).status.code(),
+        Some(2),
+        "a launcher naming an interpreter that is not there must not read as fresh"
+    );
+}
+
+/// THE LAUNCHER ENTRY POINT IS INTERCEPTED BEFORE THE PARSER, and this is what
+/// says so over the shipped binary.
+///
+/// It is deliberately absent from `surface.rs`, so the only thing that can prove
+/// it exists — and that clap is not the one answering — is running it. A build
+/// where the interception was removed or reordered answers clap's "unrecognized
+/// subcommand" here, which is a different exit code and a different message.
+#[test]
+fn the_launcher_entry_point_is_read_before_the_parser() {
+    let env = Env::new("provision-launcher-intercept");
+    let out = env.run(&["provision-exec", "/nowhere/at/all/launcher"]);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains("launcher"),
+        "the launcher's own reader must answer, not clap: {said}"
+    );
+    assert!(
+        !said.contains("unrecognized") && !said.contains("Usage: batten"),
+        "clap must never see this argv — it would claim the tool's own flags: {said}"
+    );
+}
+
+/// AND IT MUST NOT CLAIM THE TOOL'S OWN FLAGS. `--help` after the launcher path
+/// belongs to the tool; a build that let clap have it prints batten's help and
+/// the caller never learns what the tool does.
+#[test]
+fn the_tool_s_own_help_flag_is_not_battens() {
+    let env = Env::new("provision-launcher-help");
+    let out = env.run(&["provision-exec", "/nowhere/at/all/launcher", "--help"]);
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !said.contains("Agent-era completion gate"),
+        "`--help` after the launcher path is the tool's, never batten's: {said}"
+    );
+}
+
+/// The xor is refused at LOAD, in both directions, because a row that sets
+/// nothing produces a launcher indistinguishable from one never written — the
+/// same silent-failure shape the field exists to end.
+#[test]
+fn an_env_row_declaring_neither_rule_is_refused_at_load() {
+    let env = Env::new("provision-env-neither");
+    let (url, sha) = env.artifact("demo.bin", b"x\n");
+    env.config(&format!(
+        "version = 1\n\n[[provision]]\nname = \"demo\"\nversion = \"1.2.3\"\nurl = '{url}'\n\
+         sha256 = \"{sha}\"\nbinary = \"demo\"\n\n[[provision.env]]\nname = \"DEMO\"\n"
+    ));
+    let out = env.run(&["provision", "status"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("neither"),
+        "the refusal names which half is missing"
+    );
+}
+
+#[test]
+fn an_env_row_declaring_both_rules_is_refused_at_load() {
+    let env = Env::new("provision-env-both");
+    let (url, sha) = env.artifact("demo.bin", b"x\n");
+    env.config(&format!(
+        "version = 1\n\n[[provision]]\nname = \"demo\"\nversion = \"1.2.3\"\nurl = '{url}'\n\
+         sha256 = \"{sha}\"\nbinary = \"demo\"\n\n[[provision.env]]\nname = \"DEMO\"\n\
+         prepend_list = [\"a\"]\nfrom_first_set = [\"B\"]\n"
+    ));
+    let out = env.run(&["provision", "status"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("both"),
+        "the refusal says two rules cannot decide one variable"
+    );
+}

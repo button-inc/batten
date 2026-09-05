@@ -331,3 +331,78 @@ fn is_executable(path: &Path) -> bool {
 fn is_executable(path: &Path) -> bool {
     path.is_file()
 }
+
+/// The `[[startup]]` block declaring `id`, as committed.
+fn row_block(id: &str) -> String {
+    let text = committed();
+    text.split("[[startup]]")
+        .find(|block| block.contains(&format!("id = \"{id}\"")))
+        .unwrap_or_else(|| panic!("the committed config declares {id}"))
+        .to_owned()
+}
+
+/// One `key = ` line's value out of a committed row.
+fn field(id: &str, key: &str) -> String {
+    row_block(id)
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(&format!("{key} = ")))
+        .unwrap_or_else(|| panic!("{id} declares {key}"))
+        .to_owned()
+}
+
+/// THE ROW REPORTED `ok` OVER A CONTAINER WITH NOTHING INSTALLED (CLOUD-1454).
+///
+/// `mise ls --current` prints `(missing)` beside every absent tool and exits `0`,
+/// so the check could not fail, so the repair that installs the toolchain never
+/// ran — measured on a real container, four tools missing and this row green. A
+/// reporter read by its exit status is indistinguishable from a gate, which is
+/// why this asserts the row declares how its answer is read rather than merely
+/// which flags it passes.
+#[test]
+fn the_toolchain_row_does_not_read_a_reporter_as_a_gate() {
+    let id = "toolchain-is-provisioned";
+    assert_eq!(
+        field(id, "decided_by"),
+        "\"silent-exit\"",
+        "this row's check exits 0 whether or not a tool is missing, so its exit \
+         status cannot be the verdict — the row must declare that silence is the pass"
+    );
+    assert!(
+        field(id, "check").contains("--missing"),
+        "silence is only an answer for the spelling that says nothing when \
+         nothing is outstanding"
+    );
+}
+
+/// AND THE ROW ABOUT BATTEN MUST NOT ASK THE RUNNER (CLOUD-1454, same report).
+///
+/// Its check was `["mise", "run", "deps"]`, and `task.run_auto_install` defaults
+/// true: one tool the runner cannot fetch makes it exit non-zero BEFORE the task
+/// body runs, so the row reported `not-provisioned` about a batten that was
+/// present and then reinstalled it, every session. A question about batten's
+/// presence answered by a third party's install state is not a question about
+/// batten.
+#[test]
+fn the_batten_presence_row_asks_nothing_of_the_runner() {
+    let check = field("host-dependencies-present", "check");
+    assert!(
+        !check.contains("\"mise\""),
+        "this row is about batten resolving by bare name; routing it through the \
+         task runner makes every unrelated provisioning failure a verdict about \
+         batten. Was: {check}"
+    );
+    assert!(
+        check.contains("\"batten\""),
+        "the row must actually name what it is about. Was: {check}"
+    );
+    // AND IT MUST STILL BE SPAWNABLE WITH BATTEN ABSENT, which is the whole
+    // subtlety: a bare `["batten", …]` check on a host without batten is
+    // could-not-look, and `startup.rs` never repairs on one — so the row could
+    // never trigger the install that fixes it. Something always present has to
+    // carry the lookup and report the miss as a real failure.
+    assert!(
+        !check.starts_with("[\"batten\""),
+        "a check whose own program is the thing that may be missing reports \
+         could-not-look and is never repaired. Was: {check}"
+    );
+}

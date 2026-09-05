@@ -356,6 +356,59 @@ unpack = "none"
 binary = "mise"
 link = "~/.local/bin"
 
+# THE RUNNER'S OWN RESOLVER, WHICH `mise.toml`'s `[env]` CANNOT REACH
+# (CLOUD-1455). The two rows below are the same two variables `[env]` already
+# declares, applied one layer earlier, because that is the only layer where they
+# work: `[env]` is applied to what the runner SPAWNS, while the HTTP client that
+# fetches a pinned tool reads the environment the runner was STARTED with.
+#
+# Measured 2026-09-05, one cold install of one pinned tool, only the environment
+# differing: declared through `mise.toml [env]` the install 403s; with the same
+# two variables in the process environment it succeeds. The ~120-line setup
+# script this repository retired shadowed `mise` with a wrapper that set exactly
+# these, and `mise.toml`'s own comment says so — the one-line Setup script
+# dropped the wrapper and took the proxy bypass and the credential with it.
+#
+# WHY EACH IS DERIVED RATHER THAN A LITERAL. The host already exempts its own
+# hosts from the proxy, so replacing `NO_PROXY` would send package-manager
+# traffic back through it; `prepend_list` adds and keeps. And a credential must
+# not be written into a tracked file at all, so the second row names where to
+# find one — the session's, falling back to the runner's own in CI, and nothing
+# at all where neither exists, which is the container-build case.
+#
+# `github.com` is deliberately NOT exempted, matching `mise.toml`: `git` keeps
+# its proxy-provided auth for this repository, and only the API and asset hosts
+# go direct.
+[[provision.env]]
+name = "NO_PROXY"
+prepend_list = [
+  "api.github.com",
+  "objects.githubusercontent.com",
+  "codeload.github.com",
+  "uploads.github.com",
+]
+
+[[provision.env]]
+name = "no_proxy"
+prepend_list = [
+  "api.github.com",
+  "objects.githubusercontent.com",
+  "codeload.github.com",
+  "uploads.github.com",
+]
+
+# TWO SOURCES, AND `GH_TOKEN` IS DELIBERATELY NOT THE THIRD. It is the obvious
+# candidate and it is measured harmful here: in this sandbox the ambient
+# `GH_TOKEN` is a proxy placeholder that answers 401 when sent straight to
+# GitHub, and these rows send traffic straight to GitHub. Anonymous is a worse
+# answer than authenticated and a better one than wrongly authenticated, so a row
+# that fell back to it would turn a rate-limited read into a refused one. The two
+# below are the same pair `mise.toml`'s own `GH_TOKEN` template already trusts:
+# the session's credential, then the job token CI's runner sets.
+[[provision.env]]
+name = "MISE_GITHUB_TOKEN"
+from_first_set = ["GITHUB_PERSONAL_ACCESS_TOKEN", "MISE_GITHUB_TOKEN"]
+
 [provision.platforms.linux-x86_64]
 url = "https://github.com/jdx/mise/releases/download/v2026.9.1/mise-v2026.9.1-linux-x64"
 sha256 = "c98423c8470d6dc416d9f7036d0646d8ef5ae92ad9186907f8fcc84cbe7db4ea"
@@ -11454,14 +11507,52 @@ gloss = "the task runner every gate in this repository is invoked through resolv
 check = ["batten", "provision", "status"]
 repair = ["batten", "provision", "apply"]
 
+# A REPORTER IS NOT A GATE, AND THIS ROW SHIPPED AS ONE (CLOUD-1454).
+#
+# `check = ["mise", "ls", "--current"]` was the obvious spelling and it is a DEAD
+# GATE: it prints `(missing)` beside every tool that is not installed and exits
+# `0` regardless. Because a `[[startup]]` row repairs only when its check FAILS,
+# the `mise install --yes` below never ran — so the container the whole one-line
+# Setup script exists for came up with the runner present and NOT ONE TOOL
+# INSTALLED, and this row reported `ok` over it. Measured 2026-09-05 against a
+# session report from such a container: four tools missing, this row green.
+#
+# `--missing` is the same program's other spelling: it names what is outstanding
+# and says NOTHING when nothing is, which is a verdict once `decided_by` says
+# silence is the pass. That keeps the row inside the argv bound — no pipeline, no
+# `test`, no wrapper task standing between the operator's declaration and what runs.
+#
+# WHY NOT A `batten` VERB, WHICH IS WHAT THE ROW ABOVE DID. That row's subject is
+# batten's own manifest, which batten owns; this row's subject is a THIRD PARTY'S
+# install state, and an engine-side reader of it would put a specific tool's
+# output format in `crates/batten` — non-negotiable rule 1. The generic thing the
+# engine gained is "silence is the pass", which names nobody.
 [[startup]]
 id = "toolchain-is-provisioned"
 gloss = "every tool this repository pins is installed, so a gate does not install one inside its own timeout"
-check = ["mise", "ls", "--current"]
+check = ["mise", "ls", "--current", "--missing"]
+decided_by = "silent-exit"
 repair = ["mise", "install", "--yes"]
 
+# AND THIS ROW ASKED THE RUNNER A QUESTION ABOUT BATTEN (CLOUD-1454, same report).
+#
+# `check = ["mise", "run", "deps"]` routed a question about batten's presence
+# through the task runner, and `task.run_auto_install` defaults true: a tool the
+# runner cannot fetch makes it exit non-zero BEFORE the task body runs at all. So
+# on that container this row reported `not-provisioned` about a batten that was
+# present at the pinned version, and then fired its repair — reinstalling a
+# binary that was already there, twice a session, for a reason that had nothing
+# to do with it. Measured: `mise run deps` exits 1 with the body never executed.
+#
+# `env` rather than `batten` directly, and the difference is the whole point:
+# `startup.rs` reports a check it could not SPAWN as could-not-look and never
+# repairs on one, in its own words to avoid making "an unreadable check into a
+# licence to mutate". A bare `["batten", "--version"]` on a host without batten
+# is exactly that unspawnable check, so the row could never trigger the install
+# that fixes it. `env` is always spawnable and exits 127 when the name does not
+# resolve — a real failure, which is what a repair is allowed to act on.
 [[startup]]
 id = "host-dependencies-present"
-gloss = "the host libraries mise does not own are installed, so a determinism test does not fail on a missing PDFium"
-check = ["mise", "run", "deps"]
+gloss = "the released batten resolves by the bare name every hook registration invokes it under"
+check = ["env", "batten", "--version"]
 repair = ["mise", "run", "deps-install"]
