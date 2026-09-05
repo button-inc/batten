@@ -246,6 +246,21 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   literal is not. Authority-only, and here that is a security property rather than
   a consistency one: a `batten.local.toml` able to add a row could run anything
   under the agent's own hook.
+- `hk.rs` — the adopted gate runner's surface contract, as a committed projection
+  (CLOUD-947). The runner decides which steps a gate runs, in what order, under
+  which profiles and in which parallel group, and nothing compared that live plan
+  against a reviewed one. `project` is the ONE canonicaliser both halves reach
+  through — the `write` verb that regenerates the artifact and the `read` verb
+  that diffs it — so the two sides cannot disagree about what the plan is.
+  **Volatile fields are excluded by construction rather than filtered at compare
+  time**: the generated-at instant, the per-step matched-file count and the human
+  `detail` string never enter the projection, so they cannot make it flap, and a
+  field that never enters cannot be trusted by mistake. An unknown step is
+  `Drift::StepAdded` and never an append the gate performs on its own —
+  appearing in the plan is not consent to run it. An EMPTY plan is
+  could-not-look, because a generator that found nothing looks exactly like a
+  gate that passed. Findings are pointers: a class token, a hook and a step name,
+  never a command, a glob or a dump of either plan.
 - `handler.rs` — the `[[hook.handler]]` dispatch surface (CLOUD-898), the door
   that lets `batten hook` be the ONLY registration on every surface while a
   repository still runs whatever it likes behind it. A **second noun beside

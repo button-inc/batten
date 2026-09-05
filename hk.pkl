@@ -234,6 +234,19 @@ local gate = new Mapping<String, Step> {
     glob = List("hk.pkl", ".claude/hooks/git-hook.sh")
     check = "mise run record-verdicts"
   }
+  // The adopted runner's own surface contract (CLOUD-947). BOTH ENDS ARE IN THE
+  // GLOB, the same shape the surface-derivation gates carry: the projection is a
+  // function of this file and the pin `mise.toml` carries, and the artifact is
+  // the reviewed answer — so a change to either end has to face the diff.
+  //
+  // `slow`, because the gate spawns the runner three times to take the plan it
+  // compares against. A pre-commit that paid that would be paying it on every
+  // commit for a contract only this file can move.
+  ["hk-contract-check"] {
+    glob = List("hk.pkl", "mise.toml", "contracts/hk.json")
+    profiles = List("slow")
+    check = "mise run hk-drift"
+  }
   // `.claude/rules/rust.md` carries no module tree — it defers to mem:core as
   // the authority kept current instead. Nothing checked that authority, so a
   // module could land with no row and leave the rule pointing at an incomplete
