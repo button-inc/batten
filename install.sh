@@ -14,8 +14,9 @@
 # already proves is present.
 #
 # WHAT IT REFUSES TO DO. Every asset is verified against the SHA-256 digest the
-# release API reports for it, and a mismatch — or an asset the API reports no
-# digest for — is a failure, never a warning. There is no flag to skip it. What
+# release publishes for it — the API's `digest` field, or the `SHA256SUMS` asset
+# when the API could not be read — and a mismatch, or an asset with no published
+# digest, is a failure, never a warning. There is no flag to skip it. What
 # that digest is NOT is a supply-chain signature: both halves come from GitHub,
 # so it proves the bytes arrived intact, not that they are the bytes a
 # maintainer intended. The stronger claims are a checksum manifest (CLOUD-278)
@@ -23,10 +24,19 @@
 # a gate rather than a sensor.
 #
 # NO TOKEN IS REQUIRED BY CONSTRUCTION (CLOUD-205), which is the "so the flip is
-# cheap" property that decision asks the release machinery to keep. One is still
-# read from BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN when present, because
-# the unauthenticated release API is rate-limited per source address and a busy
-# shared runner exhausts it.
+# cheap" property that decision asks the release machinery to keep. This file
+# CLAIMED that and did not hold it: every route ran through `api.github.com`,
+# whose anonymous budget is 60 an hour per source address, so a busy shared
+# address — an agent container's egress, say — exhausted it and the install died
+# naming a token the sentence above says is unnecessary. Measured on a container
+# whose Setup script failed with `cannot read the release list`.
+#
+# The property is now structural. `resolve_via_web` reads the tag off the
+# redirect `github.com/<repo>/releases/latest` answers and pulls the asset and
+# its `SHA256SUMS` from `…/releases/download/…` — no API budget, no credential,
+# and the digest gate unchanged. A token is still read from BATTEN_GITHUB_TOKEN,
+# GH_TOKEN or GITHUB_TOKEN when present, and is genuinely required only for a
+# private repository, where the web route serves nothing.
 #
 # Output is pointer-only (non-negotiable rule 4): asset names, a target, a
 # destination path. Never a token, never file contents. Exit 0 installed / 1
@@ -42,6 +52,28 @@ set -eu
 
 REPO="${BATTEN_REPO:-button-inc/batten}"
 API="${BATTEN_API:-https://api.github.com}"
+# The release web host, which is NOT the API and does not share its budget.
+#
+# `…/releases/latest` answers a redirect naming the tag, and
+# `…/releases/download/<tag>/<name>` serves an asset — neither spends the
+# unauthenticated API's 60-per-hour-per-address allowance, and both work with no
+# token at all. That is what makes the header's "no token is required by
+# construction" true rather than aspirational; see `resolve_via_web`.
+WEB="${BATTEN_WEB:-https://github.com}"
+
+# THE FALLBACK IS OFF WHEN THE OPERATOR NAMED AN API AND DID NOT NAME A WEB HOST.
+#
+# `BATTEN_API` is how somebody points this at an enterprise instance, a mirror,
+# or a `file://` fixture. Reaching public github.com when THAT host fails would
+# fetch bytes from somewhere they deliberately did not name — the opposite of
+# what overriding it asks for, and a supply-chain answer rather than a
+# convenience one. So the second route is available on the default pairing, or
+# whenever `BATTEN_WEB` is named explicitly; naming an API alone switches it off.
+if [ -n "${BATTEN_API:-}" ] && [ -z "${BATTEN_WEB:-}" ]; then
+	WEB_FALLBACK=
+else
+	WEB_FALLBACK=1
+fi
 BIN=batten
 
 # The targets a release carries that this script can install. It is NOT the
@@ -76,7 +108,8 @@ usage() {
 		  BATTEN_TARGET        override target detection
 		  BATTEN_INSTALL_DIR   destination; default \${XDG_BIN_HOME:-\$HOME/.local/bin}
 		  BATTEN_GITHUB_TOKEN  token for the release API (also GH_TOKEN,
-		                       GITHUB_TOKEN). Optional; raises the rate limit.
+		                       GITHUB_TOKEN). Optional; raises the rate limit,
+		                       and is required only for a private repository.
 	EOF
 }
 
@@ -145,10 +178,18 @@ API_RETRIES="${BATTEN_RETRIES:-3}"
 # The discriminator is the STATUS, not the environment. `401`/`403` is a
 # credential refusal — something answered and declined — where a network problem
 # is a connect failure or a 5xx. So a refusal is the one thing that earns a
-# second attempt around the proxy, and only when a token of our own exists to
-# authenticate with; without one the direct route is an unauthenticated
-# shared-address request that GitHub rate-limits, which trades a clear refusal
-# for a confusing one.
+# second attempt around the proxy.
+#
+# IT USED TO ALSO REQUIRE A TOKEN, and that conjunct is withdrawn for the
+# anonymous route. The reason given was sound for the API and was applied to
+# every request: without a credential the direct attempt is an unauthenticated
+# shared-address call that GitHub rate-limits, trading a clear refusal for a
+# confusing one. That is true of `api.github.com`, whose anonymous budget is 60
+# an hour per address; it is NOT true of the release web host, which serves
+# `…/releases/download/…` to anyone. So a tokenless host with an intercepting
+# proxy — the exact shape of an agent container running the one-line Setup
+# script — had no route at all, and the installer died naming a remedy
+# (`set BATTEN_GITHUB_TOKEN`) that its own header says should not be needed.
 #
 # `--noproxy` names the GitHub hosts rather than `*`: everything else this
 # machine talks to keeps going the way the operator configured it.
@@ -174,15 +215,24 @@ intercepted() {
 	grep -q "^Issuer:.*O = ${INTERCEPT_ORG}" "$1" 2>/dev/null
 }
 
+# `$4`, when non-empty, sends NO credential and asks for no API version.
+#
+# The web host needs none, and sending one there is worse than useless: a
+# placeholder token an intercepting proxy exported answers `401` at github.com
+# for a URL that would have served the asset anonymously. So the fallback route
+# is anonymous by construction rather than by luck.
 api_get() {
 	ag_url=$1
 	ag_accept=$2
 	ag_out=$3
+	ag_anon=${4:-}
 	ag_attempt=1
 	ag_direct=
 	while :; do
 		if {
-			if [ -n "$ag_direct" ] && [ -n "${TOKEN_DIRECT:-}" ]; then
+			if [ -n "$ag_anon" ]; then
+				:
+			elif [ -n "$ag_direct" ] && [ -n "${TOKEN_DIRECT:-}" ]; then
 				printf 'header = "Authorization: Bearer %s"\n' "$TOKEN_DIRECT"
 			elif [ -n "$TOKEN" ]; then
 				printf 'header = "Authorization: Bearer %s"\n' "$TOKEN"
@@ -206,7 +256,12 @@ api_get() {
 			# `%{certs}` is the chain the peer actually presented, in plain text.
 			# It is what decides the retry below, and it costs nothing here: the
 			# request is being made anyway.
-			printf 'write-out = "%%{http_code}\\n%%{certs}"\n'
+			#
+			# `%{url_effective}` is line two, and it is how `latest` resolves
+			# without the API: the web host answers a redirect to
+			# `…/releases/tag/<tag>`, so the tag is in the URL curl ended on.
+			# Line one stays the status, which is what every reader here parses.
+			printf 'write-out = "%%{http_code}\\n%%{url_effective}\\n%%{certs}"\n'
 			printf 'output = "%s"\n' "$ag_out"
 			printf 'url = "%s"\n' "$ag_url"
 		} | curl --config - >"$ag_out.code" 2>/dev/null; then
@@ -215,7 +270,8 @@ api_get() {
 		# Read before the retry decision: a refusal earns a different next step
 		# from a timeout, and the status is the only thing that tells them apart.
 		ag_code=$(head -n 1 "$ag_out.code" 2>/dev/null || true)
-		if [ -z "$ag_direct" ] && { [ -n "$TOKEN" ] || [ -n "${TOKEN_DIRECT:-}" ]; } &&
+		if [ -z "$ag_direct" ] &&
+			{ [ -n "$ag_anon" ] || [ -n "$TOKEN" ] || [ -n "${TOKEN_DIRECT:-}" ]; } &&
 			{ [ "$ag_code" = "403" ] || [ "$ag_code" = "401" ]; } &&
 			intercepted "$ag_out.code"; then
 			# Something answered and declined, AND the certificate it presented
@@ -281,6 +337,90 @@ asset_field() {
 	digest) printf '%s\n' "$af_line" |
 		sed -n 's/.*"digest"[[:space:]]*:[[:space:]]*"sha256:\([0-9a-f][0-9a-f]*\)".*/\1/p' ;;
 	esac
+}
+
+# Fetch a URL from the release web host with no credential of any kind.
+web_get() {
+	api_get "$1" '*/*' "$2" anon
+}
+
+# Resolve the release through the API. Sets `tag`, `asset`, `asset_url`, `want`.
+#
+# Returns non-zero ONLY when the API could not be read — a rate limit, a
+# refusal, an unreachable host. Everything past that point is a statement about
+# the release itself and stays a refusal, because the web route would find the
+# same absence and reporting it twice as "could not look" would be a lie.
+resolve_via_api() {
+	if [ -n "${BATTEN_VERSION:-}" ]; then
+		rel_url="$API/repos/$REPO/releases/tags/${BATTEN_VERSION}"
+	else
+		rel_url="$API/repos/$REPO/releases/latest"
+	fi
+	api_get "$rel_url" "application/vnd.github+json" "$tmp/release.json" || return 1
+
+	flatten "$tmp/release.json" >"$tmp/release.line"
+	tag=$(json_string "$tmp/release.line" tag_name)
+	[ -n "$tag" ] ||
+		die 2 "no tag_name in the release payload — the API answered with something this script cannot read."
+	asset=$(asset_name "${tag#v}" "$target")
+
+	# The asset name in double quotes matches the `name` field and nothing else:
+	# `browser_download_url` carries it inside a longer URL, so the closing quote
+	# does not follow it there. The second filter keeps a chunk that is actually
+	# an asset, so a release body merely mentioning a filename cannot be read as
+	# one.
+	awk '{ gsub(/}[ \t]*,[ \t]*[{]/, "}\n{"); print }' "$tmp/release.line" >"$tmp/assets"
+	line=$(grep -F "\"$asset\"" "$tmp/assets" | grep -F '/releases/assets/' | head -n 1 || true)
+	[ -n "$line" ] ||
+		die 1 "release $tag carries no asset named $asset. Re-run release-artifacts.yml against that tag; uploads are idempotent."
+
+	asset_url=$(asset_field "$line" url)
+	[ -n "$asset_url" ] ||
+		die 1 "no asset URL for $asset on $tag."
+
+	# A missing digest is a REFUSAL, not a reason to skip verification. An
+	# installer that quietly stops checking when the check is unavailable is one
+	# that has never checked anything.
+	want=$(asset_field "$line" digest)
+	[ -n "$want" ] ||
+		die 1 "release $tag reports no sha256 digest for $asset, and this script does not install unverified bytes."
+	asset_anon=
+}
+
+# Resolve the release through the web host, spending no API budget and sending
+# no credential. Sets the same four variables; returns non-zero if any leg fails.
+#
+# THE DIGEST STILL COMES FROM THE RELEASE, which is what keeps this a fallback
+# route rather than a weaker one: `SHA256SUMS` is a published asset, so the
+# verification the header calls a gate rather than a sensor is unchanged. The
+# only thing that differs is which document carries the hex.
+#
+# A private repository answers `404` here rather than serving the asset, so this
+# route simply fails for one and the API's refusal is the message the operator
+# gets. That is the correct order: the API says *why*, and this says nothing it
+# cannot back up.
+resolve_via_web() {
+	if [ -n "${BATTEN_VERSION:-}" ]; then
+		tag=$BATTEN_VERSION
+	else
+		# `…/releases/latest` redirects to `…/releases/tag/<tag>`, so the tag is
+		# read off the URL curl ended on rather than out of a payload.
+		web_get "$WEB/$REPO/releases/latest" "$tmp/latest" || return 1
+		tag=$(sed -n '2p' "$tmp/latest.code" 2>/dev/null |
+			sed -n 's|.*/releases/tag/\([^/][^/]*\)$|\1|p')
+		[ -n "$tag" ] || return 1
+	fi
+	asset=$(asset_name "${tag#v}" "$target")
+
+	web_get "$WEB/$REPO/releases/download/$tag/SHA256SUMS" "$tmp/SHA256SUMS" || return 1
+	# Exact field equality rather than a substring: one asset's name is a prefix
+	# of nothing else here today, and a route that depends on that staying true
+	# is a route that breaks on the next asset somebody adds.
+	want=$(awk -v n="$asset" '$2 == n { print $1; exit }' "$tmp/SHA256SUMS")
+	[ -n "$want" ] || return 1
+
+	asset_url="$WEB/$REPO/releases/download/$tag/$asset"
+	asset_anon=1
 }
 
 main() {
@@ -350,47 +490,28 @@ main() {
 		die 2 "could not create a temporary directory."
 	trap 'rm -rf "$tmp"' EXIT INT TERM
 
+	# THE API IS TRIED FIRST AND IS NOT REQUIRED, which is the header's
+	# "no token is required by construction" being delivered rather than claimed.
+	#
+	# The API stays first because it answers with a reason: on a private
+	# repository, or a genuinely broken release, its refusal is the message the
+	# operator needs, and the web route can only be silent about either. But its
+	# anonymous budget is 60 an hour PER ADDRESS, so on a shared agent-container
+	# egress address it is exhausted by other tenants and no amount of retrying
+	# moves it — measured as a Setup script that died with `cannot read the
+	# release list`, naming a token the header says should be unnecessary.
+	#
 	# An unreadable release is "could not look" (2), never "this release is
 	# broken" (1): a network blip and an unauthorized token are both environment,
 	# and reporting them as a bad release points the reader at the wrong thing.
-	if [ -n "${BATTEN_VERSION:-}" ]; then
-		rel_url="$API/repos/$REPO/releases/tags/${BATTEN_VERSION}"
-	else
-		rel_url="$API/repos/$REPO/releases/latest"
+	if ! resolve_via_api; then
+		[ -n "$WEB_FALLBACK" ] ||
+			die 2 "cannot read the release list from $REPO at $API. If you are being rate-limited, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN."
+		resolve_via_web ||
+			die 2 "cannot read release metadata for $REPO from either $API or $WEB. If the API is rate-limiting this address, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN; if the repository is private, a token is required."
 	fi
-	api_get "$rel_url" "application/vnd.github+json" "$tmp/release.json" ||
-		die 2 "cannot read the release list from $REPO. If you are being rate-limited, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN."
 
-	flatten "$tmp/release.json" >"$tmp/release.line"
-	tag=$(json_string "$tmp/release.line" tag_name)
-	[ -n "$tag" ] ||
-		die 2 "no tag_name in the release payload — the API answered with something this script cannot read."
-	version=${tag#v}
-
-	asset=$(asset_name "$version" "$target")
-
-	# The asset name in double quotes matches the `name` field and nothing else:
-	# `browser_download_url` carries it inside a longer URL, so the closing quote
-	# does not follow it there. The second filter keeps a chunk that is actually
-	# an asset, so a release body merely mentioning a filename cannot be read as
-	# one.
-	awk '{ gsub(/}[ \t]*,[ \t]*[{]/, "}\n{"); print }' "$tmp/release.line" >"$tmp/assets"
-	line=$(grep -F "\"$asset\"" "$tmp/assets" | grep -F '/releases/assets/' | head -n 1 || true)
-	[ -n "$line" ] ||
-		die 1 "release $tag carries no asset named $asset. Re-run release-artifacts.yml against that tag; uploads are idempotent."
-
-	asset_url=$(asset_field "$line" url)
-	[ -n "$asset_url" ] ||
-		die 1 "no asset URL for $asset on $tag."
-
-	# A missing digest is a REFUSAL, not a reason to skip verification. An
-	# installer that quietly stops checking when the check is unavailable is one
-	# that has never checked anything.
-	want=$(asset_field "$line" digest)
-	[ -n "$want" ] ||
-		die 1 "release $tag reports no sha256 digest for $asset, and this script does not install unverified bytes."
-
-	api_get "$asset_url" "application/octet-stream" "$tmp/$asset" ||
+	api_get "$asset_url" "application/octet-stream" "$tmp/$asset" "$asset_anon" ||
 		die 2 "could not download $asset from $tag."
 
 	got=$(sha256_of "$tmp/$asset") ||
