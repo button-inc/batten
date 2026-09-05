@@ -220,3 +220,42 @@ fn the_surface_declares_the_subtree_the_row_asked_for() {
         "the leaf answers through -J, so it declares the data channel"
     );
 }
+
+#[test]
+fn a_config_that_will_not_load_is_an_error_and_never_a_zero_gate_document() {
+    // THE HOLE THE OTHER CASES LEFT, found in review of this PR.
+    //
+    // `an_unconfigured_repository_answers_rather_than_failing` covers the ABSENT
+    // config, where `resolve` succeeds with the built-in defaults and the gate
+    // list is non-empty. It cannot see this one: a `batten.toml` that EXISTS and
+    // will not load made `resolve` fail, `ok()` turned that into `None`, and
+    // `capabilities(None)` reports `gates: []` — so the verb answered "nothing is
+    // enforced here", at exit 0, over a repository it had failed to read.
+    //
+    // Shown able to fail (CLOUD-418): against the `ok()` this replaces, the run
+    // exits 0 and the document parses with an empty `gates`.
+    let fixture = Fixture::new("agent-unloadable").config("this is not: valid toml [[[");
+    let output = batten()
+        .args(["show", "agent", "-J"])
+        .current_dir(fixture.path())
+        .output()
+        .expect("run show agent");
+
+    assert!(
+        !output.status.success(),
+        "a config that will not load must not answer as a state; got exit {:?} and {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    // AND IT EMITS NO DOCUMENT AT ALL. Refusing with an error on stderr while
+    // still printing `gates: []` on stdout would leave an agent reading the
+    // channel it was told to read exactly the false reassurance this case
+    // exists to remove.
+    let document: Result<serde_json::Value, _> = serde_json::from_slice(&output.stdout);
+    assert!(
+        document.is_err(),
+        "the verb emitted a capabilities document over a config it could not read: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}

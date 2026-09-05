@@ -13749,19 +13749,31 @@ fn session_code(report: &doctor::SessionReport) -> ExitCode {
 
 /// `show agent` (CLOUD-1180): what an agent may do in this repository.
 ///
-/// # Absent config is a STATE, and that decides the error handling
+/// # Absent config is a STATE; a config that will not LOAD is not
 ///
-/// `resolve` raises a `UsageError` where there is no `batten.toml`. That is the
-/// right answer for a gate — a run that cannot read its policy has not passed —
-/// and the wrong one here: "there is nothing configured in this repository" is a
-/// true and useful answer to "what may I do here", and CLOUD-1180's §7(d) asks
-/// for a deterministic unavailable state rather than an error.
+/// CLOUD-1180's §7(d) asks for a deterministic unavailable state rather than an
+/// error where a repository declares no policy, and it gets one for free:
+/// `resolve` SUCCEEDS with the built-in defaults where no authority exists, so
+/// absent already answers `configured: false` with the defaults' own gates
+/// listed. `Authority::Present` is what `configured` reads, never whether a
+/// `Resolved` was obtained.
 ///
-/// So the resolve is made optional and its failure becomes `configured: false`.
-/// A malformed config is NOT swallowed with it — that is a different question
-/// (`ok()` keeps could-not-parse indistinguishable from absent only because both
-/// mean "no gates are in force here", which is the one thing this verb reports;
-/// `config lint` is where a broken file is diagnosed).
+/// **This used to swallow the resolve's error with `ok()`, and that was a false
+/// safety claim rather than a tidy fallback.** Since absent never errors, the
+/// only thing `ok()` could ever discard was a config that EXISTS and will not
+/// load — and `capabilities(None)` reports `gates: []`, so a malformed
+/// `batten.toml` answered "nothing is enforced here" at exit `0`. That is the
+/// one direction [`crate::agent`]'s module doc says this verb must never be
+/// wrong in, and the sentence that stood here asserted the opposite of what the
+/// code did: it claimed a malformed config was "NOT swallowed with it" while
+/// the `ok()` two lines down swallowed exactly that, on the reasoning that both
+/// cases "mean no gates are in force" — which is false of both. Absent leaves
+/// the defaults in force; unreadable leaves the question unanswered.
+///
+/// So the error propagates. An agent reading this verb gets an answer or an
+/// error, never a document that understates what governs it. `config lint` is
+/// still where a broken file is DIAGNOSED; this verb's job is to refuse to
+/// speak for one.
 ///
 /// # `read`, structurally
 ///
@@ -13769,8 +13781,8 @@ fn session_code(report: &doctor::SessionReport) -> ExitCode {
 /// [`agent::capabilities`] takes the config by reference and touches no
 /// filesystem, so there is no path from this verb to a write or a spawn.
 fn run_show_agent(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
-    let config = resolve::resolve(Path::new("."), overrides).ok();
-    let reading = agent::capabilities(config.as_ref());
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let reading = agent::capabilities(Some(&config));
     if json {
         // Unconditional, including when nothing is configured: JSON that is
         // sometimes absent is unparseable.

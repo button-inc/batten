@@ -214,14 +214,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_unresolvable_repository_is_a_state_rather_than_an_error() {
-        // CLOUD-1180 §7(d), for the arm where nothing resolved AT ALL — outside a
-        // repository, say. That is a different case from "resolved to the
-        // built-in defaults", which reports `configured: false` with a NON-empty
-        // gate list; `agent_capabilities::an_unconfigured_repository_...` covers
-        // that one over the compiled binary, and the two must not be collapsed:
-        // saying "nothing is gated" where the defaults are gating is the one
-        // direction this verb must never be wrong in.
+    fn projecting_no_config_lists_no_gates() {
+        // THIS IS A PROJECTION CASE, NOT A REPOSITORY STATE, and saying so is the
+        // correction rather than a rename. It read "the arm where nothing
+        // resolved AT ALL — outside a repository, say", which described a
+        // situation `run_show_agent` can no longer produce and, while it could,
+        // produced the defect review of this PR caught: `resolve` succeeds with
+        // the built-in defaults wherever it can look, so the only input that ever
+        // reached `None` was a `batten.toml` that would not LOAD — and this arm
+        // answers `gates: []`, which reads as "nothing is enforced here".
+        //
+        // The verb propagates that error now, so `None` means only "the caller
+        // had no config to hand over" and this pins the projection's own shape.
+        // What a repository with no authority reports is a different question and
+        // a different tier: `agent_capabilities::an_unconfigured_repository_...`
+        // asserts a NON-empty gate list over the compiled binary. The two must
+        // not be collapsed — saying "nothing is gated" where the defaults are
+        // gating is the one direction this verb must never be wrong in.
         let reading = capabilities(None);
         assert!(!reading.configured);
         assert!(reading.gates.is_empty());
