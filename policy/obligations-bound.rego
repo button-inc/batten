@@ -184,27 +184,40 @@ obligation contains entry if {
 # matching the PREFIX rather than the whole row is deliberate: the expression and
 # the case name are the sweep's business, and a module re-parsing them would be a
 # second authority over a format the runner already owns.
-# EITHER COMMENT OPENER, BECAUSE ONE OF THEM EXCLUDED AN IMPLEMENTATION LANGUAGE
-# (CLOUD-1369). This read `#MUTANT` alone, and `#MUTANT` is not valid Rust — so
-# this gate demanded, of every obligation on a Rust change, a row the declared
-# file could not legally contain. `.bats` was no escape either
+# THE OPENER IS NOT THIS MODULE'S BUSINESS, AND SAYING SO IS THE POINT
+# (CLOUD-1369). This read `#MUTANT` anchored at column zero, and `#MUTANT` is not
+# valid Rust — so the gate demanded, of every obligation on a Rust change, a row
+# the declared file could not legally contain. `.bats` was no escape either
 # (`V-SHELL-RULE-ADDED` refuses adding one), which made the pair unsatisfiable
 # rather than merely awkward: `REQUIRED_CLAIMS` makes `tests` mandatory in every
-# post-cutover Ready block, so a Rust change had to promise what it could not
-# bind.
+# post-cutover Ready block, so a Rust change had to promise what it could not bind.
 #
-# THIS IS A SECOND READER OF `mutate.rs`'s `OPENERS` AND THE DUPLICATION IS
-# NAMED RATHER THAN HIDDEN. The alternative was projecting the engine's resolved
-# rows onto the tree surface as a fact, which is the right end state and a wider
-# change than this row buys; a `[[pattern]]` row was rejected in this write's own
-# admission, because a comment opener is a fact about a LANGUAGE and not about
-# this consumer's repository. Nothing currently holds the two spellings together,
-# and that gap is real: a third opener added to `mutate.rs` will silently not be
-# honoured here.
+# THE FIRST REPAIR ENUMERATED THE OPENERS HERE, AND THAT WAS A SECOND AUTHORITY.
+# `mutate.rs`'s `OPENERS` owns the set; a copy of it in this file disagrees the
+# day a third opener is added — the runner would honour a declaration this gate
+# could not see, and `obligations-bound` would refuse an obligation whose row is
+# applied. That is the disagreement class `.claude/rules/policy-modules.md`
+# records for `hook::segments`, re-created inside the module that reads that
+# runner's output. `filed-over-own-diff` refused the attempt to file it instead
+# of fixing it, and was right to: a defect in the branch's own diff is what that
+# refusal exists for.
+#
+# SO THE QUESTION IS ASKED WITHOUT THE OPENER. This rule decides one thing —
+# *does the declared file declare this slug* — and the marker plus its closing
+# `|` answers it in any comment syntax, present and future. It cannot collide
+# with `MUTANT-EXEMPT`, `MUTANT-SUITE` or `MUTANT-OWNER`, whose text after the
+# marker is a key or a path rather than `<slug>|`.
+#
+# IT IS DELIBERATELY THE LOOSER READING, AND THE LOOSENESS FALLS IN THE SAFE
+# DIRECTION. A line mentioning the marker in prose would satisfy this gate over a
+# row `mutate` never applies. But this gate answers *is something bound to the
+# promise*; whether the binding DISCRIMINATES is the sweep's question, and the
+# sweep reports `unappliable-mutation` and `names-no-case` for exactly that.
+# Over-refusing here would block an author whose row is correct, which no later
+# gate recovers from.
 declares_slug(entry) if {
 	some line in input.tree.lines[entry.file]
-	some opener in ["//", "#"]
-	startswith(line, sprintf("%vMUTANT %v|", [opener, entry.slug]))
+	contains(line, sprintf("MUTANT %v|", [entry.slug]))
 }
 
 # An obligation whose file this repository does not track.
