@@ -6278,6 +6278,12 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // would put half a predicate within reach of a surface where the
             // other half can never follow. `facts.rs` carries the argument.
             crate::facts::Fact::Records => None,
+            // CLOUD-1126. `Surface::Check` beside `Records`, and for the sharper
+            // reason: this channel is WRITTEN on the mediated path — `append_all`
+            // is what observes a selected call failing to answer — so projecting
+            // it here would offer a hook predicate the store the same call is
+            // still filling.
+            crate::facts::Fact::RecordsBlocked => None,
             // CLOUD-1171. `Surface::Check` in `facts.rs`, so this arm is `None`
             // by the model rather than by this function's opinion — and the
             // reason it is classified there is the digest: answering means

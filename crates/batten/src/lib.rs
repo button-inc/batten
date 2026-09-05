@@ -4429,6 +4429,7 @@ fn suite_input(
             review: &crate::facts::Look::IsNot,
             produced: &std::collections::BTreeMap::new(),
             records: &std::collections::BTreeMap::new(),
+            records_blocked: &std::collections::BTreeMap::new(),
             git: &git::GitFacts::default(),
             symbols: &facts::Look::IsNot,
             external: &std::collections::BTreeMap::new(),

@@ -156,7 +156,8 @@ that distinguishes a passing gate from an absent one.
 A **tree**-scoped module (`scope = "tree"`, run by `batten check`) reads
 `input.tree.documents`, `input.tree.lines`, `input.tree.invocations`,
 `input.tree.uses`, `input.tree.tracked`, `input.tree.missing`,
-`input.tree.produced`, `input.tree.records`, `input.tree.landing`, and the git
+`input.tree.produced`, `input.tree.records`, `input.tree["records-blocked"]`,
+`input.tree.landing`, and the git
 family —
 `input.tree.git-head`, `input.tree.git-refs`, `input.tree.git-ranges`,
 `input.tree.git-remote`, `input.tree.git-status`, `input.tree.git-worktrees`.
@@ -172,6 +173,17 @@ checkout it never looked at. Each entry is `{id, present, locked}` and carries n
 path: a linked worktree may live anywhere on the machine, so its base is read to
 decide `present` and dropped at the boundary — rule 4 held in the fact's TYPE, the
 same way `commit-meta` has no body field.
+
+**`records-blocked` is the recorder surface's could-not-look, and its EMPTY value
+is an answer** (CLOUD-1126). `records` already distinguishes a record that could
+not be read (absent from the map) from one that was read and is short; neither
+says that a row's SELECTOR matched a call which then failed to produce what the
+row reads. That third arm is the one nothing downstream can re-derive, because
+the call is gone by the time a gate reads the store — measured where
+`pr-body-closes` selects a `gh pr view` on a host with no `gh`, so `filed-here`'s
+closes-the-row exemption was unreachable rather than unsatisfied. The store is
+written only when a row is blocked, so its absence and its emptiness are one
+fact: read a PRESENT entry, and never infer one from an absence.
 
 **Eleven of those keys are DECLARED READS whose subject is not the working tree**,
 and grouping them is worth a sentence because each answers a question no walk

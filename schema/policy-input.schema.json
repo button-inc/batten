@@ -372,6 +372,13 @@
           "description": "Fact::Records (CLOUD-1051). RECORD name -> the lines accumulated in it on this branch, in write order. Keyed by the record rather than by the recorder row because several rows may write one record. Each line is the recorder's own whitespace-free columns; the projection adds nothing and reads nothing out of them. A record ABSENT from this map could not be read; the collapse into an empty list is what this keeps open.",
           "type": "object"
         },
+        "records-blocked": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Fact::RecordsBlocked (CLOUD-1126). RECORDER id -> the reason class its selected call could not be answered, e.g. `required-absent`. The could-not-look channel `input.tree.records` does not have: a record ABSENT from that map could not be read and a short one is a recorder that ran and found nothing, while an entry HERE is a row whose subject arrived and whose call produced none of the inputs the row reads. Two pointers per entry -- a declared id and a class -- and never a byte of what the call produced (non-negotiable rule 4). An EMPTY object is an answer and means nothing was blocked on this branch: the store is written only when something is, so its absence and its emptiness are one fact. A recorder absent from the map is therefore NOT blocked, and a predicate must read a PRESENT entry rather than infer one from an absence.",
+          "type": "object"
+        },
         "review": {
           "additionalProperties": {
             "additionalProperties": false,

@@ -6352,6 +6352,14 @@ fn run(
         }
         _ => BTreeMap::new(),
     };
+    // CLOUD-1126, read UNCONDITIONALLY for `VERB_WRITTEN`'s reason: the engine
+    // owns both the writer and the reader of this store, so there is no
+    // declaration a consumer could forget and nothing to make the read
+    // conditional on.
+    let records_blocked = match (crate::git::git_dir(root), crate::git::current_branch(root)) {
+        (Ok(git_dir), Ok(Some(branch))) => recorder_blocked(&git_dir, &branch),
+        _ => BTreeMap::new(),
+    };
 
     // The union the engine DECIDES against, built once for the run (CLOUD-1220).
     // `registry_for` is the one authority on it and refuses a consumer row that
@@ -6368,6 +6376,7 @@ fn run(
         external: &external,
         produced: &produced,
         records: &records,
+        records_blocked: &records_blocked,
         git: &git,
         symbols: &symbols,
         review: &review,
@@ -6611,6 +6620,33 @@ fn dedup_scoped(findings: &mut Vec<Finding>) {
 /// file — that many-to-one is the recorder model's own — so reading per row
 /// would open the same file once per row and project the same lines under
 /// several names.
+/// The recorder could-not-look lines this branch accumulated (CLOUD-1126).
+///
+/// **Last write wins per recorder, deliberately.** The store is append-only, so a
+/// row blocked twice appears twice; a reader wants the current answer rather than
+/// a history, and the later line is the one the branch is living with. A recorder
+/// that was blocked and later answered still appears here — this channel records
+/// that a call could not be looked at, not that the row never succeeded, and
+/// collapsing those would make the entry mean something no writer wrote.
+///
+/// A malformed line is skipped rather than judged, matching every other record
+/// reader here: the writer already refused a bad line, so anything unparseable at
+/// read time is a torn store and not an author's claim.
+fn recorder_blocked(git_dir: &std::path::Path, branch: &str) -> BTreeMap<String, String> {
+    let claim = crate::claim::claimed_token(&git_dir.join("batten-receipts"), branch);
+    let path = crate::recorder::blocked_path(git_dir, branch, claim.as_deref());
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return BTreeMap::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let (recorder, reason) = line.split_once(' ')?;
+            (!recorder.is_empty() && !reason.is_empty())
+                .then(|| (recorder.to_owned(), reason.to_owned()))
+        })
+        .collect()
+}
+
 fn recorder_records(
     git_dir: &std::path::Path,
     branch: &str,
@@ -6699,6 +6735,7 @@ struct RunInputs<'a> {
     /// The recorder records this branch accumulated (CLOUD-1051). One read for
     /// the whole run, beside `produced`.
     records: &'a BTreeMap<String, Vec<String>>,
+    records_blocked: &'a BTreeMap<String, String>,
     /// The git facts this rule set declared (CLOUD-907).
     git: &'a crate::git::GitFacts,
     /// The symbol census, iff this rule set declared it (CLOUD-760).
@@ -7667,6 +7704,8 @@ pub(crate) struct Resolved<'a> {
     pub produced: &'a BTreeMap<String, String>,
     /// The recorder records this branch accumulated (CLOUD-1051).
     pub records: &'a BTreeMap<String, Vec<String>>,
+    /// [`crate::facts::Fact::RecordsBlocked`] — recorder id -> reason class.
+    pub records_blocked: &'a BTreeMap<String, String>,
     /// The git facts this rule set declared (CLOUD-907).
     pub git: &'a crate::git::GitFacts,
     /// The symbol census, iff this rule set declared it (CLOUD-760).
@@ -7883,6 +7922,8 @@ pub(crate) struct Projected {
     pub produced_records: serde_json::Map<String, serde_json::Value>,
     /// [`crate::facts::Fact::Records`] — record name -> this branch's lines.
     pub recorder_lines: serde_json::Map<String, serde_json::Value>,
+    /// [`crate::facts::Fact::RecordsBlocked`] — recorder id -> reason class.
+    pub recorder_blocked: serde_json::Map<String, serde_json::Value>,
     /// What could not be looked at, as the bare names the SKIP guard counts.
     ///
     /// Not what the document carries: since CLOUD-1309 the projection builds
@@ -7926,6 +7967,11 @@ fn project_paths(
             .records
             .iter()
             .map(|(name, lines)| (name.clone(), serde_json::json!(lines)))
+            .collect(),
+        recorder_blocked: resolved
+            .records_blocked
+            .iter()
+            .map(|(recorder, reason)| (recorder.clone(), serde_json::json!(reason)))
             .collect(),
         missing: Vec::new(),
         causes: Vec::new(),
@@ -8453,6 +8499,13 @@ pub(crate) fn tree_document(
             crate::facts::Fact::Records => {
                 serde_json::Value::Object(std::mem::take(&mut projected.recorder_lines))
             }
+            // CLOUD-1126. An EMPTY object is an answer here and means no declared
+            // row was blocked on this branch, which is why this is not `null` when
+            // the store is missing: the store is written only when something is
+            // blocked, so its absence and its emptiness are the same fact.
+            crate::facts::Fact::RecordsBlocked => {
+                serde_json::Value::Object(std::mem::take(&mut projected.recorder_blocked))
+            }
             // The git family (CLOUD-907). `null` rather than a skip when a
             // member is `None`, which is the same invariant the mediated
             // document holds: a key that comes and goes cannot be written
@@ -8637,6 +8690,7 @@ fn resolved_of<'a>(inputs: &RunInputs<'a>) -> Resolved<'a> {
         review: inputs.review,
         produced: inputs.produced,
         records: inputs.records,
+        records_blocked: inputs.records_blocked,
         git: inputs.git,
         symbols: inputs.symbols,
         external: inputs.external,
@@ -12289,6 +12343,7 @@ mod tests {
                 review: &crate::facts::Look::IsNot,
                 produced: &BTreeMap::new(),
                 records: &BTreeMap::new(),
+                records_blocked: &BTreeMap::new(),
                 git: &crate::git::GitFacts::default(),
                 symbols: &crate::facts::Look::IsNot,
                 external: &BTreeMap::new(),
@@ -12866,6 +12921,7 @@ mod tests {
                 review: &crate::facts::Look::IsNot,
                 produced: &BTreeMap::new(),
                 records: &BTreeMap::new(),
+                records_blocked: &BTreeMap::new(),
                 git: &crate::git::GitFacts::default(),
                 symbols: &crate::facts::Look::IsNot,
                 external: &BTreeMap::new(),
@@ -12978,6 +13034,7 @@ mod tests {
         external: BTreeMap<String, Acquired>,
         produced: BTreeMap<String, String>,
         records: BTreeMap<String, Vec<String>>,
+        records_blocked: BTreeMap<String, String>,
         git: crate::git::GitFacts,
         symbols: crate::facts::Look<crate::symbols::Resolved>,
     }
@@ -12990,6 +13047,7 @@ mod tests {
                 external: BTreeMap::new(),
                 produced: BTreeMap::new(),
                 records: BTreeMap::new(),
+                records_blocked: BTreeMap::new(),
                 git: crate::git::GitFacts::default(),
                 symbols: crate::facts::Look::IsNot,
             }
@@ -13005,6 +13063,7 @@ mod tests {
                 external: &self.external,
                 produced: &self.produced,
                 records: &self.records,
+                records_blocked: &self.records_blocked,
                 git: &self.git,
                 symbols: &self.symbols,
                 review: &crate::facts::Look::IsNot,

@@ -699,6 +699,22 @@ pub enum Fact {
     /// The lines a **declared** `[[recorder]]` accumulated on this branch
     /// (CLOUD-1051).
     Records,
+    /// Which `[[recorder]]` rows SELECTED a call and could not answer it
+    /// (CLOUD-1126).
+    ///
+    /// **The could-not-look channel [`Records`] does not have.** A record absent
+    /// from that map could not be read; a record that is present and short is a
+    /// recorder that ran and found nothing. Neither says that a row's subject
+    /// arrived and the call failed to produce what the row reads — and that arm
+    /// is the one a gate downstream cannot re-derive, because the call is gone by
+    /// the time anything reads the store.
+    ///
+    /// Measured on PR #726: `pr-body-closes` selects a `gh pr view` and reads its
+    /// stdout, `gh` is absent from the web sandbox, so no `pr-closes` record could
+    /// exist and `filed-here`'s closes-the-row exemption was unreachable rather
+    /// than unsatisfied. The refusal fired on every subject while the PR body
+    /// carried the closing key throughout.
+    RecordsBlocked,
     /// The instant the CALLER supplied, as data (CLOUD-1170).
     ///
     /// **Supplied, never read, and that verb is the whole variant.** A clock READ
@@ -1392,6 +1408,19 @@ pub const BASE_DELTA: Class = Class::new(Cost::Read, Surface::Check);
 /// a tracked path — never a line of the body that produced it.
 pub const RECORDS: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::RecordsBlocked`] — which declared rows could not answer (CLOUD-1126).
+///
+/// `read` x **`check`**, matching [`RECORDS`] because it is the same read: one
+/// branch-keyed file under the receipt store, opened where the tree surface is
+/// already opening its sibling.
+///
+/// Its own const rather than a share of [`RECORDS`]', which
+/// `every_class_arm_names_its_own_const` requires and which is right here for a
+/// reason beyond the gate: the two files are written at different moments — the
+/// record when a row answers, this when a row could not — so a later change to
+/// either one's cost has no business moving the other's.
+pub const RECORDS_BLOCKED: Class = Class::new(Cost::Read, Surface::Check);
+
 /// [`Fact::Instant`] — the epoch second the caller handed in (CLOUD-1170).
 ///
 /// **`Free`, on [`BYPASS`]'s own reasoning.** The value arrives in `argv`, which
@@ -1455,6 +1484,7 @@ impl Fact {
         Fact::Review,
         Fact::BaseDelta,
         Fact::Records,
+        Fact::RecordsBlocked,
         Fact::Instant,
         Fact::Pinned,
     ];
@@ -1498,6 +1528,7 @@ impl Fact {
             Fact::Review => "review",
             Fact::BaseDelta => "base-delta",
             Fact::Records => "records",
+            Fact::RecordsBlocked => "records-blocked",
             Fact::Instant => "instant",
             Fact::Pinned => "pinned-programs",
         }
@@ -1549,6 +1580,7 @@ impl Fact {
             Fact::Review => REVIEW,
             Fact::BaseDelta => BASE_DELTA,
             Fact::Records => RECORDS,
+            Fact::RecordsBlocked => RECORDS_BLOCKED,
             Fact::Instant => INSTANT,
             Fact::Pinned => PINNED,
         }
@@ -1650,6 +1682,7 @@ impl Fact {
             // `check`-surface cost and not a mediated call's.
             Fact::BaseDelta => Some("base-delta"),
             Fact::Records => Some("records"),
+            Fact::RecordsBlocked => Some("records-blocked"),
             // Hook-surface facts. The tree engine resolves none of them, and
             // naming them here as `None` is what lets the correspondence test
             // assert the emitted key set in BOTH directions rather than only
@@ -1769,7 +1802,8 @@ impl Fact {
             | Fact::Minted
             | Fact::Captured
             | Fact::Produced
-            | Fact::Records => Self::keyed_read_schema_fragment(self),
+            | Fact::Records
+            | Fact::RecordsBlocked => Self::keyed_read_schema_fragment(self),
             Fact::Symbols => Self::symbols_schema_fragment(),
             Fact::Review => Self::review_schema_fragment(),
             Fact::Uses => serde_json::json!({
@@ -2026,6 +2060,7 @@ impl Fact {
             | Fact::Symbols
             | Fact::BaseDelta
             | Fact::Records
+            | Fact::RecordsBlocked
             | Fact::Pinned
             | Fact::Review => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact scalar_schema_fragment does not own",
@@ -2096,6 +2131,7 @@ impl Fact {
             | Fact::Review
             | Fact::BaseDelta
             | Fact::Records
+            | Fact::RecordsBlocked
             | Fact::GitHead
             | Fact::GitStatus
             | Fact::GitRemote
@@ -2202,6 +2238,11 @@ impl Fact {
                 "type": ["object", "null"],
                 "description": "Fact::Captured (CLOUD-1188). Declared id -> the REDUCTION that row asked for over a response the agent already captured: a boolean for `present`, an integer for `count`, a bounded whitespace-free string for `token`. THE REDUCTION IS PART OF THE FACT rather than the consumer's discipline -- a payload on this document could be lifted into a `subjects` pointer by any module, so non-negotiable rule 4 is decided here. A `token` reduction over a value that is not a bounded token is REFUSED and the id is absent, which is what makes `tokens, not prose` structural. Resolved from the capture store and NEVER from stdin: the store is sorted by handle, so two runs over unchanged bytes agree, which is what `Surface::Check` requires. NULL when no row declared a reduction and when no store is readable; a declared id no capture answers is ABSENT from the map, never a false negative.",
                 "additionalProperties": {"type": ["boolean", "integer", "string"]},
+            }),
+            Fact::RecordsBlocked => serde_json::json!({
+                "type": "object",
+                "description": "Fact::RecordsBlocked (CLOUD-1126). RECORDER id -> the reason class its selected call could not be answered, e.g. `required-absent`. The could-not-look channel `input.tree.records` does not have: a record ABSENT from that map could not be read and a short one is a recorder that ran and found nothing, while an entry HERE is a row whose subject arrived and whose call produced none of the inputs the row reads. Two pointers per entry -- a declared id and a class -- and never a byte of what the call produced (non-negotiable rule 4). An EMPTY object is an answer and means nothing was blocked on this branch: the store is written only when something is, so its absence and its emptiness are one fact. A recorder absent from the map is therefore NOT blocked, and a predicate must read a PRESENT entry rather than infer one from an absence.",
+                "additionalProperties": {"type": "string"},
             }),
             Fact::Records => serde_json::json!({
                 "type": "object",
@@ -2455,6 +2496,7 @@ impl Fact {
             | Fact::Review
             | Fact::BaseDelta
             | Fact::Records
+            | Fact::RecordsBlocked
             | Fact::Staged
             | Fact::State
             | Fact::Forge

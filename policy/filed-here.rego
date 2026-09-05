@@ -60,6 +60,7 @@
 #MUTANT-SUITE crates/batten/tests/it/filed_here.rs
 #MUTANT unrefined-row-unread|s@^\tlatest\[id\].verdict == "unready"$@\tfalse@|an_unready_create_stops_the_lap
 #MUTANT closing-row-still-priced|s@^\tnot id in closes$@\ttrue@|a_row_the_pr_closes_is_exempt
+#MUTANT blocked-recorder-still-priced|s@^\tnot closes_unreadable$@\ttrue@|a_blocked_closes_recorder_withholds_the_proximity_refusal
 #MUTANT left-open-arm-unpartitioned|s@^\tcites_only(id)$@\ttrue@|a_row_recorded_after_the_base_whose_sec1_names_the_diff_still_refuses
 #MUTANT left-open-judges-an-unread-body|s@^\tbody_read$@\ttrue@|an_unread_pr_body_leaves_the_set_unjudged
 
@@ -268,8 +269,40 @@ violation contains {
 	some id, hits in overlapping
 	some path in hits
 	not id in closes
+	not closes_unreadable
 	not predates_the_branch(id)
 	not cites_only(id)
+}
+
+# THE RECORDER THAT SUPPLIES `closes` COULD NOT RUN (CLOUD-1126).
+#
+# `closes` being empty has always had causes that are not "the PR closes nothing",
+# and `body_read` above separates the one the recorder can measure. This separates
+# the one it cannot: `pr-body-closes` selects a `gh pr view` and reads its stdout,
+# so on a host with no `gh` the call produces nothing, the row is never satisfied,
+# and NO `pr-closes` record exists to read a `-` out of. `body_read` is therefore
+# false and `closes` is empty for a reason no column carries — which made the
+# closes-the-row exemption structurally unreachable rather than merely
+# unsatisfied.
+#
+# Measured on PR #726: the body carried `Closes CLOUD-1119` and `Closes
+# CLOUD-1120` throughout, the exemption's substance held the whole time, and this
+# rule refused every subject anyway. The branch then spent an admission — a
+# mechanism a human answers — because the free and correct route could not be
+# observed.
+#
+# IT WITHHOLDS THIS REFUSAL, IT DOES NOT GRANT THE EXEMPTION, and the difference
+# is the whole of why this is scoped here. A gate that cannot see its evidence
+# must not assert the evidence is absent; it must equally not assert the evidence
+# is present. `filed-and-left-open` still reports the set, so a row this branch
+# will not land is still priced — what stops is the PROXIMITY refusal, whose §1
+# cites the branch's own diff and whose exemption is exactly the thing that could
+# not be read.
+#
+# A PRESENT entry, never an inferred one: an id absent from `records-blocked` is
+# not blocked, because the store is written only when a row is.
+closes_unreadable if {
+	input.tree["records-blocked"]["pr-body-closes"]
 }
 
 # `filed-and-left-open`: a row this branch filed, that this branch does not close.

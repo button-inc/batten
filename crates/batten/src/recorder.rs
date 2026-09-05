@@ -398,22 +398,73 @@ pub struct Program {
     pub args: Vec<String>,
 }
 
+/// What one recorder row made of this call: not its subject, its subject but
+/// unanswerable, or a row that applies (CLOUD-1126).
+///
+/// **The middle arm is the one this type exists for, and it used to be
+/// indistinguishable from the first.** `satisfied` returned one bool, so a row
+/// whose SELECTOR matched a call that then failed to answer was folded in with
+/// every call the row was never about — and a recorder that could not run wrote
+/// exactly what a recorder that ran and found nothing wrote, which is nothing.
+///
+/// Measured on PR #726: `pr-body-closes` selects a `gh pr view` and reads its
+/// `stdout`. `gh` is not installed in the web sandbox, so the call exits without
+/// stdout, `requires` went unmet, no `pr-closes` record could exist — and
+/// `filed-here`'s first exemption, the row a PR closes, was structurally
+/// unreachable rather than merely unsatisfied. The body carried
+/// `Closes CLOUD-1119` throughout and the refusal fired on every subject anyway.
+///
+/// That is `.claude/rules/policy-modules.md`'s own rule for tree sources —
+/// *"a module that iterates only `documents` reports green over a file it never
+/// read"* — arriving on the recorder surface, where CLOUD-1049 shipped it for
+/// parse failures and nothing shipped it for this.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// This call is not what the row selects for. Silence is the right answer and
+    /// carries no information.
+    NotSelected,
+    /// The row selected this call and the call did not answer it. The payload is
+    /// the reason CLASS, never the call's own output (non-negotiable rule 4).
+    Blocked(&'static str),
+    /// The row applies to this call.
+    Applies,
+}
+
+/// The reason class for a selected call that produced none of the row's inputs.
+///
+/// A class rather than the path itself: which path a row requires is its
+/// declaration, and a reader wants to know that the recorder could not look
+/// rather than to re-read the config through a finding.
+pub const BLOCKED_REQUIRED_ABSENT: &str = "required-absent";
+
 /// Whether every required result path resolved, no refusing input path did, and
 /// every input path the row matches on carries a value its pattern accepts.
 ///
 /// Takes the whole [`Context`] rather than two values because the third question
 /// needs the pattern table, and threading one more parameter through every caller
 /// would put the same three things in two orders.
+///
+/// Kept as the bool every caller already reads; [`outcome`] is what separates its
+/// two false arms.
 #[must_use]
 pub fn satisfied(declared: &Declared, context: &Context<'_>) -> bool {
-    declared
-        .requires
+    matches!(outcome(declared, context), Outcome::Applies)
+}
+
+/// [`satisfied`]'s three-valued reading.
+///
+/// **The order is the predicate.** Selection is decided FIRST — the refusing
+/// inputs and the matching patterns — because a call the row was never about must
+/// report `NotSelected` rather than `Blocked`, however many of its required paths
+/// are missing. Reading it the other way round would file a could-not-look for
+/// every unrelated tool call in the session, which is the noise that gets a
+/// channel ignored.
+#[must_use]
+pub fn outcome(declared: &Declared, context: &Context<'_>) -> Outcome {
+    let selected = declared
+        .refused_when_input
         .iter()
-        .all(|path| scalar(context.result, path).is_some())
-        && declared
-            .refused_when_input
-            .iter()
-            .all(|path| scalar(context.input, path).is_none())
+        .all(|path| scalar(context.input, path).is_none())
         && declared
             .requires_input_matching
             .iter()
@@ -432,7 +483,18 @@ pub fn satisfied(declared: &Declared, context: &Context<'_>) -> bool {
                     .patterns
                     .get(pattern)
                     .is_some_and(|regex| regex.is_match(&text))
-            })
+            });
+    if !selected {
+        return Outcome::NotSelected;
+    }
+    if declared
+        .requires
+        .iter()
+        .all(|path| scalar(context.result, path).is_some())
+    {
+        return Outcome::Applies;
+    }
+    Outcome::Blocked(BLOCKED_REQUIRED_ABSENT)
 }
 
 /// The single scalar a dotted path selects, as a bare string.
@@ -1004,6 +1066,17 @@ pub fn append_all(
         {
             continue;
         }
+        // COULD-NOT-LOOK IS WRITTEN, NOT SKIPPED (CLOUD-1126). A row whose
+        // selector matched a call that did not answer it is the one arm a
+        // downstream gate cannot re-derive: the call is gone by the time anything
+        // reads the record, and its absence looks exactly like a clean run.
+        if let Outcome::Blocked(reason) = outcome(recorder, context) {
+            append(
+                &blocked_path(git_dir, branch, claim.as_deref()),
+                &format!("{} {reason}", recorder.name),
+            );
+            continue;
+        }
         let Some(line) = render(recorder, context) else {
             continue;
         };
@@ -1012,6 +1085,27 @@ pub fn append_all(
         }
     }
     written
+}
+
+/// Where this branch's recorder could-not-look lines live (CLOUD-1126).
+///
+/// A file of its own rather than a reserved record name, because a record name is
+/// the consumer's — `[[recorder]] record = "blocked"` is a config a consumer may
+/// legitimately write, and a channel that collided with it would silently merge
+/// the engine's report with theirs. Partitioned by the branch's claim exactly as
+/// [`record_path`] is, and for the same reason: a stale attempt's could-not-look
+/// is not evidence about this one.
+///
+/// Each line is `<recorder-id> <reason-class>` — two pointers, and never a byte
+/// of what the call produced.
+#[must_use]
+pub fn blocked_path(git_dir: &Path, branch: &str, claim: Option<&str>) -> std::path::PathBuf {
+    let branch = branch.replace('/', "-");
+    let name = match claim {
+        Some(claim) => format!("recorder-blocked.{branch}.{claim}"),
+        None => format!("recorder-blocked.{branch}"),
+    };
+    git_dir.join("batten-receipts").join(name)
 }
 
 /// Where a branch-keyed record lives.
@@ -1087,4 +1181,107 @@ fn append(path: &Path, line: &str) -> Option<()> {
         .open(path)
         .ok()?;
     writeln!(file, "{line}").ok()
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "a test literal that does not compile is a broken test, not a reachable path"
+)]
+mod outcome_tests {
+    use super::*;
+
+    fn declared(requires: &[&str], matching: &[(&str, &str)]) -> Declared {
+        Declared {
+            name: "r".to_owned(),
+            record: "r".to_owned(),
+            tool: "Bash".to_owned(),
+            key: RecordKey::Branch,
+            requires: requires.iter().map(|path| (*path).to_owned()).collect(),
+            refused_when_input: Vec::new(),
+            requires_input_matching: matching
+                .iter()
+                .map(|(path, pattern)| ((*path).to_owned(), (*pattern).to_owned()))
+                .collect(),
+            requires_recorded: None,
+            columns: Vec::new(),
+        }
+    }
+
+    /// CLOUD-1126's three-valued read, over the two arms that used to be one.
+    ///
+    /// The measured shape: the row selects a command and reads its `stdout`. A
+    /// call that matched and produced no stdout is could-not-look; a call the
+    /// pattern never matched is simply not this row's, and reporting it would
+    /// file a finding for every unrelated tool call in the session.
+    #[test]
+    fn a_selected_call_that_does_not_answer_is_blocked_and_an_unselected_one_is_not() {
+        let mut patterns = std::collections::BTreeMap::new();
+        patterns.insert(
+            "fetch".to_owned(),
+            regex::Regex::new("gh pr view").expect("a test literal compiles"),
+        );
+        let programs = std::collections::BTreeMap::new();
+        let selected = serde_json::json!({"command": "gh pr view --json body"});
+        let unselected = serde_json::json!({"command": "ls -la"});
+        let empty = serde_json::json!({});
+        let answered = serde_json::json!({"stdout": "Closes CLOUD-1"});
+        let row = declared(&["stdout"], &[("command", "fetch")]);
+
+        let context =
+            |input: &'static serde_json::Value, result: &'static serde_json::Value| Context {
+                input,
+                result,
+                branch: Some("work"),
+                root: Path::new("."),
+                patterns: &patterns,
+                programs: &programs,
+                grammar: None,
+            };
+        let _ = &context;
+
+        let blocked = Context {
+            input: &selected,
+            result: &empty,
+            branch: Some("work"),
+            root: Path::new("."),
+            patterns: &patterns,
+            programs: &programs,
+            grammar: None,
+        };
+        assert_eq!(
+            outcome(&row, &blocked),
+            Outcome::Blocked(BLOCKED_REQUIRED_ABSENT),
+            "the row's subject arrived and the call produced none of what it reads"
+        );
+
+        let missed = Context {
+            input: &unselected,
+            result: &empty,
+            branch: Some("work"),
+            root: Path::new("."),
+            patterns: &patterns,
+            programs: &programs,
+            grammar: None,
+        };
+        assert_eq!(
+            outcome(&row, &missed),
+            Outcome::NotSelected,
+            "a call this row was never about carries no information, however many \
+             required paths are missing"
+        );
+
+        let applies = Context {
+            input: &selected,
+            result: &answered,
+            branch: Some("work"),
+            root: Path::new("."),
+            patterns: &patterns,
+            programs: &programs,
+            grammar: None,
+        };
+        assert_eq!(outcome(&row, &applies), Outcome::Applies);
+        assert!(satisfied(&row, &applies));
+        assert!(!satisfied(&row, &blocked));
+    }
 }

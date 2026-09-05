@@ -37,8 +37,8 @@ use batten::facts::{
     AGENT_SOURCED, BASE_DELTA, BYPASS, CAPTURED, COMMIT_META, Class, Cost, DOCUMENT, EXTERNAL,
     EXTRACTED, FORGE, Fact, GIT_HEAD, GIT_HISTORY, GIT_RANGE, GIT_REF, GIT_REMOTE, GIT_STATUS,
     GIT_WORKTREES, INSTANT, INVOCATIONS, KEYS, LANDING, LINES, Look, MINTED, PINNED, PRODUCED,
-    PROSPECTIVE, RECEIPTS, RECORDS, REVIEW, STAGED, STATE, STOP, SYMBOLS, Surface, TASKS,
-    TOOL_VERDICT, TRACKED, USES, WAIVED,
+    PROSPECTIVE, RECEIPTS, RECORDS, RECORDS_BLOCKED, REVIEW, STAGED, STATE, STOP, SYMBOLS, Surface,
+    TASKS, TOOL_VERDICT, TRACKED, USES, WAIVED,
 };
 
 #[test]
@@ -145,7 +145,12 @@ fn every_fact_returns_its_stated_const() {
             Fact::Symbols => SYMBOLS,
             Fact::Review => REVIEW,
             Fact::BaseDelta => BASE_DELTA,
+            // CLOUD-1126. The same class as `Records` because it is the same
+            // read: a file under the branch's receipt store, opened on the check
+            // surface. The pairing is stated rather than merged so a later change
+            // to either one has to say which it meant.
             Fact::Records => RECORDS,
+            Fact::RecordsBlocked => RECORDS_BLOCKED,
             Fact::Instant => INSTANT,
             Fact::Pinned => PINNED,
         }
@@ -156,7 +161,7 @@ fn every_fact_returns_its_stated_const() {
     // rather than quietly shrinking the census.
     assert_eq!(
         Fact::ALL.len(),
-        37,
+        38,
         "the census covers every fact; update this count deliberately when the \
          model gains or loses one"
     );

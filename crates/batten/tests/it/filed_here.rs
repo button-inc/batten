@@ -171,6 +171,20 @@ fn write_record(root: &Path, branch: &str, record: &str, lines: &[&str]) {
     fs::write(path, format!("{}\n", lines.join("\n"))).expect("write record");
 }
 
+/// The recorder could-not-look store, written where the engine writes it
+/// (CLOUD-1126).
+///
+/// Through `blocked_path` rather than a literal, for `write_record`'s reason one
+/// level over: the filename is the contract between the writer and the reader,
+/// and two spellings of it mean the gate reads an empty channel for a store that
+/// exists.
+fn write_blocked(root: &Path, branch: &str, lines: &[&str]) {
+    let git_dir = root.join(".git");
+    let path = batten::recorder::blocked_path(&git_dir, branch, None);
+    fs::create_dir_all(path.parent().expect("the store has a parent")).expect("receipts dir");
+    fs::write(path, format!("{}\n", lines.join("\n"))).expect("write blocked store");
+}
+
 fn install_module(root: &Path) {
     let source = common::at_root("policy/filed-here.rego")
         .canonicalize()
@@ -482,6 +496,78 @@ fn a_row_the_pr_closes_is_exempt() {
     assert!(
         verdicts(&root).is_empty(),
         "filing then fixing is the work landing"
+    );
+}
+
+/// CLOUD-1126's discriminating pair, and the first arm is the reproduction.
+///
+/// The `pr-closes` record is ABSENT here, exactly as it is on a host with no
+/// `gh`: the recorder selected the call, the call produced no stdout, so no
+/// record was ever written and there is no `-` for `body_read` to read. Before
+/// the could-not-look channel that was byte-identical to "this PR closes
+/// nothing", and the proximity refusal fired on a branch whose PR body carried
+/// the closing key throughout.
+#[test]
+fn a_blocked_closes_recorder_withholds_the_proximity_refusal() {
+    let root = repo(
+        "blocked-closes",
+        "work",
+        &["src/a.rs"],
+        &[&format!(
+            "issue CLOUD-1 {AFTER} ready 1,src/a.rs - 1,src/a.rs"
+        )],
+        &[],
+    );
+    write_blocked(&root, "work", &["pr-body-closes required-absent"]);
+    assert!(
+        verdicts(&root).is_empty(),
+        "a gate that cannot see its evidence must not assert the evidence is absent"
+    );
+}
+
+/// The mirror, and the reason the case above is worth its line.
+///
+/// Same absent record, same overlapping row, and NO blocked entry — so the
+/// channel is silent, which is its ordinary state. The refusal must still fire,
+/// or the first case would be passing under a clause that exempts everything.
+#[test]
+fn an_absent_record_with_no_blocked_entry_is_still_refused() {
+    let root = repo(
+        "unblocked-closes",
+        "work",
+        &["src/a.rs"],
+        &[&format!(
+            "issue CLOUD-1 {AFTER} ready 1,src/a.rs - 1,src/a.rs"
+        )],
+        &[],
+    );
+    assert!(
+        !verdicts(&root).is_empty(),
+        "silence in the blocked channel is the ordinary outcome, never an amnesty"
+    );
+}
+
+/// A blocked entry for a DIFFERENT recorder withholds nothing.
+///
+/// The clause reads one declared id. A channel that exempted on any entry at all
+/// would turn one unrelated recorder's bad day into a blanket amnesty, which is
+/// the shape `.claude/rules/policy-modules.md` refuses for every could-not-look
+/// key it documents.
+#[test]
+fn a_blocked_entry_for_another_recorder_exempts_nothing() {
+    let root = repo(
+        "blocked-elsewhere",
+        "work",
+        &["src/a.rs"],
+        &[&format!(
+            "issue CLOUD-1 {AFTER} ready 1,src/a.rs - 1,src/a.rs"
+        )],
+        &[],
+    );
+    write_blocked(&root, "work", &["board-writes required-absent"]);
+    assert!(
+        !verdicts(&root).is_empty(),
+        "the clause reads one declared id, never the channel's emptiness"
     );
 }
 
