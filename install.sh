@@ -130,14 +130,41 @@ detect_target() {
 # the token keeps travelling on stdin.
 API_RETRIES="${BATTEN_RETRIES:-3}"
 
+# THE PROXY IS RESPECTED, AND BYPASSED ONLY WHEN IT IS THE THING REFUSING.
+#
+# A proxy is a legitimate part of most networks and this installer honours it: no
+# `NO_PROXY` is set, no variable is unset, and on any ordinary host nothing below
+# fires. What this handles is the narrower case of an INTERCEPTING proxy that
+# answers on GitHub's behalf with a credential of its own — measured here, a
+# container whose proxy returns `403` with the body *"GitHub access to this
+# repository is not enabled for this session"*, which is the proxy speaking and
+# not GitHub. That happens at container-BUILD time, where no session exists for
+# the proxy to scope a credential to, so the refusal is unconditional and no
+# amount of retrying moves it.
+#
+# The discriminator is the STATUS, not the environment. `401`/`403` is a
+# credential refusal — something answered and declined — where a network problem
+# is a connect failure or a 5xx. So a refusal is the one thing that earns a
+# second attempt around the proxy, and only when a token of our own exists to
+# authenticate with; without one the direct route is an unauthenticated
+# shared-address request that GitHub rate-limits, which trades a clear refusal
+# for a confusing one.
+#
+# `--noproxy` names the GitHub hosts rather than `*`: everything else this
+# machine talks to keeps going the way the operator configured it.
+NOPROXY_HOSTS='api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com,github.com'
+
 api_get() {
 	ag_url=$1
 	ag_accept=$2
 	ag_out=$3
 	ag_attempt=1
+	ag_direct=
 	while :; do
 		if {
-			if [ -n "$TOKEN" ]; then
+			if [ -n "$ag_direct" ] && [ -n "${TOKEN_DIRECT:-}" ]; then
+				printf 'header = "Authorization: Bearer %s"\n' "$TOKEN_DIRECT"
+			elif [ -n "$TOKEN" ]; then
 				printf 'header = "Authorization: Bearer %s"\n' "$TOKEN"
 			fi
 			printf 'header = "Accept: %s"\n' "$ag_accept"
@@ -153,10 +180,25 @@ api_get() {
 			elif [ -n "${SSL_CERT_FILE:-}" ] && [ -f "$SSL_CERT_FILE" ]; then
 				printf 'cacert = "%s"\n' "$SSL_CERT_FILE"
 			fi
+			if [ -n "$ag_direct" ]; then
+				printf 'noproxy = "%s"\n' "$NOPROXY_HOSTS"
+			fi
+			printf 'write-out = "%%{http_code}"\n'
 			printf 'output = "%s"\n' "$ag_out"
 			printf 'url = "%s"\n' "$ag_url"
-		} | curl --config -; then
+		} | curl --config - >"$ag_out.code" 2>/dev/null; then
 			return 0
+		fi
+		# Read before the retry decision: a refusal earns a different next step
+		# from a timeout, and the status is the only thing that tells them apart.
+		ag_code=$(cat "$ag_out.code" 2>/dev/null || true)
+		if [ -z "$ag_direct" ] && { [ -n "$TOKEN" ] || [ -n "${TOKEN_DIRECT:-}" ]; } &&
+			{ [ "$ag_code" = "403" ] || [ "$ag_code" = "401" ]; }; then
+			# Something answered and declined. On a build host that is the
+			# intercepting proxy speaking for GitHub, so try once around it with
+			# our own credential before spending any more of the retry budget.
+			ag_direct=1
+			continue
 		fi
 		[ "$ag_attempt" -ge "$API_RETRIES" ] && return 1
 		sleep $((ag_attempt * ag_attempt))
@@ -248,6 +290,19 @@ main() {
 	# says so through `BATTEN_GITHUB_TOKEN`, which still wins. On a public repo none
 	# of this matters — the token is a rate-limit convenience, not a requirement.
 	TOKEN="${BATTEN_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-${GITHUB_PERSONAL_ACCESS_TOKEN:-}}}}"
+	# THE SECOND CANDIDATE, and it exists because the first can be a placeholder.
+	# An intercepting proxy exports its own `GH_TOKEN`/`GITHUB_TOKEN` — a short
+	# session-scoped string that authenticates to the PROXY and 401s at GitHub —
+	# and that value sits ahead of the operator's real credential in the order
+	# above. Measured on a build host: `GH_TOKEN` 14 characters answering 401,
+	# `GITHUB_PERSONAL_ACCESS_TOKEN` 40 characters answering 200.
+	#
+	# Reordering is the wrong fix: on an ordinary machine `GH_TOKEN` IS the
+	# operator's credential and must keep winning. So the order stands and this
+	# is the fallback tried only once the first has been REFUSED, beside the
+	# proxy bypass and for the same reason.
+	TOKEN_DIRECT="${GITHUB_PERSONAL_ACCESS_TOKEN:-}"
+	[ "$TOKEN_DIRECT" = "$TOKEN" ] && TOKEN_DIRECT=
 
 	target="${BATTEN_TARGET:-}"
 	if [ -z "$target" ]; then
