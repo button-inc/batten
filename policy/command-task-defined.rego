@@ -212,13 +212,13 @@ test_a_row_naming_a_manifest_task_is_clean if {
 # red on most of this repository's own rows, which is worse than the silence it
 # replaces: a gate whose first firing is a false positive gets switched off.
 test_a_file_task_counts_with_and_without_its_extension if {
-	every check in ["mise run land", "mise run land.sh"] {
+	every check in ["mise run linear-check", "mise run linear-check.sh"] {
 		found := violation with input as {"tree": {
 			"documents": {
 				"batten.toml": {"rule": [{"id": "r", "check": check}]},
 				"mise.toml": {"tasks": {}},
 			},
-			"tracked": ["mise-tasks/land.sh"],
+			"tracked": ["mise-tasks/linear-check.sh"],
 			"missing": {},
 		}}
 		count(found) == 0
@@ -248,7 +248,7 @@ test_a_program_on_path_is_left_alone if {
 			"batten.toml": {"rule": [{"id": "r", "check": "hk util check-merge-conflict"}]},
 			"mise.toml": {"tasks": {}},
 		},
-		"tracked": ["mise-tasks/land.sh"],
+		"tracked": [],
 		"missing": {},
 	}}
 	count(found) == 0
