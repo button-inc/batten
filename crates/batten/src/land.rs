@@ -806,26 +806,54 @@ pub fn verify(
     // here is what kind of failure a red one was, and `classify_in_env` is the
     // sibling that answers it. Both readings from one function would produce
     // opposite verdicts over identical bytes.
-    let verified =
-        match crate::exec::classify_in_env(&started, command, environment, &settings, published) {
-            Ok((0, _)) => Verified::Clean(head),
-            Ok((_, found)) => Verified::Refused {
-                sha: head,
-                // THE FIRST DECLARED ROW THAT MATCHED, in declaration order, and one
-                // remedy rather than a concatenation: `outputs::reasons` already
-                // dedupes per pattern for the reason it states — a tool that emitted
-                // the same warning forty times should say what to do about it once.
-                // An empty set is `Tree`, which is the common case and the one whose
-                // advice was always right.
-                cause: crate::outputs::reasons(environment, &found).first().map_or(
-                    Refusal::Tree,
-                    |remedy| Refusal::Environment {
-                        remedy: remedy.clone(),
-                    },
+    let verified = match crate::exec::classify_in_env(
+        &started,
+        command,
+        environment,
+        &settings,
+        published,
+    ) {
+        Ok((0, _)) => Verified::Clean(head),
+        // **THE EXIT CODE IS READ BEFORE THE PATTERNS, and it was not read at
+        // all** (review of #848). Every non-zero became `Refusal::Tree`
+        // unless a declared `[[verify_environment_pattern]]` happened to
+        // match, so a renamed task, a missing runner or a gate that answered
+        // could-not-look were all recorded as `verify refused <sha>` and the
+        // driver printed the speculative-base advice as though the gate had
+        // judged this tree. A consumer cannot be asked to write a pattern for
+        // "the program was not there": there is no output to match on.
+        //
+        // Three codes say the gate did not judge, and none of them is a
+        // verdict. `3` is this engine's own could-not-look (house-style §7),
+        // and `126`/`127` are the shell's — not executable, and not found.
+        // Everything else reaches the pattern scan exactly as before, so a
+        // declared row still classifies a `1` or a `2` that names a
+        // disk-full or a rate limit.
+        Ok((code, _)) if matches!(code, 3 | 126 | 127) => Verified::Refused {
+            sha: head,
+            cause: Refusal::Environment {
+                remedy: format!(
+                    "the verify command exited {code}, which is not a verdict about this tree — check that it names a task this checkout declares and that its runner is on PATH"
                 ),
             },
-            Err(problem) => return Err(problem.context("land: run the configured verify command")),
-        };
+        },
+        Ok((_, found)) => Verified::Refused {
+            sha: head,
+            // THE FIRST DECLARED ROW THAT MATCHED, in declaration order, and one
+            // remedy rather than a concatenation: `outputs::reasons` already
+            // dedupes per pattern for the reason it states — a tool that emitted
+            // the same warning forty times should say what to do about it once.
+            // An empty set is `Tree`, which is the common case and the one whose
+            // advice was always right.
+            cause: crate::outputs::reasons(environment, &found).first().map_or(
+                Refusal::Tree,
+                |remedy| Refusal::Environment {
+                    remedy: remedy.clone(),
+                },
+            ),
+        },
+        Err(problem) => return Err(problem.context("land: run the configured verify command")),
+    };
     append(root, branch, std::slice::from_ref(&verified.line()))?;
     Ok(verified)
 }
@@ -1122,9 +1150,15 @@ pub fn ready(root: &Path, gates: &[Vec<String>], body: &str) -> Readied {
         return Readied::Clear;
     }
     for argv in gates {
-        let Some(gate) = argv.first().cloned() else {
+        if argv.is_empty() {
             continue;
-        };
+        }
+        // THE WHOLE ARGV, NOT ITS FIRST WORD. `argv.first()` is the RUNNER —
+        // `mise` for every gate this consumer declares — so every refusal named
+        // the same program and none named the gate that refused. A pointer that
+        // is identical across every possible finding is not a pointer (review of
+        // #848).
+        let gate = argv.join(" ");
         let Some((code, output)) = crate::exec::piped_argv(root, argv, body) else {
             return Readied::Unrunnable { gate };
         };
@@ -2406,6 +2440,38 @@ mod tests {
                 gate: String::from("batten-no-such-program-for-the-ready-phase"),
             },
             "a declared gate that cannot run has not passed"
+        );
+    }
+
+    /// **THE POINTER NAMES THE GATE, NOT THE RUNNER.**
+    ///
+    /// This read `argv.first()`, which is `mise` for every gate this consumer
+    /// declares — so a refusal from `deferral-check` and one from
+    /// `closing-key-check` produced the identical pointer and neither said which
+    /// had refused. A value that is constant across every possible finding
+    /// carries no information about which one occurred, which is the same
+    /// objection this crate makes to a fallback that cannot fail.
+    ///
+    /// Driven through `Unrunnable` because that arm needs no live gate: the
+    /// label is built before the spawn is attempted, so it is the same string
+    /// either arm would carry.
+    #[test]
+    fn a_refusal_names_the_whole_gate_rather_than_the_task_runner() {
+        let root = std::env::temp_dir();
+        let gate = vec![vec![
+            String::from("batten-no-such-runner-for-the-ready-phase"),
+            String::from("run"),
+            String::from("closing-key-check"),
+        ]];
+
+        assert_eq!(
+            super::ready(&root, &gate, "Closes CLOUD-1"),
+            super::Readied::Unrunnable {
+                gate: String::from(
+                    "batten-no-such-runner-for-the-ready-phase run closing-key-check"
+                ),
+            },
+            "the pointer must distinguish two gates the same runner invokes"
         );
     }
 

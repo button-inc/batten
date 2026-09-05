@@ -1225,15 +1225,29 @@ pub struct Terms {
     pub beat: i64,
 }
 
+/// How many beats fit inside a TTL — the RATIO the field docs call the property.
+///
+/// Written once because it is now read twice: [`Terms::default`] derives the
+/// shipped beat from it, and [`terms`] restores it when an operator declares a
+/// `LAND_LOCK_HEARTBEAT` that is not narrower than their `LAND_LOCK_TTL`. Two
+/// spellings of one relation is exactly the drift this module records elsewhere,
+/// and the pair went unchecked for its whole life because the relation lived in
+/// prose (review of #848).
+const BEATS_PER_TTL: i64 = 4;
+
+/// The shipped TTL. The beat is derived, so the two cannot be edited apart.
+const DEFAULT_TTL: i64 = 120;
+
 impl Default for Terms {
     fn default() -> Self {
         Self {
             remote: String::from("origin"),
             reference: String::from("refs/heads/batten-land-lock"),
             // 120s over a 30s beat. See the field docs for why the ratio rather
-            // than either number is the property.
-            ttl: 120,
-            beat: 30,
+            // than either number is the property, and `BEATS_PER_TTL` for where
+            // that ratio is written down.
+            ttl: DEFAULT_TTL,
+            beat: DEFAULT_TTL / BEATS_PER_TTL,
         }
     }
 }
@@ -1334,6 +1348,25 @@ pub fn terms(root: &Path) -> std::result::Result<Terms, TermsMissing> {
     }
     if let Some(beat) = env_secs("LAND_LOCK_HEARTBEAT") {
         resolved.beat = beat;
+    }
+    // **THE RELATION IS THE SAFETY PROPERTY, AND IT WAS PROSE.** `Terms`' own
+    // field docs say the TTL is three beats wide on purpose, and every consumer
+    // of `beat`/`ttl` assumes it — but the two were read INDEPENDENTLY, each
+    // filtered only for `> 0`, so `LAND_LOCK_HEARTBEAT=120 LAND_LOCK_TTL=30`
+    // loaded clean and left the lease expired for 90s of every beat. A waiter's
+    // `body.expired(now) && held_for >= terms.beat` then takes a lease whose
+    // holder is alive and two landers run concurrently, which is the one thing
+    // this module exists to prevent (review of #848).
+    //
+    // THE TTL IS KEPT AND THE BEAT IS DERIVED, which is not a coin toss between
+    // two values. The TTL is the OUTER bound — how long a dead holder can wedge
+    // the fleet — so an operator who raised it wants it raised, and it is the
+    // half that stays. The beat is an implementation detail of staying alive
+    // inside it, so it is the half that moves, back to the width the field docs
+    // already declare. Restoring the relation cannot widen the window a waiter
+    // sees; it can only shorten it.
+    if resolved.beat >= resolved.ttl {
+        resolved.beat = (resolved.ttl / BEATS_PER_TTL).max(1);
     }
     if let Ok(reference) = std::env::var("LAND_LOCK_BRANCH") {
         resolved.reference = format!("refs/heads/{reference}");

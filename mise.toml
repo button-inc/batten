@@ -439,6 +439,27 @@ LAND_BODY_GATES = "mise run deferral-check|mise run closing-key-check"
 # the landing where the predecessor carried on to `check` — whose refusal is the
 # one that names `record` as the way through.
 LAND_ENTRY_GATES = "?mise run pr-unsubscribed drop|mise run pr-unsubscribed check"
+# THE THREE THE LAP CANNOT RUN WITHOUT, AND NOTHING DECLARED THEM (review of
+# #848). Every one of these is a consumer fact `crates/batten` refuses to guess —
+# which is non-negotiable rule 1 working — but refusing to guess only reaches a
+# working lander if the consumer then DECLARES them, and this file did not. Only
+# the suites injected them, so `mise run land` could not complete: the entry
+# gates resolved the repo to `pr_watch::REPO_PLACEHOLDER` and exited 3, and past
+# that the empty `LAND_VERIFY` returned `Usage`, which `land::progress` maps to
+# `Stop`. A gate that refuses to guess and a manifest that never answers are the
+# same silence from the caller's side.
+#
+# `LAND_VERIFY` is the gate a lap re-proves the tree with, spelled as the argv it
+# runs. It is `verify` rather than `verify:gated` deliberately: the lap owns the
+# rebase, so the outer task's own linear-check is the one that must re-run per
+# lap. The predecessor ran `mise run verify` directly, and this is that call site
+# moved into config rather than a new decision.
+LAND_VERIFY = "mise run verify"
+# The workflow whose runs carry the fast-forward bot's answer, as a PATH, because
+# `fast_forward::Ask` matches a run's own `path`. The predecessor defaulted this
+# to `fast-forward.yml` compiled in; naming it here is the same value with the
+# consumer holding it.
+LAND_WORKFLOW = ".github/workflows/fast-forward.yml"
 # THE RECLAIM CENSUS'S STOP NOTE (CLOUD-451), declared here because the program
 # is this consumer's and a census name inside `crates/batten` is non-negotiable
 # rule 1's plainest violation. `batten lease release` spawns it when a release

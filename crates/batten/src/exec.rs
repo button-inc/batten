@@ -1575,7 +1575,20 @@ fn piped_through(
             .current_dir(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            // **STDERR IS CAPTURED, NOT NULLED, AND THAT IS WHERE THE REASON
+            // LIVES.** Both consumer gates on this path write every refusal
+            // reason to stderr and only their verdict to stdout, so nulling it
+            // left `land::ready` building `Readied::Refused { detail }` from an
+            // empty string and the operator reading `mise refused this pull
+            // request's body` with no coordinate at all. That is the same defect
+            // `land::verify`'s `tee: true` closed, reintroduced one step over
+            // (review of #848).
+            //
+            // Merged rather than kept apart because the caller has ONE detail
+            // field and a gate is free to write to either stream; splitting them
+            // here would make which stream a gate happened to choose decide
+            // whether its reason survives.
+            .stderr(Stdio::piped())
             .spawn()
     })
     .ok()?;
@@ -1587,10 +1600,17 @@ fn piped_through(
         pipe.write_all(stdin.as_bytes()).ok()?;
     }
     let finished = child.wait_with_output().ok()?;
-    Some((
-        finished.status.code()?,
-        String::from_utf8_lossy(&finished.stdout).into_owned(),
-    ))
+    // STDOUT FIRST, because that is where a verdict is written and a caller
+    // parsing one must not have to skip a diagnostic to find it.
+    let mut output = String::from_utf8_lossy(&finished.stdout).into_owned();
+    let diagnostics = String::from_utf8_lossy(&finished.stderr);
+    if !diagnostics.trim().is_empty() {
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str(diagnostics.trim_end());
+    }
+    Some((finished.status.code()?, output))
 }
 
 /// [`piped`] over an ARGV rather than a program path.

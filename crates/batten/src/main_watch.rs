@@ -49,7 +49,7 @@
 //! raced without becoming a second authority over when to stop asking, which is
 //! the mistake `pr_watch::read` was made public to avoid (CLOUD-1338).
 
-use crate::pr_watch::interval_for;
+use crate::pr_watch::{interval_for, longer_of};
 
 /// What the staleness poll needs.
 #[derive(Debug, Clone)]
@@ -131,10 +131,20 @@ impl Poll {
         if let Some(etag) = &answer.etag {
             self.etag = Some(etag.clone());
         }
-        if answer.status != 304 {
+        // ONLY A READING REPLACES THE READING, and here the consequence is worse
+        // than the sibling's. `status != 304` parsed an ERROR document as a ref
+        // advertisement, so a `403` set `head` to `None` — and `moved()` reads
+        // `None` as *still landable*, which is the fail-open direction. The lap
+        // then pushes onto a base the forge already moved past, buys a matrix on
+        // a head the fast-forward will refuse, and does it again next lap.
+        // `crate::pr_watch::Poll::absorb` carries the same guard for the same
+        // reason; the two are the arms of one race (review of #848).
+        if answer.is_reading() {
             self.head = head_from_body(&answer.body);
         }
-        interval_for(configured, answer.poll_floor)
+        // The server's own backoff outranks the configured floor, for the reason
+        // `pr_watch::Poll::absorb` states beside the same call.
+        interval_for(configured, longer_of(answer.poll_floor, answer.backoff))
     }
 
     /// The validator for the next request.

@@ -6,8 +6,8 @@
 //! The driver was an array literal of [`crate::land::Step`] with a compile-time
 //! step→function `match`. A consumer could not add, remove, reorder or
 //! re-implement a step, nor supply a fast-forward for a forge without this
-//! repository's bot — so the successor still described *"Button-specific landing
-//! policy a consumer inherits and cannot tailor"*, which is the sentence the
+//! repository's bot — so the successor still described *"consumer-specific
+//! landing policy a consumer inherits and cannot tailor"*, which is the sentence the
 //! whole retirement exists to falsify. A shell script can at least be forked
 //! where a `match` arm needs a release.
 //!

@@ -90,12 +90,65 @@ const MAX_PAGES: u32 = 20;
 /// through, and this function would answer `None` for every one of them.
 #[must_use]
 pub fn open_pull_request(repo: &str, branch: &str) -> Option<String> {
+    match look_up_pull_request(repo, branch) {
+        Lookup::Found(number) => Some(number),
+        Lookup::None | Lookup::Unreadable(_) => None,
+    }
+}
+
+/// What a pull-request lookup actually found, with could-not-look kept apart.
+///
+/// **[`open_pull_request`]'s `None` COLLAPSED TWO ANSWERS and every caller
+/// printed the wrong one** (review of #848). `rest::get` hands back an `Answer`
+/// for a `404` as readily as for a `200` — the body is the error document — so an
+/// unauthenticated read of a private repository parsed as *not an array* and came
+/// back `None`, identical to a branch that genuinely has no pull request. The
+/// callers then wrote *"no open pull request for `<branch>`"*, which states a fact
+/// about the branch on evidence that says only that nobody looked.
+///
+/// The distinction is the whole type. A missing credential, a rate limit and a
+/// repository slug that did not resolve are all [`Lookup::Unreadable`], carrying
+/// the status so the operator is pointed at their environment rather than at
+/// their branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lookup {
+    /// The forge named an open pull request for this branch.
+    Found(String),
+    /// The forge answered, and there is none. A fact about the branch.
+    None,
+    /// The forge did not answer usefully, carrying the status it did answer.
+    /// **Never a fact about the branch.**
+    Unreadable(u16),
+}
+
+/// The three-valued lookup [`open_pull_request`] flattens.
+#[must_use]
+pub fn look_up_pull_request(repo: &str, branch: &str) -> Lookup {
     let owner = repo.split('/').next().unwrap_or(repo);
-    let raw = run(&format!(
-        "repos/{repo}/pulls?head={owner}:{branch}&state=open&per_page=1"
-    ))?;
-    let document = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
-    let number = document.as_array()?.first()?.get("number")?;
+    let Some(answer) = crate::rest::get(
+        &format!("repos/{repo}/pulls?head={owner}:{branch}&state=open&per_page=1"),
+        None,
+    ) else {
+        // The request did not complete at all — no host, no route, no answer.
+        // `0` rather than a status, because there was none to carry.
+        return Lookup::Unreadable(0);
+    };
+    if !answer.is_reading() {
+        return Lookup::Unreadable(answer.status);
+    }
+    // Past here the forge answered `200`, so an absent entry IS the answer: this
+    // branch has no open pull request. A body that will not parse as the array
+    // this endpoint documents is the forge disagreeing with itself, which is a
+    // could-not-look rather than an empty result.
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(&answer.body) else {
+        return Lookup::Unreadable(answer.status);
+    };
+    let Some(entries) = document.as_array() else {
+        return Lookup::Unreadable(answer.status);
+    };
+    let Some(number) = entries.first().and_then(|entry| entry.get("number")) else {
+        return Lookup::None;
+    };
     // A NUMBER OR A STRING, for `comment_id`'s reason one function down: the
     // forge sends a number, and a string-only read would answer `None` over a
     // good response.
@@ -103,6 +156,7 @@ pub fn open_pull_request(repo: &str, branch: &str) -> Option<String> {
         .as_u64()
         .map(|found| found.to_string())
         .or_else(|| number.as_str().map(str::to_owned))
+        .map_or(Lookup::Unreadable(answer.status), Lookup::Found)
 }
 
 /// What the lap needs to ask, and to recognise the answer.
@@ -241,6 +295,19 @@ pub fn answer_request(ask: &Ask, since: &str, page: u32) -> String {
 /// the page at all. A keyed filter over a window that has already rolled past the
 /// run returns empty, which reads as [`Answer::Pending`] — byte-identical to a
 /// silent bot, and the reading that cost the predecessor its diagnosis.
+/// Seconds between two reads of the same lap's fast-forward answer.
+///
+/// The bot takes roughly twenty seconds to create its run at all, so the first
+/// read of any lap is `Pending` by construction. Two seconds is short enough that
+/// the answer is reported promptly once it exists and long enough that the wait
+/// is a handful of requests rather than a spin — and this endpoint is not the
+/// conditional one, so each ask is a real request against the rate limit.
+///
+/// **The loop is the caller's, never this module's**, for the reason
+/// [`crate::main_watch`]'s header gives about its own: a module holding an
+/// unbounded loop becomes a second authority over when to stop asking.
+pub const ANSWER_POLL_SECONDS: u64 = 2;
+
 #[must_use]
 pub fn answer(ask: &Ask, since: &str, comment: &str) -> Answer {
     let wanted = key(&ask.pr, comment);
