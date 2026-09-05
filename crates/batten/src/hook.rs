@@ -4053,6 +4053,21 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     {
         return Decision::Deny(history_drop_refusal(unreferenced));
     }
+    // THE SINGLETON GATE (CLOUD-438), the earliest computable moment for
+    // "one `land` per clone".
+    //
+    // The in-task lock is and stays the load-bearing enforcement — a hook can be
+    // unwired, unloaded or bypassed, so this may never be the only thing between
+    // a clone and a second landing loop. What it buys is the ~200 ms and one
+    // process spawn between `mise run land` starting and the lock refusing, plus
+    // a refusal that arrives as a denied tool call rather than buried in a task's
+    // output.
+    //
+    // The same lock, read the same way (`task::singleton_holder`), so there is no
+    // second predicate to drift.
+    if let Some((task, holder)) = facts.singleton {
+        return Decision::Deny(singleton_held_refusal(task, holder));
+    }
     // The write gate, before the command gate and not inside it: a write tool
     // carries no command, so every path below this point used to return Allow
     // for it. That is why the `Write|Edit|MultiEdit|NotebookEdit` matcher was
@@ -4633,6 +4648,20 @@ pub struct Facts<'a> {
     pub stop: &'a crate::stop::StopFacts,
     /// The rules a live waiver suppresses today, with the expiry each claims.
     pub waived: &'a crate::waiver::Live,
+    /// The task and live holder of a singleton lock this call would collide with
+    /// (CLOUD-438).
+    ///
+    /// **Resolved at the boundary, because a lock is a file and a pid is a
+    /// process** — neither is answerable from a pure function. `task::
+    /// singleton_holder` is the READ half of the same lock `batten task
+    /// singleton` takes, so there is no second predicate and no second
+    /// bookkeeping scheme; the acquiring verb stays the load-bearing enforcement
+    /// and this is the fast feedback CLOUD-428 §3 called the earliest computable
+    /// moment.
+    ///
+    /// `None` is both "this call starts no guarded task" and "nothing holds the
+    /// lock", which are the same answer to the only question asked here.
+    pub singleton: &'a Option<(String, String)>,
     /// The commits a `git reset --hard` in this call would leave unreferenced,
     /// as short SHAs, and only those reachable from no remote (CLOUD-462).
     ///
@@ -4717,6 +4746,9 @@ impl<'a> Facts<'a> {
             stop,
             waived,
             sourced: &None,
+            // No collision resolved, which for this fact is the same answer a
+            // caller that looked and found a free lock would give.
+            singleton: &None,
             // Could-not-look, never an empty list: "this reset discards nothing"
             // is a claim about a repository's remotes, and a caller that resolved
             // nothing is not making it (CLOUD-462).
@@ -6843,6 +6875,9 @@ pub const PROTECTED_MUTATION: &str = "protected-mutation";
 /// same reason `must_land_on` is a top-level key rather than a rule.
 pub const HISTORY_DROP: &str = "history-drop";
 
+/// The rule id the singleton gate refuses under (CLOUD-438).
+pub const SINGLETON_HELD: &str = "singleton-held";
+
 /// The pseudo-programs a shell redirect is reported as.
 ///
 /// A truncating redirect mutates a file with no program to classify: in
@@ -7326,6 +7361,31 @@ fn history_drop_refusal(unreferenced: &[String]) -> Refusal {
         Fix::declared(Some(
             "these commits are on no remote; `git reflog` still holds them",
         )),
+    )
+}
+
+/// Refuse starting a task a live process already holds the lock for (CLOUD-438).
+///
+/// Pointer-only (rule 4): the task name and the holder — a pid, or `unknown`
+/// where the lock says nothing readable. Never the holder's command line and
+/// never its output.
+///
+/// The remedy names the reader rather than the lock, because a caller who hits
+/// this wants to know what the other one is DOING, and `batten task alive` is
+/// the verb that answers without disturbing it.
+fn singleton_held_refusal(task: &str, holder: &str) -> Refusal {
+    Refusal::declared(
+        SINGLETON_HELD,
+        crate::verdict::Native::SingletonHeld,
+        &[
+            crate::verdict::Subject::Artifact {
+                artifact: task.to_owned(),
+            },
+            crate::verdict::Subject::Artifact {
+                artifact: holder.to_owned(),
+            },
+        ],
+        Fix::declared(Some("`batten task alive` reports what the holder is doing")),
     )
 }
 
@@ -8099,6 +8159,69 @@ fn git_subcommand(arguments: &[&str]) -> Option<usize> {
         } else {
             1
         };
+    }
+    None
+}
+
+/// `mise run`'s own options that CONSUME the next word, so a task scan does not
+/// mistake an option's value for the task.
+///
+/// **A DECLARED STOPGAP, exactly as [`GIT_VALUE_OPTIONS`] and [`SHELL_GRAMMAR`]
+/// are, and behind the same row.** The miss direction is the same too and is
+/// worth naming because this gate's is the *quieter* one: reading `dev` out of
+/// `mise run -E dev land` resolves a task no lock is held for, so the gate looks
+/// up nothing and ALLOWS — an under-deny that leaves a second `land` running
+/// beside the first, which is the collision the row exists to stop.
+const MISE_VALUE_OPTIONS: [&str; 10] = [
+    "-C", "--cd", "-E", "--env", "-j", "--jobs", "-s", "--shell", "-t", "--tool",
+];
+
+/// The singleton task this call would start a second copy of (CLOUD-438).
+///
+/// `mise run <task>` and nothing else. `effective_program` resolves `mise` for
+/// `mise run` deliberately — only `mise exec`/`mise x` reach another program —
+/// so the runner is the program here and the task is its first non-flag
+/// argument.
+///
+/// **Read off `programs`, so a compound command is reached.** The row asks for
+/// `input.call.segments` rather than `command`, on CLOUD-857's measurement; that
+/// is superseded by CLOUD-1382, which found `words[0]` is the first WORD and not
+/// the first program, and moved every program anchor here. Same intent, one
+/// construct further along.
+pub(crate) fn singleton_task_started(envelope: &Envelope) -> Option<String> {
+    for entry in &program_reach(&envelope.command) {
+        if entry.get("name").and_then(serde_json::Value::as_str) != Some("mise") {
+            continue;
+        }
+        let arguments: Vec<&str> = entry
+            .get("arguments")
+            .and_then(serde_json::Value::as_array)
+            .map(|list| list.iter().filter_map(serde_json::Value::as_str).collect())
+            .unwrap_or_default();
+        if arguments.first() != Some(&"run") {
+            continue;
+        }
+        // NO LIST OF GUARDED TASK NAMES, and that is non-negotiable rule 1
+        // rather than economy: `land` is THIS consumer's task, and a constant
+        // naming it would put a consumer identifier in the core. The lock
+        // directory already answers which tasks are guarded — one exists only
+        // because something took it — so the boundary asks about the task this
+        // call names and lets the absence of a lock be the allow.
+        // THE TASK IS THE FIRST BARE WORD PAST `run`'S OWN OPTIONS, not the first
+        // bare word (review). `-E dev` puts `dev` where this scan looked, and the
+        // gate then asked about a task nothing holds.
+        let mut index = 1;
+        while index < arguments.len() {
+            let word = arguments[index];
+            if !word.starts_with('-') {
+                return Some(word.to_owned());
+            }
+            index += if MISE_VALUE_OPTIONS.contains(&word) {
+                2
+            } else {
+                1
+            };
+        }
     }
     None
 }
@@ -8955,6 +9078,7 @@ mod tests {
                 stop,
                 waived: &crate::waiver::Live::new(),
                 sourced: &None,
+                singleton: &None,
                 // Could-not-look: these unit cases resolve no repository, so
                 // they make no claim about what a reset would discard. The
                 // compiled tier `history_drop.rs` is where that fact is real.

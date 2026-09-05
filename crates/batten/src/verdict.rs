@@ -948,6 +948,8 @@ pub enum Native {
     StopConditionUnmet,
     /// A `git reset --hard` would leave commits reachable from no remote.
     HistoryDropUnpushed,
+    /// A task a live process already holds the singleton lock for.
+    SingletonHeld,
     // ─── the mediated composers' own classes (CLOUD-1285) ────────────────────
     //
     // These are Batten's OWN words about generic concepts, which is what puts
@@ -1050,6 +1052,7 @@ impl Native {
         Native::SpawningRuleOnReadVerb,
         Native::StopConditionUnmet,
         Native::HistoryDropUnpushed,
+        Native::SingletonHeld,
         Native::ReceiptUnusable,
         Native::ReceiptExpired,
         Native::ReceiptRefuted,
@@ -1119,6 +1122,7 @@ impl Native {
             Native::ScannerUnprovisioned => "scanner install missing",
             Native::SpawningRuleOnReadVerb => "spawn run refused",
             Native::HistoryDropUnpushed => "history drop unpushed",
+            Native::SingletonHeld => "task run twice",
             Native::StopConditionUnmet => "turn finish unmet",
             Native::ReceiptUnusable => "receipt read missing",
             Native::ReceiptExpired => "receipt read late",
@@ -1287,6 +1291,19 @@ protected path directly is the only route left, and the write is one a reviewer 
 in the diff it lands in",
             ),
         ],
+    },
+    VendoredVerdict {
+        id: "task run twice",
+        gloss: "a live process in this clone already holds this task's lock",
+        class: "Some tasks are one-per-clone: a second copy does not do the work \
+twice, it races the first over the same refs, the same lock and the same remote. The \
+task itself refuses a second copy, and this is the same refusal arriving before a \
+process starts rather than a fraction of a second after. A lock naming a DEAD pid is \
+not this class -- that is a corpse the acquiring path reclaims. A lock naming NOTHING \
+READABLE is this class: a holder caught between its create and its write is a holder, \
+which is the reading the acquiring path already takes, and a gate disagreeing with it \
+would allow a start that path then refuses.",
+        routes: &[read("holder inspected", "batten task alive")],
     },
     VendoredVerdict {
         id: "history drop unpushed",
@@ -1954,6 +1971,7 @@ mod tests {
                 | Native::SpawningRuleOnReadVerb
                 | Native::StopConditionUnmet
                 | Native::HistoryDropUnpushed
+                | Native::SingletonHeld
                 | Native::ReceiptUnusable
                 | Native::ReceiptExpired
                 | Native::ReceiptRefuted
