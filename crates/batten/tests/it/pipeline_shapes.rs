@@ -128,7 +128,20 @@ fn an_and_chain_is_allowed_because_it_cannot_manufacture_a_green() {
     // still exits the list non-zero. There is no false green to stop, and
     // `verify`'s own body is built from guarded chains for that property.
     assert_allowed("mise run fmt && mise run verify");
-    assert_allowed("git fetch origin main && git rebase origin/main");
+    // THE GIT-FAMILY ARM, AND ITS OPERAND MOVED (CLOUD-1351). This read
+    // `git fetch origin main && git rebase origin/main`, and that command is now
+    // DENIED — by `rebase-not-hand-stepped`, for hand-stepping a step
+    // `mise run land` drives, which is a different row answering a different
+    // question. The claim here is about `&&` alone, so an operand another row
+    // independently refuses makes the case ambiguous: it would fail while
+    // proving nothing about short-circuiting.
+    //
+    // Two `git fetch` calls keep exactly what this arm is for — the verdict-
+    // bearing list's git entry, exercised inside a chain — and nothing else
+    // decides them. Stated rather than silently swapped, because a fixture
+    // edited to make a new deny pass is otherwise indistinguishable from a test
+    // weakened to fit a change.
+    assert_allowed("git fetch origin main && git fetch origin --tags");
     assert_allowed("mise exec -- cargo build && mise exec -- cargo test");
 }
 

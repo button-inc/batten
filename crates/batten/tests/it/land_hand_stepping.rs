@@ -109,6 +109,19 @@ fn a_fresh_rebase_onto_main_is_refused() {
 fn the_lap_is_refused_however_it_is_spelled() {
     denied_by_the_row("cd /home/user/batten && git rebase origin/main");
     denied_by_the_row("GIT_EDITOR=true git rebase origin/main");
+    // THE ONE ACTUALLY TYPED, and it arrives here from another suite rather than
+    // from imagination: `pipeline_shapes.rs` used this exact string to show an
+    // `&&` chain is allowed, which it no longer is — this row refuses it. The
+    // command moved to the file that decides it instead of being deleted, so the
+    // coverage follows the verdict.
+    //
+    // It is also the CLOUD-857 shape, which is why it is worth its own line: a
+    // predicate anchored on `input.call.command` reads the first word of the
+    // whole LINE, so `git push --force origin main` was denied while
+    // `cd /tmp && git push --force origin main` was allowed, with a green suite
+    // over it. Anchoring on segments is what makes the fetch-then-rebase pair
+    // refuse on its SECOND element.
+    denied_by_the_row("git fetch origin main && git rebase origin/main");
 }
 
 // --- allowed: the one step the contract keeps by hand -------------------------
