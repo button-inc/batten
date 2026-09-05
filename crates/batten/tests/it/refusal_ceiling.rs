@@ -68,7 +68,7 @@ fn refusal(command: &str) -> Option<String> {
 fn refusal_once(command: &str) -> Option<String> {
     let run = run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(command),
     );
     if run.status.code() == Some(2) {

@@ -115,7 +115,7 @@ fn bash_payload(command: &str) -> String {
 fn decision(command: &str) -> String {
     stdout(&run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "claude-code"],
+        &["adjudicate", "--harness", "claude-code"],
         &bash_payload(command),
     ))
 }
@@ -296,7 +296,7 @@ fn an_allowed_command_emits_no_decision() {
 fn unparseable_input_fails_open() {
     let out = stdout(&run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "claude-code"],
+        &["adjudicate", "--harness", "claude-code"],
         "not json",
     ));
     assert!(
@@ -309,7 +309,7 @@ fn unparseable_input_fails_open() {
 fn decision_with_env(command: &str, key: &str, value: &str) -> String {
     stdout(
         &common::batten_at_real_root()
-            .args(["hook", "--harness", "claude-code"])
+            .args(["adjudicate", "--harness", "claude-code"])
             .current_dir(root())
             .env(key, value)
             .stdin(std::process::Stdio::piped())

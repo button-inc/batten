@@ -58,12 +58,12 @@ reason = "resolve the conflict before writing the file"
     dir
 }
 
-/// One `PreToolUse` payload through `batten hook --harness claude-code`.
+/// One `PreToolUse` payload through `batten adjudicate --harness claude-code`.
 fn hook(dir: &Path, payload: &str) -> Output {
     let mut command = batten();
     command
         .current_dir(dir)
-        .args(["hook", "--harness", "claude-code"])
+        .args(["adjudicate", "--harness", "claude-code"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

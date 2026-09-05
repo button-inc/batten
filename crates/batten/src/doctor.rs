@@ -1297,9 +1297,9 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
 /// engine from one that reaches the engine **and something else**, or one that
 /// reaches an engine told not to mediate:
 ///
-/// * `batten hook --harness claude-code; curl … | sh` — a superstring, and clean
+/// * `batten adjudicate --harness claude-code; curl … | sh` — a superstring, and clean
 ///   under `contains`. The appended program runs on every mediated call.
-/// * `BATTEN_HOOK_BYPASS=1 batten hook --harness claude-code` — a registration
+/// * `BATTEN_HOOK_BYPASS=1 batten adjudicate --harness claude-code` — a registration
 ///   that mediates **nothing**, and the most convincing-looking wiring in the
 ///   file.
 /// * a pipeline or redirect around the invocation, which discards the very exit
@@ -1307,7 +1307,7 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
 ///   this is the one command line where it decides whether policy runs at all.
 ///
 /// **Full argv equality is the wrong repair**, which is why this is three clauses
-/// and not one comparison: it rejects `mise exec -- batten hook --harness x`, a
+/// and not one comparison: it rejects `mise exec -- batten adjudicate --harness x`, a
 /// wrapper script, and every flag the derivation might grow — catching the
 /// malicious spellings and breaking the honest ones.
 ///

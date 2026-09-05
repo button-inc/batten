@@ -138,7 +138,7 @@ fn hook(dir: &Path, payload: &str) -> Output {
     let mut command = batten();
     command
         .current_dir(dir)
-        .args(["hook", "--harness", "claude-code"])
+        .args(["adjudicate", "--harness", "claude-code"])
         .env_remove("BATTEN_HOOK_BYPASS")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

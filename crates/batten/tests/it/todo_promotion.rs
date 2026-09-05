@@ -118,7 +118,7 @@ fn completed(repo: &Path, tool: &str, response: &str) {
     // so asserting one would be asserting this call's own irrelevance.
     let _ = run_with_stdin(
         repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &post_tool(tool, response),
     );
 }
@@ -131,7 +131,7 @@ fn read_the_row(repo: &Path, description: &str) {
 fn verdict(repo: &Path, input: &str) -> Option<i32> {
     run_with_stdin(
         repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &pre_tool("mcp__Linear__save_issue", input),
     )
     .status
@@ -226,7 +226,7 @@ fn the_refusal_names_this_row_and_carries_no_body() {
 
     let refusal = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &pre_tool("mcp__Linear__save_issue", PROMOTION),
     );
     let text = stderr(&refusal);

@@ -52,7 +52,7 @@ fn payload(command: &str) -> String {
 fn adjudicate(command: &str) -> (Option<i32>, String) {
     let outcome = run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(command),
     );
     let code = outcome.status.code();

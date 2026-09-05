@@ -1102,7 +1102,7 @@ expression: stdout_of(&output)
       ]
     },
     {
-      "path": "hook",
+      "path": "adjudicate",
       "id": "hook",
       "about": "Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)",
       "effect": "unclassified",

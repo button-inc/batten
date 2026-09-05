@@ -108,7 +108,7 @@ impl Bench {
 
         let mut child = common::batten()
             .current_dir(&self.repo)
-            .args(["hook", "--harness", "claude-code"])
+            .args(["adjudicate", "--harness", "claude-code"])
             .env("BATTEN_MCP_SETTINGS", &self.settings)
             .env("BATTEN_MCP_CONFIG", &self.mcp_config)
             .stdin(std::process::Stdio::piped())

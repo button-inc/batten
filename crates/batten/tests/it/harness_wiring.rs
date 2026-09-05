@@ -143,6 +143,65 @@
 //!
 // withdrawn: "CLOUD-525 (c): a declared row matching nothing on a surface that WAS read is stale" one rule holds one surface under CLOUD-1307, so a union over the surfaces read is unspellable; restored there
 // withdrawn: "CLOUD-525 (c2): NO MERGED SURFACE READ IS COULD-NOT-LOOK, never a stale row" the guard for the predicate above, and it goes with it — the engine now skips the merged rule outright when its surface is absent, which is the same posture one level up
+//!
+//! # The retirement ledger for `mise-tasks/hook-matcher-check.sh` (CLOUD-1192)
+//!
+//! **The program asked a question the engine had already closed more strictly.**
+//! It read `.claude/settings.json`'s `PreToolUse` matchers and decided whether
+//! each `[[verb]]` row in `batten.toml` was DELIVERED by one of them — a
+//! coverage question over an enumeration. `crates/batten/src/doctor.rs` refuses
+//! the enumeration itself: `MATCHER_NARROWS` fires on a batten registration
+//! carrying ANY matcher, because the derivation emits none deliberately so that
+//! `batten.toml`'s `mediated_call` rows are the only narrowing. The dying
+//! program's own header states the consequence — "AN EMPTY OR ABSENT `matcher`
+//! IS COVERAGE, NOT A GAP … broader than any enumeration" — so under the
+//! engine's rule every declared verb is delivered unconditionally and the
+//! coverage question has no reachable negative case left.
+//!
+//! That is what makes this a subsumption rather than a port: the successor is
+//! not a translation of the predicate, it is the reason the predicate stopped
+//! being askable. `a_matcher_on_battens_own_entry_is_refused` below is the
+//! compiled-binary tier for it — the shell suite drove a fixture settings file
+//! and so does this, in the direction the decision now goes.
+//!
+//! CLOUD-1192 is what forced the choice. The gate selected engine entries with
+//! a literal `batten-hook\.sh|batten hook`, so renaming the mediation verb to
+//! `adjudicate` left it matching zero entries and reporting every declared verb
+//! uncovered. `shell edit refused` declares one route with no override, and a
+//! §1 that says "this row edits `foo.sh`" is a row written in the wrong shape.
+//!
+// subsumed: mise-tasks/hook-matcher-check.sh crates/batten/src/doctor.rs kind:mechanism crates/batten/tests/it/harness_wiring.rs
+// subsumed: tests/hook-matcher-check.bats crates/batten/src/doctor.rs kind:mechanism crates/batten/tests/it/harness_wiring.rs
+//!
+//! ## SUBSUMED — the arms `doctor hooks` reaches, at equal or greater strength
+//!
+// subsumed: "the committed tree is covered" crates/batten/src/doctor.rs
+// subsumed: "a tool-name verb outside the matcher is caught, and named with the token it needed" crates/batten/src/doctor.rs
+// subsumed: "a shell-program verb with no Bash in the matcher is uncovered too" crates/batten/src/doctor.rs
+// subsumed: "an absent matcher is coverage, not a gap" crates/batten/src/doctor.rs
+// subsumed: "an empty matcher is coverage, and so is a literal star" crates/batten/src/doctor.rs
+// subsumed: "an entry that does not invoke the engine lends no coverage" crates/batten/src/doctor.rs
+// subsumed: "a direct 'batten hook' registration counts, not only the launcher" crates/batten/src/doctor.rs
+// subsumed: "a settings file that cannot be read fails open, loudly, and never as a verdict" crates/batten/src/doctor.rs
+// subsumed: "a settings file that does not exist fails open, loudly" crates/batten/src/doctor.rs
+//!
+//! ## WITHDRAWN — the enumeration's own machinery, which has no question left
+//!
+//! Nine cases, and not one of them is a coverage loss: each pins how the SHELL
+//! parsed a matcher, a `[[verb]]` table or `write_tools()`'s Rust source with
+//! `awk`. The engine loads its own config and knows its own harness enum, so
+//! there is no second parser to get wrong — and with a matcher refused outright
+//! there is no regex to compile, no route to choose and no token to require.
+//!
+// withdrawn: "a shell-program verb is satisfied by Bash alone — the route decides the token" the route/token model existed only to decide which token an ENUMERATED matcher had to carry; with no matcher permitted there is no token to require and nothing to route
+// withdrawn: "the matcher is read as a regex, so an alternation covers each of its arms" a matcher is refused rather than compiled, so the successor never evaluates one and there is no regex dialect to pin
+// withdrawn: "coverage is unanchored, matching the host — Edit delivers MultiEdit" the same reading in its subtlest direction, and it goes with the matcher it read
+// withdrawn: "a config declaring no verbs is nothing to cover, and says so" the empty-table arm of a coverage predicate that no longer exists; the engine reports on the wiring, never on the size of the verb table
+// withdrawn: "a [[verb]] table this gate cannot parse is could-not-look, never a pass" the awk parse is gone: the engine loads `batten.toml` through its own parser, so an unparseable config is a config error before any wiring question is asked
+// withdrawn: "an engine source with no readable write_tools arm is could-not-look" the successor READS the `Harness` enum rather than scraping `hook.rs`, so the arm cannot be unreadable and the could-not-look class is unreachable
+// withdrawn: "a neighbouring harness arm is not read as this host's tool set" the same scrape from its cross-contamination side; a typed enum cannot bleed one variant into another
+// withdrawn: "a matcher that is not a compilable regex is could-not-look" the could-not-look arm for a compilation the successor never performs
+// withdrawn: "one front-end declared under two subcommands is one coverage question" a de-duplication of verb rows that only mattered to a per-verb coverage loop; the successor decides per REGISTRATION, so a verb table's shape does not reach it
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -261,7 +320,7 @@ fn wiring(pre_tool: &[&str], stop: &[&str]) -> String {
 }
 
 /// The committed registration every fixture starts from.
-const MEDIATOR: &str = "batten hook --harness claude-code";
+const MEDIATOR: &str = "batten adjudicate --harness claude-code";
 
 /// A sibling command a case registers beside the mediator, spelled as the host
 /// spells it — with the variable prefix, so the substring match is exercised
@@ -611,7 +670,7 @@ fn a_wrapper_that_reaches_the_mediator_is_not_a_second_decider() {
         // predicate instead of the wrapper one.
         Some(&wiring(
             &[],
-            &["mise exec -- batten hook --harness claude-code"],
+            &["mise exec -- batten adjudicate --harness claude-code"],
         )),
     );
     let output = check(&repo, Some(&outside));
@@ -635,6 +694,59 @@ fn this_repository_is_wired_correctly() {
     assert!(
         output.status.success(),
         "this repository's own wiring reported: {}",
+        stderr(&output)
+    );
+}
+
+/// The subsumption CLOUD-1192's retirement rests on, over the compiled binary.
+///
+/// `mise-tasks/hook-matcher-check.sh` asked whether an enumerated matcher
+/// DELIVERED every declared `[[verb]]`. `doctor hooks` refuses the enumeration:
+/// a matcher on batten's own registration is a second narrowing, so the coverage
+/// question has no reachable negative case. Asserted here rather than only in
+/// `doctor.rs`'s unit tier because the retired suite drove a fixture settings
+/// file through a process, and a subsumption is only real at the strength the
+/// BINARY actually reaches.
+#[test]
+fn a_matcher_on_battens_own_entry_is_refused() {
+    let narrowed = format!(
+        r#"{{"hooks": {{"PreToolUse": [{{"matcher": "Bash", "hooks": [{{"type": "command", "command": "{MEDIATOR}"}}]}}], "Stop": [{{"hooks": [{{"type": "command", "command": "{MEDIATOR}"}}]}}]}}}}"#
+    );
+    let (repo, _outside) = fixture("matcher-narrows", &narrowed, None);
+    let output = batten()
+        .current_dir(&repo)
+        .args(["doctor", "hooks"])
+        .output()
+        .expect("run batten doctor hooks");
+    assert!(
+        !output.status.success(),
+        "a matcher on batten's own entry passed: {}",
+        stdout(&output)
+    );
+    let whole = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        whole.contains("hook-wiring-matcher-narrows"),
+        "the refusal did not name the narrowing: {whole}"
+    );
+}
+
+/// The anti-vacuity half: the same fixture WITHOUT the matcher is clean.
+///
+/// Without it the case above passes just as well over a `doctor hooks` that
+/// refuses every fixture, which is the shape that made the retired suite's own
+/// coverage claims unreadable.
+#[test]
+fn the_same_wiring_without_a_matcher_is_clean() {
+    let (repo, _outside) = fixture("matcher-absent", &clean_committed(), None);
+    let output = batten()
+        .current_dir(&repo)
+        .args(["doctor", "hooks"])
+        .output()
+        .expect("run batten doctor hooks");
+    assert!(
+        output.status.success(),
+        "an unmatched wiring reported: {}{}",
+        stdout(&output),
         stderr(&output)
     );
 }

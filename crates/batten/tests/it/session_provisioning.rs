@@ -185,7 +185,7 @@ impl Bench {
 
         let mut child = common::batten()
             .current_dir(&self.repo)
-            .args(["hook", "--harness", "claude-code"])
+            .args(["adjudicate", "--harness", "claude-code"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -585,7 +585,7 @@ fn no_by_path_registration_survives_on_the_session_start_surface() {
 
     assert_eq!(
         commands,
-        ["batten hook --harness claude-code"],
+        ["batten adjudicate --harness claude-code"],
         "the engine is the only thing registered on session start; everything else \
          is a `[[hook.handler]]` row it dispatches"
     );

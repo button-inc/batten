@@ -683,6 +683,12 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn committed_rows() -> Vec<String> {
         vec![
+            // The mediation entrypoint, renamed from the noun `hook` under
+            // CLOUD-1192: every top-level token on an imperative surface is a
+            // verb, and this row was the last noun at the head of one. The
+            // stable id stays `hook` — a rename moves the spelling, never the
+            // identity.
+            "adjudicate".to_owned(),
             "attribution".to_owned(),
             "attribution check".to_owned(),
             "attribution identity".to_owned(),
@@ -757,7 +763,6 @@ mod tests {
             "generate man".to_owned(),
             "generate markdown".to_owned(),
             "generate schema".to_owned(),
-            "hook".to_owned(),
             // §2 already reserved this row (`init [-n] … (write)`); CLOUD-206
             // landed the verb behind it, so the document needed no edit.
             "init".to_owned(),

@@ -210,7 +210,7 @@ fn payload(tool: &str, input: &str, result: &str) -> String {
 fn hook(dir: &Path, tool: &str, input: &str, result: &str) {
     let output = run_with_stdin(
         dir,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(tool, input, result),
     );
     assert_eq!(

@@ -11,7 +11,7 @@
 //!
 //! That is exactly the class `.claude/rules/policy-modules.md` names, and this
 //! is the tier it names as the only one that can catch it. Every case below runs
-//! `batten hook --harness claude-code` against a real payload and reads what a
+//! `batten adjudicate --harness claude-code` against a real payload and reads what a
 //! host would read.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
@@ -324,7 +324,7 @@ fn hook_in(dir: &Path, home: &Path, payload: &str) -> Output {
     common::state_home(&mut command, home);
     command
         .current_dir(dir)
-        .args(["hook", "--harness", "claude-code"])
+        .args(["adjudicate", "--harness", "claude-code"])
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .env_remove("BATTEN_HOOK_BYPASS")
         .stdin(Stdio::piped())
@@ -737,7 +737,7 @@ fn the_stop_guard_bypass_silences_the_whole_surface() {
     let mut command = batten();
     command
         .current_dir(&dir)
-        .args(["hook", "--harness", "claude-code"])
+        .args(["adjudicate", "--harness", "claude-code"])
         .env_remove("BATTEN_HOOK_BYPASS")
         .env("BATTEN_STOP_GUARD_BYPASS", "1")
         .stdin(Stdio::piped())

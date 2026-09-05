@@ -87,7 +87,7 @@ fn write_payload(path: &str) -> String {
 fn verdict(dir: &Path, path: &str) -> Option<i32> {
     run_with_stdin(
         dir,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &write_payload(path),
     )
     .status
@@ -141,7 +141,7 @@ fn verdict_under_bypass(dir: &Path, path: &str) -> Option<i32> {
     use std::process::Stdio;
 
     let mut child = common::batten()
-        .args(["hook", "--harness", "exit-code"])
+        .args(["adjudicate", "--harness", "exit-code"])
         .current_dir(dir)
         .env("BATTEN_HOOK_BYPASS", "1")
         .stdin(Stdio::piped())

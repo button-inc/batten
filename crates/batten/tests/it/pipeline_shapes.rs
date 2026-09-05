@@ -47,7 +47,7 @@ fn payload(command: &str) -> String {
 fn verdict(command: &str) -> Option<i32> {
     run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(command),
     )
     .status
@@ -70,7 +70,7 @@ fn assert_allowed(command: &str) {
 fn cause(command: &str) -> String {
     stderr(&run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(command),
     ))
 }
@@ -200,7 +200,7 @@ fn the_refusal_states_the_principle_rather_than_naming_one_command() {
     // cause therefore has to generalise, and the remedy has to be the row's.
     let refusal = stderr(&run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload("mise run verify | tail -6"),
     ));
     assert!(

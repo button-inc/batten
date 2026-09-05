@@ -64,7 +64,7 @@ fn hook_from(dir: &Path) -> Output {
     let mut command = common::batten();
     command
         .current_dir(dir)
-        .args(["hook", "--harness", "claude-code"])
+        .args(["adjudicate", "--harness", "claude-code"])
         .env_remove("BATTEN_HOOK_BYPASS")
         .env_remove("CLAUDE_PROJECT_DIR")
         .stdin(Stdio::piped())

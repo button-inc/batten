@@ -104,7 +104,7 @@ fn payload(tool: &str, prompt: &str) -> String {
 fn verdict(repo: &Path, tool: &str, prompt: &str) -> Option<i32> {
     run_with_stdin(
         repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(tool, prompt),
     )
     .status
@@ -130,7 +130,7 @@ fn a_manifest_over_the_cap_is_refused() {
 
     let refusal = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload("Task", "read a.txt b.txt c.txt d.txt then act"),
     );
     assert_eq!(
@@ -239,7 +239,7 @@ fn an_oversize_prompt_is_refused() {
     let over = "x".repeat(6100);
     let refusal = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload("Task", &over),
     );
     assert_eq!(
@@ -286,7 +286,7 @@ fn only_a_spawn_is_judged() {
     ] {
         let output = run_with_stdin(
             &repo,
-            &["hook", "--harness", "exit-code"],
+            &["adjudicate", "--harness", "exit-code"],
             &payload(tool, over),
         );
         let text = stderr(&output);
@@ -311,7 +311,7 @@ fn only_a_spawn_is_judged() {
     // An absent projection is could-not-look, which allows.
     let no_prompt = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         r#"{"hook_event_name":"PreToolUse","tool_name":"Task","tool_input":{}}"#,
     );
     assert_eq!(
@@ -333,7 +333,7 @@ fn the_refusal_carries_no_prompt_bytes() {
     let secret = "hunter2-do-not-echo-me";
     let output = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(
             "Task",
             &format!("read a.txt b.txt c.txt d.txt and remember {secret}"),

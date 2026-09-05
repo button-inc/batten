@@ -410,7 +410,7 @@ fn post(dir: &Path, tool: &str, input: &serde_json::Value, response: &serde_json
     });
     let output = run_with_stdin(
         dir,
-        &["hook", "--harness", "claude-code"],
+        &["adjudicate", "--harness", "claude-code"],
         &payload.to_string(),
     );
     assert_eq!(
@@ -429,7 +429,7 @@ fn call(dir: &Path, command: &str) -> String {
     });
     let output = run_with_stdin(
         dir,
-        &["hook", "--harness", "claude-code"],
+        &["adjudicate", "--harness", "claude-code"],
         &payload.to_string(),
     );
     // THE STATUS IS ASSERTED, for the retired suite's measured reason: this
@@ -847,7 +847,7 @@ fn reading_the_review_is_never_refused_so_the_remedy_is_reachable() {
     });
     let output = run_with_stdin(
         &dir,
-        &["hook", "--harness", "claude-code"],
+        &["adjudicate", "--harness", "claude-code"],
         &payload.to_string(),
     );
     assert_eq!(output.status.code(), Some(0));

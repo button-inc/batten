@@ -1393,7 +1393,7 @@ const CENSUS: &[Verb] = &[
         disposition: Disposition::PointerOnly,
     },
     Verb {
-        path: "hook",
+        path: "adjudicate",
         args: &["--harness", "exit-code"],
         stdin: Stdin::MediatedCall,
         disposition: Disposition::PointerOnly,

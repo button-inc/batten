@@ -79,7 +79,7 @@ fn hook_on(dir: &Path, event: &str) -> Output {
     let mut command = batten();
     command
         .current_dir(dir)
-        .args(["hook", "--harness", "claude-code"])
+        .args(["adjudicate", "--harness", "claude-code"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

@@ -4,7 +4,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "batten hook --harness claude-code"
+          "command": "batten adjudicate --harness claude-code"
         }
       ]
     }
@@ -14,7 +14,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "batten hook --harness claude-code"
+          "command": "batten adjudicate --harness claude-code"
         }
       ]
     }
@@ -24,7 +24,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "batten hook --harness claude-code"
+          "command": "batten adjudicate --harness claude-code"
         }
       ]
     }
@@ -34,7 +34,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "batten hook --harness claude-code"
+          "command": "batten adjudicate --harness claude-code"
         }
       ]
     }
@@ -44,7 +44,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "batten hook --harness claude-code"
+          "command": "batten adjudicate --harness claude-code"
         }
       ]
     }
@@ -54,7 +54,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "batten hook --harness claude-code"
+          "command": "batten adjudicate --harness claude-code"
         }
       ]
     }
@@ -64,7 +64,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "batten hook --harness claude-code"
+          "command": "batten adjudicate --harness claude-code"
         }
       ]
     }
@@ -74,7 +74,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "batten hook --harness claude-code"
+          "command": "batten adjudicate --harness claude-code"
         }
       ]
     }

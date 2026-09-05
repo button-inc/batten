@@ -46,7 +46,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
     dir
 }
 
-/// One `PostToolBatch` through `batten hook --harness claude-code`.
+/// One `PostToolBatch` through `batten adjudicate --harness claude-code`.
 fn drift(dir: &Path, session: &str) -> Output {
     drift_on(dir, session, "PostToolBatch", &[])
 }
@@ -62,7 +62,7 @@ fn drift_on(dir: &Path, session: &str, event: &str, env: &[(&str, &str)]) -> Out
     let mut command = batten();
     command
         .current_dir(dir)
-        .args(["hook", "--harness", "claude-code"])
+        .args(["adjudicate", "--harness", "claude-code"])
         .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

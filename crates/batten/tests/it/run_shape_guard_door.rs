@@ -159,7 +159,7 @@ fn door_bg(dir: &Path, command: &str) -> Door {
 }
 
 fn door_envelope(dir: &Path, payload: &str) -> Door {
-    let outcome = run_with_stdin(dir, &["hook", "--harness", "claude-code"], payload);
+    let outcome = run_with_stdin(dir, &["adjudicate", "--harness", "claude-code"], payload);
     Door {
         out: stdout(&outcome),
         err: stderr(&outcome),
@@ -301,7 +301,7 @@ fn the_bypass_reaches_the_handler_through_the_door() {
     let payload = envelope("cd /tmp; sleep 90; echo done", false);
     let outcome = common::batten()
         .current_dir(&dir)
-        .args(["hook", "--harness", "claude-code"])
+        .args(["adjudicate", "--harness", "claude-code"])
         .env("BATTEN_RUN_SHAPE_BYPASS", "1")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

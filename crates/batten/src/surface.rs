@@ -3720,7 +3720,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // list buys nothing an agent needs. §5's rule is that an unclassified command
     // is listed with a stated reason rather than guessed; this is that reason.
     CommandDecl {
-        path: "hook",
+        path: "adjudicate",
         id: "hook",
         about: "Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)",
         // Excluded deliberately: `hook`'s stdout is already a harness-shaped
@@ -3744,7 +3744,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // `attach` marks any path with children `subcommand_required`, because §2
     // says a noun performs no default action — so nesting under `hook` would
     // have turned the PreToolUse mediator itself into a noun that refuses to
-    // adjudicate. Measured while writing this: `batten hook --harness
+    // adjudicate. Measured while writing this: `batten adjudicate --harness
     // claude-code` began answering `requires a subcommand`, which is policy
     // unenforced for every mediated call.
     CommandDecl {

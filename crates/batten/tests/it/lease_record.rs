@@ -94,7 +94,7 @@ fn hook(dir: &Path, command: &str) {
     let payload = format!(
         r#"{{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{{"command":{input}}},"tool_response":{{"stdout":"","exit_code":0}}}}"#
     );
-    let output = run_with_stdin(dir, &["hook", "--harness", "exit-code"], &payload);
+    let output = run_with_stdin(dir, &["adjudicate", "--harness", "exit-code"], &payload);
     assert_eq!(
         output.status.code(),
         Some(0),

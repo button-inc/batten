@@ -225,7 +225,7 @@ fn hook(dir: &Path, home: &Path, transcript: Option<&Path>) -> std::process::Out
     invocation
         .current_dir(dir)
         .state_home(home)
-        .args(["hook", "--harness", "claude-code"])
+        .args(["adjudicate", "--harness", "claude-code"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());

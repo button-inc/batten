@@ -85,7 +85,7 @@ fn fixture(name: &str) -> PathBuf {
 
 /// The exit status the `exit-code` harness renders: `2` is the policy verdict.
 fn verdict(dir: &Path, payload: &str) -> (Option<i32>, String) {
-    let outcome = run_with_stdin(dir, &["hook", "--harness", "exit-code"], payload);
+    let outcome = run_with_stdin(dir, &["adjudicate", "--harness", "exit-code"], payload);
     (outcome.status.code(), stderr(&outcome))
 }
 

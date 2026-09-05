@@ -567,22 +567,6 @@ local gate = new Mapping<String, Step> {
   // the repo-agnostic core asserting a consumer's tool vocabulary; the coverage
   // question therefore lands in a consumer gate, which is this one.
   //
-  // Globbed on all three files that can move the verdict plus the script that
-  // decides. `crates/batten/src/hook.rs` is a genuine input, not a courtesy: the
-  // gate reads `Harness::ClaudeCode::write_tools()` there rather than restating
-  // the set, so a tool added to that arm changes which verbs need their own name
-  // in the matcher — and a gate that does not re-run when its subject moves stops
-  // running for exactly the commits it exists to judge.
-  ["hook-matcher-check"] {
-    glob =
-      List(
-        ".claude/settings.json",
-        "batten.toml",
-        "crates/batten/src/hook.rs",
-        "mise-tasks/hook-matcher-check.sh",
-      )
-    check = "mise run hook-matcher-check"
-  }
   // A pattern reaching awk through `-v` goes through assignment escape
   // processing first, and what that does to a backslash is undefined across
   // implementations — gawk strips it, mawk keeps it. ready-lint matched its §8

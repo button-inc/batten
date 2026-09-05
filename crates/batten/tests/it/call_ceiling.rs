@@ -63,7 +63,7 @@ fn payload(prompt: &str) -> String {
 }
 
 fn verdict(repo: &Path, prompt: &str) -> Option<i32> {
-    run_with_stdin(repo, &["hook", "--harness", "exit-code"], &payload(prompt))
+    run_with_stdin(repo, &["adjudicate", "--harness", "exit-code"], &payload(prompt))
         .status
         .code()
 }
@@ -116,7 +116,7 @@ fn a_planted_secret_reaches_no_emitted_byte() {
     let prompt = format!("{}{secret}{}", prompt_of(50), prompt_of(50));
     let output = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(&prompt),
     );
     let rendered = format!(
@@ -162,7 +162,7 @@ reason = "..."
         .build();
     let output = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(&prompt_of(10)),
     );
     // Exit 1 is the usage code: a config fault, never a policy verdict, so no

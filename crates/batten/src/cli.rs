@@ -2210,7 +2210,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "mcp" => mcp_of(matches).map(|command| Command::Mcp { command }),
         "show" => show_of(matches),
         "target" => target_of(matches).map(|command| Command::Target { command }),
-        "hook" => matches
+        "adjudicate" => matches
             .get_one::<Harness>("harness")
             .map(|harness| Command::Hook {
                 harness: *harness,

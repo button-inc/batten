@@ -66,7 +66,7 @@ fn bash_payload(command: &str) -> String {
 fn verdict(command: &str) -> Option<i32> {
     run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &bash_payload(command),
     )
     .status
@@ -106,7 +106,7 @@ fn assert_allowed(command: &str) {
 fn assert_not_refused_as_a_write(command: &str) {
     let refusal = stderr(&run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &bash_payload(command),
     ));
     assert!(
@@ -280,7 +280,7 @@ fn the_deny_names_the_whole_action_and_the_serena_tool_to_use_instead() {
     // saying `git` would read as a ban on every use of version control.
     let refusal = stderr(&run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &bash_payload(&format!("git mv {GUARDED} .serena/memories/renamed.md")),
     ));
     assert!(refusal.contains("git mv"), "names the action: {refusal}");
@@ -288,7 +288,7 @@ fn the_deny_names_the_whole_action_and_the_serena_tool_to_use_instead() {
 
     let edit = stderr(&run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &bash_payload(&format!("sed -i s/a/b/ {GUARDED}")),
     ));
     assert!(
@@ -336,7 +336,7 @@ fn the_deny_names_the_whole_action_and_the_serena_tool_to_use_instead() {
 fn a_registered_module_gets_its_own_route_and_not_the_memory_one() {
     let module = stderr(&run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &bash_payload("sed -i s/a/b/ policy/shell-retirement.rego"),
     ));
     assert!(
@@ -364,7 +364,7 @@ fn a_registered_module_gets_its_own_route_and_not_the_memory_one() {
     // stopped naming the Serena tools anywhere.
     let memory = stderr(&run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &bash_payload(&format!("sed -i s/a/b/ {GUARDED}")),
     ));
     assert!(
@@ -448,7 +448,7 @@ fn no_byte_of_the_mediated_command_reaches_either_stream() {
     let canary = "CANARY-SECRET-VALUE";
     let output = run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &bash_payload(&format!("sed -i s/a/{canary}/ {GUARDED}")),
     );
     let both = format!(
@@ -496,7 +496,7 @@ fn write_verdict(tool: &str, path: &str) -> Option<i32> {
 fn write_decision(tool: &str, path: &str) -> (Option<i32>, String) {
     let output = run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code", "-vv"],
+        &["adjudicate", "--harness", "exit-code", "-vv"],
         &write_payload(tool, path),
     );
     let told = format!(
@@ -837,7 +837,7 @@ fn bash_payload_in(cwd: &std::path::Path, command: &str) -> String {
 fn verdict_in(cwd: &std::path::Path, command: &str) -> Option<i32> {
     run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &bash_payload_in(cwd, command),
     )
     .status
@@ -977,7 +977,7 @@ fn read_payload(path: &str) -> String {
 fn read_verdict(path: &str) -> Option<i32> {
     run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &read_payload(path),
     )
     .status
@@ -993,7 +993,7 @@ fn a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers() {
     );
     let refusal = stderr(&run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &read_payload(GUARDED),
     ));
     // Pointer-only: the path and the class, never a byte of the memory.
@@ -1037,6 +1037,6 @@ fn a_write_to_a_memory_is_still_refused_as_a_write() {
          \"tool_input\":{{\"file_path\":{}}}}}",
         serde_json::to_string(GUARDED).expect("a path is encodable")
     );
-    let run = run_with_stdin_at_real_root(&root(), &["hook", "--harness", "exit-code"], &payload);
+    let run = run_with_stdin_at_real_root(&root(), &["adjudicate", "--harness", "exit-code"], &payload);
     assert_eq!(run.status.code(), Some(2), "a write is still a write");
 }

@@ -921,7 +921,7 @@ fn the_mediated_call_does_not_judge_the_basis() {
 
     let envelope = "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
                     \"tool_input\":{\"command\":\"echo hello\"}}";
-    let output = run_with_stdin(&repo, &["hook", "--harness", "claude-code"], envelope);
+    let output = run_with_stdin(&repo, &["adjudicate", "--harness", "claude-code"], envelope);
     let said = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),

@@ -62,7 +62,7 @@ fn payload(tool: &str, input: &str) -> String {
 fn verdict(repo: &Path, tool: &str, input: &str) -> Option<i32> {
     run_with_stdin(
         repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(tool, input),
     )
     .status
@@ -472,7 +472,7 @@ fn the_refusal_carries_no_argument_value() {
     let encoded = serde_json::to_string(secret).expect("encodable");
     let output = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(
             "mcp__Linear__save_issue",
             &format!("{{\"title\":{encoded}}}"),
@@ -635,7 +635,7 @@ reason = "unreachable"
     );
     let refusal = run_with_stdin(
         &zero,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload("mcp__Linear__save_issue", r#"{"id":"CLOUD-1"}"#),
     );
     assert!(
@@ -780,7 +780,7 @@ reason = "a force push while a review is open rewrites what the reviewer read"
     // matches. This is the assertion the missing modifier check failed.
     let allowed = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push --force"}}"#,
     );
     assert_eq!(
@@ -794,7 +794,7 @@ reason = "a force push while a review is open rewrites what the reviewer read"
     // discriminates the modifier rather than the pattern failing to match.
     let refused = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push --force","state":"In Review"}}"#,
     );
     assert_eq!(

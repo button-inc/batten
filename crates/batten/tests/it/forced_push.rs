@@ -50,7 +50,7 @@ fn decision(command: &str) -> String {
     let root = common::at_root(".");
     common::stdout(&common::run_with_stdin(
         &root,
-        &["hook", "--harness", "claude-code"],
+        &["adjudicate", "--harness", "claude-code"],
         &bash_payload(command),
     ))
 }

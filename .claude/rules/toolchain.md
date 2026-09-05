@@ -385,7 +385,7 @@ restate its count here), each failing open on anything it can't parse. Most are
 `PreToolUse`; the ones that are not name their event below, and the settings
 file is what says how many that is:
 
-**`PreToolUse` is now ONE entry — the engine** (`batten hook --harness
+**`PreToolUse` is now ONE entry — the engine** (`batten adjudicate --harness
 claude-code`), reading the `mediated_call` rows of `batten.toml` and nothing
 else (CLOUD-312). Six `mise run` launches per Bash call cost a measured 1.247 s
 serial / 605 ms concurrent to do milliseconds of policy, ~93% of it task-runner

@@ -100,7 +100,7 @@ fn record(dir: &Path, stdout_bytes: &str) -> Output {
     });
     run_with_stdin(
         dir,
-        &["hook", "--harness", "claude-code"],
+        &["adjudicate", "--harness", "claude-code"],
         &envelope.to_string(),
     )
 }
@@ -114,7 +114,7 @@ fn ready(dir: &Path) -> Output {
     });
     run_with_stdin(
         dir,
-        &["hook", "--harness", "claude-code"],
+        &["adjudicate", "--harness", "claude-code"],
         &envelope.to_string(),
     )
 }

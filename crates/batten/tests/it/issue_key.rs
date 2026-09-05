@@ -92,7 +92,7 @@ fn payload(command: &str) -> String {
 }
 
 fn verdict(dir: &Path, command: &str) -> Option<i32> {
-    run_with_stdin(dir, &["hook", "--harness", "exit-code"], &payload(command))
+    run_with_stdin(dir, &["adjudicate", "--harness", "exit-code"], &payload(command))
         .status
         .code()
 }
@@ -302,7 +302,7 @@ fn the_refusal_names_the_route_and_leaks_no_evidence() {
     );
     let refusal = stderr(&run_with_stdin(
         &dir,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload("gh pr create --title 'tidy' --body 'no key'"),
     ));
     assert!(
@@ -366,7 +366,7 @@ fn a_requires_key_row_without_a_base_is_a_load_error() {
         .build();
     let output = run_with_stdin(
         &dir,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload("gh pr create --title 'tidy' --body 'no key'"),
     );
     assert_eq!(

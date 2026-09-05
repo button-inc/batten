@@ -83,7 +83,7 @@ fn payload(command: &str) -> String {
 fn advice(repo: &Path, command: &str) -> String {
     stderr(&run_with_stdin(
         repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(command),
     ))
 }

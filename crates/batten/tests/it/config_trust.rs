@@ -650,7 +650,7 @@ fn hook_adjudicates_against_the_base_ref_when_the_working_config_is_gone() {
     let output = common::run_with_stdin(
         &repo,
         &[
-            "hook",
+            "adjudicate",
             "--harness",
             "exit-code",
             "--config-from",
@@ -679,7 +679,7 @@ fn hook_without_the_flag_still_allows_everything_in_a_config_less_tree() {
     );
     let output = common::run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &bash_payload("mv secrets.txt elsewhere.txt"),
     );
     assert_eq!(

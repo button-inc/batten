@@ -102,7 +102,7 @@ fn write_payload(path: &str) -> String {
 fn verdict(dir: &Path, path: &str) -> Option<i32> {
     run_with_stdin(
         dir,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &write_payload(path),
     )
     .status
@@ -147,7 +147,7 @@ fn the_refusal_names_the_check_and_the_keying() {
     let dir = repo("claim-refusal");
     let refusal = stderr(&run_with_stdin(
         &dir,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &write_payload("src/tracked.rs"),
     ));
     assert!(
@@ -288,7 +288,7 @@ fn a_command_is_not_judged_by_a_write_triggered_row() {
     let dir = repo("claim-command");
     let payload = "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
                    \"tool_input\":{\"command\":\"gh pr ready 42\"}}";
-    let output = run_with_stdin(&dir, &["hook", "--harness", "exit-code"], payload);
+    let output = run_with_stdin(&dir, &["adjudicate", "--harness", "exit-code"], payload);
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -566,7 +566,7 @@ fn the_alternations_refusal_names_every_alternative_and_its_verdict() {
     let dir = alternation_repo("alternation-refusal");
     let refusal = stderr(&run_with_stdin(
         &dir,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &write_payload("src/tracked.rs"),
     ));
     for kind in ["claim", "bot", "carry"] {

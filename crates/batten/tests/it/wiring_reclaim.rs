@@ -54,7 +54,7 @@ const SURFACE: &str = r#"{
     "SessionStart": [
       {
         "hooks": [
-          {"type": "command", "command": "batten hook --harness claude-code"},
+          {"type": "command", "command": "batten adjudicate --harness claude-code"},
           {"type": "command", "command": "/opt/launcher/session-start-git-identity.sh"}
         ]
       }
@@ -205,7 +205,7 @@ fn the_repair_takes_the_siblings_and_leaves_battens_own_registration() {
     // registration out with the sibling sharing its entry, and every negative
     // assertion in this file is satisfied by that bug.
     assert!(
-        surface.contains("batten hook --harness claude-code"),
+        surface.contains("batten adjudicate --harness claude-code"),
         "{surface}"
     );
     assert!(!surface.contains("session-start-git-identity"), "{surface}");
@@ -316,7 +316,7 @@ fn a_session_start_expires_the_record_which_is_the_restart_this_reports() {
         use std::io::Write as _;
         let mut child = common::batten()
             .current_dir(&bench.repo)
-            .args(["hook", "--harness", "claude-code"])
+            .args(["adjudicate", "--harness", "claude-code"])
             .at_home(&bench.home)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -354,7 +354,7 @@ fn session_start_in(bench: &Bench, environment: &str) -> std::process::Output {
     use std::io::Write as _;
     let mut child = common::batten()
         .current_dir(&bench.repo)
-        .args(["hook", "--harness", "claude-code"])
+        .args(["adjudicate", "--harness", "claude-code"])
         .at_home(&bench.home)
         .env("BATTEN_ENVIRONMENT", environment)
         .stdin(std::process::Stdio::piped())
@@ -412,7 +412,7 @@ fn a_declared_repair_takes_the_siblings_at_session_start() {
     // the wrong level takes batten's registration out with the siblings, and
     // every negative below is satisfied by that bug.
     assert!(
-        surface.contains("batten hook --harness claude-code"),
+        surface.contains("batten adjudicate --harness claude-code"),
         "{surface}"
     );
     assert!(!surface.contains("session-start-git-identity"), "{surface}");
@@ -453,7 +453,7 @@ fn a_declared_repair_takes_nothing_on_an_undeclared_machine() {
     );
     assert!(surface.contains("stop-hook-git-check"), "{surface}");
     assert!(
-        surface.contains("batten hook --harness claude-code"),
+        surface.contains("batten adjudicate --harness claude-code"),
         "and batten's own is still there: {surface}"
     );
 }

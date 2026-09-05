@@ -23,7 +23,7 @@ use common::{
     stderr, stdout, write,
 };
 
-/// Run `batten hook --harness <harness>` with `payload` piped to stdin, against
+/// Run `batten adjudicate --harness <harness>` with `payload` piped to stdin, against
 /// an authority that declares no rules.
 ///
 /// The ambient bypass var is removed so a developer's shell can never flip a
@@ -117,7 +117,7 @@ fn run_hook_in(dir: &std::path::Path, harness: &str, payload: &str, bypass: bool
     let mut command = common::batten_at_real_root();
     command
         .current_dir(dir)
-        .args(["hook", "--harness", harness])
+        .args(["adjudicate", "--harness", harness])
         .env_remove("BATTEN_HOOK_BYPASS")
         .env_remove("BATTEN_GH_GUARD_BYPASS")
         .stdin(Stdio::piped())
@@ -154,7 +154,7 @@ fn run_hook_with_env(
     let mut command = common::batten_at_real_root();
     command
         .current_dir(dir)
-        .args(["hook", "--harness", harness])
+        .args(["adjudicate", "--harness", harness])
         .env_remove("BATTEN_HOOK_BYPASS")
         .env_remove("BATTEN_GH_GUARD_BYPASS")
         .stdin(Stdio::piped())
@@ -178,7 +178,7 @@ fn run_hook_verbose(dir: &std::path::Path, harness: &str, payload: &str) -> Outp
     let mut command = batten();
     command
         .current_dir(dir)
-        .args(["-v", "hook", "--harness", harness])
+        .args(["-v", "adjudicate", "--harness", harness])
         .env_remove("BATTEN_HOOK_BYPASS")
         .env_remove("BATTEN_GH_GUARD_BYPASS")
         .stdin(Stdio::piped())
@@ -1322,7 +1322,7 @@ fn spec_emits_the_derived_read_only_allowlist() {
     // The two verbs whose exclusion is the whole point: `enforce` may run
     // user-supplied commands, and `hook` adjudicates someone else's write.
     assert!(!allowlist.contains(&"enforce"), "{allowlist:?}");
-    assert!(!allowlist.contains(&"hook"), "{allowlist:?}");
+    assert!(!allowlist.contains(&"adjudicate"), "{allowlist:?}");
 
     // Sorted by the STABLE half (§6). Asserting the path order instead would
     // pin an order the document does not have, and would move under a rename
@@ -2404,7 +2404,7 @@ fn a_malformed_harness_token_fails_loud_without_denying() {
     // pipe. That it never reads the payload is itself the point.
     for token in ["claude_code", "", "exitcode"] {
         let output = batten()
-            .args(["hook", "--harness", token])
+            .args(["adjudicate", "--harness", token])
             .env_remove("BATTEN_HOOK_BYPASS")
             .env_remove("BATTEN_GH_GUARD_BYPASS")
             .stdin(Stdio::null())
@@ -2671,7 +2671,7 @@ fn the_deny_is_a_function_of_config_and_argv_not_the_ambient_environment() {
         let mut command = batten();
         command
             .current_dir(&dir)
-            .args(["hook", "--harness", "exit-code"])
+            .args(["adjudicate", "--harness", "exit-code"])
             .env_remove("BATTEN_HOOK_BYPASS")
             .env_remove("BATTEN_GH_GUARD_BYPASS")
             .env(key, value)
@@ -5129,7 +5129,7 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
     .to_string();
     let mut hook = batten();
     let spawned = hook
-        .args(["hook", "--harness", "claude-code"])
+        .args(["adjudicate", "--harness", "claude-code"])
         .current_dir(&repo)
         .state_home(&home)
         .env_remove("BATTEN_HOOK_BYPASS")
@@ -10085,7 +10085,7 @@ fn every_generated_wiring_is_parseable_json_naming_the_harness_it_is_for() {
             serde_json::from_str(&emitted).unwrap_or_else(|err| panic!("{harness}: {err}"));
         assert!(parsed.is_object(), "{harness} emitted a non-object");
         assert!(
-            emitted.contains(&format!("batten hook --harness {harness}")),
+            emitted.contains(&format!("batten adjudicate --harness {harness}")),
             "{harness}'s registrations must invoke the engine for {harness}"
         );
     }
@@ -11188,7 +11188,7 @@ fn run_hook_state(
     let mut command = batten();
     command
         .current_dir(dir)
-        .args(["hook", "--harness", harness])
+        .args(["adjudicate", "--harness", harness])
         .env_remove("BATTEN_HOOK_BYPASS")
         .env_remove("BATTEN_GH_GUARD_BYPASS")
         .stdin(Stdio::piped())
@@ -12014,7 +12014,7 @@ fn record_response(dir: &Path, home: &Path, tool: &str, document: &serde_json::V
     let mut command = batten();
     let output = command
         .current_dir(dir)
-        .args(["hook", "--harness", "claude-code"])
+        .args(["adjudicate", "--harness", "claude-code"])
         .env_remove("BATTEN_HOOK_BYPASS")
         .state_home(home)
         .stdin(Stdio::piped())
@@ -12624,7 +12624,7 @@ fn ready_record(repo: &Path, home: &Path, check: &str) {
 /// `batten hook` over one command, with the same isolated store the mint used.
 fn ready_hook(repo: &Path, home: &Path, command: &str) -> Output {
     let mut child = batten()
-        .args(["hook", "--harness", "exit-code"])
+        .args(["adjudicate", "--harness", "exit-code"])
         .current_dir(repo)
         .state_home(home)
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
@@ -12761,7 +12761,7 @@ fn the_engine_hatch_suppresses_the_row() {
     // `guardrail_bypass.rs` because the ledger's `changed` arm claims it.
     let (repo, home) = ready_fixture("ready-guard-bypass");
     let mut child = batten()
-        .args(["hook", "--harness", "exit-code"])
+        .args(["adjudicate", "--harness", "exit-code"])
         .current_dir(&repo)
         .state_home(&home)
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))

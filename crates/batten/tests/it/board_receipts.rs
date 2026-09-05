@@ -270,7 +270,7 @@ fn payload(tool: &str, input: &str) -> String {
 fn verdict(repo: &Path, tool: &str, input: &str) -> Option<i32> {
     run_with_stdin(
         repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(tool, input),
     )
     .status
@@ -325,7 +325,7 @@ fn filing_without_a_search_is_refused_and_with_one_is_allowed() {
     );
     let refusal = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload("mcp__Linear__save_issue", r#"{"title":"a finding"}"#),
     );
     let text = stderr(&refusal);
@@ -366,7 +366,7 @@ fn an_update_is_not_row_ones_business() {
     let repo = repo("row1-update");
     let refusal = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(
             "mcp__Linear__save_issue",
             r#"{"id":"CLOUD-1","title":"an edit"}"#,
@@ -474,7 +474,7 @@ fn the_refusal_carries_no_byte_of_the_filing() {
     let encoded = serde_json::to_string(secret).expect("encodable");
     let output = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(
             "mcp__Linear__save_issue",
             &format!("{{\"title\":{encoded}}}"),
@@ -547,7 +547,7 @@ fn an_update_with_no_receipt_is_refused() {
     let update = r#"{"id":"CLOUD-1","description":"groomed"}"#;
     let refusal = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload("mcp__Linear__save_issue", update),
     );
     assert_eq!(
@@ -618,7 +618,7 @@ fn a_read_older_than_the_bound_is_refused() {
     mint_read_receipt(&repo, "CLOUD-1", 3060);
     let refusal = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload("mcp__Linear__save_issue", update),
     );
     assert_eq!(
@@ -668,7 +668,7 @@ fn a_supplied_instant_decides_recency_rather_than_the_clock() {
     );
     let refusal = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code", "--instant", &later(1000)],
+        &["adjudicate", "--harness", "exit-code", "--instant", &later(1000)],
         &payload("mcp__Linear__save_issue", update),
     );
     assert_eq!(
@@ -700,7 +700,7 @@ fn the_same_instant_yields_the_same_verdict() {
     let update = r#"{"id":"CLOUD-1","description":"groomed"}"#;
     mint_read_receipt(&repo, "CLOUD-1", 5);
     let at = later(1000);
-    let args = ["hook", "--harness", "exit-code", "--instant", &at];
+    let args = ["adjudicate", "--harness", "exit-code", "--instant", &at];
     let first = run_with_stdin(&repo, &args, &payload("mcp__Linear__save_issue", update));
     let second = run_with_stdin(&repo, &args, &payload("mcp__Linear__save_issue", update));
     assert_eq!(
@@ -727,12 +727,12 @@ fn a_different_instant_changes_the_verdict() {
     mint_read_receipt(&repo, "CLOUD-1", 5);
     let inside = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code", "--instant", &later(10)],
+        &["adjudicate", "--harness", "exit-code", "--instant", &later(10)],
         &payload("mcp__Linear__save_issue", update),
     );
     let past = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code", "--instant", &later(1000)],
+        &["adjudicate", "--harness", "exit-code", "--instant", &later(1000)],
         &payload("mcp__Linear__save_issue", update),
     );
     assert_eq!(
@@ -788,7 +788,7 @@ fn a_malformed_instant_is_a_usage_error() {
     let refusal = run_with_stdin(
         &repo,
         &[
-            "hook",
+            "adjudicate",
             "--harness",
             "exit-code",
             "--instant",
@@ -891,7 +891,7 @@ fn a_create_is_not_row_twos_business() {
     mint_search_receipt(&repo, "main");
     let output = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload("mcp__Linear__save_issue", r#"{"title":"a finding"}"#),
     );
     let text = stderr(&output);
@@ -956,7 +956,7 @@ fn row_twos_refusal_carries_no_byte_of_the_edit() {
     let encoded = serde_json::to_string(secret).expect("encodable");
     let output = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(
             "mcp__Linear__save_issue",
             &format!("{{\"id\":\"CLOUD-1\",\"description\":{encoded}}}"),
@@ -1061,7 +1061,7 @@ fn a_move_with_no_adjudication_is_refused() {
     mint_read_receipt(&repo, "CLOUD-1", 5);
     let refusal = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload("mcp__Linear__save_issue", &input),
     );
     assert_eq!(
@@ -1112,7 +1112,7 @@ fn an_adjudication_past_the_bound_is_refused() {
     mint_move_receipt(&repo, "CLOUD-1", 4000);
     let refusal = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload("mcp__Linear__save_issue", &input),
     );
     assert_eq!(
@@ -1277,7 +1277,7 @@ fn row_threes_selectors_are_the_guards() {
     // The create: no `id`, so no subject, so this row is silent.
     let output = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(
             "mcp__Linear__save_issue",
             r#"{"title":"a finding","state":"In Review"}"#,
@@ -1302,7 +1302,7 @@ fn row_threes_refusal_carries_no_byte_of_the_move() {
     mint_read_receipt(&repo, "CLOUD-1", 5);
     let output = run_with_stdin(
         &repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &payload(
             "mcp__Linear__save_issue",
             &format!("{{\"id\":\"CLOUD-1\",\"state\":\"In Review\",\"description\":{encoded}}}"),
@@ -1353,7 +1353,7 @@ fn completed(repo: &Path, tool: &str, response: &str) {
     // this call's own irrelevance. What the case reads is the receipt store.
     let _ = run_with_stdin(
         repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &post_tool(tool, response),
     );
 }

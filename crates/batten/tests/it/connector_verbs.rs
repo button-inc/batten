@@ -128,7 +128,7 @@ fn every_spelling_of_a_decided_verb_is_refused() {
             (*verb).to_owned(),
         ] {
             let refusal =
-                run_with_stdin(&repo, &["hook", "--harness", "exit-code"], &payload(&tool));
+                run_with_stdin(&repo, &["adjudicate", "--harness", "exit-code"], &payload(&tool));
             assert_eq!(
                 refusal.status.code(),
                 Some(2),
@@ -174,7 +174,7 @@ fn a_verb_merely_containing_a_decided_one_is_untouched() {
         "mcp__Linear__list_issues",
         "Read",
     ] {
-        let output = run_with_stdin(&repo, &["hook", "--harness", "exit-code"], &payload(tool));
+        let output = run_with_stdin(&repo, &["adjudicate", "--harness", "exit-code"], &payload(tool));
         let text = stderr(&output);
         for (_, rule) in DECIDED {
             assert!(
@@ -210,7 +210,7 @@ fn each_refusal_names_its_own_remedy() {
     ] {
         let refusal = run_with_stdin(
             &repo,
-            &["hook", "--harness", "exit-code"],
+            &["adjudicate", "--harness", "exit-code"],
             &payload(&format!("mcp__Claude_Code_Remote__{verb}")),
         );
         assert_eq!(refusal.status.code(), Some(2), "{verb} is refused");

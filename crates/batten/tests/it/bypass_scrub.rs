@@ -328,7 +328,7 @@ fn an_admission_in_the_store_disarms_the_committed_protected_gate() {
 )]
 fn run(command: &mut std::process::Command, payload: &str) -> Option<i32> {
     let mut child = command
-        .args(["hook", "--harness", "exit-code"])
+        .args(["adjudicate", "--harness", "exit-code"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

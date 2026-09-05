@@ -116,7 +116,7 @@ One verdict, two channels, because hosts differ:
   on stderr.
 
 Both are the same policy verdict. On the first kind of host, exit `0` from
-`batten hook` does not mean allowed — read the decision.
+`batten adjudicate` does not mean allowed — read the decision.
 
 A real deny, in full:
 
@@ -281,7 +281,7 @@ to the committed authority, reviewed like any other change.
   more output to get.
 - Read empty output as "it did not run". Read the exit code.
 - Treat exit `1` as a policy finding. It means the gate could not run.
-- Treat exit `0` from `batten hook` as "allowed" on a host with an in-band
+- Treat exit `0` from `batten adjudicate` as "allowed" on a host with an in-band
   decision channel. Read the decision document.
 - Reach for a bypass before reading the fix pointer the deny already gave you.
 - Record a receipt for a check you did not run.

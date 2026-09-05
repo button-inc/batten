@@ -49,7 +49,7 @@ fn post_tool(session: &str) -> String {
     )
 }
 
-/// Run `batten hook --harness claude-code` in `dir` with `payload` on stdin, in a
+/// Run `batten adjudicate --harness claude-code` in `dir` with `payload` on stdin, in a
 /// scrubbed environment pointing at the fixture's own state home.
 fn hook(dir: &Path, home: &Path, payload: &str) -> Output {
     hook_at(dir, home, payload, &[])
@@ -66,7 +66,7 @@ fn hook_as(dir: &Path, home: &Path, harness: &str, payload: &str) -> Output {
     let mut command = batten();
     command
         .state_home(home)
-        .args(["hook", "--harness", harness])
+        .args(["adjudicate", "--harness", harness])
         .current_dir(dir)
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .stdin(Stdio::piped())
@@ -89,7 +89,7 @@ fn hook_at(dir: &Path, home: &Path, payload: &str, leading: &[&str]) -> Output {
     command
         .state_home(home)
         .args(leading)
-        .args(["hook", "--harness", "claude-code"])
+        .args(["adjudicate", "--harness", "claude-code"])
         .current_dir(dir)
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .stdin(Stdio::piped())
@@ -175,7 +175,7 @@ fn forked_hook(dir: &Path, home: &Path, payload: &str, parent: &str) -> Output {
     let mut command = batten();
     command
         .state_home(home)
-        .args(["hook", "--harness", "claude-code"])
+        .args(["adjudicate", "--harness", "claude-code"])
         .current_dir(dir)
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .env("BATTEN_SESSION_PARENT", parent)

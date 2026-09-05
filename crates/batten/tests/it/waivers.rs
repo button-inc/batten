@@ -72,7 +72,7 @@ fn bash_payload(command: &str) -> String {
 fn adjudicate(repo: &std::path::Path, command: &str) -> (i32, String) {
     let output = run_with_stdin(
         repo,
-        &["hook", "--harness", "exit-code"],
+        &["adjudicate", "--harness", "exit-code"],
         &bash_payload(command),
     );
     (output.status.code().expect("exit code"), stderr(&output))

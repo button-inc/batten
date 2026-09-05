@@ -4,7 +4,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "batten hook --harness gemini-cli"
+          "command": "batten adjudicate --harness gemini-cli"
         }
       ]
     }
@@ -14,7 +14,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "batten hook --harness gemini-cli"
+          "command": "batten adjudicate --harness gemini-cli"
         }
       ]
     }
@@ -24,7 +24,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "batten hook --harness gemini-cli"
+          "command": "batten adjudicate --harness gemini-cli"
         }
       ]
     }
@@ -34,7 +34,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "batten hook --harness gemini-cli"
+          "command": "batten adjudicate --harness gemini-cli"
         }
       ]
     }

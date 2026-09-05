@@ -2052,7 +2052,7 @@ fn seed_response(dir: &Path, home: &Path, document: &serde_json::Value) {
     .to_string();
     let mut command = common::batten();
     command
-        .args(["hook", "--harness", "claude-code"])
+        .args(["adjudicate", "--harness", "claude-code"])
         .current_dir(dir)
         .env_remove("BATTEN_HOOK_BYPASS")
         .stdin(Stdio::piped())
