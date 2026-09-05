@@ -9978,7 +9978,6 @@ fn record_state(overrides: &Overrides) {
 fn unlanded_pointer() -> Option<String> {
     let branch = git::current_branch(Path::new(".")).ok().flatten()?;
     let context = format!("refs/heads/{branch}");
-    let head = git::head_commit(Path::new(".")).ok()?;
     // THE REPO ROOT, NOT THE HOOK'S ANCHOR, and the two are not the same object.
     // `run_state_record` — which minted this verdict moments ago — keys the store
     // on `git::repo_root`, so a reader anchored anywhere else looks in a store
@@ -9989,28 +9988,44 @@ fn unlanded_pointer() -> Option<String> {
     let dir = store::bound_dir(&opened)?;
     let records = findings::load_all(&dir).ok()?;
 
-    let count = records
+    let (identity, count) = records
         .iter()
         .filter(|record| record.rule == completion::RULE_ID)
-        .flat_map(|record| &record.instances)
-        .filter(|instance| instance.context.to_string() == context)
-        .find_map(|instance| match instance.occurrences {
+        .flat_map(|record| record.instances.iter().map(move |i| (&record.identity, i)))
+        .filter(|(_, instance)| instance.context.to_string() == context)
+        .find_map(|(identity, instance)| match instance.occurrences {
             // FAIL-CLOSED ON THE OBSERVATION, and this is the arm that carries it.
-            findings::Observation::Observed(count) if count > 0 => Some(count),
+            findings::Observation::Observed(count) if count > 0 => Some((identity, count)),
             _ => None,
         })?;
 
-    // ONCE PER HEAD, because the finding HOLDS while the work is unlanded. An
-    // unsuppressed rule repeats one pointer every turn until nobody reads it,
-    // and a new commit is a new answer to the question. The receipt lives beside
-    // the lease and board-write records in the git dir — out of the tree, so a
-    // nudge never dirties the worktree it is asking about.
+    // ONCE PER CLAIM, AND THE KEY IS NOT ONE THE REMEDY CAN MINT (CLOUD-890).
+    //
+    // This keyed on `git rev-parse HEAD`, and its own nudge says "Land it, or say
+    // what blocks it." The agent commits; HEAD moves; the key is void; the nudge
+    // fires again — so under "commit early and often" EVERY REMEDIAL ACTION
+    // RE-ARMED THE ALARM. A dedup key the recipient can mint by doing what it was
+    // asked is not a suppression key, it is a retrigger, and the level-vs-edge
+    // reading is the same one ISA-18.2 makes shelving a first-class state for:
+    // `¬landed` is a level that holds continuously, and the agent cannot clear it
+    // within the turn it is asked to.
+    //
+    // The finding's own identity is the claim instance: `completion::identity`
+    // hashes the RULE, its pattern key and the SESSION, so committing does not
+    // move it and no action the agent takes mints a fresh one. A NEW session asks
+    // again, which is right — it has not been told yet — and landing the work
+    // resolves the finding at the source, which is where a level is supposed to
+    // clear.
+    //
+    // The receipt still lives beside the lease and board-write records in the git
+    // dir, out of the tree, so a nudge never dirties the worktree it asks about.
+    let key = identity.fingerprint.to_hex();
     let seen = git::git_dir(Path::new(".")).ok().map(|dir| {
         dir.join("batten-receipts")
             .join(format!("unlanded-nudged.{}", branch.replace('/', "-")))
     });
     if let Some(path) = seen.as_deref() {
-        if std::fs::read_to_string(path).is_ok_and(|seen| seen.lines().any(|line| line == head)) {
+        if std::fs::read_to_string(path).is_ok_and(|seen| seen.lines().any(|line| line == key)) {
             return None;
         }
         if let Some(parent) = path.parent() {
@@ -10023,7 +10038,7 @@ fn unlanded_pointer() -> Option<String> {
             .append(true)
             .open(path)
             .and_then(|mut file| {
-                std::io::Write::write_all(&mut file, format!("{head}\n").as_bytes())
+                std::io::Write::write_all(&mut file, format!("{key}\n").as_bytes())
             });
     }
     Some(format!(

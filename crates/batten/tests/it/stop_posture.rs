@@ -793,6 +793,68 @@ fn unlanded_work_at_a_declared_stopping_point_is_pointed_at() {
     );
 }
 
+/// A REMEDIAL COMMIT DOES NOT RE-ARM THE NUDGE (CLOUD-890).
+///
+/// The suppression keyed on `git rev-parse HEAD`, and the nudge it suppressed
+/// says "Land it, or say what blocks it." So the agent committed, HEAD moved,
+/// the key went void and the same pointer fired again — under "commit early and
+/// often" every remedial action re-armed the alarm. A dedup key the recipient can
+/// mint by doing what it was asked is not a suppression key.
+///
+/// Three consecutive commits on one unlanded branch, one advisory. The commits
+/// are real rather than simulated, because HEAD moving is the entire mechanism
+/// being tested.
+#[test]
+fn three_remedial_commits_on_one_claim_produce_one_advisory() {
+    let (repo, home) = unlanded_fixture("stop-unlanded-rearm");
+    let mut spoke = 0;
+    for step in 0..3 {
+        let stdout = stdout_of(&hook_in(
+            &repo,
+            &home,
+            &stop_payload("Landed and pushed.", false),
+        ));
+        if stdout.contains(batten::completion::RULE_ID) {
+            spoke += 1;
+        }
+        // THE REMEDY, as the agent would perform it: a commit. It does not land
+        // the work — nothing here can — so the finding still HOLDS, which is
+        // precisely the level this rule must not re-assert on.
+        common::write(
+            &repo,
+            &format!("src/step{step}.rs"),
+            "pub fn step() {}
+",
+        );
+        common::git_in(&repo, &["add", "-A"]);
+        common::git_in(&repo, &["commit", "-q", "-m", &format!("wip: step {step}")]);
+    }
+    assert_eq!(
+        spoke, 1,
+        "the claim is asked once; a commit is not a new claim"
+    );
+}
+
+/// ANTI-VACUITY for the case above (CLOUD-418): the first turn must still speak.
+///
+/// Without this, a suppression that silenced the rule outright would pass the
+/// three-commit case — and the row's own mutation (revert to the HEAD key) turns
+/// that case red while leaving this one green, which is what makes the pair a
+/// measurement rather than an assertion.
+#[test]
+fn the_first_turn_on_a_fresh_claim_still_speaks() {
+    let (repo, home) = unlanded_fixture("stop-unlanded-first");
+    let stdout = stdout_of(&hook_in(
+        &repo,
+        &home,
+        &stop_payload("Landed and pushed.", false),
+    ));
+    assert!(
+        stdout.contains(batten::completion::RULE_ID),
+        "a claim nobody has been told about is reported: {stdout}"
+    );
+}
+
 /// PLAN MODE SUPPRESSES AN ADVISORY WHOSE REMEDY IS A WRITE (CLOUD-895).
 ///
 /// The same unlanded fixture as the case above — same repository, same commit
