@@ -94,7 +94,7 @@
       "Bash(gh:*)",
       "Bash(mise:*)",
       "Bash(batten:*)",
-      "mcp__serena__*"
+      "mcp__serena"
     ],
     "deny": [
       "mcp__Claude_Code_Remote__send_later",

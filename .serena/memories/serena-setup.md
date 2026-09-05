@@ -64,6 +64,30 @@ mcp-timeout-budget`, which carries the floor, the measurement behind it, and the
    approval path for a launch failure. Evidence that approval worked is a
    `Starting connection` record in the log, nothing else.
 
+   **AND THAT IS ONLY THE SERVER'S APPROVAL — THE TOOLS NEED A SECOND ENTRY,
+   WHICH IS A THIRD GATE THIS MEMORY DID NOT NAME** (2026-09-05). A server can be
+   enabled, attached and advertising its tools while every single call still
+   stops for a human, because `enabledMcpjsonServers` says the server may run and
+   `permissions.allow` says its tools need no approval. Two different keys, and
+   satisfying only the first is invisible: the tools appear, they work, and the
+   owner clicks.
+
+   **The spelling is the whole trap.** `.claude/settings.json` carried
+   `"mcp__serena__*"`, which reads as a grant and matches nothing — the MCP forms
+   are `mcp__<server>` for every tool of a server and `mcp__<server>__<tool>` for
+   one, and a trailing `__*` is not among them. Measured that day by changing the
+   one line and calling a tool that had NOT already been approved in that session:
+   `list_memories` ran with no prompt where the wildcard had prompted for every
+   call. Use a tool with no prior approval when testing this — approval is
+   remembered per session, so re-calling one you already approved proves nothing,
+   and that confound was walked into first.
+
+   The cost is silent and lands on a person rather than on a gate: the owner had
+   been approving `find_symbol` and `get_symbols_overview` by hand, and the agent's
+   first instinct was to stop using Serena and reach for the shell utilities
+   instead — the substitution `.claude/rules/scanning.md` and `no-tool-substitution`
+   exist to refuse, arrived at as a workaround for a one-line config bug.</repl>
+
 3. **A scoped launch (CLOUD-316).** The one that actually cost a whole session.
    `.mcp.json` ran a bare `mise exec`, which provisions **every** tool in the
    active config before it execs anything — so Serena waited on twenty tools and
