@@ -7378,6 +7378,35 @@ email = "alec@wenzowski.com"
 # EMPTY IS COULD-NOT-LOOK, never a clean answer: this gate fails open at every
 # unknown, because a reading it cannot take would cancel every job in the fleet
 # where waving one matrix through costs one matrix.
+# ─── WHICH GATE FAILURES ARE THE ENVIRONMENT'S (CLOUD-861) ──────────────────
+#
+# A `verify` refusal is normally about this tree, and "reproduce and fix locally"
+# is the right advice for it. These rows name the failures for which that advice
+# is ACTIVELY WRONG — the branch did not cause them, and reproducing costs a
+# cycle to learn so.
+#
+# MEASURED 2026-08-21: `target-prune` passed a lap with 6242MB against its 4096MB
+# floor, the `cargo test` link step then consumed all of it, and the lap stopped
+# with "Reproduce and fix locally" over a tree with nothing wrong in it. That is
+# the misattribution CLOUD-811 records in `linear-check`, one layer over.
+#
+# THE LITERAL AND THE REMEDY ARE BOTH THIS CONSUMER'S. The wording is a property
+# of the toolchain this repository runs, and the remedy names a task — either one
+# inside `crates/batten` is non-negotiable rule 1's plainest violation, which
+# `document_facts.rs` would refuse. The engine learns only that a declared row
+# matched, and reads the remedy back out.
+#
+# A SEPARATE TABLE FROM `[[exec_pattern]]`, which asks the opposite question:
+# that one promotes a lying exit `0` to a violation, and this one explains a
+# failure that already happened. `report_bundle` scans only on a `0` and says so
+# — "Only `0` is promotable" — so one table serving both readings would produce
+# opposite verdicts over identical bytes.
+[[verify_environment_pattern]]
+id = "disk-full"
+pattern = "No space left on device"
+stream = "both"
+reason = "the disk filled, so this is the environment rather than your branch. Run `mise run target-prune`, and consider building with CARGO_INCREMENTAL=0."
+
 [lease]
 landing_paths = [
   "mise-tasks/land.sh",

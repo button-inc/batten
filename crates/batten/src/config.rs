@@ -355,6 +355,32 @@ pub struct Config {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub exec_patterns: Vec<crate::outputs::OutputPattern>,
+    /// Output predicates that classify a landing gate's REFUSAL as the
+    /// environment's rather than this tree's (CLOUD-861).
+    ///
+    /// **A separate table from [`Config::exec_patterns`], because the two answer
+    /// opposite questions from the same shape.** That one asks *is this green run
+    /// lying* and promotes a `0`; this one asks *a run already failed, and what
+    /// KIND of failure was it* and promotes nothing. One table serving both would
+    /// have to decide per reader whether a hit means promote-this-success or
+    /// explain-this-failure, and a row written for one reading would silently
+    /// change the other's verdict.
+    ///
+    /// Consumer-specific for [`Config::exec_patterns`]'s reason and then some:
+    /// the literal is a toolchain's wording, and the `reason` is the remedy —
+    /// *which* reclaim task to run is this repository's vocabulary, so putting
+    /// either in the crate is non-negotiable rule 1's plainest violation.
+    /// `crates/batten/tests/it/document_facts.rs` is the gate that would catch it.
+    ///
+    /// The measured case: `target-prune` passed a lap with 6242MB against its
+    /// 4096MB floor, the link step then consumed all of it, and the stop said
+    /// *"Reproduce and fix locally"* over a tree with nothing wrong in it.
+    #[serde(
+        default,
+        rename = "verify_environment_pattern",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub verify_environment_patterns: Vec<crate::outputs::OutputPattern>,
     /// How `batten exec` owns what it dispatched (CLOUD-427). Absent means the
     /// defaults, and the default is today's behaviour: Batten makes no process
     /// group. Authority-only by omission from [`OverrideConfig`] — an uncommitted
@@ -1514,6 +1540,16 @@ fn validate_tables(config: &Config, text: &str, source: &str) -> Result<()> {
         Native::OutputTableRefused,
         crate::outputs::validate(&config.exec_patterns),
     )?;
+    // The same validator over the second pattern table, and deliberately the
+    // same class: both are `OutputPattern`, so an empty id, an empty literal, an
+    // empty reason or a duplicate id is malformed in exactly the same way
+    // whichever question the table answers. A malformed row here would classify
+    // nothing and read as a consumer who declared no classifier at all — the
+    // inert-typo shape this call site exists to refuse.
+    under(
+        Native::VerifyEnvironmentTableRefused,
+        crate::outputs::validate_environment(&config.verify_environment_patterns),
+    )?;
     // And the waiver table, where the stakes are inverted from every other row
     // here: a malformed rule fails to gate, but a malformed *waiver* is a hatch
     // whose expiry nobody could read. Refusing at load is what makes "every
@@ -1830,6 +1866,11 @@ impl Config {
             mcp: None,
             capture: None,
             exec_patterns: Vec::new(),
+            // No declared classifier means every gate refusal reads as being
+            // about the tree, which is the advice that was always given and is
+            // right in the common case — the safe direction for an authority
+            // that could not be read.
+            verify_environment_patterns: Vec::new(),
             waivers: Vec::new(),
             // An authority that declares no budget grants no exemption from one
             // either — there is simply no threshold, which is what `None` says.
@@ -2249,6 +2290,17 @@ mod tests {
             "exec_patterns",
             "crate::outputs::validate(",
             Native::OutputTableRefused,
+        ),
+        // The second `OutputPattern` table, sharing the validator and the class
+        // with the row above. Listed separately because the census is per FIELD:
+        // two fields validated by one call site are two rows here, and collapsing
+        // them would let one of the two go unwired unnoticed — which is CLOUD-242
+        // and CLOUD-253's own shape, where both tables shipped together and the
+        // fix wired up only one.
+        (
+            "verify_environment_patterns",
+            "crate::outputs::validate_environment(",
+            Native::VerifyEnvironmentTableRefused,
         ),
         (
             "provisions",

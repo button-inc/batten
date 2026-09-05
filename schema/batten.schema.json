@@ -430,6 +430,13 @@
         "$ref": "#/$defs/DeclaredVerdict"
       }
     },
+    "verify_environment_pattern": {
+      "description": "Output predicates that classify a landing gate's REFUSAL as the\nenvironment's rather than this tree's (CLOUD-861).\n\n**A separate table from [`Config::exec_patterns`], because the two answer\nopposite questions from the same shape.** That one asks *is this green run\nlying* and promotes a `0`; this one asks *a run already failed, and what\nKIND of failure was it* and promotes nothing. One table serving both would\nhave to decide per reader whether a hit means promote-this-success or\nexplain-this-failure, and a row written for one reading would silently\nchange the other's verdict.\n\nConsumer-specific for [`Config::exec_patterns`]'s reason and then some:\nthe literal is a toolchain's wording, and the `reason` is the remedy —\n*which* reclaim task to run is this repository's vocabulary, so putting\neither in the crate is non-negotiable rule 1's plainest violation.\n`crates/batten/tests/it/document_facts.rs` is the gate that would catch it.\n\nThe measured case: `target-prune` passed a lap with 6242MB against its\n4096MB floor, the link step then consumed all of it, and the stop said\n*\"Reproduce and fix locally\"* over a tree with nothing wrong in it.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/OutputPattern"
+      }
+    },
     "version": {
       "description": "The config schema version. Must equal [`SUPPORTED_VERSION`].",
       "type": "integer",

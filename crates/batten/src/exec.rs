@@ -1424,6 +1424,79 @@ pub fn run_in_with_env(
     report_bundle(&bundle, &outcomes, patterns, settings, report)
 }
 
+/// Run a command and report WHICH declared patterns its output matched,
+/// whatever it exited.
+///
+/// # This asks a different question from [`run_in_with_env`], and the difference
+/// is the exit code
+///
+/// [`report_bundle`] scans for patterns only on a `0`, and says so in as many
+/// words: *"Only `0` is promotable, and only a declared pattern promotes it."*
+/// That is right for CLOUD-117, whose question is **is this green run lying** —
+/// a child that already failed needs no promotion, and re-deciding a failure
+/// Batten did not diagnose would make the wrapper's verdict unreadable.
+///
+/// The question here is the other one: **a run already failed, and what KIND of
+/// failure was it.** CLOUD-861 is the measured case — a `verify` that died on a
+/// full disk is not a defect in the tree, and reporting it as one sends an
+/// author to reproduce a condition their branch did not create. Reusing the
+/// promotion path could not answer it, because the promotion path returns before
+/// it scans.
+///
+/// So this is a sibling rather than a flag on that one: one function answering
+/// both questions would have to decide, per caller, whether a hit means *promote
+/// this success* or *explain this failure*, and those produce opposite verdicts
+/// from identical inputs.
+///
+/// # It returns hits, never bytes
+///
+/// [`Hit`] is `stream:line id` and carries no matched text, so a caller learns
+/// which class of failure it was without the output passing through its hands —
+/// non-negotiable rule 4 held in the return TYPE rather than by each caller
+/// remembering. A wrapped command's output is the likeliest place in this whole
+/// engine for a secret to appear, which is what makes that load-bearing here.
+///
+/// The exit code is returned rather than raised: a gate that ran and refused is
+/// an ANSWER to its caller, and wrapping it in [`Passthrough`] would make the
+/// caller unwrap an error to read a verdict it asked for.
+///
+/// # Errors
+///
+/// A malformed bundle, or a boundary that could not start the child. A child
+/// that ran and failed is `Ok`, with its code.
+pub(crate) fn classify_in_env(
+    repo_root: &Path,
+    command: &[String],
+    patterns: &[OutputPattern],
+    settings: &ExecConfig,
+    published: &[(String, String)],
+) -> Result<(i32, Vec<Hit>)> {
+    let bundle = split_bundle(command)?;
+    let outcomes = dispatch(repo_root, &bundle, settings, published, next_run())?;
+    let code = bundle_code(&outcomes);
+    let mut found: Vec<Hit> = Vec::new();
+    for outcome in &outcomes {
+        found.extend(outputs::hits(patterns, Stream::Stdout, &outcome.out_bytes));
+        found.extend(outputs::hits(patterns, Stream::Stderr, &outcome.err_bytes));
+    }
+    Ok((code, found))
+}
+
+/// A bundle's exit code: the FIRST non-zero in declaration order.
+///
+/// Extracted rather than written twice (CLOUD-430). A bundle where command 2 of
+/// 3 failed and command 3 succeeded must not report `0`; and reading the FIRST
+/// failure rather than the last keeps the answer a property of the bundle rather
+/// than of the scheduler, which `--jobs` would otherwise make non-deterministic.
+/// Two spellings of that reduction is two authorities over one number.
+fn bundle_code(outcomes: &[Outcome]) -> i32 {
+    outcomes
+        .iter()
+        .map(|outcome| outcome.exit)
+        .find(|exit| *exit != 0)
+        .unwrap_or(0)
+}
+
 /// Run a program at `root/<program>` with `stdin` piped in, and read back its
 /// exit code and stdout.
 ///
@@ -1861,11 +1934,7 @@ fn report_bundle(
     // FIRST failure rather than the last keeps the answer a property of the
     // bundle rather than of the scheduler, which `--jobs` would otherwise make
     // non-deterministic.
-    let code = outcomes
-        .iter()
-        .map(|outcome| outcome.exit)
-        .find(|exit| *exit != 0)
-        .unwrap_or(0);
+    let code = bundle_code(outcomes);
 
     // CLOUD-429: the record IS the default answer, and it is emitted before the
     // passthrough below because a non-zero child must not lose it. On `report`,

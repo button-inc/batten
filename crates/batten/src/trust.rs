@@ -1161,6 +1161,18 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[WeakeningKind::ExecPatternRemoved]),
     },
     FieldCoverage {
+        field: "verify_environment_patterns",
+        coverage: Coverage::NotPolicyBearing(
+            "the same shape as `redirects`, and deliberately NOT `exec_patterns`' shape \
+             despite sharing its type: a row here classifies a refusal that has ALREADY \
+             happened, so it changes what the stop SAYS and never whether it fires. Dropping \
+             every row costs an operator the reading that a full disk is not their branch's \
+             defect (CLOUD-861); it cannot turn a refusal into a pass, which is what \
+             `exec_patterns` can do in the other direction by no longer promoting a lying \
+             exit `0`. The exit code is `Violation` with the table and without it.",
+        ),
+    },
+    FieldCoverage {
         field: "exec",
         coverage: Coverage::NoMonotoneReading(
             "dispatch shape and presentation: process-group ownership, tee, format, style, \

@@ -5669,7 +5669,7 @@ fn run_land(
             // the gate this tree carries no borrowed range while it does.
             let mut standing = speculation::Bet::default();
             let _ = speculation::recover(root, &mut standing);
-            run_land_verify(root, &standing, &branch, out, err)
+            run_land_verify(root, &standing, &branch, None, out, err)
         }
         cli::LandCommand::FastForward => run_land_fast_forward(&branch, out, err),
         cli::LandCommand::Replay { reference } => {
@@ -5860,7 +5860,9 @@ fn run_land_lap(
             }
             let code = match step {
                 land::Step::Replay => run_land_replay(root, url, reference, branch, out)?,
-                land::Step::Verify => run_land_verify(root, &bet, branch, out, err)?,
+                land::Step::Verify => {
+                    run_land_verify(root, &bet, branch, Some(reference), out, err)?
+                }
                 land::Step::Ready => run_land_ready(root, branch, &mut ledger, out, err)?,
                 land::Step::Push => run_land_push(root, url, branch, out)?,
                 land::Step::Wait => {
@@ -6632,6 +6634,7 @@ fn run_land_verify(
     root: &Path,
     bet: &speculation::Bet,
     branch: &str,
+    reference: Option<&str>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -6653,19 +6656,92 @@ fn run_land_verify(
         .published()
         .map(|base| vec![(speculation::PUBLISHED_AS.to_owned(), base.to_owned())])
         .unwrap_or_default();
-    match land::verify(root, branch, &command, &published)? {
+    let environment = verify_environment(root);
+    match land::verify(root, branch, &command, &published, &environment)? {
         land::Verified::Clean(head) => {
             writeln!(out, "land: {head} passed the configured gate")?;
             Ok(ExitCode::Success)
         }
         // A REFUSAL IS A VERDICT ABOUT THE REPOSITORY, so `2`. The gate's own
-        // output already went to the caller's terminal; repeating a pointer to
-        // it here would be the payload rule's exact failure.
-        land::Verified::Refused(head) => {
-            writeln!(out, "land: {head} was refused by the configured gate")?;
+        // output reached the caller's terminal — `land::verify` tees for exactly
+        // this — so repeating a pointer to it here would be the payload rule's
+        // exact failure. What this arm adds is not the output but the READING:
+        // which of three refusals it was, because the advice differs and two of
+        // the three were previously told the wrong thing.
+        land::Verified::Refused { sha, cause } => {
+            writeln!(out, "land: {sha} was refused by the configured gate")?;
+            match cause {
+                // NOT THIS BRANCH'S DOING, so none of the tree advice applies.
+                // The remedy is the consumer's own words from the row that
+                // matched; this engine knows there was a match and nothing about
+                // what to do, which is what keeps the reclaim's name out of it.
+                land::Refusal::Environment { remedy } => {
+                    writeln!(
+                        err,
+                        "::error:: land: the gate died of the environment rather than of this tree — {remedy}"
+                    )?;
+                }
+                // A SUSPICION, NEVER A VERDICT, and the wording is load-bearing.
+                // This row retracted two attributions in one day for treating
+                // "speculative" as the explanation because it was the salient
+                // difference — so it says how to FIND OUT rather than deciding.
+                //
+                // BOTH recoveries, because `rebase --onto` is not the only one
+                // and the cheaper one is available whenever the remote still
+                // holds this branch unborrowed.
+                land::Refusal::Tree => {
+                    if let Some(base) = bet.published() {
+                        writeln!(
+                            err,
+                            "::error:: land: this tree is SPECULATIVE — it carries {} borrowed from {base}, so the failure may not be yours.",
+                            short(base)
+                        )?;
+                        // THE BASE REF IS THE LAP'S AND A HAND-DRIVEN VERIFY HAS
+                        // NONE, so it is `Option` rather than a guess. `batten
+                        // land verify` run alone takes no positional — the lap
+                        // is what knows which trunk this branch is landing onto
+                        // — and naming a default here would print a recovery
+                        // that reaches the wrong ref in any repository whose
+                        // trunk is spelled differently (non-negotiable rule 1).
+                        // The `reset --hard` half needs no base and is offered
+                        // either way.
+                        match reference {
+                            Some(reference) => writeln!(
+                                err,
+                                "  Re-run the gate off the borrowed base: git rebase --onto {reference} {base}, or git reset --hard <this branch's own head>."
+                            )?,
+                            None => writeln!(
+                                err,
+                                "  Re-run the gate off the borrowed base: git rebase --onto <your base> {base}, or git reset --hard <this branch's own head>."
+                            )?,
+                        }
+                        writeln!(
+                            err,
+                            "  If it still fails off the borrowed base, it is yours."
+                        )?;
+                    } else {
+                        writeln!(err, "::error:: land: reproduce and fix locally.")?;
+                    }
+                }
+            }
             Ok(ExitCode::Violation)
         }
     }
+}
+
+/// The declared `[[verify_environment_pattern]]` rows, or none.
+///
+/// **Could-not-look is an EMPTY table rather than a refusal**, and that is the
+/// safe direction here: with no rows every refusal classifies as
+/// [`land::Refusal::Tree`], which is the advice that was always given and is
+/// right in the common case. A config this cannot read must not turn a refused
+/// gate into a second failure on top of it.
+fn verify_environment(root: &Path) -> Vec<outputs::OutputPattern> {
+    let site = config::authority_site(root, None);
+    config::load_site(&site)
+        .ok()
+        .map(|(loaded, _)| loaded.verify_environment_patterns)
+        .unwrap_or_default()
 }
 
 /// How many ticks the guard waits to be killed after a cancellation lands.
