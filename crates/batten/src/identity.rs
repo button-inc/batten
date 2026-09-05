@@ -210,7 +210,15 @@ pub enum SpanNormalization {
 const ADDRESS_VERSION: u8 = 1;
 
 /// The rendered address's fixed length: `b3-1-` plus 64 hex characters.
-const ADDRESS_LEN: usize = 5 + 64;
+///
+/// Public because the transport policy PRICES it (CLOUD-1367): what an address
+/// costs is the rendered grammar including its version and separators, never a
+/// generic hash length or a bytes-over-four approximation, and a consumer that
+/// re-derived the number would be a second authority over the grammar.
+pub const ADDRESS_RENDERED_LEN: usize = 5 + 64;
+
+/// The rendered address's fixed length, for this module's own use.
+const ADDRESS_LEN: usize = ADDRESS_RENDERED_LEN;
 
 /// A canonical content address: BLAKE3 over a versioned, domain-separated
 /// whole-document preimage (CLOUD-1364).
@@ -379,7 +387,7 @@ impl ContentAddress {
             return Err(refuse());
         }
         let mut digest = [0u8; 32];
-        for (at, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+        for (at, pair) in hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             let hi = char::from(pair[0]).to_digit(16).ok_or_else(refuse)?;
             let lo = char::from(pair[1]).to_digit(16).ok_or_else(refuse)?;
             digest[at] = u8::try_from(hi * 16 + lo).map_err(|_| refuse())?;

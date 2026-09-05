@@ -679,6 +679,7 @@ impl Freshness {
 /// One line per entry, `<locator>\t<address>`, under the repository's state
 /// directory. A flat file rather than a store: the whole point is that a
 /// comparison costs a read of THIS file and never a read of a payload.
+#[derive(Debug)]
 pub struct Index {
     /// Where the index lives.
     at: PathBuf,
@@ -1628,6 +1629,68 @@ pub struct CaptureConfig {
     /// Response-capture records the store may hold. Absent means the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_records: Option<u64>,
+    /// The payload size at which a rendered response switches from carrying the
+    /// bytes to carrying an address (CLOUD-1367).
+    ///
+    /// **An ECONOMIC threshold and nothing else.** A payload at or under it is
+    /// cheaper to send than an address plus the round trip to resolve one; over
+    /// it, the address wins. Absent means [`DEFAULT_INLINE_MAX_BYTES`].
+    ///
+    /// It is deliberately NOT a privacy or safety cap. Those refuse to emit
+    /// content at all and are their own rows; this one only ever changes the
+    /// REPRESENTATION, and both routes carry the same semantic result. Reusing
+    /// one number for both would mean a measurement about token cost silently
+    /// deciding what may leave the process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_max_bytes: Option<u64>,
+}
+
+/// How a response renders: the bytes themselves, or an address for them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transport {
+    /// Small enough that the bytes are cheaper than the address plus a resolve.
+    Inline,
+    /// Large enough that a fixed-length address wins.
+    Addressed,
+}
+
+impl Transport {
+    /// The stable token used in machine output.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Transport::Inline => "inline",
+            Transport::Addressed => "addressed",
+        }
+    }
+}
+
+/// The default inline threshold.
+///
+/// **Derived from the rendered grammar rather than chosen** (CLOUD-1367). An
+/// address costs [`identity::ADDRESS_RENDERED_LEN`] characters plus the resolve
+/// that follows it; below a few hundred bytes the payload is simply cheaper than
+/// its own pointer, and `bench/address-transport/RESULTS.md` is the measurement
+/// this number is read off. A round 1 KiB is the smallest declared value the
+/// measured curve supports, and the bench is what moves it.
+pub const DEFAULT_INLINE_MAX_BYTES: u64 = 1024;
+
+/// Which transport a payload of `len` bytes takes under `config`.
+///
+/// **At or under the threshold is inline**, so the boundary is inclusive and a
+/// payload exactly at the declared size still carries its bytes. That is stated
+/// here because an off-by-one is invisible in every other reading — the fixtures
+/// sit one byte either side for exactly this reason.
+#[must_use]
+pub fn transport_for(config: Option<&CaptureConfig>, len: u64) -> Transport {
+    let threshold = config
+        .and_then(|it| it.inline_max_bytes)
+        .unwrap_or(DEFAULT_INLINE_MAX_BYTES);
+    if len <= threshold {
+        Transport::Inline
+    } else {
+        Transport::Addressed
+    }
 }
 
 /// The default byte bound on response captures.
@@ -2419,6 +2482,7 @@ mod tests {
             store_in(&root, Stream::Stdout, &[index]).unwrap();
         }
         let tight = CaptureConfig {
+            inline_max_bytes: None,
             max_bytes: Some(1),
             max_records: Some(1),
         };
@@ -2443,6 +2507,7 @@ mod tests {
             record_call_in(&root, &row("s", Some(digest), None)).unwrap();
         }
         let two = CaptureConfig {
+            inline_max_bytes: None,
             max_bytes: None,
             max_records: Some(2),
         };
@@ -2474,6 +2539,7 @@ mod tests {
         // store under a table of one record evicts, which an unbounded reading
         // could never do.
         let one = CaptureConfig {
+            inline_max_bytes: None,
             max_bytes: None,
             max_records: Some(0),
         };
@@ -2497,6 +2563,7 @@ mod tests {
         record_call_in(&root, &row("zzz", Some(&old.digest), None)).unwrap();
         record_call_in(&root, &row("aaa", Some(&new.digest), None)).unwrap();
         let one = CaptureConfig {
+            inline_max_bytes: None,
             max_bytes: None,
             max_records: Some(1),
         };
@@ -2528,6 +2595,7 @@ mod tests {
         let root = scratch_store("bound-dedup");
         let stored = store_in(&root, Stream::Response, b"same").unwrap();
         let one = CaptureConfig {
+            inline_max_bytes: None,
             max_bytes: None,
             max_records: Some(1),
         };
