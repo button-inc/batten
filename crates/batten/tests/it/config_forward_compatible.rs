@@ -76,7 +76,7 @@ fn repo(name: &str, body: &str) -> PathBuf {
 fn adjudicate(dir: &Path) -> (Option<i32>, String, String) {
     let out = run_with_stdin(
         dir,
-        &["hook", "--harness", "claude-code"],
+        &["adjudicate", "--harness", "claude-code"],
         r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"rm /"}}"#,
     );
     (
@@ -239,9 +239,60 @@ fn a_key_under_a_plain_section_drops_nothing() {
     );
     let (code, _, stderr) = adjudicate(&dir);
     assert_eq!(code, Some(1), "a top-level table's key is still a refusal");
+    // NAMING THE CONFIG IS THE ANTI-VACUITY HALF. This case asserted only the
+    // exit code, and passed for a year's worth of the wrong reason in review:
+    // the tier invoked a verb that had been renamed, so clap's `unrecognized
+    // subcommand` was the exit 1 being read as a config refusal.
+    assert!(
+        stderr.contains("invalid config"),
+        "exit 1 must be the CONFIG refusing, not the CLI: {stderr}"
+    );
     assert!(
         !stderr.contains("unresolved row"),
         "no row may be dropped for a fault that is not in one: {stderr}"
+    );
+}
+
+/// A HEADER-SHAPED LINE INSIDE A MULTI-LINE STRING IS NOT A HEADER.
+///
+/// The line scan that finds a row's boundaries read raw lines, so a `[[rule]]`
+/// written inside a `reason = """…"""` was taken for a section boundary: the
+/// prune blanked from the wrong offset and the refusal quoted a fabricated
+/// `invalid multi-line basic string` at a line the author's file does not have.
+/// This repository's own `batten.toml` carries 363 multi-line `reason` strings,
+/// so it is the common shape rather than an exotic one.
+///
+/// The good row must still DECIDE, which is what makes this more than a
+/// no-crash case: a fix that simply refused the file would satisfy an assertion
+/// about the error text and reinstate the fail-open this change removes.
+#[test]
+fn a_header_shaped_line_inside_a_multi_line_string_is_not_a_boundary() {
+    let quoted = r#"
+[[rule]]
+id = "quotes-a-header"
+kind = "shape"
+scope = "mediated_call"
+pattern = "nevermatches /"
+severity = "deny"
+reason = """
+A row is spelled like this:
+[[rule]]
+and that line is prose, not a section.
+"""
+"#;
+    let dir = repo(
+        "config-forward-multiline",
+        &format!("{GOOD}{quoted}{FROM_A_NEWER_SCHEMA}"),
+    );
+    let (code, stdout, stderr) = adjudicate(&dir);
+    assert_eq!(code, Some(0), "the hook answered: {stdout} {stderr}");
+    assert!(
+        stdout.contains(r#""permissionDecision":"deny""#) && stdout.contains("good-row"),
+        "the good row must still decide beside a quoted header: {stdout}"
+    );
+    assert!(
+        !stderr.contains("multi-line basic string"),
+        "the prune must not manufacture a lexing error: {stderr}"
     );
 }
 

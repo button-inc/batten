@@ -13206,6 +13206,13 @@ fn announce_config(mode: Mode, err: &mut dyn Write, config: &resolve::Resolved) 
     if config.authority == config::Authority::Absent {
         output::message(mode, Verbosity::Normal, err, config::DEFAULTS_NOTE)?;
     }
+    // EVERY RULE-RUNNING VERB SAYS WHICH GATES ARE OFF, not just `config show`
+    // (CLOUD-1428). `Resolved::unresolvable` was written by `assemble` and read
+    // nowhere, so `check` and `enforce` reported clean over a dropped row —
+    // which is the silence this whole change exists to remove, reintroduced one
+    // layer along. Review caught it. This is the one place both verbs already
+    // pass through with `err` in hand.
+    report_unresolvable(&config.unresolvable, err)?;
     announce_degrade(mode, err, config.base.as_ref())
 }
 

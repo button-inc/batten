@@ -215,9 +215,14 @@ intercepted() {
 	grep -q "^Issuer:.*O = ${INTERCEPT_ORG}" "$1" 2>/dev/null
 }
 
-# `$4`, when non-empty, sends NO credential and asks for no API version.
+# `$4`, when non-empty, sends NO credential. The `Accept` and
+# `X-GitHub-Api-Version` headers still travel, because the web host ignores both
+# and a route that varied more than it needs to is a second request shape to
+# reason about. (This comment claimed the version header was dropped too; it was
+# never dropped, and review caught the description rather than the code.)
 #
-# The web host needs none, and sending one there is worse than useless: a
+# The credential is what must go. Sending one to the web host is worse than
+# useless: a
 # placeholder token an intercepting proxy exported answers `401` at github.com
 # for a URL that would have served the asset anonymously. So the fallback route
 # is anonymous by construction rather than by luck.
@@ -358,7 +363,8 @@ resolve_via_api() {
 	fi
 	api_get "$rel_url" "application/vnd.github+json" "$tmp/release.json" || return 1
 
-	flatten "$tmp/release.json" >"$tmp/release.line"
+	flatten "$tmp/release.json" >"$tmp/release.line" ||
+		die 2 "could not read the release payload this machine just downloaded."
 	tag=$(json_string "$tmp/release.line" tag_name)
 	[ -n "$tag" ] ||
 		die 2 "no tag_name in the release payload — the API answered with something this script cannot read."
@@ -369,7 +375,8 @@ resolve_via_api() {
 	# does not follow it there. The second filter keeps a chunk that is actually
 	# an asset, so a release body merely mentioning a filename cannot be read as
 	# one.
-	awk '{ gsub(/}[ \t]*,[ \t]*[{]/, "}\n{"); print }' "$tmp/release.line" >"$tmp/assets"
+	awk '{ gsub(/}[ \t]*,[ \t]*[{]/, "}\n{"); print }' "$tmp/release.line" >"$tmp/assets" ||
+		die 2 "could not split the release payload's asset array on this machine."
 	line=$(grep -F "\"$asset\"" "$tmp/assets" | grep -F '/releases/assets/' | head -n 1 || true)
 	[ -n "$line" ] ||
 		die 1 "release $tag carries no asset named $asset. Re-run release-artifacts.yml against that tag; uploads are idempotent."
@@ -504,6 +511,13 @@ main() {
 	# An unreadable release is "could not look" (2), never "this release is
 	# broken" (1): a network blip and an unauthorized token are both environment,
 	# and reporting them as a bad release points the reader at the wrong thing.
+	# BOTH RESOLVERS GUARD THEIR OWN BODIES, because calling one as a condition
+	# SUSPENDS `set -e` inside it — and so does `f || x=$?`, which is why the
+	# first attempt at this fix was no fix. A local fault (`flatten` unable to
+	# write, `awk` missing) would otherwise stop aborting and fall through to
+	# the "release carries no asset" refusal: exit 1 blaming the release for a
+	# problem on this machine, where 2 (could not look) is the honest answer.
+	# The remedy is `|| die 2` on every internal command, never a call shape.
 	if ! resolve_via_api; then
 		[ -n "$WEB_FALLBACK" ] ||
 			die 2 "cannot read the release list from $REPO at $API. If you are being rate-limited, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN."

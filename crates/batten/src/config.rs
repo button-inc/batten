@@ -1647,6 +1647,22 @@ fn validate_sections(config: &Config) -> Result<()> {
 /// silence, so `config_skew.rs` asserts the wording rather than trusting it.
 const UNKNOWN_KEY: [&str; 2] = ["unknown field", "unknown variant"];
 
+/// Whether a rendered parse error is one of the unknown-key shapes.
+///
+/// Named rather than inlined so the `//MUTANT` rows below can anchor on a line
+/// carrying no `|`: a mutation row is `id|script|case`, split on `|`, so a
+/// closure in the anchor yields five fields and the declaration can only ever
+/// report `malformed-row`. Both rows here did exactly that until it was caught
+/// in review.
+///
+/// Declared ABOVE `config_error`'s doc block rather than between it and the
+/// function: extracting it into the gap orphaned that whole block onto this
+/// helper and left `config_error` — the function all of it describes —
+/// undocumented, which review caught.
+fn names_an_unknown_key(rendered: &str) -> bool {
+    UNKNOWN_KEY.iter().any(|shape| rendered.contains(shape))
+}
+
 /// Report a config parse failure, naming a version skew where one is possible.
 ///
 /// # The defect (CLOUD-1449), measured twice in one session
@@ -1677,17 +1693,6 @@ const UNKNOWN_KEY: [&str; 2] = ["unknown field", "unknown variant"];
 ///
 /// Pointer-only (rule 4): the note adds a version and a task name. Every byte of
 /// file content in the output is the parser's own error, unchanged.
-/// Whether a rendered parse error is one of the unknown-key shapes.
-///
-/// Named rather than inlined so the `//MUTANT` rows below can anchor on a line
-/// carrying no `|`: a mutation row is `id|script|case`, split on `|`, so a
-/// closure in the anchor yields five fields and the declaration can only ever
-/// report `malformed-row`. Both rows here did exactly that until it was caught
-/// in review.
-fn names_an_unknown_key(rendered: &str) -> bool {
-    UNKNOWN_KEY.iter().any(|shape| rendered.contains(shape))
-}
-
 //MUTANT-SUITE crates/batten/tests/it/config_skew.rs
 //MUTANT skew-reads-as-malformed|s@    if !names_an_unknown_key(&rendered) {@    if true {@|an_unknown_key_names_the_rebuild
 //MUTANT every-parse-error-blames-skew|s@    if !names_an_unknown_key(&rendered) {@    if false {@|a_malformed_config_does_not_mention_a_rebuild
@@ -1814,13 +1819,65 @@ fn header_of(line: &str) -> Option<Header<'_>> {
     (!name.is_empty()).then_some(Header::Table(name))
 }
 
+/// Advance the multi-line-string state across one line.
+///
+/// `open` carries the delimiter a previous line left unclosed — `"` for `"""`,
+/// `'` for `'''` — and is updated in place.
+fn scan_delimiters(line: &str, open: &mut Option<char>) {
+    let bytes = line.as_bytes();
+    let mut at = 0;
+    while at + 3 <= bytes.len() {
+        let found = if &bytes[at..at + 3] == b"\"\"\"" {
+            Some('"')
+        } else if &bytes[at..at + 3] == b"'''" {
+            Some('\'')
+        } else {
+            None
+        };
+        match (found, *open) {
+            (Some(delimiter), None) => {
+                *open = Some(delimiter);
+                at += 3;
+            }
+            (Some(delimiter), Some(current)) if delimiter == current => {
+                *open = None;
+                at += 3;
+            }
+            _ => at += 1,
+        }
+    }
+}
+
 /// Every header in `text`, as `(byte offset of its line, header)`.
+///
+/// **A LINE INSIDE A MULTI-LINE STRING IS NOT A HEADER**, and reading it as one
+/// is the defect review caught here. A `reason = """…"""` whose body contains a
+/// line spelled `[[rule]]` made this treat that line as a section boundary: the
+/// prune then blanked from the wrong offset, corrupting the document and
+/// emitting a fabricated `invalid multi-line basic string` at a line the
+/// author's file does not have. `batten.toml` in this repository carries 363
+/// multi-line `reason` strings, so the case is the common one rather than an
+/// exotic input.
+///
+/// **This lexes ONE thing — where a line begins — and never a value.** That is
+/// what keeps it from being the second authority `.claude/rules/policy-modules.md`
+/// refuses: no key, no value and no type is read here; `toml::from_str` remains
+/// the only thing that interprets the document. The bound is stated rather than
+/// hidden: an unbalanced `"""` inside a `#` comment or inside a single-line
+/// string would desynchronise this, and `prune_unresolvable`'s re-parse guard is
+/// what makes that degrade to refusing the file rather than to mangling it.
 fn headers(text: &str) -> impl Iterator<Item = (usize, Header<'_>)> {
     let base = text.as_ptr() as usize;
+    let mut open: Option<char> = None;
     text.lines().filter_map(move |line| {
         // `lines()` yields subslices of `text`, so the offset is exact and no
         // second scan can disagree with it.
         let at = line.as_ptr() as usize - base;
+        let inside = open.is_some();
+        scan_delimiters(line, &mut open);
+        if inside {
+            return None;
+        }
         header_of(line).map(|header| (at, header))
     })
 }
@@ -1982,6 +2039,17 @@ fn prune_unresolvable(source: &str) -> (String, Vec<Unresolvable>) {
         }
         let id = row_id(&source[at..end]);
         blank(&mut text, at, end);
+        // A PRUNE MAY NEVER PRODUCE A DOCUMENT THE PARSER REJECTS FOR A NEW
+        // REASON, and this guard holds that however wrong the line scan above
+        // is. Blanking a range that was not a whole row leaves TOML that no
+        // longer lexes, and the refusal then quotes a line the author's file
+        // does not have — measured in review as a fabricated `invalid
+        // multi-line basic string`. Degrading to the untouched source means the
+        // file is refused carrying its OWN parse error, which is exactly the
+        // behaviour before this change: safe, and honest about what was read.
+        if toml::from_str::<toml::Table>(&text).is_err() {
+            return (source.to_owned(), Vec::new());
+        }
         dropped.push(Unresolvable { section, id, index });
     }
     (text, dropped)
