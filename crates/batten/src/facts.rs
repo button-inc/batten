@@ -1877,6 +1877,19 @@ impl Fact {
                         "type": "object",
                         "additionalProperties": {"type": "array", "items": {"type": "string"}},
                     },
+                    // CLOUD-1484. The identity of the branch's whole CHANGE
+                    // against the base, so a module can ask whether THIS change
+                    // was attested without re-deriving one from the path lists —
+                    // which would be a second notion of `the same change`, free
+                    // to disagree with `landing`'s about a rebase. A MERGE-BASE
+                    // diff over COMMITTED bytes, where the lists beside it are a
+                    // tip diff over the working tree: the two disagree on a stale
+                    // or dirty branch, deliberately, because an attestation must
+                    // not move when somebody saves a file. `null` is
+                    // could-not-look AND covers the empty diff — a branch that
+                    // changed nothing has no identity, so a predicate must not
+                    // read it as `unattested`.
+                    "patch-id": {"type": ["string", "null"]},
                 },
                 "additionalProperties": false,
             }),

@@ -68,6 +68,24 @@ pub enum MintKey {
     /// Filed under the current branch, so every commit on it continues to serve
     /// the same record.
     Branch,
+    /// Filed under the identity of the branch's whole CHANGE against
+    /// [`Declared::key_base`] (CLOUD-1484).
+    ///
+    /// **The third keying, and it exists because neither of the two above can
+    /// key a receipt to the bytes a review actually read.** [`MintKey::Named`]
+    /// takes its subject from the tool result, which knows nothing about the
+    /// repository; [`MintKey::Branch`] takes a name that outlives every commit
+    /// under it, which is the staleness defeat
+    /// [`crate::receipt::branch_validity`] already had to be written to patch
+    /// around (CLOUD-516).
+    ///
+    /// The identity is [`crate::git::branch_patch_id`], so it moves when the
+    /// change moves and does NOT move when a rebase merely relocates it. Both
+    /// halves are load-bearing: without the first a receipt would outlive the
+    /// code it attests to, and without the second the landing loop would re-buy
+    /// the attested work on every lap, which is the shape that gets a gate
+    /// switched off rather than satisfied.
+    Delta,
 }
 
 /// Whether a mint replaces its record or appends to it.
@@ -109,6 +127,42 @@ pub struct Declared {
     /// The path whose value is the subject, for [`MintKey::Named`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_from: Option<String>,
+    /// The base ref the change is measured against, for [`MintKey::Delta`].
+    ///
+    /// Declared rather than defaulted: which ref a branch is *a change against*
+    /// is the consumer's fact, and an engine that assumed one would be naming a
+    /// branch in a repo-agnostic core (non-negotiable rule 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_base: Option<String>,
+    /// The path whose value must equal [`Declared::selects`] for this row to
+    /// mint at all (CLOUD-1484).
+    ///
+    /// # Why presence could not do this job
+    ///
+    /// [`Declared::requires`] asserts a path is present and non-null, which is
+    /// the right shape for a SUCCESS predicate and the wrong one for a
+    /// SELECTION. A harness that dispatches every one of its skills, agents or
+    /// commands through one tool name gives [`Declared::tool`] nothing to
+    /// discriminate on: the row would mint on every invocation of that tool and
+    /// the receipt would attest that *something* ran. That is a false green in
+    /// the one direction a dispatch gate exists to refuse, and no amount of
+    /// `requires` reaches it, because the field is present either way — it just
+    /// holds another value.
+    ///
+    /// **The shape is adopted, not invented.** [`crate::capture`] already
+    /// resolves a stored response by `key_at`/`key` through [`scalar`], the same
+    /// selector this uses, so a path spelled here means what it means there.
+    ///
+    /// Absent leaves the row judged exactly as it was before this column
+    /// existed: [`Declared::tool`] alone decides, which is every landed row's
+    /// behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selects_at: Option<String>,
+    /// The value [`Declared::selects_at`] must hold. Compared for EQUALITY,
+    /// never as a substring: a prefix match would let a longer name a consumer
+    /// never declared mint under a shorter one's row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selects: Option<String>,
     /// Paths that must be present and non-null in the result for anything to be
     /// written. **This is the success predicate** — see the module doc.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -324,6 +378,33 @@ pub(crate) fn scalar(value: &serde_json::Value, path: &str) -> Option<String> {
     }
 }
 
+/// Whether this result is the one the row selects (CLOUD-1484).
+///
+/// **A SELECTION, kept separate from [`satisfied`]'s SUCCESS test**, and the two
+/// must not be folded together even though both gate the same write. `requires`
+/// asks *did the call this row is about actually answer*; this asks *is this even
+/// the call this row is about*. Collapsing them would make a row that selects
+/// nothing indistinguishable from one whose call failed, and only the second of
+/// those is a reason to try again.
+///
+/// A row declaring no selector selects every result its `tool` matched, which is
+/// every landed row's behaviour.
+///
+/// **A path that does not resolve to a single scalar does NOT select.** The
+/// failure direction is deliberate: an unreadable field means the boundary cannot
+/// tell whether this is the declared call, and minting on a maybe is exactly the
+/// forgery this column was added to remove. A gate over the receipt then denies
+/// again with the same remedy, which is the safe direction and one the agent can
+/// see.
+#[must_use]
+pub fn selects(declared: &Declared, result: &serde_json::Value) -> bool {
+    let (Some(path), Some(expected)) = (declared.selects_at.as_deref(), declared.selects.as_deref())
+    else {
+        return true;
+    };
+    scalar(result, path).is_some_and(|found| found == expected)
+}
+
 /// Whether every required path resolved, which is this module's success test.
 #[must_use]
 pub fn satisfied(declared: &Declared, result: &serde_json::Value) -> bool {
@@ -503,6 +584,43 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
                 mint.name
             )));
         }
+        if mint.key == MintKey::Delta && mint.key_base.is_none() {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[mint]]` `{}` is keyed `delta` and declares no `key_base`, so nothing says \
+                 which base the change is measured against and no receipt could be filed",
+                mint.name
+            )));
+        }
+        // A `key_base` on a row keyed any other way is refused rather than
+        // ignored: an ignored declaration reads as configured and decides
+        // nothing, which is the inert-coverage shape this whole function exists
+        // to refuse.
+        if mint.key != MintKey::Delta && mint.key_base.is_some() {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[mint]]` `{}` declares a `key_base` and is not keyed `delta`, so the base \
+                 would be read by nothing",
+                mint.name
+            )));
+        }
+        // HALF A SELECTOR IS THE DANGEROUS HALF. `selects_at` alone would leave
+        // the row minting on every result its tool matched while LOOKING
+        // narrowed, which is the reading a reviewer takes from the column's
+        // presence; `selects` alone names a value nothing is compared to.
+        if mint.selects_at.is_some() != mint.selects.is_some() {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[mint]]` `{}` declares only one of `selects_at` and `selects`; a selector \
+                 with no value narrows nothing while reading as though it did",
+                mint.name
+            )));
+        }
+        if let Some(at) = mint.selects_at.as_deref()
+            && at.trim().is_empty()
+        {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[mint]]` `{}` declares an empty `selects_at`",
+                mint.name
+            )));
+        }
         if let Err(problem) = parse(&mint.body) {
             return Err(crate::error::UsageError::raise(format!(
                 "`[[mint]]` `{}` has an unreadable `body`: {problem}",
@@ -597,6 +715,9 @@ mod tests {
             tool: "get_issue".to_owned(),
             key: MintKey::Named,
             key_from: Some("id".to_owned()),
+            key_base: None,
+            selects_at: None,
+            selects: None,
             requires: vec!["id".to_owned()],
             mode: MintMode::Replace,
             body: "{id} {authority:ready}".to_owned(),

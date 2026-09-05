@@ -1248,6 +1248,76 @@ requires = ["hasNextPage", "issues[].id"]
 mode = "append"
 body = "{join:issues[].id}\nbase {git:origin/main}"
 
+# ─── THE CODE-REVIEW RECEIPT (CLOUD-1484) ───
+#
+# `code-review.<patch-id>`, replacing. What is attested is one thing and nothing
+# more: THE AGENT DISPATCHED THE DECLARED REVIEW OVER THIS EXACT CHANGE. Not that
+# the review was good, not what it found — those are judgements and non-negotiable
+# rule 3 forbids a gate deciding one, so the gate over this receipt refuses
+# ABSENCE, which is a comparison of two digests.
+#
+# WHY BATTEN DOES NOT DISPATCH IT. `review-dispatched` one family over has the
+# ENGINE spawn a reviewer, and that is what forced a runner, a readiness probe and
+# a prompt channel into a repo-agnostic core — a harness's CLI, one row from the
+# crate. Here the refusal names what the agent owes, the agent dispatches with its
+# own harness, and the boundary mints from the call it was already mediating.
+# Nothing about that harness is expressible in `crates/batten`: `tool` and
+# `selects` are strings this file supplies and the engine matches (rule 1).
+#
+# AND IT IS NOT CLOUD-1265's REFUTED SHAPE. `tool-verdict`'s producer-writes-
+# outside store went measured dead because somebody had to remember to run the
+# producer. Nobody has to remember here — the hook sees the call.
+#
+# `selects_at`/`selects` ARE THE LOAD-BEARING PAIR AND `requires` COULD NOT DO IT.
+# Every skill this harness dispatches arrives under ONE tool name, so `tool` alone
+# discriminates nothing: without the selector this row mints on every skill and
+# the receipt attests that *something* ran, which is a false green in the one
+# direction the gate exists to refuse. `requires` cannot reach it either — the
+# field is present whichever skill ran, it just holds another value.
+#
+# THE SELECTOR READS THE INPUT AND `requires` READS THE RESULT, which is the same
+# split one layer down: the input says which call this is, the result says whether
+# it answered.
+#
+# KEYED `delta`, so the receipt is stale by construction. `key_base` is
+# `origin/main` because that is what this repository lands onto; the identity is
+# a MERGE-BASE diff, so `land`'s per-lap rebase does not re-buy the review, and
+# any commit that moves code does. The boundary refuses to mint at all while the
+# tree is dirty — a receipt keyed to committed bytes must not be taken in a
+# session looking at something else.
+#
+# THE BODY CARRIES NO FINDING AND HAS NOWHERE TO PUT ONE. Two fields: the head
+# this was taken at, and the instant. Rule 4 holds structurally rather than by
+# anybody remembering to strip. Neither piece reads the RESULT, which is what
+# lets this row work at all — see below.
+#
+# `requires` IS EMPTY, AND THAT IS A MEASUREMENT RATHER THAN AN OVERSIGHT.
+# Measured 2026-09-05 on the live host: a skill dispatch answers with the bare
+# string `Launching skill: <name>`. That is not JSON, so there is no field in the
+# result to require, and a path declared here would resolve to nothing on every
+# call — the row would load clean, match its tool, and mint nothing, which is the
+# dead gate this repository keeps recording. The engine half is the same reading:
+# `record_mints` no longer gives up on a result carrying no JSON.
+#
+# SO THIS ATTESTS THE DISPATCH, NOT THE COMPLETION, and the gap is named rather
+# than papered over. The boundary can see that the review was asked for over these
+# exact bytes; it cannot see that the agent then did what the skill told it,
+# because the harness returns nothing that would say so. `review.rs` states the
+# nearer version of this — completion is the contract and the findings are a
+# bonus — and this is one notch weaker again. Tightening it needs a result-side
+# signal that does not exist today; until one does, what is checkable is that the
+# ask happened over this change and not over some earlier one.
+[[mint]]
+name = "code-review"
+tool = "Skill"
+selects_at = "skill"
+selects = "code-review"
+key = "delta"
+key_base = "origin/main"
+requires = []
+mode = "replace"
+body = "{git:HEAD} {now}"
+
 # ─── THE BOARD-WRITE RECORD (CLOUD-1051), replacing `board-write-record.sh` ───
 #
 # The sensor half of CLOUD-514: every row this branch put on the board, with the
@@ -5641,6 +5711,53 @@ prompt = "ready-pressure-test"
 runner = "batten-review-runner"
 version = "0"
 subject = "tracker-body"
+
+# CLOUD-1484's consumer: the branch's own CHANGE carries a code-review receipt,
+# or it does not land.
+#
+# THE SIBLING OF THE ROW ABOVE AND NOT A WIDENING OF IT. That one asks whether a
+# VENDORED prompt the engine spawned ran over a document; this asks whether a
+# review the AGENT dispatched ran over this branch's diff. Same question, opposite
+# routes, and they stay two rows because the route is what decides the failure
+# mode: a missing runner silences that one (measured — `batten-review-runner` is
+# on no PATH here, so `input.tree.review` is `null` and it has never refused
+# anything), where this one is silenced only by a missing receipt store, which is
+# what it refuses on.
+#
+# `delta_sources` IS THE CODE, and `base` is what the branch is a change against.
+# The module reads `code-changed` off the resulting delta, so a prose-only branch
+# owes nothing — the narrowing `review-dispatched` had to add after four `cli.rs`
+# cases went red for wanting to exercise other rules.
+#
+# `[[rule.minted]]` COSTS A DIRECTORY LISTING AND NO NETWORK. The receipt is
+# already on disk by the time this row is adjudicated, because the boundary wrote
+# it when the agent dispatched; nothing here spawns, fetches or asks a model.
+#
+# `max_age_days` IS BELT AND BRACES, not the staleness control. The KEY is: a
+# receipt is filed under the change's own identity, so a commit that moves code
+# files the next review under a name this row does not look up. The age bound
+# catches only the case the key cannot — a change re-created byte-identically
+# long after it was reviewed.
+#
+# ABSENT IS COULD-NOT-LOOK ON EVERY FRESH CLONE, which is every CI runner until
+# CLOUD-877 gives the receipt a portable form. That is stated here rather than
+# discovered: today this gate is enforced where `land` runs, and CI is honestly
+# silent rather than falsely green.
+[[rule]]
+id = "code-review-dispatched"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["crates/**", "policy/**", "mise-tasks/**", "batten.toml"]
+module = "policy/code-review-dispatched.rego"
+severity = "deny"
+
+[[rule.minted]]
+id = "code-review"
+mint = "code-review"
+field = 0
+recency = 1
+max_age_days = 30
 
 # A third-party validator's verdict for a file it read (CLOUD-1171, the
 # adjudication half of `pkl-check`, `renovate-config-validator` and
@@ -11013,6 +11130,47 @@ target = "check the declared runner is installed and on PATH — a dispatch that
 # What remains has command routes and needs no hatch: the runner is here and was
 # asked, and left no record. That is the branch's own conduct, and the two routes
 # above name what to do about it.
+
+# CLOUD-1484. The branch's own change carries no code-review receipt.
+#
+# A SEPARATE CLASS FROM `prompt run never` ABOVE, and the split is the remedy
+# rather than the subject. Both refuse the absence of a review keyed to bytes; the
+# routes differ entirely, because that one is answered by an engine-spawned
+# runner being present and this one is answered by the AGENT dispatching. Folding
+# them would give a reader one class with two contradictory remedies, and the
+# whole point of a token is that a reader can look it up.
+#
+# THE SUBJECT IS `patch`, NOT `review`, for the reason `prompt run never` gives
+# one row up and which applies with more force here: `review answer missing` and
+# `review read absent` are about the FORGE's review of a pull request, and a
+# reader meeting a FOURTH `review …` class would have to look up which kind it
+# meant. `patch` is glossed *a change identified by its content*, which is exactly
+# what this is keyed by. And the action is `read` rather than `grade`: what is
+# attested is that the change was looked at, never that a verdict was assigned to
+# it — a class naming a verdict would describe a thing rule 3 forbids this gate
+# from reading.
+[[verdict]]
+id = "patch read never"
+gloss = "this branch changed code and no code review has been dispatched over the change"
+class = """
+Refuses ABSENCE and nothing else. A receipt is filed under the identity of the \
+branch's whole change, so a review taken over other bytes lives under another \
+name and does not answer — staleness is the key rather than a comparison \
+somebody must remember to make. What the review CONCLUDED is never read, and the \
+receipt has no field it could occupy: refusing on a finding would be a model \
+verdict wearing an exit code, which non-negotiable rule 3 forbids. A rebase does \
+not re-owe the review, because the identity is a merge-base diff. A prose-only \
+branch owes nothing, and a change with no identity — an empty diff — is not a \
+branch with an unreviewed change but one with nothing to review. Absent on a \
+fresh clone is could-not-look, not a refusal: the receipt store dies with the \
+container, so this speaks where the branch is worked and is honestly silent in \
+CI until that store has a portable form.
+"""
+
+[[verdict.route]]
+id = "verb run first"
+kind = "command"
+target = "/code-review"
 
 [[verdict]]
 id = "review answer missing"
