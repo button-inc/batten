@@ -312,8 +312,11 @@ uv = "0.12.5"                                       # fast Rust installer the pi
 # which is what CI's `mise install --locked` demands. Without that row EVERY job
 # using mise-action dies on `pipx:ntia-conformance-checker@5.0.3 is not in the
 # lockfile` — not just the job that installs it — because the check is over the
-# whole file. `lock-complete` passes either way, so nothing local catches it
-# (CLOUD-611).
+# whole file. `lock-complete` CATCHES IT NOW (CLOUD-611): its presence clause
+# stopped inheriting the url question's backend exemption, so a `[tools]` key
+# with no `mise.lock` row is a finding on every backend. This comment used to end
+# "passes either way, so nothing local catches it", which was true and was the
+# blind spot.
 #
 # WHAT THAT COSTS, stated because it is strictly weaker than every other pin
 # here: `mise-tasks/lock-complete.sh` exempts the `pipx:` backend by design (those
