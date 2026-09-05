@@ -361,6 +361,9 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 err,
                 policy::ModuleChecks::Run,
                 facts::Surface::Check,
+                // The verb scans: it is the whole point of running it, and the
+                // caller is a human or the drain, neither on a per-call budget.
+                true,
             ),
             StateCommand::Migrate => run_state_migrate(err),
             StateCommand::Settle {
@@ -952,6 +955,18 @@ fn run_defects_add(
 /// lineage edge and advances **its own** fold position
 /// ([`session::HOLDER_RECORD`]) — never a drain's, since this verb folds shards
 /// whether or not anything reached an agent (CLOUD-83).
+/// The environment marker `record_state` sets on the drain it spawns.
+///
+/// A drain and the verb do the same work and must not do it at the same time,
+/// but they lose the race differently: a drain nobody is waiting on exits
+/// quietly, where a verb a human invoked would be lying if it printed a clean
+/// record it did not write.
+const DRAIN_MARKER: &str = "BATTEN_STATE_DRAIN";
+
+/// The lock file that serialises store writes, under `$GIT_DIR` beside the
+/// store it guards.
+const DRAIN_LOCK: &str = "batten-state-record.lock";
+
 fn run_state_record(
     overrides: &Overrides,
     mode: Mode,
@@ -963,8 +978,43 @@ fn run_state_record(
     // the mediated recorder is `Surface::Hook`, where a fact classed
     // `Surface::Check` may not resolve.
     surface: facts::Surface,
+    // WHETHER TO SCAN THE TREE, which is this function's whole cost. False on the
+    // mediated path, where the transcript detectors below are what the turn's own
+    // nudge reads and the scan is the drain's to finish.
+    scan_tree: bool,
 ) -> Result<ExitCode> {
     let repo = git::repo_root(Path::new("."))?;
+    // ONE WRITER AT A TIME (CLOUD-1480). `findings::record` is an unlocked
+    // read/modify/write and `journal`'s shards declare exactly one writer, so
+    // two records in flight lose dispositions and can interleave a `writeln!`
+    // into JSONL that `read_shards` drops. A record takes ~118s on a large tree,
+    // which is long enough that consecutive turns overlap by default.
+    //
+    // `fs4` advisory, for the reason `.claude/rules/rust.md` gives for every
+    // other lock here: the kernel releases it when the holder dies, so a drain
+    // killed with its container leaves the next one a lock it can take rather
+    // than one nobody can release.
+    //
+    // THE TWO CALLERS LOSE THE RACE DIFFERENTLY, which is what the marker is
+    // for. A drain nobody awaits exits clean — the work is already being done by
+    // whoever holds the lock. The VERB waits, because a human ran it and a
+    // record it did not write must not be reported as one.
+    let lock_path = git::git_dir(&repo)?.join(DRAIN_LOCK);
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)?;
+    if std::env::var_os(DRAIN_MARKER).is_some() {
+        match fs4::FileExt::try_lock(&lock) {
+            Ok(()) => {}
+            // Another record holds it and is doing this work. Clean exit: the
+            // drain is not the thing anyone reads a verdict from.
+            Err(_) => return Ok(ExitCode::Success),
+        }
+    } else {
+        fs4::FileExt::lock(&lock)?;
+    }
     // **The ref comes from HERE, not from `repo`.** `repo_root` answers with the
     // MAIN worktree's root — which is exactly what makes every linked worktree
     // share one store — so asking it for the branch would report the main
@@ -988,18 +1038,36 @@ fn run_state_record(
     // included (CLOUD-97 never once evaluated in this repository for exactly
     // that reason). Withholding is honest here because `record` below folds
     // `not_evaluated` into the store, where a withheld rule's findings HOLD.
-    let scan = rules::run_recorded(
-        &config.rules,
-        &config.provisions,
-        policy::Vocabulary {
-            patterns: &config.patterns,
-            verdicts: &config.verdicts,
-            recorders: &config.recorders,
-        },
-        Path::new("."),
-        checks,
-        surface,
-    )?;
+    // THE TREE SCAN IS THE EXPENSIVE HALF AND THE ONLY ONE (CLOUD-1480). Every
+    // other line of this function is a store open, a journal open and the
+    // transcript detectors; `run_recorded` is the ~118s.
+    //
+    // So the mediated caller skips it and keeps the rest, which is what preserves
+    // `the_first_turn_on_a_fresh_claim_still_speaks`: `completion` is a
+    // TRANSCRIPT detector, so the unlanded verdict this turn's nudge reads is
+    // minted below, in this process, before the hook returns. Detaching the whole
+    // function broke that contract, and the commit that did it called the breakage
+    // "the deliberate cost" without running the suite that had already decided
+    // otherwise — three cases, one of them named for the contract.
+    //
+    // The DRAIN still runs the scan, so nothing is lost: the two halves differ in
+    // when they land, not in whether.
+    let scan = if scan_tree {
+        rules::run_recorded(
+            &config.rules,
+            &config.provisions,
+            policy::Vocabulary {
+                patterns: &config.patterns,
+                verdicts: &config.verdicts,
+                recorders: &config.recorders,
+            },
+            Path::new("."),
+            checks,
+            surface,
+        )?
+    } else {
+        rules::Scan::default()
+    };
     if !scan.not_evaluated.is_empty() {
         // Never silent: a rule that did not look must say so, or a clean-looking
         // record is the false green. The COUNT carries that on the default rung
@@ -9985,10 +10053,48 @@ const UNLANDED_BYPASS: &str = "BATTEN_UNLANDED_CHECK_BYPASS";
 /// exit code on a one-turn-stale store would be a different and much worse
 /// trade, which is why this indirection stays local to the advisory path.
 ///
-/// The child re-reads config from the environment, which is where a mediated
-/// call's overrides live; no flag is dropped, because the hook is invoked with
-/// none.
-fn record_state(_overrides: &Overrides) {
+/// **The child is handed this call's overrides, and the sentence that stood here
+/// claiming otherwise was wrong** (CLOUD-1480). It read "no flag is dropped,
+/// because the hook is invoked with none" — true of how the harness invokes the
+/// hook, and not a property of this function, which any caller may reach with
+/// `--config-from` or `--strictness` set. Under `--config-from` a child that
+/// re-resolved from the working tree would judge the branch by the policy the
+/// branch itself declares, which is the exact weakening that flag exists to
+/// prevent, and it would do so silently.
+///
+/// **One drain at a time, by advisory lock in the child.** A record takes ~118s
+/// on a large tree, so turns ending inside that window would otherwise overlap,
+/// and `findings::record` is an unlocked read/modify/write over a store whose
+/// journal shards declare exactly one writer. Two appenders interleave inside a
+/// single `writeln!` — O_APPEND is not one syscall for a multi-write format — so
+/// the failure is malformed JSONL that `read_shards` silently drops, plus lost
+/// dispositions where a settled finding reopens. The lock lives in the CHILD
+/// because the parent must not wait to find out whether it won.
+fn record_state(overrides: &Overrides) {
+    // THE TRANSCRIPT DETECTORS RUN HERE, IN THIS PROCESS, BEFORE THE RETURN.
+    //
+    // `completion` is one of them, and `unlanded_pointer` reads its finding a few
+    // lines later to decide this turn's nudge. Detaching the whole record made
+    // that read see the PREVIOUS turn's store, so a fresh claim's first Stop said
+    // nothing — which `stop_posture.rs` had already decided against in a case
+    // named `the_first_turn_on_a_fresh_claim_still_speaks`.
+    //
+    // Cheap because `scan_tree` is false: no tree walk, no rule evaluation, no
+    // `Cost::Effect` fact. What is left is a store open, a journal open and a
+    // transcript read — the half whose answer this turn actually needs.
+    //
+    // Errors are swallowed for the reason the spawn below is silent: this is the
+    // advisory path, and a boundary that cannot mint its own record must not turn
+    // that into a verdict about the turn.
+    let mut sink = std::io::sink();
+    let _ = run_state_record(
+        overrides,
+        Mode::default(),
+        &mut sink,
+        policy::ModuleChecks::SkipOnHotPath,
+        facts::Surface::Hook,
+        false,
+    );
     let Ok(exe) = std::env::current_exe() else {
         // Could-not-look: no binary path, no record. Silent by design — this is
         // the advisory path, and a boundary that cannot start its own drain must
@@ -10005,6 +10111,30 @@ fn record_state(_overrides: &Overrides) {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
+    // THE OVERRIDES THIS CALL WAS MADE UNDER, forwarded as the flags they came
+    // from. Reconstructed rather than serialised: the child parses the same clap
+    // surface, so a flag is the one spelling both ends already agree on.
+    if let Some(strictness) = overrides.strictness {
+        // clap's own token for the variant, never a second spelling: the child
+        // parses this back through the same `ValueEnum`, so the two ends cannot
+        // disagree about what `strict` means.
+        if let Some(value) = clap::ValueEnum::to_possible_value(&strictness) {
+            builder.args(["--strictness", value.get_name()]);
+        }
+    }
+    if overrides.fail_on_warning {
+        builder.arg("--fail-on-warning");
+    }
+    if let Some(reference) = overrides.config_from.as_deref() {
+        builder.args(["--config-from", reference]);
+    }
+    if let Some(dir) = overrides.config_in.as_deref() {
+        builder.args(["--config-in", dir]);
+    }
+    // The marker the child reads to know it is a drain rather than the verb: a
+    // drain that loses the race exits quietly, where the verb a human ran must
+    // wait its turn and do the work.
+    builder.env(DRAIN_MARKER, "1");
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;

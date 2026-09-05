@@ -6484,6 +6484,7 @@ fn run(
         records: &records,
         records_blocked: &records_blocked,
         git: &git,
+        surface,
         symbols: &symbols,
         review: &review,
         state: state.as_ref(),
@@ -6529,7 +6530,27 @@ fn run(
 /// `Look::IsNot` is deliberately NOT withheld. That arm means the question was
 /// asked and the answer is no — a real census with no sites — and a rule is
 /// entitled to decide on it. Only `CouldNotLook` is the could-not-ask.
-fn unresolved_declared_fact(rule: &Rule, inputs: &RunInputs<'_>) -> Option<&'static str> {
+fn unresolved_declared_fact(
+    rule: &Rule,
+    inputs: &RunInputs<'_>,
+    surface: crate::facts::Surface,
+) -> Option<&'static str> {
+    // THE MEDIATED SURFACE ONLY, and scoping it was the correction (CLOUD-1480).
+    //
+    // Unscoped, this withheld on `check` and `enforce` too — and there
+    // could-not-look means the ANALYSER is unreachable, or the tree does not
+    // compile, which is precisely when `spawn-adapters`' `symbol count absent`
+    // verdict is written to refuse. Skipping instead of denying makes breaking
+    // the build switch the gate off: a fail-open EXIT-CODE FLIP on the
+    // enforcement surface, which is strictly worse than the spurious deny this
+    // clause was added to stop.
+    //
+    // On the hook the same arm is honest, because there the fact is barred by
+    // the SURFACE rather than missing from the environment — nobody looked, so
+    // no verdict about the tree is available to give.
+    if !matches!(surface, crate::facts::Surface::Hook) {
+        return None;
+    }
     if rule.symbols && matches!(inputs.symbols, crate::facts::Look::CouldNotLook) {
         return Some("symbols");
     }
@@ -6599,7 +6620,7 @@ fn evaluate_rules(
         // answers could-not-look wherever the analyser is absent, so every
         // checkout without the delegated toolchain was taking that same spurious
         // deny — a verdict about the OPERATOR wearing a verdict about the tree.
-        if let Some(fact) = unresolved_declared_fact(rule, inputs) {
+        if let Some(fact) = unresolved_declared_fact(rule, inputs, inputs.surface) {
             scan.not_evaluated
                 .insert(rule.id.clone(), NotObserved::RuleSkipped);
             scan.unmet.insert(rule.id.clone(), fact.to_owned());
@@ -6902,6 +6923,14 @@ struct RunInputs<'a> {
     records_blocked: &'a BTreeMap<String, String>,
     /// The git facts this rule set declared (CLOUD-907).
     git: &'a crate::git::GitFacts,
+    /// WHICH SURFACE THIS RUN IS ON (CLOUD-1480), beside the two facts whose
+    /// resolvability it decides.
+    ///
+    /// Here rather than as a parameter to `evaluate_rules`, because the question
+    /// it answers — may this fact be resolved at all — is about the same values
+    /// this bag already carries, and a run-wide input passed separately is the
+    /// one that drifts out of step with them.
+    surface: crate::facts::Surface,
     /// The symbol census, iff this rule set declared it (CLOUD-760).
     symbols: &'a crate::facts::Look<crate::symbols::Resolved>,
     review: &'a crate::facts::Look<std::collections::BTreeMap<String, crate::review::Record>>,
@@ -13222,6 +13251,12 @@ mod tests {
                 provisions: &[],
                 files,
                 scoped: files,
+                // The TREE surface, which is what these unit cases exercise: the
+                // mediated arm is driven through the compiled binary in
+                // `review_dispatched.rs`, because a `with input as`-shaped
+                // fabrication here could not tell a barred fact from an absent
+                // one.
+                surface: crate::facts::Surface::Check,
                 derived: &self.derived,
                 documents: &self.documents,
                 external: &self.external,
