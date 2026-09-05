@@ -668,6 +668,66 @@ fn the_keys_cloud_721_added_reach_the_lint_with_their_own_pointers() {
 }
 
 #[test]
+fn an_arriving_narrowing_key_is_clean_while_the_same_row_widened_is_not() {
+    // CLOUD-1394, over the compiled binary against a REAL base ref, because the
+    // acceptance turns on the engine building the comparison rather than on the
+    // module's own view of it. Both arms live in one case on purpose: an
+    // assertion that the narrowing is clean passes trivially under a gate that
+    // stopped firing at all, which is the failure this replaces rather than a
+    // variant of it.
+    let row = |extra: &str| {
+        format!(
+            "version = 1\n\n[[rule]]\nid = \"ready-receipt\"\nkind = \"receipt\"\n\
+             scope = \"mediated_call\"\nseverity = \"deny\"\npattern = \"gh pr ready\"\n\
+             checks = [\"verify\"]\nkey = \"head\"\nreason = \"run verify\"\n{extra}"
+        )
+    };
+
+    // The narrowing: a bound arrives where the base declared none, so a receipt
+    // this row already accepted can only stop qualifying by aging out.
+    let narrowed = pr_fixture("lint-1394-narrowed", &row(""), &row("max_age = 3600\n"));
+    let output = lint(&narrowed, &["--config-from", "origin/main"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "an arriving `max_age` is not a weakening; got: {}",
+        stdout(&output)
+    );
+    assert_eq!(stdout(&output), "config-lint: 0 smell(s)\n");
+
+    // The mirror, same row and same column: raising the bound admits receipts
+    // the base refused, and nothing here ranks that.
+    let widened = pr_fixture(
+        "lint-1394-widened",
+        &row("max_age = 3600\n"),
+        &row("max_age = 86400\n"),
+    );
+    let output = lint(&widened, &["--config-from", "origin/main"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        stdout(&output),
+        "batten.toml:rule[ready-receipt].max_age rule-predicate-changed\n\
+         config-lint: 1 smell(s)\n"
+    );
+
+    // And the counterexample the ranking is DECLARED rather than inferred for:
+    // `bypass_env` is optional, absent before and absence-preserving, and it
+    // makes the row suppressible (`batten.toml:415-430`).
+    let suppressible = pr_fixture(
+        "lint-1394-bypass",
+        &row(""),
+        &row("bypass_env = \"BATTEN_READY_BYPASS\"\n"),
+    );
+    let output = lint(&suppressible, &["--config-from", "origin/main"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        stdout(&output),
+        "batten.toml:rule[ready-receipt].bypass_env rule-predicate-changed\n\
+         config-lint: 1 smell(s)\n"
+    );
+}
+
+#[test]
 fn the_reverse_edit_of_those_keys_is_clean() {
     // The direction half, at the same boundary the verdict is taken: a widened
     // glob, an expiry pulled in, and a verb row ADDED lower no bar.

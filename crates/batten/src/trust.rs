@@ -2627,14 +2627,63 @@ const RULE_NON_PREDICATE: &[(&str, &str)] = &[
     ),
 ];
 
+/// Rule columns and nested keys whose ARRIVAL can only add refusals, each with
+/// why (CLOUD-1394).
+///
+/// **Declared, never inferred, and the counterexamples are why.** The tempting
+/// structural rule — *an optional key whose absence preserved the prior
+/// behaviour can only narrow* — is false of this repository three times over,
+/// and each one is already written down. [`Rule::bypass_env`] arrives on a row
+/// and makes it SUPPRESSIBLE (`batten.toml:415-430` says the smell is correct
+/// "in its own terms, since the key makes a row suppressible").
+/// [`Rule::key_shape`] arrives and resolves a non-matching subject to absent,
+/// which its own doc calls could-not-look and therefore allow — "it narrows
+/// what counts as a subject; it never denies", which is a narrower PREDICATE
+/// and a weaker GATE. [`Rule::when_present`] narrows a `mediated_call` row to
+/// the calls that named a projection, so the calls it stops gating are no
+/// longer refused.
+///
+/// So the ranking is per-key and it is written here with its argument, exactly
+/// as [`RULE_NON_PREDICATE`] writes its exemptions. Everything not named stays
+/// unrankable and keeps firing, which is the direction the gate has always been
+/// right about: a partial ranking that read "unrankable" as "narrowing" would
+/// convert a false refusal into a false pass.
+const RULE_NARROWING_ON_ARRIVAL: &[(&str, &str)] = &[
+    (
+        "max_age",
+        "a receipt this row already accepted can only stop qualifying by aging \
+         out. Absent, existence is the verdict — the column's own words, \"no \
+         committed row changes meaning by this column arriving\" — so what \
+         arrives is a bound, never an admission",
+    ),
+    (
+        "requires_field",
+        "a receipt field that says the required value is satisfied and an absent \
+         one fails OPEN, so the column can only add the `Refuted` deny it \
+         introduces. Nothing this row accepted before is accepted less",
+    ),
+];
+
 /// Predicate columns of one rule that the working tree changed.
 ///
-/// **A change, never a ranking.** Whether a narrowed glob is weaker than the one
+/// **A change, and one ranking.** Whether a narrowed glob is weaker than the one
 /// it replaced is a judgement about two patterns, and this module does not make
 /// judgements. That the predicate moved at all is a byte comparison, and it is
 /// the fact that used to be reported nowhere: a rule whose glob matches nothing
 /// keeps its id and its severity, so the comparison called it unchanged while it
 /// gated nothing.
+///
+/// **The one exception is an ARRIVAL, and only a declared one** (CLOUD-1394).
+/// Where the base said nothing and the working tree fills in a key named by
+/// [`RULE_NARROWING_ON_ARRIVAL`], the change can only add refusals, and charging
+/// it the groomed `Weakens:` pair a loosening costs is a false refusal that the
+/// repository has twice paid by shaping the config around the gate instead
+/// (`batten.toml:925-933`, `:951-960`, both splitting a check into a new
+/// `receipt` row because a new row raises nothing). Every other difference —
+/// a changed value, a removed key, a resized list, an UNDECLARED key arriving —
+/// is unrankable and still fires. That asymmetry is deliberate: a ranking that
+/// read "unrankable" as "narrowing" would turn this gate's one false refusal
+/// into a false pass.
 ///
 /// Read off the rule's own serialization rather than a hand-kept column list,
 /// which would drift the next time [`Rule`] grows one. The tokens are digests:
@@ -2661,7 +2710,7 @@ fn rule_predicate_weakenings(base: &Rule, working: &Rule) -> Vec<Weakening> {
                 from.get(column).unwrap_or(&serde_json::Value::Null),
                 to.get(column).unwrap_or(&serde_json::Value::Null),
             );
-            (was != now).then(|| {
+            (was != now && !arrival_is_narrowing(column, was, now)).then(|| {
                 Weakening::new(
                     WeakeningKind::RulePredicateChanged,
                     format!("rule[{}].{column}", base.id),
@@ -2671,6 +2720,80 @@ fn rule_predicate_weakenings(base: &Rule, working: &Rule) -> Vec<Weakening> {
             })
         })
         .collect()
+}
+
+/// Whether the difference between two column values is a declared arrival.
+///
+/// Split from [`rule_predicate_weakenings`] rather than inlined so the ranking
+/// has a name a test can reach, and so the comparison above stays one
+/// expression.
+fn arrival_is_narrowing(column: &str, was: &serde_json::Value, now: &serde_json::Value) -> bool {
+    if was.is_null() {
+        // The whole column arrived, so the key that arrived is the column.
+        return !now.is_null() && declared_narrowing(column);
+    }
+    arrivals_only(was, now).is_some_and(|keys| keys.iter().all(|key| declared_narrowing(key)))
+}
+
+/// Whether [`RULE_NARROWING_ON_ARRIVAL`] names this key.
+fn declared_narrowing(key: &str) -> bool {
+    RULE_NARROWING_ON_ARRIVAL
+        .iter()
+        .any(|(narrowing, _)| *narrowing == key)
+}
+
+/// The keys the working tree FILLS where the base said nothing, or `None` the
+/// moment anything else moved.
+///
+/// `None` is the unrankable answer and it is the common one: a changed scalar,
+/// a key the base carried and the head dropped, a list that changed length, a
+/// type that changed. Only a strictly additive difference has a direction this
+/// module can state without judging two values against each other.
+///
+/// **Absent and `null` are one reading**, which [`column_token`] already takes:
+/// a rule column carries `skip_serializing_if`, so a fresh optional field is
+/// simply missing from the base object, while a nested row like
+/// [`crate::facts::CaptureQuery`] carries none and serializes the same field as
+/// `null`. A ranking that saw only one of those spellings would rank the rule
+/// and not the row inside it.
+fn arrivals_only(base: &serde_json::Value, head: &serde_json::Value) -> Option<Vec<String>> {
+    use serde_json::Value;
+    if base == head {
+        return Some(Vec::new());
+    }
+    match (base, head) {
+        (Value::Object(from), Value::Object(to)) => {
+            // A key the base carried and the head no longer does is a removal,
+            // never an arrival — and `null` on either side is "said nothing".
+            if from
+                .iter()
+                .any(|(key, was)| !was.is_null() && !to.contains_key(key))
+            {
+                return None;
+            }
+            let mut arrived = Vec::new();
+            for (key, now) in to {
+                let was = from.get(key).unwrap_or(&Value::Null);
+                if was == now {
+                    continue;
+                }
+                if was.is_null() {
+                    arrived.push(key.clone());
+                } else {
+                    arrived.extend(arrivals_only(was, now)?);
+                }
+            }
+            Some(arrived)
+        }
+        (Value::Array(from), Value::Array(to)) if from.len() == to.len() => {
+            let mut arrived = Vec::new();
+            for (was, now) in from.iter().zip(to.iter()) {
+                arrived.extend(arrivals_only(was, now)?);
+            }
+            Some(arrived)
+        }
+        _ => None,
+    }
 }
 
 /// One column's value as a stable token: a digest, or `absent`.
@@ -3794,6 +3917,125 @@ mod tests {
         assert_eq!(weakenings(&base, &working), weakenings(&base, &working));
         // And a rule nobody touched reports nothing at all.
         assert!(weakenings(&base, &base).is_empty());
+    }
+
+    fn receipt_rule(id: &str, extra: &str) -> String {
+        format!(
+            "\n[[rule]]\nid = \"{id}\"\nkind = \"receipt\"\nscope = \"mediated_call\"\nseverity = \"deny\"\npattern = \"gh pr ready\"\nchecks = [\"verify\"]\nkey = \"head\"\nreason = \"r\"\n{extra}"
+        )
+    }
+
+    #[test]
+    fn an_arriving_declared_narrowing_key_is_not_charged_as_a_weakening() {
+        // CLOUD-1394's measured case, in the shape CLOUD-1387 ran into: a column
+        // arrives that the base said nothing about, and its arrival can only add
+        // refusals. The gate used to charge that the groomed `Weakens:` pair a
+        // loosening costs, which is a false refusal and is why the repository
+        // twice split a check into a new row rather than touch an existing one.
+        let base = config(&receipt_rule("r", ""));
+        let working = config(&receipt_rule("r", "max_age = 3600\n"));
+        assert!(
+            weakenings(&base, &working).is_empty(),
+            "an arriving `max_age` is a bound, never an admission: {:?}",
+            weakenings(&base, &working)
+        );
+    }
+
+    #[test]
+    fn the_declared_key_moving_after_it_arrived_is_still_a_predicate_change() {
+        // The discriminating mirror, and the arm that makes the one above worth
+        // anything: a case asserting only the narrowing would pass under a gate
+        // that stopped firing at all. Raising a bound admits receipts the row
+        // refused, which is the direction nothing here ranks.
+        let base = config(&receipt_rule("r", "max_age = 3600\n"));
+        let working = config(&receipt_rule("r", "max_age = 86400\n"));
+        let found = only(&base, &working);
+        assert_eq!(found.kind, WeakeningKind::RulePredicateChanged);
+        assert_eq!(found.key, "rule[r].max_age");
+    }
+
+    #[test]
+    fn a_declared_key_departing_is_a_predicate_change_in_the_other_direction() {
+        // Arrival is the ranked half and removal is not: dropping the bound
+        // restores every receipt it was expiring.
+        let base = config(&receipt_rule("r", "max_age = 3600\n"));
+        let working = config(&receipt_rule("r", ""));
+        assert_eq!(only(&base, &working).key, "rule[r].max_age");
+    }
+
+    #[test]
+    fn an_arriving_undeclared_key_is_still_charged() {
+        // `bypass_env` is the measured counterexample the ranking is declared
+        // rather than inferred for (`batten.toml:415-430`): optional, absent
+        // before, absence-preserving — and it makes the row SUPPRESSIBLE. An
+        // "added optional key is a narrowing" rule would have admitted it.
+        let base = config(&receipt_rule("r", ""));
+        let working = config(&receipt_rule("r", "bypass_env = \"BATTEN_X_BYPASS\"\n"));
+        assert_eq!(only(&base, &working).key, "rule[r].bypass_env");
+    }
+
+    #[test]
+    fn a_declared_key_arriving_inside_a_nested_row_is_ranked_too() {
+        // The shape CLOUD-1387 actually has: the column is a LIST of rows and
+        // what arrives is a field on one of them. A nested row carries no
+        // `skip_serializing_if`, so the base spells the same absence `null`
+        // rather than by omission, and both readings have to rank.
+        let json = |text: &str| -> serde_json::Value {
+            serde_json::from_str(text).expect("a test literal parses")
+        };
+        assert_eq!(
+            arrivals_only(
+                &json(r#"[{"id": "a", "max_age": null}]"#),
+                &json(r#"[{"id": "a", "max_age": 60}]"#),
+            ),
+            Some(vec!["max_age".to_owned()]),
+            "a `null` the head fills is an arrival"
+        );
+        assert_eq!(
+            arrivals_only(
+                &json(r#"[{"id": "a"}]"#),
+                &json(r#"[{"id": "a", "max_age": 60}]"#)
+            ),
+            Some(vec!["max_age".to_owned()]),
+            "and so is a key the base omitted"
+        );
+        // Everything else is unrankable, which is the direction that keeps
+        // firing: a changed value, a departure, a resized list.
+        assert_eq!(
+            arrivals_only(&json(r#"[{"id": "a"}]"#), &json(r#"[{"id": "b"}]"#)),
+            None
+        );
+        assert_eq!(
+            arrivals_only(
+                &json(r#"[{"id": "a", "max_age": 60}]"#),
+                &json(r#"[{"id": "a"}]"#)
+            ),
+            None
+        );
+        assert_eq!(
+            arrivals_only(&json("[]"), &json(r#"[{"id": "a"}]"#)),
+            None,
+            "a row joining a list is not one row's key arriving"
+        );
+    }
+
+    #[test]
+    fn every_narrowing_key_names_a_real_column_and_a_reason() {
+        // `RULE_NON_PREDICATE`'s census, for the table that ranks rather than
+        // exempts — and the failure direction is worse here: an exemption that
+        // names nothing merely never fires, while a NARROWING key that names
+        // nothing is a name a later column could accidentally acquire.
+        let source = concat!(include_str!("rules.rs"), include_str!("facts.rs"));
+        for (key, reason) in RULE_NARROWING_ON_ARRIVAL {
+            assert!(
+                source.contains(&format!("pub {key}:")),
+                "`{key}` is ranked as a narrowing but no rule or fact row declares it"
+            );
+            assert!(
+                !reason.trim().is_empty(),
+                "`{key}` is ranked as a narrowing without saying why"
+            );
+        }
     }
 
     #[test]
