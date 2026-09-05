@@ -288,6 +288,7 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   exactly like one backed by evidence. The three routes that would manufacture
   it — scraping stderr, wrapping steps individually, inferring execution from an
   exit — are excluded by name.
+
 - `outcome.rs` — the post-tool outcome, normalized (CLOUD-945). A bare pinned tool
   can fail loudly after the agent starts it, and this is the loud counterpart to
   the pre-admission rule's silent case. It **advises rather than decides**: no arm
