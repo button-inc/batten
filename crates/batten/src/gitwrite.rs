@@ -588,7 +588,7 @@ fn materialise(
 // `cross-check` type-checks this crate against `x86_64-pc-windows-gnu` with
 // warnings denied, and it caught both of these unconditional: `std::os::unix`
 // does not exist there, so the whole library failed to compile on a target this
-// repository claims to support. `.claude/rules/rust.md` states the convention
+// repository claims to support. `rules/rust.md` states the convention
 // the fix takes — platform-specific code is deliberate and `#[cfg]`-gated.
 //
 // **The non-Unix arms are git's own fallbacks rather than silent no-ops**, and

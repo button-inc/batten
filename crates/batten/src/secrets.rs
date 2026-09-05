@@ -1345,7 +1345,7 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             // Asserting the bits we set, not an enforcement the root sandbox
-            // cannot produce — `.claude/rules/rust.md`'s premise rule. The claim
+            // cannot produce — `rules/rust.md`'s premise rule. The claim
             // under test is "this file is created 0600", and that is exactly what
             // the mode word answers.
             let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;

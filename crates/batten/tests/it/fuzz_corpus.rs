@@ -2,7 +2,7 @@
 //!
 //! Fuzzing splits into two things that are easy to confuse, and this repo has
 //! already drawn the line once — `lock-check`'s split (see
-//! `.claude/rules/toolchain.md`): **a property of the commit belongs in the
+//! `rules/toolchain.md`): **a property of the commit belongs in the
 //! gate, a property of the world belongs on a clock.**
 //!
 //! * The *search* — `mise run fuzz`, driven by libFuzzer under nightly — is a

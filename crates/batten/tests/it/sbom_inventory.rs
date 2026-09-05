@@ -5,7 +5,7 @@
 //! what it reads.** The module's own `test_` rules fabricate
 //! `input.tree["tool-verdict"]["sbom"]` and `input.tree.lines` with `with input
 //! as`, which passes whether or not anything can produce that shape — the class
-//! `.claude/rules/policy-modules.md` opens with. This file runs the real producer
+//! `rules/policy-modules.md` opens with. This file runs the real producer
 //! verb and the real engine, over a real lockfile and a real workflow.
 //!
 //! **The two halves are deliberately split, and the split is the subject here.**

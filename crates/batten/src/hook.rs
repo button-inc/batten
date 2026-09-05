@@ -1577,7 +1577,7 @@ impl Harness {
                 // All four spellings, and the per-event probe discipline
                 // `ADVISORY_GAPS` applies to Claude Code does NOT transfer here —
                 // reading that rejection without its scope is the error
-                // `.claude/rules/scanning.md` records. There the question is
+                // `rules/scanning.md` records. There the question is
                 // whether a documented FIELD is honoured at a given event, which
                 // is genuinely per-event. Here it is how the host parses a hook's
                 // stdout, which is a property of the host's reader and not of the
@@ -5753,7 +5753,7 @@ fn tool_rules(policy: &Policy, envelope: &Envelope) -> Decision {
         // Measured, and only the end-to-end suite could see it: the unit cases
         // call `ceiling_rules` directly, so a `Task` row capped at 100 tokens
         // allowed a 100-token prompt there and was refused outright through the
-        // binary. `.claude/rules/rust.md` prefers end-to-end for anything a
+        // binary. `rules/rust.md` prefers end-to-end for anything a
         // consumer depends on, and this is why.
         if rule.max.is_some() {
             continue;
@@ -5793,7 +5793,7 @@ pub fn count_named_artifacts(
         .filter_map(|rewrite| {
             // Already compiled once at load, so a failure here cannot happen for
             // a row that loaded; skipping rather than panicking keeps the
-            // mediated path free of a reachable panic (`.claude/rules/rust.md`).
+            // mediated path free of a reachable panic (`rules/rust.md`).
             regex::Regex::new(&rewrite.reference)
                 .ok()
                 .map(|re| (re, rewrite.path.as_str()))
@@ -5824,7 +5824,7 @@ pub fn count_named_artifacts(
 ///
 /// **A counter, because a clock cannot discriminate here** — the same argument
 /// [`crate::rules::documents_acquired`] rests on, and the one
-/// `.claude/rules/rust.md` makes for concurrency one section over: *"assert it
+/// `rules/rust.md` makes for concurrency one section over: *"assert it
 /// with a counter and a repeat-run comparison, never with wall clock."*
 ///
 /// The claim it defends is CLOUD-925's cheap-when-irrelevant half: a repository
@@ -6125,7 +6125,7 @@ fn policy_protected_paths(rule: &Rule) -> Vec<String> {
 /// so `policy/stop-posture.rego` — a row whose whole subject is the turn's final
 /// message, a field only `Stop` projects — could not fire on any event at all.
 /// Its own `test_` rules passed the entire time, which is exactly the class
-/// `.claude/rules/policy-modules.md` names: a dead gate and a clean tree are
+/// `rules/policy-modules.md` names: a dead gate and a clean tree are
 /// byte-identical on the decision surface.
 ///
 /// # Why this is a second function and not a widened `adjudicate`

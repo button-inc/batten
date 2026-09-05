@@ -240,7 +240,7 @@ violation contains {
 # `mise-tasks/` path it cleared a DIFFERENT rule while leaving this one standing.
 #
 # It mattered because two landed policies MANDATE what this refused.
-# `.claude/rules/policy-modules.md` requires a door migration's second tier over
+# `rules/policy-modules.md` requires a door migration's second tier over
 # the compiled binary, and CLOUD-312's per-row obligation says the same for a
 # handler destination -- so a migration was required to add a suite this arm
 # refused, with a route that could not clear it.
@@ -1298,7 +1298,7 @@ ported_subjects(path) := subjects if {
 # "A POLICY SURFACE" IS THREE SHAPES, not a Rego module — a consumer module, a
 # preset, or engine source, per `has_policy_surface` below. Reading it as "a
 # module" makes every retirement onto an existing verb look unspellable, which is
-# a wrong turn this file's own prose has caused; `.claude/rules/toolchain.md` is
+# a wrong turn this file's own prose has caused; `rules/toolchain.md` is
 # where the choice between the three is argued.
 #
 # So this arm trades those two obligations for two others, and it is strictly
@@ -1533,7 +1533,7 @@ has_policy_surface(path) if {
 # THE PRESET ARM, AND IT WAS MISSING RATHER THAN DECLINED. A preset lives at
 # `crates/batten/src/policy/presets/**` and is a `.rego`, so it failed the first
 # arm on the prefix and the second on the suffix — the ONE successor shape
-# `.claude/rules/policy-modules.md` calls generic-by-construction could not be
+# `rules/policy-modules.md` calls generic-by-construction could not be
 # spelled at all.
 #
 # That is not a cosmetic gap, because the gate's incentive ran the wrong way.

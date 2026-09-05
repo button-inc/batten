@@ -198,7 +198,7 @@ pub struct Refusal {
     /// The canonical subject an admission binds to, when this refusal names one.
     ///
     /// The FIRST path-bearing subject, which is already the finding's own pointer
-    /// by `.claude/rules/policy-modules.md`'s rule — so this is the same choice
+    /// by `rules/policy-modules.md`'s rule — so this is the same choice
     /// that surface makes, not a second one.
     ///
     /// **Carried rather than re-derived at the boundary**, and that is the whole

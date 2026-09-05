@@ -15,7 +15,7 @@
 //! and the difference is the point.** A unit test over `ready::lint` fabricates
 //! the `Payload` the predicate expects; only a run of the binary proves the
 //! ENGINE builds that shape from what a caller actually pipes — which is the
-//! class `.claude/rules/policy-modules.md` records for `with input as`, and the
+//! class `rules/policy-modules.md` records for `with input as`, and the
 //! class CLOUD-1121 itself was filed over, where a fixture and a reader agreed
 //! with each other and neither agreed with the writer.
 //!

@@ -18,7 +18,7 @@
 //!
 //! # Over the compiled binary, and that is the whole discriminator
 //!
-//! `.claude/rules/policy-modules.md`'s second tier, one surface over. The unit
+//! `rules/policy-modules.md`'s second tier, one surface over. The unit
 //! tests in `commit.rs` pin the predicate over two sets a test constructed, and
 //! cannot see whether the resolver builds them: whether the config at a commit's
 //! PARENT is read at all, whether `[rule.conserves]` survives that parse, and

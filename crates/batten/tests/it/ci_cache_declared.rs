@@ -5,7 +5,7 @@
 //!
 //! The module's own `test_` cases hand themselves a `documents` object, so they
 //! are green over a shape the engine may never build — the hazard
-//! `.claude/rules/policy-modules.md` names, and the reason both of its measured
+//! `rules/policy-modules.md` names, and the reason both of its measured
 //! instances were found by adding this tier rather than by reading.
 //!
 //! This row reads deeper than any of its neighbours and reads TWO documents of
@@ -104,7 +104,7 @@ fn findings_declared_by(root: &Path, vocabulary_root: &Path) -> Vec<(String, Opt
     // for the bundle to compile at all — the registry doing its job rather than
     // a fixture detail. Supplied rather than left empty because this is an
     // in-repo module and a consumer really does declare it: the preset exemption
-    // `.claude/rules/policy-modules.md` records does not apply, and an empty
+    // `rules/policy-modules.md` records does not apply, and an empty
     // vocabulary would make predicate 2 read undefined and abstain, so every
     // deny case below would pass for the wrong reason.
     let patterns = [batten::pattern::NamedPattern {

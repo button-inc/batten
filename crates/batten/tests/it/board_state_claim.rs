@@ -18,7 +18,7 @@
 //! an object it decides, never a model verdict — and "did the agent consult the
 //! tree before believing a row" is exactly a model verdict. So that axis is
 //! feedforward, the rule says so where it lives, and a §7 claiming otherwise
-//! here would be the defect `.claude/rules/scanning.md` already records for its
+//! here would be the defect `rules/scanning.md` already records for its
 //! own case.
 //!
 //! Same shape as `scanner_taxonomy.rs`: the prose carries the position, and the

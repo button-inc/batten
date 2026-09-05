@@ -4,7 +4,7 @@
 //!
 //! The module's `test_` cases hand themselves a `lines` array and a `documents`
 //! object, so they are green over a shape the engine may never build — the hazard
-//! `.claude/rules/policy-modules.md` names, and the reason both of its measured
+//! `rules/policy-modules.md` names, and the reason both of its measured
 //! instances were found by adding this tier rather than by reading. Two things
 //! here can only be proved against the real boundary: that a file the boundary
 //! does NOT parse (`hk.pkl` is Pkl) still reaches a module through
@@ -68,7 +68,7 @@ fn row() -> Rule {
         "kind": "policy",
         "scope": "tree",
         "sources": ["mise.toml"],
-        "line_sources": ["hk.pkl", ".claude/rules/toolchain.md"],
+        "line_sources": ["hk.pkl", "rules/toolchain.md"],
         "module": "policy/hk-fix-selection.rego",
         "severity": "deny",
     }))
@@ -81,7 +81,7 @@ fn tree(name: &str, config: &str, manifest: &str, rules_doc: &str) -> PathBuf {
     let root = common::scratch(&format!("hk-fix-selection-{name}"));
     common::write(&root, "hk.pkl", config);
     common::write(&root, "mise.toml", manifest);
-    common::write(&root, ".claude/rules/toolchain.md", rules_doc);
+    common::write(&root, "rules/toolchain.md", rules_doc);
     install_module(&root);
     root
 }
@@ -240,9 +240,7 @@ fn a_rules_file_that_dropped_the_clause_is_refused() {
     );
     let found = findings(&root);
     assert!(
-        found
-            .iter()
-            .any(|(path, _)| path == ".claude/rules/toolchain.md"),
+        found.iter().any(|(path, _)| path == "rules/toolchain.md"),
         "the rules file should be named as the place to fix it: {found:?}"
     );
 }
@@ -315,7 +313,7 @@ fn a_tree_with_no_hook_config_is_not_judged() {
     // its subject. A repository that runs no hk hooks has no selection to judge.
     let root = common::scratch("hk-fix-selection-foreign");
     common::write(&root, "mise.toml", SOUND_MANIFEST);
-    common::write(&root, ".claude/rules/toolchain.md", SOUND_RULES);
+    common::write(&root, "rules/toolchain.md", SOUND_RULES);
     install_module(&root);
     assert!(
         findings(&root).is_empty(),

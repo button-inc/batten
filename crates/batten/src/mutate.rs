@@ -462,7 +462,7 @@ fn lines_of(root: &Path, path: &str) -> Option<Vec<String>> {
 /// which no file in the tree carries. It compiled clean and would have silently
 /// stopped resolving every landed `.rego` declaration — a suite falling back to
 /// `tests/<gate>.bats`, an owner and an exemption reading as absent. Compile-clean
-/// and gate-dead is the same shape `.claude/rules/policy-modules.md` opens with.
+/// and gate-dead is the same shape `rules/policy-modules.md` opens with.
 fn declared(lines: &[String], marker: &str) -> Option<String> {
     lines.iter().find_map(|line| strip_marker(line, marker))
 }

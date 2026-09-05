@@ -106,6 +106,6 @@ figure this benchmark exists to beat. Measured capabilities: 4. Reporting
 
 ## Stated gaps
 
-- **cross-session prefix-cache hit rate: not measured.** requires a live provider credential; hit rate and time-to-first-token are properties of the world, not of this commit, so they cannot be a gate (see .claude/rules/toolchain.md on gate-vs-schedule)
+- **cross-session prefix-cache hit rate: not measured.** requires a live provider credential; hit rate and time-to-first-token are properties of the world, not of this commit, so they cannot be a gate (see rules/toolchain.md on gate-vs-schedule)
   Measured instead: byte-stability of each arm across runs — the precondition a warm prefix cache depends on, and the half that IS a property of this commit
 

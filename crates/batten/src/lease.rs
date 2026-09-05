@@ -316,7 +316,7 @@ pub fn parse_report(body: &[u8]) -> Result<Outcome> {
 /// Split a smart-HTTP body into its pkt-line payloads and whatever follows them.
 ///
 /// **The framing is `gix-packetline`'s, not this module's**, for the reason
-/// `.claude/rules/policy-modules.md` gives one domain over: a second parser is a
+/// `rules/policy-modules.md` gives one domain over: a second parser is a
 /// second AUTHORITY, and two readers of one wire can disagree about a truncation
 /// or length case neither author had in mind. What this function adds is the
 /// BOUNDARY — where the pkt-framed section stops and a raw packfile begins —

@@ -26,7 +26,7 @@
 //!
 //! The module's own `test_` rules fabricate `input.call.segments` with
 //! `with input as`, so they pass over a shape the engine may never build —
-//! `.claude/rules/policy-modules.md`'s opening defect, and the reason both live
+//! `rules/policy-modules.md`'s opening defect, and the reason both live
 //! instances of it were found by adding a tier like this one. The specific risk
 //! here is real rather than notional: `hook::is_env_assignment` is what the
 //! boundary uses to look THROUGH an assignment when resolving the effective

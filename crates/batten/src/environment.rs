@@ -65,7 +65,7 @@ mod tests {
 
     /// The predicate over its own input, extracted from the environment read.
     ///
-    /// `.claude/rules/rust.md`'s rule for a condition the test cannot create:
+    /// `rules/rust.md`'s rule for a condition the test cannot create:
     /// `set_var` is `unsafe` and `unsafe` is forbidden here, so a case that
     /// reached for the real environment could not be written at all. What decides
     /// is the comparison, and that is what is asserted.

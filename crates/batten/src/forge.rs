@@ -89,7 +89,7 @@ pub fn verdicts(git_dir: &Path, declared: &[String]) -> BTreeMap<String, BTreeMa
 /// `pub(crate)` because [`crate::tools`] reads the same shape (CLOUD-1171): this
 /// family and the tool-verdict one differ in their KEY and in nothing else, so
 /// two parsers would be two authorities over one byte format that can disagree
-/// about a torn line — the shape `.claude/rules/policy-modules.md` records for
+/// about a torn line — the shape `rules/policy-modules.md` records for
 /// patterns, one layer down.
 ///
 /// Split on the FIRST whitespace run only: a conclusion is a token, and a name

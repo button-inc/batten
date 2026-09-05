@@ -126,7 +126,7 @@ fn head_decides_both_ways_over_the_branch_it_names() {
     );
     assert!(fired(&on_main), "HEAD is on `main` and the module read it");
 
-    // The negative is CONSTRUCTED rather than assumed (`.claude/rules/rust.md`):
+    // The negative is CONSTRUCTED rather than assumed (`rules/rust.md`):
     // the same module over a checkout that is genuinely on another branch, so
     // the case distinguishes "the predicate is false" from "the fact never
     // arrived". Both halves in one suite is what stops a fact that is always

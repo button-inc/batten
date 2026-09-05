@@ -16,7 +16,7 @@
 //!
 //! # The pattern registry is passed, and that is the opposite of a preset's rule
 //!
-//! `.claude/rules/policy-modules.md` tells a PRESET's tier to supply
+//! `rules/policy-modules.md` tells a PRESET's tier to supply
 //! `patterns: &[]`, because a preset ships to consumers who wrote no rows and a
 //! harness declaring the ids would supply input no consumer supplies. An in-repo
 //! module is the other case: this repository DOES declare
@@ -300,7 +300,7 @@ fn a_declared_fixture_owns_its_fork() {
 /// THE COULD-NOT-LOOK CHANNEL, DRIVEN BY THE ENGINE RATHER THAN FABRICATED.
 ///
 /// The module's own `test_` rule for this arm hands over `input.tree.missing`
-/// directly, and `.claude/rules/policy-modules.md` says in as many words why
+/// directly, and `rules/policy-modules.md` says in as many words why
 /// that is not enough: *"Assert it in the second tier over the compiled binary,
 /// never with `with input as` — that fabricates the very shape the engine may be
 /// unable to produce, which is how the dead clause survived this long."* On

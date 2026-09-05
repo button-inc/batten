@@ -768,7 +768,7 @@ pub fn load(
             //
             // Stated rather than absorbed, because shipping this as "closes the
             // silent dead gate" would have been a claim about a channel nobody
-            // measured, which is the defect `.claude/rules/policy-modules.md`
+            // measured, which is the defect `rules/policy-modules.md`
             // records against its own earlier revisions.
             if manifest.scope != rule.scope {
                 return Err(UsageError::raise(format!(
@@ -2260,7 +2260,7 @@ pub fn tree_input_schema() -> Result<String> {
         "missing".to_owned(),
         serde_json::json!({
             "type": "object",
-            "description": "Could-not-look, and NOT a Fact: a declared name the engine could not acquire, mapped to WHY (CLOUD-1309). Distinct from an empty result, which is the distinction that keeps a vacuous pass out (CLOUD-251, CLOUD-845). The cause is one of `absent`, `unparsed`, `unreadable`, `unknown-format` or `root-unset` -- `NotAcquired::as_str`'s own tokens -- and carrying it is what makes `.claude/rules/policy-modules.md`'s \"the two causes stay distinct and a module may rely on that\" true of this surface rather than only of the Rust enum. A module keys by name: `input.tree.missing[path] == \"unparsed\"`. It was an array of bare names until CLOUD-1309, so a predicate could see THAT a source failed and never WHY, and firing on membership alone reddened every consumer that declares an optional source.",
+            "description": "Could-not-look, and NOT a Fact: a declared name the engine could not acquire, mapped to WHY (CLOUD-1309). Distinct from an empty result, which is the distinction that keeps a vacuous pass out (CLOUD-251, CLOUD-845). The cause is one of `absent`, `unparsed`, `unreadable`, `unknown-format` or `root-unset` -- `NotAcquired::as_str`'s own tokens -- and carrying it is what makes `rules/policy-modules.md`'s \"the two causes stay distinct and a module may rely on that\" true of this surface rather than only of the Rust enum. A module keys by name: `input.tree.missing[path] == \"unparsed\"`. It was an array of bare names until CLOUD-1309, so a predicate could see THAT a source failed and never WHY, and firing on membership alone reddened every consumer that declares an optional source.",
             "additionalProperties": {"type": "string"},
         }),
     );

@@ -58,7 +58,7 @@ fn preset_row(id: &str, preset: &str) -> Rule {
 /// operator, a wrapper or a token before the program belongs in
 /// `crates/batten/tests/it/preset_segments.rs`, which drives the real projection
 /// through the compiled binary over a real envelope — the tier
-/// `.claude/rules/policy-modules.md` says a `with input as` case cannot stand in
+/// `rules/policy-modules.md` says a `with input as` case cannot stand in
 /// for, and the one that caught CLOUD-1382's six bypasses.
 fn call(command: &str) -> String {
     let words: Vec<&str> = command.split_whitespace().collect();

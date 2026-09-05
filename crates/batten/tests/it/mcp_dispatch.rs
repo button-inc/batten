@@ -6,7 +6,7 @@
 //! a token refuses, how the three could-not-look answers differ. They cannot pin
 //! that the ENGINE builds the input the predicate reads: a case constructing an
 //! `McpConfig` by hand fabricates the very shape the config loader may be unable
-//! to produce, which is `.claude/rules/policy-modules.md`'s two-tier rule one
+//! to produce, which is `rules/policy-modules.md`'s two-tier rule one
 //! layer out of Rego. Both live instances of that class in this repository were
 //! found by adding the second tier, not by reading.
 //!
@@ -715,7 +715,7 @@ fn this_change_introduces_no_consumer_identifier_into_the_crate() {
     //
     // **COMMENTS ARE STRIPPED FIRST.** Rule 1 governs what the crate KNOWS, and a
     // doc comment explaining why a name lives in config is prose about the rule
-    // rather than an instance of breaking it. `.claude/rules/scanning.md`'s row
+    // rather than an instance of breaking it. `rules/scanning.md`'s row
     // two is exactly this distinction — whether a token is in code, in a comment
     // or in a string is a syntax question, and a text scan answers the wrong one.
     // Measured: an unstripped scan reported nine files, of which every hit in
@@ -746,7 +746,7 @@ fn this_change_introduces_no_consumer_identifier_into_the_crate() {
         // Assembled rather than written whole, because this file sits under
         // `crates/batten` and a literal here would be a hit for the gate it
         // states — `git.rs`'s own idiom, and the reason
-        // `.claude/rules/policy-modules.md` records why a substring gate must
+        // `rules/policy-modules.md` records why a substring gate must
         // hide its own literals when its corpus includes itself.
         for needle in [
             ["/tmp/mcp", "-config"].concat(),

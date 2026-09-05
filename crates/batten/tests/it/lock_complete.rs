@@ -14,7 +14,7 @@
 //! read and the row DECLARES the format instead. A module reaching for
 //! `input.tree.staged["mise.lock"]` without that declaration gets undefined,
 //! denies nothing, and loads clean — which is the class
-//! `.claude/rules/policy-modules.md` opens with, and which
+//! `rules/policy-modules.md` opens with, and which
 //! `policy/lock-entry-complete.rego` was a live instance of on `main`.
 //!
 //! The ledger for this member: two deleted paths and thirty-seven deleted

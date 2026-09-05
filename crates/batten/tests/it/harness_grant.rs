@@ -6,7 +6,7 @@
 //! they cannot establish is whether the ENGINE builds that key at all for a path
 //! inside a DOTFILE DIRECTORY — and if it does not, the module is silent on every
 //! tree, a dead gate and a correctly-granted repository being byte-identical on
-//! the decision surface. That is the class `.claude/rules/policy-modules.md`
+//! the decision surface. That is the class `rules/policy-modules.md`
 //! records two live instances of, both found by adding this tier rather than by
 //! reading.
 //!

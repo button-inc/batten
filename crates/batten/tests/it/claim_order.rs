@@ -4,7 +4,7 @@
 //!
 //! The module's own `test_` cases hand themselves a `lines` object, so they are
 //! green over a shape the engine may never build — the hazard
-//! `.claude/rules/policy-modules.md` names, and the reason both of its measured
+//! `rules/policy-modules.md` names, and the reason both of its measured
 //! instances were found by adding a tier like this rather than by reading. What
 //! only the real boundary can prove here is that two MARKDOWN files reach a module
 //! through `input.tree.lines` at all: if the engine built nothing for them, every
@@ -47,7 +47,7 @@ fn row() -> Rule {
         "id": "claim-order-is-stated",
         "kind": "policy",
         "scope": "tree",
-        "line_sources": ["AGENTS.md", ".claude/rules/toolchain.md"],
+        "line_sources": ["AGENTS.md", "rules/toolchain.md"],
         "module": "policy/claim-order-is-stated.rego",
         "severity": "deny",
     }))
@@ -78,7 +78,7 @@ fn tree(name: &str, index: Option<&str>, rules_doc: Option<&str>) -> PathBuf {
         common::write(&root, "AGENTS.md", body);
     }
     if let Some(body) = rules_doc {
-        common::write(&root, ".claude/rules/toolchain.md", body);
+        common::write(&root, "rules/toolchain.md", body);
     }
     install_module(&root);
     root
@@ -99,7 +99,7 @@ fn install_module(root: &Path) {
 ///
 /// **An EMPTY pattern vocabulary, deliberately.** A harness that declared pattern
 /// ids would be supplying input no consumer supplies, and the deny cases would
-/// then pass for the wrong reason (`.claude/rules/policy-modules.md`).
+/// then pass for the wrong reason (`rules/policy-modules.md`).
 fn findings(root: &Path) -> Vec<String> {
     // A fixture holds this module and no other, so its own tree is the honest
     // vocabulary.
@@ -185,7 +185,7 @@ fn a_rules_file_missing_a_failure_direction_is_refused() {
     assert!(
         findings(&root)
             .iter()
-            .any(|path| path == ".claude/rules/toolchain.md"),
+            .any(|path| path == "rules/toolchain.md"),
         "one failure direction alone is half a warning and must be refused"
     );
 }
@@ -202,7 +202,7 @@ fn the_finding_names_the_file_that_drifted() {
     let found = findings(&root);
     assert_eq!(
         found,
-        vec![String::from(".claude/rules/toolchain.md")],
+        vec![String::from("rules/toolchain.md")],
         "only the file that lost the text may be named"
     );
 }

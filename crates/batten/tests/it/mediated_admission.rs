@@ -230,7 +230,7 @@ fn an_issued_but_unspent_admission_does_not_admit() {
 /// `hook.rs`'s unit cases assert this against `adjudicate` directly, which is the
 /// decision function — but the bypass is resolved at the BOUNDARY, in `run_hook`,
 /// and a unit case cannot see that wiring. A consumer depends on the end-to-end
-/// behaviour, so `.claude/rules/rust.md` asks for it here.
+/// behaviour, so `rules/rust.md` asks for it here.
 ///
 /// The second assertion is the discriminator: without it this case would pass
 /// just as well if the hatch had been deleted outright, and a reader could not

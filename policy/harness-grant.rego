@@ -94,7 +94,7 @@ violation contains {
 # `input.tree.documents` for a DOTFILE path at all -- a `with input as` case
 # fabricates the very shape the engine may be unable to produce -- which is why
 # `crates/batten/tests/harness_grant.rs` exists over the compiled binary. That is
-# the tier `.claude/rules/policy-modules.md` records both live instances of the
+# the tier `rules/policy-modules.md` records both live instances of the
 # dead-gate class as having been found by adding.
 
 settings(entries) := {"tree": {"documents": {".claude/settings.json": {"autoMode": {"allow": entries}}}}}

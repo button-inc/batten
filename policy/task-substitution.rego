@@ -95,7 +95,7 @@ substituted contains task if {
 #     does LESS than the call.
 #
 # What is left is exactly "the task's argv continues past where this call stops",
-# which is what `.claude/rules/toolchain.md` means by a weaker form — and what
+# which is what `rules/toolchain.md` means by a weaker form — and what
 # leaves the genuine one-off it already promises is untouched, untouched.
 #
 # Spelled as the program plus its `arguments` rather than as one joined list, so
@@ -204,7 +204,7 @@ test_a_tool_call_in_a_later_segment_is_refused if {
 # `cargo run --quiet -p batten --` as well, so a predicate comparing the tool —
 # or any fixed number of leading words — refuses this call. The argvs diverge at
 # the VERB, which is the only place they could, and a call that diverges from
-# every task is the genuine one-off `.claude/rules/toolchain.md` promises is
+# every task is the genuine one-off `rules/toolchain.md` promises is
 # untouched. Fails against the shipped `argv[0]` predicate; that is the point.
 verbs := {
 	"attribution-identity": ["cargo", "run", "--quiet", "-p", "batten", "--", "attribution", "identity"],

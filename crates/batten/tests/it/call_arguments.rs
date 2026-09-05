@@ -497,7 +497,7 @@ fn the_refusal_carries_no_argument_value() {
 /// Move a receipt's mtime `seconds` into the past.
 ///
 /// **Set, never slept for.** A test that waits out its own bound grades on a wall
-/// clock, and `.claude/rules/rust.md` is explicit that a timing assertion
+/// clock, and `rules/rust.md` is explicit that a timing assertion
 /// discriminates nothing here — CLOUD-521 and CLOUD-724 are the recorded cost,
 /// one asserting an exact elapsed second and one flaking a `land` lap. `std`'s
 /// own `set_times` rather than a new dependency for two lines.

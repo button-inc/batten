@@ -100,7 +100,7 @@ violation contains {
 #
 # THE CLAUSE, WRITTEN RATHER THAN LEFT TO ABSTENTION. A module carrying no
 # `missing` arm still abstains — the engine reports `RuleSkipped` — but
-# abstention is not a finding and nobody reads it. `.claude/rules/policy-modules.md`
+# abstention is not a finding and nobody reads it. `rules/policy-modules.md`
 # is explicit that the difference between "the engine recording that it could not
 # look" and "your gate saying so" is this clause.
 

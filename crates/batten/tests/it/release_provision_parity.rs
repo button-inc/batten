@@ -5,7 +5,7 @@
 //!
 //! The module's own `test_` cases hand themselves a `documents` object, so they
 //! are green over a shape the engine may never build — the hazard
-//! `.claude/rules/policy-modules.md` names, and the reason both of its measured
+//! `rules/policy-modules.md` names, and the reason both of its measured
 //! instances were found by adding this tier rather than by reading.
 //!
 //! This row is the one in the tree that reads TWO documents of different formats

@@ -1,12 +1,12 @@
 # WHICH MODULES MAY SPAWN, decided by NAME RESOLUTION (CLOUD-760).
 #
 # This is the consumer that makes `Fact::Symbols` a fact rather than a facility.
-# `.claude/rules/rust.md` states the rule it enforces -- a spawn is an inventory
+# `rules/rust.md` states the rule it enforces -- a spawn is an inventory
 # row, and the annotation beside it is where somebody wrote down whether it
 # stays -- but the inventory has never had a gate over WHERE a spawn may appear.
 # It has one now, and only this fact could carry it.
 #
-# WHY NO SCANNER CAN WRITE THIS RULE. `.claude/rules/scanning.md` records the
+# WHY NO SCANNER CAN WRITE THIS RULE. `rules/scanning.md` records the
 # three answers to "where is `std::process::Command`": a byte scan says 14, a
 # tree-sitter matcher says 11, name resolution says 9. The spread is one import:
 # `surface.rs` writes `use clap::{..., Command}`, so the token names a DIFFERENT

@@ -21,7 +21,7 @@
 #   at all, so there is nothing left to intercept and the invariant holds by
 #   construction on every harness. Registration happens where the launcher writes
 #   its wiring, which is outside this repository and outside every gate here —
-#   the same shape `.claude/rules/commits.md` records for the user-level identity
+#   the same shape `rules/commits.md` records for the user-level identity
 #   hook. What this repository OWNS is whether its own committed settings hand the
 #   raw tools back, and that is exactly what is asserted. A gate claiming to
 #   assert registration would be the "authority it does not hold" defect, and

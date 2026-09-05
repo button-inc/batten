@@ -122,7 +122,7 @@ pub(crate) const MEDIATOR: &str = "mise";
 /// engine's spawn ladder, and the analyser acquisition that must run under the
 /// pin's environment rather than merely at its `PATH`. A second composition is a
 /// second authority over an argv, which is the class
-/// `.claude/rules/policy-modules.md` records for the mediated surface and which
+/// `rules/policy-modules.md` records for the mediated surface and which
 /// holds here for the same reason.
 #[must_use]
 pub fn mediated(program: &str) -> (&'static str, Vec<String>) {
@@ -557,7 +557,7 @@ fn resolve(root: &Path) -> PinnedFacts {
 ///
 /// Pure, and separated from the spawn for that reason: the interesting decision
 /// here is the difference, and a test that had to install a toolchain to reach
-/// it would be asserting its own premise (`.claude/rules/rust.md`).
+/// it would be asserting its own premise (`rules/rust.md`).
 fn added_directories(composed: &str, ambient: &str) -> Vec<PathBuf> {
     let already: BTreeSet<&str> = ambient.split(':').filter(|dir| !dir.is_empty()).collect();
     composed

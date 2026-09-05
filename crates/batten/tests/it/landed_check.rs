@@ -5,7 +5,7 @@
 //! files, the stdin payload, the exit table and the pointer shape. A unit case
 //! over `decide` cannot settle any of those — it constructs the `Evidence` the
 //! verb is supposed to assemble, which is the fabricate-the-shape defect
-//! `.claude/rules/policy-modules.md` records for `with input as`.
+//! `rules/policy-modules.md` records for `with input as`.
 //!
 //! **The controls are CLOUD-1127's own, drawn from real state rather than
 //! invented.** PR #726 merged 2026-08-28 carrying `Closes CLOUD-1119`,

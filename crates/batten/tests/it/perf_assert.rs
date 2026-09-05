@@ -4,7 +4,7 @@
 //! **This is the tier the module's own `test_` rules cannot be.** A `with input
 //! as` block writes the shape it then reads, so it is green over a key the engine
 //! never fills — CLOUD-845's defect, and the one
-//! `.claude/rules/policy-modules.md` records both live instances of. Two claims
+//! `rules/policy-modules.md` records both live instances of. Two claims
 //! here are exactly of that kind and are asserted nowhere else: that the engine
 //! fills `input.tree.lines["README.md"]` from a row declaring it, and that
 //! `input.tree.missing` reaches the module when it cannot.

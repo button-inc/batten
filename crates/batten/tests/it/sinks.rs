@@ -667,7 +667,7 @@ fn a_declared_record_that_cannot_be_read_fails_the_run_rather_than_reading_as_ab
     //
     // The unreadable condition is a DIRECTORY where the record belongs, not a
     // permission bit: this sandbox runs as root, so a mode-000 file is still
-    // readable here and the arm would assert its own premise (`.claude/rules/rust.md`).
+    // readable here and the arm would assert its own premise (`rules/rust.md`).
     //
     // SHOWN ABLE TO FAIL (CLOUD-418), observed rather than argued: with the read
     // restored to `if let Ok(text)` this case reports `left: Some(0)` — the run

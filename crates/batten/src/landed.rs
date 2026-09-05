@@ -28,9 +28,9 @@
 //! commit-message fact for it to read — `input.tree["commit-meta"]` is a range's
 //! identity fields and carries no message body (CLOUD-1187). A module written
 //! against it would load clean, read undefined, and decide nothing, which is the
-//! dead-gate shape `.claude/rules/policy-modules.md` opens with.
+//! dead-gate shape `rules/policy-modules.md` opens with.
 //! `policy/shell-retirement.rego` admits `crates/batten/src/*.rs` as a policy
-//! surface for exactly this case, and `.claude/rules/toolchain.md` requires the
+//! surface for exactly this case, and `rules/toolchain.md` requires the
 //! ledger arm to declare which disposition it is: this one is `kind:verb`.
 //!
 //! ## What this deliberately does not decide

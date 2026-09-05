@@ -1,7 +1,7 @@
 //! `policy/shell-retirement.rego`'s cost is flat in the deleted-path count
 //! (CLOUD-1321).
 //!
-//! **This is a wall-clock assertion, deliberately, and `.claude/rules/rust.md`'s
+//! **This is a wall-clock assertion, deliberately, and `rules/rust.md`'s
 //! standing rule is why that needs saying.** That rule forbids a clock *where a
 //! counter would answer* — "assert it with a counter and a repeat-run comparison,
 //! never with wall clock: a timing assertion discriminates nothing here". Read
@@ -67,7 +67,7 @@ const RUNS: usize = 3;
 /// module: measured 2.5x on this container (0.36s / 0.91s) and **3.1x on the
 /// Windows CI runner** (0.68s / 2.10s), where the same flattened module is
 /// correct. A `RATIO` of 3 therefore failed a green tree on a slower box, which
-/// is the percentage-band assertion `.claude/rules/rust.md` refuses wearing a
+/// is the percentage-band assertion `rules/rust.md` refuses wearing a
 /// step-change detector's clothes.
 ///
 /// 8 is the step-change line: ~2.6x above the worst passing reading either

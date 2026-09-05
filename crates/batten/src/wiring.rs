@@ -288,7 +288,7 @@ impl Reclaimed {
 /// ONCE, so a second run cannot report the repair` for the only-when-none-exists
 /// half — over the compiled binary and a real `$HOME` on disk, which is the tier
 /// that can see this at all. A unit case here would build the document the engine
-/// may be unable to locate, which is the shape `.claude/rules/policy-modules.md`
+/// may be unable to locate, which is the shape `rules/policy-modules.md`
 /// names. An earlier draft of this comment cited a Rust test name that was never
 /// written; caught in review of #714.
 ///
@@ -516,7 +516,7 @@ mod tests {
     ///
     /// This comment does not spell the literal either, and that is not fastidious:
     /// the gate is a substring scan over the file, so an explanation naming what
-    /// it forbids fires on itself. `.claude/rules/scanning.md` records the same
+    /// it forbids fires on itself. `rules/scanning.md` records the same
     /// shape one layer up, and the second draft of this comment is what proved it.
     fn claude() -> hook::WiringFile {
         hook::Harness::ClaudeCode

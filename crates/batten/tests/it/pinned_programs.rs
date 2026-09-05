@@ -5,7 +5,7 @@
 //!
 //! The preset's own `test_` cases hand themselves a `programs` array and a
 //! `pinned-programs` list. Both are shapes the ENGINE has to build, and a module
-//! test cannot establish that it does: `.claude/rules/policy-modules.md` records
+//! test cannot establish that it does: `rules/policy-modules.md` records
 //! two measured instances of a module that passed its own suite while iterating
 //! a key nothing filled. Three things here can only be proved against the real
 //! boundary — that a command's argv reaches a module already parsed, that
@@ -92,7 +92,7 @@ fn advice(repo: &Path, command: &str) -> String {
 ///
 /// A path the FIXTURE owns rather than one asked of a real pin: `configs` spawns,
 /// and a test that had to install a toolchain to reach the record would be
-/// asserting its own premise before its conclusion (`.claude/rules/rust.md`).
+/// asserting its own premise before its conclusion (`rules/rust.md`).
 /// What these cases are about is the writer and the reader agreeing over the same
 /// key, which does not depend on where the list came from.
 fn configs(repo: &Path) -> Vec<PathBuf> {

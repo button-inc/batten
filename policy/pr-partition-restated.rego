@@ -39,7 +39,7 @@
 #   WHAT THIS DOES NOT REACH, stated rather than left to be found. It catches a
 #   restatement of THIS decision in THIS phrase family, and nothing else. It is not
 #   a general "prose that contradicts a binding rule" detector, and no text
-#   predicate is: `.claude/rules/scanning.md` records what claiming the ambitious
+#   predicate is: `rules/scanning.md` records what claiming the ambitious
 #   guarantee costs when only the modest one is held. The general half is
 #   `a-spawn-carries-the-workflow-contract`, which binds the prompt of a planning
 #   spawn rather than the prose it may read.
@@ -96,7 +96,7 @@ violation contains {
 #
 # FOUND BY THE COMPILED TIER, NOT BY READING. The load-time tier passed over the
 # dead version, because a `with input as` case supplies whatever cause its author
-# believed in -- which is exactly the failure `.claude/rules/policy-modules.md`
+# believed in -- which is exactly the failure `rules/policy-modules.md`
 # records two live instances of, arriving on the module written to close that
 # class.
 violation contains {
@@ -119,7 +119,7 @@ unreadable contains name if {
 # `input.tree.missing` with a cause -- a `with input as` case fabricates the very
 # shape the engine may be unable to produce. That is
 # `crates/batten/tests/it/pr_partition_restated.rs`, over the compiled binary, and
-# `.claude/rules/policy-modules.md` records both live instances of the dead-gate
+# `rules/policy-modules.md` records both live instances of the dead-gate
 # class as having been found by adding exactly that tier.
 #
 # The fixture vocabulary is supplied the way `lock-complete` supplies its own:
@@ -163,7 +163,7 @@ test_a_matching_line_is_refused if {
 # matching one hard-coded string, and every other spelling the row carries ships
 # as coverage having never been walked.
 test_the_rows_other_spelling_is_refused_too if {
-	some v in violation with input as tree({".claude/rules/toolchain.md": ["BETA-PARTITION"]})
+	some v in violation with input as tree({"rules/toolchain.md": ["BETA-PARTITION"]})
 		with data.batten.patterns as fixture_patterns
 	v.verdict == "prose state other"
 }

@@ -26,7 +26,7 @@
 //! The suppression lives in `[tasks."session:census"]`'s body, because
 //! `mise-tasks/reclaim-census.sh` is governed by `shell-retirement` and is not
 //! this row's to edit. A test that re-implemented the decision in Rust would be
-//! the `with input as` shape `.claude/rules/policy-modules.md` names one layer
+//! the `with input as` shape `rules/policy-modules.md` names one layer
 //! down: it would pass over a body that never runs, reads the wrong store, or
 //! writes the mark before the report instead of after.
 //!

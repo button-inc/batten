@@ -120,7 +120,7 @@ ls_additional_workspace_folders: []
 # initial prompt for the project. It will always be given to the LLM upon activating the project
 # (contrary to the memories, which are loaded on demand).
 initial_prompt: |
-  Read a file with Read(offset,limit), search with Grep, list with Glob, resolve a name with Serena — a shell text utility aimed at a repo path is the wrong instrument, not a shortcut; `.claude/rules/scanning.md` picks between them.
+  Read a file with Read(offset,limit), search with Grep, list with Glob, resolve a name with Serena — a shell text utility aimed at a repo path is the wrong instrument, not a shortcut; `rules/scanning.md` picks between them.
 
 # optional shell command to run before the language backend (LSP or JetBrains) is initialised.
 # the command runs in the project root directory and is only executed if the project is trusted

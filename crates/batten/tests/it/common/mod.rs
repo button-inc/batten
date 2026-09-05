@@ -39,7 +39,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 #[expect(
     clippy::disallowed_types,
-    reason = "stays, and test-only: this module IS the end-to-end harness — `.claude/rules/rust.md` prefers a test over the compiled binary for anything a consumer depends on, and running a binary is a spawn"
+    reason = "stays, and test-only: this module IS the end-to-end harness — `rules/rust.md` prefers a test over the compiled binary for anything a consumer depends on, and running a binary is a spawn"
 )]
 use std::process::{Command, Output};
 

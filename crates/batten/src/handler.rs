@@ -843,7 +843,7 @@ fn run_one(handler: &Handler, payload: &str) -> Outcome {
     // `exec.rs` already resolved this and says so in its own module docs ("Each
     // pipe is drained on its own thread. Reading them in sequence would…"), so
     // this is that answer reused rather than a new one — and it is the same
-    // reason `.claude/rules/rust.md` admits those drains: one thread per pipe for
+    // reason `rules/rust.md` admits those drains: one thread per pipe for
     // CORRECTNESS, not for speed, which is why no measurement is owed for it.
     //
     // The write still CLOSES the pipe when it finishes, which stays load-bearing:
@@ -1187,7 +1187,7 @@ mod tests {
         // end closes, the write fails with `EPIPE` immediately, and NOTHING
         // blocks. Run against the un-fixed code it passed in 0.00s — a test
         // asserting its own premise before its conclusion, which is the shape
-        // `.claude/rules/rust.md` names and `tests/primitives.rs` gates. A child
+        // `rules/rust.md` names and `tests/primitives.rs` gates. A child
         // that sleeps holds the read end open, which is what makes the parent's
         // write block and the defect reachable.
         //

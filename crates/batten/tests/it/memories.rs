@@ -4,7 +4,7 @@
 //! **This is the tier `policy/memories.rego`'s own `test_` rules cannot be.** A
 //! `with input as` block writes the shape it then reads, so it is green over a
 //! key the engine never fills and over a channel nothing populates — the
-//! dead-gate class `.claude/rules/policy-modules.md` opens with, measured twice
+//! dead-gate class `rules/policy-modules.md` opens with, measured twice
 //! in this repository. Every fixture below builds a real repository and runs the
 //! real binary against the committed module, so what is asserted is that the
 //! ENGINE selects the markdown this row declares and hands it over as lines.
@@ -87,6 +87,8 @@ line_sources = [
   "*.md",
   ".claude/*.md",
   ".claude/**/*.md",
+  "rules/*.md",
+  "rules/**/*.md",
   ".serena/memories/*.md",
   ".serena/memories/**/*.md",
 ]
@@ -222,13 +224,13 @@ fn a_referrer_outside_the_memories_tree_is_judged() {
         "memories-outside",
         &[
             (".serena/memories/core.md", "the root\n"),
-            (".claude/rules/toolchain.md", "detail in mem:gone-away\n"),
+            ("rules/toolchain.md", "detail in mem:gone-away\n"),
         ],
     );
     let (code, said) = judge(&dir);
     assert_eq!(code, Some(2), "a rules file is a referrer too\n{said}");
     assert!(
-        said.contains(".claude/rules/toolchain.md"),
+        said.contains("rules/toolchain.md"),
         "the finding names the referrer\n{said}"
     );
 }
@@ -419,7 +421,7 @@ fn no_index_file_is_required() {
 
 /// COULD NOT LOOK — and this tier MEASURES the channel rather than assuming it.
 ///
-/// `.claude/rules/policy-modules.md` asks for exactly this case and says why a
+/// `rules/policy-modules.md` asks for exactly this case and says why a
 /// `with input as` version is worthless for it: that fabricates the shape the
 /// engine may be unable to produce, so it passes over a channel nothing fills.
 ///

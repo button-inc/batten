@@ -2,7 +2,7 @@
 //!
 //! **The second tier for the verb (CLOUD-893).** `wiring.rs`'s own unit cases
 //! pin `prune_siblings` against documents they build themselves, which is the
-//! `with input as` shape `.claude/rules/policy-modules.md` names: it fabricates
+//! `with input as` shape `rules/policy-modules.md` names: it fabricates
 //! the document the ENGINE may be unable to locate, so every one of them could
 //! pass over a verb that reads the wrong home directory, refuses without `-y` in
 //! the wrong direction, or writes the record after the repair instead of before.

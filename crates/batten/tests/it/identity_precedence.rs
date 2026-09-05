@@ -8,7 +8,7 @@
 //! argued from first principles against `batten.toml`, and six more in a later
 //! session across two container restarts.
 //!
-//! WHY AGENTS.md AND NOT `.claude/rules/commits.md`. That was the original
+//! WHY AGENTS.md AND NOT `rules/commits.md`. That was the original
 //! placement and it is falsified: `commits.md` is path-scoped by its frontmatter
 //! to `CHANGELOG.md`, `release-plz.toml` and `Cargo.toml`, while the hook fires
 //! on every commit in every session, most of which touch none of those three. A
@@ -41,7 +41,7 @@ use common::at_root;
 const INSTRUCTIONS: &str = "AGENTS.md";
 
 /// The path-scoped file that carries the detail behind the record.
-const DETAIL: &str = ".claude/rules/commits.md";
+const DETAIL: &str = "rules/commits.md";
 
 fn read(path: &str) -> String {
     fs::read_to_string(at_root(path)).unwrap_or_else(|error| panic!("read {path}: {error}"))

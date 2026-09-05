@@ -19,7 +19,7 @@
 //! **Counts are the assertion, never the clock.** `RuleCost::elapsed` is a
 //! measurement and varies run to run; the counts are deterministic. Asserting a
 //! duration here would discriminate nothing, which is the standing rule in
-//! `.claude/rules/rust.md`.
+//! `rules/rust.md`.
 //!
 //! Asserted through `run_static` — the surface a consumer reaches — rather than
 //! by widening anything to `pub` for a test's convenience.

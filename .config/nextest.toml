@@ -25,7 +25,7 @@
 # tuned on two noisy samples, and 25% from the thing it exists to catch. Isolating
 # the measurement removes the noise rather than widening the bound to admit it.
 #
-# `.claude/rules/rust.md` says to assert this class with a counter and a repeat-run
+# `rules/rust.md` says to assert this class with a counter and a repeat-run
 # comparison rather than a clock. That remains the durable fix and needs a counter
 # over Rego evaluation the engine does not expose today: `RuleCost` carries
 # `files_read` and `bytes_read`, which count acquisitions at the boundary and so

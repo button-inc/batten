@@ -30,7 +30,7 @@
 # WHY THERE IS A `check` ROW NOW, when the predecessor deliberately had none.
 # `perf-assert.sh` argued that `check` is bounded by the repository it is pointed
 # at, so no ceiling could tell a large consumer tree apart from a regression, and
-# `.claude/rules/rust.md` records the absence as a stated decision. The `perf`
+# `rules/rust.md` records the absence as a stated decision. The `perf`
 # arm this row gates is not that: it is a ONE-RULE FIXTURE repo, so it measures
 # process start plus config load plus trust resolution plus one rule, all of which
 # are bounded by what batten costs rather than by a consumer's tree. That is
@@ -88,7 +88,7 @@ rules contains "perf-budget-unreadable"
 # A LITERAL IN A CONSUMER MODULE, NOT A `[[pattern]]` ROW. Non-negotiable rule 1
 # scopes to `crates/batten`, and a `policy/*.rego` module IS consumer config, so a
 # number is at home here exactly as it was at home in the shell table.
-# `.claude/rules/policy-modules.md` refuses a threshold spelled as a pattern for
+# `rules/policy-modules.md` refuses a threshold spelled as a pattern for
 # the opposite reason — arithmetic is not a concept with one spelling — and this
 # is not that.
 #

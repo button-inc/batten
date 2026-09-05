@@ -11,7 +11,7 @@
 //! plumbing, and `with input as`'s equivalent here — calling `diagnose` and
 //! reading the `Report` — passes over a channel nothing writes to.
 //!
-//! That is the same class `.claude/rules/policy-modules.md` records for a dead
+//! That is the same class `rules/policy-modules.md` records for a dead
 //! Rego clause, one layer over: a producer that resolves correctly and reaches
 //! nobody looks exactly like a healthy container.
 //!
@@ -29,7 +29,7 @@
 //! mean nothing, so the discriminating assertion is the SUBJECT: the reachable
 //! fixture's advisory must not name `command-programs`, over a tree identical to
 //! the unreachable one except for the program the row spells. Same reason
-//! `.claude/rules/policy-modules.md` demands a mirror beside every deny case.
+//! `rules/policy-modules.md` demands a mirror beside every deny case.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

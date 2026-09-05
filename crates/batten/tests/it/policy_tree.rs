@@ -194,7 +194,7 @@ fn a_declared_document_that_will_not_parse_is_could_not_look() {
 /// Both arms above assert `not_evaluated`, which is the ENGINE's record. Neither
 /// says a MODULE can tell them apart, and until CLOUD-1309 it could not:
 /// `input.tree.missing` was an array of bare names, so "would not parse" and "not
-/// there" were byte-identical to every predicate. `.claude/rules/policy-modules.md`
+/// there" were byte-identical to every predicate. `rules/policy-modules.md`
 /// asserted the opposite in its own words — "the two causes stay distinct and a
 /// module may rely on that" — and `rules_drift.rs` carries a comment claiming its
 /// per-cause pair "proves the distinction survives the projection". It did not:
@@ -207,7 +207,7 @@ fn a_declared_document_that_will_not_parse_is_could_not_look() {
 #[test]
 fn a_module_can_tell_an_unparseable_source_from_an_absent_one() {
     // A probe asking the channel BY NAME and refusing only on the `unparsed`
-    // cause, which is the spelling `.claude/rules/policy-modules.md` documents.
+    // cause, which is the spelling `rules/policy-modules.md` documents.
     // The module carries no `absent` arm at all, so an engine still projecting
     // the old bare LIST reads `["config.toml"]["config.toml"]` as undefined and
     // fires never — and one projecting a single collapsed token fires on both.

@@ -31,7 +31,7 @@
 # because its fixtures exercised the shapes the author already had in mind.
 #
 # THAT DISTINCTION IS WHAT KEEPS CLOUD-843'S CAMPAIGN RUNNING, and it is the whole
-# reason this is not a `[[ratchet]]` over files. `.claude/rules/toolchain.md`
+# reason this is not a `[[ratchet]]` over files. `rules/toolchain.md`
 # requires every retirement to land its predicate as a `policy/*.rego` module PLUS
 # a `crates/batten/tests/*.rs` tier, so a retirement adds a test file BY MANDATE —
 # which is why `prune.rs` recorded the count moving 110 -> 114 -> 118 across three
@@ -123,7 +123,7 @@ delta := input.tree["base-delta"]
 # silently. The load-time cases below agreed with the mistake, because a
 # `with input as` case can only be as right as its author. The compiled tier in
 # `crates/batten/tests/it/test_targets.rs` is what caught it — which is the whole
-# reason `.claude/rules/policy-modules.md` calls that second tier not optional.
+# reason `rules/policy-modules.md` calls that second tier not optional.
 added_target contains path if {
 	some path in delta.added
 	segments := split(path, "/")
@@ -144,7 +144,7 @@ added_target contains path if {
 # `count(segments) == 5` with the last segment EXACTLY `main.rs` is what keeps
 # the campaign's tier landable: `crates/batten/tests/it/foo.rs` is also five
 # segments and is not `main.rs`, so it stays invisible here, which is the
-# property `.claude/rules/toolchain.md`'s two-shapes rule depends on. Widening
+# property `rules/toolchain.md`'s two-shapes rule depends on. Widening
 # this to "any five-segment .rs" would refuse every retirement's own tier.
 added_target contains path if {
 	some path in delta.added
@@ -174,7 +174,7 @@ deny contains finding if {
 # input the predicate reads — `with input as` fabricates the very shape the engine
 # may be unable to produce — so `crates/batten/tests/it/test_targets.rs` runs the
 # same questions over the compiled binary. Both tiers, per
-# `.claude/rules/policy-modules.md`, and the second is not optional.
+# `rules/policy-modules.md`, and the second is not optional.
 
 test_a_new_top_level_test_file_is_refused if {
 	count(violation) == 1 with input as {"tree": {"base-delta": {

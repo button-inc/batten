@@ -242,7 +242,7 @@ fn the_bare_report_is_unchanged_by_this_sub_verb() {
     // THE REGRESSION THIS VERB EXISTS AS A SUB-VERB TO AVOID. An earlier revision
     // put the comparison in `diagnose()`'s check list, and `this_repository_is_healthy`
     // went red whenever a rebuild had outpaced the install — a world-property
-    // deciding a commit gate (`.claude/rules/toolchain.md`, from `lock-check`).
+    // deciding a commit gate (`rules/toolchain.md`, from `lock-check`).
     // Bare `doctor` must not mention the mediator at all.
     let dir = mediator_fixture("mediator-bare-unchanged", b"older", b"newer");
     let output = doctor(&dir, &[]);

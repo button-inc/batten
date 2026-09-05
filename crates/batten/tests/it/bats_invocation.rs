@@ -13,7 +13,7 @@
 //!
 //! The module's `test_` cases hand themselves a `documents` object, so they are
 //! green over a shape the engine may never build — the hazard
-//! `.claude/rules/policy-modules.md` names, and the reason both of its measured
+//! `rules/policy-modules.md` names, and the reason both of its measured
 //! instances were found by adding this tier rather than by reading. Two things
 //! here can only be proved against the real boundary: that the manifest's
 //! `[tasks."test:bats"].run` reaches a module as a parsed string at all, and that

@@ -186,7 +186,7 @@ fn the_ordinary_possessive_uses_stay_clean() {
 #[test]
 fn an_unreadable_source_is_reported_rather_than_passed() {
     // COULD NOT LOOK IS NOT CLEAN, over the compiled binary rather than over a
-    // fabricated `missing` map. `.claude/rules/policy-modules.md` is explicit that
+    // fabricated `missing` map. `rules/policy-modules.md` is explicit that
     // a `with input as` case cannot establish this: it manufactures the very
     // channel the engine may never populate, so the module's own tier passes
     // whether or not `input.tree.missing` is ever filled for a `line_sources`

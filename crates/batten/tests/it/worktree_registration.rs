@@ -5,7 +5,7 @@
 //! `policy/worktree-registration.rego`'s own `test_` rules pin the predicate and
 //! cannot pin the ENGINE. Every one of them supplies `input` by hand, so all six
 //! pass over a `git-worktrees` key nothing fills — which is the class
-//! `.claude/rules/policy-modules.md` opens with and the one both live instances in
+//! `rules/policy-modules.md` opens with and the one both live instances in
 //! this repository were found by adding a tier like this one, not by reading.
 //!
 //! So this suite installs **the module's real bytes**, read off the checkout at

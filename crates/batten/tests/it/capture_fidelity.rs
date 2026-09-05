@@ -19,7 +19,7 @@
 //! `a_reason_id_never_carries_a_path` for the same reason). It also means a
 //! rename of either file is a compile error here rather than a scan that quietly
 //! finds nothing — the `mise-tasks/` no-extension defect
-//! (`.claude/rules/scanning.md`) in a different costume.
+//! (`rules/scanning.md`) in a different costume.
 
 /// The term itself, spelled once so the scan cannot drift from the rule.
 const RESERVED: &str = "byte-perfect";

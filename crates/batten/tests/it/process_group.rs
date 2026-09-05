@@ -710,7 +710,7 @@ fn a_clean_run_leaves_no_group_record_and_a_killed_one_does() {
     // Measured: green in isolation, red under a full `verify` where the machine
     // is loaded.
     //
-    // Retrying the SETUP, never the measurement (`.claude/rules/rust.md`,
+    // Retrying the SETUP, never the measurement (`rules/rust.md`,
     // CLOUD-448): what is asserted below — that exactly one note survives an
     // uncatchable kill and holds a pgid — is unchanged.
     let deadline = Instant::now() + PATIENCE;
