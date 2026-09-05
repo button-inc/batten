@@ -3132,6 +3132,31 @@ case "$rc" in
 esac
 '''
 
+# ─── `mise run land`, the name every caller still uses (CLOUD-1148) ──────────
+#
+# `mise-tasks/land.sh` was a FILE task, so deleting the program deletes the task
+# name with it — and `mise run land` is invoked by NAME from AGENTS.md,
+# `.claude/rules/commits.md`, `.claude/settings.json` and several `batten.toml`
+# remedies. A shim keeps every one of those call sites byte-identical, which is
+# the same reason `[tasks."verified"]` and `[tasks."task-registry"]` exist and
+# why those retirements touched no caller.
+#
+# NO EXIT TRANSLATION, unlike `verified`'s shim. That one inverts a table because
+# its predecessor answered `1` unverified and `2` could-not-look; this verb was
+# always the engine's own table — `0` landed, `2` a decision the caller must make
+# (a conflict or a refused gate), `3` the laps ran out with no answer — so the
+# codes pass straight through and a wrapper case statement would be a second
+# authority over them.
+#
+# THE BASE IS A POSITIONAL WITH A DEFAULT, because `batten land lap` requires one
+# and the predecessor read `origin/main` throughout. The default is spelled here
+# rather than compiled in: which ref is trunk is this repository's own fact, and
+# `crates/batten` refusing to guess it is non-negotiable rule 1 (see
+# `run_land_fast_forward`'s `$LAND_WORKFLOW` refusal for the same shape).
+[tasks.land]
+description = "Land this branch's PR: rebase, verify, push, wait for CI, /fast-forward — lapping until it merges or a rebase conflicts"
+run = 'cargo run --quiet -p batten -- land lap "{{arg(name="reference", default="main")}}"'
+
 [tasks."checks-green"]
 description = "Is this SHA green over the required check set? (0 green / 1 red / 2 could not look / 3 no answer yet)"
 shell = "bash -c"

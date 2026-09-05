@@ -238,12 +238,3 @@ at() { (cd "$REPO" && "$CENSUS" "$@"); }
 }
 
 # --- the call sites, so the wiring cannot go dead unnoticed -------------------
-
-@test "land records the stop it causes itself, or every clean landing reads as a reclaim" {
-	# The commonest stop of all is land killing its own heartbeat on a normal
-	# finish; the loop never runs another statement, so its last record stays an
-	# `h`. Without this line every successful landing would later read as
-	# "the container died under active work".
-	run grep -c 'note x land-stopped' "$BATS_TEST_DIRNAME/../mise-tasks/land.sh"
-	[ "$output" -eq 1 ]
-}
