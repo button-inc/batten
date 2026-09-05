@@ -1906,6 +1906,11 @@ fn claim_of(matches: &ArgMatches) -> Option<ClaimCommand> {
     }
 }
 
+/// The `hk` noun's arm, if one was given (CLOUD-947).
+///
+/// Undocumented siblings surround this one, and that is the file's convention
+/// rather than an oversight: each `*_of` is a mechanical `ArgMatches` fold whose
+/// arms name themselves. This carries a line only because the noun is new.
 fn hk_of(matches: &ArgMatches) -> Option<HkCommand> {
     match matches.subcommand()? {
         ("contract", _) => Some(HkCommand::Contract),

@@ -1008,6 +1008,7 @@ pub fn adopt(
 mod tests {
     use super::*;
 
+    /// A tracker row with just the two fields the sequence rules read.
     fn issue(id: &str, status: &str) -> Issue {
         Issue {
             id: id.to_owned(),
@@ -1051,6 +1052,7 @@ mod tests {
         assert_eq!(parsed("CLOUD-1", None).created_at, None);
     }
 
+    /// A wiped receipts directory under `target/tmp`, per case.
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join("batten-claim-tests").join(name);
         let _ = std::fs::remove_dir_all(&dir);
