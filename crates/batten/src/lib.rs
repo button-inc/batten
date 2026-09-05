@@ -9954,17 +9954,67 @@ const UNLANDED_BYPASS: &str = "BATTEN_UNLANDED_CHECK_BYPASS";
 /// this is an EVALUATION, not a decision. A recorder that failed simply leaves
 /// nothing to read, which is silence — the correct answer for a hook that may
 /// never be the reason a turn stalls.
-fn record_state(overrides: &Overrides) {
-    let mut sink = std::io::sink();
-    // `SkipOnHotPath`, because this is the hot path (CLOUD-1480). The verb below
-    // is a human asking about their config; this is the end of every turn.
-    let _ = run_state_record(
-        overrides,
-        Mode::default(),
-        &mut sink,
-        policy::ModuleChecks::SkipOnHotPath,
-        facts::Surface::Hook,
-    );
+/// Start the state record and **do not wait for it** (CLOUD-1480).
+///
+/// # The hook must return inside its budget; the record cannot
+///
+/// This ran inline, and it is the whole of that row: a state record scans the
+/// tree and folds in the transcript detectors, which measured **118.2s** as a
+/// standalone verb on this repository. The mediated Stop call therefore took
+/// ~110s against a published `<=100ms` budget, and a turn cannot close until the
+/// hook returns — so every end of turn stalled for about two minutes.
+///
+/// No amount of trimming fixes that. The work is seconds by nature, the budget
+/// is milliseconds, and the only reconciliation is that the record stops being
+/// AWAITED. It is drain work: the verdict is written, the process exits, and the
+/// scan finishes on its own time.
+///
+/// # Detached, and what that costs
+///
+/// Spawned with null stdio and never waited on, so the child is reparented when
+/// this process exits. `process_group` on unix rather than `pre_exec(setsid)`
+/// for `exec.rs`'s stated reason — the workspace forbids `unsafe`, and for this
+/// purpose the two are the same call.
+///
+/// **The nudge ladder below now reads a store one turn behind**, and that is the
+/// deliberate cost rather than an oversight. It called this and then read what
+/// this wrote; asynchronously, the read sees the PREVIOUS turn's record. That is
+/// tolerable for exactly this consumer and would not be for a gate: the
+/// conditions it reports — unlanded work above all — persist across turns, so a
+/// turn that creates one is nudged at the end of the next. A gate deciding an
+/// exit code on a one-turn-stale store would be a different and much worse
+/// trade, which is why this indirection stays local to the advisory path.
+///
+/// The child re-reads config from the environment, which is where a mediated
+/// call's overrides live; no flag is dropped, because the hook is invoked with
+/// none.
+fn record_state(_overrides: &Overrides) {
+    let Ok(exe) = std::env::current_exe() else {
+        // Could-not-look: no binary path, no record. Silent by design — this is
+        // the advisory path, and a boundary that cannot start its own drain must
+        // not turn that into a verdict about the turn.
+        return;
+    };
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: the drain IS the spawn (CLOUD-1480). The record cannot run inside a 100ms mediated budget, so the boundary starts it and returns; `exec::piped` is the waiting path and is exactly what must not happen here"
+    )]
+    let mut builder = std::process::Command::new(exe);
+    builder
+        .args(["state", "record"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        // Its own group, so the harness reaping this hook's group does not take
+        // the drain with it.
+        builder.process_group(0);
+    }
+    // SPAWNED AND DROPPED. No `wait`, no `status`, no handle kept: waiting is
+    // the defect this function exists to remove.
+    drop(builder.spawn());
 }
 
 /// The `completion.unlanded` verdict for this branch, or nothing (CLOUD-1163).
