@@ -53,12 +53,6 @@ defined[name] := argv if {
 	count(argv) > 0
 }
 
-# The program a task would reach, per task.
-runs[program] := name if {
-	some name, argv in defined
-	program := argv[0]
-}
-
 # One entry per segment, so a task's program reached in the second half of a
 # pipeline is as visible as one in the first.
 #
@@ -66,14 +60,29 @@ runs[program] := name if {
 # here would mean re-implementing the wrapper look-through, the environment
 # assignments and every spelling of the runner's own invocation — a second
 # authority over an argv the engine already parses.
+#
+# THE TASK IS BOUND HERE RATHER THAN THROUGH A PROGRAM -> NAME TABLE, and that
+# is a correctness fix and not a style one. The table was written
+# `runs[program] := name`, a partial object keyed on the program — so two tasks
+# whose bodies begin with the same program are two values under one key, which
+# Rego refuses at evaluation with `eval_conflict_error`. Not hypothetical: this
+# very repository has 33 tasks starting `cargo` and 3 starting `hk`, so the
+# preset would have failed to evaluate at all in the tree that ships it, and a
+# preset that cannot evaluate refuses nothing. Every fixture written for it had
+# exactly one task, which is the CLOUD-418 class exactly — a gate never shown
+# able to fire on the shape it will actually meet.
+#
+# Binding `name` in the comprehension yields one finding per (call, task) pair
+# instead, so several tasks reaching one program each name themselves.
 violation contains {
 	"rule": "task-over-executable",
 	"verdict": "task reach loose",
-	"subjects": [{"artifact": runs[entry.name]}],
+	"subjects": [{"artifact": name}],
 } if {
 	some entry in input.call.programs
 	not entry.mediated
-	runs[entry.name]
+	some name, argv in defined
+	argv[0] == entry.name
 }
 
 deny contains finding if some finding in violation
@@ -98,6 +107,28 @@ test_the_refusal_names_the_task_rather_than_the_program if {
 	}
 
 	finding.subjects[0].artifact == "a-task"
+}
+
+# TWO TASKS, ONE PROGRAM — the shape every other case in this file lacked.
+#
+# The program -> name table this module used to build made these two tasks two
+# values under the key "a-program", and Rego refuses that with
+# `eval_conflict_error` rather than deciding: the preset stopped evaluating and
+# therefore refused nothing. This repository has 33 tasks starting `cargo`, so
+# the shape is the common one and the single-task fixtures were the unusual one.
+test_two_tasks_sharing_a_program_still_decide if {
+	findings := violation with input as {
+		"facts": {"tasks": {
+			"first-task": ["a-program", "--one"],
+			"second-task": ["a-program", "--two"],
+		}},
+		"call": {"programs": [{"name": "a-program", "mediated": false}]},
+	}
+
+	count(findings) == 2
+
+	names := {subject.artifact | some finding in findings; some subject in finding.subjects}
+	names == {"first-task", "second-task"}
 }
 
 test_a_mediated_call_of_the_same_program_is_allowed if {
