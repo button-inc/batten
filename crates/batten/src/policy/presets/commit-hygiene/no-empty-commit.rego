@@ -1,5 +1,5 @@
 #MUTANT-SUITE crates/batten/tests/it/policy_presets.rs
-#MUTANT program-unread|s@^\tsegment.words\[0\] == "git"$@\tfalse@|the_commit_hygiene_preset_decides_both_ways
+#MUTANT program-unread|s@^\tprogram.name == "git"$@\tfalse@|the_commit_hygiene_preset_decides_both_ways
 # Commit hygiene: a commit records a change, and an empty one records that
 # somebody wanted a new SHA.
 #
@@ -19,46 +19,84 @@ violation contains {
 	"rule": "no-empty-commit",
 	"verdict": "commit ship empty",
 } if {
-	# PER SEGMENT (CLOUD-857), the identical anchoring defect its sibling
-	# `no-force-push` carried: `split(input.call.command, " ")` asks about the
-	# first word of the LINE, so `cd /tmp && git commit --allow-empty` was
-	# allowed. `input.call.segments` is `hook::segments` projected — the one
-	# parser — and no `split` belongs here.
-	some segment in input.call.segments
-	segment.words[0] == "git"
-	"commit" in segment.words
-	"--allow-empty" in segment.words
+	# ON THE PROGRAM (CLOUD-1382), and this module has now carried its sibling
+	# `no-force-push`'s anchoring defect twice, which is why the history is kept
+	# rather than tidied.
+	#
+	# First it read `split(input.call.command, " ")` — the first word of the
+	# LINE — so `cd /tmp && git commit --allow-empty` was allowed (CLOUD-857).
+	# Then it read `segment.words[0]`, which is the first word of the SEGMENT and
+	# still not the program: `(git commit --allow-empty …)`, `time …`, `! …`,
+	# `{ …; }` and `command …` each put a token at index 0 and each runs the
+	# commit. Measured on the sibling, one keystroke apiece.
+	#
+	# `input.call.programs` is the argv the engine already read (CLOUD-1028), and
+	# `arguments` is what THIS program was handed — so `--allow-empty` is
+	# correlated with git's own invocation rather than with the line it sits on.
+	# No `split` belongs here: a second tokenizer is a second authority.
+	some program in input.call.programs
+	program.name == "git"
+	"commit" in program.arguments
+	"--allow-empty" in program.arguments
 }
 
 # The predicate's own tests (CLOUD-835). The negative cases are what make this a
 # test of the practice rather than of the string: an ordinary commit and another
 # tool's `--allow-empty` both have to stay unjudged.
 #
-# Every case passes segments and one is COMPOUND (CLOUD-857): a bare-only suite
-# is exactly what let the anchoring defect above ship green, and `batten policy
-# test` reports one now.
+# Every case passes `programs` and one is COMPOUND (CLOUD-857): a bare-only
+# suite is exactly what let the first anchoring defect ship green.
+#
+# AND HAND-WRITTEN `programs` IS STILL NOT THE ENGINE'S, which is why
+# `#MUTANT-SUITE` names a compiled tier. A case here supplies the resolution
+# under test — it cannot say whether the boundary resolves `(git` to `git`, only
+# that the predicate would be right if it did. That is what let CLOUD-1382's six
+# bypasses sit under a green suite.
 test_no_empty_commit if {
-	some v in violation with input as {"call": {"segments": [{"words": ["git", "commit", "--allow-empty", "-m", "x"], "raw": "git commit --allow-empty -m x", "terminator": null}]}}
+	some v in violation with input as {"call": {"programs": [{"program": "git", "name": "git", "arguments": ["commit", "--allow-empty", "-m", "x"], "mediated": false}]}}
 	v.rule == "no-empty-commit"
 }
 
 test_an_empty_commit_later_in_a_list_is_caught if {
-	some v in violation with input as {"call": {"segments": [
-		{"words": ["cd", "/tmp"], "raw": "cd /tmp", "terminator": "&&"},
-		{"words": ["git", "commit", "--allow-empty", "-m", "x"], "raw": "git commit --allow-empty -m x", "terminator": null},
+	some v in violation with input as {"call": {"programs": [
+		{"program": "cd", "name": "cd", "arguments": ["/tmp"], "mediated": false},
+		{"program": "git", "name": "git", "arguments": ["commit", "--allow-empty", "-m", "x"], "mediated": false},
 	]}}
 	v.rule == "no-empty-commit"
 }
 
+# The grammar case (CLOUD-1382): the caller wrote `time git commit
+# --allow-empty`, and the walk steps past `time`, so the entry names git.
+test_a_grammar_token_does_not_hide_the_program if {
+	some v in violation with input as {"call": {"programs": [{"program": "git", "name": "git", "arguments": ["commit", "--allow-empty"], "mediated": false}]}}
+	v.rule == "no-empty-commit"
+}
+
+# Reached through a path, still git — what `name` buys over `program`.
+test_git_reached_through_a_path_is_still_git if {
+	some v in violation with input as {"call": {"programs": [{"program": "/usr/bin/git", "name": "git", "arguments": ["commit", "--allow-empty"], "mediated": false}]}}
+	v.rule == "no-empty-commit"
+}
+
 test_an_ordinary_commit_is_left_alone if {
-	count(violation) == 0 with input as {"call": {"segments": [{"words": ["git", "commit", "-m", "x"], "raw": "git commit -m x", "terminator": null}]}}
+	count(violation) == 0 with input as {"call": {"programs": [{"program": "git", "name": "git", "arguments": ["commit", "-m", "x"], "mediated": false}]}}
 }
 
 # A quoted mention stays one word (CLOUD-269), so the program is `echo`.
 test_a_quoted_mention_does_not_fire if {
-	count(violation) == 0 with input as {"call": {"segments": [{"words": ["echo", "git commit --allow-empty"], "raw": "echo \"git commit --allow-empty\"", "terminator": null}]}}
+	count(violation) == 0 with input as {"call": {"programs": [{"program": "echo", "name": "echo", "arguments": ["git commit --allow-empty"], "mediated": false}]}}
+}
+
+# THE FLAG MUST BE THIS PROGRAM'S. git is invoked and `--allow-empty` is on the
+# line; they are not the same invocation, and anchoring on the program while
+# reading the flag from anywhere would be the defect one level up.
+test_another_programs_flag_is_not_gits if {
+	count(violation) == 0 with input as {"call": {"programs": [
+		{"program": "git", "name": "git", "arguments": ["commit", "-m", "x"], "mediated": false},
+		{"program": "hg", "name": "hg", "arguments": ["commit", "--allow-empty"], "mediated": false},
+	]}}
 }
 
 test_another_tool_is_not_judged if {
-	count(violation) == 0 with input as {"call": {"segments": [{"words": ["hg", "commit", "--allow-empty"], "raw": "hg commit --allow-empty", "terminator": null}]}}
+	count(violation) == 0 with input as {"call": {"programs": [{"program": "hg", "name": "hg", "arguments": ["commit", "--allow-empty"], "mediated": false}]}}
 }

@@ -1,5 +1,5 @@
 #MUTANT-SUITE crates/batten/tests/it/policy_presets.rs
-#MUTANT probe-mediation-unread|s@^\tsegment.words\[0\] in probe_verbs$@\tfalse@|every_shipped_preset_passes_its_own_suite
+#MUTANT probe-mediation-unread|s@^\tentry.name in probe_verbs$@\tfalse@|every_shipped_preset_passes_its_own_suite
 # A pinned toolchain: asking the bare PATH about a pinned program answers about
 # the wrong toolchain, and the empty answer reads as "not installed here".
 #
@@ -10,8 +10,9 @@
 # something wrong happened. This is about a PRESENCE ANSWER: nothing ran, nothing
 # broke, and the caller concluded a capability does not exist.
 #
-# A gate watching `input.call.programs` cannot see it: the pinned name is an
-# ARGUMENT, so no entry matches and nothing fires.
+# A gate watching only which PROGRAM ran cannot see it: the pinned name is an
+# ARGUMENT of the probe, never the thing invoked. `programs[_].arguments` is what
+# makes it visible (CLOUD-1382) — the same entry, read one field further.
 #
 # **SCOPED BY MEASUREMENT, NOT BY THE VERB LIST THE ROW PROPOSED.** CLOUD-1256
 # named `command -v` as the motivating case on the premise that the program run
@@ -84,21 +85,27 @@ provided contains name if {
 # CLOUD-1161's `ci-hygiene` preset shipped two dead predicates exactly that way.
 probe_verbs := {"which", "type"}
 
-# Whether this segment's first word is one of the probe verbs.
-probes(segment) if {
-	segment.words[0] in probe_verbs
-}
-
-# The pinned program a probe segment names, if any.
+# The pinned program a probe names, if any.
 #
-# READ OFF `segments[_].words`, the argv the engine already parsed — never a
-# `split` of `input.call.command`. A second parser is a second authority over one
-# call, measured at CLOUD-857 where a module anchored on the first word of the
-# whole line denied `git push --force` and allowed `cd /tmp && git push --force`.
+# ON THE PROGRAM, NOT ON THE FIRST WORD (CLOUD-1382). This read
+# `segment.words[0] in probe_verbs`, which is one construct short of the program:
+# `(which gh)`, `time which gh` and `{ which gh; }` each put something else at
+# index 0, and each still runs the probe. Measured on `trunk-based`'s sibling
+# preset, six such tokens at exit 0.
+#
+# READ OFF `programs`, the argv the engine already parsed — never a `split` of
+# `input.call.command`. A second parser is a second authority over one call,
+# measured at CLOUD-857 where a module anchored on the first word of the whole
+# line denied `git push --force` and allowed `cd /tmp && git push --force`.
+#
+# `arguments` rather than the segment's words, so the pinned name has to be
+# something THIS probe was handed: a probe of one program and an invocation of
+# another on the same line are two facts, and reading the whole segment would
+# merge them.
 probed contains name if {
-	some segment in input.call.segments
-	probes(segment)
-	some name in segment.words
+	some entry in input.call.programs
+	entry.name in probe_verbs
+	some name in entry.arguments
 	provided[name]
 }
 
@@ -133,12 +140,47 @@ mediated_call if {
 
 # --- cases ---------------------------------------------------------------
 
+# THE GRAMMAR CASE (CLOUD-1382), as the boundary now resolves it: the caller
+# wrote `time which gh`, `time` is grammar the walk steps past, and the entry
+# names the probe with its own argument.
+test_a_grammar_token_does_not_hide_the_probe if {
+	some v in violation with input as {
+		"call": {
+			"command": "time which gh",
+			"segments": [{"words": ["time", "which", "gh"]}],
+			"programs": [{"program": "which", "name": "which", "arguments": ["gh"], "mediated": false}],
+		},
+		"facts": {"pinned-programs": ["gh"]},
+	}
+	v.subjects[0].artifact == "gh"
+}
+
+# AND THE PINNED NAME MUST BE THIS PROBE'S ARGUMENT. A probe of one program
+# beside an invocation of the pinned one is two facts, and reading the whole
+# segment would have merged them into a finding nobody can act on.
+test_a_pinned_name_belonging_to_another_program_is_not_probed if {
+	count(violation) == 0 with input as {
+		"call": {
+			"command": "which curl && gh pr list",
+			"segments": [
+				{"words": ["which", "curl"]},
+				{"words": ["gh", "pr", "list"]},
+			],
+			"programs": [
+				{"program": "which", "name": "which", "arguments": ["curl"], "mediated": false},
+				{"program": "gh", "name": "gh", "arguments": ["pr", "list"], "mediated": false},
+			],
+		},
+		"facts": {"pinned-programs": ["gh"]},
+	}
+}
+
 test_an_unmediated_probe_for_a_pinned_program_is_reported if {
 	some v in violation with input as {
 		"call": {
 			"command": "which gh",
 			"segments": [{"words": ["which", "gh"]}],
-			"programs": [{"program": "which", "name": "which", "mediated": false}],
+			"programs": [{"program": "which", "name": "which", "arguments": ["gh"], "mediated": false}],
 		},
 		"facts": {"pinned-programs": ["gh", "jq"]},
 	}
@@ -150,7 +192,7 @@ test_type_is_a_probe_too if {
 		"call": {
 			"command": "type gh",
 			"segments": [{"words": ["type", "gh"]}],
-			"programs": [{"program": "type", "name": "type", "mediated": false}],
+			"programs": [{"program": "type", "name": "type", "arguments": ["gh"], "mediated": false}],
 		},
 		"facts": {"pinned-programs": ["gh"]},
 	}
@@ -166,7 +208,7 @@ test_command_is_left_to_the_sibling_rule if {
 		"call": {
 			"command": "command -v gh",
 			"segments": [{"words": ["command", "-v", "gh"]}],
-			"programs": [{"program": "gh", "name": "gh", "mediated": false}],
+			"programs": [{"program": "gh", "name": "gh", "arguments": [], "mediated": false}],
 		},
 		"facts": {"pinned-programs": ["gh"]},
 	}
@@ -179,7 +221,7 @@ test_a_probe_for_an_unpinned_program_is_not_reported if {
 		"call": {
 			"command": "which curl",
 			"segments": [{"words": ["which", "curl"]}],
-			"programs": [{"program": "which", "name": "which", "mediated": false}],
+			"programs": [{"program": "which", "name": "which", "arguments": ["curl"], "mediated": false}],
 		},
 		"facts": {"pinned-programs": ["gh"]},
 	}
@@ -192,7 +234,7 @@ test_a_mediated_probe_is_not_reported if {
 		"call": {
 			"command": "mise exec -- bash -c \"which gh\"",
 			"segments": [{"words": ["mise", "exec", "--", "bash", "-c", "which gh"]}],
-			"programs": [{"program": "bash", "name": "bash", "mediated": true}],
+			"programs": [{"program": "bash", "name": "bash", "arguments": ["-c", "which gh"], "mediated": true}],
 		},
 		"facts": {"pinned-programs": ["gh"]},
 	}
@@ -205,7 +247,7 @@ test_a_bare_invocation_is_not_this_rules_finding if {
 		"call": {
 			"command": "gh pr list",
 			"segments": [{"words": ["gh", "pr", "list"]}],
-			"programs": [{"program": "gh", "name": "gh", "mediated": false}],
+			"programs": [{"program": "gh", "name": "gh", "arguments": ["pr", "list"], "mediated": false}],
 		},
 		"facts": {"pinned-programs": ["gh"]},
 	}
@@ -217,7 +259,7 @@ test_an_unresolved_fact_refuses_nothing if {
 		"call": {
 			"command": "which gh",
 			"segments": [{"words": ["which", "gh"]}],
-			"programs": [{"program": "which", "name": "which", "mediated": false}],
+			"programs": [{"program": "which", "name": "which", "arguments": ["gh"], "mediated": false}],
 		},
 		"facts": {"pinned-programs": null},
 	}
@@ -235,8 +277,8 @@ test_a_later_segment_is_judged_too if {
 				{"words": ["which", "gh"]},
 			],
 			"programs": [
-				{"program": "echo", "name": "echo", "mediated": false},
-				{"program": "which", "name": "which", "mediated": false},
+				{"program": "echo", "name": "echo", "arguments": ["hi"], "mediated": false},
+				{"program": "which", "name": "which", "arguments": ["gh"], "mediated": false},
 			],
 		},
 		"facts": {"pinned-programs": ["gh"]},
@@ -259,7 +301,10 @@ test_a_probe_nested_in_a_substitution_is_not_seen if {
 		"call": {
 			"command": "binary=\"$(which gh)\"",
 			"segments": [{"words": ["binary=$(which gh)"]}],
-			"programs": [{"program": "binary=$(which", "name": "binary=$(which", "mediated": false}],
+			# NO ENTRY AT ALL, which is the engine's own answer rather than a
+			# convenience: the one word is an environment assignment, so
+			# `effective_program` walks past it and finds nothing to run.
+			"programs": [],
 		},
 		"facts": {"pinned-programs": ["gh"]},
 	}

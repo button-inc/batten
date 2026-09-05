@@ -108,6 +108,33 @@ fn a_leased_push_behind_a_compound_command_is_still_reached() {
 }
 
 #[test]
+fn a_grammar_token_does_not_hide_the_program() {
+    // CLOUD-1382. `segment.words[0]` is the first WORD, and six shell
+    // constructs put something else there for one keystroke — measured on the
+    // sibling preset, all six at exit 0 while running the push. This row read
+    // the same anchor, so it carried the same six.
+    denied_by_this_row("(git push --force-with-lease origin main)");
+    denied_by_this_row("time git push --force-with-lease origin main");
+    denied_by_this_row("! git push --force-with-lease origin main");
+    denied_by_this_row("{ git push --force-with-lease origin main; }");
+    denied_by_this_row("command git push --force-with-lease origin main");
+    denied_by_this_row("if true; then git push --force-with-lease origin main; fi");
+    denied_by_this_row("GIT_TRACE=1 git push --force-with-lease origin main");
+}
+
+#[test]
+fn a_grammar_token_does_not_make_another_tool_gits() {
+    // The anti-vacuity half, and the case `#MUTANT program-anchor-unread`
+    // reddens: drop the program anchor and this denies. `hg` is reached through
+    // the same grammar the arm above steps past, so it also proves the skip did
+    // not simply stop identifying the program at all.
+    allowed("time hg push --force-with-lease");
+    allowed("(hg push --force-with-lease)");
+    // git behind the same token, doing something this row has no view on.
+    allowed("time git push -u origin work");
+}
+
+#[test]
 fn the_preset_still_owns_the_bare_forced_spellings() {
     // Asserted as SOMEBODY refusing rather than as this row's work. If this ever
     // starts coming from `leased-push`, the narrowing has been undone and

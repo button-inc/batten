@@ -156,3 +156,51 @@ fn another_tool_is_not_judged_wherever_it_sits() {
     assert_allowed("hg push --force");
     assert_allowed("cd /tmp && hg push --force");
 }
+
+#[test]
+fn a_token_before_the_program_does_not_hide_it() {
+    // CLOUD-1382's table, measured 2026-09-03 and re-measured 2026-09-05 against
+    // the shipped binary: every one of these ran the force push at exit 0.
+    // CLOUD-857 moved the anchor off the whole LINE and onto the segment, which
+    // closed `cd /tmp && …`; it did not close a token before the PROGRAM, and
+    // six of those are one keystroke.
+    //
+    // `!` inverts the exit status and still executes. `time` executes and
+    // reports. `(` and `{` both group and both execute. `command` executes,
+    // bypassing only function and alias lookup. `then` is the body of a
+    // conditional that ran.
+    //
+    // SHOWN ABLE TO FAIL (CLOUD-418). Run against the preset as it stood, seven
+    // of these eight were green when they should have been red — and the
+    // load-time tier could not have shown it, because a `with input as` case
+    // hands the predicate hand-written `words` and so fabricates the very
+    // tokenization that is wrong.
+    assert_preset_denies("(git push --force origin main)");
+    assert_preset_denies("time git push --force origin main");
+    assert_preset_denies("! git push --force origin main");
+    assert_preset_denies("{ git push --force origin main; }");
+    assert_preset_denies("command git push --force origin main");
+    assert_preset_denies("if true; then git push --force origin main; fi");
+    // The eighth, found while reproducing the row's seven: an environment
+    // assignment occupies index 0 in its own right, and `effective_program` has
+    // stepped past those since long before this row.
+    assert_preset_denies("GIT_TRACE=1 git push --force origin main");
+    // A grammar token in a COMPOUND command, which is the two holes at once —
+    // neither anchor alone reaches it.
+    assert_preset_denies("cd /tmp && time git push --force origin main");
+}
+
+#[test]
+fn a_token_before_the_program_does_not_invent_a_deny_either() {
+    // The anti-vacuity half, and it is the one that would catch a fix that
+    // simply searched the whole segment for `git`. Each of these carries a
+    // grammar prefix AND something that must stay allowed, so a predicate that
+    // stopped correlating the flag with git's own argv fails here.
+    assert_preset_allows("time git push --force-with-lease origin main");
+    assert_allowed("(git push origin feature)");
+    assert_allowed("time hg push --force");
+    assert_allowed("! echo \"git push --force origin main\"");
+    // git behind a grammar token, doing something the preset has no view on.
+    // The prefix must make the program VISIBLE, never make it guilty.
+    assert_allowed("time git status");
+}

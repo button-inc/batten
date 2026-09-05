@@ -39,7 +39,7 @@ rules contains "task-substitution"
 # Every declared task this call is a WEAKER SPELLING of.
 #
 # WEAKER IS A STRICT PREFIX, and that relation is the whole rule (CLOUD-1222).
-# This compared `segment.words[0] == argv[0]` for its first life — one word, the
+# This compared `words[0] == argv[0]` for its first life — one word, the
 # tool — which is that relation truncated to its first term. Sound for the case it
 # was written against (`cargo clippy` against `[tasks.lint]`'s
 # `cargo clippy --all-targets`), and unsound for this manifest, where most tasks
@@ -58,15 +58,30 @@ substituted contains task if {
 	# compare against — and inventing one would let this refuse a call by naming
 	# a command the task never runs.
 	is_array(argv)
-	some segment in input.call.segments
-	weaker_than(segment.words, argv)
+
+	# ON THE PROGRAM AND ITS OWN ARGV (CLOUD-1382). This iterated
+	# `input.call.segments` and compared `segment.words`, whose first element is
+	# the first WORD rather than the program — so `time cargo clippy`,
+	# `(cargo clippy)` and `{ cargo clippy; }` each diverged at index 0 and
+	# matched no task at all. Six such tokens, measured at exit 0 on the
+	# `trunk-based` preset that carried the same anchor.
+	#
+	# `programs` is the argv the engine already read, and reading it here also
+	# retires the value join `runs_a_task` used to perform: mediation is a
+	# property of THIS entry rather than of whatever segment shared its first
+	# word.
+	some entry in input.call.programs
+	weaker_than_program(entry, argv)
 
 	# THE TASK'S OWN INVOCATION IS NOT A SUBSTITUTION FOR ITSELF. Without this a
-	# repository could not run its own tasks.
-	not runs_a_task(segment)
+	# repository could not run its own tasks. Anchored on `programs` rather than
+	# on the raw first word, because that is the EFFECTIVE program the boundary
+	# resolved — through wrappers and environment assignments (CLOUD-1028) — so a
+	# mediated spelling of the same call is recognised as one.
+	entry.mediated != true
 }
 
-# The call's words are a STRICT prefix of the task's argv.
+# THE CALL'S ARGV IS A STRICT PREFIX OF THE TASK'S.
 #
 # Strict at both ends, and neither bound is defensive style:
 #
@@ -82,24 +97,18 @@ substituted contains task if {
 # What is left is exactly "the task's argv continues past where this call stops",
 # which is what `.claude/rules/toolchain.md` means by a weaker form — and what
 # leaves the genuine one-off it already promises is untouched, untouched.
-weaker_than(words, argv) if {
-	count(words) > 0
-	count(words) < count(argv)
-	every index, word in words {
-		argv[index] == word
-	}
-}
-
-# Whether this segment invokes the runner rather than the tool directly.
 #
-# Anchored on `programs` rather than on the raw first word, because that is the
-# EFFECTIVE program the boundary resolved — the argv already read, through
-# wrappers and environment assignments (CLOUD-1028). A predicate over
-# `segment.words[0]` would miss every mediated spelling of the same call.
-runs_a_task(segment) if {
-	some program in input.call.programs
-	program.mediated == true
-	program.program == segment.words[0]
+# Spelled as the program plus its `arguments` rather than as one joined list, so
+# the two halves are compared where the engine already separates them and no
+# array is built to be taken apart again. `program` rather than `name`, because a
+# task's argv is the spelling the manifest carries and comparing a basename
+# against it would match a different binary reached by the same name.
+weaker_than_program(entry, argv) if {
+	argv[0] == entry.program
+	count(entry.arguments) + 1 < count(argv)
+	every index, word in entry.arguments {
+		argv[index + 1] == word
+	}
 }
 
 violation contains {
@@ -122,7 +131,12 @@ call(command, tasks) := {
 	"call": {
 		"command": command,
 		"segments": [{"words": split(command, " "), "raw": command, "terminator": null, "input-redirect": false}],
-		"programs": [{"program": split(command, " ")[0], "mediated": false}],
+		"programs": [{
+			"program": split(command, " ")[0],
+			"name": split(command, " ")[0],
+			"arguments": array.slice(split(command, " "), 1, count(split(command, " "))),
+			"mediated": false,
+		}],
 	},
 	"facts": {"tasks": tasks},
 }
@@ -158,8 +172,18 @@ compound(command, first, second, tasks) := {
 			{"words": split(second, " "), "raw": second, "terminator": null, "input-redirect": false},
 		],
 		"programs": [
-			{"program": split(first, " ")[0], "mediated": false},
-			{"program": split(second, " ")[0], "mediated": false},
+			{
+				"program": split(first, " ")[0],
+				"name": split(first, " ")[0],
+				"arguments": array.slice(split(first, " "), 1, count(split(first, " "))),
+				"mediated": false,
+			},
+			{
+				"program": split(second, " ")[0],
+				"name": split(second, " ")[0],
+				"arguments": array.slice(split(second, " "), 1, count(split(second, " "))),
+				"mediated": false,
+			},
 		],
 	},
 	"facts": {"tasks": tasks},
@@ -223,6 +247,36 @@ test_a_task_with_no_single_argv_matches_nothing if {
 # case does not merely fail — it faults, taking the whole bundle with it.
 test_could_not_look_refuses_nothing if {
 	count(violation) == 0 with input as call("cargo clippy", null)
+}
+
+# THE GRAMMAR CASE (CLOUD-1382), as the boundary now resolves it: the caller
+# wrote `time cargo clippy`, `time` is grammar the walk steps past, and the entry
+# names cargo with cargo's own argv — so the weakening is reached where the
+# first-word comparison diverged at index 0 and matched nothing.
+test_a_grammar_token_does_not_hide_the_tool if {
+	some v in violation with input as {
+		"call": {
+			"command": "time cargo clippy",
+			"segments": [{"words": ["time", "cargo", "clippy"], "raw": "time cargo clippy", "terminator": null, "input-redirect": false}],
+			"programs": [{"program": "cargo", "name": "cargo", "arguments": ["clippy"], "mediated": false}],
+		},
+		"facts": {"tasks": lint},
+	}
+	v.subjects[0].artifact == "lint"
+}
+
+# THE MEDIATED SPELLING IS THE TASK ITSELF, and it is read off the entry rather
+# than joined back to a segment by its first word — which is what the value join
+# this rule used to perform could get wrong the moment the two stopped agreeing.
+test_a_mediated_call_is_not_a_substitution_for_its_own_task if {
+	count(violation) == 0 with input as {
+		"call": {
+			"command": "mise x -- cargo clippy",
+			"segments": [{"words": ["mise", "x", "--", "cargo", "clippy"], "raw": "mise x -- cargo clippy", "terminator": null, "input-redirect": false}],
+			"programs": [{"program": "cargo", "name": "cargo", "arguments": ["clippy"], "mediated": true}],
+		},
+		"facts": {"tasks": lint},
+	}
 }
 
 #MUTANT-SUITE crates/batten/tests/it/task_receipt.rs

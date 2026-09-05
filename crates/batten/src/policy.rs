@@ -2307,7 +2307,7 @@ pub fn call_input_schema() -> Result<String> {
                     // line the `facts` object below carries, for the same reason.
                     "segments": {
                         "type": "array",
-                        "description": "`hook::segments` over `command`: one entry per shell-separated element, quote-aware. Anchor a program here rather than on `command`, whose first word is the first word of the whole LINE.",
+                        "description": "`hook::segments` over `command`: one entry per shell-separated element, quote-aware. For the SPAN's structure -- its terminator, its input redirection, its raw text. A PROGRAM is anchored on `programs`, not on `words[0]`, which is the first word and not the first program (CLOUD-1382).",
                         "items": {
                             "type": "object",
                             "additionalProperties": false,
@@ -2324,19 +2324,28 @@ pub fn call_input_schema() -> Result<String> {
                     "transcript": {},
                     "stop-repeat": {},
                     // CLOUD-1028. One entry per segment of the command, each the
-                    // effective program and whether the pin selected it —
-                    // constrained here rather than left open because the whole
-                    // point of the key is that a module reads a PARSED argv it
-                    // does not have to parse, and an unconstrained shape would
-                    // let a predicate ask for a field the boundary never emits.
+                    // effective program, WHAT IT WAS HANDED, and whether the pin
+                    // selected it — constrained here rather than left open
+                    // because the whole point of the key is that a module reads a
+                    // PARSED argv it does not have to parse, and an unconstrained
+                    // shape would let a predicate ask for a field the boundary
+                    // never emits.
                     "programs": {
                         "type": "array",
+                        "description": "Each segment's effective program, resolved through environment assignments, wrapper programs and shell grammar. ANCHOR A PROGRAM HERE: `segments[_].words[0]` is the first WORD, which six one-keystroke shell constructs occupy in their own right (CLOUD-1382).",
                         "items": {
                             "type": "object",
                             "additionalProperties": false,
                             "properties": {
                                 "program": {"type": "string"},
                                 "name": {"type": "string"},
+                                // WHAT THIS PROGRAM WAS HANDED (CLOUD-1382), so
+                                // a module anchoring on the program reads its
+                                // own argv rather than joining back to a segment
+                                // by value — a join that stops agreeing the
+                                // moment the two readings differ, which is the
+                                // whole reason this key exists.
+                                "arguments": {"type": "array", "items": {"type": "string"}},
                                 "mediated": {"type": "boolean"},
                             },
                         },

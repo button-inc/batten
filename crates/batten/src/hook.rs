@@ -6490,8 +6490,9 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
         .filter_map(|segment| {
             let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
             let index = effective_program(&tokens)?;
+            let program = program_token(tokens[index]);
             Some(serde_json::json!({
-                "program": tokens[index],
+                "program": program,
                 // THE NAME AS WELL AS THE TOKEN, because they are different
                 // questions and a predicate about "which program is this" wants
                 // the second. `./tests/bats/bin/bats` and `bats` are one program
@@ -6501,7 +6502,18 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
                 // Resolved here rather than in Rego for the reason the whole
                 // projection exists: path splitting is argv reading, and a module
                 // doing it would be a second authority over it.
-                "name": program_name(tokens[index]),
+                "name": program_name(program),
+                // WHAT THIS PROGRAM WAS HANDED, so a module can anchor on the
+                // program AND read its own argv without a join (CLOUD-1382).
+                //
+                // Without it a module correlating `programs` back to `segments`
+                // has nothing to correlate ON: the list above is `filter_map`ed,
+                // so a segment with no program yields no entry and the two
+                // indices stop agreeing. The alternative was for every module to
+                // re-find the program inside a segment's words, which is the
+                // second authority over one argv that CLOUD-857 measured and
+                // this whole projection exists to refuse.
+                "arguments": &tokens[index + 1..],
                 "mediated": mediator_present(
                     crate::rules::RequireVia::Mise,
                     &tokens[..index],
@@ -6932,7 +6944,9 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
             // candidates; a redirect needs no program at all.
             let mut candidates: Vec<Target<'_>> = Vec::new();
             if let Some(index) = effective_program(&tokens) {
-                let program = tokens[index];
+                // The PROGRAM rather than the token, so `(rm` is `rm` here as it
+                // is in `programs` (CLOUD-1382). One identity, resolved once.
+                let program = program_token(tokens[index]);
                 // The row is resolved ONCE per segment, from the program and its
                 // arguments together (CLOUD-442). Before this the lookup was by
                 // program alone, so a program that mutates under one subcommand or
@@ -7005,7 +7019,11 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
             // Forgetting a writer is no longer a silent hole. That asymmetry is the
             // whole change; the enumeration did not get longer, it got turned round.
             if let Some(index) = effective_program(&tokens) {
-                let program = tokens[index];
+                // Same identity as the mutation walk above, and it matters more
+                // here: an unresolved `(stat` is an UNKNOWN program, so a
+                // declared `protected_readers` entry was unreachable behind a
+                // grouping paren — CLOUD-1287's over-deny by a second road.
+                let program = program_token(tokens[index]);
                 let known = policy
                     .protected_readers
                     .iter()
@@ -7812,6 +7830,69 @@ pub(crate) fn is_lookthrough_wrapper(token: &str) -> bool {
     LOOKTHROUGH_WRAPPERS.contains(&token)
 }
 
+/// Shell GRAMMAR that may stand where a program is written — CLOUD-1382's
+/// **declared stopgap**, and it is one on purpose.
+///
+/// # What it buys
+///
+/// A module anchoring on the first word of a segment was one keystroke from
+/// silence. Measured 2026-09-03 and re-measured 2026-09-05 against the shipped
+/// binary, this repository's committed config, adjudication only:
+/// `git push --force origin main` refused, and `(git push --force origin main)`,
+/// `time …`, `! …`, `{ …; }`, `command …` and `if true; then … fi` every one
+/// exited 0. All six run the force push. `!` inverts a status and still
+/// executes; `time` executes and reports; both grouping forms execute;
+/// `command` bypasses function and alias lookup only.
+///
+/// # AND WHY IT IS NOT THE FIX
+///
+/// **A list cannot enumerate a grammar.** These six were the ones someone
+/// thought of, and [`effective_program`] states the posture that makes the next
+/// one silent too — *"Known wrappers only; anything unrecognised keeps the
+/// fail-open posture."* CLOUD-1382's own Ready block refuses a prefix list as
+/// the answer, in as many words, because adding to a table reproduces the defect
+/// one token later. The real fix is a parsed command line, which is CLOUD-1381,
+/// and CLOUD-1382 stays OPEN behind it rather than closing on this.
+///
+/// So the bound is stated rather than absorbed: every token here is one a shell
+/// may place before a program, none of them is a program this repository would
+/// ever judge in its own right, and the walk below steps past one only when a
+/// further token exists — so a segment that is nothing but grammar (`fi`, `}`,
+/// `done`) keeps exactly the answer it had, and no landed verdict moves.
+///
+/// `for` and `in` are deliberately absent: they are followed by a variable name
+/// rather than by a command, so stepping past one would name an operand as the
+/// program — a misidentification, where every token here is a correction.
+const SHELL_GRAMMAR: [&str; 9] = [
+    "!", "time", "if", "then", "elif", "else", "while", "until", "do",
+];
+
+/// The token with any GROUPING punctuation it was written against removed.
+///
+/// `(git` is one word to [`segments`], because `(` is not a separator and a
+/// grouping construct needs no space after it. So the program identity and the
+/// token are different strings here in exactly the way they are for
+/// `/usr/bin/git`, and [`program_name`] is the precedent: the boundary answers
+/// which PROGRAM this is, and a module comparing the raw token would answer no
+/// for the spelling that produced the bypass.
+///
+/// Only the opening side. A trailing `)` belongs to whichever operand it was
+/// written against, and rewriting operands is a claim about paths this function
+/// has no business making.
+fn program_token(token: &str) -> &str {
+    token.trim_start_matches(['(', '{'])
+}
+
+/// Is this token shell grammar standing where a program is written?
+///
+/// Decided on the STRIPPED token, which is what keeps the two cases apart: a
+/// bare `(` strips to nothing and is grammar, while `(git` strips to `git` and
+/// is the program itself, reached at the very same index.
+fn is_shell_grammar(token: &str) -> bool {
+    let bare = program_token(token);
+    bare.is_empty() || SHELL_GRAMMAR.contains(&bare)
+}
+
 /// Find the index of the effective program in a segment's tokens: skip
 /// `VAR=value` env prefixes, then look through known wrapper programs so the
 /// wrapped program is judged, not the wrapper. Known wrappers only; anything
@@ -7823,6 +7904,17 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
     }
     loop {
         match *tokens.get(i)? {
+            // SHELL GRAMMAR BEFORE THE PROGRAM (CLOUD-1382), and the guard is
+            // half the arm: stepping past requires a further token, so a
+            // segment that is only grammar keeps the answer it already had.
+            // An environment assignment may follow one — `time FOO=1 git …` —
+            // so the prefix skip is repeated rather than done once at the top.
+            grammar if is_shell_grammar(grammar) && i + 1 < tokens.len() => {
+                i += 1;
+                while i < tokens.len() && is_env_assignment(tokens[i]) {
+                    i += 1;
+                }
+            }
             // `nohup` joins the list with CLOUD-443, and it was a gap in every
             // gate rather than only the new one: with the wrapper unresolved,
             // `nohup rm <protected>` presented `nohup` as its program and the

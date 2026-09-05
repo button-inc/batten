@@ -16,9 +16,16 @@
           "type": "string"
         },
         "programs": {
+          "description": "Each segment's effective program, resolved through environment assignments, wrapper programs and shell grammar. ANCHOR A PROGRAM HERE: `segments[_].words[0]` is the first WORD, which six one-keystroke shell constructs occupy in their own right (CLOUD-1382).",
           "items": {
             "additionalProperties": false,
             "properties": {
+              "arguments": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "mediated": {
                 "type": "boolean"
               },
@@ -40,7 +47,7 @@
           ]
         },
         "segments": {
-          "description": "`hook::segments` over `command`: one entry per shell-separated element, quote-aware. Anchor a program here rather than on `command`, whose first word is the first word of the whole LINE.",
+          "description": "`hook::segments` over `command`: one entry per shell-separated element, quote-aware. For the SPAN's structure -- its terminator, its input redirection, its raw text. A PROGRAM is anchored on `programs`, not on `words[0]`, which is the first word and not the first program (CLOUD-1382).",
           "items": {
             "additionalProperties": false,
             "properties": {
