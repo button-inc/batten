@@ -28,9 +28,11 @@
 # whose blocker is CLOUD-856. So the guard cannot lose these three until it can
 # lose all four, and both authorities decide them until it does. CLOUD-1108 owns
 # that gap; the predicates below are written from the bash's own decision table,
-# with ONE deliberate divergence — `keywords` reaches a sleep inside a loop body
-# and `resolve()` does not (CLOUD-1112) — which is in the DENYING direction, so
-# no call gets a weaker answer from the pair than it had from the guard alone.
+# with ONE deliberate divergence — this reaches a sleep inside a loop body and
+# `resolve()` does not (CLOUD-1112) — which is in the DENYING direction, so no
+# call gets a weaker answer from the pair than it had from the guard alone. The
+# divergence stands; only its mechanism moved, from `keywords` stepping past a
+# `do` token to the body arriving as its own segment (CLOUD-1381).
 #
 # TWO ERAS OF INPUT LIVE HERE, deliberately, and the newer one is the model.
 # `commit-names-no-message-source` landed before `hook::segments` was projected,
@@ -192,8 +194,11 @@ violation contains {
 # only a leading one — `cd x; sleep 90; git log` is the exact measured shape.
 #
 # A SLEEP IN A LOOP BODY IS REACHED HERE, and the bash it ports does not reach
-# it: `keywords` below looks through `do`/`then`/…, and `resolve()` has no such
-# set (CLOUD-1112). That is the one place these two authorities deliberately
+# it: the boundary gives a loop body its own segment, whose program is the
+# `sleep` itself, and `resolve()` walks a string with no notion of a body
+# (CLOUD-1112, mechanism updated by CLOUD-1381 — this used to depend on
+# `keywords` stepping past a `do` token, which no longer arrives). That is the
+# one place these two authorities deliberately
 # disagree while both are live, and it is in the DENYING direction — the engine
 # refuses a foreground loop the guard allows, so no call gets a weaker answer
 # than it did before.
@@ -215,10 +220,23 @@ sleeps if {
 # rather than testing a condition, so it exits on the clock like any timer; the
 # bash names it a deliberate non-catch "because narrowing that costs a real
 # parser", and it costs none now.
+# DECIDED FROM THE NODE, never from a keyword (CLOUD-1381).
+#
+# This read `word in {"until", "while"}` over a segment's words, and that only
+# ever worked because the character walk split on `;` and had no idea what a loop
+# was -- so `until` and `do` and `done` fell out as ordinary words. A real parse
+# has no such token: the keyword IS the node type. `input.call.segments[_]
+# .construct` carries it, `null` at the top level.
+#
+# Reading the node is also a tightening rather than a translation. `for` is
+# excluded because it is a DIFFERENT NODE, not because a list of words happens to
+# omit it -- `for i in $(seq 60); do sleep 10; done` counts iterations and exits
+# on the clock like any timer. And a `!` between the keyword and the test needed
+# filtering out by hand before; it is inside the condition now and never reaches
+# this predicate.
 waits_on_condition if {
 	some segment in input.call.segments
-	some word in segment.words
-	word in {"until", "while"}
+	segment.construct.kind in {"until", "while"}
 }
 
 # Every reader of the LOCAL process table in this call.
@@ -250,22 +268,37 @@ process_probes contains i if {
 
 # The program a LOOP CONDITION segment invokes.
 #
-# `keywords` looks through `do`/`then`/… — which is what lets `sleeps` reach a
-# loop BODY — and a condition segment begins with `until` or `while`, often with
-# `!` after it. Neither is in that set, so `words_program_index` resolves the
-# keyword itself and every probe below would miss.
+# **The keyword filter this used to carry is gone, and its absence is the point**
+# (CLOUD-1381). A condition segment used to begin with `until` or `while`, often
+# with a `!` after, so this had to strip those three tokens before
+# `words_program_index` could resolve anything -- and it stripped them ANYWHERE
+# rather than in a leading run, which was safe only because none of the three is
+# a plausible operand of a process probe. That was a workaround for a token
+# stream that did not know what a loop was.
 #
-# A NARROWER LOOK-THROUGH HERE RATHER THAN A WIDER `keywords`, deliberately:
-# `sleeps` shares that set, so adding `until`/`while` to it would change which
-# program every landed call resolves to. This rule is new and may carry its own;
-# the shared authority stays where it is.
+# A condition is its own segment now, carrying only the test's own words. There
+# is nothing to filter, and the rule selects the segments it is about instead of
+# every segment that happens to lack a keyword.
 #
-# The filter drops those tokens ANYWHERE rather than only in a leading run, which
-# is the cheaper predicate and is safe here because none of the three is a
-# plausible operand of a process probe.
+# **KIND, NOT ROLE, AND NARROWING TO `role == "condition"` WAS A MEASURED
+# BYPASS.** The probe does not have to be in the test: a loop can poll from its
+# BODY and break, which is the same wait spelled one line down. Before the
+# construct projection this rule ran over every segment and `keywords` stepped
+# past `do`, so a body probe resolved; keying on the role lost it. Measured over
+# both compiled binaries, backgrounded --
+# `while true; do pgrep -f mise >/dev/null || break; sleep 20; done` and
+# `while :; do sleep 20; pgrep -f mise; done` were exit 2 `task watch duplicate`
+# before and exit 0 after. Moving the probe from the condition to the body was a
+# one-edit bypass of the gate AGENTS.md cites the "490 in one session"
+# measurement for, and the nested spelling still denied, which is what would
+# have kept it hidden.
+#
+# So the selector is the loop NODE, either half of it. `for` stays excluded
+# because it is a different kind, which is the narrowing that was actually
+# wanted.
 condition_program(segment) := name if {
-	rest := [w | some w in segment.words; not w in {"until", "while", "!"}]
-	name := basename(rest[words_program_index(rest)])
+	segment.construct.kind in {"until", "while"}
+	name := basename(segment.words[words_program_index(segment.words)])
 }
 
 # `git commit`, resolved over WORDS the engine split rather than a string this
@@ -413,9 +446,21 @@ wrappers := {"env", "command", "nice", "stdbuf", "timeout", "xargs", "sudo", "do
 # gap would have satisfied the clause vacuously. This is the narrower reading:
 # the engine resolves the loop body, and the exemption is what decides it.
 #
-# `until`/`while`/`if`/`for` are deliberately ABSENT. They introduce a condition
-# list rather than the command, and `waits_on_condition` reads them as words —
-# skipping them would blind the exemption to the thing it tests for.
+# **VESTIGIAL SINCE CLOUD-1381, and said so rather than left reading as live.**
+# The engine emits none of these as words any more: each is a NODE, and a
+# control-flow body is its own segment tagged with the node it sits in. So this
+# look-through skips tokens that no longer arrive, and `sleeps` reaches a loop
+# body because the body is a segment rather than because `do` was stepped past.
+#
+# Kept rather than deleted because `skippable` serves the `stage` path too, which
+# reads a pipeline STRING and can still carry these; deleting the set would be a
+# behaviour change on a surface this row did not touch. Retiring it belongs with
+# whatever retires that path.
+#
+# The sentence that stood here — that `until`/`while`/`if`/`for` are absent
+# because "`waits_on_condition` reads them as words" — was true of the character
+# walk and is false now. That rule reads `segment.construct.kind`, and no reading
+# of a parse produces those words at all.
 keywords := {"do", "then", "else", "elif", "time"}
 
 tokens(stage) := [t | some t in split(trim_space(stage), " "); t != ""]
@@ -542,6 +587,25 @@ seg(words, terminator, redirect) := {
 	"raw": concat(" ", words),
 	"terminator": terminator,
 	"input-redirect": redirect,
+	"construct": null,
+}
+
+# A segment INSIDE a control-flow node, as the engine now projects one
+# (CLOUD-1381).
+#
+# **The keyword is not in `words` here, and that is the whole shape change.** A
+# fixture that still wrote `["until", "[", "-f", "x", "]"]` would be encoding a
+# token stream the engine cannot produce -- `until` is the NODE, and the
+# condition segment carries only the test's own words. Two tiers exist precisely
+# because a `with input as` case can fabricate that; the compiled tier in
+# `crates/batten/tests/it/run_shape.rs` is what proves these shapes are the ones
+# the boundary actually builds.
+inner(words, kind, role, terminator) := {
+	"words": words,
+	"raw": concat(" ", words),
+	"terminator": terminator,
+	"input-redirect": false,
+	"construct": {"kind": kind, "role": role},
 }
 
 # THE MEASURED SHAPE (CLOUD-488): the heredoc binds to the LAST element, so
@@ -639,9 +703,8 @@ test_a_backgrounded_wait_polling_a_process_is_refused if {
 		"command": "until ! pgrep -f mise >/dev/null; do sleep 20; done",
 		"run-in-background": true,
 		"segments": [
-			seg(["until", "!", "pgrep", "-f", "mise"], ";", false),
-			seg(["do", "sleep", "20"], ";", false),
-			seg(["done"], null, false),
+			inner(["pgrep", "-f", "mise"], "until", "condition", ";"),
+			inner(["sleep", "20"], "until", "body", null),
 		],
 	}}
 	v.verdict == "task watch duplicate"
@@ -656,9 +719,8 @@ test_a_bracketed_pattern_is_refused_just_the_same if {
 		"command": "until ! pgrep -f [m]ise >/dev/null; do sleep 20; done",
 		"run-in-background": true,
 		"segments": [
-			seg(["until", "!", "pgrep", "-f", "[m]ise"], ";", false),
-			seg(["do", "sleep", "20"], ";", false),
-			seg(["done"], null, false),
+			inner(["pgrep", "-f", "[m]ise"], "until", "condition", ";"),
+			inner(["sleep", "20"], "until", "body", null),
 		],
 	}}
 	v.verdict == "task watch duplicate"
@@ -671,9 +733,8 @@ test_a_liveness_signal_is_the_same_question if {
 		"command": "while kill -0 $PID 2>/dev/null; do sleep 5; done",
 		"run-in-background": true,
 		"segments": [
-			seg(["while", "kill", "-0", "$PID"], ";", false),
-			seg(["do", "sleep", "5"], ";", false),
-			seg(["done"], null, false),
+			inner(["kill", "-0", "$PID"], "while", "condition", ";"),
+			inner(["sleep", "5"], "while", "body", null),
 		],
 	}}
 	v.verdict == "task watch duplicate"
@@ -688,9 +749,8 @@ test_a_wait_on_a_condition_nobody_reports_is_clean if {
 		"command": "until curl -sf https://example.test/ready; do sleep 5; done",
 		"run-in-background": true,
 		"segments": [
-			seg(["until", "curl", "-sf", "https://example.test/ready"], ";", false),
-			seg(["do", "sleep", "5"], ";", false),
-			seg(["done"], null, false),
+			inner(["curl", "-sf", "https://example.test/ready"], "until", "condition", ";"),
+			inner(["sleep", "5"], "until", "body", null),
 		],
 	}}
 }
@@ -711,25 +771,24 @@ test_a_backgrounded_wait_on_a_condition_is_allowed if {
 		"command": "until [ -f /tmp/done ]; do sleep 1; done",
 		"run-in-background": true,
 		"segments": [
-			seg(["until", "[", "-f", "/tmp/done", "]"], ";", false),
-			seg(["do", "sleep", "1"], ";", false),
-			seg(["done"], null, false),
+			inner(["[", "-f", "/tmp/done", "]"], "until", "condition", ";"),
+			inner(["sleep", "1"], "until", "body", null),
 		],
 	}}
 }
 
 # A FOREGROUND loop spends the turn exactly as a foreground `sleep` does, and it
-# is refused for that reason. Reaching it needs `keywords`: without the
-# look-through `do sleep 1` resolves to `do` and this passes silently, which is
-# how it stood in the bash (CLOUD-1112).
+# is refused for that reason. Reaching it needed `keywords` when a loop body
+# arrived as `do sleep 1` and resolved to `do` (CLOUD-1112); since CLOUD-1381 the
+# body is its own segment carrying `sleep` as its program, so it is reached
+# structurally and the look-through decides nothing here.
 test_a_foreground_wait_on_a_condition_is_refused if {
 	some v in violation with input as {"call": {
 		"command": "until [ -f /tmp/done ]; do sleep 1; done",
 		"run-in-background": false,
 		"segments": [
-			seg(["until", "[", "-f", "/tmp/done", "]"], ";", false),
-			seg(["do", "sleep", "1"], ";", false),
-			seg(["done"], null, false),
+			inner(["[", "-f", "/tmp/done", "]"], "until", "condition", ";"),
+			inner(["sleep", "1"], "until", "body", null),
 		],
 	}}
 	v.rule == "foreground-sleep"
@@ -741,11 +800,7 @@ test_a_backgrounded_counting_loop_is_a_timer if {
 	some v in violation with input as {"call": {
 		"command": "for i in $(seq 60); do sleep 10; done",
 		"run-in-background": true,
-		"segments": [
-			seg(["for", "i", "in", "$(seq", "60)"], ";", false),
-			seg(["do", "sleep", "10"], ";", false),
-			seg(["done"], null, false),
-		],
+		"segments": [inner(["sleep", "10"], "for", "body", null)],
 	}}
 	v.rule == "background-timer"
 }
@@ -758,9 +813,8 @@ test_a_bare_sleep_beside_a_condition_loop_is_exempt if {
 		"run-in-background": true,
 		"segments": [
 			seg(["sleep", "5"], ";", false),
-			seg(["until", "[", "-f", "/tmp/done", "]"], ";", false),
-			seg(["do", ":"], ";", false),
-			seg(["done"], null, false),
+			inner(["[", "-f", "/tmp/done", "]"], "until", "condition", ";"),
+			inner([":"], "until", "body", null),
 		],
 	}}
 }

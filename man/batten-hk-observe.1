@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-hk-observe 1  batten 
+.SH NAME
+batten\-hk\-observe \- Record what this session resolved of the runner, once per contract digest
+.SH SYNOPSIS
+\fBbatten hk observe\fR [\fB\-\-session\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Record what this session resolved of the runner, once per contract digest
+.SH OPTIONS
+.TP
+\fB\-\-session\fR
+The host\*(Aqs session identifier; without one no receipt is written
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

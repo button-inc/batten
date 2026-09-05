@@ -1882,6 +1882,26 @@ const ADOPT: FlagDecl = FlagDecl {
 /// optional-value flag cannot tell `--adopt --takeover` from `--adopt <name>`
 /// without a rule about which tokens look like branch names — and a rule about
 /// rules is what this repository's config posture refuses.
+/// The host's session identifier for the runtime observation (CLOUD-948).
+///
+/// OPTIONAL, and its absence is an answer rather than a usage error: a host that
+/// cannot name a session cannot have a receipt written about one, and writing it
+/// under a shared key would let two sessions answer for each other. The raw
+/// token never reaches the disk — the record carries its digest.
+const SESSION: FlagDecl = FlagDecl {
+    id: "session",
+    long: Some("session"),
+    short: None,
+    help: "The host's session identifier; without one no receipt is written",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const ADOPT_FROM: FlagDecl = FlagDecl {
     id: "adopt_from",
     long: Some("adopt-from"),
@@ -3097,6 +3117,65 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Whether a board column is honest about what git and the forge already did",
         data_channel: false,
         effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // The adopted gate runner's surface contract (CLOUD-947). Two verbs and two
+    // effects, because the row specifies them separately: "the generator is a
+    // `write` … the gate is `read`. Both are declared on the command surface —
+    // the generator is not a read verb that happens to write."
+    //
+    // That is the one place this pair departs from the `generate` family above,
+    // which emits on stdout and leaves the redirect to the caller. Here the
+    // artifact is not the output: the generator runs a program three times and
+    // replaces one committed file, and a caller redirecting a stream could not
+    // tell a partial acquisition from a complete one.
+    CommandDecl {
+        path: "hk",
+        id: "hk",
+        about: "The adopted gate runner's surface contract",
+        data_channel: false,
+        // UNCLASSIFIED, for `claim`'s and `record`'s reason: the subtree carries
+        // one `write` arm and one `read` arm, and a consumer treating an entry as
+        // a prefix must not pick the generator up off the read-only allowlist
+        // (CLOUD-90). The noun acts on nothing itself.
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    CommandDecl {
+        path: "hk contract",
+        id: "hk.contract",
+        about: "Regenerate the committed plan projection from the pinned runner",
+        // The pointer it emits is one path; a JSON document of one field would
+        // be a second shape for the same answer, and byte-stability is not a
+        // claim a mutating verb can make about two consecutive runs.
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
+    CommandDecl {
+        path: "hk observe",
+        id: "hk.observe",
+        about: "Record what this session resolved of the runner, once per contract digest",
+        // The pointer it emits is one state token; a JSON document of one field
+        // would be a second shape for the same answer, and byte-stability is not
+        // a claim a mutating verb can make about two consecutive runs.
+        data_channel: false,
+        // WRITE, declared rather than smuggled into a read verb: it records a
+        // receipt. It is the only write — nothing about the tree, the contract or
+        // the plan is modified.
+        effect: Effect::Write,
+        flags: &[SESSION],
+    },
+    CommandDecl {
+        path: "hk drift",
+        id: "hk.drift",
+        about: "Whether the committed plan projection still matches the pinned runner",
+        // NO DATA CHANNEL, for `landed`'s reason: a `-J` verb must emit its
+        // document unconditionally, and this verb's could-not-look arms — an
+        // absent runner, an empty plan, another pin — have no document to emit.
+        // The answer is one pointer line per drifted step.
+        data_channel: false,
+        effect: Effect::Read,
         flags: &[],
     },
     // `read`, structurally: it reads a payload on stdin and three caller-supplied

@@ -500,6 +500,9 @@ mod tests {
                 "generate man".to_owned(),
                 "generate markdown".to_owned(),
                 "generate schema".to_owned(),
+                // The adopted runner's drift gate (CLOUD-947): a `read`, where its
+                // generator sibling writes the artifact and so is not here.
+                "hk drift".to_owned(),
                 // The board sweep (CLOUD-186, CLOUD-1127). It reads a payload on
                 // stdin and three caller-supplied evidence files and starts no
                 // program — the `claimed-keys` spawn its shell predecessor made
@@ -763,6 +766,13 @@ mod tests {
             "generate man".to_owned(),
             "generate markdown".to_owned(),
             "generate schema".to_owned(),
+            // The adopted runner's surface contract (CLOUD-947): a noun and its
+            // arms, the generator a `write` and the gate a `read`. §2 reserved
+            // no row for them, so nothing around them needed an edit.
+            "hk".to_owned(),
+            "hk contract".to_owned(),
+            "hk drift".to_owned(),
+            "hk observe".to_owned(),
             // §2 already reserved this row (`init [-n] … (write)`); CLOUD-206
             // landed the verb behind it, so the document needed no edit.
             "init".to_owned(),

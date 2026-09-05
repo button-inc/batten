@@ -475,7 +475,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "attestation-check,engine-config,engine-doctor,engine-pinned,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,ci-cache-declared,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared,worktree-registration"
+MUTANT_GATES = "mise,attestation-check,engine-config,engine-doctor,engine-pinned,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,ci-cache-declared,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared,worktree-registration"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -603,6 +603,7 @@ mise run completions
 mise run man
 mise run schema
 mise run snapshots
+mise run hk-contract
 hk fix --all
 echo "fix: clippy autofixes applied, derived artifacts regenerated, every fixer run"
 '''
@@ -681,9 +682,11 @@ shell = "bash -c"
 #
 # THE EXCLUSIONS ARE THREE CLASSES, none of them tidiness:
 #   generator-owned — `schema/*.json` is diffed byte-for-byte by `schema-check`,
-#     `CHANGELOG.md` by release-plz, both `RESULTS.md` by their benches. Format
-#     them and every regeneration lands unformatted, gets rewritten, and has to
-#     be regenerated again to stay byte-stable.
+#     `contracts/*.json` by `hk-drift` (CLOUD-947), `CHANGELOG.md` by release-plz,
+#     both `RESULTS.md` by their benches. Format them and every regeneration lands
+#     unformatted, gets rewritten, and has to be regenerated again to stay
+#     byte-stable — the fixer and the drift gate would be two authorities over one
+#     file's bytes, which is the fight `completions/*` is excluded from shfmt for.
 #   byte-significant fixtures — `cursor-bom.json` exists to carry a byte-order
 #     mark and a fuzz corpus entry is an INPUT, not a document. Reformatting
 #     either destroys the thing the test is testing.
@@ -700,7 +703,7 @@ shell = "bash -c"
 run = '''
 set -euo pipefail
 git ls-files -z '*.json' '*.jsonc' '*.yaml' '*.yml' \
-	':!:.github/workflows/*' ':!:schema/*.json' \
+	':!:.github/workflows/*' ':!:schema/*.json' ':!:contracts/*.json' \
 	':!:crates/batten/tests/fixtures/*' ':!:fuzz/corpus/*' ':!:tests/fixtures/*' |
 	xargs -0 -r deno fmt --check --prose-wrap=preserve
 echo "lint:deno: every tracked JSON and non-workflow YAML file parses and is formatted"
@@ -735,7 +738,7 @@ shell = "bash -c"
 run = '''
 set -euo pipefail
 git ls-files -z '*.json' '*.jsonc' '*.yaml' '*.yml' \
-	':!:.github/workflows/*' ':!:schema/*.json' \
+	':!:.github/workflows/*' ':!:schema/*.json' ':!:contracts/*.json' \
 	':!:crates/batten/tests/fixtures/*' ':!:fuzz/corpus/*' ':!:tests/fixtures/*' |
 	xargs -0 -r deno fmt --prose-wrap=preserve
 '''
@@ -2057,8 +2060,42 @@ echo "install:local: batten -> $dest/batten"
 # mediated call fails open in silence. The caller already appends its own line, and
 # mise prints the non-zero exit.
 [tasks."deps-install"]
-description = "Provision the host dependencies mise does not: the released `batten`, before any hook fires (CLOUD-1085)"
-run = "./install.sh"
+description = "Provision the host dependencies mise does not: the released `batten`, before any hook fires (CLOUD-1085), and reclaim the wiring the launcher rewrote"
+# THE REAP BELONGS HERE AND NOWHERE EARLIER, which is CLOUD-1079's open half.
+#
+# `[[hook.handler]] session-wiring-reclaim` already runs this verb at session
+# start, and it loses a race it cannot win from there: the launcher rewrites
+# `~/.claude/launcher-settings.json` and its two scripts on container BOOT, and a
+# boot does not reliably fire `SessionStart`. Measured 2026-09-05 -- the settings
+# file and both scripts stamped 21:16:24, `~/.claude` itself 21:17:23, and
+# `wiring reclaim --check` reporting two live sibling registrations in a session
+# whose start handler had already run. That is the second recorded recurrence;
+# the first was a session that ran the verb by hand, watched the launcher
+# provision over it, and concluded permanent impossibility.
+#
+# This task is the seam that beats it, on a property rather than a hope: the
+# container's setup script calls `mise run deps-install` on every provision,
+# BEFORE Claude launches. So it is upstream of the rewrite and upstream of the
+# harness snapshot, where every hook-event surface is downstream of both.
+#
+# AND IT IS NOT WHAT `batten.toml` FORBIDS. That refusal -- "NEVER add `batten
+# wiring reclaim` to this handler" -- is scoped to the session-start handler, and
+# its reason does not carry: `batten hook` expires the at-load record on that
+# same event, so a reclaim dispatched from there puts the write and the clear in
+# one unordered batch. Nothing dispatches a hook event during provisioning, so
+# there is no record to race.
+#
+# NOT IN `install.sh`, which is the repo-agnostic install interface a consumer
+# with no launcher also runs (non-negotiable rule 1). The reap is this
+# consumer's, so it lives in this consumer's task.
+#
+# `-y` because a provisioning script has no terminal; after `install.sh` because
+# the verb is the binary that script installs.
+run = """
+set -eu
+./install.sh
+batten wiring reclaim -y
+"""
 
 # The report half of the same seam, and the setup script calls this one too.
 #
@@ -2453,6 +2490,23 @@ for shell in bash zsh fish; do
 done
 echo "completions: regenerated for bash, zsh, fish"
 '''
+
+[tasks.hk-contract]
+description = "Regenerate the committed plan projection from the pinned gate runner (CLOUD-947)"
+# A WRITE VERB, so there is no redirect here and none is possible: the generator
+# runs the pinned runner once per surface and replaces one committed file. That
+# is the row's own specification and the one place this pair departs from the
+# `generate` family above, where the artifact IS the stream and the caller owns
+# the redirect. A stream could not tell a partial acquisition from a complete
+# one, and a partial contract commits clean for the surface it lost.
+run = "cargo run --quiet -p batten -- hk contract"
+
+[tasks.hk-drift]
+description = "Gate: the committed plan projection still matches the pinned gate runner (CLOUD-947)"
+# `cargo run` rather than an installed binary, for `completions`' reason: the
+# artifact must track the WORKING TREE's projection, or the gate answers about a
+# canonicaliser nobody is landing.
+run = "cargo run --quiet -p batten -- hk drift"
 
 [tasks.man]
 description = "Regenerate the committed man pages from the command surface"

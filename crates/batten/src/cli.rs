@@ -408,6 +408,40 @@ pub enum Command {
         /// The chosen sub-verb.
         command: LandedCommand,
     },
+    /// The adopted gate runner's surface contract (CLOUD-947).
+    ///
+    /// Appended for the reason `Override` states: a shifted discriminant is a
+    /// break the crate has to declare, and every variant above is already on
+    /// the landing target.
+    Hk {
+        /// The chosen sub-verb.
+        command: HkCommand,
+    },
+}
+
+/// Subcommands of `hk`.
+///
+/// Two verbs and two effects, which is the row's own specification: the
+/// generator WRITES the committed projection and the gate READS it. A single
+/// verb with a `--check` flag would have made the effect an argument, and
+/// house-style §5 declares an effect per command rather than per invocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HkCommand {
+    /// Regenerate the committed projection from the pinned binary.
+    Contract,
+    /// Record what this session resolved, once per contract digest.
+    Observe {
+        /// The host's session identifier, where it supplies one.
+        session: Option<String>,
+    },
+    /// Report how the committed projection and the live plan differ.
+    ///
+    /// No data channel: the answer is a pointer per drifted step, one per line,
+    /// which is `landed`'s shape and for `landed`'s reason — a `-J` document
+    /// must be emitted unconditionally, and the arms that cannot look have no
+    /// document to emit.
+    Drift,
 }
 
 /// Subcommands of `singleton`.
@@ -1872,6 +1906,22 @@ fn claim_of(matches: &ArgMatches) -> Option<ClaimCommand> {
     }
 }
 
+/// The `hk` noun's arm, if one was given (CLOUD-947).
+///
+/// Undocumented siblings surround this one, and that is the file's convention
+/// rather than an oversight: each `*_of` is a mechanical `ArgMatches` fold whose
+/// arms name themselves. This carries a line only because the noun is new.
+fn hk_of(matches: &ArgMatches) -> Option<HkCommand> {
+    match matches.subcommand()? {
+        ("contract", _) => Some(HkCommand::Contract),
+        ("observe", matches) => Some(HkCommand::Observe {
+            session: matches.get_one::<String>("session").cloned(),
+        }),
+        ("drift", _) => Some(HkCommand::Drift),
+        _ => None,
+    }
+}
+
 fn checks_of(matches: &ArgMatches) -> Option<ChecksCommand> {
     match matches.subcommand()? {
         ("green", matches) => Some(ChecksCommand::Green {
@@ -2168,6 +2218,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "mutate" => mutate_of(matches).map(|command| Command::Mutate { command }),
         "ready" => ready_of(matches).map(|command| Command::Ready { command }),
         "landed" => landed_of(matches).map(|command| Command::Landed { command }),
+        "hk" => hk_of(matches).map(|command| Command::Hk { command }),
         "claim" => claim_of(matches).map(|command| Command::Claim { command }),
         "checks" => checks_of(matches).map(|command| Command::Checks { command }),
         "pr" => pr_of(matches).map(|command| Command::Pr { command }),

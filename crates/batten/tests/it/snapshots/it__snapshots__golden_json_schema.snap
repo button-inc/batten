@@ -1128,6 +1128,52 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "hk",
+      "id": "hk",
+      "about": "The adopted gate runner's surface contract",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "hk contract",
+          "id": "hk.contract",
+          "about": "Regenerate the committed plan projection from the pinned runner",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "hk drift",
+          "id": "hk.drift",
+          "about": "Whether the committed plan projection still matches the pinned runner",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "hk observe",
+          "id": "hk.observe",
+          "about": "Record what this session resolved of the runner, once per contract digest",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "session",
+              "short": null,
+              "long": "session",
+              "takes_value": true,
+              "positional": false,
+              "help": "The host's session identifier; without one no receipt is written"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "init",
       "id": "init",
       "about": "Write a starter batten.toml, refusing to overwrite an existing one",
@@ -2858,6 +2904,10 @@ expression: stdout_of(&output)
     {
       "id": "generate.schema",
       "path": "generate schema"
+    },
+    {
+      "id": "hk.drift",
+      "path": "hk drift"
     },
     {
       "id": "landed.check",

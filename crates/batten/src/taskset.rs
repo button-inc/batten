@@ -257,6 +257,23 @@ fn named(table: &Node) -> BTreeMap<String, Option<Vec<String>>> {
 /// carrying a separator is a pipeline or a sequence, and reducing one to a word
 /// list would let a consumer compare a call against something the task does not
 /// actually run — a refusal naming a task whose argv it invented.
+///
+/// **DECIDED BY A PARSE SINCE CLOUD-1381, and it was a scan before.** The bound
+/// above is unchanged and the way it is established is not. This read
+/// `body.contains("&&")` and then `split_whitespace()`, which is the same class
+/// of defect the mediation boundary was carrying one surface over: a substring
+/// test fires on a separator inside a quoted operand, so
+/// `echo "a && b"` was refused an argv it plainly has, and a whitespace split
+/// ignores quoting, so `cargo test --filter "a b"` yielded five words where the
+/// task runs four. Both were silent — the first under-reports (a task with no
+/// argv is simply not judged) and the second hands a guard an argv nobody runs.
+///
+/// [`rable`] answers the same question structurally: one [`Command`] node and
+/// nothing else is a single command, and its words are its argv. A pipeline, a
+/// list, a compound body and a body that will not parse are all `None`, which
+/// they already were.
+///
+/// [`Command`]: rable::NodeKind::Command
 fn argv(entry: &Node) -> Option<Vec<String>> {
     let body = match entry {
         Node::Map(_) => match entry.at("run") {
@@ -265,20 +282,37 @@ fn argv(entry: &Node) -> Option<Vec<String>> {
         },
         other => other.scalar()?,
     };
-    if body
-        .lines()
-        .nth(1)
-        .is_some_and(|rest| !rest.trim().is_empty())
-    {
+    // A body that does not parse has no argv, which is the same answer a
+    // pipeline gets: the task exists and its argv is unknowable as a word list.
+    let nodes = rable::parse(&body, false).ok()?;
+    let [node] = nodes.as_slice() else {
+        // Zero nodes is an empty body; two or more is a multi-line body, which
+        // this has always refused an argv.
+        return None;
+    };
+    let rable::NodeKind::Command {
+        words, redirects, ..
+    } = &node.kind
+    else {
+        // A pipeline, a list, a subshell, an `if` — every one of them runs
+        // something other than one program with one argv.
+        return None;
+    };
+    // A REDIRECTION MEANS THE TASK IS NOT ITS ARGV EITHER. `mise run x` sets up
+    // the redirect and a bare `prog` does not, so calling them the same command
+    // is the substitution this fact exists to refuse.
+    if !redirects.is_empty() {
         return None;
     }
-    for separator in ["&&", "||", ";", "|"] {
-        if body.contains(separator) {
-            return None;
-        }
-    }
-    let words: Vec<String> = body.split_whitespace().map(str::to_owned).collect();
-    (!words.is_empty()).then_some(words)
+    let spelled: Vec<String> = words
+        .iter()
+        .map(|word| match &word.kind {
+            rable::NodeKind::Word { value, .. } => crate::hook::unquote(value),
+            _ => String::new(),
+        })
+        .filter(|word| !word.is_empty())
+        .collect();
+    (!spelled.is_empty()).then_some(spelled)
 }
 
 #[cfg(test)]

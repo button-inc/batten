@@ -147,12 +147,20 @@ rules contains "spawn-adapters"
 #              which this rule refused. Placing the CLI dispatch would admit every
 #              future spawn in the crate's largest file at once — the table would
 #              stop naming boundaries and start naming files
+#   hk         the adopted gate runner's contract (CLOUD-947). Placed on
+#              `symbols`' argument and nothing new: what a delegated runner WOULD
+#              run is a property of that runner and its config, and no walk of
+#              the tree answers it — the runner's own config is a language this
+#              crate does not parse. Two spawns, the version and the plan, and
+#              the version is a spawn for `symbols`' reason too: a contract whose
+#              tool version is inferred rather than read is not canonical
 adapters := {
 	"exec", "provision", "secrets", "symbols",
 	"judge", "handler", "action", "rules", "semver",
 	"pinned", "perf", "prune", "pr_watch", "mutate", "bot",
 	"lease",
 	"startup",
+	"hk",
 }
 
 module_of(path) := name if {

@@ -2264,6 +2264,24 @@ pub struct Rule {
     /// than by a comparison a module could forget.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<crate::facts::ToolQuery>,
+
+    /// The adopted gate runner's EFFECTIVE plan, per declared surface
+    /// (CLOUD-949).
+    ///
+    /// Each row becomes an entry of `input.tree.plan` under its own `id`,
+    /// carrying what the runner said it would run — acquired from the runner
+    /// itself, never re-derived from its config, because the runner owns its
+    /// selector and a second derivation is a second authority on which files a
+    /// step runs over.
+    ///
+    /// **Acquired fresh rather than read back, which is the difference from
+    /// `tools`.** A verdict is a statement about bytes that have a digest; a plan
+    /// is a statement about a WORKING TREE, whose dirty and index state move
+    /// without HEAD. Keying a stored plan would mean comparing every binding
+    /// field before trusting it, and a comparison a caller can forget is the
+    /// staleness class this avoids by simply taking the plan now.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plan: Vec<crate::hk::PlanQuery>,
     /// The already-minted receipt fields this policy row reads, **declared**
     /// (CLOUD-1310).
     ///
@@ -3397,6 +3415,10 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         declares: Declares::Fact(crate::facts::Fact::ToolVerdict, |rule| {
             !rule.tools.is_empty()
         }),
+    },
+    ColumnCensus {
+        field: "plan",
+        declares: Declares::Fact(crate::facts::Fact::Plan, |rule| !rule.plan.is_empty()),
     },
     ColumnCensus {
         field: "minted",
@@ -5299,6 +5321,41 @@ fn validate_rows(rules: &[Rule]) -> anyhow::Result<()> {
                 )));
             }
         }
+        // ONE PLAN ID, ONE QUERY — the same argument as the row above, over
+        // `[[rule.plan]]` (CLOUD-949). `plan_facts` writes every declared query
+        // into one map keyed by `id`, so two queries sharing an id and differing
+        // in `hook`, `required` or `prohibited_profiles` resolve to whichever
+        // was inserted last. That is a false green of the worst kind: the
+        // module reads `input.tree.plan["gate"]` and is answered about a
+        // DIFFERENT surface than the row it belongs to declared, so a required
+        // step can go unchecked while the gate reports clean.
+        //
+        // Refused at LOAD rather than deduplicated at acquisition, because
+        // silently picking one of two disagreeing declarations is the same
+        // defect one layer down. An IDENTICAL redeclaration is accepted: it
+        // names one query, so there is nothing to resolve.
+        //
+        // The per-row `validate` cannot see this — the collision is between
+        // rows as often as within one — which is why it lives here beside
+        // CLOUD-444's, whose reasoning it borrows wholesale.
+        for query in &rule.plan {
+            let collides = |other: &crate::hk::PlanQuery| other.id == query.id && other != query;
+            if let Some(prior) = rules[..index]
+                .iter()
+                .find(|prior| prior.plan.iter().any(collides))
+            {
+                return Err(UsageError::raise(format!(
+                    "rules {} and {}: both declare the plan `{}` with different terms; one plan id has one query",
+                    prior.id, rule.id, query.id
+                )));
+            }
+            if rule.plan.iter().any(collides) {
+                return Err(UsageError::raise(format!(
+                    "rule {}: declares the plan `{}` twice with different terms; one plan id has one query",
+                    rule.id, query.id
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -6330,6 +6387,7 @@ fn run(
     // THE TOOL VERDICTS (CLOUD-1171) — `forge_facts`' mechanism with a different
     // key, extracted for the same reason.
     let tool_verdicts = tool_facts(rules, root);
+    let plan = plan_facts(rules, root);
     let minted = minted_facts(rules, root, now);
     // THE CAPTURED REDUCTIONS (CLOUD-1188) — guarded on the declaration for
     // `forge_facts`' reason, and here the guard matters more: resolving this
@@ -6406,6 +6464,7 @@ fn run(
         state: state.as_ref(),
         forge: forge.as_ref(),
         tool_verdicts: tool_verdicts.as_ref(),
+        plan: plan.as_ref(),
         minted: minted.as_ref(),
         captured: captured.as_ref(),
         bundles,
@@ -6773,6 +6832,8 @@ struct RunInputs<'a> {
     /// A third-party tool's verdicts, per declared id (CLOUD-1171). `None` is
     /// could-not-look, for `forge`'s two reasons.
     tool_verdicts: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
+    /// The effective plan per declared row (CLOUD-949).
+    plan: Option<&'a BTreeMap<String, Option<crate::hk::Planned>>>,
     minted: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
     /// The declared reductions over the capture store (CLOUD-1188). `None` is
     /// could-not-look: nobody asked, or no store is readable.
@@ -7746,6 +7807,8 @@ pub(crate) struct Resolved<'a> {
     /// A third-party tool's verdicts, per declared id (CLOUD-1171), read back
     /// from a record keyed to (tool, pinned version, input digest).
     pub tool_verdicts: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
+    /// The effective plan per declared row (CLOUD-949).
+    pub plan: Option<&'a BTreeMap<String, Option<crate::hk::Planned>>>,
     /// One declared field of each already-minted receipt, per `[[rule.minted]]`
     /// row (CLOUD-1310). `None` is could-not-look for both of its conditions.
     pub minted: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
@@ -8201,6 +8264,44 @@ fn forge_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, BTreeMap<
 /// git directory is resolvable. An empty MAP would be a third claim ("records
 /// were read and none exist"), which a gate over a validator must not infer from
 /// a directory nobody opened.
+/// Acquire the adopted gate runner's effective plan for every declared row
+/// (CLOUD-949).
+///
+/// [`tool_facts`]' shape with the staleness half inverted: **the declaration is
+/// still the bound**, so a run whose rows declare no plan spawns nothing, but a
+/// declared one is taken NOW rather than read back. A plan binds to a working
+/// tree, and a working tree has no digest a record could be keyed by.
+///
+/// `None` is nobody declared a plan. A declared id that could not be acquired is
+/// present with a `null` VALUE rather than absent — the reacquire arm, and the
+/// one place this family departs from "absent is could-not-look".
+///
+/// **The departure is load-bearing.** Everywhere else the declared set is
+/// recoverable from the config a module cannot see, so absence is the only
+/// signal available. Here a module must be able to refuse a plan that could NOT
+/// be taken, and a row that vanished on failure would make that refusal
+/// unwritable: the id nobody could acquire is exactly the id the module needs to
+/// name. A plan nobody could read and a plan with nothing wrong are otherwise
+/// identical on the decision surface, which is what this row exists to prevent.
+fn plan_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, Option<crate::hk::Planned>>> {
+    let declared: Vec<crate::hk::PlanQuery> = rules
+        .iter()
+        .flat_map(|rule| rule.plan.iter().cloned())
+        .collect();
+    if declared.is_empty() {
+        return None;
+    }
+    let mut acquired = BTreeMap::new();
+    for query in &declared {
+        let taken = match crate::hk::acquire(root, query) {
+            crate::facts::Look::Is(planned) => Some(planned),
+            _ => None,
+        };
+        acquired.insert(query.id.clone(), taken);
+    }
+    Some(acquired)
+}
+
 fn tool_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, BTreeMap<String, String>>> {
     let declared: Vec<crate::facts::ToolQuery> = rules
         .iter()
@@ -8572,6 +8673,7 @@ pub(crate) fn tree_document(
             // whose KEY has no record is ABSENT from the map, which is the third
             // answer and the one the whole keying exists to produce.
             crate::facts::Fact::ToolVerdict => serde_json::json!(resolved.tool_verdicts),
+            crate::facts::Fact::Plan => serde_json::json!(resolved.plan),
             crate::facts::Fact::Minted => serde_json::json!(resolved.minted),
             // CLOUD-1188. `null` for both could-not-look conditions — nobody
             // declared a reduction, and no store is readable. A declared id no
@@ -8720,6 +8822,7 @@ fn resolved_of<'a>(inputs: &RunInputs<'a>) -> Resolved<'a> {
         state: inputs.state,
         forge: inputs.forge,
         tool_verdicts: inputs.tool_verdicts,
+        plan: inputs.plan,
         minted: inputs.minted,
         captured: inputs.captured,
     }
@@ -12373,6 +12476,7 @@ mod tests {
                 state: None,
                 forge: None,
                 tool_verdicts: None,
+                plan: None,
                 minted: None,
                 captured: None,
             },
@@ -12951,6 +13055,7 @@ mod tests {
                 state: None,
                 forge: None,
                 tool_verdicts: None,
+                plan: None,
                 minted: None,
                 captured: None,
             },
@@ -13093,6 +13198,7 @@ mod tests {
                 state: None,
                 forge: None,
                 tool_verdicts: None,
+                plan: None,
                 minted: None,
                 captured: None,
                 bundles: &[],
@@ -13181,6 +13287,7 @@ mod tests {
             state: Vec::new(),
             forge: Vec::new(),
             tools: Vec::new(),
+            plan: Vec::new(),
             minted: Vec::new(),
             captured: Vec::new(),
             tasks: Vec::new(),

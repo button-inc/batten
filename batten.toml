@@ -4072,6 +4072,39 @@ max_tokens = 24
 [advisory]
 max_tokens = 1024
 
+# The post-tool outcome signatures this repository recognises (CLOUD-945).
+#
+# THE `code` COLUMN IS THE ANCHORING, AND IT IS REQUIRED. A signature with no
+# code would match on diagnostic TEXT, which recognises `sh: 1: x: not found`
+# and equally every echo, log line and commit message that contains the phrase.
+# The row's own words: an unanchored matcher is what makes an advisory channel
+# noise, and a signature that fires on prose is worse than one that never fires,
+# because the first teaches a reader to ignore the channel.
+#
+# MEASURED, AND THESE ARMS ARE THEREFORE UNREACHED ON THIS HOST. Over 364 real
+# post-tool payloads from one Claude Code session, the Bash result carries
+# `stdout`, `stderr`, `interrupted`, `isImage`, `noOutputExpected` and five
+# optional siblings — and NO exit code. `returnCodeInterpretation` occurred once
+# and carried a human sentence ("Files differ"), not a number. So
+# `outcome::classify` reads no code, answers could-not-look, and nothing is
+# advised: the row's own "absent exit status fails open with no advice" working,
+# rather than a gap in it.
+#
+# They are declared anyway, and that is the point of declaring them: a host that
+# supplies a code is recognised the day it arrives, with no change to the engine
+# and no second authority over what 127 means.
+# `crates/batten/tests/fixtures/hooks/claude-code-posttool-failure.json` is the
+# measured shape, sanitized.
+[[outcome]]
+class = "command-not-found"
+code = 127
+family = "unix"
+
+[[outcome]]
+class = "permission-denied"
+code = 126
+family = "unix"
+
 # What THIS REPOSITORY'S OWN HOOKS may cost one session (CLOUD-417).
 #
 # The three thresholds above bound one thing each: what loads once per session,
@@ -4757,6 +4790,29 @@ severity = "deny"
 # `sources` is what a `scope = "tree"` row hands its bundle. The engine asks the
 # pin which files configure it instead, so neither this row nor `crates/batten`
 # carries their names (non-negotiable rule 1).
+# CONSUMER #1 EATS THE SAME FOOD (CLOUD-946), and this preset is `pinned-toolchain`'s
+# complement rather than a second copy of it. That one asks whether a program was
+# reached around the pin and can only name the PROGRAM; this one reads the task
+# receipt and names the TASK to run instead, so the remedy is in the finding
+# rather than in a file the reader has to go and search.
+#
+# `warn`, AND THE SEVERITY IS THE ROW'S OWN DISCIPLINE RATHER THAN TIMIDITY.
+# CLOUD-946 asks that every new deny predicate be REPLAYED before its severity is
+# selected, and no replay has been run for this one. Choosing `deny` now would be
+# selecting a severity without the evidence the row requires; `warn` is what the
+# predicate has earned, and moving it is a change somebody makes with a number.
+#
+# NO `sources` COLUMN, for `pinned-toolchain-preset`'s reason one row down: the
+# receipt this reads is keyed to the manifest the runner resolves, and naming that
+# manifest here is refused at load and would put a consumer's filenames in a row
+# that ships to every consumer.
+[[rule]]
+id = "mise-preset"
+kind = "policy"
+scope = "mediated_call"
+preset = "mise"
+severity = "warn"
+
 [[rule]]
 id = "pinned-toolchain-preset"
 kind = "policy"
@@ -6296,6 +6352,56 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "add the missing step to `fixers` in hk.pkl, or remove the one that carries no fixer; which of the two a name needs is a reading of the gate that no command can make"
 
+# The adopted runner's surface contract (CLOUD-947). The row is here because
+# house style §1 says the committed authority declares what runs; hk and CI
+# schedule it. The gate itself decides nothing about this repository — it diffs
+# the pinned runner's own plan against the reviewed projection of it.
+#
+# THE GLOB NAMES THE TOOL'S OWN CONFIG, NEVER THE CORPUS, which is the idiom
+# `no-conflict-markers` and `fix-selection-complete` already carry: globbing the
+# corpus would make the row fire inside test fixtures, where `mise exec` cannot
+# resolve and the runner is not the one this repository pinned.
+#
+# Tree-scoped and spawning, which is the right side of the CLOUD-170 split: it
+# runs under `enforce` and the hk gate, never on the mediated path.
+# The adopted runner's EFFECTIVE plan, adjudicated (CLOUD-949). The row above
+# answers what the plan IS against a reviewed projection; this one answers
+# whether the plan a proposed invocation would produce still runs what this
+# repository requires.
+#
+# `kind = "policy"` and the fact is acquired at the BOUNDARY, so the module
+# spawns nothing — which is what keeps a Rego rule from becoming a second
+# authority on the runner's selector. The acquisition is `Cost::Effect`, so the
+# row is resolved on the spawning surface and never on the mediated call.
+#
+# THE REQUIRED LIST IS THIS REPOSITORY'S, and it lives here for non-negotiable
+# rule 1: `crates/batten` names no step of anybody's, and the module reads the
+# list out of the fact it is handed.
+[[rule]]
+id = "hk-plan-required"
+kind = "policy"
+scope = "tree"
+module = "policy/hk-plan-required.rego"
+severity = "deny"
+
+# The three steps whose absence from the gate would mean this repository's own
+# engine, its config and its policy corpus stopped being checked. A wider list
+# would make the row fire on every hk.pkl edit; a narrower one would let the
+# three that matter be silently excluded.
+[[rule.plan]]
+id = "gate"
+hook = "check"
+required = ["batten-check", "test", "policy-test"]
+
+[[rule]]
+id = "hk-contract-drift"
+kind = "command"
+glob = "hk.pkl"
+check = "mise run hk-drift"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "regenerate the projection with `mise run hk-contract` and read the diff: which of an added, removed, reordered or regrouped step is intended is a decision, and a gate that applied it would be absorbing the change nobody reviewed"
+
 [[rule]]
 id = "hk-fix-selection"
 kind = "policy"
@@ -6658,16 +6764,16 @@ root = "target"
 keep = 2
 
 [prune.warm]
-mb = 8971
-worst_mb = 8971
+mb = 15898
+worst_mb = 15898
 multiplier = 1
-measured = "2026-09-04"
+measured = "2026-09-05"
 
 [prune.cold]
-mb = 21455
-worst_mb = 21455
+mb = 22653
+worst_mb = 22653
 multiplier = 1
-measured = "2026-09-04"
+measured = "2026-09-05"
 
 # THE BASIS EACH FLOOR WAS MEASURED AGAINST (CLOUD-1158), because `measured` is a
 # pointer to a basis and not the basis itself.
@@ -6715,6 +6821,43 @@ measured = "2026-09-04"
 # file is one somebody switches off, and the thing being watched is a trend. When
 # it does red, move `count` and `measured` TOGETHER: a count refreshed without a
 # new measurement is the same staleness wearing a newer number.
+#
+# THE 2026-09-05 MOVE, 197 -> 208, DERIVED by the same model and recorded for the
+# same reason. The hk-preset bundle added five suites -- `hk_contract`, `hk_plan`,
+# `hk_observation`, `hk_evidence`, `outcome_advice` -- which took the live count 11
+# past the basis, one outside the tolerance. This gate refused the branch that did
+# it, which is the gate working: the floor it was defending was taken against a
+# tree eleven stems smaller, and a floor taken low fails in the direction that
+# fails silently.
+#
+# Scaled rather than re-measured, and the difference is stated because the
+# paragraph above says a reader who needs an exact should take it rather than
+# trust this line. Warm: 8971 at 197 stems is 45.54 per stem, and 45.54 x 208 is
+# 9472. Cold: 21455 at 197 is 108.91 per stem, and 108.91 x 208 is 22653. Neither
+# is an independent measurement.
+#
+# AND ON THE SAME DAY THE WARM FLOOR BECAME AN OBSERVED ONE, which is the first
+# time any entry in this block has been able to write that sentence. Every move
+# above scales the stem model and then says plainly that it took no measurement;
+# the ratchet took one. A lap on `80d25ece` consumed 15898MB and the journal
+# raised its warm observation to that, uncapped — so the derived 9472 above was
+# 6426MB low, and low is the direction this block already names as the one that
+# fails silently.
+#
+# The declared floor is a SEED and a lower bound rather than the whole answer, and
+# the journal that holds the observation is per-clone: it lives in
+# `$GIT_DIR/batten-prune/laps.json`, which no clone inherits. So leaving 9472
+# committed does not mean "the ratchet handles it" — it means every fresh
+# container is admitted under a floor 6.4GB below what a lap here actually
+# consumes, and re-learns it only after a lap has already run under it. Promoting
+# the observation is what makes the seed agree with the instrument.
+#
+# Cold does NOT move with it and the asymmetry is deliberate: the journal carries
+# `"cold": null`, because cold is judged only when the escalation drops the cache
+# and no lap here reached that. Scaling cold to keep the two in the stem model's
+# proportion would be re-deriving a number FROM an observation that says nothing
+# about it — the same staleness wearing a newer basis. Cold keeps its derivation
+# and its disclosure until a lap measures it.
 #
 # THE 2026-09-02 MOVE, 164 -> 175, and it is DERIVED like the two before it.
 # `[[startup]]`'s two suites plus `obligations_bound` took the live count 11 past
@@ -6891,12 +7034,12 @@ measured = "2026-09-04"
 # satisfy refuses every lap and gets switched off.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 197
+count = 208
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 197
+count = 208
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
@@ -11090,6 +11233,52 @@ target = "crates/batten/src/exec.rs"
 id = "module read first"
 kind = "document"
 target = "policy/spawn-adapters.rego"
+
+[[verdict]]
+id = "plan read missing"
+gloss = "a declared plan the boundary could not acquire from the runner"
+class = """
+A plan nobody could read and a plan with nothing wrong are identical on the
+decision surface, so this refuses rather than passing. The cause is upstream of
+the gate: the pinned runner is not resolvable, its config will not evaluate, or
+it answered with something this build cannot read. Reacquire — provision the
+runner through the project's own pin and run the gate again.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "policy/hk-plan-required.rego"
+
+[[verdict]]
+id = "step run missing"
+gloss = "the plan will not run a step this repository requires"
+class = """
+A step the row requires is missing from the plan, or present with a status that
+is not inclusion. Either way the gate would run without it, and a required step
+the runner silently excluded reads as satisfied to everything downstream. Restore
+the step, or change what the row requires — the second is a decision about what
+this repository checks, and it belongs in the diff that makes it.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "hk.pkl"
+
+[[verdict]]
+id = "plan run refused"
+gloss = "the plan resolved under a profile this row refuses"
+class = """
+The plan is a plan the gate would run, and the row refuses the profile set it
+resolved under. Distinct from a missing step because the remedy is different:
+this is how the gate was invoked rather than what the gate contains.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "hk.pkl"
 
 [[verdict]]
 id = "symbol count absent"

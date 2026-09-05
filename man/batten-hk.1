@@ -1,0 +1,26 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-hk 1  batten 
+.SH NAME
+batten\-hk \- The adopted gate runner\*(Aqs surface contract
+.SH SYNOPSIS
+\fBbatten hk\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+The adopted gate runner\*(Aqs surface contract
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-hk\-contract(1)
+Regenerate the committed plan projection from the pinned runner
+.TP
+batten\-hk\-observe(1)
+Record what this session resolved of the runner, once per contract digest
+.TP
+batten\-hk\-drift(1)
+Whether the committed plan projection still matches the pinned runner
+.TP
+batten\-hk\-help(1)
+Print this message or the help of the given subcommand(s)

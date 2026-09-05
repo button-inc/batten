@@ -246,6 +246,63 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   literal is not. Authority-only, and here that is a security property rather than
   a consistency one: a `batten.local.toml` able to add a row could run anything
   under the agent's own hook.
+- `hk.rs` — the adopted gate runner's surface contract, as a committed projection
+  (CLOUD-947). The runner decides which steps a gate runs, in what order, under
+  which profiles and in which parallel group, and nothing compared that live plan
+  against a reviewed one. `project` is the ONE canonicaliser both halves reach
+  through — the `write` verb that regenerates the artifact and the `read` verb
+  that diffs it — so the two sides cannot disagree about what the plan is.
+  **Volatile fields are excluded by construction rather than filtered at compare
+  time**: the generated-at instant, the per-step matched-file count and the human
+  `detail` string never enter the projection, so they cannot make it flap, and a
+  field that never enters cannot be trusted by mistake. An unknown step is
+  `Drift::StepAdded` and never an append the gate performs on its own —
+  appearing in the plan is not consent to run it. An EMPTY plan is
+  could-not-look, because a generator that found nothing looks exactly like a
+  gate that passed. Findings are pointers: a class token, a hook and a step name,
+  never a command, a glob or a dump of either plan.
+
+  It carries two further authorities over the same runner, and they are
+  deliberately three types rather than one. `Fact::Plan` (CLOUD-949) is the
+  EFFECTIVE plan for a declared surface, acquired from the runner and projected
+  at `input.tree.plan` — it keeps the reason KIND and the file count the contract
+  drops, because a required step's absence turns on whether a PROFILE or a glob
+  MISS excluded it, and it is bound to an `inputFingerprint` over HEAD and every
+  differing path's current bytes, since dirty and index state move a selection
+  without moving HEAD. `hk-session-capability/v1` (CLOUD-948) is a per-session
+  RECEIPT recording what a session resolved — `available` / `drifted` /
+  `unknown`, where the third is could-not-look and reading it as drift would turn
+  a verdict about the environment into one about the repository. It decides
+  nothing, is keyed by (hashed session, contract digest) so a second event in one
+  session runs no program, and stores no raw session token, no command and no
+  path. Three questions, three authorities: a merged one would answer none of
+  them, because a mismatch could mean the contract is wrong or the runtime is.
+
+  A fourth authority sits beside them and is DATA rather than a type:
+  `contracts/hk-evidence.json` (CLOUD-950) is the one statement of what the
+  pinned runner can evidence about a RUN, and its value today is
+  `executionEvents: none`. `attest` reads it first and unconditionally, so a
+  step-level execution receipt is unwritable rather than discouraged — the
+  absence was previously undocumented, which is the dangerous state: nothing
+  stopped a receipt inferred from a process exit, and such a receipt reads
+  exactly like one backed by evidence. The three routes that would manufacture
+  it — scraping stderr, wrapping steps individually, inferring execution from an
+  exit — are excluded by name.
+- `outcome.rs` — the post-tool outcome, normalized (CLOUD-945). A bare pinned tool
+  can fail loudly after the agent starts it, and this is the loud counterpart to
+  the pre-admission rule's silent case. It **advises rather than decides**: no arm
+  reaches a verdict, so nothing here can deny, retry, mutate, probe or write.
+  **The structured exit code is read FIRST**, before any diagnostic text, which is
+  what keeps a signature from firing on the phrase inside an echo, a log line or a
+  commit message — the unanchored matcher that makes an advisory channel noise.
+  MEASURED over 364 real Claude Code post-tool results: that host's Bash payload
+  carries `stdout`, `stderr`, `interrupted` and five optional siblings and NO exit
+  code, so the declared 127/126 arms are unreached there and nothing is advised —
+  the row's own fail-open, not a gap. The signatures are `batten.toml`'s
+  `[[outcome]]` rows (rule 1); the crate holds only the matcher. An `Outcome`
+  carries a closed class, an optional code, an OS family and the program token —
+  never a byte of stdout or stderr, which is the field likeliest in the whole
+  envelope to hold a secret.
 - `handler.rs` — the `[[hook.handler]]` dispatch surface (CLOUD-898), the door
   that lets `batten hook` be the ONLY registration on every surface while a
   repository still runs whatever it likes behind it. A **second noun beside

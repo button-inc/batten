@@ -384,11 +384,19 @@ fn sequence_refusal(issue: &Issue, description: &str, receipts: &Path) -> Result
     // sequence question is answerable here and we simply cannot see the answer,
     // and a gate that silently clears everything it cannot see is the false green
     // this repository keeps re-meeting. The remedy is local and cheap — the
-    // SessionStart hook writes it before it does anything else.
+    // SessionStart handler writes it before it does anything else.
+    //
+    // **THE REMEDY NAMES A TASK THAT EXISTS, which it did not.** This said
+    // `.claude/hooks/session-start.sh` — a script RETIRED into declared handler
+    // rows, so the one thing the refusal told a reader to run had not existed
+    // for some time. That is CLOUD-1050's class exactly, in the file whose own
+    // header argues for it: a `msg` was a `String`, so "naming a task that does
+    // not exist" was expressible and uncheckable. Measured 2026-09-05, when a
+    // session followed this line and found nothing there.
     if !receipts.join(SESSION_STAMP).exists() {
         return Ok(Some(Refusal {
             id: issue.id.clone(),
-            rule: "no-session-stamp (run .claude/hooks/session-start.sh, or pass \
+            rule: "no-session-stamp (run `mise run session:stamp`, or pass \
                    --bypass-sequence)"
                 .to_owned(),
             kind: Kind::Sequence,
@@ -1000,6 +1008,7 @@ pub fn adopt(
 mod tests {
     use super::*;
 
+    /// A tracker row with just the two fields the sequence rules read.
     fn issue(id: &str, status: &str) -> Issue {
         Issue {
             id: id.to_owned(),
@@ -1043,6 +1052,7 @@ mod tests {
         assert_eq!(parsed("CLOUD-1", None).created_at, None);
     }
 
+    /// A wiped receipts directory under `target/tmp`, per case.
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join("batten-claim-tests").join(name);
         let _ = std::fs::remove_dir_all(&dir);

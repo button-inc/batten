@@ -622,7 +622,20 @@ struct Verb {
 /// asks whether this clone holds a lease and is being told that it does not).
 /// That asymmetry is the same effect split the read-only allowlist draws, and
 /// keeping it visible here is what stops the whole verb being waved through.
+/// THE TWO `hk` ARMS JOIN IT, and the reason is the corpus rather than the verbs
+/// (CLOUD-947, CLOUD-949). Both reach the pinned gate runner — the generator to
+/// take a plan, the gate to take one and diff it — and this corpus deliberately
+/// stands up no runner and commits no contract, so could-not-look is their
+/// honest answer here. No lighter fixture changes that without provisioning a
+/// third-party binary, which is the same bar `mutate sweep` states one row down.
+///
+/// The pointer-only assertions still run over both, unchanged, which is the half
+/// this file is actually about: what a could-not-look arm emits is a class token
+/// and a path, and it is held to that here exactly as a verdict would be.
 const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
+    "hk contract",
+    "hk drift",
+    "hk observe",
     "mutate sweep",
     "lease acquire",
     "lease hold",
@@ -1121,6 +1134,38 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "doctor session",
         args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        // The adopted runner's contract (CLOUD-947, CLOUD-949). Both verbs are
+        // `PointerOnly` because both are: the generator emits one path, and the
+        // gate emits a class token, a hook and a step NAME per drifted step. The
+        // one thing neither carries is what a plan SAYS — no command, no glob, no
+        // matched path, no reason prose — which is the exclusion the types
+        // enforce rather than the census.
+        //
+        // In the corpus neither reaches the runner at all, so both take the
+        // could-not-look path; the pointer they emit there names the artifact and
+        // the verb that regenerates it, which is the same shape.
+        path: "hk contract",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "hk drift",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        // The observation (CLOUD-948). A session token is supplied so the verb
+        // reaches its own work rather than the no-session arm — and the census
+        // then holds it to the exclusion that IS this receipt: what it emits is
+        // one state token, and the token it was handed appears nowhere.
+        path: "hk observe",
+        args: &["--session", "pointer-only-census"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },

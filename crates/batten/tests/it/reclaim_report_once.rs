@@ -101,6 +101,19 @@ fn session_start(git_dir: &Path) -> String {
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .env("GIT_DIR", git_dir)
         .env("BATTEN_BOOT_TIME", NOW)
+        // THE SUBJECT IS A TASK BODY, SO NOTHING HERE NEEDS INSTALLING, and
+        // saying so is what keeps this case from hanging on a network it does
+        // not use. `session:census` runs shell; the runner resolves the whole
+        // toolset first regardless, and behind an egress proxy that resolution
+        // retries against a host answering 403 and never returns.
+        //
+        // Measured: without this the three cases in this file run FOREVER --
+        // `timeout 180` returns 124 on a tree that contains none of the change
+        // that was suspected -- and with it they pass in 10s. A test that hangs
+        // indefinitely on an unrelated network condition reports nothing at all,
+        // which is worse than failing: a suite nobody can finish is a suite
+        // nobody runs.
+        .env("MISE_AUTO_INSTALL", "0")
         .output()
         .expect("run the session-start census handler");
     format!(

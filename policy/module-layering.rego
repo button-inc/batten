@@ -238,6 +238,25 @@ declared_modules := {
 	# They sit below the engine and their back-edges are forbidden for `symbols`'
 	# reason.
 	"forge", "tools", "captured", "taskset",
+	# `outcome` arrived with CLOUD-945 and this rule named it too. It is a PURE
+	# NORMALIZER and a LEAF: it reads a value the boundary already holds and
+	# returns a closed class, reaching `tools` for the one digest the rate-limit
+	# key needs and nothing else. It decides nothing and refuses nothing — the
+	# advisory channel carries no verdict — so it sits below the engine with the
+	# acquisition modules and its back-edges are forbidden for their reason.
+	"outcome",
+	# `hk` arrived with CLOUD-947 and this rule named it too — the coverage clause
+	# earning its keep again, on a module whose two test tiers were already green.
+	#
+	# It is an ACQUISITION module in `symbols`' class: it spawns a delegated tool
+	# to resolve what that tool would do, which is a property of the TOOL rather
+	# than of the tree, so no walk answers it. It reaches `facts` for `Look` and
+	# `error` for a malformed artifact, and nothing else — no `rules`, no
+	# `findings`, no store. It decides nothing: whether a drifted contract refuses
+	# is the `hk-contract-drift` row's, and the verdict is composed in `lib`, which
+	# is the same split `lease` and `wiring` carry and the reason neither becomes a
+	# second authority on its own subject.
+	"hk",
 	# `claim` arrived with CLOUD-1121 too, and this rule named it a seventh time.
 	# It sits ABOVE `ready` and reaches it: the claim gate's readiness rule is the
 	# refinement gate's own predicate rather than a second reading of the same

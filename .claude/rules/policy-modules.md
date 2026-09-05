@@ -185,7 +185,7 @@ closes-the-row exemption was unreachable rather than unsatisfied. The store is
 written only when a row is blocked, so its absence and its emptiness are one
 fact: read a PRESENT entry, and never infer one from an absence.
 
-**Eleven of those keys are DECLARED READS whose subject is not the working tree**,
+**Twelve of those keys are DECLARED READS whose subject is not the working tree**,
 and grouping them is worth a sentence because each answers a question no walk
 can: `input.tree["base-delta"]` is how the declared globs' paths differ from a
 declared base rev — `added`, `edited`, `deleted`, `code-changed` and the base side
@@ -208,7 +208,12 @@ does not answer (CLOUD-1171); `input.tree.minted` is one declared FIELD of a
 receipt the MEDIATED boundary already wrote, bounded by how old the reading is —
 which is what makes it a different family from `captured`, whose store is keyed
 by content, carries no clock, and would answer a question about a mutable field
-from whichever read sorts first in digest order (CLOUD-1310); and
+from whichever read sorts first in digest order (CLOUD-1310); `input.tree.plan` is the adopted gate
+runner's EFFECTIVE plan for a declared surface, acquired from the runner rather
+than re-derived from its config — `Cost::Effect`, in `symbols`' class, and bound
+to an `inputFingerprint` over HEAD and every differing path's CURRENT bytes,
+because dirty and index state move a selection without moving HEAD (CLOUD-949);
+and
 `input.tree.captured` is a declared REDUCTION
 over the capture store — `present`, `count` or a bounded token, never a payload
 (CLOUD-1188); and `input.tree.review` is whether a VENDORED agent prompt was
@@ -251,6 +256,20 @@ reads `input.call.command`, `input.call.segments`, `input.call.programs`,
 `input.call.event`, `input.call.operation`, `input.call.writes`,
 `input.call["run-in-background"]`, `input.call["final-message"]`,
 `input.call.transcript` and `input.call["stop-repeat"]`, plus the `facts` object.
+
+**A segment's `construct` is the one field that is about the command's SHAPE
+rather than its text** (CLOUD-1381), and it is worth its own sentence because it
+exists to replace a habit. `null` at the top level; inside a control-flow node it
+is `{kind, role}` — `kind` one of `until`, `while`, `if`, `for`, `select`,
+`case`, `function`, and `role` either `condition` or `body`. Compare it as
+`segment.construct.kind == "until"`, never by hunting for the word: `run-shape`
+established "this call waits on a condition" by finding the literal `until` in
+some segment's `words`, which worked only because the boundary used to split on
+`;` and had no idea what a loop was. A parse has no such token — the keyword IS
+the node — so a predicate written that way now matches nothing and refuses
+nothing. Reading the node is also tighter: `for` is excluded because it is a
+different `kind` rather than because a word list omits it, and a `!` before the
+test lives inside the condition instead of needing to be filtered out.
 
 **The `facts` object is where the hook-surface FACTS live, and it is not
 `input.call`.** That distinction is the one this file's own reader gets wrong
@@ -400,6 +419,53 @@ operand", a question a line answers and a segment does not. So a module reading
 `input.call.segments` sees exactly what it saw before, and must not grow its own
 line splitting to compensate — that would be the second authority two sections
 up already refuses.
+
+**AND SINCE CLOUD-1381 THAT ONE PARSER IS A PARSER**, which the paragraph below
+was written before and is worth stating because it changes what the rule buys.
+`hook::segments` was a character walk — one `chars.next()` loop deciding quoting,
+escapes, heredoc bodies, here-strings and whether an `&` belonged to a
+redirection, all at one position in one pass. It could not fail, so a command it
+mis-split produced a confident wrong shape that no gate could tell from a correct
+one, and CLOUD-857 is that measured. It is `rable` now, a GNU Bash 5.3-compatible
+recursive-descent parse, and two things follow that a module may rely on.
+
+`input.call.segments` is `null` where the command **would not parse**. Rego reads
+that as undefined and therefore as _does not hold_, so a predicate over segments
+cannot fire on a call nobody could read — the same abstention shape as
+`input.tree.missing`, one surface over. Do not read an absent segment list as a
+clean command.
+
+And a command inside `$(…)`, `<(…)`, a subshell or a compound body **is a
+segment** (CLOUD-1257, which the walk could not reach at all). So a predicate
+counting segments, or asserting something about every one of them, now sees
+commands it did not see before; that is the gate working rather than a
+regression, and a module written against the walk's blindness is the thing to
+re-read.
+
+The parser delimits words and does **not** remove quotes — `hook::unquote` does,
+as a leaf operation over a token whose extent is already settled. That boundary
+is stated here because it is the one place a reader will expect more than
+arrived.
+
+**AND A PARSE IS NECESSARY WITHOUT BEING SUFFICIENT — the residue is named here
+so the next author finds it rather than discovering it** (CLOUD-1381's own
+acceptance). A correct tree gives STRUCTURE; it does not make a command whose
+text is not known until it runs decidable. `eval "$CMD"`, `bash -c "$VAR"`,
+`sh -c "$(build_it)"` and anything assembled at runtime all parse cleanly, and
+what they parse to is a two-word command whose second word is an expansion. The
+program that will actually run is not in the tree, because it is not in the
+string.
+
+**Those read as an ordinary allowed command today, NOT as could-not-look, and
+that gap is the honest statement of where this row got to.** `Look::CouldNotLook`
+is reserved for a command the parser could not read at all; a command it read
+perfectly and whose MEANING is deferred to runtime is a different thing, and
+collapsing them would make every `eval` in a task body unanalysable. Closing it
+is a predicate — a module refusing an interpreter flag whose operand is not a
+literal — and a predicate is a row of its own, not a property of the parser.
+What the parse buys is that such a rule is now WRITABLE: `segments` carries the
+program and its operands as structure, so "an `eval` whose argument contains an
+expansion" is a question a module can ask. Before, it was not.
 
 There is **one parser**, and a module must not grow a second: no `split` of the
 command line, in Rego or in Rust. **The reason is not effort, and giving it as

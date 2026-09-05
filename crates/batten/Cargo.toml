@@ -105,6 +105,7 @@ getrandom.workspace = true
 gix.workspace = true
 gix-diff.workspace = true
 gix-packetline.workspace = true
+rable.workspace = true
 regorus.workspace = true
 globset.workspace = true
 hmac.workspace = true

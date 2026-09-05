@@ -42,6 +42,15 @@ const FAULTS: &[(&str, &str, &str)] = &[
          [[verb]]\nverb = \"frobnicate\"\neffect = \"write\"\n",
     ),
     (
+        // CLOUD-945. The fault is a class the engine cannot resolve, which is the
+        // arm that fires on nothing — a declared-but-dead signature reads as
+        // coverage while its route has never been walked.
+        "outcome table refused",
+        "outcome",
+        "version = 1\n\
+         [[outcome]]\nclass = \"invented\"\ncode = 127\nfamily = \"unix\"\n",
+    ),
+    (
         "pattern declare refused",
         "pattern",
         "version = 1\n[[pattern]]\nid = \"unclosed\"\nregex = \"[\"\n",
