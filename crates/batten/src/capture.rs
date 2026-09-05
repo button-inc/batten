@@ -562,6 +562,225 @@ const STAGING_ATTEMPTS: u32 = 8;
 /// and a capture that quietly did not happen is indistinguishable from a command
 /// nobody checked. That is the same posture the receipt store takes, and the
 /// reason both are internal errors rather than fail-open allowances.
+/// A mutable way to FIND a payload — never a claim about its content
+/// (CLOUD-1366).
+///
+/// # Why this is a type rather than a `String`
+///
+/// An issue key, a capture handle and a host's spill-file path all discover a
+/// candidate, and every one of them can point at different bytes tomorrow: a row
+/// is edited, a handle is superseded, a spill file is overwritten in place. A
+/// [`identity::ContentAddress`] cannot — it IS the bytes. Carrying both as
+/// strings is what let a filename be trusted as content in the first place, so
+/// they are separate types with no `From` between them and one named crossing
+/// ([`Index::current`]) that has to go through the index.
+///
+/// **Discovery-only, and the rendering says so.** A locator renders with its kind
+/// as a prefix, so a locator that reached a field expecting an address is visible
+/// in the bytes rather than merely wrong — and `ContentAddress::parse` refuses
+/// every one of these spellings, because none of them is `b3-<version>-<hex>`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Locator {
+    /// A tracker row. Its payload changes whenever anyone edits the row.
+    IssueKey(String),
+    /// A capture handle. Ordering selects a current one; the selection moves.
+    Handle(String),
+    /// A path the host spilled a payload to. Overwritten in place by design.
+    SpillPath(String),
+}
+
+impl Locator {
+    /// The rendered form, kind-prefixed so it can never be read as an address.
+    #[must_use]
+    pub fn render(&self) -> String {
+        match self {
+            Locator::IssueKey(key) => format!("issue:{key}"),
+            Locator::Handle(handle) => format!("handle:{handle}"),
+            Locator::SpillPath(path) => format!("spill:{path}"),
+        }
+    }
+
+    /// The kind alone, for a pointer-only diagnostic.
+    ///
+    /// A spill path is a filesystem path on somebody's machine and an issue key
+    /// is a consumer's vocabulary, so a diagnostic that must not carry either
+    /// still has something true to say.
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Locator::IssueKey(_) => "issue",
+            Locator::Handle(_) => "handle",
+            Locator::SpillPath(_) => "spill",
+        }
+    }
+}
+
+/// An identity that names a payload and CANNOT be resolved back to it
+/// (CLOUD-1366).
+///
+/// The privacy exemption, as a type. A tool result may be identified — so a gate
+/// can say *this is the same answer as last time* — without the bytes being
+/// retrievable from the identity. There is deliberately no route from this into
+/// [`identity::ContentAddress`] and no resolver that accepts one: a resolvable
+/// identity over a payload nobody agreed to store is the leak this exists to
+/// make unrepresentable.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct OpaqueIdentity(String);
+
+impl OpaqueIdentity {
+    /// Mint one from a digest a caller already holds.
+    #[must_use]
+    pub fn new(digest: impl Into<String>) -> OpaqueIdentity {
+        OpaqueIdentity(digest.into())
+    }
+
+    /// The rendered form, prefixed so it is distinguishable from an address at a
+    /// glance and refused by `ContentAddress::parse` at the boundary.
+    #[must_use]
+    pub fn render(&self) -> String {
+        format!("opaque:{}", self.0)
+    }
+}
+
+/// How a locator's current address compares with the one a caller expected.
+///
+/// **Aligned with [`crate::store::Resolution`] without duplicating it.** These
+/// answer *has the content moved*, where the resolver answers *can these bytes be
+/// trusted* — so `Stale` has no resolver counterpart and `Mismatch` has no
+/// freshness counterpart. The two vocabularies stay separate because collapsing
+/// them would make a moved payload and a corrupt one one word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Freshness {
+    /// The index's current address is the expected one.
+    Unchanged,
+    /// The index names a different current address: the content moved.
+    Stale,
+    /// The index has no entry for this locator.
+    Absent,
+    /// The index could not be read; this says nothing about the content.
+    Unavailable,
+}
+
+impl Freshness {
+    /// The stable token used in machine output.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Freshness::Unchanged => "unchanged",
+            Freshness::Stale => "stale",
+            Freshness::Absent => "absent",
+            Freshness::Unavailable => "unavailable",
+        }
+    }
+}
+
+/// The Batten-owned map from a locator to the address current for it.
+///
+/// One line per entry, `<locator>\t<address>`, under the repository's state
+/// directory. A flat file rather than a store: the whole point is that a
+/// comparison costs a read of THIS file and never a read of a payload.
+pub struct Index {
+    /// Where the index lives.
+    at: PathBuf,
+}
+
+/// The index file's name inside the state directory.
+const INDEX_FILE: &str = "locator-index";
+
+impl Index {
+    /// The index for `repo_root`.
+    ///
+    /// # Errors
+    ///
+    /// When the repository's state directory cannot be resolved.
+    pub fn open(repo_root: &Path) -> Result<Index> {
+        Ok(Index {
+            at: state::repo_state_dir(repo_root)?.join(INDEX_FILE),
+        })
+    }
+
+    /// The index at an explicit path, for a caller that already resolved one.
+    #[must_use]
+    pub fn at(path: PathBuf) -> Index {
+        Index { at: path }
+    }
+
+    /// Record `address` as current for `locator`, replacing any prior entry.
+    ///
+    /// # Errors
+    ///
+    /// When the index cannot be written.
+    pub fn record(&self, locator: &Locator, address: &identity::ContentAddress) -> Result<()> {
+        let mut kept: Vec<String> = self
+            .lines()
+            .into_iter()
+            .flatten()
+            .filter(|line| !line.starts_with(&format!("{}\t", locator.render())))
+            .collect();
+        kept.push(format!("{}\t{}", locator.render(), address.render()));
+        // SORTED, so the file is byte-stable: two runs recording the same set in
+        // different orders produce identical bytes, which is what keeps a diff of
+        // this file readable and §6's stability claim true of it.
+        kept.sort();
+        if let Some(parent) = self.at.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&self.at, kept.join("\n") + "\n")
+            .with_context(|| "the locator index could not be written".to_owned())
+    }
+
+    /// The address current for `locator`, if the index names one.
+    ///
+    /// **The one named crossing from a locator to an address.** Nothing converts
+    /// between the two types directly, so every route from "how do I find it" to
+    /// "what is it" passes through here and is greppable.
+    #[must_use]
+    pub fn current(&self, locator: &Locator) -> Option<identity::ContentAddress> {
+        let prefix = format!("{}\t", locator.render());
+        self.lines()?
+            .into_iter()
+            .find_map(|line| line.strip_prefix(&prefix).map(str::to_owned))
+            .and_then(|rendered| identity::ContentAddress::parse(&rendered).ok())
+    }
+
+    /// Compare what a caller expected against what is current, reading NO payload.
+    ///
+    /// This is the acceptance clause in one function: the answer comes from the
+    /// index file alone, so a store whose payloads are gone still answers, and
+    /// deciding freshness never costs the bytes it is deciding about.
+    #[must_use]
+    pub fn compare(&self, locator: &Locator, expected: &identity::ContentAddress) -> Freshness {
+        let Some(lines) = self.lines() else {
+            // COULD NOT LOOK, never `Absent`: an unreadable index says nothing
+            // about whether an entry exists, and a caller that treats the two
+            // alike will re-fetch a payload it already had.
+            return Freshness::Unavailable;
+        };
+        let prefix = format!("{}\t", locator.render());
+        match lines
+            .into_iter()
+            .find_map(|line| line.strip_prefix(&prefix).map(str::to_owned))
+        {
+            None => Freshness::Absent,
+            Some(rendered) if rendered == expected.render() => Freshness::Unchanged,
+            Some(_) => Freshness::Stale,
+        }
+    }
+
+    /// The index's lines, or `None` where it could not be read.
+    ///
+    /// An ABSENT index reads as an empty set rather than as could-not-look: a
+    /// repository that has recorded nothing yet has an empty index, and calling
+    /// that unreadable would make every first comparison `Unavailable`.
+    fn lines(&self) -> Option<Vec<String>> {
+        match std::fs::read_to_string(&self.at) {
+            Ok(text) => Some(text.lines().map(str::to_owned).collect()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(Vec::new()),
+            Err(_) => None,
+        }
+    }
+}
+
 pub fn store(repo_root: &Path, stream: Stream, bytes: &[u8]) -> Result<Capture> {
     store_in(&captures_dir(repo_root)?, stream, bytes)
 }
