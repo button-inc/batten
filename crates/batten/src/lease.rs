@@ -2233,10 +2233,29 @@ pub fn push(remote: &str, repo: &std::path::Path, reference: &str, head: &str) -
 /// different answers and only one of them is safe to continue from.
 pub fn fetch(remote: &str, repo: &std::path::Path, reference: &str) -> Result<Fetched> {
     let advertisement = advertise(remote, Service::UploadPack)?;
-    let want = advertisement.head_of(reference);
+    // **QUALIFIED, BECAUSE THE ADVERTISEMENT IS KEYED BY FULL REF NAME.**
+    // `Advertisement::refs` says so in its own field doc and `head_of` is an
+    // exact map lookup, but every driver-level caller carries `reference` SHORT
+    // — `main`, as the CLI positional and the tracking-ref construction both
+    // spell it. So `head_of("main")` missed `refs/heads/main`, answered `ZERO`,
+    // and this reported *"{remote} does not advertise main"* about a remote
+    // whose advertisement carried it twice. Measured against this repository:
+    // 79,973 bytes of advertisement, `refs/heads/main` present, the fetch
+    // refusing anyway.
+    //
+    // The `refs/` test rather than a slash test, because a branch is legitimately
+    // `feature/x` and prefixing by "has no slash" would leave exactly those
+    // unresolvable — which is the same half-right rule that made
+    // `gitwrite::FullName` accept a slashed short name verbatim.
+    let qualified = if reference.starts_with("refs/") {
+        reference.to_owned()
+    } else {
+        format!("refs/heads/{reference}")
+    };
+    let want = advertisement.head_of(&qualified);
     if want == ZERO {
         return Err(anyhow::anyhow!(
-            "lease: {remote} does not advertise {reference}"
+            "lease: {remote} does not advertise {qualified}"
         ));
     }
     // Already in hand: the local odb has it, so there is nothing on the wire to

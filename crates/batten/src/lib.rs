@@ -6273,8 +6273,7 @@ fn unwind_the_bet(
     } else {
         writeln!(
             out,
-            "land: an earlier run bet on a base that is no longer landing; replaying this branch's own commits onto {} rather than carrying another branch's",
-            short(tracking)
+            "land: an earlier run bet on a base that is no longer landing; replaying this branch's own commits onto {tracking} rather than carrying another branch's"
         )?;
         gitwrite::replay_onto(root, &full, base, tracking)
             .map(|replayed| !matches!(replayed, gitwrite::Rebase::Conflicted { .. }))
