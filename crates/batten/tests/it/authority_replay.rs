@@ -71,11 +71,37 @@ fn root() -> PathBuf {
 /// those expressions again would be comparing the shell program against a second
 /// grammar rather than against the one that ships, which is exactly the drift a
 /// fidelity replay exists to catch.
+///
+/// **AND THE `[ready]` THRESHOLDS ARE PART OF IT, which this omitted** (CLOUD-1395).
+/// `Grammar::resolve` reads the `[[pattern]]` rows and nothing else; the CLI
+/// builds the grammar it ships in `lib.rs`'s `board_grammar`, which chains
+/// `with_prose_threshold` and `with_pressure_test_threshold` off `[ready]`. A
+/// replay that called only `resolve` therefore compared the program against a
+/// compiled producer **configured differently from the one that ships** — with
+/// every ratchet unset, so no clause reading one could fire, on any payload.
+///
+/// That is the same class of defect as the corpus gaps this file already records,
+/// one level up: `bump` was added over a corpus with no §6 clause, `createdAt` was
+/// absent from every payload — and underneath both, the threshold those clauses
+/// read was `None` regardless. A fidelity replay whose subject is not the shipped
+/// configuration is not a fidelity replay, and it passes for that reason.
 fn grammar() -> batten::ready::Grammar {
     let config =
         batten::config::load(&root().join("batten.toml")).expect("the committed config loads");
     batten::ready::Grammar::resolve(&config.patterns)
         .expect("the committed config declares the whole Ready grammar")
+        .with_prose_threshold(
+            config
+                .ready
+                .as_ref()
+                .and_then(|ready| ready.prose_dialect_required_from.clone()),
+        )
+        .with_pressure_test_threshold(
+            config
+                .ready
+                .as_ref()
+                .and_then(|ready| ready.pressure_test_required_from.clone()),
+        )
 }
 
 /// The corpus: one payload per verdict-bearing shape the grammar decides.
@@ -177,6 +203,7 @@ fn corpus() -> Vec<(&'static str, serde_json::Value)> {
     ]
     .into_iter()
     .chain(section_six())
+    .chain(claims_object())
     .collect()
 }
 
@@ -219,6 +246,53 @@ fn section_six() -> Vec<(&'static str, serde_json::Value)> {
     ]
 }
 
+/// The shapes the CLAIMS-OBJECT RATCHET decides, which no payload here could
+/// reach before (CLOUD-1395).
+///
+/// **The exit-code axis was already compared and had nothing to compare over.**
+/// `the_compiled_authority_answers_exactly_what_the_program_answered` has
+/// asserted `compiled_status == shell_status` all along, and it passed — because
+/// every payload in the corpus omits `createdAt`, and
+/// `[ready] prose_dialect_required_from` is read against exactly that field. A
+/// row with no creation instant is never past the cutover, so `ready.rs`'s
+/// `claims-object-absent` clause could not fire on any shape the replay ran, and
+/// the one axis that would have caught the divergence was vacuous rather than
+/// missing.
+///
+/// That is the same defect this file already records one axis over: CLOUD-1092's
+/// `bump` comparison was added to a corpus carrying no §6 clause at all, so it
+/// "had nothing to say". An assertion is only worth its line if some payload can
+/// make it fail, and adding the payload is the work — not adding the assertion.
+///
+/// One discriminator and one control. The control is what proves the
+/// discriminator is about the CUTOVER rather than about carrying a `createdAt` at
+/// all.
+fn claims_object() -> Vec<(&'static str, serde_json::Value)> {
+    let payload = |created: &str, description: &str| {
+        let mut object = serde_json::Map::new();
+        object.insert(
+            "id".to_owned(),
+            serde_json::Value::String("CLOUD-1".to_owned()),
+        );
+        object.insert(
+            "createdAt".to_owned(),
+            serde_json::Value::String(created.to_owned()),
+        );
+        object.insert(
+            "description".to_owned(),
+            serde_json::Value::String(description.to_owned()),
+        );
+        serde_json::Value::Object(object)
+    };
+    vec![(
+        "a row created BEFORE the cutover carrying no claims object — the ratchet does not          reach it, so both producers still read the prose",
+        payload(
+            "2026-08-01T00:00:00.000Z",
+            "**Refinement — Ready**\n\n* **Commit / bump (§6).** `fix` → **patch**.",
+        ),
+    )]
+}
+
 /// The shapes where the two producers are KNOWN to disagree, each with the row
 /// that owns the disagreement.
 ///
@@ -251,6 +325,56 @@ fn divergent_corpus() -> Vec<(&'static str, &'static str, serde_json::Value)> {
             "CLOUD-1",
             "**Refinement — Ready**\n\n* **Commit / bump (§6).** `test` → **no bump**.",
         ),
+    )]
+}
+
+/// The shapes where the two producers return a different EXIT CODE, each with the
+/// row that owns it.
+///
+/// Separate from [`divergent_corpus`] because that one inventories a divergence
+/// in an EMISSION the columns read, and this one inventories a divergence in the
+/// verdict itself. Collapsing them would let a shape that disagrees about `bump`
+/// stand in for one that disagrees about whether the row is Ready at all, and
+/// those are refused at different gates: `graph-check` reads the token, and
+/// `claim-check` reads the verdict.
+///
+/// CLOUD-472's ratchet — `[ready] prose_dialect_required_from`, read at
+/// `crates/batten/src/ready.rs` against the payload's `createdAt` — requires a row
+/// created after the cutover to carry the fenced claims object. It landed in the
+/// compiled producer only. `mise-tasks/ready-lint.sh` has no clause for it and
+/// cannot acquire one: `shell edit refused` declares one route, `rule read
+/// first`, with no override and no `bypass_env` — the same wall CLOUD-1221 records
+/// for the `bump` split directly above.
+///
+/// So the gap WIDENS ON A CLOCK rather than on edits: every row created after the
+/// cutover is a new disagreement. That is what makes listing it worth more than
+/// the usual inventory entry — an unlisted divergence of this shape does not sit
+/// still, it grows.
+///
+/// Measured on CLOUD-1384's own body, same bytes to both producers:
+/// `mise run ready-lint` exit 0, `batten ready lint` exit 2 with
+/// `claims-object-absent`.
+#[cfg(unix)]
+fn divergent_verdicts() -> Vec<(&'static str, &'static str, serde_json::Value)> {
+    let mut object = serde_json::Map::new();
+    object.insert(
+        "id".to_owned(),
+        serde_json::Value::String("CLOUD-1".to_owned()),
+    );
+    object.insert(
+        "createdAt".to_owned(),
+        serde_json::Value::String("2026-09-03T00:00:00.000Z".to_owned()),
+    );
+    object.insert(
+        "description".to_owned(),
+        serde_json::Value::String(
+            "**Refinement — Ready**\n\n* **Commit / bump (§6).** `fix` → **patch**.".to_owned(),
+        ),
+    );
+    vec![(
+        "a row created AFTER the cutover carrying no claims object — the compiled producer          raises `claims-object-absent` and the program has no clause for it",
+        "CLOUD-1395",
+        serde_json::Value::Object(object),
     )]
 }
 
@@ -402,6 +526,35 @@ fn the_producers_still_disagree_only_where_a_row_says_so() {
             "{owner} records a divergence at {shape} and the two producers now AGREE. \
              If it was repaired, delete the entry from `divergent_corpus` and move the shape \
              into `corpus`, so the agreement is asserted rather than merely expected"
+        );
+    }
+}
+
+/// The declared VERDICT divergences are still divergences, and there are no
+/// others.
+///
+/// [`the_producers_still_disagree_only_where_a_row_says_so`]'s discipline over
+/// the other axis: it asserts the disagreement is REAL, so an entry cannot rot
+/// into a note about something already repaired, and it goes RED the day
+/// `ready-lint.sh` is retired — which is the event that should delete the entry
+/// rather than leave a stale exemption behind.
+#[cfg(unix)]
+#[test]
+fn the_producers_return_the_same_verdict_except_where_a_row_says_so() {
+    let root = root();
+    let grammar = grammar();
+    for (shape, owner, value) in divergent_verdicts() {
+        let text = serde_json::to_string(&value).expect("a corpus payload is encodable");
+        let (shell_status, _) = spawn_the_program(&text);
+        let (compiled_status, _) = batten::ready::adjudicate(&grammar, &value, &root)
+            .unwrap_or_else(|| panic!("the compiled authority reads the corpus payload: {shape}"));
+
+        assert_ne!(
+            compiled_status, shell_status,
+            "{owner} records a VERDICT divergence at {shape} and the two producers now AGREE \
+             (both {compiled_status}). If it was repaired, delete the entry from \
+             `divergent_verdicts` and move the shape into `corpus`, so the agreement is \
+             asserted rather than merely expected"
         );
     }
 }
