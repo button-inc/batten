@@ -117,11 +117,22 @@ impl Replay {
 /// move. A ref moved before its objects landed names a commit this clone cannot
 /// read, which is a corrupt clone rather than a failed fetch.
 ///
+/// **`pub(crate)` for that ordering rather than for reuse.** The bet's liveness
+/// reading needs the holder's current tip in this clone's odb, which is the same
+/// three steps in the same order; a second spelling of them would be a second
+/// place to get the ordering wrong, over the one ref whose corruption nobody
+/// would notice until an ancestry answer came back false.
+///
 /// # Errors
 ///
 /// A transport failure, a reference the remote does not advertise, or an odb that
 /// will not take the objects.
-fn advance(root: &Path, remote: &str, reference: &str, tracking: &str) -> Result<String> {
+pub(crate) fn advance(
+    root: &Path,
+    remote: &str,
+    reference: &str,
+    tracking: &str,
+) -> Result<String> {
     let fetched = crate::lease::fetch(remote, root, reference)
         .with_context(|| format!("land: fetch {reference} from the remote"))?;
     // EMPTY IS NOT A FAILURE — `Fetched::objects` is empty when the odb already

@@ -5800,6 +5800,14 @@ fn run_land_lap(
             // THE ROW'S OWN QUESTION, where the driver used to carry a
             // `step == Verify` exception. A pre-check runs BEFORE the primitive
             // and can only lap, never land: it exists to spend nothing.
+            // THE BET IS SETTLED BEFORE ANYTHING IS SPENT, and before the
+            // replay that would otherwise build on somebody else's commits.
+            if let Some(pipeline::Precheck::BetSettled) = row.precheck
+                && let Some(code) = settle_the_bet(root, reference, branch, out, err)?
+            {
+                unwind_lap(root, branch, &pipeline, &entered, seen, out, err)?;
+                return Ok(code);
+            }
             if let Some(pipeline::Precheck::BaseMoved) = row.precheck {
                 let trunk = trunk_watch(
                     reference,
@@ -6016,6 +6024,194 @@ fn unwind_lap(
         }
     }
     Ok(())
+}
+
+/// Settle an outstanding speculation, unwinding one that cannot come true.
+///
+/// # THE ENTRY POINT `speculation` DID NOT HAVE
+///
+/// That module is a complete decision layer — `settle`, `recover`, `carries`,
+/// `Bet`, `Live`, with its own suite — and it was reachable from nothing but
+/// `pub mod`. Twenty-one cases in `tests/land.bats` describe behaviour no call
+/// site could produce, which is the shape PR #848's review found for the
+/// compensation cluster and the ready event before it.
+///
+/// # ASK GIT BEFORE ASKING THE PROCESS
+///
+/// [`speculation::recover`] runs first and unconditionally. The predecessor
+/// opened on *"did this process place a bet"* and returned on its first line
+/// when the answer was no — while the ref holding the answer sat on disk beside
+/// it. Measured (CLOUD-862): a stopped `land` left seven of another branch's
+/// commits in the tree, and the next one ran a full clean `verify` and reached
+/// the push with them.
+///
+/// # `Some(code)` STOPS THE LAP, and only an unwind this tree refuses does that
+///
+/// Every reading here fails open — an unreachable remote, an unresolvable ref
+/// and an unknown ancestry all mean *the bet is stale*, never *stop the
+/// landing*. The one thing that stops is a tree the unwind could not rewind,
+/// because carrying on would push another branch's commits under this one's
+/// pull request.
+///
+/// # THE SETTLE IS WIRED AND THE PLACEMENT IS NOT, WHICH IS THE SAFE HALF FIRST
+///
+/// Nothing in this crate yet WRITES [`speculation::BASE_REF`] — no lap replays
+/// onto a holder's head, and [`speculation::PUBLISHED_AS`] and
+/// [`speculation::Bet::would_rebet`] stay unreached. Stated rather than left for
+/// a reader to discover, because a half-wired cluster reading as whole is the
+/// exact shape this branch has now corrected three times.
+///
+/// **The ordering is a decision.** A wired placement over an unwired settle is
+/// the dangerous arrangement — it borrows a range with nothing to give it back.
+/// This direction is the safe one and is useful on its own: a bet left behind by
+/// the bash lander, or by a `land` this loop replaced, is adopted from its ref
+/// and unwound here rather than pushed. CLOUD-1456 carries the placement.
+fn settle_the_bet(
+    root: &Path,
+    reference: &str,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    let mut bet = speculation::Bet::default();
+    // A ref this clone cannot read is not a bet, which is the same fail-open
+    // direction every other reading here takes.
+    if speculation::recover(root, &mut bet).unwrap_or(false) {
+        writeln!(
+            out,
+            "land: adopting an unsettled speculation left by an earlier run; settling it before anything is pushed"
+        )?;
+    }
+    if !bet.live() {
+        return Ok(None);
+    }
+    let tracking = format!(
+        "refs/remotes/origin/{}",
+        reference.rsplit('/').next().unwrap_or(reference)
+    );
+    let main_now = git::resolve_ref(root, &tracking)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let base = bet.published().unwrap_or_default().to_owned();
+    // WON, and it is asked first and unconditionally: the base being an ancestor
+    // of the trunk is true whoever placed the bet, and both arms below would
+    // misread it.
+    let base_on_main = speculation::carries(root, &base, &tracking);
+    let live = bet_liveness(root, branch, &base);
+
+    match speculation::settle(&bet, &main_now, base_on_main, live) {
+        speculation::Settle::Landed => {
+            writeln!(
+                out,
+                "land: the speculation landed — already linearized on {}, no rebase needed",
+                short(&main_now)
+            )?;
+            drop_the_bet(root);
+            Ok(None)
+        }
+        // Undecided — keep the tree: the holder is still landing and this branch
+        // is already linearized behind it. `Nothing` shares the arm because it is
+        // unreachable from here (the `live()` guard above returns first) and
+        // because it takes the same action if the guard ever moves: no bet is
+        // nothing to unwind.
+        speculation::Settle::Pending | speculation::Settle::Nothing => Ok(None),
+        speculation::Settle::Lost => unwind_the_bet(root, branch, &bet, &base, &tracking, out, err),
+    }
+}
+
+/// Is the bet still on the branch that is about to land? Fails CLOSED.
+///
+/// [`speculation::Live::decide`] treats anything but a confirmed yes as stale,
+/// and this resolves the reading it decides over: who holds the lease NOW, and
+/// whether the base is still on that branch. Failing open here would make a
+/// network blip the thing that lands somebody else's work.
+fn bet_liveness(root: &Path, branch: &str, base: &str) -> speculation::Live {
+    let Ok(terms) = lease::terms(root) else {
+        return speculation::Live::Unreadable;
+    };
+    let Ok(observed) = lease::observe(&terms) else {
+        return speculation::Live::Unreadable;
+    };
+    let lease::Observed::Held { body, .. } = &observed else {
+        // Nobody holds it. Holding no lease with the base not yet on the trunk
+        // can only mean the branch we bet on is gone — a base that actually
+        // landed is caught one arm earlier, by the ancestry check.
+        return speculation::Live::No;
+    };
+    if body.branch.is_empty() || body.branch == branch {
+        // WE hold it, or it names nobody. Either way the bet is not on somebody
+        // else's landing any more.
+        return speculation::Live::No;
+    }
+    // The holder may have changed or force-pushed past our base, and the
+    // question is the same either way: is the commit we bet on still on the
+    // branch that is about to become the trunk. A SECOND ref, never `BASE_REF` —
+    // reusing it would overwrite the base while asking a question about it.
+    let reference = format!("refs/heads/{}", body.branch);
+    match land::advance(root, &terms.remote, &reference, speculation::LIVE_REF) {
+        Ok(_) if speculation::carries(root, base, speculation::LIVE_REF) => speculation::Live::Yes,
+        Ok(_) => speculation::Live::No,
+        Err(_) => speculation::Live::Unreadable,
+    }
+}
+
+/// Drop the borrowed range, and say which unwind it took.
+///
+/// **TWO UNWINDS, because an adopted bet has no undo point** (CLOUD-862). The
+/// reset is exact and is the path whenever this process placed the bet; the
+/// replay is for one inherited from a dead run, which has only the base — and
+/// `origin/main..HEAD` minus the borrowed range is precisely this branch's own
+/// commits.
+fn unwind_the_bet(
+    root: &Path,
+    branch: &str,
+    bet: &speculation::Bet,
+    base: &str,
+    tracking: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    let outcome = if let Some(undo) = bet.undo.as_deref() {
+        writeln!(
+            out,
+            "land: the speculation did not land; unwinding to {} rather than carrying another branch's commits",
+            short(undo)
+        )?;
+        gitwrite::reset_hard(root, branch, undo).map(|_| true)
+    } else {
+        writeln!(
+            out,
+            "land: an earlier run bet on a base that is no longer landing; replaying this branch's own commits onto {} rather than carrying another branch's",
+            short(tracking)
+        )?;
+        gitwrite::replay_onto(root, branch, base, tracking)
+            .map(|replayed| !matches!(replayed, gitwrite::Rebase::Conflicted { .. }))
+    };
+    if let Ok(true) = outcome {
+        drop_the_bet(root);
+        return Ok(None);
+    }
+    // THE ONE STOP. A tree still carrying another branch's commits must not reach
+    // a push, so this is a decision rather than a lap: lapping would replay onto a
+    // HEAD nobody can describe.
+    writeln!(
+        err,
+        "::error:: land: the speculative range could not be unwound, so this tree still carries commits that are not landing and this loop must not push it"
+    )?;
+    Ok(Some(ExitCode::Internal))
+}
+
+/// Forget a settled bet: the bookkeeping and the ref that outlives the process.
+fn drop_the_bet(root: &Path) {
+    let _ = gitwrite::delete_ref(root, speculation::BASE_REF);
+    let _ = gitwrite::delete_ref(root, speculation::LIVE_REF);
+}
+
+/// A sha as a reader reads one. Pointer-only either way; this is the short form
+/// every other line in this lap already uses.
+fn short(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
 }
 
 /// The url of the remote this lap lands against, or `None` having said why.

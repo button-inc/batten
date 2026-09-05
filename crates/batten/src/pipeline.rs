@@ -144,6 +144,18 @@ pub enum Precheck {
     /// moved while the gate ran makes the push a matrix spent to learn what one
     /// ref read already knows. Fails open.
     BaseMoved,
+    /// Is an outstanding speculation still worth carrying?
+    ///
+    /// **AT THE TOP OF THE LAP, BEFORE ANYTHING CAN PUSH**, which is the property
+    /// `mise-tasks/land.sh` states in as many words: *"there is no path from a
+    /// losing bet to a push, which is what makes speculating safe rather than
+    /// merely fast."* A lost bet leaves this branch carrying another branch's
+    /// commits, and the lap's own replay runs immediately after — so the unwind
+    /// has nothing to re-linearize by hand.
+    ///
+    /// A precheck rather than a `Step` because it spends nothing and cannot land:
+    /// it reads refs and the lease, and either keeps the tree or rewinds it.
+    BetSettled,
 }
 
 /// A declared landing pipeline.
@@ -276,7 +288,11 @@ impl Default for Pipeline {
                     step: Step::Replay,
                     effectful: false,
                     compensate: Compensation::Nothing,
-                    precheck: None,
+                    // SETTLED BEFORE THE REPLAY, never after: the replay is what
+                    // re-linearizes this branch, so a bet unwound here needs no
+                    // second rebase — and a bet left un-settled would have the
+                    // replay build on top of somebody else's commits.
+                    precheck: Some(Precheck::BetSettled),
                 },
                 StepRow {
                     step: Step::Verify,
@@ -381,6 +397,31 @@ mod tests {
     #[test]
     fn the_commit_point_needs_no_compensation() {
         assert!(Pipeline::default().validate().is_empty());
+    }
+
+    /// **THE BET IS SETTLED BEFORE ANYTHING IS SPENT**, and the position is the
+    /// property rather than the presence.
+    ///
+    /// `mise-tasks/land.sh` states the invariant in as many words: *"there is no
+    /// path from a losing bet to a push."* A [`Precheck::BetSettled`] positioned
+    /// after any effectful row would give it one — the lap would spend a matrix,
+    /// or push, on a tree still carrying another branch's commits, and only then
+    /// discover the bet was lost. So this asserts the ORDER, which a row-presence
+    /// case would not: moving the declaration one row down leaves it present and
+    /// leaves the invariant broken.
+    #[test]
+    fn the_bet_settles_before_the_first_effectful_step() {
+        let shipped = Pipeline::default();
+        let settles = shipped
+            .steps
+            .iter()
+            .position(|row| row.precheck == Some(Precheck::BetSettled))
+            .expect("the shipped composition settles an outstanding bet");
+        let first_spend = shipped.steps.iter().position(|row| row.effectful);
+        assert!(
+            first_spend.is_none_or(|spend| settles <= spend),
+            "the settle is at row {settles} and the first spend at {first_spend:?}"
+        );
     }
 
     /// A step after the commit point is refused: it would run after the
