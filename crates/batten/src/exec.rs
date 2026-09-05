@@ -1585,8 +1585,19 @@ fn piped_through(
     // until it closes. A caller with nothing to say still has to say nothing and
     // hang up, which is what an owned handle going out of scope here does.
     {
-        let mut pipe = child.stdin.take()?;
-        pipe.write_all(stdin.as_bytes()).ok()?;
+        // **A GATE THAT DID NOT READ STDIN STILL ANSWERED** (review of #848). This
+        // was `.ok()?`, which turns an ordinary `EPIPE` into `None` — and `None`
+        // reaches `land::ready` as `Readied::Unrunnable`, a could-not-look, over a
+        // gate that ran and produced a real verdict. Rust ignores `SIGPIPE`, so a
+        // gate that ignores its stdin and exits before the write completes is not
+        // a crash; it is a program that had already decided.
+        //
+        // The early `?` also abandoned a live child without waiting, leaking a
+        // zombie per occurrence. Dropping the handle closes the pipe either way,
+        // and `wait_with_output` below is what actually decides.
+        if let Some(mut pipe) = child.stdin.take() {
+            let _ = pipe.write_all(stdin.as_bytes());
+        }
     }
     let finished = child.wait_with_output().ok()?;
     let mut output = String::from_utf8_lossy(&finished.stdout).into_owned();
