@@ -7058,14 +7058,35 @@ measured = "2026-09-04"
 # negative, so the next move that raises cold should take the exact measurement
 # rather than scale again: the model's own warning is that a floor nothing can
 # satisfy refuses every lap and gets switched off.
+# THE 2026-09-05 MOVE, and only ONE half of it is taken. CLOUD-1148's retirement
+# added five compiled tiers, taking the live count 15 past the basis — this gate
+# working, exactly as the 2026-08-30 move records.
+#
+# **The count is refreshed and the floors are NOT.** The block above says a count
+# refreshed without a new measurement is the same staleness wearing a newer
+# number, so a measurement was taken: `target/debug` built from an EMPTY tree,
+# full suite run, **2644 MB at 212 stems** — 12.5 MB per stem against this
+# basis's own 108.9. That does not say the floors are 8% low; it says they are
+# roughly 8x HIGH, which is the opposite finding and a much larger claim than a
+# stem refresh.
+#
+# It is filed rather than acted on. Lowering a safety floor eightfold on one
+# reading is the change this block already warns against in the other direction —
+# a floor too high refuses laps that would have been fine, and a floor too low is
+# CLOUD-861's rustc IO error inside a test run. The likeliest reconciliation is
+# that the declared numbers were taken over an ACCUMULATED tree rather than a
+# single cold build, which is the same apples-to-oranges error this block caught
+# once already; confirming that needs its own measurement discipline and its own
+# row. The number is recorded here so the next reader has it rather than
+# retaking it.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 197
+count = 212
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 197
+count = 212
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
