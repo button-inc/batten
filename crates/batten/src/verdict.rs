@@ -1037,6 +1037,8 @@ pub enum Native {
     ProvisionTableRefused,
     /// The `[[startup]]` table would not load.
     StartupTableRefused,
+    /// The `[[outcome]]` table would not load.
+    OutcomeTableRefused,
     /// The committed plan projection no longer matches the pinned runner.
     ///
     /// Batten's OWN word about a generic concept — an adopted tool's contract
@@ -1091,6 +1093,7 @@ impl Native {
         Native::ProvisionTableRefused,
         Native::StartupTableRefused,
         Native::PlanReadStale,
+        Native::OutcomeTableRefused,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1107,6 +1110,7 @@ impl Native {
     /// only thing that distinguishes them is who raises them.
     pub const CONFIG_FAULTS: &'static [Native] = &[
         Native::VerbTableRefused,
+        Native::OutcomeTableRefused,
         Native::PatternTableRefused,
         Native::VerdictTableRefused,
         Native::RedirectTableRefused,
@@ -1130,6 +1134,7 @@ impl Native {
             Native::ProtectedMutation => "path write refused",
             Native::InitWouldOverwrite => "config write refused",
             Native::PlanReadStale => "plan read stale",
+            Native::OutcomeTableRefused => "outcome table refused",
             Native::HandlerDenied => "handler answer denied",
             Native::ScannerUnpinned => "scanner pin missing",
             Native::ScannerUnprovisioned => "scanner install missing",
@@ -1361,6 +1366,16 @@ you can name what they contained without consulting them",
 writes it. Overwriting an existing one would replace a reviewed policy with a default \
 set, silently, in a verb whose whole purpose is that there was nothing there before. \
 Edit the file that exists, or move it aside deliberately.",
+        routes: &[read("config read first", "batten.toml")],
+    },
+    VendoredVerdict {
+        id: "outcome table refused",
+        gloss: "an `[[outcome]]` row could not mean anything",
+        class: "A post-tool signature names the class it establishes, the exit code that \
+anchors it, and the OS family it applies to. A row naming a class the engine cannot resolve, \
+a family nobody surveyed, or a code a second row already claims is an arm that fires on \
+nothing — and a declared-but-dead arm is worse than an absent one, because it reads as \
+coverage while its route has never been walked. The refusal names the row and the key.",
         routes: &[read("config read first", "batten.toml")],
     },
     VendoredVerdict {
@@ -2018,6 +2033,7 @@ mod tests {
                 | Native::ShapeRefused
                 | Native::ContentRefused
                 | Native::PlanReadStale
+                | Native::OutcomeTableRefused
                 | Native::KeyMissing
                 | Native::VerbTableRefused
                 | Native::PatternTableRefused

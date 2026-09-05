@@ -428,6 +428,17 @@ pub struct Config {
     /// and the predicate are [`crate::advisory`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub advisory: Option<crate::advisory::Channel>,
+
+    /// The post-tool outcome signatures this repository recognises (CLOUD-945).
+    ///
+    /// **Consumer config, and that is non-negotiable rule 1 rather than a
+    /// preference**: which codes and which program-specific patterns count as a
+    /// class is the repository's answer, and `crates/batten` holds the matcher
+    /// only. An empty table recognises nothing, which is the honest default —
+    /// an advisory channel that fires on a signature nobody declared is noise
+    /// that nobody chose.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outcome: Vec<crate::outcome::Signature>,
     /// What this repository's hooks may cost ONE SESSION (CLOUD-417). Absent
     /// means unenforced, on `[budget]`'s reading. The type and the predicate are
     /// [`crate::hookcost`].
@@ -1433,6 +1444,14 @@ fn validate_tables(config: &Config, text: &str, source: &str) -> Result<()> {
     under(
         Native::DeferralTableRefused,
         crate::deferral::validate(&config.deferrals),
+    )?;
+    // The post-tool signature table, at parse for the pattern table's reason
+    // (CLOUD-945): a row naming a class this build cannot resolve is an arm that
+    // fires on nothing, and a declared-but-dead arm reads as coverage while its
+    // route has never been walked.
+    under(
+        Native::OutcomeTableRefused,
+        crate::outcome::validate(&config.outcome),
     )?;
     // The named-regex table, at parse for the identical reason (CLOUD-885): a
     // malformed expression is a config fault, and refusing it here means
@@ -2804,6 +2823,7 @@ impl Config {
             budget: None,
             refusal: None,
             advisory: None,
+            outcome: Vec::new(),
             hook_output: None,
             must_land_on: None,
             // An authority that cannot be read attaches no side effects. The
@@ -3190,6 +3210,11 @@ mod tests {
             Native::DeferralTableRefused,
         ),
         ("verbs", "crate::verbs::validate(", Native::VerbTableRefused),
+        (
+            "outcome",
+            "crate::outcome::validate(",
+            Native::OutcomeTableRefused,
+        ),
         (
             "patterns",
             "crate::pattern::validate(",

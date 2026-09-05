@@ -75,6 +75,7 @@ pub mod mcp;
 pub mod mint;
 pub mod minted;
 pub mod mutate;
+pub mod outcome;
 pub mod output;
 pub mod outputs;
 /// The in-process patch identity: what a change IS, independent of the commit
