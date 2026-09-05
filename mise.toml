@@ -1928,6 +1928,31 @@ description = "Measure tree-surface acquisition cost as declared-document count 
 depends = ["build:release"]
 run = "BENCH_METRIC=acquisition-wall-clock cargo run --quiet --release -p batten --example acquisition-bench"
 
+[tasks.address-transport-bench]
+description = "Price inline versus addressed transport over a payload corpus, writing bench/address-transport/RESULTS.md (CLOUD-1367)"
+# CLOUD-1367. Extends the shape `acquisition-bench` above already takes rather
+# than standing up a parallel harness, which is that row's first acceptance
+# clause: an example target, a one-line body, `build:release` as the dependency,
+# and its own `BENCH_METRIC` stamp.
+#
+# AN EXAMPLE TARGET RATHER THAN A VERB, for the reason recorded at
+# `acquisition-bench`: `crates/batten/tests/pointer_only.rs` sweeps every leaf
+# verb over a bare fixture corpus and refuses one that exits 3, and a bench with
+# no corpus to price has could-not-look as its only honest answer there.
+#
+# ITS OWN METRIC STAMP, for the reason `.claude/rules/rust.md` records for the
+# acquisition series: this measures emitted CHARACTERS over a payload corpus,
+# where `wall-clock` measures invocation latency and `acquisition-wall-clock`
+# measures document reads. Three axes sharing a stamp would let a reader diff
+# them and see a step change that never happened.
+#
+# A REPORT, NEVER A GATE, and off the landing path like `perf` itself. Nothing in
+# `verify` or the hk gate calls it, because it answers a question about a
+# measurement rather than about a commit — the split
+# `.claude/rules/toolchain.md` draws between a gate and a schedule.
+depends = ["build:release"]
+run = "BENCH_METRIC=address-transport-characters cargo run --quiet --release -p batten --example address-transport-bench"
+
 [tasks.config-load-bench]
 description = "Price `config::load` over the committed batten.toml, with its own null (CLOUD-1291)"
 # CLOUD-1291. The harness re-reads and re-parses this repository's 354 KB

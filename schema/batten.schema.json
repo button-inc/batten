@@ -677,6 +677,15 @@
       "description": "The bound on response captures (CLOUD-918).\n\nEnforced **at write time**, and the trigger is the write — never a clock,\nnever a schedule, never a background sweeper. That is\n`.claude/rules/toolchain.md`'s split between a gate and a schedule, and\n[`prune`]'s own doc already refuses a time-based sweeper on the same grounds.",
       "type": "object",
       "properties": {
+        "inline_max_bytes": {
+          "description": "The payload size at which a rendered response switches from carrying the\nbytes to carrying an address (CLOUD-1367).\n\n**An ECONOMIC threshold and nothing else.** A payload at or under it is\ncheaper to send than an address plus the round trip to resolve one; over\nit, the address wins. Absent means [`DEFAULT_INLINE_MAX_BYTES`].\n\nIt is deliberately NOT a privacy or safety cap. Those refuse to emit\ncontent at all and are their own rows; this one only ever changes the\nREPRESENTATION, and both routes carry the same semantic result. Reusing\none number for both would mean a measurement about token cost silently\ndeciding what may leave the process.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "max_bytes": {
           "description": "Total response-capture bytes the store may hold. Absent means the default.",
           "type": [

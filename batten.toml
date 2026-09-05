@@ -4049,6 +4049,33 @@ payload. Measured 2026-09-02: 20,580 bytes stored, 609 emitted. The raw tool \
 was 85% of one session's whole tool output, and a first read is not an \
 exception: the store is what a gate reads, and it is filled either way."""
 
+# THE TRANSPORT THRESHOLD, DECLARED RATHER THAN DEFAULTED (CLOUD-1367).
+#
+# At or under this many bytes a rendered response carries the payload; over it,
+# it carries a content address. The boundary is INCLUSIVE, which is the one
+# property an off-by-one hides — `crates/batten/tests/it/address_transport.rs`
+# sits its fixtures one byte either side for exactly that reason.
+#
+# THE NUMBER IS READ OFF A MEASUREMENT, not chosen. `mise run
+# address-transport-bench` writes `bench/address-transport/RESULTS.md`, and the
+# curve there is what moves this value: an address costs a fixed 69 characters —
+# the rendered grammar including `b3-`, the version and both separators — so
+# below roughly that length a payload is cheaper than its own pointer, and the
+# saving only becomes real once a payload is read more than once. 1024 is the
+# smallest round value the measured curve supports.
+#
+# COMMITTED RATHER THAN LEFT TO THE DEFAULT, because a threshold nobody declared
+# cannot be reviewed against the bench that justifies it, and a default buried in
+# `capture.rs` moves without anyone noticing that the measurement moved too.
+#
+# IT IS NOT A PRIVACY CAP AND MUST NOT BE READ AS ONE. A payload over this size
+# is still emitted — as an address — so this only ever changes the
+# REPRESENTATION. Refusing to emit content at all is a different mechanism with
+# its own rows, and one number serving both would let a measurement about token
+# cost silently decide what may leave the process.
+[capture]
+inline_max_bytes = 1024
+
 [budget.instructions]
 files = ["AGENTS.md"]
 max_tokens = 3500

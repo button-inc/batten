@@ -44,6 +44,7 @@ mod acceptance_corpus;
 mod acquisition_metric;
 mod acquisition_sweep;
 mod address_resolve;
+mod address_transport;
 mod admission;
 mod advisory_drain;
 mod agent_capabilities;
