@@ -63,7 +63,13 @@ fn bash_payload(command: &str) -> String {
 fn decision(command: &str) -> String {
     stdout(&run_with_stdin_at_real_root(
         &root(),
-        &["hook", "--harness", "claude-code"],
+        // `adjudicate`, not `hook`. The rename ships no alias and an unknown
+        // subcommand is clap exit 1 — which every host reads as ALLOW — so this
+        // file failed with three "must refuse" assertions the moment the rename
+        // landed, over a policy that was refusing correctly. That is the same
+        // failure mode a stale binary produces in production, seen from inside
+        // the suite.
+        &["adjudicate", "--harness", "claude-code"],
         &bash_payload(command),
     ))
 }

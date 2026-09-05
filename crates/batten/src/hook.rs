@@ -4743,41 +4743,57 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
         }
     }
     for segment in segments(&envelope.command) {
-        let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
-        let Some(program_index) = effective_program(&tokens) else {
-            continue;
-        };
-        let words: Vec<&str> = tokens[program_index + 1..]
-            .iter()
-            .copied()
-            .filter(|token| !token.starts_with('-'))
-            .collect();
-        for rule in &policy.shapes {
-            if rule.kind != RuleKind::Receipt
-                || rule.receipt_trigger() != ReceiptTrigger::Command
-                || !blocks(rule.severity(), policy.fail_on_warning)
-                || !modifier_admits(rule, envelope)
-            {
-                continue;
-            }
-            let Some((program, wanted)) = rule.trigger() else {
+        // PER LINE, for the reason `matching_shape_rows` states (CLOUD-1381).
+        // A receipt row is a PRECONDITION — `gh pr ready` demands a verify
+        // receipt — so a walk that misses the two-line spelling does not merely
+        // fail to deny: it silently stops demanding the precondition, which is
+        // the permissive direction and the one nothing reports.
+        for (line_words, line_raw) in line_bounded_units(&segment) {
+            let tokens: Vec<&str> = line_words.iter().map(String::as_str).collect();
+            let Some(program_index) = effective_program(&tokens) else {
                 continue;
             };
-            if tokens[program_index] != program {
-                continue;
-            }
-            if !operands_match(&words, &wanted) {
-                continue;
-            }
-            if let Some(contains) = rule.contains.as_deref()
-                && !segment.raw.contains(contains)
-            {
-                continue;
-            }
-            // A command with several segments can match one row twice; the row
-            // is still one obligation.
-            if !matched.iter().any(|seen| std::ptr::eq(*seen, rule)) {
-                matched.push(rule);
+            let words: Vec<&str> = tokens[program_index + 1..]
+                .iter()
+                .copied()
+                .filter(|token| !token.starts_with('-'))
+                .collect();
+            for rule in &policy.shapes {
+                if rule.kind != RuleKind::Receipt
+                    || rule.receipt_trigger() != ReceiptTrigger::Command
+                    || !blocks(rule.severity(), policy.fail_on_warning)
+                    || !modifier_admits(rule, envelope)
+                {
+                    continue;
+                }
+                let Some((program, wanted)) = rule.trigger() else {
+                    continue;
+                };
+                // Normalised, for the reason `matching_shape_rows` states at its own
+                // comparison (CLOUD-1381): a receipt PRECONDITION that misses the
+                // grouped spelling is a precondition silently not demanded, which is
+                // the permissive direction.
+                if program_token(tokens[program_index]) != program {
+                    continue;
+                }
+                if !operands_match(&words, &wanted) {
+                    continue;
+                }
+                // The LINE's raw, not the segment's, for the reason
+                // `line_bounded_units` states: resolving the program per line while
+                // matching the needle across the whole segment lets one line's text
+                // qualify another line's program, which is a false precondition
+                // rather than a missing one.
+                if let Some(contains) = rule.contains.as_deref()
+                    && !line_raw.contains(contains)
+                {
+                    continue;
+                }
+                // A command with several segments can match one row twice; the row
+                // is still one obligation.
+                if !matched.iter().any(|seen| std::ptr::eq(*seen, rule)) {
+                    matched.push(rule);
+                }
             }
         }
     }
@@ -5099,24 +5115,49 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
         let verdicts = rule.verdict.as_deref().unwrap_or_default();
         let filters = rule.filters.as_deref().unwrap_or_default();
         for (index, segment) in parsed.iter().enumerate() {
-            let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
-            let Some(program_index) = effective_program(&tokens) else {
-                continue;
-            };
-            // A `nohup` wrapper is looked THROUGH by `effective_program`, so the
-            // detach it performs has to be read off the raw span rather than off
-            // the resolved program — otherwise the wrapper that orphans the run
-            // is the one token the parser hides.
-            let detached_here = tokens.contains(&"nohup");
-            let words: Vec<&str> = tokens[program_index + 1..]
-                .iter()
-                .copied()
-                .filter(|token| !token.starts_with('-'))
-                .collect();
-            if !verdicts
-                .iter()
-                .any(|entry| entry.matches(tokens[program_index], &words))
-            {
+            // THE SPLIT THIS ROW NEEDS, AND WHY IT IS NOT A LOOP SWAP
+            // (CLOUD-1381). A newline is whitespace to `segments`, so
+            // `echo hi` then `mise run land | head` resolved its program as
+            // `echo` and the piped verdict went unseen. But a `pipeline` row's
+            // subject is the SHAPE OF THE LIST — `terminator`, and this
+            // segment's position among the stages — and those are segment
+            // facts. `.claude/rules/policy-modules.md` bounds exactly this:
+            // promoting a newline in `segments()` "would change every landed
+            // `pipeline` verdict".
+            //
+            // So the reading splits rather than moving: WHICH PROGRAM carries a
+            // verdict is asked per line, while WHAT HAPPENS TO IT stays the
+            // segment's. No landed verdict moves, because a single-line segment
+            // yields exactly the one reading it did before.
+            let mut detached_here = false;
+            let mut carries_verdict = false;
+            for line_words in line_bounded_words(segment) {
+                let tokens: Vec<&str> = line_words.iter().map(String::as_str).collect();
+                let Some(program_index) = effective_program(&tokens) else {
+                    continue;
+                };
+                let words: Vec<&str> = tokens[program_index + 1..]
+                    .iter()
+                    .copied()
+                    .filter(|token| !token.starts_with('-'))
+                    .collect();
+                if verdicts
+                    .iter()
+                    .any(|entry| entry.matches(program_token(tokens[program_index]), &words))
+                {
+                    carries_verdict = true;
+                    // A `nohup` wrapper is looked THROUGH by `effective_program`,
+                    // so the detach it performs has to be read off the raw span
+                    // rather than off the resolved program — otherwise the
+                    // wrapper that orphans the run is the one token the parser
+                    // hides. Read on the line that carries the verdict, because
+                    // a `nohup` on a NEIGHBOURING line detaches that line's
+                    // command and not this one.
+                    detached_here = tokens.contains(&"nohup");
+                    break;
+                }
+            }
+            if !carries_verdict {
                 continue;
             }
             // Orphaned first: it discards the verdict AND the supervision, so it
@@ -5138,10 +5179,18 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
                     })
                     .chain(parsed.get(index + 1))
                     .any(|stage| {
-                        let stage_tokens: Vec<&str> =
-                            stage.words.iter().map(String::as_str).collect();
-                        effective_program(&stage_tokens).is_some_and(|at| {
-                            filters.iter().any(|filter| filter == stage_tokens[at])
+                        // Per line and normalised, matching the verdict-bearing
+                        // reading above: a filter is no less a filter for sitting
+                        // on a later line or inside a group, and the two halves
+                        // of one row disagreeing about what a program IS is the
+                        // defect CLOUD-857 measured.
+                        line_bounded_words(stage).iter().any(|line_words| {
+                            let stage_tokens: Vec<&str> =
+                                line_words.iter().map(String::as_str).collect();
+                            effective_program(&stage_tokens).is_some_and(|at| {
+                                let named = program_token(stage_tokens[at]);
+                                filters.iter().any(|filter| filter == named)
+                            })
                         })
                     });
                 if piped_into_filter {
@@ -6714,7 +6763,22 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
                 let Some((program, wanted)) = rule.shape() else {
                     continue;
                 };
-                if tokens[program_index] != program {
+                // THE NORMALISED PROGRAM, not the raw token (CLOUD-1381).
+                //
+                // `effective_program`, `program_reach` and `protected_mutation`
+                // all resolve the identity through `program_token`, and this
+                // comparison did not — so a grouped command split the two
+                // readings apart: `(git rebase origin/main)` has the token
+                // `"(git"` here and the program `git` there, and the measured
+                // result was the `programs`-anchored preset denying
+                // `(git push --force origin main)` while this row allowed
+                // `(git rebase origin/main)`.
+                //
+                // One argv read two ways is the defect `program_reach`'s own
+                // header forbids and CLOUD-857 measured. It is not a narrower
+                // bug than the newline: it is the same one, reached by the other
+                // spelling.
+                if program_token(tokens[program_index]) != program {
                     continue;
                 }
                 if !operands_match(&words, &wanted) {
