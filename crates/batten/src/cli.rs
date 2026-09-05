@@ -425,7 +425,7 @@ pub enum Command {
 /// generator WRITES the committed projection and the gate READS it. A single
 /// verb with a `--check` flag would have made the effect an argument, and
 /// house-style §5 declares an effect per command rather than per invocation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum HkCommand {
     /// Regenerate the committed projection from the pinned binary.

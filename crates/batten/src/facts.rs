@@ -565,6 +565,17 @@ pub enum Fact {
     /// also owe a machine identity and a declared null spread, which is a
     /// different design and not this one.
     ToolVerdict,
+    /// The adopted gate runner's EFFECTIVE plan for a declared surface
+    /// (CLOUD-949), acquired from the runner itself rather than re-derived.
+    ///
+    /// `Cost::Effect`, in [`Fact::Symbols`]' class and for its reason: what a
+    /// delegated tool would do is a property of that tool, and no walk of the
+    /// tree answers it. What separates it from [`Fact::ToolVerdict`] is WHERE the
+    /// answer comes from — a verdict is read back from a record a producer wrote,
+    /// where a plan is taken now, because a plan binds to the working tree and a
+    /// stored one would need every binding field compared before it could be
+    /// trusted.
+    Plan,
     /// A **declared FIELD** of a receipt the mediated boundary already minted,
     /// read on the TREE surface and bounded by how old the reading is
     /// (CLOUD-1310).
@@ -1317,6 +1328,15 @@ pub const LANDING: Class = Class::new(Cost::Read, Surface::Check);
 /// `Class` rather than a quiet reinterpretation of this one.
 pub const SYMBOLS: Class = Class::new(Cost::Effect, Surface::Check);
 
+/// [`Fact::Plan`] — the adopted gate runner's effective plan for a declared
+/// surface (CLOUD-949).
+///
+/// `effect` x `check`, both halves for [`SYMBOLS`]' reasons: resolving it RUNS
+/// the runner, and `run_static` already refuses a spawning kind on the mediated
+/// path, so a fact resolvable there would weaken a structural guarantee into a
+/// convention.
+pub const PLAN: Class = Class::new(Cost::Effect, Surface::Check);
+
 /// [`Fact::Review`] — **the second occupant of [`Cost::Effect`]**, and the one
 /// that had to state why an LLM in the resolution path is not a model verdict in
 /// a gate.
@@ -1474,6 +1494,7 @@ impl Fact {
         Fact::State,
         Fact::Forge,
         Fact::ToolVerdict,
+        Fact::Plan,
         Fact::Minted,
         Fact::Captured,
         Fact::Tasks,
@@ -1518,6 +1539,7 @@ impl Fact {
             Fact::State => "state",
             Fact::Forge => "forge",
             Fact::ToolVerdict => "tool-verdict",
+            Fact::Plan => "plan",
             Fact::Minted => "minted",
             Fact::Captured => "captured",
             Fact::Tasks => "tasks",
@@ -1570,6 +1592,7 @@ impl Fact {
             Fact::State => STATE,
             Fact::Forge => FORGE,
             Fact::ToolVerdict => TOOL_VERDICT,
+            Fact::Plan => PLAN,
             Fact::Minted => MINTED,
             Fact::Captured => CAPTURED,
             Fact::Tasks => TASKS,
@@ -1657,6 +1680,7 @@ impl Fact {
             // digest half opens the declared input, which is a `check`-surface
             // cost and not a mediated call's.
             Fact::ToolVerdict => Some("tool-verdict"),
+            Fact::Plan => Some("plan"),
             Fact::Minted => Some("minted"),
             // CLOUD-1188. Tree-only: reducing a response means reading and
             // parsing every capture the store holds until a declared key
@@ -1805,6 +1829,7 @@ impl Fact {
             | Fact::Records
             | Fact::RecordsBlocked => Self::keyed_read_schema_fragment(self),
             Fact::Symbols => Self::symbols_schema_fragment(),
+            Fact::Plan => Self::plan_schema_fragment(),
             Fact::Review => Self::review_schema_fragment(),
             Fact::Uses => serde_json::json!({
                 "type": "object",
@@ -1906,6 +1931,50 @@ impl Fact {
     /// `sites` is pointer-only, per non-negotiable rule 4: a path, a line and the
     /// lint that fired. The analyser's message, and the source line it quoted,
     /// are content and stay out of the policy input.
+    /// [`Fact::Plan`]'s fragment (CLOUD-949).
+    ///
+    /// Keyed by the declared row's `id`, like the read family: a module written
+    /// against one key does not have to be edited when a second consumer declares
+    /// another. NULLABLE at the leaf for [`Self::symbols_schema_fragment`]'s
+    /// reason — a plan that could not be acquired is `null`, and a schema typing
+    /// this as a bare object refuses the module that handles the arm.
+    fn plan_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::Plan (CLOUD-949). Declared id -> the adopted gate runner's EFFECTIVE plan for that surface, acquired from the runner rather than re-derived. Bound to the invocation, the tool version and an `inputFingerprint` over HEAD and every differing path's current bytes -- HEAD alone is insufficient, because dirty and index state change the selection without moving HEAD. `required` and `prohibitedProfiles` are the consumer's own row, carried alongside so a module compares two halves of one document. Pointer-only: a step's identity, its status, the reason KIND, its order, its group and a file COUNT -- never a command, a matched path, or a reason's prose. An id absent from the map could not be acquired, which is a reacquire and never a clean plan.",
+            "additionalProperties": {
+                "type": ["object", "null"],
+                "properties": {
+                    "hook": {"type": "string"},
+                    "runType": {"type": "string"},
+                    "profiles": {"type": "array", "items": {"type": "string"}},
+                    "invocation": {"type": "array", "items": {"type": "string"}},
+                    "toolVersion": {"type": "string"},
+                    "contractDigest": {"type": ["string", "null"]},
+                    "inputFingerprint": {"type": "string"},
+                    "required": {"type": "array", "items": {"type": "string"}},
+                    "prohibitedProfiles": {"type": "array", "items": {"type": "string"}},
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "status": {"type": "string"},
+                                "reasonKind": {"type": ["string", "null"]},
+                                "orderIndex": {"type": "integer"},
+                                "parallelGroupId": {"type": "string"},
+                                "fileCount": {"type": "integer"},
+                            },
+                            "additionalProperties": false,
+                        },
+                    },
+                },
+                "additionalProperties": false,
+            },
+        })
+    }
+
     fn symbols_schema_fragment() -> serde_json::Value {
         serde_json::json!({
             // NULLABLE, like the git family and for its reason: the projection
@@ -2058,6 +2127,7 @@ impl Fact {
             | Fact::Invocations
             | Fact::Uses
             | Fact::Symbols
+            | Fact::Plan
             | Fact::BaseDelta
             | Fact::Records
             | Fact::RecordsBlocked
@@ -2128,6 +2198,7 @@ impl Fact {
             | Fact::Uses
             | Fact::Produced
             | Fact::Symbols
+            | Fact::Plan
             | Fact::Review
             | Fact::BaseDelta
             | Fact::Records
@@ -2286,6 +2357,7 @@ impl Fact {
             | Fact::Invocations
             | Fact::Uses
             | Fact::Symbols
+            | Fact::Plan
             | Fact::Review
             | Fact::BaseDelta
             | Fact::Pinned
@@ -2493,6 +2565,7 @@ impl Fact {
             | Fact::Invocations
             | Fact::Uses
             | Fact::Symbols
+            | Fact::Plan
             | Fact::Review
             | Fact::BaseDelta
             | Fact::Records

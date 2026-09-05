@@ -4786,6 +4786,7 @@ fn suite_input(
             state: None,
             forge: None,
             tool_verdicts: None,
+            plan: None,
             minted: None,
             captured: None,
         },

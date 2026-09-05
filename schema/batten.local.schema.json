@@ -521,6 +521,39 @@
         "reason"
       ]
     },
+    "PlanQuery": {
+      "description": "One declared plan query: which surface to ask about, and what a module needs\nto decide over the answer.\n\n**`required` and `prohibited_profiles` are CONSUMER facts** and live in the\nrow rather than in this crate (non-negotiable rule 1). They are projected\nalongside the acquired plan so the module compares two halves of one document\nrather than reaching for a second source — the same shape a `[[rule.tools]]`\nrow's `id` gives its module.",
+      "type": "object",
+      "properties": {
+        "hook": {
+          "description": "Which surface to ask about: a hook name the contract also covers.",
+          "type": "string"
+        },
+        "id": {
+          "description": "The key this plan is projected under in `input.tree.plan`.",
+          "type": "string"
+        },
+        "prohibited_profiles": {
+          "description": "Profiles whose presence makes the plan unusable for this consumer.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required": {
+          "description": "The steps this consumer requires the plan to include.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "hook"
+      ]
+    },
     "Production": {
       "description": "What a rule PRODUCES — the third axis, and the one [`Cost`] structurally\ncannot carry (CLOUD-851).\n\n# Why a separate axis rather than a `Cost` arm\n\n`Cost` describes what resolving a fact SPENDS, and it has no arm meaning\n\"mutates\". [`Cost::Effect`] is the near miss and it cannot be repurposed:\n`rules::tests::the_two_axes_agree_about_every_kind` welds\n`Cost::Effect | Cost::Stateful` to `RuleKind::carries_ambient_authority()`\nover every kind x scope pairing, so a kind classified `Effect` that does not\nspawn goes red there. That test is right and stays. A sink is not a spawn.\n\n# Three kinds, because the census found three\n\nEleven bash writers, sorted by what READS the thing written. That is the\ndistinction that matters — not the file format, and not where it lives:\n\n* nothing reads it back ([`Production::Journal`]),\n* a later run reads it back AS A FACT ([`Production::Baseline`]), which is the\n  genuine ratchet and the only kind that makes a decision depend on a\n  previous one,\n* only its own presence is read ([`Production::Marker`]).\n\n# The write is the boundary's, always\n\nA rule declaring a sink stays [`Cost::Read`] on the resolution axis, because\nit does not perform the write: the decision REQUESTS an effect and the\nboundary performs it, on [`crate::refusal::Fix::Run`]'s existing shape. That\nis what keeps `hook::adjudicate` pure with three of the four writing hook\nbodies on the mediated path.",
       "oneOf": [
@@ -1123,6 +1156,13 @@
             "string",
             "null"
           ]
+        },
+        "plan": {
+          "description": "The adopted gate runner's EFFECTIVE plan, per declared surface\n(CLOUD-949).\n\nEach row becomes an entry of `input.tree.plan` under its own `id`,\ncarrying what the runner said it would run — acquired from the runner\nitself, never re-derived from its config, because the runner owns its\nselector and a second derivation is a second authority on which files a\nstep runs over.\n\n**Acquired fresh rather than read back, which is the difference from\n`tools`.** A verdict is a statement about bytes that have a digest; a plan\nis a statement about a WORKING TREE, whose dirty and index state move\nwithout HEAD. Keying a stored plan would mean comparing every binding\nfield before trusting it, and a comparison a caller can forget is the\nstaleness class this avoids by simply taking the plan now.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PlanQuery"
+          }
         },
         "policy_url": {
           "description": "An optional link to the policy this rule enforces, appended to the deny.",

@@ -355,6 +355,94 @@
           "description": "Could-not-look, and NOT a Fact: a declared name the engine could not acquire, mapped to WHY (CLOUD-1309). Distinct from an empty result, which is the distinction that keeps a vacuous pass out (CLOUD-251, CLOUD-845). The cause is one of `absent`, `unparsed`, `unreadable`, `unknown-format` or `root-unset` -- `NotAcquired::as_str`'s own tokens -- and carrying it is what makes `.claude/rules/policy-modules.md`'s \"the two causes stay distinct and a module may rely on that\" true of this surface rather than only of the Rust enum. A module keys by name: `input.tree.missing[path] == \"unparsed\"`. It was an array of bare names until CLOUD-1309, so a predicate could see THAT a source failed and never WHY, and firing on membership alone reddened every consumer that declares an optional source.",
           "type": "object"
         },
+        "plan": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "properties": {
+              "contractDigest": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "hook": {
+                "type": "string"
+              },
+              "inputFingerprint": {
+                "type": "string"
+              },
+              "invocation": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "profiles": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "prohibitedProfiles": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "required": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "runType": {
+                "type": "string"
+              },
+              "steps": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "fileCount": {
+                      "type": "integer"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "orderIndex": {
+                      "type": "integer"
+                    },
+                    "parallelGroupId": {
+                      "type": "string"
+                    },
+                    "reasonKind": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "toolVersion": {
+                "type": "string"
+              }
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "description": "Fact::Plan (CLOUD-949). Declared id -> the adopted gate runner's EFFECTIVE plan for that surface, acquired from the runner rather than re-derived. Bound to the invocation, the tool version and an `inputFingerprint` over HEAD and every differing path's current bytes -- HEAD alone is insufficient, because dirty and index state change the selection without moving HEAD. `required` and `prohibitedProfiles` are the consumer's own row, carried alongside so a module compares two halves of one document. Pointer-only: a step's identity, its status, the reason KIND, its order, its group and a file COUNT -- never a command, a matched path, or a reason's prose. An id absent from the map could not be acquired, which is a reacquire and never a clean plan.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "produced": {
           "additionalProperties": {
             "type": "string"
