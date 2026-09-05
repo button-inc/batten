@@ -5901,6 +5901,30 @@ fn run_land_lap(
     // somebody else's commits, which is the exact hazard the undo exists to
     // remove. `speculation::Bet`'s own header states it.
     let mut bet = speculation::Bet::default();
+    // **THE REFUND IS WIRED AND THE LOOP BOUND IS NOT MOVED, WHICH LEAVES IT
+    // INERT — DELIBERATELY, AND THIS IS THE SECOND ATTEMPT** (review of #848).
+    //
+    // `Ledger::waited` decrements `laps` so a pass that never won the lease does
+    // not consume the budget. Making the loop read `ledger.laps` does activate
+    // that, and it was tried: the effect is that a refunded pass re-enters the
+    // lap at `Replay`, and `Lease` sits AFTER `Verify` in the composition — so
+    // every refunded wait re-runs the rebase and the full `$LAND_VERIFY` gate,
+    // which this file's own comments price at ~200s, with no backoff. At the
+    // default sixty waits that is ~61 full verify cycles where the shipped bound
+    // is two. "Waiting is free" is true of the lease and false at this position
+    // in the pipeline.
+    //
+    // The three ways out are a design decision rather than a patch: hold the wait
+    // INSIDE the `Lease` primitive (which then carries a verify receipt taken
+    // before the wait, so a trunk that moved during it is unnoticed until the
+    // next precheck), move `Lease` ahead of `Verify` (which holds the lease
+    // across every waiter's verify and serialises the fleet on gate time), or
+    // give the refunded pass a resume point rather than restarting the lap.
+    //
+    // So the counter is charged and read for its REPORT — the refusal can say
+    // the fleet was saturated rather than blaming a conflict — and the budget is
+    // unchanged from what shipped. `LAND_MAX_LEASE_WAITS` bounds the charge, not
+    // the loop.
     'laps: for lap in 1..=laps {
         ledger.attempt();
         writeln!(out, "land: lap {lap} of {laps}")?;
@@ -6466,7 +6490,7 @@ fn place_the_bet(
     let replayed = gitwrite::rebase(root, &format!("refs/heads/{branch}"), &candidate);
     match replayed {
         Ok(gitwrite::Rebase::Conflicted { .. }) => {
-            bet.conflicts = true;
+            bet.conflicts = Some(candidate.clone());
             let _ = gitwrite::delete_ref(root, speculation::BASE_REF);
             writeln!(
                 out,
@@ -6611,7 +6635,9 @@ fn landed_for_real(
     out: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {
     let repo = repo_or_placeholder(root);
-    let merged = match fast_forward::look_up_pull_request(&repo, branch) {
+    // ANY STATE, because a merged pull request is CLOSED and the open-only
+    // lookup can therefore never confirm one — see `pull_request_in_any_state`.
+    let merged = match fast_forward::pull_request_in_any_state(&repo, branch) {
         fast_forward::Lookup::Found(pr) => fast_forward::merged(&repo, &pr),
         // The pull request the bot was asked about cannot be found now. That is a
         // could-not-look about the merge, never evidence of one.

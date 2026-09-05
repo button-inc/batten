@@ -148,14 +148,26 @@ pub struct Bet {
     /// holding another branch's commits under an open PR — the measured
     /// two-PRs-at-one-sha state.
     pub pushed: bool,
-    /// The holder's base is known to conflict with this branch.
+    /// The holder's base that is KNOWN to conflict with this branch.
     ///
     /// Kept rather than discarded (CLOUD-369): a successor whose base is known
     /// to conflict is guaranteed to be voided, so its run grades a head the
     /// fast-forward will refuse and the rebase that follows still has to resolve
     /// the same conflict. Measured for one such admission: a full CI run burned,
     /// a ~200s `verify` discarded, a hand-resolved conflict, and a second run.
-    pub conflicts: bool,
+    ///
+    /// **IT CARRIED NO SUBJECT AND NOTHING READ IT** (review of #848). As a bare
+    /// `bool` it was set on a conflicting replay and never consulted, so
+    /// [`Bet::would_rebet`] — which compares `base`, and `base` is deliberately
+    /// NOT set when the replay conflicted — answered `true` on the next lap and
+    /// the same conflicting rebase was attempted again, every lap, to reach the
+    /// same answer. CLOUD-369's mechanism was written and then unreachable.
+    ///
+    /// An `Option<String>` because refusing to re-bet needs to know WHICH base:
+    /// a flag cannot tell the holder that conflicted from the one that replaced
+    /// it, and reading it as "no more bets at all" would give up speculating for
+    /// the rest of the landing over one bad candidate.
+    pub conflicts: Option<String>,
 }
 
 impl Bet {
@@ -185,8 +197,18 @@ impl Bet {
     /// the bet IS dropped, nothing here remembers that this candidate was already
     /// tried, so the next lap bets on the same holder again. Conserved; the fix
     /// is CLOUD-1306's.
+    ///
+    /// **A base known to CONFLICT is a different question and this now answers
+    /// it** (review of #848). That one is not about a tree that will not go
+    /// green — it is a replay this clone already attempted and watched fail, so
+    /// re-attempting it is guaranteed waste rather than a gamble whose odds
+    /// changed. [`Bet::conflicts`] records which base, and it is the one thing
+    /// here that survives the bet not being placed.
     #[must_use]
     pub fn would_rebet(&self, candidate: &str) -> bool {
+        if self.conflicts.as_deref() == Some(candidate) {
+            return false;
+        }
         self.base.as_deref() != Some(candidate)
     }
 
@@ -519,6 +541,37 @@ mod tests {
         assert!(
             Bet::default().would_rebet(HOLDER),
             "and a forgotten bet re-bets on the same holder — CLOUD-1306's other half"
+        );
+    }
+
+    /// **A BASE THIS CLONE ALREADY WATCHED CONFLICT IS NOT BET ON AGAIN.**
+    ///
+    /// `place_the_bet` records the conflict and deliberately does NOT set
+    /// `base` — the replay failed, so there is no borrowed range — which left
+    /// `would_rebet` comparing against `None` and answering `true` on the next
+    /// lap. The same conflicting rebase was then attempted every lap to reach
+    /// the same answer, with CLOUD-369's mechanism written and unreachable.
+    ///
+    /// The third assertion is what keeps the fix from over-reaching: one bad
+    /// candidate must not end speculation for the rest of the landing, which is
+    /// what reading a bare flag would have done.
+    #[test]
+    fn a_base_known_to_conflict_is_not_bet_on_again() {
+        let refused = Bet {
+            conflicts: Some(String::from(HOLDER)),
+            ..Bet::default()
+        };
+        assert!(
+            !refused.would_rebet(HOLDER),
+            "this clone already replayed onto it and watched the rebase conflict"
+        );
+        assert!(
+            refused.would_rebet(MOVED),
+            "a DIFFERENT holder is a fresh question — the flag form could not say this"
+        );
+        assert!(
+            Bet::default().would_rebet(HOLDER),
+            "and with nothing recorded the candidate is open, as before"
         );
     }
 
