@@ -355,7 +355,9 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // not a policy question and no `batten.toml` may answer it.
         Some(Command::State { command }) => match command {
             StateCommand::Adopt { store } => store::run_adopt(store.as_deref(), err),
-            StateCommand::Record => run_state_record(&overrides, mode, err),
+            StateCommand::Record => {
+                run_state_record(&overrides, mode, err, policy::ModuleChecks::Run)
+            }
             StateCommand::Migrate => run_state_migrate(err),
             StateCommand::Settle {
                 identity,
@@ -946,7 +948,14 @@ fn run_defects_add(
 /// lineage edge and advances **its own** fold position
 /// ([`session::HOLDER_RECORD`]) — never a drain's, since this verb folds shards
 /// whether or not anything reached an agent (CLOUD-83).
-fn run_state_record(overrides: &Overrides, mode: Mode, err: &mut dyn Write) -> Result<ExitCode> {
+fn run_state_record(
+    overrides: &Overrides,
+    mode: Mode,
+    err: &mut dyn Write,
+    // Threaded to `run_recorded` (CLOUD-1480): the verb reports config
+    // faults, the mediated Stop path may not afford to re-derive them.
+    checks: policy::ModuleChecks,
+) -> Result<ExitCode> {
     let repo = git::repo_root(Path::new("."))?;
     // **The ref comes from HERE, not from `repo`.** `repo_root` answers with the
     // MAIN worktree's root — which is exactly what makes every linked worktree
@@ -980,6 +989,7 @@ fn run_state_record(overrides: &Overrides, mode: Mode, err: &mut dyn Write) -> R
             recorders: &config.recorders,
         },
         Path::new("."),
+        checks,
     )?;
     if !scan.not_evaluated.is_empty() {
         // Never silent: a rule that did not look must say so, or a clean-looking
@@ -9937,7 +9947,14 @@ const UNLANDED_BYPASS: &str = "BATTEN_UNLANDED_CHECK_BYPASS";
 /// never be the reason a turn stalls.
 fn record_state(overrides: &Overrides) {
     let mut sink = std::io::sink();
-    let _ = run_state_record(overrides, Mode::default(), &mut sink);
+    // `SkipOnHotPath`, because this is the hot path (CLOUD-1480). The verb below
+    // is a human asking about their config; this is the end of every turn.
+    let _ = run_state_record(
+        overrides,
+        Mode::default(),
+        &mut sink,
+        policy::ModuleChecks::SkipOnHotPath,
+    );
 }
 
 /// The `completion.unlanded` verdict for this branch, or nothing (CLOUD-1163).

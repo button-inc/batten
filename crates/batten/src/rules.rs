@@ -6119,18 +6119,19 @@ pub fn run_recorded(
     provisions: &[crate::provision::Provision],
     vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
+    // WHICH CONFIG-FAULT CHECKS THIS CALLER IS ENTITLED TO (CLOUD-1480). The
+    // `state record` VERB reports config faults and passes `Run`; the mediated
+    // Stop path does not — it is the caller `SkipOnHotPath` was written for, in
+    // that variant's own words: "the caller is the mediated path, where the
+    // answer is already known and the budget is per call". Hardcoding `Run` here
+    // made the end-of-turn boundary re-derive every module's smoke query.
+    checks: crate::policy::ModuleChecks,
 ) -> anyhow::Result<Scan> {
     let (evaluable, withheld): (Vec<&Rule>, Vec<&Rule>) = rules
         .iter()
         .partition(|rule| !rule.kind.carries_ambient_authority());
     let evaluable: Vec<Rule> = evaluable.into_iter().cloned().collect();
-    let bundles = crate::policy::load(
-        root,
-        &evaluable,
-        vocabulary,
-        crate::policy::ModuleChecks::Run,
-        None,
-    )?;
+    let bundles = crate::policy::load(root, &evaluable, vocabulary, checks, None)?;
     let mut scan = run(
         &evaluable,
         provisions,
