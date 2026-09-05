@@ -3317,6 +3317,33 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "the installer installs the binary and nothing else; a toolchain, a package manager or a shell profile belongs behind `batten` once it is on PATH — a `[[provision]]` row or a `[[startup]]` row, both of which a gate can read"
 
+# A GRANT THAT MATCHES NOTHING IS THE DEAD-GATE CLASS, ONE SURFACE OVER, AND ITS
+# ONLY SYMPTOM IS A PERSON BEING ASKED (CLOUD-1455).
+#
+# `permissions.allow` carried `"mcp__serena__*"` for an unknown number of
+# sessions. The MCP forms are `mcp__<server>` and `mcp__<server>__<tool>`; a
+# trailing wildcard is not among them, so the line read as a grant and granted
+# nothing, and the repository owner approved `find_symbol` and
+# `get_symbols_overview` by hand, call after call, while the file said otherwise.
+#
+# NOTHING ELSE IN THE TREE CAN SEE THIS. A pattern that matches nothing and one
+# that matches everything are byte-identical to every other check here: the
+# server attaches, `doctor hooks` is clean, the tools appear and they work. The
+# cost lands entirely outside the exit codes — on a human, one click at a time —
+# which is precisely why it needs a row rather than a note.
+#
+# The regex refuses a wildcard ANYWHERE in an `mcp__` entry rather than only a
+# trailing `__*`, because the failure is the character and not its position, and
+# a row catching one spelling would teach the next author to write the other.
+[[rule]]
+id = "mcp-grant-matches-something"
+kind = "forbid"
+glob = ".claude/settings.json"
+regex = '"mcp__[^"]*\*'
+severity = "deny"
+scope = "tree"
+no_fix_reason = "an MCP permission entry names a server (`mcp__serena`) or one tool (`mcp__serena__read_memory`) and takes no wildcard; enumerate the tools, which is also the only spelling a reader can check against the server's own list. Measured twice in one session: the wildcard granted nothing, and the bare server form granted the reads and left every write still prompting"
+
 [[rule]]
 id = "no-cargo-install-in-ci"
 kind = "forbid"
