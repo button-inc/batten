@@ -355,9 +355,13 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // not a policy question and no `batten.toml` may answer it.
         Some(Command::State { command }) => match command {
             StateCommand::Adopt { store } => store::run_adopt(store.as_deref(), err),
-            StateCommand::Record => {
-                run_state_record(&overrides, mode, err, policy::ModuleChecks::Run)
-            }
+            StateCommand::Record => run_state_record(
+                &overrides,
+                mode,
+                err,
+                policy::ModuleChecks::Run,
+                facts::Surface::Check,
+            ),
             StateCommand::Migrate => run_state_migrate(err),
             StateCommand::Settle {
                 identity,
@@ -955,6 +959,10 @@ fn run_state_record(
     // Threaded to `run_recorded` (CLOUD-1480): the verb reports config
     // faults, the mediated Stop path may not afford to re-derive them.
     checks: policy::ModuleChecks,
+    // AND THE SURFACE, for the `Cost::Effect` facts. The verb is a tree verb;
+    // the mediated recorder is `Surface::Hook`, where a fact classed
+    // `Surface::Check` may not resolve.
+    surface: facts::Surface,
 ) -> Result<ExitCode> {
     let repo = git::repo_root(Path::new("."))?;
     // **The ref comes from HERE, not from `repo`.** `repo_root` answers with the
@@ -990,6 +998,7 @@ fn run_state_record(
         },
         Path::new("."),
         checks,
+        surface,
     )?;
     if !scan.not_evaluated.is_empty() {
         // Never silent: a rule that did not look must say so, or a clean-looking
@@ -9954,6 +9963,7 @@ fn record_state(overrides: &Overrides) {
         Mode::default(),
         &mut sink,
         policy::ModuleChecks::SkipOnHotPath,
+        facts::Surface::Hook,
     );
 }
 

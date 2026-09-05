@@ -6071,7 +6071,7 @@ fn run_static_inner(
         vocabulary,
         scope,
         now,
-        RunKind::Static,
+        crate::facts::Surface::Check,
     )
 }
 
@@ -6126,6 +6126,12 @@ pub fn run_recorded(
     // answer is already known and the budget is per call". Hardcoding `Run` here
     // made the end-of-turn boundary re-derive every module's smoke query.
     checks: crate::policy::ModuleChecks,
+    // AND WHICH SURFACE IT RUNS ON, for the `Cost::Effect` facts (CLOUD-1480).
+    // The verb is a tree verb and passes `Surface::Check`; the mediated
+    // recorder passes `Surface::Hook`, which is what bars a fact classed
+    // `Surface::Check` from resolving there — `admits` is one-directional and
+    // that direction is the whole point.
+    surface: crate::facts::Surface,
 ) -> anyhow::Result<Scan> {
     let (evaluable, withheld): (Vec<&Rule>, Vec<&Rule>) = rules
         .iter()
@@ -6142,7 +6148,7 @@ pub fn run_recorded(
         // The Stop-surface recorder supplies none, and `None` is the honest
         // answer rather than a clock read this module may not make.
         None,
-        RunKind::Static,
+        surface,
     )?;
     for rule in withheld {
         // `RuleSkipped`, not a variant of its own. The distinction between "the
@@ -6221,7 +6227,7 @@ fn run_all_inner(
         vocabulary,
         scope,
         now,
-        RunKind::All,
+        crate::facts::Surface::Check,
     )
 }
 
@@ -6249,14 +6255,20 @@ fn run(
     // The instant the BOUNDARY read, threaded to `minted_facts` rather than
     // read here — see `RunOptions::now` for why this module may not read one.
     now: Option<u64>,
-    // WHICH EFFECT SURFACE THIS RUN IS ON, threaded here rather than left with
-    // the caller (CLOUD-1480). `run_static` refuses a spawning KIND before any
-    // work, and that read as the whole of §5's read-only promise — but a
+    // WHICH SURFACE THIS RUN IS ON, threaded here rather than left with the
+    // caller (CLOUD-1480). `run_static` refuses a spawning KIND before any work,
+    // and that read as the whole of §5's read-only promise — but a
     // `Cost::Effect` FACT is not a kind, so `symbols_fact` and `review_fact`
-    // below were guarded by DECLARATION alone and spawned on the read surface.
-    // Measured: `batten hook` on a Stop payload exec'd `cargo clippy` and took
-    // 114.8s against a published 100ms budget.
-    kind: RunKind,
+    // below were guarded by DECLARATION alone and spawned on the mediated
+    // boundary. Measured: `batten hook` on a Stop payload exec'd `cargo clippy`.
+    //
+    // `facts::Surface` AND NOT `RunKind`, which is the correction this parameter
+    // already needed once. `RunKind` is a DISPATCH enum — `check`, `baseline`
+    // and the mediated recorder all arrive as `Static` — so gating on it
+    // disabled both facts on the read surface their own `Class` admits, and
+    // `review_dispatched.rs` went red. The surface is the axis that carries the
+    // meaning, and `Class::resolvable_on` is the one predicate over it.
+    surface: crate::facts::Surface,
 ) -> anyhow::Result<Scan> {
     let recorders = vocabulary.recorders;
     let files = tree_files(root)?;
@@ -6340,16 +6352,16 @@ fn run(
     // measured answer about a crate nobody analysed. `IsNot` is what the
     // undeclared arm already returns and it is the honest one here too — the
     // projection emits `null`, and a module reads undefined.
-    let effects_admitted = matches!(kind, RunKind::All);
-    let symbols = if effects_admitted {
+    let effects_admitted = |class: crate::facts::Class| class.resolvable_on(surface);
+    let symbols = if effects_admitted(crate::facts::Fact::Symbols.class()) {
         symbols_fact(rules, root)
     } else {
-        crate::facts::Look::IsNot
+        crate::facts::Look::CouldNotLook
     };
-    let review = if effects_admitted {
+    let review = if effects_admitted(crate::facts::Fact::Review.class()) {
         review_fact(rules, root)
     } else {
-        crate::facts::Look::IsNot
+        crate::facts::Look::CouldNotLook
     };
     // THE OUT-OF-ROOT FILES (CLOUD-1167), acquired once for the whole run beside
     // the families above and, like every one of them, ONLY FOR WHAT A ROW
