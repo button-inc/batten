@@ -1,4 +1,4 @@
 argv: check
 exit: 2
 stdout:
-lib.rs:2 no-todo
+lib.rs:4 no-todo

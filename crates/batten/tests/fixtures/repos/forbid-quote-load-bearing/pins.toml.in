@@ -1,0 +1,6 @@
+[tools]
+# batten-case: no-built-backend clean
+# a cargo: backend builds from source, so this file pins binaries instead
+"aqua:some/tool" = "1.0.0"
+# batten-case: no-built-backend violating
+"cargo:some-crate" = "2.0.0"

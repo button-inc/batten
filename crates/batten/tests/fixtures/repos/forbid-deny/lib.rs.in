@@ -1,2 +1,4 @@
+# batten-case: no-todo clean
 fine
+# batten-case: no-todo violating
 TODO fix this
