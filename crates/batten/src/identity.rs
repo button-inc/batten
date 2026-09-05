@@ -1476,6 +1476,39 @@ mod tests {
     }
 
     #[test]
+    fn two_keys_yield_disjoint_fingerprint_sets_not_merely_unequal_pairs() {
+        // CLOUD-311 §2(2) at the granularity its prose uses. The pair case above
+        // is what DISCRIMINATES — an implementation dropping the key from the
+        // preimage reddens there and nowhere else — so this catches nothing that
+        // one misses, and is here because the row states the property over sets
+        // and the set form costs three lines.
+        //
+        // Over several spans rather than one, so a key that participated for some
+        // inputs and not others would show up as an intersection rather than as a
+        // single equal pair.
+        let spans = ["AKIAIOSFODNN7EXAMPLE", "ghp_0123456789", "xoxb-000-111-aaa"];
+        let under = |k: &IdentityKey| -> std::collections::BTreeSet<String> {
+            spans
+                .iter()
+                .map(|raw| {
+                    secret_code_fingerprint(k, "r", "src/a.rs", &SecretSpan::mint(raw))
+                        .unwrap()
+                        .to_hex()
+                })
+                .collect()
+        };
+
+        let one = under(&key("k1", 1));
+        let two = under(&key("k2", 2));
+
+        assert_eq!(one.len(), spans.len(), "each span mints its own identity");
+        assert!(
+            one.is_disjoint(&two),
+            "two keys share no fingerprint over the same spans: {one:?} vs {two:?}"
+        );
+    }
+
+    #[test]
     fn a_keyed_identity_never_collides_with_an_unkeyed_one() {
         // Distinct domain tags, so total agreement on every other field still
         // cannot make a secret-class identity equal a plain code one.
