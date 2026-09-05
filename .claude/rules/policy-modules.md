@@ -257,13 +257,24 @@ declared extractor's COUNT over this session's transcript — an integer over
 typed events, never a byte of the session (CLOUD-1172).
 
 `programs` is the ARGV ALREADY READ (CLOUD-1028), and it is NOT `segments` under
-another name: one entry per segment, each carrying the EFFECTIVE program and
-whether a mediator selected it. `segments[_].words[0]` is the first word as
-written; `programs[_].program` is what will actually run once the boundary has
-looked through wrappers, environment assignments and every spelling of the
-mediator's own invocation. Reach for it rather than deriving one from the other —
-a module re-deriving that is a second authority over an argv reading the engine
-already owns.
+another name: one entry per segment, each carrying the EFFECTIVE program, the
+`arguments` that program was handed, and whether a mediator selected it.
+`segments[_].words[0]` is the first word as written; `programs[_].program` is
+what will actually run once the boundary has looked through wrappers,
+environment assignments, every spelling of the mediator's own invocation, and —
+since CLOUD-1382 — the shell grammar that can stand where a program is written.
+Reach for it rather than deriving one from the other: a module re-deriving that
+is a second authority over an argv reading the engine already owns, and the six
+constructs the table below measures are what the derivation misses.
+
+**`arguments` is the half that makes the anchor usable, and its absence was a
+trap rather than an inconvenience.** The list is `filter_map`ed — a segment with
+no program at all yields no entry — so `programs` and `segments` do not share an
+index, and a module anchoring on the program had nothing to correlate its own
+flags ON. Every one that tried joined back by value (`program.program ==
+segment.words[0]`), which is the same first-word anchor wearing a second
+reading, and it stops agreeing the moment the two readings differ. Read
+`arguments` instead.
 
 `input.call["run-in-background"]` is a property of the CALL rather than of the
 command (CLOUD-1094), and it is three-valued: `true`, `false`, or `null` where
@@ -273,23 +284,65 @@ them. It is `Field::RunInBackground`'s answer rather than a raw key, so a module
 never has to know whether its host spells it `run_in_background` or
 `runInBackground`.
 
-**Anchor a program on `segments`, never on `command`** (CLOUD-857).
+**Anchor a program on `programs`, never on `command` and never on a segment's
+first WORD.** This passage has been wrong twice in the same direction, and both
+corrections are kept because the second one is what the first taught.
+
 `input.call.command` is the line exactly as written, so
 `split(input.call.command, " ")[0] == "git"` asks about the first word of the
 whole LINE — and a real agent command is compound most of the time. Measured on
 the vendored preset that spelled it that way: `git push --force origin main`
 denied while `cd /tmp && git push --force origin main` was allowed, with a green
-suite over it. `input.call.segments` is `hook::segments` projected — the same
-quote-aware tokenizer `shape` and `pipeline` rows are decided by — one entry per
-list element, each carrying `words`, `raw`, the `terminator` that followed
-it (`"&&"`, `";"`, `"||"`, `"|"`, `"&"`, or `null` where the command ended), and
-`input-redirect`. So
-the correct predicate is the short one:
+suite over it (CLOUD-857).
+
+**The remedy this file then taught was `segment.words[0] == "git"`, and it is one
+construct short of the program** (CLOUD-1382). `words[0]` is the first WORD, and
+six shell constructs occupy that position in their own right. Measured over the
+compiled binary, adjudication only, one preset:
+
+| command                                          | exit |
+| ------------------------------------------------ | ---- |
+| `git push --force origin main`                   | 2    |
+| `(git push --force origin main)`                 | 0    |
+| `time git push --force origin main`              | 0    |
+| `! git push --force origin main`                 | 0    |
+| `{ git push --force origin main; }`              | 0    |
+| `command git push --force origin main`           | 0    |
+| `if true; then git push --force origin main; fi` | 0    |
+
+Every one runs the force push, and every one is one keystroke. The reason the
+table is here rather than only on the row is that ~80 modules were about to copy
+whatever this paragraph said.
+
+`input.call.programs` is the argv the engine already read — the effective
+program per segment, resolved through environment assignments, wrapper programs
+and the shell grammar above — with `name` for the program reached through a
+path, `arguments` for what THAT program was handed, and `mediated` for whether
+the pin selected it. So the correct predicate is still short, and it correlates:
 
 ```rego
-some segment in input.call.segments
-segment.words[0] == "git"
+some program in input.call.programs
+program.name == "git"
+"push" in program.arguments
 ```
+
+Reach for `arguments` rather than the segment's words whenever a flag has to be
+the program's own: a `git status` beside an `hg push --force` is two facts, and
+reading the whole segment merges them into a refusal nobody can act on.
+
+`input.call.segments` is still `hook::segments` projected — the same quote-aware
+tokenizer `shape` and `pipeline` rows are decided by — one entry per list
+element, each carrying `words`, `raw`, the `terminator` that followed it
+(`"&&"`, `";"`, `"||"`, `"|"`, `"&"`, or `null` where the command ended), and
+`input-redirect`. Read it for the SPAN's own structure, which is what those
+fields are: what the element's status is handed to, whether it binds stdin, what
+was literally written. A program is not one of them.
+
+**The engine half of CLOUD-1382 is a declared STOPGAP and that row stays open.**
+`hook.rs`'s `SHELL_GRAMMAR` is a list, a list cannot enumerate a grammar, and
+`effective_program`'s own posture — _"Known wrappers only; anything
+unrecognised keeps the fail-open posture"_ — says how the next token stays
+silent. The fix is a parsed command line, which is CLOUD-1381.
 
 **`input-redirect` is per SEGMENT and that is the whole of it** (CLOUD-613):
 whether THIS element binds stdin, by `<`, `<<` or `<<<`, outside a quoted span.
