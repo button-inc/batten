@@ -491,7 +491,13 @@ pub fn wait(
                     // roster that cannot decide was refused before the loop.
                     Ok(crate::checks_green::Verdict::Pending(_)) | Err(_) => {}
                 }
-                crate::pr_watch::pause(interval);
+                // INTERRUPTIBLE, because the OTHER arm may answer during this
+                // wait and `thread::scope` joins this one before the verdict can
+                // be acted on. Checking the flag only at the loop head held a
+                // finished landing for a whole interval — survivable at the
+                // poll's one second, and not once `wait_for` began honouring a
+                // rate-limit backoff measured in minutes (review of #848).
+                crate::pr_watch::pause_until(interval, stop);
             }
         }));
 
@@ -514,7 +520,12 @@ pub fn wait(
                 // `pr_watch`'s pause deliberately, not a second one: there is one
                 // sleep in this crate and it carries the one `disallowed_methods`
                 // exemption, so a second arm cannot grow a timer of its own.
-                crate::pr_watch::pause(interval);
+                //
+                // Interruptible for the reason the sibling arm states: this arm
+                // loses the race most of the time, and holding the scope open
+                // through its last interval delays every verdict the other one
+                // reaches.
+                crate::pr_watch::pause_until(interval, stop);
             }
         }));
 
