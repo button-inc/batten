@@ -2179,6 +2179,48 @@ pub struct Envelope {
     pub last_message: Option<String>,
     /// The path to the session transcript, on the `Stop` event.
     pub transcript: Option<String>,
+    /// The permission mode the host declares for this turn (CLOUD-895).
+    ///
+    /// **A HOST FACT, never an inference from the user's prose.** Whether a turn
+    /// may write is something the harness states; reading intent out of what the
+    /// user typed would be a model verdict, which non-negotiable rule 3 forbids.
+    /// So this is the token the host sent and nothing else — the same
+    /// echo-the-host's-spelling posture [`Envelope::raw_event`] takes.
+    ///
+    /// `None` where the host said nothing, which is could-not-look and NOT
+    /// "writes are available": [`Envelope::writes_available`] is where that
+    /// direction is decided, once.
+    pub mode: Option<String>,
+}
+
+/// The mode a host names when the turn may propose but not perform.
+///
+/// Claude Code's spelling, and the only one measured. A host that spells it
+/// differently is unrecognised rather than mis-read — which fails toward
+/// speaking, the direction an advisory must fail in.
+const PLAN_MODE: &str = "plan";
+
+impl Envelope {
+    /// Whether a remedy that asks for a WRITE is lawful on this turn
+    /// (CLOUD-895).
+    ///
+    /// **The reader this row adds, and the whole of it — the envelope gains no
+    /// authority.** In plan mode the agent may not commit, push, file or land, so
+    /// an advisory saying "Land it" or "file it" names an action its recipient is
+    /// forbidden to take. A channel that instructs the impossible teaches the
+    /// recipient to override the channel, which is CLOUD-339's warning applied to
+    /// the boundary that survived it — and `additionalContext` is delivered AFTER
+    /// the user's message, so a machine-generated imperative displaces the human's
+    /// own ask on every turn it fires.
+    ///
+    /// **Absent means available**, which is the failing-open direction: a host
+    /// that declares no mode gets the advisories it has always had, and only an
+    /// explicit `plan` suppresses. Reading silence as read-only would mute the
+    /// channel on every host that never sends the field.
+    #[must_use]
+    pub fn writes_available(&self) -> bool {
+        self.mode.as_deref() != Some(PLAN_MODE)
+    }
 }
 
 /// The payload fields a shell hook may ask for by name.
@@ -2755,6 +2797,14 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
         transcript: value
             .get("transcript_path")
             .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        // CLOUD-895, read the way the three above are and for the same reason:
+        // a fourth `get` on an already-parsed value, rather than a second decoder
+        // to keep in step with the BOM strip and the alias tables.
+        mode: ["permission_mode", "permissionMode"]
+            .iter()
+            .find_map(|key| value.get(*key).and_then(Value::as_str))
+            .filter(|mode| !mode.is_empty())
             .map(ToOwned::to_owned),
     })
 }
@@ -8968,6 +9018,7 @@ mod tests {
             stop_active: None,
             last_message: None,
             transcript: None,
+            mode: None,
         }
     }
 
@@ -9008,6 +9059,7 @@ mod tests {
             stop_active: None,
             last_message: None,
             transcript: None,
+            mode: None,
         }
     }
 
@@ -13635,6 +13687,7 @@ deny contains "refused by themodule" if {
             stop_active: None,
             last_message: None,
             transcript: None,
+            mode: None,
         };
         assert!(
             policy.required_checks_for(&read).is_empty(),

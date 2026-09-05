@@ -185,6 +185,21 @@ fn stop_payload(message: &str, active: bool) -> String {
     .to_string()
 }
 
+/// A Claude `Stop` payload declaring plan mode (CLOUD-895).
+///
+/// The ONE difference from [`stop_payload`] is the host's `permission_mode`, so
+/// a difference in outcome is attributable to the mode and to nothing else.
+fn plan_mode_payload(message: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": "Stop",
+        "session_id": "s-1",
+        "stop_hook_active": false,
+        "last_assistant_message": message,
+        "permission_mode": "plan",
+    })
+    .to_string()
+}
+
 /// `batten hook` against the fixture's own state home.
 ///
 /// **ISOLATED FOR EVERY CASE, not only the one that asserts silence.** This
@@ -775,6 +790,57 @@ fn unlanded_work_at_a_declared_stopping_point_is_pointed_at() {
     assert!(
         stdout.contains("Land it"),
         "and what to do about it: {stdout}"
+    );
+}
+
+/// PLAN MODE SUPPRESSES AN ADVISORY WHOSE REMEDY IS A WRITE (CLOUD-895).
+///
+/// The same unlanded fixture as the case above — same repository, same commit
+/// off the landing target, same completion marker — and the only difference is
+/// that the host declares `permission_mode: "plan"`. On that turn the agent may
+/// not commit, push or land, so "Land it" names an action its recipient is
+/// forbidden to take.
+///
+/// Worse than useless, which is why this is a suppression rather than a reword:
+/// `additionalContext` is delivered AFTER the user's message, so it is the
+/// freshest instruction in context, and an imperative the recipient cannot obey
+/// trains them to override the channel a real refusal arrives on.
+#[test]
+fn a_plan_mode_turn_gets_no_write_remedy_advisory() {
+    let (repo, home) = unlanded_fixture("stop-plan-mode");
+    let stdout = stdout_of(&hook_in(
+        &repo,
+        &home,
+        &plan_mode_payload("Here is the plan; nothing is written yet."),
+    ));
+    assert!(
+        !stdout.contains("Land it"),
+        "a plan-mode turn must not be told to do what it may not do: {stdout}"
+    );
+    assert!(
+        !stdout.contains(batten::completion::RULE_ID),
+        "and the advisory is suppressed whole, not merely reworded: {stdout}"
+    );
+}
+
+/// ANTI-VACUITY for the case above (CLOUD-418), and the row's own §7: removing
+/// the mode test turns the plan-mode case red, and without this one a
+/// suppression that silenced EVERY turn would pass it.
+///
+/// Identical fixture, identical message, no declared mode — and the advisory
+/// returns. So the suppression is attributable to the mode rather than to the
+/// fixture, the message, or the ladder having gone quiet.
+#[test]
+fn the_same_turn_outside_plan_mode_still_gets_it() {
+    let (repo, home) = unlanded_fixture("stop-plan-mode-control");
+    let stdout = stdout_of(&hook_in(
+        &repo,
+        &home,
+        &stop_payload("Here is the plan; nothing is written yet.", false),
+    ));
+    assert!(
+        stdout.contains("Land it"),
+        "the same turn with no declared mode is advised as before: {stdout}"
     );
 }
 

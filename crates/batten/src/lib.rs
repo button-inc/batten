@@ -9675,6 +9675,26 @@ fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope) -> Option<Strin
     if std::env::var_os(STOP_GUARD_BYPASS).is_some() {
         return None;
     }
+    // NO ADVISORY WHOSE REMEDY THIS TURN MAY NOT PERFORM (CLOUD-895).
+    //
+    // Every rule below ends in a write — "Land it", "file it", "Finish it now",
+    // "Close the punts" — so in plan mode the whole ladder names actions the
+    // agent is forbidden to take on the turn it is told to take them. That is
+    // worse than saying nothing: `additionalContext` is delivered AFTER the
+    // user's message, so it is the freshest instruction in context, and a
+    // machine-generated imperative the recipient cannot obey trains the recipient
+    // to override the channel a real refusal arrives on (CLOUD-339).
+    //
+    // MECHANICAL, NEVER AN INFERENCE FROM PROSE. The host declares the mode; this
+    // reads it. Deciding from the user's wording whether they "meant" a read-only
+    // turn would be the model verdict non-negotiable rule 3 forbids.
+    //
+    // ABOVE THE SEAM WRITES ON PURPOSE? NO — deliberately below them. The links
+    // and the state mint are the engine's own record rather than advice to the
+    // agent, and a plan-mode turn still happened: suppressing the RECORD would
+    // make `doctor session` answer could-not-look over a session it watched, which
+    // is the distinction CLOUD-1372 spent a rule on. Only the SPEAKING half is
+    // suppressed.
     let root = &hook_authority_root();
     // THE TRANSCRIPT SEAM, and it is a WRITE this routine owes rather than a rule
     // (CLOUD-990). `[transcript].path` names one fixed repo-relative path because
@@ -9733,6 +9753,9 @@ fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope) -> Option<Strin
     // that is the inversion CLOUD-1372 records, and it is the ladder's own
     // "at most one nudge" budget that made the ordering load-bearing rather than
     // cosmetic.
+    if !envelope.writes_available() {
+        return None;
+    }
     if std::env::var_os(UNLANDED_BYPASS).is_none()
         && let Some(pointer) = unlanded_pointer()
     {
