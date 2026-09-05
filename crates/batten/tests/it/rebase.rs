@@ -425,6 +425,76 @@ fn a_placed_bet_unwinds_to_the_recorded_sha() {
     assert!(dir.join("ours.txt").is_file(), "our own file was removed");
 }
 
+/// **A BET REACHES THE GATE'S ENVIRONMENT, and the publication is a function of
+/// the bet rather than a side effect kept in step with it.**
+///
+/// `land::verify` is the one metered step a speculation has to be visible to: a
+/// gate cannot otherwise tell a commit this branch authored from one the lap
+/// adopted, and CLOUD-748 measured the consequence twice in one session — the
+/// consumer's race check reported the waiter as racing the very PR the bet was
+/// placed on.
+///
+/// Driven through `land::verify` over a real repository, because the thing under
+/// test is whether the pairs SURVIVE the exec boundary. A case asserting that
+/// `Bet::published` returns the base would pass over a `verify` that dropped
+/// them on the floor, which is the whole class the second tier exists for.
+#[test]
+fn a_published_bet_reaches_the_gate_and_an_absent_one_publishes_nothing() {
+    let (dir, repo) = init("verify-publication");
+    let base = commit(&repo, &[], &[("shared.txt", "base\n")]);
+    point(&dir, "refs/heads/work", base);
+    // `verify` reads HEAD, and the other cases in this file never do — so the
+    // fixture's initial branch has to exist as well as `work`. Both spellings,
+    // because which one `gix::init` writes into HEAD is the host git's default
+    // and not this case's to depend on.
+    point(&dir, "refs/heads/main", base);
+    point(&dir, "refs/heads/master", base);
+    materialise(&dir, &[("shared.txt", "base\n")]);
+
+    // A gate that passes only when the variable carries the expected value. The
+    // gate is the assertion, so a dropped pair reddens the case rather than
+    // leaving it to a follow-up read.
+    let gate = dir.join("gate.sh");
+    std::fs::write(
+        &gate,
+        format!(
+            "#!/bin/sh\ntest \"${{{}}}\" = \"speculated-base\"\n",
+            batten::speculation::PUBLISHED_AS
+        ),
+    )
+    .expect("write the gate");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o755))
+            .expect("make the gate runnable");
+    }
+    let command = vec![gate.to_string_lossy().into_owned()];
+
+    let published = vec![(
+        batten::speculation::PUBLISHED_AS.to_owned(),
+        String::from("speculated-base"),
+    )];
+    assert!(
+        matches!(
+            batten::land::verify(&dir, "work", &command, &published).expect("run the gate"),
+            batten::land::Verified::Clean(_)
+        ),
+        "the published pair did not reach the gate"
+    );
+
+    // THE MIRROR, and it is not hygiene: without it the case passes over a
+    // boundary that publishes the variable unconditionally from some other
+    // source, which would make a settled bet stay visible to every later gate.
+    assert!(
+        matches!(
+            batten::land::verify(&dir, "work", &command, &[]).expect("run the gate"),
+            batten::land::Verified::Refused(_)
+        ),
+        "the variable reached the gate with no bet outstanding"
+    );
+}
+
 /// The filenames in a commit's tree.
 fn tree_names(repo: &gix::Repository, id: gix::ObjectId) -> Vec<String> {
     let tree = repo
