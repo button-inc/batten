@@ -36,10 +36,6 @@
 // the former per-file allowances are preserved on each module below.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-mod claim_carry;
-mod claim_race;
-mod common;
-
 mod acceptance_corpus;
 mod acquisition_metric;
 mod acquisition_sweep;
@@ -69,13 +65,16 @@ mod ci_hygiene;
 mod ci_parity;
 mod ci_suite_lane;
 mod claim;
+mod claim_carry;
 mod claim_order;
+mod claim_race;
 mod claim_receipt;
 mod cli;
 mod commit;
 mod commit_admission;
 mod commit_arm_sequencing;
 mod commit_meta_facts;
+mod common;
 mod config_authority_boundary;
 mod config_base_ref_reading;
 mod config_deprecations;
@@ -236,6 +235,7 @@ mod tool_selector;
 mod tool_verdict_facts;
 mod transcript_stop_reason;
 mod transcript_tool_result;
+mod trunk_watch;
 mod use_graph;
 mod verdict_registry;
 mod verdict_vocabulary;
@@ -244,3 +244,4 @@ mod walker;
 mod wiring_reclaim;
 mod worktree_registration;
 mod zero_config;
+
