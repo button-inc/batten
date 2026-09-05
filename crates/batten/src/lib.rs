@@ -12877,6 +12877,10 @@ fn run_rules(
     let opts = rules::RunOptions {
         checks,
         scope: &scope,
+        // `check` and `enforce` are the TREE verbs, which is the surface both
+        // `Cost::Effect` facts are classed for (CLOUD-1480). The mediated
+        // recorder is the one caller that passes `Surface::Hook`.
+        surface: facts::Surface::Check,
         // The BOUNDARY's clock, read here and handed over, because `rules.rs`
         // holds the projection and may read none (CLOUD-1170's stated division,
         // gated by `the_evaluation_path_reads_no_wall_clock`).

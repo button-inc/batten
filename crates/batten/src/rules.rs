@@ -5872,6 +5872,9 @@ pub fn run_static(
         RunOptions {
             checks: crate::policy::ModuleChecks::Run,
             scope: &Scope::Tree,
+            // The tree verbs, so the surface their `Cost::Effect` facts are
+            // classed for (CLOUD-1480).
+            surface: crate::facts::Surface::Check,
             // No caller supplied one on this entry point, and `None` is the
             // honest answer rather than a clock read this module may not make.
             now: None,
@@ -5929,6 +5932,17 @@ pub struct RunOptions<'a> {
     pub checks: crate::policy::ModuleChecks,
     /// Which files rules are selected against.
     pub scope: &'a Scope,
+    /// WHICH SURFACE THIS RUN IS ON, for the `Cost::Effect` facts (CLOUD-1480).
+    ///
+    /// A third narrowing, and it rides here for the reason the header gives:
+    /// grouping is what keeps the runner's arity from growing per narrowing, and
+    /// adding this one as an eighth positional argument is what
+    /// `clippy::too_many_arguments` refused.
+    ///
+    /// It is `facts::Surface` and never `RunKind`: that one is a DISPATCH enum —
+    /// `check`, `baseline` and the mediated recorder all arrive as `Static` — so
+    /// gating a fact on it disables the fact on surfaces its own `Class` admits.
+    pub surface: crate::facts::Surface,
     /// The epoch second the BOUNDARY read, for the one freshness comparison a
     /// tree run makes: `[[rule.minted]]`'s `max_age_days` (CLOUD-1187).
     ///
@@ -6029,7 +6043,9 @@ fn run_static_inner(
     root: &Path,
     opts: RunOptions<'_>,
 ) -> anyhow::Result<Scan> {
-    let RunOptions { checks, scope, now } = opts;
+    // Only `checks` is read here; `scope`, `now` and `surface` travel on to
+    // `run` inside the bag rather than being unpacked and re-passed.
+    let RunOptions { checks, .. } = opts;
     // POLICY BUNDLES ARE LOADED HERE, on the read surface, and that is
     // CLOUD-833's substantive claim rather than a formality. `run_static` backs
     // `check` and refuses any kind that `carries_ambient_authority` — a
@@ -6063,16 +6079,7 @@ fn run_static_inner(
             ));
         }
     }
-    run(
-        rules,
-        &[],
-        root,
-        &bundles,
-        vocabulary,
-        scope,
-        now,
-        crate::facts::Surface::Check,
-    )
+    run(rules, &[], root, &bundles, vocabulary, opts)
 }
 
 /// Run only the rules that cannot spawn a process, and report the ones that can
@@ -6096,14 +6103,26 @@ fn run_static_inner(
 /// so there the only honest answer is to refuse. Same omission, two surfaces,
 /// two correct answers.
 ///
-/// Nothing here spawns, and **the argument list is only half of why**
-/// (CLOUD-1480). The withheld rules are partitioned out *before* [`run`] sees
-/// them, which the previous revision of this paragraph called "a property of
-/// the argument list rather than a promise" — true of every spawning KIND and
-/// false of the two `Cost::Effect` FACTS, which no partition over
-/// [`RuleKind`] can reach. `symbols` spawned `cargo clippy` from this surface
-/// for as long as that sentence stood. The surface is passed to [`run`] now and
-/// the facts are gated on it, so the property holds on both halves.
+/// **Whether anything here spawns is the CALLER's answer, not this function's**
+/// (CLOUD-1480), and stating it as the function's was this paragraph's defect
+/// twice over.
+///
+/// The withheld rules are partitioned out *before* [`run`] sees them, which an
+/// earlier revision called "a property of the argument list rather than a
+/// promise" — true of every spawning KIND and false of the two `Cost::Effect`
+/// FACTS, which no partition over [`RuleKind`] can reach. `symbols` spawned
+/// `cargo clippy` from this surface for as long as that sentence stood.
+///
+/// The replacement then claimed "the property holds on both halves", which is
+/// true only of the mediated caller. `surface` decides it: `Surface::Hook` bars
+/// both facts and nothing spawns, while the `state record` VERB passes
+/// `Surface::Check` — the surface those facts are classed for — and still
+/// resolves `symbols`, spawning the analyser before its store write. That is
+/// correct rather than an oversight: a verb a human ran is entitled to the
+/// census, and a per-call budget is what the hook has and the verb does not.
+///
+/// So the honest sentence is the conditional one. Read `surface` at the call
+/// site to know which answer applies; do not read a promise here.
 ///
 /// The partition asks [`RuleKind::carries_ambient_authority`] — the same
 /// question [`run_static`] refuses on, deliberately the identical call rather
@@ -6144,11 +6163,16 @@ pub fn run_recorded(
         root,
         &bundles,
         vocabulary,
-        &Scope::Tree,
-        // The Stop-surface recorder supplies none, and `None` is the honest
-        // answer rather than a clock read this module may not make.
-        None,
-        surface,
+        RunOptions {
+            checks,
+            scope: &Scope::Tree,
+            // The caller's surface: `Surface::Check` for the `state record`
+            // verb, `Surface::Hook` for the mediated recorder (CLOUD-1480).
+            surface,
+            // This caller supplies none, and `None` is the honest answer rather
+            // than a clock read this module may not make.
+            now: None,
+        },
     )?;
     for rule in withheld {
         // `RuleSkipped`, not a variant of its own. The distinction between "the
@@ -6189,6 +6213,9 @@ pub fn run_all(
         RunOptions {
             checks: crate::policy::ModuleChecks::Run,
             scope: &Scope::Tree,
+            // The tree verbs, so the surface their `Cost::Effect` facts are
+            // classed for (CLOUD-1480).
+            surface: crate::facts::Surface::Check,
             // No caller supplied one on this entry point, and `None` is the
             // honest answer rather than a clock read this module may not make.
             now: None,
@@ -6204,7 +6231,9 @@ fn run_all_inner(
     root: &Path,
     opts: RunOptions<'_>,
 ) -> anyhow::Result<Scan> {
-    let RunOptions { checks, scope, now } = opts;
+    // Only `checks` is read here; `scope`, `now` and `surface` travel on to
+    // `run` inside the bag rather than being unpacked and re-passed.
+    let RunOptions { checks, .. } = opts;
     // Refuse before any work, the shape `run_static` above already uses: the
     // alternative is running the check side, exiting on its verdict, and having
     // silently ignored a repair the config declared. A key that parses and does
@@ -6219,16 +6248,7 @@ fn run_all_inner(
         }
     }
     let bundles = crate::policy::load(root, rules, vocabulary, checks, None)?;
-    run(
-        rules,
-        provisions,
-        root,
-        &bundles,
-        vocabulary,
-        scope,
-        now,
-        crate::facts::Surface::Check,
-    )
+    run(rules, provisions, root, &bundles, vocabulary, opts)
 }
 
 /// Run every rule in `rules` against the tree rooted at `root`, returning all
@@ -6249,27 +6269,23 @@ fn run(
     // recorders accumulated, so a second declaration on the rule would be a
     // second home for one answer.
     vocabulary: crate::policy::Vocabulary<'_>,
-    // Which files rules are SELECTED against (CLOUD-519). Applied here, once,
-    // beside the walk it narrows — never re-derived per rule.
-    scope: &Scope,
-    // The instant the BOUNDARY read, threaded to `minted_facts` rather than
-    // read here — see `RunOptions::now` for why this module may not read one.
-    now: Option<u64>,
-    // WHICH SURFACE THIS RUN IS ON, threaded here rather than left with the
-    // caller (CLOUD-1480). `run_static` refuses a spawning KIND before any work,
-    // and that read as the whole of §5's read-only promise — but a
-    // `Cost::Effect` FACT is not a kind, so `symbols_fact` and `review_fact`
-    // below were guarded by DECLARATION alone and spawned on the mediated
-    // boundary. Measured: `batten hook` on a Stop payload exec'd `cargo clippy`.
-    //
-    // `facts::Surface` AND NOT `RunKind`, which is the correction this parameter
-    // already needed once. `RunKind` is a DISPATCH enum — `check`, `baseline`
-    // and the mediated recorder all arrive as `Static` — so gating on it
-    // disabled both facts on the read surface their own `Class` admits, and
-    // `review_dispatched.rs` went red. The surface is the axis that carries the
-    // meaning, and `Class::resolvable_on` is the one predicate over it.
-    surface: crate::facts::Surface,
+    // Which files rules are SELECTED against (CLOUD-519), the boundary's
+    // instant, and the surface — the three narrowings, as the one bag whose
+    // whole purpose is that arity does not grow per narrowing.
+    opts: RunOptions<'_>,
 ) -> anyhow::Result<Scan> {
+    // WHY THE SURFACE IS HERE AT ALL (CLOUD-1480). `run_static` refuses a
+    // spawning KIND before any work, and that read as the whole of §5's
+    // read-only promise — but a `Cost::Effect` FACT is not a kind, so
+    // `symbols_fact` and `review_fact` below were guarded by DECLARATION alone
+    // and spawned on the mediated boundary. Measured: the mediated verb on a
+    // Stop payload exec'd `cargo clippy`.
+    let RunOptions {
+        checks: _,
+        scope,
+        surface,
+        now,
+    } = opts;
     let recorders = vocabulary.recorders;
     let files = tree_files(root)?;
     // The narrowed selection, computed once beside the walk. Every acquisition
@@ -6347,11 +6363,12 @@ fn run(
     // the NARROWEST surface it may be resolved on — so resolving it from the
     // read-effect surface contradicts the class the fact already carries.
     //
-    // COULD-NOT-LOOK RATHER THAN A SKIP, for the reason both facts' own headers
-    // give: an empty census would read as "resolved, found nothing", which is a
-    // measured answer about a crate nobody analysed. `IsNot` is what the
-    // undeclared arm already returns and it is the honest one here too — the
-    // projection emits `null`, and a module reads undefined.
+    // COULD-NOT-LOOK, AND NOT `IsNot`. The two are different claims and this
+    // comment endorsed the wrong one for a revision: `IsNot` says the question
+    // was asked and the answer is no, which about a crate nobody analysed is a
+    // measured nothing. The surface could not ask, so `CouldNotLook` is the arm.
+    // Both project `null` today, which is exactly why the distinction has to be
+    // right in the code rather than in whichever arm happens to render the same.
     let effects_admitted = |class: crate::facts::Class| class.resolvable_on(surface);
     let symbols = if effects_admitted(crate::facts::Fact::Symbols.class()) {
         symbols_fact(rules, root)
@@ -6497,6 +6514,31 @@ fn run(
     Ok(scan)
 }
 
+/// The declared fact this run could not resolve for `rule`, if any (CLOUD-1480).
+///
+/// DECLARED is the whole predicate. A run resolves the `Cost::Effect` facts only
+/// when a row asks for one, so a rule that asked for nothing can never be
+/// withheld here — the answer is `None` for every row that does not carry the
+/// column, which is what keeps this additive.
+///
+/// Returns the COLUMN NAME rather than a sentence: it lands in `Scan::unmet`
+/// beside the input-precondition's missing path, and both are read as pointers
+/// (rule 4). A reader gets "this rule asked for `symbols` and the run had none",
+/// which names the remedy without describing the tree.
+///
+/// `Look::IsNot` is deliberately NOT withheld. That arm means the question was
+/// asked and the answer is no — a real census with no sites — and a rule is
+/// entitled to decide on it. Only `CouldNotLook` is the could-not-ask.
+fn unresolved_declared_fact(rule: &Rule, inputs: &RunInputs<'_>) -> Option<&'static str> {
+    if rule.symbols && matches!(inputs.symbols, crate::facts::Look::CouldNotLook) {
+        return Some("symbols");
+    }
+    if !rule.review.is_empty() && matches!(inputs.review, crate::facts::Look::CouldNotLook) {
+        return Some("review");
+    }
+    None
+}
+
 /// Evaluate every rule into `scan`, each one contained (CLOUD-126) and each one
 /// gated on its declared inputs first (CLOUD-125).
 ///
@@ -6528,6 +6570,39 @@ fn evaluate_rules(
             scan.not_evaluated
                 .insert(rule.id.clone(), NotObserved::RuleSkipped);
             scan.unmet.insert(rule.id.clone(), missing.to_owned());
+            continue;
+        }
+        // THE DECLARED FACT-PRECONDITION, beside the input one above and for its
+        // reason (CLOUD-1480). A rule that DECLARED a fact the run could not
+        // resolve has not been given what it asked for, and evaluating it anyway
+        // hands the module a `null` it cannot tell from a measured answer.
+        //
+        // WHY THIS IS NOT OPTIONAL, measured on this branch. Barring the two
+        // `Cost::Effect` facts from the mediated surface left
+        // `input.tree.symbols` null while `spawn-adapters.rego` — a `policy` row,
+        // so still evaluable on the recorder's partition — refuses on exactly
+        // that shape (`no_census if not input.tree.symbols.sites`). Every end of
+        // turn therefore wrote a spurious `symbol count absent` deny into the
+        // state store: a gate reporting on a census nobody took. Trading a slow
+        // hook for a hook that records false findings is the worse half of the
+        // trade, and it was caught by review rather than by me.
+        //
+        // WITHHELD RATHER THAN PASSED, which is the whole point and the direction
+        // `Scan::not_evaluated` exists to keep honest. A withheld rule's silence
+        // is not evidence of a clean tree, so its findings HOLD; passing it would
+        // be CLOUD-251's vacuous pass in the one place a reader would never look.
+        // `.claude/rules/policy-modules.md` already states the engine half of
+        // this for a module that cannot look: "the engine reports `RuleSkipped`
+        // for it rather than a clean tree".
+        //
+        // It also repairs a case that predates this branch: `symbols_fact`
+        // answers could-not-look wherever the analyser is absent, so every
+        // checkout without the delegated toolchain was taking that same spurious
+        // deny — a verdict about the OPERATOR wearing a verdict about the tree.
+        if let Some(fact) = unresolved_declared_fact(rule, inputs) {
+            scan.not_evaluated
+                .insert(rule.id.clone(), NotObserved::RuleSkipped);
+            scan.unmet.insert(rule.id.clone(), fact.to_owned());
             continue;
         }
         // FAIL-CLOSED ISOLATION (CLOUD-126). This loop used to carry a `?`, so
