@@ -280,6 +280,36 @@ pub enum Event {
         call: String,
         /// Whether the host flagged it an error — a typed boolean, not a phrase.
         failed: bool,
+        /// What the call ANSWERED, as a keyed identity and never as content
+        /// (CLOUD-1348).
+        ///
+        /// **This is what makes an action-observation cycle expressible.** The
+        /// detector every other implementation leads with is the same call
+        /// returning the SAME answer — which separates a stuck loop from a
+        /// converging one, where a repeated call alone cannot. Without it every
+        /// predicate in the loop family has to treat a debug loop whose errors
+        /// are shrinking exactly like one that is learning nothing.
+        ///
+        /// **Keyed, and that is the decision rather than a detail.** A tool
+        /// result is the widest content a session holds; an UNKEYED digest of one
+        /// is a stable identity of that content, so two machines reading the same
+        /// file would mint the same value and the digests would join across
+        /// clones. [`crate::identity::observation_fingerprint`] mints under the
+        /// machine-scoped key, so the within-session comparison is unchanged and
+        /// the cross-machine join does not exist. The row refused the unkeyed
+        /// spelling explicitly; do not "simplify" this to a bare hash.
+        ///
+        /// The bytes are hashed and dropped inside [`collect`], as
+        /// [`Event::HookOutput`]'s digest already is: no caller is ever handed
+        /// them, so no output can carry one.
+        ///
+        /// **`None` has two causes and they are kept apart one level up.** Here
+        /// it means only that this record has no observation identity — either
+        /// the host's result shape carried no content this parser knows, or the
+        /// stream was parsed with no key at all. [`Stream::keyed`] answers the
+        /// second, so a consumer that must not read "no key" as "no content" has
+        /// the fact rather than an inference.
+        digest: Option<crate::identity::Fingerprint>,
     },
     /// A hook run the host recorded, with the code it returned.
     HookDecision {
@@ -390,6 +420,17 @@ pub struct Stream {
     /// because the bytes the parse actually read and the bytes on disk are two
     /// different numbers the moment a host is still appending.
     pub bytes: usize,
+    /// Whether this parse held the key that mints an observation identity
+    /// (CLOUD-1348).
+    ///
+    /// The could-not-look channel for [`Event::ToolResult::digest`], and it is
+    /// here for the reason `input.tree.missing` exists one layer out: a record
+    /// with no digest because nothing keyed the parse and a record with no digest
+    /// because the host wrote no content it could read are opposite facts, and a
+    /// consumer collapsing them would report "nothing repeated" over a stream it
+    /// never fingerprinted. [`parse`] is unkeyed and says so here;
+    /// [`parse_keyed`] is the entry that mints.
+    pub keyed: bool,
 }
 
 /// The agent's own composition, as far as a transcript states it.
@@ -716,13 +757,42 @@ pub fn resolve(root: &Path, configured: Option<&str>) -> Capability {
     }
 }
 
-/// Parse a transcript body into the typed stream.
+/// Parse a transcript body into the typed stream, minting no observation
+/// identities.
+///
+/// **The unkeyed entry, and it says so on the stream** ([`Stream::keyed`] is
+/// `false`): every [`Event::ToolResult`] it produces carries `digest: None`, which
+/// is a statement about this parse rather than about the host's records. A caller
+/// that wants the identity an action-observation cycle is decided over asks
+/// [`parse_keyed`] for it; one that only reads turns, tool calls or hook decisions
+/// — which is most of them — needs no key and pays for none.
 ///
 /// # Errors
 ///
 /// [`UsageError`] naming the line that did not decode — a pointer, never the
 /// line itself, which is the whole reason this module exists.
 pub fn parse(body: &str, label: &str) -> Result<Stream> {
+    parse_keyed(body, label, None)
+}
+
+/// [`parse`], minting an observation identity for every result the host wrote
+/// content for (CLOUD-1348).
+///
+/// **The key is the caller's to supply, and that is the custody boundary rather
+/// than an ergonomic choice.** `identity.rs` mints under a key `secrets.rs`
+/// custodies per machine; this module neither loads nor holds one, so the
+/// question "which key was this stream fingerprinted under" is answered where key
+/// custody already lives and not by a second reader here.
+///
+/// # Errors
+///
+/// As [`parse`], plus the unreachable HMAC key-length branch
+/// [`crate::identity::observation_fingerprint`] documents.
+pub fn parse_keyed(
+    body: &str,
+    label: &str,
+    key: Option<&crate::identity::IdentityKey>,
+) -> Result<Stream> {
     let mut session = None;
     let mut records = Vec::new();
     let mut agent = AgentContext::default();
@@ -760,13 +830,14 @@ pub fn parse(body: &str, label: &str) -> Result<Stream> {
                 .map(ToOwned::to_owned);
         }
         gather(&parsed, &mut agent);
-        collect(&parsed, line, &mut records);
+        collect(&parsed, line, &mut records, key)?;
     }
     Ok(Stream {
         session,
         records,
         agent,
         bytes: body.len(),
+        keyed: key.is_some(),
     })
 }
 
@@ -799,7 +870,12 @@ fn gather(parsed: &Line, agent: &mut AgentContext) {
 /// Zero is the common case and the important one: a host records far more than
 /// any predicate reads, and an unrecognized shape must produce nothing rather
 /// than fail.
-fn collect(parsed: &Line, line: usize, records: &mut Vec<Record>) {
+fn collect(
+    parsed: &Line,
+    line: usize,
+    records: &mut Vec<Record>,
+    key: Option<&crate::identity::IdentityKey>,
+) -> Result<()> {
     if let Some(attachment) = &parsed.attachment {
         if let (Some(event), Some(exit_code)) = (&attachment.hook_event, attachment.exit_code) {
             records.push(Record {
@@ -859,10 +935,10 @@ fn collect(parsed: &Line, line: usize, records: &mut Vec<Record>) {
                 });
             }
         }
-        return;
+        return Ok(());
     }
     let Some(message) = &parsed.message else {
-        return;
+        return Ok(());
     };
     let role = match message.role.as_deref() {
         Some("user") => Some(Role::User),
@@ -887,7 +963,7 @@ fn collect(parsed: &Line, line: usize, records: &mut Vec<Record>) {
     // Content is an array of blocks, or a bare string when the turn is plain
     // text. A string carries no tool structure, so it yields the turn alone.
     let Some(Value::Array(blocks)) = &message.content else {
-        return;
+        return Ok(());
     };
     for block in blocks {
         let Ok(block) = serde_json::from_value::<Block>(block.clone()) else {
@@ -908,17 +984,68 @@ fn collect(parsed: &Line, line: usize, records: &mut Vec<Record>) {
             }
             "tool_result" => {
                 if let Some(call) = block.tool_use_id {
+                    // HASHED AND DROPPED HERE, which is the whole of rule 4 for
+                    // this variant: `content` is a local, the digest is what is
+                    // pushed, and no caller is ever handed the bytes. The same
+                    // shape `HookOutput` above already takes, under a key because
+                    // this content is wider than that one's.
+                    let digest = match (key, block.content.as_ref().map(result_text)) {
+                        (Some(key), Some(text)) => {
+                            Some(crate::identity::observation_fingerprint(key, &text)?)
+                        }
+                        // No key is this PARSE saying nothing, recorded on
+                        // `Stream::keyed`; no content is the HOST saying nothing.
+                        // Both leave the record without an identity and neither
+                        // invents one.
+                        _ => None,
+                    };
                     records.push(Record {
                         line,
                         event: Event::ToolResult {
                             call,
                             failed: block.is_error.unwrap_or(false),
+                            digest,
                         },
                     });
                 }
             }
             _ => {}
         }
+    }
+    Ok(())
+}
+
+/// The text a host wrote for one tool result, flattened for hashing only.
+///
+/// **Two spellings, one reading.** A host writes a result either as a bare string
+/// or as an array of typed content blocks, and a parser that knew only one would
+/// mint no identity for the other — reporting "this host says nothing" where it
+/// says the same thing differently. Both reduce here; anything else reduces to
+/// its own JSON, which is a stable reading of an unknown shape rather than a
+/// guess at which field is the payload (§2's "never a digest of the wrong
+/// field").
+///
+/// **Array order is the host's and is preserved**, because two results are the
+/// same answer only if they said the same things in the same order — and a set
+/// reading would fold a re-ordered answer into the one before it.
+///
+/// The return value is a local of [`collect`]'s tool-result arm and dies there.
+fn result_text(content: &Value) -> String {
+    match content {
+        Value::String(text) => text.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .map(|block| match block.get("text") {
+                Some(Value::String(text)) => text.clone(),
+                // A block with no `text` still contributes: dropping it would make
+                // an answer that changed only in a non-text block read as
+                // unchanged, which is the false "nothing is happening" this
+                // digest exists to avoid.
+                _ => block.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        other => other.to_string(),
     }
 }
 
@@ -1130,6 +1257,13 @@ struct Block {
     input: Option<Value>,
     tool_use_id: Option<String>,
     is_error: Option<bool>,
+    /// The result payload, read only to be hashed (CLOUD-1348).
+    ///
+    /// A `Value` rather than a `String` because hosts spell it both ways — a bare
+    /// string, or an array of typed content blocks — and a parser that knew only
+    /// one would silently mint no digest for the other. It never leaves
+    /// [`collect`].
+    content: Option<Value>,
 }
 
 /// The configured transcript path, as `batten.toml` declares it.

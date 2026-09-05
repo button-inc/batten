@@ -270,7 +270,15 @@ pub fn scan(stream: &Stream) -> Vec<Detection> {
             } if *exit_code == DENY_EXIT => {
                 note_refusal(&calls, call, record.line, Refusal::Mediated, &mut refused);
             }
-            Event::ToolResult { call, failed: true } => {
+            Event::ToolResult {
+                call,
+                failed: true,
+                // The observation identity is CLOUD-1348's and no bypass
+                // predicate reads it: this rule fires on the host's own error
+                // flag, and what the failing call ANSWERED is not part of that
+                // question.
+                digest: _,
+            } => {
                 note_refusal(&calls, call, record.line, Refusal::Failed, &mut refused);
             }
             Event::Turn(..)

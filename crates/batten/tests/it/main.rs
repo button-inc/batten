@@ -230,6 +230,7 @@ mod todo_promotion;
 mod tool_selector;
 mod tool_verdict_facts;
 mod transcript_stop_reason;
+mod transcript_tool_result;
 mod use_graph;
 mod verdict_registry;
 mod verdict_vocabulary;

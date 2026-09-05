@@ -330,6 +330,10 @@ mod tests {
             records,
             agent: crate::transcript::AgentContext::default(),
             bytes,
+            // Unkeyed: this suite is about hook OUTPUT cost, and a fixture that
+            // claimed a key it never used would say the stream had been
+            // fingerprinted when nothing was.
+            keyed: false,
         }
     }
 

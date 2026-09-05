@@ -529,6 +529,13 @@ const CHECKOUT_TAG: &str = "checkout";
 /// of those and joined against it.
 const CONTEXT_TAG: &str = "context";
 
+/// The domain tag for a **tool result's observation identity** (CLOUD-1348),
+/// distinct from every other tag for the reason they are all distinct — and from
+/// [`CAPTURE_TAG`] most of all, since those two are the closest neighbours here:
+/// a capture is output this engine RAN and stored, an observation is an answer the
+/// session was handed and never stored at all.
+const OBSERVATION_TAG: &str = "observation";
+
 /// The domain tag for a **secret-class** identity, distinct from every
 /// [`FindingKind`] tag and from [`SURFACE_TAG`]/[`CAPTURE_TAG`] for the same
 /// reason those two are distinct from each other: a keyed identity and an
@@ -905,6 +912,45 @@ pub fn capture_fingerprint(stream: &str, bytes: &[u8]) -> Fingerprint {
 #[must_use]
 pub fn judge_fingerprint(class: &str, bytes: &[u8]) -> Fingerprint {
     tagged_fingerprint(JUDGE_TAG, &[class.as_bytes(), bytes])
+}
+
+/// The identity of **what a tool call answered**, keyed (CLOUD-1348).
+///
+/// The observation half of an action-observation cycle: two results are the same
+/// answer exactly when their fingerprints match, which is what makes "the same
+/// call returning the same answer" decidable without keeping either answer.
+///
+/// **KEYED, where [`judge_fingerprint`] and [`context_fingerprint`] beside it are
+/// not, and the difference is the whole reason this function exists rather than a
+/// third call to `tagged_fingerprint`.** A tool result is the widest content a
+/// session ever holds — file contents it read, command output, anything a tool
+/// echoed — so an unkeyed digest of one is a stable identity of that content, and
+/// two machines reading the same file would mint the same value. That is a
+/// correlatable identity across clones, which this repository has admitted onto no
+/// surface. Under the machine-scoped key [`crate::secrets`] custodies, two clones
+/// mint two identities for the same bytes and nothing joins across machines, while
+/// the within-session comparison the detector needs is unchanged.
+///
+/// The key id is in the preimage for [`secret_code_fingerprint`]'s reason: the
+/// identity says which key generation minted it, so a store holding two
+/// generations separates them in the tuple rather than only in metadata.
+///
+/// Content is hashed **verbatim**, like a capture and a judge payload and unlike a
+/// span: two genuinely different results must not fold into one observation, and
+/// a normalization that collapsed whitespace would make a shrinking error list
+/// read as the same answer twice — which is exactly the case the detector this
+/// serves exists to tell apart.
+///
+/// # Errors
+///
+/// As [`secret_code_fingerprint`]'s keying step: the unreachable HMAC key-length
+/// branch surfaces as a plain internal error (exit `3`), never a [`UsageError`].
+pub fn observation_fingerprint(key: &IdentityKey, content: &str) -> anyhow::Result<Fingerprint> {
+    let keyed = keyed_span(key, content)?;
+    Ok(tagged_fingerprint(
+        OBSERVATION_TAG,
+        &[key.id.as_bytes(), &keyed],
+    ))
 }
 
 /// The identity of the **context a guard decision was taken in** (CLOUD-133).
