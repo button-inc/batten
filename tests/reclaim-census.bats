@@ -239,16 +239,6 @@ at() { (cd "$REPO" && "$CENSUS" "$@"); }
 
 # --- the call sites, so the wiring cannot go dead unnoticed -------------------
 
-@test "land-lock's hold loop records a beat and every stop it chooses" {
-	LOCK="$BATS_TEST_DIRNAME/../mise-tasks/land-lock.sh"
-	run grep -c 'beat_note x' "$LOCK"
-	# Four paths where the loop chooses to stop: holder gone, stalled, lease
-	# lost, lease lapsed. A new exit added without a record is a silent gap.
-	[ "$output" -eq 4 ]
-	run grep -c 'beat_note h' "$LOCK"
-	[ "$output" -eq 1 ]
-}
-
 @test "land records the stop it causes itself, or every clean landing reads as a reclaim" {
 	# The commonest stop of all is land killing its own heartbeat on a normal
 	# finish; the loop never runs another statement, so its last record stays an

@@ -155,6 +155,7 @@ mod land;
 mod land_hand_stepping;
 mod landed_check;
 mod lease_health;
+mod lease_lifecycle;
 mod lease_precondition;
 mod lease_record;
 mod locator_index;
