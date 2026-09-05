@@ -134,63 +134,53 @@ violation contains {
 deny contains finding if some finding in violation
 
 test_a_required_step_the_plan_includes_is_clean if {
-	count(violation) == 0 with input as {"tree": {
-		"plan": {"gate": {
-			"hook": "check",
-			"profiles": [],
-			"prohibitedProfiles": [],
-			"required": ["one"],
-			"steps": [{"name": "one", "status": "included", "reasonKind": "filter_match"}],
-		}},
-	}}
+	count(violation) == 0 with input as {"tree": {"plan": {"gate": {
+		"hook": "check",
+		"profiles": [],
+		"prohibitedProfiles": [],
+		"required": ["one"],
+		"steps": [{"name": "one", "status": "included", "reasonKind": "filter_match"}],
+	}}}}
 }
 
 test_a_required_step_the_plan_excludes_is_refused if {
-	some finding in violation with input as {"tree": {
-		"plan": {"gate": {
-			"hook": "check",
-			"profiles": [],
-			"prohibitedProfiles": [],
-			"required": ["one"],
-			"steps": [{"name": "one", "status": "skipped", "reasonKind": "profile_exclude"}],
-		}},
-	}}
+	some finding in violation with input as {"tree": {"plan": {"gate": {
+		"hook": "check",
+		"profiles": [],
+		"prohibitedProfiles": [],
+		"required": ["one"],
+		"steps": [{"name": "one", "status": "skipped", "reasonKind": "profile_exclude"}],
+	}}}}
 
 	finding.rule == "plan-required-step"
 }
 
 test_a_required_step_the_plan_never_names_is_refused if {
-	some finding in violation with input as {"tree": {
-		"plan": {"gate": {
-			"hook": "check",
-			"profiles": [],
-			"prohibitedProfiles": [],
-			"required": ["absent"],
-			"steps": [{"name": "one", "status": "included", "reasonKind": "filter_match"}],
-		}},
-	}}
+	some finding in violation with input as {"tree": {"plan": {"gate": {
+		"hook": "check",
+		"profiles": [],
+		"prohibitedProfiles": [],
+		"required": ["absent"],
+		"steps": [{"name": "one", "status": "included", "reasonKind": "filter_match"}],
+	}}}}
 
 	finding.rule == "plan-required-step"
 }
 
 test_a_declared_plan_that_could_not_be_acquired_is_refused if {
-	some finding in violation with input as {"tree": {
-		"plan": {"gate": null},
-	}}
+	some finding in violation with input as {"tree": {"plan": {"gate": null}}}
 
 	finding.rule == "plan-unacquired"
 }
 
 test_a_prohibited_profile_is_refused if {
-	some finding in violation with input as {"tree": {
-		"plan": {"gate": {
-			"hook": "check",
-			"profiles": ["slow"],
-			"prohibitedProfiles": ["slow"],
-			"required": [],
-			"steps": [{"name": "one", "status": "included", "reasonKind": "filter_match"}],
-		}},
-	}}
+	some finding in violation with input as {"tree": {"plan": {"gate": {
+		"hook": "check",
+		"profiles": ["slow"],
+		"prohibitedProfiles": ["slow"],
+		"required": [],
+		"steps": [{"name": "one", "status": "included", "reasonKind": "filter_match"}],
+	}}}}
 
 	finding.rule == "plan-prohibited-profile"
 }
