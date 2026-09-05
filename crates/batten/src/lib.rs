@@ -1005,15 +1005,29 @@ fn run_state_record(
         .truncate(false)
         .write(true)
         .open(&lock_path)?;
-    if std::env::var_os(DRAIN_MARKER).is_some() {
+    // WHO MAY BLOCK ON THIS LOCK, and getting it wrong cost 100s. The first
+    // version keyed only on the drain marker, so the SYNCHRONOUS in-process call
+    // took the blocking branch and waited for the drain the previous turn had
+    // spawned — the hook serialised behind the very ~118s scan detaching it was
+    // meant to escape. Measured at 99-124s, worse than before the fix.
+    //
+    // The surface is the predicate, because it is the one that already means
+    // "there is a per-call budget here": `Surface::Hook` must never wait, and the
+    // drain must not either, since nobody reads its verdict. Only the VERB blocks,
+    // because a human ran it and a record it did not write must not be reported
+    // as one.
+    let may_block =
+        !matches!(surface, facts::Surface::Hook) && std::env::var_os(DRAIN_MARKER).is_none();
+    if may_block {
+        fs4::FileExt::lock(&lock)?;
+    } else {
         match fs4::FileExt::try_lock(&lock) {
             Ok(()) => {}
-            // Another record holds it and is doing this work. Clean exit: the
-            // drain is not the thing anyone reads a verdict from.
+            // Someone else is already doing this work. Clean exit rather than a
+            // wait: on the mediated path the budget forbids it, and for a drain
+            // there is nothing to report.
             Err(_) => return Ok(ExitCode::Success),
         }
-    } else {
-        fs4::FileExt::lock(&lock)?;
     }
     // **The ref comes from HERE, not from `repo`.** `repo_root` answers with the
     // MAIN worktree's root — which is exactly what makes every linked worktree
