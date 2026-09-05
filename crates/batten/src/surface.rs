@@ -1882,6 +1882,26 @@ const ADOPT: FlagDecl = FlagDecl {
 /// optional-value flag cannot tell `--adopt --takeover` from `--adopt <name>`
 /// without a rule about which tokens look like branch names — and a rule about
 /// rules is what this repository's config posture refuses.
+/// The host's session identifier for the runtime observation (CLOUD-948).
+///
+/// OPTIONAL, and its absence is an answer rather than a usage error: a host that
+/// cannot name a session cannot have a receipt written about one, and writing it
+/// under a shared key would let two sessions answer for each other. The raw
+/// token never reaches the disk — the record carries its digest.
+const SESSION: FlagDecl = FlagDecl {
+    id: "session",
+    long: Some("session"),
+    short: None,
+    help: "The host's session identifier; without one no receipt is written",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const ADOPT_FROM: FlagDecl = FlagDecl {
     id: "adopt_from",
     long: Some("adopt-from"),
@@ -3131,6 +3151,20 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         effect: Effect::Write,
         flags: &[],
+    },
+    CommandDecl {
+        path: "hk observe",
+        id: "hk.observe",
+        about: "Record what this session resolved of the runner, once per contract digest",
+        // The pointer it emits is one state token; a JSON document of one field
+        // would be a second shape for the same answer, and byte-stability is not
+        // a claim a mutating verb can make about two consecutive runs.
+        data_channel: false,
+        // WRITE, declared rather than smuggled into a read verb: it records a
+        // receipt. It is the only write — nothing about the tree, the contract or
+        // the plan is modified.
+        effect: Effect::Write,
+        flags: &[SESSION],
     },
     CommandDecl {
         path: "hk drift",

@@ -261,6 +261,22 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   could-not-look, because a generator that found nothing looks exactly like a
   gate that passed. Findings are pointers: a class token, a hook and a step name,
   never a command, a glob or a dump of either plan.
+
+  It carries two further authorities over the same runner, and they are
+  deliberately three types rather than one. `Fact::Plan` (CLOUD-949) is the
+  EFFECTIVE plan for a declared surface, acquired from the runner and projected
+  at `input.tree.plan` — it keeps the reason KIND and the file count the contract
+  drops, because a required step's absence turns on whether a PROFILE or a glob
+  MISS excluded it, and it is bound to an `inputFingerprint` over HEAD and every
+  differing path's current bytes, since dirty and index state move a selection
+  without moving HEAD. `hk-session-capability/v1` (CLOUD-948) is a per-session
+  RECEIPT recording what a session resolved — `available` / `drifted` /
+  `unknown`, where the third is could-not-look and reading it as drift would turn
+  a verdict about the environment into one about the repository. It decides
+  nothing, is keyed by (hashed session, contract digest) so a second event in one
+  session runs no program, and stores no raw session token, no command and no
+  path. Three questions, three authorities: a merged one would answer none of
+  them, because a mismatch could mean the contract is wrong or the runtime is.
 - `handler.rs` — the `[[hook.handler]]` dispatch surface (CLOUD-898), the door
   that lets `batten hook` be the ONLY registration on every surface while a
   repository still runs whatever it likes behind it. A **second noun beside

@@ -425,11 +425,16 @@ pub enum Command {
 /// generator WRITES the committed projection and the gate READS it. A single
 /// verb with a `--check` flag would have made the effect an argument, and
 /// house-style §5 declares an effect per command rather than per invocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum HkCommand {
     /// Regenerate the committed projection from the pinned binary.
     Contract,
+    /// Record what this session resolved, once per contract digest.
+    Observe {
+        /// The host's session identifier, where it supplies one.
+        session: Option<String>,
+    },
     /// Report how the committed projection and the live plan differ.
     ///
     /// No data channel: the answer is a pointer per drifted step, one per line,
@@ -1904,6 +1909,9 @@ fn claim_of(matches: &ArgMatches) -> Option<ClaimCommand> {
 fn hk_of(matches: &ArgMatches) -> Option<HkCommand> {
     match matches.subcommand()? {
         ("contract", _) => Some(HkCommand::Contract),
+        ("observe", matches) => Some(HkCommand::Observe {
+            session: matches.get_one::<String>("session").cloned(),
+        }),
         ("drift", _) => Some(HkCommand::Drift),
         _ => None,
     }

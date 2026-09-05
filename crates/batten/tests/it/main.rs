@@ -126,6 +126,7 @@ mod harness_wiring;
 mod history_facts;
 mod hk_contract;
 mod hk_fix_selection;
+mod hk_observation;
 mod hk_plan;
 mod hook_cost;
 mod hook_profile;

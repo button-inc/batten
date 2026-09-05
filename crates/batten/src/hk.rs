@@ -58,7 +58,7 @@
 //! a step's command, its glob, its matched files, or a dump of either plan. The
 //! report is what a reader follows to the two files; it is not a copy of them.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -866,6 +866,218 @@ pub fn acquire(root: &Path, query: &PlanQuery) -> Look<Planned> {
         prohibited_profiles: query.prohibited_profiles.clone(),
         steps,
     })
+}
+
+// ─── CLOUD-948: the runtime-observation receipt ──────────────────────────────
+//
+// The two sections above answer what the gate INTENDS to run and what it WOULD
+// run for a proposed invocation. Neither says anything about what a given agent
+// session actually resolved: a different runner on PATH, a stale contract, or a
+// plan that will not resolve at all are invisible to a contract that describes
+// intent.
+//
+// **This is a separate authority and is deliberately not merged into the
+// verification receipt.** One receipt answers one question. A merged one would
+// answer neither, because a mismatch could then mean the contract is wrong OR
+// the runtime is, and nothing in the record would separate them.
+//
+// **IT DECIDES NOTHING.** No gate reads it, no call is denied by it, and it
+// proves no hook is installed and no run occurred. It is evidence, and the whole
+// of its contribution is that a later reader can tell an environment fault from
+// a repository one.
+
+/// The receipt predicate, versioned in its own name.
+///
+/// A version in the TYPE rather than a field, so a reader that does not know
+/// this shape fails to match rather than misreading a field it does not have.
+pub const OBSERVATION_PREDICATE: &str = "hk-session-capability/v1";
+
+/// Where observations live, under the git directory.
+///
+/// Beside the other per-checkout stores and for their reason: it is state that
+/// must never be committed, and the git directory is the one place this crate
+/// already treats that way.
+const OBSERVATION_DIR: &str = "batten-hk-observations";
+
+/// What a session resolved, as three states.
+///
+/// **The third is the could-not-look channel rather than a failure.** Reading
+/// `Unknown` as `Drifted` would turn a verdict about the ENVIRONMENT into one
+/// about the REPOSITORY, which is exactly the confusion a three-valued read
+/// exists to prevent — and it is the discriminator an implementation that
+/// collapsed them would fail while passing every other case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum Capability {
+    /// The runtime version and the normalised surfaces both match the contract.
+    Available,
+    /// Readable runtime data disagrees with the contract.
+    Drifted,
+    /// The runner, the contract, or plan resolution was unavailable or
+    /// malformed. An answer, not an error.
+    Unknown,
+}
+
+impl Capability {
+    /// The stable token this state is recorded and rendered under (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Capability::Available => "available",
+            Capability::Drifted => "drifted",
+            Capability::Unknown => "unknown",
+        }
+    }
+}
+
+/// One recorded observation.
+///
+/// **Every field is a digest, a version or a token.** No raw session identifier,
+/// no command, no path, no result byte and no environment value is stored — the
+/// exclusion list is this receipt's substance rather than a caveat, because an
+/// observation is written on a host whose session id may itself be sensitive.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct Observation {
+    /// [`OBSERVATION_PREDICATE`], written into the record so a reader matches on
+    /// the shape rather than on where the file was found.
+    pub predicate_type: String,
+    /// The session identifier, HASHED. The raw token never reaches the disk.
+    pub session: String,
+    /// The digest of the committed surface contract this was taken against.
+    pub contract_digest: String,
+    /// The config epoch at the time of observation.
+    pub config_epoch: String,
+    /// The runner's self-reported version, or `None` where it could not be read.
+    pub tool_version: Option<String>,
+    /// What was resolved.
+    pub state: Capability,
+}
+
+/// The hashed form of a host's session token.
+///
+/// `contract.rs`'s spelling, and deliberately the same one: a second hashing of
+/// one concept would be a second authority over what "this session" means.
+#[must_use]
+fn hashed(session: &str) -> String {
+    crate::tools::digest(session.as_bytes())
+}
+
+/// Where one session's observation of one contract digest lives.
+///
+/// **Both components are in the name, which is what makes the once-per rule
+/// structural.** A second event in the same session against the same digest
+/// finds the file and does not probe; a changed digest is a different name, so
+/// it is a new observation rather than an overwrite. CLOUD-725's failure — a
+/// cached receipt answering a question it never observed — is unreachable when
+/// the cache key carries everything the answer depends on.
+#[must_use]
+pub fn observation_path(git_dir: &Path, session: &str, contract_digest: &str) -> PathBuf {
+    git_dir
+        .join(OBSERVATION_DIR)
+        .join(format!("{}.{contract_digest}.json", hashed(session)))
+}
+
+/// Read back one observation, if this session already made it.
+#[must_use]
+pub fn observed(git_dir: &Path, session: &str, contract_digest: &str) -> Look<Observation> {
+    let path = observation_path(git_dir, session, contract_digest);
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Look::CouldNotLook;
+    };
+    match serde_json::from_str::<Observation>(&text) {
+        // A record whose predicate type is not this one does not answer this
+        // question, so it is could-not-look rather than a value to reinterpret.
+        Ok(record) if record.predicate_type == OBSERVATION_PREDICATE => Look::Is(record),
+        _ => Look::CouldNotLook,
+    }
+}
+
+/// Compare a live contract against the committed one, as a state.
+///
+/// Pure, and separated from the probe for `.claude/rules/rust.md`'s reason: the
+/// failing condition is a PAIR OF CONTRACTS, which a test can create, rather
+/// than a runner a test would have to make misbehave.
+#[must_use]
+pub fn capability(committed: Option<&Contract>, current: Option<&Contract>) -> Capability {
+    let (Some(committed), Some(current)) = (committed, current) else {
+        // Either side absent is could-not-look: with nothing to compare, a
+        // `drifted` here would be a claim about the repository made on the
+        // strength of an environment fault.
+        return Capability::Unknown;
+    };
+    if committed.tool_version != current.tool_version {
+        return Capability::Drifted;
+    }
+    if compare(committed, current).is_empty() {
+        Capability::Available
+    } else {
+        Capability::Drifted
+    }
+}
+
+/// Observe what this session resolved, recording it once per contract digest.
+///
+/// [`Look::IsNot`] where the host supplies no session identifier: a receipt
+/// about "this session" cannot be written by a host that cannot name one, and
+/// writing it under a shared key would let two sessions answer for each other.
+/// That is a real answer rather than a failure, which is why it is `IsNot` and
+/// not `CouldNotLook`.
+///
+/// **The existing record short-circuits the probe**, which is the once-per rule
+/// working rather than being remembered: a second event in the same session
+/// against the same digest returns the record and runs no program.
+///
+/// # Errors
+///
+/// Propagates an I/O failure creating the directory or writing the record.
+pub fn observe(
+    root: &Path,
+    git_dir: &Path,
+    session: Option<&str>,
+) -> anyhow::Result<Look<Observation>> {
+    let Some(session) = session.filter(|token| !token.is_empty()) else {
+        return Ok(Look::IsNot);
+    };
+    // The digest is the cache key, so it is read BEFORE anything is probed. An
+    // absent contract still has a key -- a stable literal -- because a session
+    // that observed "there is no contract" has observed something.
+    let contract_digest = std::fs::read(root.join(ARTIFACT)).map_or_else(
+        |_| "no-contract".to_owned(),
+        |bytes| crate::tools::digest(&bytes),
+    );
+    if let Look::Is(already) = observed(git_dir, session, &contract_digest) {
+        return Ok(Look::Is(already));
+    }
+
+    let committed = std::fs::read_to_string(root.join(ARTIFACT))
+        .ok()
+        .and_then(|text| Contract::parse(&text).ok());
+    let current = match resolve(root) {
+        Look::Is(contract) => Some(contract),
+        _ => None,
+    };
+    let record = Observation {
+        predicate_type: OBSERVATION_PREDICATE.to_owned(),
+        session: hashed(session),
+        contract_digest: contract_digest.clone(),
+        config_epoch: crate::epoch::compute(root, None).unwrap_or_else(|_| "unknown".to_owned()),
+        tool_version: current
+            .as_ref()
+            .map(|contract| contract.tool_version.clone()),
+        state: capability(committed.as_ref(), current.as_ref()),
+    };
+    let path = observation_path(git_dir, session, &contract_digest);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut text = serde_json::to_string_pretty(&record)
+        .map_err(|error| crate::UsageError::raise(error.to_string()))?;
+    text.push('\n');
+    std::fs::write(&path, text)?;
+    Ok(Look::Is(record))
 }
 
 #[cfg(test)]

@@ -635,6 +635,7 @@ struct Verb {
 const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     "hk contract",
     "hk drift",
+    "hk observe",
     "mutate sweep",
     "lease acquire",
     "lease hold",
@@ -1155,6 +1156,16 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "hk drift",
         args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        // The observation (CLOUD-948). A session token is supplied so the verb
+        // reaches its own work rather than the no-session arm — and the census
+        // then holds it to the exclusion that IS this receipt: what it emits is
+        // one state token, and the token it was handed appears nowhere.
+        path: "hk observe",
+        args: &["--session", "pointer-only-census"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },

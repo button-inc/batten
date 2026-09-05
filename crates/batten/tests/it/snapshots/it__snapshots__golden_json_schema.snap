@@ -1126,6 +1126,24 @@ expression: stdout_of(&output)
           "data_channel": false,
           "flags": [],
           "subcommands": []
+        },
+        {
+          "path": "hk observe",
+          "id": "hk.observe",
+          "about": "Record what this session resolved of the runner, once per contract digest",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "session",
+              "short": null,
+              "long": "session",
+              "takes_value": true,
+              "positional": false,
+              "help": "The host's session identifier; without one no receipt is written"
+            }
+          ],
+          "subcommands": []
         }
       ]
     },

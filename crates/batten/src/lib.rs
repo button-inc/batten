@@ -629,6 +629,32 @@ fn run_hk(
 ) -> Result<ExitCode> {
     let root = Path::new(".");
     let artifact = root.join(hk::ARTIFACT);
+    // THE OBSERVATION IS ANSWERED BEFORE THE PROBE, because it owns the probe.
+    // Resolving the contract here would run the runner on the way to a verb
+    // whose whole once-per rule is not to, and a session that already observed
+    // this digest would pay for a plan nobody reads.
+    if let HkCommand::Observe { session } = command {
+        let Ok(git_dir) = crate::git::git_dir(root) else {
+            writeln!(
+                err,
+                "::error:: hk: not a git repository, so there is no store to record an observation in"
+            )?;
+            return Ok(ExitCode::Internal);
+        };
+        if let facts::Look::Is(record) = hk::observe(root, &git_dir, session.as_deref())? {
+            writeln!(out, "{}", record.state.as_str())?;
+        } else {
+            // A host that names no session is told so and exits `0`: there is
+            // nothing wrong, and there is nothing to record.
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                "hk: this host names no session, so no observation was recorded",
+            )?;
+        }
+        return Ok(ExitCode::Success);
+    }
     let facts::Look::Is(current) = hk::resolve(root) else {
         writeln!(
             err,
@@ -652,6 +678,8 @@ fn run_hk(
             )?;
             Ok(ExitCode::Success)
         }
+        // Answered above, before the probe it must not pay for.
+        HkCommand::Observe { .. } => Ok(ExitCode::Success),
         HkCommand::Drift => {
             let Ok(text) = std::fs::read_to_string(&artifact) else {
                 writeln!(
