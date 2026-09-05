@@ -2051,9 +2051,21 @@ regex = '^\$\(dirname([[:space:]]+--)?[[:space:]]+"[^"]*"\)$|^\$\(cd([[:space:]]
 # span this admits can only ever be a literal path rooted at the suite's own
 # directory. The module removes the `/<name>` tail before matching, exactly as it
 # does for the row above.
+#
+# AT MOST ONE `..`, AND NO TRAVERSAL AFTER IT. The segment class was
+# `[A-Za-z0-9._-]+`, which contains `.` — so `.` and `..` were ordinary segments
+# and `$BATS_TEST_DIRNAME/../../../elsewhere/x.sh` matched. That is not the shape
+# the comment above describes: a suite sits in `tests/` and its subject in a
+# sibling directory, which is exactly one level up, and every further `..` walks
+# out of the repository layout this row exists to recognise.
+#
+# The tail class now requires at least one NON-dot character per segment, which
+# is what refuses `.` and `..` while still admitting `.claude` and `a.b` — the
+# spellings the paragraph above names. RE2 has no lookahead, so the exclusion is
+# spelled positively rather than as a negative assertion.
 [[pattern]]
 id = "bats-suite-directory"
-regex = '^\$\{?BATS_TEST_DIRNAME\}?(/[A-Za-z0-9._-]+)*$'
+regex = '^\$\{?BATS_TEST_DIRNAME\}?(/\.\.)?(/[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)*$'
 
 # A CLIPPY LINT ESCAPE, in either spelling (CLOUD-1338). `spawn-widening` reads
 # it over the lines a change ADDED to engine source.
@@ -7355,6 +7367,14 @@ landing_paths = [
   "mise-tasks/land-lock.sh",
   "crates/batten/src/land.rs",
   "crates/batten/src/lease.rs",
+  # `fast_forward.rs` carries the half of the landing protocol that ASKS for the
+  # merge and recognises the answer — the `/fast-forward` comment, its keyed
+  # verdict and the anti-livelock fence. A head that predates a change there is
+  # exactly as stale as one that predates a change to `land.rs`, and without this
+  # row it read as current. `pipeline.rs` is deliberately NOT here: it decides
+  # whether a composition is walkable and performs nothing, so a head can differ
+  # on it without differing on what a lap DOES.
+  "crates/batten/src/fast_forward.rs",
 ]
 
 # THE BRANCHES A LANDER FAST-FORWARDS, so no agent ever holds the lease for them
@@ -7381,6 +7401,24 @@ landing_paths = [
 # NOT `[bot_lane] bots`, which keys on a forge login. What decides this question
 # is which workflow lands the branch, and a workflow selects on the name.
 fast_forward_branches = ["renovate/", "sbom-actions/", "release-plz-"]
+
+# WHICH RECEIPTS A HEAD MUST CARRY TO BE CALLED VERIFIED (CLOUD-1338).
+#
+# These two names were `const VERIFIED_BY: [&str; 2]` inside `crates/batten`,
+# which is non-negotiable rule 1's plainest shape: they are THIS repository's
+# task names, and an adopter whose gates are called something else had no way to
+# say so. The set is the consumer's now and the engine reads it.
+#
+# `verify` says the tree passed its gate. `linear-check` says the branch was
+# linear on the trunk it was measured against, and records WHICH trunk, so a
+# moved `origin/main` expires it — a head carrying only the first has been
+# proven against a base that may no longer exist.
+#
+# AN EMPTY SET REFUSES rather than passing: nothing is unverified when nothing is
+# required, so an undeclared row would make `verified` report clean over every
+# head having asked about nothing.
+[receipt]
+verified_by = ["verify", "linear-check"]
 
 [ready]
 prose_dialect_required_from = "2026-09-02T00:00:00.000Z"

@@ -767,18 +767,29 @@ pub fn verify(root: &Path, branch: &str, command: &[String]) -> Result<Verified>
 /// stop a landing to save a matrix, which is the wrong trade in the wrong
 /// direction. `None` therefore means "carry on" for both *unmoved* and *could not
 /// look*, and the two are deliberately one reading here.
+/// **THE POLL IS THE CALLER'S, AND IT HAS TO BE.** The paragraph above says
+/// *"every later lap's [ask] does [carry a validator], because the
+/// `main_watch::Poll` is the lap's"* — and this function used to build a fresh
+/// one on every call and pass `None`, so the validator was discarded between
+/// laps and every probe was unconditional. The prose described the design and
+/// the code did not implement it. A `&mut` parameter is what makes the sentence
+/// true rather than aspirational: the driver holds one poll across the whole
+/// landing, so lap 2 onward send `If-None-Match` and a quiet trunk answers `304`
+/// at no rate-limit cost, which is the entire reason the interval is affordable.
 #[must_use]
-pub fn stale(root: &Path, trunk: &crate::main_watch::Config, reference: &str) -> Option<String> {
+pub fn stale(
+    root: &Path,
+    poll: &mut crate::main_watch::Poll,
+    trunk: &crate::main_watch::Config,
+    reference: &str,
+) -> Option<String> {
     let tracking = tracking_ref(reference);
     // The base this lap actually replayed onto, read from the ref `advance` set
     // rather than passed down through five signatures. Local, so it costs nothing
     // and cannot itself fail to reach anybody.
     let replayed_onto = crate::git::resolve_ref(root, &tracking).ok()??;
-    let mut poll = crate::main_watch::Poll::default();
-    poll.absorb(
-        crate::main_watch::read(trunk, None).as_ref(),
-        trunk.interval,
-    );
+    let answer = crate::main_watch::read(trunk, poll.etag());
+    let _pace = poll.absorb(answer.as_ref(), trunk.interval);
     poll.moved(&replayed_onto).map(ToOwned::to_owned)
 }
 
@@ -1695,7 +1706,12 @@ mod lap_tests {
         };
 
         assert_eq!(
-            super::stale(&dir, &trunk, "refs/heads/main"),
+            super::stale(
+                &dir,
+                &mut crate::main_watch::Poll::default(),
+                &trunk,
+                "refs/heads/main"
+            ),
             None,
             "a probe that could not look must not report the base as moved"
         );

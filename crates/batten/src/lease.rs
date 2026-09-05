@@ -2439,16 +2439,88 @@ fn forge_read(path: &str) -> String {
 /// `None` when no path answered, which is could-not-look rather than "nothing
 /// has ever touched the mechanism" — the two are indistinguishable from here and
 /// the caller fails open on both.
+/// Percent-encode one query VALUE.
+///
+/// **A local encoder rather than a crate**, and the trade is stated because it is
+/// the kind of thing that gets waved through: the unreserved set is four lines of
+/// RFC 3986 and vendoring a dependency here would go through `deny.toml`,
+/// `macos-link-check`, `darwin-link`, the ambient-authority bound and the SBOM
+/// inventory to buy them. Everything outside `A-Za-z0-9-._~` is escaped, which is
+/// the conservative direction: over-escaping a segment the server would have
+/// accepted costs nothing, and under-escaping is the defect.
+fn query_value(raw: &str) -> String {
+    let mut encoded = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            // The two hex digits by hand rather than through `format!`, which
+            // allocates per byte — and `write!` here would need `std::fmt::Write`
+            // in scope beside `std::io::Write`, which this module already uses.
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    encoded
+}
+
+/// The newest commit at `trunk` touching any of `paths`.
+///
+/// One request per path, and the newest sha across them wins. **`per_page=1`
+/// rather than a window**, because the question is "what is the latest" and a
+/// page of history would be bytes fetched to discard.
+///
+/// # ORDERED BY ANCESTRY, NEVER BY THE COMMITTER'S DATE
+///
+/// This compared `commit.committer.date` across paths, and that is a MUTABLE
+/// field: a rebase, a cherry-pick or a hand-set `GIT_COMMITTER_DATE` reorders it
+/// freely, and the endpoint's own ordering says nothing across two separate
+/// queries. An older trunk commit could therefore win, and [`carries`] would
+/// report `Current` for a head missing the later landing commit — the guard
+/// answering clean about exactly the staleness it exists to catch.
+///
+/// Every candidate is on `trunk`, so they are totally ordered by ancestry, and
+/// the newest is the one that CARRIES the others. That is one extra compare per
+/// additional path — three, for a four-row declaration — against a guard that
+/// already spends one request per path.
+///
+/// # An unorderable pair is could-not-look for the WHOLE reading
+///
+/// Where [`head_carries`] cannot answer, the two candidates cannot be ordered at
+/// all, and there is no safe way to pick one: taking the older makes the guard
+/// too lenient, which is this function's own defect, and taking the newer makes
+/// it refuse a head it has no evidence against. So the reading is abandoned and
+/// the caller fails open, exactly as it does for a path that never answered.
+///
+/// `None` when no path answered, which is could-not-look rather than "nothing
+/// has ever touched the mechanism" — the two are indistinguishable from here and
+/// the caller fails open on both.
 #[must_use]
 pub fn newest_landing_commit(
     repo: &str,
     trunk: &str,
     paths: &[String],
 ) -> Option<(String, String)> {
-    let mut newest: Option<(String, String, String)> = None;
+    let mut newest: Option<(String, String)> = None;
     for path in paths {
+        // AN EMPTY ROW ASKS ABOUT THE WHOLE REPOSITORY. `path=` with no value is
+        // not "no filter I meant to write" to this endpoint — it is every commit
+        // on the trunk, so one blank entry in a consumer's `landing_paths` makes
+        // the newest trunk commit the answer and every head that is not tip-of-
+        // trunk read as stale. Skipped rather than refused, because this reading
+        // fails open on everything it cannot use.
+        if path.is_empty() {
+            continue;
+        }
+        // ENCODED, because a configured path is consumer data. A `&` or a `#` in
+        // one silently truncated or re-keyed the query, so the request asked
+        // about a different path than the row declared.
         let raw = forge_read(&format!(
-            "repos/{repo}/commits?sha={trunk}&path={path}&per_page=1"
+            "repos/{repo}/commits?sha={}&path={}&per_page=1",
+            query_value(trunk),
+            query_value(path)
         ));
         let Ok(document) = serde_json::from_str::<serde_json::Value>(&raw) else {
             continue;
@@ -2459,24 +2531,21 @@ pub fn newest_landing_commit(
         let Some(sha) = entry.get("sha").and_then(serde_json::Value::as_str) else {
             continue;
         };
-        // ORDERED BY THE COMMITTER'S DATE, compared as fixed-width ISO-8601.
-        // `.claude/rules/policy-modules.md` records why an instant beats an
-        // ordinal for exactly this: every tracker and every forge stamps one,
-        // and a lexical compare over a fixed-width stamp needs no parser.
-        let when = entry
-            .get("commit")
-            .and_then(|commit| commit.get("committer"))
-            .and_then(|committer| committer.get("date"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        if newest
-            .as_ref()
-            .is_none_or(|(_, held, _)| when > held.as_str())
-        {
-            newest = Some((sha.to_owned(), when.to_owned(), path.clone()));
+        let Some((held, _)) = newest.as_ref() else {
+            newest = Some((sha.to_owned(), path.clone()));
+            continue;
+        };
+        if held == sha {
+            continue;
+        }
+        // Does the candidate carry what we hold? Then it is the later commit.
+        match head_carries(repo, held, sha) {
+            Some(true) => newest = Some((sha.to_owned(), path.clone())),
+            Some(false) => {}
+            None => return None,
         }
     }
-    newest.map(|(sha, _, path)| (sha, path))
+    newest
 }
 
 /// Does `head` carry `wanted`?

@@ -302,7 +302,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // is why nothing on the `check` or `hook` surface may reach this module —
         // `policy/module-layering.rego` forbids both edges over the resolved use
         // graph rather than by review.
-        Some(Command::Lease { command }) => run_lease(command, out, err),
+        Some(Command::Lease { command }) => run_lease(command, &overrides, out, err),
         // The landing lap (CLOUD-1335). It reaches the network through `lease`
         // and the worktree through `gitwrite`, so the same two edges are
         // forbidden — transitively, which the layering table states rather than
@@ -5466,6 +5466,7 @@ fn report_comparison(
 /// a runner's budget.
 fn run_lease(
     command: cli::LeaseCommand,
+    overrides: &resolve::Overrides,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -5476,7 +5477,7 @@ fn run_lease(
     // reason: a clone that cannot name a remote can still answer both, and
     // resolving one first would refuse a question that never needed it.
     if let cli::LeaseCommand::Carries { head } = &command {
-        return run_lease_carries(root, head, out, err);
+        return run_lease_carries(root, overrides, head, out, err);
     }
     let terms = match lease::terms(root) {
         Ok(terms) => terms,
@@ -5517,7 +5518,7 @@ fn run_lease(
                     branch: &branch,
                     run: &run,
                 };
-                return run_lease_guard_unleased(root, &asking, out, err);
+                return run_lease_guard_unleased(root, overrides, &asking, out, err);
             }
             cli::LeaseCommand::Check => {
                 writeln!(
@@ -5535,7 +5536,7 @@ fn run_lease(
             // Spelled rather than wildcarded so the next arm added here cannot
             // be swallowed by a `_`, which is the property that forced this row.
             cli::LeaseCommand::Carries { head } => {
-                return run_lease_carries(root, &head, out, err);
+                return run_lease_carries(root, overrides, &head, out, err);
             }
             cli::LeaseCommand::Acquire { .. }
             | cli::LeaseCommand::Renew
@@ -5602,13 +5603,13 @@ fn run_lease(
                 branch: &branch,
                 run: &run,
             };
-            run_lease_guard(root, &terms, &asking, now, out, err)
+            run_lease_guard(root, overrides, &terms, &asking, now, out, err)
         }
         // UNREACHABLE, and stated rather than wildcarded: the arm returns above,
         // before the terms this match is built on resolve. A `_` here would
         // silently swallow the next arm somebody adds, which is what the
         // exhaustive match exists to prevent — it is what forced this very row.
-        cli::LeaseCommand::Carries { head } => run_lease_carries(root, &head, out, err),
+        cli::LeaseCommand::Carries { head } => run_lease_carries(root, overrides, &head, out, err),
     }
 }
 
@@ -5746,6 +5747,12 @@ fn run_land_lap(
     let laps = std::env::var("LAND_MAX_LAPS")
         .ok()
         .and_then(|declared| declared.parse::<u32>().ok())
+        // ZERO IS NOT A BOUND, IT IS A LOOP THAT NEVER RUNS. `1..=0` iterates
+        // never, so the lap loop fell straight through to the exhausted-laps
+        // message and reported "0 lap(s) bought no landing" at exit 3 — a
+        // could-not-look about a branch nothing looked at. The same positive
+        // filter `LAND_ANSWER_MAX_UNKNOWNS` already applies to its own count.
+        .filter(|laps| *laps > 0)
         .unwrap_or(LAPS);
     // THE COMPOSITION, VALIDATED BEFORE A LAP SPENDS ANYTHING. A pipeline that
     // would ready and then abandon fails to LOAD rather than in production,
@@ -5762,7 +5769,19 @@ fn run_land_lap(
         return Ok(ExitCode::Usage);
     }
 
+    // ONE POLL FOR THE WHOLE LANDING, held outside the lap loop so lap 2 onward
+    // send the validator lap 1 was given. Rebuilt per lap it was a fresh
+    // unconditional ask every time — see `land::stale`'s own header, which
+    // described this design while the code discarded it.
+    let mut trunk_poll = main_watch::Poll::default();
+    // THE SPEND, COUNTED RATHER THAN INFERRED. `Ledger`'s header records the
+    // measurement: two laps both lost to `main` moving under the gate, the ready
+    // never reached, zero check-runs on the head — and the refusal announced
+    // "having spent 2 CI matrices". `laps` is an attempt counter; `paid` moves at
+    // the one site that buys a run.
+    let mut ledger = land::Ledger::default();
     'laps: for lap in 1..=laps {
+        ledger.attempt();
         writeln!(out, "land: lap {lap} of {laps}")?;
         // WHAT THIS LAP HAS ENTERED, which is what it owes an undo for. A lap
         // that stopped at `verify` never readied, so it owes no re-draft —
@@ -5789,7 +5808,7 @@ fn run_land_lap(
                         .unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned()),
                     1,
                 );
-                if let Some(moved) = land::stale(root, &trunk, reference) {
+                if let Some(moved) = land::stale(root, &mut trunk_poll, &trunk, reference) {
                     writeln!(
                         out,
                         "land: lap {lap} — {reference} moved to {moved} before {step:?}; lapping before a matrix is spent"
@@ -5801,7 +5820,7 @@ fn run_land_lap(
             let code = match step {
                 land::Step::Replay => run_land_replay(root, url, reference, branch, out)?,
                 land::Step::Verify => run_land_verify(root, branch, out, err)?,
-                land::Step::Ready => run_land_ready(root, branch, out, err)?,
+                land::Step::Ready => run_land_ready(root, branch, &mut ledger, out, err)?,
                 land::Step::Push => run_land_push(root, url, branch, out)?,
                 land::Step::Wait => {
                     let (code, verdict) = run_land_wait(root, reference, branch, out, err)?;
@@ -5849,9 +5868,13 @@ fn run_land_lap(
     // NOT A VERDICT ABOUT THE BRANCH. Exhausting the count says the loop stopped
     // asking, never that the head is unlandable — so `3`, and the caller runs it
     // again if the laps were lost to contention rather than to a defect.
+    // WHAT THE ACCOUNTING SUPPORTS, never the lap counter. The two look
+    // interchangeable and are not: a lap that stopped before the ready bought
+    // nothing, so reporting laps as spend states a cost that was never paid.
     writeln!(
         err,
-        "::error:: land: {laps} lap(s) bought no landing. A conflict, a failed gate or red CI will lose again — read the lap lines above for how each ended. If every lap lost only to contention, running this again commits up to {laps} more."
+        "::error:: land: {laps} lap(s) bought no landing, spending {} CI matri(ces). A conflict, a failed gate or red CI will lose again — read the lap lines above for how each ended. If every lap lost only to contention, running this again commits up to {laps} more.",
+        ledger.spent()
     )?;
     Ok(ExitCode::Internal)
 }
@@ -6354,6 +6377,7 @@ struct Standing<'a> {
 /// Only for a stream that will not accept output.
 fn run_lease_guard(
     root: &Path,
+    overrides: &resolve::Overrides,
     terms: &lease::Terms,
     asking: &Standing<'_>,
     now: i64,
@@ -6361,11 +6385,11 @@ fn run_lease_guard(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let Standing { head, branch, run } = *asking;
-    if let Some(code) = fast_forward_lane(root, branch, out)? {
+    if let Some(code) = fast_forward_lane(root, overrides, branch, out)? {
         return Ok(code);
     }
     let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
-    let carries = lease_staleness(root, &repo, head);
+    let carries = lease_staleness(root, overrides, &repo, head);
 
     // THE LEASE IS ASKED ONLY IF THE HEAD IS CURRENT, which is the predecessor's
     // ordering: one fewer forge read on a head that is doomed either way.
@@ -6388,16 +6412,17 @@ fn run_lease_guard(
 /// fail-open.
 fn run_lease_guard_unleased(
     root: &Path,
+    overrides: &resolve::Overrides,
     asking: &Standing<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let Standing { head, branch, run } = *asking;
-    if let Some(code) = fast_forward_lane(root, branch, out)? {
+    if let Some(code) = fast_forward_lane(root, overrides, branch, out)? {
         return Ok(code);
     }
     let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
-    let carries = lease_staleness(root, &repo, head);
+    let carries = lease_staleness(root, overrides, &repo, head);
     let guarded = lease::guard(&carries, None);
     report_guard(&guarded, &repo, run, out, err)
 }
@@ -6411,10 +6436,13 @@ fn run_lease_guard_unleased(
 /// refusal fire on a branch this gate is not judging.
 ///
 /// `Some(Success)` means *not judging this branch*; `None` means carry on.
-fn fast_forward_lane(root: &Path, branch: &str, out: &mut dyn Write) -> Result<Option<ExitCode>> {
-    let prefixes = config::load(root)
-        .ok()
-        .and_then(|loaded| loaded.lease)
+fn fast_forward_lane(
+    root: &Path,
+    overrides: &resolve::Overrides,
+    branch: &str,
+    out: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    let prefixes = lease_config(root, overrides)
         .map(|lease| lease.fast_forward_branches)
         .unwrap_or_default();
     if !lease::lands_by_fast_forward(branch, &prefixes) {
@@ -6427,14 +6455,54 @@ fn fast_forward_lane(root: &Path, branch: &str, out: &mut dyn Write) -> Result<O
     Ok(Some(ExitCode::Success))
 }
 
+/// The `[lease]` table, read through the §8 authority chain.
+///
+/// # THE READERS BELOW WERE HANDING A DIRECTORY TO A FILE READER
+///
+/// Every one of them spelled this `config::load(root)`, and [`config::load`]
+/// takes a **file** path. `fs::read_to_string(".")` is not `NotFound`, so it
+/// became an internal error, which `.ok()` dropped, which `unwrap_or_default()`
+/// turned into an empty table — so `[lease] landing_paths` read as *nothing
+/// declared* in every checkout it has ever run in, and the staleness half of the
+/// runner-side guard has been failing open since it landed. Measured over the
+/// compiled binary from this repository's own root, with the rows in
+/// `batten.toml` two directories up from the reader.
+///
+/// That is the same class the key exists to close, arriving by a different
+/// route: its own doc comment records the predecessor dying quietly and every
+/// stale head passing. `crates/batten/tests/it/lease_config.rs` is the tier that
+/// catches it, because it drives the ENGINE rather than the reader.
+///
+/// # AND IT HONOURS `--config-in`, WHICH IS NOT A CONVENIENCE HERE
+///
+/// `batten lease guard` is the runner's FIRST step, before any checkout, so the
+/// directory it stands in is empty by construction. A reader anchored on the
+/// working tree therefore has nothing to read even once the path bug is fixed —
+/// the trust half of the same problem, since the only tree a checkout WOULD
+/// offer is the pull request's own. [`config::authority_site`] is the boundary
+/// that already answers this for every other verb: the caller names a directory
+/// holding a trusted `batten.toml`, fetched from trunk exactly as `install.sh`
+/// is, and the guard is judged by trunk's policy rather than by the head's.
+///
+/// `None` is could-not-look and every caller reads it that way.
+fn lease_config(root: &Path, overrides: &resolve::Overrides) -> Option<config::Lease> {
+    let site = config::authority_site(root, overrides.config_in.as_deref().map(Path::new));
+    config::load_site(&site)
+        .ok()
+        .and_then(|(loaded, _)| loaded.lease)
+}
+
 /// The staleness reading, over the declared landing paths.
 ///
 /// One place both guard arms read it, so they cannot disagree about which paths
 /// or which trunk.
-fn lease_staleness(root: &Path, repo: &str, head: &str) -> lease::Carries {
-    let paths = config::load(root)
-        .ok()
-        .and_then(|loaded| loaded.lease)
+fn lease_staleness(
+    root: &Path,
+    overrides: &resolve::Overrides,
+    repo: &str,
+    head: &str,
+) -> lease::Carries {
+    let paths = lease_config(root, overrides)
         .map(|lease| lease.landing_paths)
         .unwrap_or_default();
     let trunk = std::env::var("LEASE_TRUNK").unwrap_or_else(|_| String::from("main"));
@@ -6468,13 +6536,12 @@ fn lease_staleness(root: &Path, repo: &str, head: &str) -> lease::Carries {
 /// forge is a could-not-look reported as `3`.
 fn run_lease_carries(
     root: &Path,
+    overrides: &resolve::Overrides,
     head: &str,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let paths = config::load(root)
-        .ok()
-        .and_then(|loaded| loaded.lease)
+    let paths = lease_config(root, overrides)
         .map(|lease| lease.landing_paths)
         .unwrap_or_default();
     let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
@@ -6553,6 +6620,7 @@ fn trunk_watch(reference: &str, base: &str, repo: &str, interval: u64) -> main_w
 fn run_land_ready(
     root: &Path,
     branch: &str,
+    ledger: &mut land::Ledger,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -6607,7 +6675,7 @@ fn run_land_ready(
         }
     }
 
-    spend_the_matrix(root, branch, out, err)
+    spend_the_matrix(root, branch, ledger, out, err)
 }
 
 /// Fire the ready, which is the event that starts CI.
@@ -6632,6 +6700,7 @@ fn run_land_ready(
 fn spend_the_matrix(
     root: &Path,
     branch: &str,
+    ledger: &mut land::Ledger,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -6663,7 +6732,7 @@ fn spend_the_matrix(
             )?;
             Ok(ExitCode::Success)
         }
-        land::Spend::Ready => fired(land::mark_ready(&node), out, err),
+        land::Spend::Ready => fired(land::mark_ready(&node), ledger, out, err),
         land::Spend::Refire => {
             // DRAFT FIRST, and a draft that will not happen is a stop: readying an
             // already-ready pull request is a no-op the forge reports as success,
@@ -6680,7 +6749,7 @@ fn spend_the_matrix(
                 out,
                 "land: {branch} carried no answer and no run in flight; re-firing its ready"
             )?;
-            fired(land::mark_ready(&node), out, err)
+            fired(land::mark_ready(&node), ledger, out, err)
         }
     }
 }
@@ -6692,8 +6761,19 @@ fn spend_the_matrix(
 /// wait's whole ask count on a matrix nobody started. `tests/land.bats` states
 /// it as *"a ready that fails stops before the push rather than pushing into
 /// silence"*.
-fn fired(happened: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+fn fired(
+    happened: bool,
+    ledger: &mut land::Ledger,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
     if happened {
+        // THE ONE SITE THAT BUYS A MATRIX, which is the whole reason `paid` is a
+        // counter rather than an inference off the lap count: a lap that stops
+        // before this point spends nothing, and `Ledger`'s own header records a
+        // refusal announcing "having spent 2 CI matrices" over a head that
+        // carried zero check-runs.
+        ledger.bought_a_matrix();
         writeln!(out, "land: the pull request is ready; the matrix is bought")?;
         return Ok(ExitCode::Success);
     }

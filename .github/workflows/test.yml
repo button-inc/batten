@@ -129,8 +129,22 @@ jobs:
           installer=$(gh api -H "Accept: application/vnd.github.raw" \
             "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
           printf '%s\n' "$installer" | \
-            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" sh || exit 0
-          "$RUNNER_TEMP/batten-bin/batten" lease guard \
+            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" \
+            BATTEN_REQUIRE="lease guard" sh || exit 0
+          # THE POLICY IS TRUNK'S TOO, AND IT HAD TO BE FETCHED. This step runs
+          # BEFORE any checkout, so the directory the guard stands in is empty and
+          # `config::load` found nothing — `[lease] landing_paths` read as *no
+          # paths declared* and the staleness half failed open on every run, which
+          # is the exact silence the row was written to end. Fetched from `main`
+          # for the installer's own reason, one line up: a head must not pin the
+          # policy it is judged by, and the only tree a checkout would offer here
+          # is the pull request's own.
+          mkdir -p "$RUNNER_TEMP/batten-config" || exit 0
+          gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/batten.toml?ref=main" \
+            >"$RUNNER_TEMP/batten-config/batten.toml" || exit 0
+          "$RUNNER_TEMP/batten-bin/batten" --config-in "$RUNNER_TEMP/batten-config" \
+            lease guard \
             "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
 
       # `path: action` frees the workspace root for the fixture. The action then
@@ -253,8 +267,22 @@ jobs:
           installer=$(gh api -H "Accept: application/vnd.github.raw" \
             "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
           printf '%s\n' "$installer" | \
-            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" sh || exit 0
-          "$RUNNER_TEMP/batten-bin/batten" lease guard \
+            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" \
+            BATTEN_REQUIRE="lease guard" sh || exit 0
+          # THE POLICY IS TRUNK'S TOO, AND IT HAD TO BE FETCHED. This step runs
+          # BEFORE any checkout, so the directory the guard stands in is empty and
+          # `config::load` found nothing — `[lease] landing_paths` read as *no
+          # paths declared* and the staleness half failed open on every run, which
+          # is the exact silence the row was written to end. Fetched from `main`
+          # for the installer's own reason, one line up: a head must not pin the
+          # policy it is judged by, and the only tree a checkout would offer here
+          # is the pull request's own.
+          mkdir -p "$RUNNER_TEMP/batten-config" || exit 0
+          gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/batten.toml?ref=main" \
+            >"$RUNNER_TEMP/batten-config/batten.toml" || exit 0
+          "$RUNNER_TEMP/batten-bin/batten" --config-in "$RUNNER_TEMP/batten-config" \
+            lease guard \
             "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -366,8 +394,22 @@ jobs:
           installer=$(gh api -H "Accept: application/vnd.github.raw" \
             "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
           printf '%s\n' "$installer" | \
-            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" sh || exit 0
-          "$RUNNER_TEMP/batten-bin/batten" lease guard \
+            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" \
+            BATTEN_REQUIRE="lease guard" sh || exit 0
+          # THE POLICY IS TRUNK'S TOO, AND IT HAD TO BE FETCHED. This step runs
+          # BEFORE any checkout, so the directory the guard stands in is empty and
+          # `config::load` found nothing — `[lease] landing_paths` read as *no
+          # paths declared* and the staleness half failed open on every run, which
+          # is the exact silence the row was written to end. Fetched from `main`
+          # for the installer's own reason, one line up: a head must not pin the
+          # policy it is judged by, and the only tree a checkout would offer here
+          # is the pull request's own.
+          mkdir -p "$RUNNER_TEMP/batten-config" || exit 0
+          gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/batten.toml?ref=main" \
+            >"$RUNNER_TEMP/batten-config/batten.toml" || exit 0
+          "$RUNNER_TEMP/batten-bin/batten" --config-in "$RUNNER_TEMP/batten-config" \
+            lease guard \
             "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -494,8 +536,22 @@ jobs:
           installer=$(gh api -H "Accept: application/vnd.github.raw" \
             "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
           printf '%s\n' "$installer" | \
-            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" sh || exit 0
-          "$RUNNER_TEMP/batten-bin/batten" lease guard \
+            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" \
+            BATTEN_REQUIRE="lease guard" sh || exit 0
+          # THE POLICY IS TRUNK'S TOO, AND IT HAD TO BE FETCHED. This step runs
+          # BEFORE any checkout, so the directory the guard stands in is empty and
+          # `config::load` found nothing — `[lease] landing_paths` read as *no
+          # paths declared* and the staleness half failed open on every run, which
+          # is the exact silence the row was written to end. Fetched from `main`
+          # for the installer's own reason, one line up: a head must not pin the
+          # policy it is judged by, and the only tree a checkout would offer here
+          # is the pull request's own.
+          mkdir -p "$RUNNER_TEMP/batten-config" || exit 0
+          gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/batten.toml?ref=main" \
+            >"$RUNNER_TEMP/batten-config/batten.toml" || exit 0
+          "$RUNNER_TEMP/batten-bin/batten" --config-in "$RUNNER_TEMP/batten-config" \
+            lease guard \
             "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -609,8 +665,22 @@ jobs:
           installer=$(gh api -H "Accept: application/vnd.github.raw" \
             "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
           printf '%s\n' "$installer" | \
-            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" sh || exit 0
-          "$RUNNER_TEMP/batten-bin/batten" lease guard \
+            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" \
+            BATTEN_REQUIRE="lease guard" sh || exit 0
+          # THE POLICY IS TRUNK'S TOO, AND IT HAD TO BE FETCHED. This step runs
+          # BEFORE any checkout, so the directory the guard stands in is empty and
+          # `config::load` found nothing — `[lease] landing_paths` read as *no
+          # paths declared* and the staleness half failed open on every run, which
+          # is the exact silence the row was written to end. Fetched from `main`
+          # for the installer's own reason, one line up: a head must not pin the
+          # policy it is judged by, and the only tree a checkout would offer here
+          # is the pull request's own.
+          mkdir -p "$RUNNER_TEMP/batten-config" || exit 0
+          gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/batten.toml?ref=main" \
+            >"$RUNNER_TEMP/batten-config/batten.toml" || exit 0
+          "$RUNNER_TEMP/batten-bin/batten" --config-in "$RUNNER_TEMP/batten-config" \
+            lease guard \
             "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -754,8 +824,22 @@ jobs:
           installer=$(gh api -H "Accept: application/vnd.github.raw" \
             "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
           printf '%s\n' "$installer" | \
-            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" sh || exit 0
-          "$RUNNER_TEMP/batten-bin/batten" lease guard \
+            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" \
+            BATTEN_REQUIRE="lease guard" sh || exit 0
+          # THE POLICY IS TRUNK'S TOO, AND IT HAD TO BE FETCHED. This step runs
+          # BEFORE any checkout, so the directory the guard stands in is empty and
+          # `config::load` found nothing — `[lease] landing_paths` read as *no
+          # paths declared* and the staleness half failed open on every run, which
+          # is the exact silence the row was written to end. Fetched from `main`
+          # for the installer's own reason, one line up: a head must not pin the
+          # policy it is judged by, and the only tree a checkout would offer here
+          # is the pull request's own.
+          mkdir -p "$RUNNER_TEMP/batten-config" || exit 0
+          gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/batten.toml?ref=main" \
+            >"$RUNNER_TEMP/batten-config/batten.toml" || exit 0
+          "$RUNNER_TEMP/batten-bin/batten" --config-in "$RUNNER_TEMP/batten-config" \
+            lease guard \
             "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
 
       # OVER `needs.*`, NOT A LIST OF NAMES. Branch protection points at this one

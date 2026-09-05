@@ -547,6 +547,15 @@ pub enum WeakeningKind {
     /// altogether is that move at its limit, where the reader takes
     /// could-not-look and the guard fails open on every head.
     LandingPathRemoved,
+    /// A check is gone from `receipt.verified_by`, so `verified` demands a
+    /// smaller body of evidence than it did (CLOUD-1338).
+    ///
+    /// Monotone by construction: `run_verified` reports a head verified when NO
+    /// declared check is unverified, so dropping a name can only remove a way to
+    /// fail. Emptying the table is that move at its limit — and there the verb
+    /// refuses outright rather than passing, which is why the empty case is a
+    /// usage error and this kind covers the shrink above it.
+    VerifiedCheckRemoved,
     /// The prose-dialect cutover moved LATER, or stopped being declared, so
     /// Ready blocks that owed the claims object no longer do (CLOUD-472).
     ///
@@ -878,6 +887,7 @@ impl WeakeningKind {
         WeakeningKind::MinVersionLowered,
         WeakeningKind::EpochPathRemoved,
         WeakeningKind::LandingPathRemoved,
+        WeakeningKind::VerifiedCheckRemoved,
         WeakeningKind::ReadyCutoverRelaxed,
         WeakeningKind::VerbRemoved,
         WeakeningKind::PatternRemoved,
@@ -937,6 +947,7 @@ impl WeakeningKind {
             WeakeningKind::RulePredicateChanged => "rule-predicate-changed",
             WeakeningKind::MinVersionLowered => "min-version-lowered",
             WeakeningKind::EpochPathRemoved => "epoch-path-removed",
+            WeakeningKind::VerifiedCheckRemoved => "verified-check-removed",
             WeakeningKind::LandingPathRemoved => "landing-path-removed",
             WeakeningKind::ReadyCutoverRelaxed => "ready-cutover-relaxed",
             WeakeningKind::PerfExemptionAdded => "perf-exemption-added",
@@ -1080,6 +1091,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "lease",
         coverage: Coverage::Compared(&[WeakeningKind::LandingPathRemoved]),
+    },
+    FieldCoverage {
+        field: "receipt",
+        coverage: Coverage::Compared(&[WeakeningKind::VerifiedCheckRemoved]),
     },
     FieldCoverage {
         field: "contract",
@@ -1868,6 +1883,17 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         "lease.landing_paths",
     ));
 
+    // The evidence `verified` demands (CLOUD-1338). Removed-direction only, for
+    // the reason above one field over: the verb reports a head verified when NO
+    // declared check is unverified, so dropping a name can only remove a way to
+    // fail. ADDING one demands more evidence and narrows nothing.
+    found.extend(removed_entries(
+        WeakeningKind::VerifiedCheckRemoved,
+        &verified_by(base),
+        &verified_by(working),
+        "receipt.verified_by",
+    ));
+
     // The refinement gate's prose-dialect cutover (CLOUD-472). A ratchet, so
     // LATER is weaker: it exempts more rows from owing the claims object, and
     // dropping the key altogether is that move taken to its limit, since absent
@@ -2165,6 +2191,18 @@ fn tracked_paths(config: &Config) -> Vec<String> {
         .epoch
         .as_ref()
         .map_or_else(Vec::new, |epoch| epoch.tracked.clone())
+}
+
+/// The `receipt.verified_by` set, or an empty one when the table is absent.
+///
+/// Absent and empty read alike, which is the same reading `landing_paths` takes
+/// beside it: a config declaring nothing has removed nothing, and the verb's own
+/// refusal is what handles an empty set at the point of use.
+fn verified_by(config: &Config) -> Vec<String> {
+    config
+        .receipt
+        .as_ref()
+        .map_or_else(Vec::new, |receipt| receipt.verified_by.clone())
 }
 
 /// The `lease.landing_paths` set, or an empty one when the table is absent.
@@ -3633,6 +3671,54 @@ mod tests {
                 Weakening::new(
                     WeakeningKind::LandingPathRemoved,
                     "lease.landing_paths[b.rs]",
+                    "present",
+                    "absent",
+                ),
+            ]
+        );
+    }
+
+    /// Dropping a required check shrinks the evidence `verified` demands.
+    ///
+    /// The same shape as `landing_paths` one field over, and the same direction
+    /// is the assertion: ADDING a check demands more, so the reverse comparison
+    /// must stay silent or every consumer tightening their own gate would be
+    /// priced as a weakening.
+    #[test]
+    fn dropping_a_verified_check_is_a_weakening() {
+        let base = config("[receipt]\nverified_by = [\"one\", \"two\"]\n");
+        let working = config("[receipt]\nverified_by = [\"one\"]\n");
+        assert_eq!(
+            only(&base, &working),
+            Weakening::new(
+                WeakeningKind::VerifiedCheckRemoved,
+                "receipt.verified_by[two]",
+                "present",
+                "absent",
+            )
+        );
+        assert!(weakenings(&working, &base).is_empty());
+    }
+
+    /// And the table's removal names every check it declared, rather than
+    /// collapsing to no finding — the limit case its sibling also carries,
+    /// because absent and empty read alike on the way in.
+    #[test]
+    fn dropping_the_receipt_table_reports_every_check_it_declared() {
+        let base = config("[receipt]\nverified_by = [\"one\", \"two\"]\n");
+        let working = config("");
+        assert_eq!(
+            weakenings(&base, &working),
+            vec![
+                Weakening::new(
+                    WeakeningKind::VerifiedCheckRemoved,
+                    "receipt.verified_by[one]",
+                    "present",
+                    "absent",
+                ),
+                Weakening::new(
+                    WeakeningKind::VerifiedCheckRemoved,
+                    "receipt.verified_by[two]",
                     "present",
                     "absent",
                 ),

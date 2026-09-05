@@ -185,6 +185,13 @@ pub struct Config {
     /// matrix through costs one matrix.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease: Option<Lease>,
+    /// Which receipts a head must carry to be called verified (CLOUD-1338).
+    ///
+    /// Absent REFUSES rather than exempting, which is the opposite direction to
+    /// `[lease]` above and deliberately so: this is a gate about the tree in
+    /// hand, where that one is an economy about somebody else's runner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<Receipt>,
     /// Accepted invocation-latency regressions (CLOUD-1163 unit 10). Absent
     /// means this file accepts none, which is the safe direction — an absent
     /// table cannot exempt a path.
@@ -743,6 +750,30 @@ pub struct Lease {
     /// reason this is a short named list rather than a pattern.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fast_forward_branches: Vec<String>,
+}
+
+/// The `[receipt]` table: which receipts a head must carry to be called verified.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Receipt {
+    /// The checks `receipt verified` requires a valid receipt for.
+    ///
+    /// # NON-NEGOTIABLE RULE 1, AND THE ARRAY THIS REPLACES
+    ///
+    /// `receipt.rs` carried `const VERIFIED_BY: [&str; 2] = ["verify",
+    /// "linear-check"]` — two of THIS consumer's task names, compiled into the
+    /// core, which is the rule's plainest shape. A different adopter's gates are
+    /// not called those things, and nothing in the engine could tell them so.
+    ///
+    /// # UNDECLARED REFUSES, and it must
+    ///
+    /// An empty set would make `receipt verified` pass over every head, since
+    /// *nothing is unverified* when nothing is required — a gate that answers
+    /// clean because it was never told what to ask. `LAND_WORKFLOW` takes the
+    /// same posture at its own site and for the same reason: the optional thing
+    /// is a body-gate list, and this is the step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verified_by: Vec<String>,
 }
 
 /// The `[ready]` table: the refinement gate's consumer-set thresholds.
@@ -1765,6 +1796,7 @@ impl Config {
             // takes as could-not-look — the same direction every other absent
             // table here takes.
             lease: None,
+            receipt: None,
             strictness: None,
             fail_on_warning: None,
             rules: Vec::new(),

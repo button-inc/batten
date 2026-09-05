@@ -489,8 +489,41 @@ forbidden[from] contains to if {
 		# (house style §5) and the read-only allowlist is DERIVED from that
 		# declaration, so a `check` path reaching a network write would put a
 		# writing prefix on the allowlist itself (CLOUD-90's shape).
-		"hook": {"fetch", "mcp", "lease", "gitwrite", "land"},
-		"check": {"lease", "gitwrite", "land"},
+		# AND THE THREE FORGE-READING ADAPTERS, LISTED RATHER THAN PROMISED.
+		# `pr_watch`, `fast_forward` and `main_watch` each carry a comment in the
+		# placement table above saying their `hook` and `check` edges are
+		# "forbidden below for `pr_watch`'s reason" — and until now no row
+		# forbade any of them, `pr_watch` included. The prose described a rule
+		# that did not exist, so a direct import from either layer passed while
+		# every reader of this file was told it could not.
+		#
+		# The reason the prose gave is the right one and is kept: all three
+		# reach the forge, and a gate declared `read` (house style §5) whose
+		# allowlist is DERIVED from that declaration must not reach a network
+		# call — CLOUD-90's shape. `hook -> land` and `check -> land` already
+		# cover today's lap route TRANSITIVELY, and this file states its own
+		# standard for that case one paragraph up: a guarantee routable around by
+		# one hop is not one (CLOUD-1260), so the direct edges are listed.
+		"hook": {
+			"fetch", "mcp", "lease", "gitwrite", "land",
+			"pr_watch", "fast_forward", "main_watch",
+		},
+		# `check` NAMES NO MODULE TODAY, so this row is INERT — and that is worth
+		# stating rather than leaving a reader to infer enforcement from a table
+		# entry. There is no `crates/batten/src/check.rs`; the tree-scoped gate is
+		# the `check` VERB, which lives in `lib.rs`, and `lib` legitimately
+		# reaches everything. So the constraint the paragraph above describes is
+		# real and is not expressible as a module edge at this layout.
+		#
+		# Kept rather than deleted, for the same reason the `hook` row beside it
+		# is listed rather than left transitive: the day a `check` module lands,
+		# the edge is already refused instead of being remembered. Found while
+		# adding the three adapter targets below — the case written for it could
+		# not fire, which is how a row with no possible subject announces itself.
+		"check": {
+			"lease", "gitwrite", "land",
+			"pr_watch", "fast_forward", "main_watch",
+		},
 		# And the other direction, which is `symbols`' and `pinned`'s row again: the
 		# dispatcher sits below the engine and must not reach the module that
 		# adjudicates a mediated call. `mcp -> rules` is deliberately NOT here --
@@ -657,6 +690,37 @@ test_the_same_chain_is_clean_in_the_declared_direction if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/trust.rs",
 		[internal("config", 44)],
+	)
+}
+
+# ONE CASE PER FORGE-READING ADAPTER, IN BOTH DIRECTIONS. The table promised
+# these six edges in prose for their whole life and forbade none of them, so a
+# row without a case here is exactly how that happened again — and the pairs
+# below are what make the addition discriminate rather than merely load.
+test_the_mediated_call_may_not_reach_a_forge_reading_adapter if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("pr_watch", 21)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("fast_forward", 22)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("main_watch", 23)],
+	)
+}
+
+# AND THE DIRECTION THAT IS THE DESIGN: a lap reaches all three, which is what
+# these modules exist for. Without this a table that banned the edge outright
+# would satisfy the six cases above.
+test_the_lap_reaches_every_adapter_it_is_built_on if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/land.rs",
+		[internal("pr_watch", 41), internal("fast_forward", 42), internal("main_watch", 43)],
 	)
 }
 

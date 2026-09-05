@@ -476,6 +476,40 @@ main() {
 		fi
 		;;
 	esac
+
+	# A BINARY WITHOUT THE VERB THE CALLER NEEDS IS THE SILENT-ABSENCE CASE AGAIN.
+	#
+	# The paragraph above refuses an unreachable binary because absent and
+	# unreachable produce identical quiet results. An installed binary that
+	# RESOLVES and does not carry the asked-for verb is the third member of that
+	# family, and the fallback above is what produces it: `BATTEN_VERSION_FROM_REF`
+	# names trunk's manifest version, release-plz bumps that BEFORE the tag is
+	# published, so a routine window resolves to `latest` instead — and `latest`
+	# is by definition older than the verb that has not shipped yet.
+	#
+	# Measured shape rather than hypothetical: the CI lease precondition installs
+	# from `main` and then runs `batten lease guard`, with `|| exit 0` on every
+	# line so it can never red the job. A binary predating that verb therefore
+	# fails the invocation, takes the tolerance, and the whole fleet runs
+	# unguarded with nothing in the log naming why. The guard's absence has to be
+	# attributable at the step that caused it.
+	#
+	# `BATTEN_REQUIRE` is ONE verb path — `lease guard`, not a list — and it is
+	# checked through `--help` so nothing runs for its effect. Unset asks nothing,
+	# which keeps every existing caller unchanged.
+	#
+	# A LIST WAS THE FIRST DRAFT AND IT WAS WRONG. Iterating `for verb in
+	# $BATTEN_REQUIRE` splits on every space, so `lease guard` became two
+	# iterations — `batten lease --help` passes and `batten guard --help` does
+	# not, and the check refused a binary that carried exactly what was asked for.
+	# The value is one argv, and the word splitting below is what makes it one.
+	if [ -n "${BATTEN_REQUIRE:-}" ]; then
+		# shellcheck disable=SC2086 # deliberate: the value IS an argv, and
+		# quoting it would ask for a single verb literally named "lease guard".
+		if ! "$dest/$BIN" ${BATTEN_REQUIRE} --help >/dev/null 2>&1; then
+			die 1 "installed $tag, which does not carry \`$BIN $BATTEN_REQUIRE\`. BATTEN_VERSION_FROM_REF falls back to the latest published release when the named ref's version has no tag yet, so this is what that fallback looks like when the caller needs a verb newer than the last release. Publish the pending version, or pin BATTEN_VERSION to one that carries it."
+		fi
+	fi
 }
 
 main "$@"

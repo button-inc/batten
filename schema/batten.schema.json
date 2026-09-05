@@ -319,6 +319,17 @@
         }
       ]
     },
+    "receipt": {
+      "description": "Which receipts a head must carry to be called verified (CLOUD-1338).\n\nAbsent REFUSES rather than exempting, which is the opposite direction to\n`[lease]` above and deliberately so: this is a gate about the tree in\nhand, where that one is an economy about somebody else's runner.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Receipt"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "recorder": {
       "description": "Records written from the tool result that earned them (CLOUD-1051).\n\nThe third selector on the post-tool event, and the one that can carry a\nvalue another gate decided. A `[[mint]]` renders a template over the\npayload; a `[[recorder]]` may additionally run a declared program and\nrecord its verdict, which is what a board write's refinement column IS.\n\nConsumer-owned for the same reason `[[mint]]` is, and more so: the column\nnames, the verdict tokens and the programs are all a tracker's vocabulary,\nso a grep of `crates/batten` for any of them returns nothing and every one\nof them lives here.",
       "type": "array",
@@ -2591,6 +2602,20 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Receipt": {
+      "description": "The `[receipt]` table: which receipts a head must carry to be called verified.",
+      "type": "object",
+      "properties": {
+        "verified_by": {
+          "description": "The checks `receipt verified` requires a valid receipt for.\n\n# NON-NEGOTIABLE RULE 1, AND THE ARRAY THIS REPLACES\n\n`receipt.rs` carried `const VERIFIED_BY: [&str; 2] = [\"verify\",\n\"linear-check\"]` — two of THIS consumer's task names, compiled into the\ncore, which is the rule's plainest shape. A different adopter's gates are\nnot called those things, and nothing in the engine could tell them so.\n\n# UNDECLARED REFUSES, and it must\n\nAn empty set would make `receipt verified` pass over every head, since\n*nothing is unverified* when nothing is required — a gate that answers\nclean because it was never told what to ask. `LAND_WORKFLOW` takes the\nsame posture at its own site and for the same reason: the optional thing\nis a body-gate list, and this is the step.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false

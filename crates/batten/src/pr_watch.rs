@@ -173,10 +173,25 @@ pub fn interval_for(configured: u64, floor: Option<f64>) -> f64 {
         // the answer would be an infinite wait, which is the hang the
         // predecessor's `+0` coercion existed to refuse. A floor nobody can
         // satisfy is no floor.
-        Some(floor) if floor.is_finite() && floor > configured => floor,
+        Some(floor) if floor.is_finite() && floor > configured => floor.min(MAX_FLOOR),
         _ => configured,
     }
 }
+
+/// The longest interval a server may ask this poll to wait, in seconds.
+///
+/// **A CEILING, because the floor comes off the wire.** `X-Poll-Interval` is a
+/// number the forge sends, and a finite one is not thereby a reasonable one: an
+/// endpoint answering `86400` — or a proxy inventing one — turns a wait into a
+/// hang that looks exactly like a slow bot. The finiteness guard above stops the
+/// infinity; this stops the merely absurd.
+///
+/// Five minutes, against a poll whose own default is one second and a landing
+/// whose bound is a COUNT rather than a clock: honouring a floor this large
+/// already means the lap spends its whole ask budget on a handful of requests,
+/// which is the signal a reader needs. Larger than any interval this forge has
+/// been observed to ask for, so it clamps nothing real.
+const MAX_FLOOR: f64 = 300.0;
 
 /// A change detector over a reading, never a digest anyone reads back.
 ///
@@ -739,6 +754,18 @@ mod tests {
         assert!(is(interval_for(5, Some(f64::NAN)), 5.0));
         assert!(is(interval_for(5, Some(f64::INFINITY)), 5.0));
         assert!(is(interval_for(5, Some(-1.0)), 5.0));
+    }
+
+    /// **AND A FINITE FLOOR IS NOT THEREBY A REASONABLE ONE.** The value comes
+    /// off the wire, so an endpoint answering a day — or a proxy inventing one —
+    /// would turn this wait into a hang indistinguishable from a slow bot. The
+    /// pair: at the ceiling the floor is honoured exactly, above it clamps.
+    #[test]
+    fn a_floor_beyond_the_ceiling_is_clamped_and_one_at_it_is_honoured() {
+        assert!(is(interval_for(1, Some(MAX_FLOOR)), MAX_FLOOR));
+        assert!(is(interval_for(1, Some(MAX_FLOOR * 100.0)), MAX_FLOOR));
+        // And an ordinary floor is untouched, so the clamp discriminates.
+        assert!(is(interval_for(1, Some(4.0)), 4.0));
     }
 
     // The request IS part of the predicate (CLOUD-337): this endpoint returns a

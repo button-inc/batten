@@ -335,7 +335,27 @@ CARGO_TERM_COLOR = "always"
 # itself, so there is nothing to re-download or re-hash. The rule generalises:
 # lock a binary artifact, vendor a source tree. Run `git submodule update
 # --init` once per clone.
-_.path = ["tests/bats/bin"]
+#
+# `target/release` IS THE SECOND ENTRY, AND IT IS THIS CHECKOUT'S BINARY WINNING
+# OVER AN INSTALLED ONE. Four task bodies invoke `batten` as a bare word —
+# `checks green`, `pr watch`, `task`, `task alive` — and nothing put a build
+# directory on PATH, so they resolved whatever `install:local` last copied to
+# `~/.local/bin`. That is a DIFFERENT binary from the tree the task is running
+# against the moment anybody edits `crates/`, and it answers confidently.
+#
+# Measured while landing CLOUD-1338: three consecutive `batten override request`
+# calls refused a `batten.toml` the working tree had just grown a key for —
+# `unknown field fast_forward_branches`, then `unknown field receipt` — because
+# the installed binary predated the config it was judging. A gate reading a
+# config its own schema does not know is the loudest form of this; the quiet form
+# is a task that agrees with a stale answer.
+#
+# A path entry rather than `cargo run --quiet -p batten --` in each body, which
+# was the other candidate: `alive` exists to answer WHILE something else is
+# building, and `cargo run` would block on the target-dir lock exactly then. A
+# clean checkout with no build still fails loudly — `batten: command not found`
+# is an honest report, where the wrong binary is not.
+_.path = ["tests/bats/bin", "target/release"]
 # The checks that carry a verdict about THIS repository, named exactly as GitHub
 # names their check-runs (the matrix leg's suffix included). Shared by `ci-wait`
 # ("is this SHA green?") and `land`'s `graded_runs` ("does this SHA carry an

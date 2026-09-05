@@ -1850,6 +1850,32 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
         .state_home(&corpus.home)
         .args(args)
         .current_dir(&corpus.repo)
+        // AMBIENT, AND IT CHANGED WHICH PATH THE CORPUS EXERCISED. `land
+        // fast-forward` refuses with `Usage` when `$LAND_WORKFLOW` names no
+        // workflow — the arm this census means to walk, since it renders a
+        // pointer and returns. With the variable set in the environment the
+        // suite inherits (this repository's own `mise.toml` declares one), the
+        // verb went on to `fast_forward::open_pull_request` instead, so the case
+        // measured a forge read that could not happen rather than the refusal.
+        // A census whose corpus depends on the shell it was launched from is not
+        // one.
+        .env_remove("LAND_WORKFLOW")
+        // AND THE ROSTER, for the reason the `pr watch` entry states about its
+        // own: that verb is driven to its REFUSAL because the loop is unbounded
+        // by design, so an entry that reached the network would not be a slow
+        // case, it would be one that never returns. `land wait` reads the same
+        // roster from the ENVIRONMENT rather than from flags, so it inherited
+        // this repository's and entered the poll — an hour per run. Cleared
+        // here, it refuses before the first request exactly as its sibling does.
+        .env_remove("CI_REQUIRED_CHECKS")
+        .env_remove("CI_ANSWERED_CONCLUSIONS")
+        // AND THE CENSUS DOES NOT REACH THE FORGE. Several verbs here read it,
+        // and with the spawn retired they do so in process — so without a seam
+        // this corpus makes real requests, and the ones that POLL keep making
+        // them. An empty fixture directory answers could-not-look instantly,
+        // which is the reading every one of these verbs is required to survive
+        // and the only one a census about OUTPUT should be exercising.
+        .env("BATTEN_REST_FIXTURE", corpus.home.join("no-answers"))
         .env("XDG_CACHE_HOME", corpus.home.join("cache"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

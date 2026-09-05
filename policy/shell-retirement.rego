@@ -420,8 +420,22 @@ admitted_removal(path, line, removed) if {
 	some spelling in {concat("", ["$", variable]), concat("", ["${", variable, "}"])}
 	contains(line, spelling)
 
+	# THE BINDING MUST BE *THE* BINDING, not merely one sharing the name.
+	#
+	# This conjunct was `assigned_name(binding) == variable` alone, and
+	# `bats_retired_path_vars` derives the variable from a binding it finds in the
+	# BASE — so the removed assignment that satisfied it did not have to be that
+	# one. A suite keeping `GATE="$BATS_TEST_DIRNAME/../mise-tasks/old-gate.sh"`
+	# while removing an unrelated `GATE=` line and its spend cleared every removal
+	# check with the retired binding still standing, and the retirement read as
+	# complete over a suite that still calls the deleted program.
+	#
+	# `mentions_retired` is the same predicate the first arm decides a removed
+	# line by, so the join uses one authority on "does this line name the path
+	# that is going away" rather than a second spelling of it.
 	some binding in removed
 	assigned_name(binding) == variable
+	mentions_retired(path, binding, gone)
 }
 
 # An added line is admitted three ways, and all three are shapes rather than
@@ -2328,6 +2342,34 @@ test_a_declaration_losing_a_variable_this_delta_unbinds_is_admitted if {
 		},
 		"lines": {
 			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "\tlocal pid phase advance", "printf x | mise run old-gate 2>/dev/null"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:mise+run+old-gate"],
+		},
+	}}
+}
+
+# THE DUPLICATE-NAME CASE, and it is what the join above exists for. The suite
+# KEEPS its `GATE=` binding of the retired path and removes an unrelated `GATE=`
+# line plus a spend. Every removal check passed on the name alone, while the
+# binding that actually calls the deleted program stayed exactly where it was.
+test_a_spend_paired_with_an_unrelated_removed_binding_is_refused if {
+	count(violation) > 0 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["tests/wiring.bats"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"tests/wiring.bats": [
+				"#!/usr/bin/env bats",
+				"\tGATE=\"$BATS_TEST_DIRNAME/../mise-tasks/old-gate.sh\"",
+				"\tGATE=\"$BATS_TEST_DIRNAME/../mise-tasks/other.sh\"",
+				"\trun \"$GATE\"",
+			]},
+		},
+		"lines": {
+			# The retired binding SURVIVES; only the unrelated one and the spend go.
+			"tests/wiring.bats": [
+				"#!/usr/bin/env bats",
+				"\tGATE=\"$BATS_TEST_DIRNAME/../mise-tasks/old-gate.sh\"",
+			],
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:mise+run+old-gate"],
 		},
 	}}
