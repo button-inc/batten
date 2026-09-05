@@ -14,7 +14,7 @@
 //!
 //! **The no-measurement claim is asserted with a counter, in `hook.rs`'s own
 //! tests** rather than here. It is a property of `ceiling_rules` and not of the
-//! command surface, so it is tested directly — `.claude/rules/rust.md`'s guidance
+//! command surface, so it is tested directly — `rules/rust.md`'s guidance
 //! where the end-to-end route would need new public surface to observe an
 //! internal count. A clock cannot stand in: reading a decoded string and dividing
 //! by four is far inside the noise of a process start, so a timing assertion
@@ -166,7 +166,7 @@ reason = "..."
         &payload(&prompt_of(10)),
     );
     // Exit 1 is the usage code: a config fault, never a policy verdict, so no
-    // Batten failure can read as a deny (`.claude/rules/rust.md`).
+    // Batten failure can read as a deny (`rules/rust.md`).
     assert_eq!(
         output.status.code(),
         Some(1),

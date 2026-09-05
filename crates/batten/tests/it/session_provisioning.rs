@@ -21,7 +21,7 @@
 //!
 //! `tests/session-start.bats` ran the script directly and read what it printed.
 //! That is the bash equivalent of a Rego module's `with input as`, and
-//! `.claude/rules/policy-modules.md` names its failure exactly: it fabricates
+//! `rules/policy-modules.md` names its failure exactly: it fabricates
 //! the shape the ENGINE may be unable to consume. Its ordering case is the
 //! sharpest instance — it stubbed `mise`, ran the hook, and grepped a call log
 //! for line numbers. That observes bash, not dispatch. Here the same property is
@@ -417,7 +417,7 @@ fn a_step_that_hangs_is_killed_at_its_declared_bound() {
     // declaring 300ms and sleeping 30s must not hold the session for 30s.
     //
     // THE ASSERTION IS ON THE WALL CLOCK AND THAT IS DELIBERATE, against
-    // `.claude/rules/rust.md`'s standing preference for counters over timing:
+    // `rules/rust.md`'s standing preference for counters over timing:
     // the property here IS elapsed time, and a counter cannot express "was
     // killed early". The margin is two orders wide — 10s against a 30s sleep and
     // a 300ms bound — so it discriminates a working bound from an absent one
@@ -489,7 +489,7 @@ fn every_handler_row_is_read() {
     // this repository ever spells one differently — an inline array, a rename —
     // the scan returns nothing, every `session_rows()` case below passes over an
     // empty list, and the suite reports green over a declaration it never read.
-    // That is the silent-empty-answer class `.claude/rules/scanning.md` records
+    // That is the silent-empty-answer class `rules/scanning.md` records
     // for a matcher pointed at an extensionless tree, one file over.
     let rows = handler_rows();
     assert!(

@@ -11,7 +11,7 @@ split below, and that does not go stale with the count.
 
 Classified by COMMAND-POSITION invocation over a tree-sitter-bash parse,
 so a token inside a comment or a string is not a hit
-(`.claude/rules/scanning.md` row two; CLOUD-843's two passes disagreed
+(`rules/scanning.md` row two; CLOUD-843's two passes disagreed
 11/24/31/16 against 22/50/3/7 for exactly that reason).
 
 - gate-described tasks: 85

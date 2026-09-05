@@ -68,7 +68,7 @@ const STORE: &str = "batten-review";
 /// What joins a record's key components into one name.
 ///
 /// Stated once rather than at both the composing and the validating site, which
-/// is the two-authorities shape `.claude/rules/policy-modules.md` records for
+/// is the two-authorities shape `rules/policy-modules.md` records for
 /// patterns one layer down. Shared with [`crate::facts::KEY_SEPARATOR`]'s reason
 /// and spelled the same way.
 const KEY_SEPARATOR: char = '@';

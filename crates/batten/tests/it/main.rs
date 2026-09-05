@@ -29,7 +29,7 @@
 //!
 //! Add it HERE, as a `mod` line, never as a new top-level `crates/batten/tests/*.rs`
 //! — that would mint a second target and undo this. `policy/test-targets.rego`
-//! refuses one, and `.claude/rules/toolchain.md`'s retirement shape now lands its
+//! refuses one, and `rules/toolchain.md`'s retirement shape now lands its
 //! tier in this group.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly, and
@@ -46,8 +46,10 @@ mod acquisition_sweep;
 mod admission;
 mod advisory_drain;
 mod agent_facts;
+mod agentic_record;
 mod ambient_authority;
 mod attribution;
+mod attribution_provenance;
 mod authority_replay;
 mod baseline;
 mod bats_invocation;

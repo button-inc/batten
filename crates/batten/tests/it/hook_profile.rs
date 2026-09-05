@@ -5,7 +5,7 @@
 //! the key it reads.** `hook-profile.rego`'s own `test_` rules fabricate
 //! `input.tree["tool-verdict"]["hk-plan"]` with `with input as`, which passes
 //! whether or not anything can ever produce that shape — the exact class
-//! `.claude/rules/policy-modules.md` opens with, and the class that let
+//! `rules/policy-modules.md` opens with, and the class that let
 //! `validator-verdict-clean` ship deciding nothing. This file runs the real
 //! producer and the real engine.
 //!

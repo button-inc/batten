@@ -350,7 +350,7 @@ imara-diff = { version = "0.2", default-features = false }
 # CLOUD-745 already vendored and bounded, and the two protocol exchanges the
 # lease needs are a POST each.
 #
-# TAKEN RATHER THAN HAND-ROLLED for the reason `.claude/rules/policy-modules.md`
+# TAKEN RATHER THAN HAND-ROLLED for the reason `rules/policy-modules.md`
 # gives one domain over: a second parser is a second AUTHORITY, and the two can
 # disagree about a quoting or truncation case neither author had in mind. The
 # framing this repository reads is the framing gix reads.
@@ -509,7 +509,7 @@ regorus = { version = "0.11", default-features = false, features = [
 # lockfile and brick the store repo-wide.
 #
 # The blocking choice is the concurrency posture's, stated once in
-# `.claude/rules/rust.md` (CLOUD-747); this note cites it rather than re-deriving
+# `rules/rust.md` (CLOUD-747); this note cites it rather than re-deriving
 # it, which is what five independent derivations of one stance cost.
 fs4 = "1.1"
 # The two halves of owning a dispatched process tree (CLOUD-427), and they are
@@ -526,7 +526,7 @@ rustix = { version = "1.1", features = ["process"] }
 # behind its private `runtime` feature — so a safe registry is not a convenience
 # here, it is the only route. `iterator` is the blocking `Signals` stream a
 # dedicated forwarding thread reads — blocking and a thread per the concurrency
-# posture in `.claude/rules/rust.md`, not a separate decision (CLOUD-747), and
+# posture in `rules/rust.md`, not a separate decision (CLOUD-747), and
 # `tokio::signal` is banned in `clippy.toml` so a second signal source cannot
 # arrive alongside it; the default `channel` feature underneath it
 # is what makes the delivery async-signal-safe, which a hand-written handler
@@ -544,7 +544,7 @@ signal-hook = { version = "0.4", default-features = false, features = ["iterator
 # because nothing measured asks otherwise** — `batten check` over this repository's
 # 654 tracked files is p50 8.67ms against a 5.08ms process-start floor, on a 100ms
 # budget (CLOUD-747, measured 2026-08-21; the profile is in
-# `.claude/rules/rust.md`, which is the one authority for this posture). Turning
+# `rules/rust.md`, which is the one authority for this posture). Turning
 # the walker on means owning a deterministic merge to buy §6 byte-stability back,
 # and there is nothing here for it to buy that back with.
 #
@@ -615,7 +615,7 @@ serde_json = "1"
 # scanning to nothing, and a shell grammar silently part-parsing `.bats` — are
 # properties of a shell corpus and do not reach `crates/**/*.rs`. A pure-Rust
 # parser with no build-script grammar is the ground that rejection left
-# standing, and `.claude/rules/scanning.md` names a CLASS for row two rather
+# standing, and `rules/scanning.md` names a CLASS for row two rather
 # than a product precisely so this substitution is following the rule.
 syn = { version = "3", default-features = false, features = [
   "full",

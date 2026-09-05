@@ -10,7 +10,7 @@
 //! identity beyond its name, no version, and — the load-bearing omission — no
 //! SCOPE.
 //!
-//! Scope is where the silence costs most. `.claude/rules/policy-modules.md`
+//! Scope is where the silence costs most. `rules/policy-modules.md`
 //! opens on the class: a module reading a key from the wrong surface evaluates,
 //! reads undefined, refuses nothing, and *"a dead gate and a clean tree are
 //! byte-identical on the decision surface"*. A consumer enabling a preset could
@@ -669,7 +669,7 @@ mod tests {
     /// The classes a module raises, read from its source.
     ///
     /// A refusal is `{rule, verdict, subjects}` and its class is a STRING
-    /// LITERAL under `verdict` (`.claude/rules/policy-modules.md`), so what is
+    /// LITERAL under `verdict` (`rules/policy-modules.md`), so what is
     /// matched is that SHAPE: a `"rule":` key, then the `"verdict":` that
     /// follows it in the same object.
     ///

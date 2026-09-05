@@ -540,7 +540,7 @@ pub fn report(
 // own subject.** The retiring `mise-tasks/singleton.sh` read the task registry
 // by hand — `sed -n 's/^phase: //p' "$git_dir/batten-tasks/$1" | head -n 1` — to
 // name what the holder was doing. That is a second authority over a layout this
-// module owns, in the same shape `.claude/rules/policy-modules.md` records for
+// module owns, in the same shape `rules/policy-modules.md` records for
 // parsers, and it is the whole reason the two could not stay apart: the registry
 // gained an owner one commit ago and this was its remaining hand-rolled reader.
 // It also shares `pid_exists`, so a liveness rule spelled twice becomes one.

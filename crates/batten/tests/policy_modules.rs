@@ -248,7 +248,7 @@ violation contains {"rule": "shared-id", "verdict": "from module b"} if {
 ///
 /// Without this, `no_evaluator_feature_admits_io` cannot tell "the builtin is
 /// absent" from "this test cannot make a module deny at all" — it would assert
-/// its own premise before its conclusion, which is what `.claude/rules/rust.md`
+/// its own premise before its conclusion, which is what `rules/rust.md`
 /// and CLOUD-249 refuse. `count` ships with the evaluator under any feature set,
 /// so this module MUST deny for the assertions below to mean anything.
 const REACHES_AN_INCLUDED_BUILTIN: &str = r#"

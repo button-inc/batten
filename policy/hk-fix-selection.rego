@@ -7,7 +7,7 @@
 # `sbom-check` and `token-bench-check`. Seven of the 58 declared a fixer.
 #
 # What that cost is not the runtime alone. Two authorities — the `fmt` task's own
-# description and `.claude/rules/toolchain.md` — call it the formatters-only
+# description and `rules/toolchain.md` — call it the formatters-only
 # subset, and `mem:memory_maintenance` builds advice on top of that reading
 # ("edit memories BEFORE `mise run fmt`", offering a formatter as "the cheap fix
 # — seconds, against a ~3.5-minute `verify`"). It was `verify`-class work under a
@@ -110,12 +110,12 @@ violation contains {
 	"rule": "hk-fix-selection",
 	"verdict": "task state wrong",
 	"subjects": [
-		{"path": ".claude/rules/toolchain.md"},
+		{"path": "rules/toolchain.md"},
 		{"artifact": "`fmt` remains the formatters-only subset"},
 	],
 } if {
 	governed
-	rules_lines := input.tree.lines[".claude/rules/toolchain.md"]
+	rules_lines := input.tree.lines["rules/toolchain.md"]
 	every line in rules_lines {
 		not contains(line, "`fmt` remains the formatters-only subset")
 	}
@@ -193,7 +193,7 @@ sound_input(config_lines) := {"tree": {
 	}}},
 	"lines": {
 		"hk.pkl": config_lines,
-		".claude/rules/toolchain.md": ["`fmt` remains the formatters-only subset."],
+		"rules/toolchain.md": ["`fmt` remains the formatters-only subset."],
 	},
 	"missing": {},
 }}
@@ -227,7 +227,7 @@ test_a_rules_file_that_dropped_the_clause_is_refused if {
 		"documents": sound.tree.documents,
 		"lines": {
 			"hk.pkl": sound_config,
-			".claude/rules/toolchain.md": ["`fmt` runs the whole gate."],
+			"rules/toolchain.md": ["`fmt` runs the whole gate."],
 		},
 		"missing": {},
 	}}

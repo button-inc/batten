@@ -23,7 +23,7 @@
 //! a new `tests/*.bats`, and it is right to: the campaign's corpus has to shrink
 //! rather than stay level while the census reports movement. Writing the
 //! door tier here costs nothing it would have had in bash — the fixture is the
-//! same fixture and the binary is the same binary — and `.claude/rules/rust.md`
+//! same fixture and the binary is the same binary — and `rules/rust.md`
 //! already prefers an end-to-end test over the compiled binary for anything a
 //! consumer depends on.
 

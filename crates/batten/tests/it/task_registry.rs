@@ -854,7 +854,7 @@ fn outside_a_repository_a_write_is_could_not_look_rather_than_a_silent_success()
 // `mise-tasks/alive.sh` is the reader and `mise-tasks/task-registry.sh` the
 // writer, over one record format. Landing one alone would have left the format
 // owned by a program the engine could not write, which is the second-authority
-// class `.claude/rules/policy-modules.md` records for parsers.
+// class `rules/policy-modules.md` records for parsers.
 //
 // **THE PROGRAM ROOT MOVED FROM A LITERAL TO A FLAG, and that is the only
 // deliberate behavioural change in the port.** The shell matched

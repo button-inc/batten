@@ -674,7 +674,7 @@
       ]
     },
     "CaptureConfig": {
-      "description": "The bound on response captures (CLOUD-918).\n\nEnforced **at write time**, and the trigger is the write — never a clock,\nnever a schedule, never a background sweeper. That is\n`.claude/rules/toolchain.md`'s split between a gate and a schedule, and\n[`prune`]'s own doc already refuses a time-based sweeper on the same grounds.",
+      "description": "The bound on response captures (CLOUD-918).\n\nEnforced **at write time**, and the trigger is the write — never a clock,\nnever a schedule, never a background sweeper. That is\n`rules/toolchain.md`'s split between a gate and a schedule, and\n[`prune`]'s own doc already refuses a time-based sweeper on the same grounds.",
       "type": "object",
       "properties": {
         "max_bytes": {
@@ -1157,7 +1157,7 @@
           }
         },
         "requires-input-matching": {
-          "description": "Input paths whose value must MATCH a declared pattern, by pattern id.\n\n**The selector a tool name cannot express.** [`Declared::tool`] narrows to\na tool, which is enough while the tool's identity is the whole question —\na board write is any `save_issue` at all. It is not enough for a general\nrunner: every shell call arrives as one tool, so a row wanting *the\ncommand that fetched the pull request body* has a tool name that matches\nevery command in the session and a result shape identical for all of them.\n\nThe value is a `[[pattern]]` id rather than an inline regex, for the\nreason `.claude/rules/policy-modules.md` gives for a module: one concept,\none spelling, refused at load rather than duplicated at leisure. An\nundeclared id fails the load and says which recorder named it.\n\nReads the INPUT, never the result, and that is the safe direction here\neven though [`Value::Input`] is the forgeable half elsewhere: this decides\nonly WHETHER to record, and the columns still take their values from what\nthe far end returned. A caller who spoofs the command string buys a record\nof a call whose own result is what gets written down.\n\nA path that does not resolve to a scalar refuses the row, on the\ncould-not-look rule the rest of this module keeps: a selector that cannot\nread its subject has not matched it.",
+          "description": "Input paths whose value must MATCH a declared pattern, by pattern id.\n\n**The selector a tool name cannot express.** [`Declared::tool`] narrows to\na tool, which is enough while the tool's identity is the whole question —\na board write is any `save_issue` at all. It is not enough for a general\nrunner: every shell call arrives as one tool, so a row wanting *the\ncommand that fetched the pull request body* has a tool name that matches\nevery command in the session and a result shape identical for all of them.\n\nThe value is a `[[pattern]]` id rather than an inline regex, for the\nreason `rules/policy-modules.md` gives for a module: one concept,\none spelling, refused at load rather than duplicated at leisure. An\nundeclared id fails the load and says which recorder named it.\n\nReads the INPUT, never the result, and that is the safe direction here\neven though [`Value::Input`] is the forgeable half elsewhere: this decides\nonly WHETHER to record, and the columns still take their values from what\nthe far end returned. A caller who spoofs the command string buys a record\nof a call whose own result is what gets written down.\n\nA path that does not resolve to a scalar refuses the row, on the\ncould-not-look rule the rest of this module keeps: a selector that cannot\nread its subject has not matched it.",
           "type": "object",
           "additionalProperties": {
             "type": "string"
@@ -4077,7 +4077,7 @@
           ]
         },
         {
-          "description": "The lines of another expression's value from a label matching `select`\nuntil the next label matching `label`.\n\n**Both patterns are `[[pattern]]` ids, never inline regexes**, which is the\nsame load-time refusal `.claude/rules/policy-modules.md` records for a\npolicy module and for the same measured reason: one concept, one spelling.\nThe censused use narrows a body to one clause of a structured block, and\nthat block's grammar already has exactly one definition elsewhere.",
+          "description": "The lines of another expression's value from a label matching `select`\nuntil the next label matching `label`.\n\n**Both patterns are `[[pattern]]` ids, never inline regexes**, which is the\nsame load-time refusal `rules/policy-modules.md` records for a\npolicy module and for the same measured reason: one concept, one spelling.\nThe censused use narrows a body to one clause of a structured block, and\nthat block's grammar already has exactly one definition elsewhere.",
           "type": "object",
           "properties": {
             "section": {

@@ -1,0 +1,150 @@
+# The declared agentic trials: what each one asks, and how it is paired.
+#
+# THE AUTHORITY FOR ARMS (CLOUD-1116 §1). `method.toml` beside this file owns the
+# outcomes and the adjudication; every row here owns its own question, fixture,
+# arms and disposition. `agentic-experiment-record` decides completeness over
+# both and reports a pointer, never a judgement about the treatment.
+#
+# GROUNDED IN THIS REPOSITORY, NOT SCHEMATIC. Every `evidence` names a real
+# `[[verdict]]` token from `batten.toml`, every `fixture` is a real commit on
+# `origin/main`, and every companion skill is one this repository ships. A trial
+# written against an invented refusal measures a prompt, not a gate.
+#
+# Measured 2026-09-05 rather than cited: the registry is **158 `[[verdict]]` rows
+# and 195 `[[verdict.route]]` entries**. CLOUD-1116's own body says to re-measure
+# rather than quote, and it was right to — the figure it carries as a correction
+# (52/66) is itself stale, as was the 37/49 that one corrected.
+#
+# EVERY ROW IS `pending`. These are declared trials, not results. A result is a
+# comment on the row it belongs to; a disposition asserting a finding without a
+# `[trial.result]` is what the gate refuses.
+
+# --- gate feedback: does returning the failed predicate help the next attempt? --
+
+[[trial]]
+id = "gate-feedback-bare-token"
+question = "Does a refusal naming only its verdict token change the next attempt?"
+intended_outcome = "the floor: what the agent does with a class name and nothing else"
+intervention = "gate-feedback"
+model = "claude-opus-5"
+fixture = "03720c38"
+runs = 10
+governed_action = "git commit touching a protected path"
+evidence = "the verdict token alone, `path write refused`, with no class prose and no route"
+canary = "a commit touching no protected path must not be refused; an arm that refuses it measured nothing"
+
+[trial.arms]
+baseline = "the refusal as a bare exit code, no token"
+treatment = "the refusal carrying its verdict token"
+
+[trial.falsifier]
+statement = "the token alone changes neither denials-before-success nor token cost against the bare-exit baseline"
+downside = "a token with no prose reads as a code to look up, and the agent spends turns searching for it"
+disposition = "pending"
+
+[[trial]]
+id = "gate-feedback-class-prose"
+question = "Does the `class` prose beside the token reduce denials before success?"
+intended_outcome = "the intervention this repository already ships and has never measured"
+intervention = "gate-feedback"
+model = "claude-opus-5"
+fixture = "476078fa"
+runs = 10
+governed_action = "git commit touching a protected path"
+evidence = "`path write refused` plus its registry `class`, which states what the class asserts and why"
+canary = "a commit touching no protected path must not be refused; an arm that refuses it measured nothing"
+
+[trial.arms]
+baseline = "the verdict token alone"
+treatment = "the token plus its `class` prose"
+
+[trial.falsifier]
+statement = "denials before success do not fall against the token-only arm"
+downside = "prose lengthens every refusal, so a null result is a standing token cost on every denied call in the repository"
+disposition = "pending"
+
+[[trial]]
+id = "gate-feedback-routes"
+question = "Do the declared `[[verdict.route]]` entries, with their preconditions, get an agent to the remedy without a menu?"
+intended_outcome = "the full shipped intervention, measured against its own middle"
+intervention = "gate-feedback"
+model = "claude-opus-5"
+fixture = "4f2268d4"
+runs = 10
+governed_action = "git push that rewrites a remote branch"
+evidence = "`branch write unsafe` plus its routes, one of which names the exact leased form that carries the assertion"
+canary = "a fast-forward push must not be refused; an arm that refuses it measured nothing"
+
+[trial.arms]
+baseline = "the token plus its `class` prose"
+treatment = "the token, the prose, and every declared route with its precondition"
+
+[trial.falsifier]
+statement = "the agent reaches the sanctioned route no sooner than with prose alone"
+downside = "routes read as a menu, and the agent picks the cheapest rather than the correct one — CLOUD-680's laundering shape, arriving through the remedy channel"
+disposition = "pending"
+
+# --- companion skills: does a checklist beat a refusal? --------------------------
+
+[[trial]]
+id = "skill-batten-checklist"
+question = "Does the shipped `batten` skill reduce denials an agent collects before its first successful governed action?"
+intended_outcome = "a skill read BEFORE the act, against a refusal read after it"
+intervention = "companion-skill"
+model = "claude-opus-5"
+fixture = "2d1000ee"
+runs = 10
+governed_action = "the first mediated write of a session"
+evidence = "the `batten` skill's own text, loaded at session start"
+canary = "a session with the skill and no batten.toml must behave exactly as one without it"
+
+[trial.arms]
+baseline = "no companion skill loaded"
+treatment = "the `batten` skill loaded at session start"
+
+[trial.falsifier]
+statement = "denials before the first successful governed action do not fall"
+downside = "the skill is loaded every session whether or not a gate ever fires, so a null result is a fixed per-session token cost"
+disposition = "pending"
+
+[[trial]]
+id = "skill-instrument-choice"
+question = "Does the `serena` skill change which instrument an agent reaches for on a whole-tree question?"
+intended_outcome = "whether a skill can move a choice that no gate may decide"
+intervention = "companion-skill"
+model = "claude-opus-5"
+fixture = "5a50e031"
+runs = 10
+governed_action = "a whole-tree search preceding an edit"
+evidence = "`tool run loose`, the refusal `no-tool-substitution` raises, plus the skill's own routing table"
+canary = "a search over an untracked path must not be refused; an arm that refuses it measured nothing"
+
+[trial.arms]
+baseline = "the refusal alone, with no skill loaded"
+treatment = "the refusal plus the `serena` skill"
+
+[trial.falsifier]
+statement = "instrument choice is unchanged, or changes only while the refusal is fresh in context"
+downside = "instrument suitability is a judgement no gate may decide, so a skill that appears to move it may be moving compliance theatre instead — the outcome has to be read off the tool actually used, never off the agent's stated reason"
+disposition = "pending"
+
+[[trial]]
+id = "skill-plan-handoff"
+question = "Does a compact what-changed/what-remains handoff reduce corrective changes after the first proposed solution?"
+intended_outcome = "the cheapest intervention in the set: no gate, no tool, one prompt shape"
+intervention = "companion-skill"
+model = "claude-opus-5"
+fixture = "5c1eac72"
+runs = 10
+governed_action = "the second and later commits of a multi-commit branch"
+evidence = "the branch's own recorded plan, read back through `batten record plan`"
+canary = "a single-commit branch must produce no handoff; an arm that produces one measured nothing"
+
+[trial.arms]
+baseline = "no handoff between commits"
+treatment = "a recorded plan read back at the start of each subsequent commit"
+
+[trial.falsifier]
+statement = "corrective changes after the first proposed solution do not fall"
+downside = "a handoff is another artifact to keep current, and a stale one is worse than none — the failure `plan-unfinished` already refuses"
+disposition = "pending"

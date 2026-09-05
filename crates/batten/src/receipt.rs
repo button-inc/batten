@@ -319,7 +319,7 @@ pub struct IdentityRef {
 ///
 /// It said "four" for its whole life while six variants stood below it
 /// (CLOUD-1091, fixed in passing). A count in prose beside the thing it counts
-/// is the drift `.claude/rules/toolchain.md` records for its own tables, and the
+/// is the drift `rules/toolchain.md` records for its own tables, and the
 /// two staleness variants are exactly the pair a reader would assume away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Validity {

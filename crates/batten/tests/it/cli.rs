@@ -6239,11 +6239,19 @@ fn the_committed_delegating_rule_spawns_nothing_when_its_glob_misses() {
 /// banned-shape run and its clean-fixture discriminator, and a narrowing that
 /// drifted between them would leave the discriminator proving nothing about the
 /// set the other arm ran.
-const AGNOSTICISM_RULES: [&str; 4] = [
+const AGNOSTICISM_RULES: [&str; 5] = [
     "no-consumer-account-literal",
     "no-consumer-entity-path",
     "no-consumer-repo-name",
     "no-tracker-key-in-core",
+    // CLOUD-761's row, and the only one of the five whose glob is not
+    // `crates/**`: the module tree carries the same class and had no gate at
+    // all. It joins this census rather than getting a fixture of its own,
+    // because the discriminator the census owns — full stdout equality over the
+    // committed table — is exactly what a row scoped to a different directory
+    // needs. A separate fixture would assert the row fires and say nothing about
+    // whether it fires where it was aimed.
+    "no-tracker-key-in-modules",
 ];
 
 /// See [`AGNOSTICISM_RULES`].
@@ -6286,9 +6294,15 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     // crate is full of the latter. Assembled like its siblings, and here the dodge
     // is load-bearing twice over — the row would otherwise fire on this line.
     let tracker_key = format!("CL{}-[0-9]+", "OUD");
+    // CLOUD-761's second spelling, and the reason the row's regex is an
+    // alternation. The character class above is the only form the twenty measured
+    // derivations happened to use; this is the form a regex author reaches for
+    // next, and until CLOUD-761 it was unrefused. Assembled like its siblings,
+    // and here the dodge is load-bearing three times over.
+    let tracker_key_escape = format!("CL{}-{}d+", "OUD", '\\');
     let payload = format!(
         "let id = \"{account}\";\nuse crate::{entity_path}mod;\n// ported from {repo_name}\n\
-         const KEY: &str = r\"{tracker_key}\";\n"
+         const KEY: &str = r\"{tracker_key}\";\nconst ALT: &str = r\"{tracker_key_escape}\";\n"
     );
 
     let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
@@ -6313,6 +6327,17 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     fs::create_dir_all(&src).expect("create fixture source tree");
     fs::write(src.join("lib.rs"), &payload).expect("write fixture source");
     fs::write(dirty.join("crates/demo/notes.txt"), &payload).expect("write fixture notes");
+    // The module tree, which `no-tracker-key-in-modules` is the row for. A
+    // module composing its own key expression instead of reading
+    // `data.batten.patterns` by id is the second authority the registry exists
+    // to make unwritable; the file is a fixture rather than a loadable module,
+    // because the row decides TEXT and loading it would be a different gate.
+    fs::create_dir_all(dirty.join("policy")).expect("create fixture module dir");
+    fs::write(
+        dirty.join("policy/demo.rego"),
+        format!("key := `{tracker_key}`\n"),
+    )
+    .expect("write fixture module");
 
     // `enforce` since CLOUD-229: the committed table now carries a `command`
     // rule, so the read-effect verb refuses the whole ruleset. The expected
@@ -6340,10 +6365,13 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
          crates/demo/notes.txt:2 no-consumer-entity-path\n\
          crates/demo/notes.txt:3 no-consumer-repo-name\n\
          crates/demo/notes.txt:4 no-tracker-key-in-core\n\
+         crates/demo/notes.txt:5 no-tracker-key-in-core\n\
          crates/demo/src/lib.rs:1 no-consumer-account-literal\n\
          crates/demo/src/lib.rs:2 no-consumer-entity-path\n\
          crates/demo/src/lib.rs:3 no-consumer-repo-name\n\
-         crates/demo/src/lib.rs:4 no-tracker-key-in-core\n",
+         crates/demo/src/lib.rs:4 no-tracker-key-in-core\n\
+         crates/demo/src/lib.rs:5 no-tracker-key-in-core\n\
+         policy/demo.rego:1 no-tracker-key-in-modules\n",
         "one sorted pointer per banned shape per file, and nothing else"
     );
 
@@ -10124,7 +10152,7 @@ fn generate_hooks_refuses_the_contract_only_harness() {
 // `--message` rather than `--range` on purpose: the finding then comes from the
 // message file this fixture writes, so it is deterministic. A range case would
 // judge the identity the sandbox's git happens to resolve, which is asserting a
-// premise the fixture never created (`.claude/rules/rust.md`, CLOUD-249).
+// premise the fixture never created (`rules/rust.md`, CLOUD-249).
 
 /// The six harness tokens, as the binary accepts them.
 ///
@@ -11118,7 +11146,7 @@ fn a_buffer_from_another_command_never_becomes_the_fact() {
 /// opaque row — satisfying the check and making a `rows == 0` predicate silently
 /// unsatisfiable. Every case in `tests/facts.rs` passed, because every one of them
 /// calls `rows_declared` directly and the function was never the thing at risk:
-/// the WIRING was, exactly as `.claude/rules/policy-modules.md` records for a
+/// the WIRING was, exactly as `rules/policy-modules.md` records for a
 /// module reading a key the engine never builds.
 ///
 /// So it goes through the binary, and it discriminates: under `rows_in` the prose
@@ -11604,7 +11632,7 @@ fn a_response_shape_the_decoder_cannot_read_is_recorded_as_such() {
 ///
 /// Driven through the state-root seam rather than through permission bits: this
 /// sandbox runs as root, so a mode-based fixture asserts its own premise before
-/// its conclusion (`.claude/rules/rust.md`, CLOUD-249). A state root that is a
+/// its conclusion (`rules/rust.md`, CLOUD-249). A state root that is a
 /// REGULAR FILE fails `create_dir_all` with `ENOTDIR` for root too.
 #[cfg(unix)]
 #[test]
@@ -11795,7 +11823,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
 
     // The discriminator. Stating the precedence rather than the command is what
     // the rule leaves room for — otherwise the row would forbid the very prose
-    // AGENTS.md rule 8 and `.claude/rules/commits.md` are made of.
+    // AGENTS.md rule 8 and `rules/commits.md` are made of.
     let _ = fs::remove_dir_all(
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("denied-identity-clean"),
     );

@@ -114,7 +114,7 @@ fn tree_files_stops_at_a_nested_repository_boundary() {
     // The premise, asserted before the conclusion: the vendored files must
     // actually be ON DISK, or "the walk yielded none of them" passes for a
     // fixture whose submodule was never checked out. A case that cannot fail is
-    // not evidence (`.claude/rules/rust.md`).
+    // not evidence (`rules/rust.md`).
     for vendored in ["one.bats", "two.bats", "nested/three.bats"] {
         assert!(
             dir.join(SUBMODULE).join(vendored).is_file(),

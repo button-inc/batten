@@ -11,7 +11,7 @@
 //! that a malformed row is refused at LOAD rather than at the first run.
 //!
 //! Each of those is a place the feature can be completely dead while every unit
-//! case passes — the class `.claude/rules/policy-modules.md` records for a Rego
+//! case passes — the class `rules/policy-modules.md` records for a Rego
 //! predicate reading a key the engine never builds.
 //!
 //! # Why the fixtures use `true`, `false` and `test -f`

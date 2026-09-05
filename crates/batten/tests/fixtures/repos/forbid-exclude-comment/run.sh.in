@@ -1,3 +1,5 @@
+# batten-case: no-timeout clean
 # timeout is not portable, so this line explains rather than invokes
+	# batten-case: no-timeout clean
 	# an indented comment mentioning timeout counts as a comment too
 echo done

@@ -5,7 +5,7 @@
 #
 #   `claim-race-check`, `done-check`, `graph-check` and six siblings are PURE
 #   PREDICATES that exist as CLI verbs only because they have nowhere to read
-#   from — `.claude/rules/toolchain.md` names them as "a pure function of stdin".
+#   from — `rules/toolchain.md` names them as "a pure function of stdin".
 #   None could migrate: a tree-scoped module asking about an issue's state read
 #   undefined, and Rego takes undefined as *does not hold*. `input.tree.captured`
 #   is the channel that was missing, and it is the difference between the

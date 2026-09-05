@@ -11,7 +11,7 @@
 //! silent gate, and neither safety net fired: the predicate WAS exercised and
 //! the module WAS tested.
 //!
-//! So the acceptance is stated over the ENGINE. `.claude/rules/policy-modules.md`
+//! So the acceptance is stated over the ENGINE. `rules/policy-modules.md`
 //! is explicit that a `with input as` case cannot answer this — *"it fabricates
 //! the very shape the engine may be unable to produce"* — and here the shape was
 //! one the engine produces constantly and the tests never did.

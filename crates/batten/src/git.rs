@@ -4169,7 +4169,7 @@ mod tests {
     /// The failing condition — `canonicalize` returning a verbatim path — is one
     /// this sandbox structurally cannot produce, so asserting over a real
     /// `repo_root` here would assert its own premise and pass for the wrong
-    /// reason (`.claude/rules/rust.md`, CLOUD-249). The decision is `plain`, and
+    /// reason (`rules/rust.md`, CLOUD-249). The decision is `plain`, and
     /// it takes a literal, so it is testable on every platform.
     ///
     /// Fails by: making `plain` the identity, which is what the tree carried when

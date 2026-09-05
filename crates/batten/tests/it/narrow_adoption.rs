@@ -26,7 +26,7 @@
 //!
 //! What was left with no sensor is the drain clause, and this file is that
 //! sensor. It is a **text** assertion over `exec.rs`, which is the weakest of
-//! the three instrument classes `.claude/rules/scanning.md` ranks — chosen
+//! the three instrument classes `rules/scanning.md` ranks — chosen
 //! anyway, and the reason is worth writing down: the event it exists to catch is
 //! somebody rewriting two OS threads as tasks, and that rewrite necessarily
 //! introduces the tokens below. It cannot catch a subtler change, and no §7
@@ -59,7 +59,7 @@ fn the_pipe_drains_are_still_os_threads_rather_than_tasks() {
     );
     assert!(
         source.contains("std::thread::scope"),
-        "the `--jobs` wave is a scoped-thread wave, per .claude/rules/rust.md's table"
+        "the `--jobs` wave is a scoped-thread wave, per rules/rust.md's table"
     );
 }
 

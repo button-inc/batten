@@ -221,7 +221,7 @@ merged_strays contains command if {
 	stray(command)
 }
 
-# The could-not-look clause `.claude/rules/policy-modules.md` requires, and it is
+# The could-not-look clause `rules/policy-modules.md` requires, and it is
 # writable now that `input.tree.missing` carries a CAUSE (CLOUD-1309). Until this
 # change the channel was an array of names, so a module could see THAT a declared
 # surface was not acquired and never WHY -- and the two states have opposite

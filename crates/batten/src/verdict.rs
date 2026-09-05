@@ -31,7 +31,7 @@
 //! # Deny-only survives, by construction
 //!
 //! A verdict declares refusal classes and nothing else. There is no allow
-//! spelling here for the same reason `.claude/rules/policy-modules.md` gives for
+//! spelling here for the same reason `rules/policy-modules.md` gives for
 //! the module shape: enabling a vocabulary can only ever add ways to refuse, so
 //! house style §8's raise-only invariant is untouched.
 //!
@@ -1417,7 +1417,7 @@ directory and asks whether the repository contains the result. It does not ask g
 a `git ls-files` per mediated call is a spawn `RuleKind::scopes` forbids on this kind and \
 `perf-assert` prices out. This text said 'tracks' for its whole life and nothing ever \
 checked it -- a class a reader believes is worse than one they cannot look up.",
-        routes: &[read("rule read first", ".claude/rules/scanning.md")],
+        routes: &[read("rule read first", "rules/scanning.md")],
     },
     VendoredVerdict {
         id: "verdict read dropped",
@@ -1426,7 +1426,7 @@ checked it -- a class a reader believes is worse than one they cannot look up.",
 passed or failed. A verdict is read from the harness, never inferred from output. Redirect \
 to a file and read the file in a separate call; a pager over a FILE is fine, a pager over a \
 live task is not.",
-        routes: &[read("rule read first", ".claude/rules/toolchain.md")],
+        routes: &[read("rule read first", "rules/toolchain.md")],
     },
     VendoredVerdict {
         id: "verdict carry other",
@@ -1435,7 +1435,7 @@ live task is not.",
 command's verdict. This is the laundered shape: it reads as correct, and backgrounded it is \
 worse than a misread, because the completion notification then carries the compound's \
 status. `&&` is fine -- it short-circuits, so a failure still propagates.",
-        routes: &[read("rule read first", ".claude/rules/toolchain.md")],
+        routes: &[read("rule read first", "rules/toolchain.md")],
     },
     VendoredVerdict {
         id: "turn watch dropped",
@@ -1444,7 +1444,7 @@ status. `&&` is fine -- it short-circuits, so a failure still propagates.",
 complete, and the session loses the wake-up it would get when the work actually exits. \
 Backgrounding the tool call is the supported shape and keeps the notification; detaching \
 inside the call throws it away.",
-        routes: &[read("rule read first", ".claude/rules/toolchain.md")],
+        routes: &[read("rule read first", "rules/toolchain.md")],
     },
     VendoredVerdict {
         id: "call count over",

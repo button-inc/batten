@@ -63,5 +63,5 @@ output = 10.00
 # coverage nobody made on purpose.
 [[not_measured]]
 subject = "cross-session prefix-cache hit rate"
-reason = "requires a live provider credential; hit rate and time-to-first-token are properties of the world, not of this commit, so they cannot be a gate (see .claude/rules/toolchain.md on gate-vs-schedule)"
+reason = "requires a live provider credential; hit rate and time-to-first-token are properties of the world, not of this commit, so they cannot be a gate (see rules/toolchain.md on gate-vs-schedule)"
 what_is_measured_instead = "byte-stability of each arm across runs — the precondition a warm prefix cache depends on, and the half that IS a property of this commit"

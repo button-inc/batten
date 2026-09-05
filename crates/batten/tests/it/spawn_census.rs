@@ -169,7 +169,7 @@ fn the_signal_ban_is_declared_and_coupled_to_the_bound_that_holds_today() {
     assert!(
         clippy.contains("tokio::signal::unix::Signal"),
         "clippy.toml must carry the `tokio::signal` ban — the posture in \
-         .claude/rules/rust.md states it, and prose is feedforward only"
+         rules/rust.md states it, and prose is feedforward only"
     );
     // The runtime-SHAPE bound travels with it, for the same reason and on the
     // same terms: the posture retired "builds no runtime" for "at most one, and

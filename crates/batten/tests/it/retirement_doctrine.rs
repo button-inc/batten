@@ -6,7 +6,7 @@
 //! one route with no override and no `bypass_env`. That rule was written down in
 //! two places and a reader reached neither before they had already edited the
 //! file: the module's own header, and the refusal itself. Two documents
-//! `AGENTS.md` routes to implied the opposite — `.claude/rules/toolchain.md`
+//! `AGENTS.md` routes to implied the opposite — `rules/toolchain.md`
 //! introduced `mise-tasks/` as real programs run in the gate, and
 //! `mem:toolchain-and-hooks` framed the port as future work the layer was being
 //! maintained through meanwhile.
@@ -14,7 +14,7 @@
 //! Measured cost: in one planning session that gap produced two wrong conclusions
 //! in a row, each needing a verification pass to undo — first that six issues were
 //! blocked and the ratchet needed changing, then that the ratchet and
-//! `.claude/rules/policy-modules.md` were in direct conflict over whether a
+//! `rules/policy-modules.md` were in direct conflict over whether a
 //! `tests/<gate>.bats` may exist. Both were the same move: looking for a third
 //! shape so the bash could keep being edited.
 //!
@@ -26,7 +26,7 @@
 //! whose §1 is in the wrong shape — and is still routed to from `AGENTS.md`'s
 //! index **with** the warning in the cell. That catches deletion and drift in the
 //! prose, which is the same shape `scanner_taxonomy.rs` uses over
-//! `.claude/rules/scanning.md` and `spawn_census.rs` over `clippy.toml`.
+//! `rules/scanning.md` and `spawn_census.rs` over `clippy.toml`.
 //!
 //! It does **not** catch an agent who does not read the file, and it holds nothing
 //! about whether a given change should have been reshaped as a retirement. That
@@ -50,7 +50,7 @@ use std::fs;
 use common::at_root;
 
 /// The rules file the doctrine binds in.
-const RULES: &str = ".claude/rules/toolchain.md";
+const RULES: &str = "rules/toolchain.md";
 
 /// The always-loaded file whose index has to route a reader to [`RULES`].
 ///
@@ -61,7 +61,7 @@ const INDEX: &str = "AGENTS.md";
 const MODULE: &str = "policy/shell-retirement.rego";
 
 /// The rules file the `$MUTANT_GATES` clause lives in.
-const MODULE_RULES: &str = ".claude/rules/policy-modules.md";
+const MODULE_RULES: &str = "rules/policy-modules.md";
 
 /// The two classifying rules whose asymmetry is the trap.
 ///
@@ -71,7 +71,7 @@ const MODULE_RULES: &str = ".claude/rules/policy-modules.md";
 const CLASSIFIERS: &[&str] = &["governed_at_head", "governed_when_deleted"];
 
 fn rules_text() -> String {
-    fs::read_to_string(at_root(RULES)).expect("`.claude/rules/toolchain.md` is committed")
+    fs::read_to_string(at_root(RULES)).expect("`rules/toolchain.md` is committed")
 }
 
 #[test]
@@ -231,7 +231,7 @@ fn the_rules_name_the_successor_kind_field_and_the_module_admits_it() {
     assert!(
         module.contains(squashed("data.batten.patterns[\"retirement-kind-field\"]").as_str()),
         "{MODULE} must read the kind field through its `[[pattern]]` row rather \
-         than an inline regex — `.claude/rules/policy-modules.md` refuses the \
+         than an inline regex — `rules/policy-modules.md` refuses the \
          latter at load, and the registry is what keeps one concept one spelling"
     );
 }
@@ -265,8 +265,8 @@ fn the_rules_name_the_wrong_conclusion_the_gap_produced() {
 /// was just retired.
 #[test]
 fn the_module_rules_scope_the_mutant_gates_clause_to_a_gate_that_stays() {
-    let text = fs::read_to_string(at_root(MODULE_RULES))
-        .expect("`.claude/rules/policy-modules.md` is committed");
+    let text =
+        fs::read_to_string(at_root(MODULE_RULES)).expect("`rules/policy-modules.md` is committed");
     assert!(
         text.contains("remains registered"),
         "{MODULE_RULES} must scope the `$MUTANT_GATES` / `tests/<gate>.bats` \

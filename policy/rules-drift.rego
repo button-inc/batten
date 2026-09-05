@@ -7,7 +7,7 @@
 #   ported from `mise-tasks/rules-drift.sh` under CLOUD-843/CLOUD-1150.
 #
 #   WHAT THIS MUST NOT DO, and it is the sharper half of the design: demand that
-#   a value be restated. `.claude/rules/toolchain.md`'s own rule is the opposite,
+#   a value be restated. `rules/toolchain.md`'s own rule is the opposite,
 #   and a gate pushing toward completeness would invert the discipline it
 #   enforces. Every predicate here fails a claim that is PRESENT AND WRONG, never
 #   one that is absent.
@@ -346,7 +346,7 @@ violation contains {
 # CLOUD-1150 §2, and it is predicate 1 one shape up: that one holds a restated
 # VALUE to the mechanism, this holds a restated CLOSED COUNT over a set of arms
 # the mechanism owns. The measured cost of not having it is on CLOUD-1150 —
-# `.claude/rules/toolchain.md` said "One edit is admitted, and only one" while
+# `rules/toolchain.md` said "One edit is admitted, and only one" while
 # `shell-retirement.rego` carried three, a grooming session read the sentence,
 # concluded three governed programs were permanently unretirable, and wrote that
 # into two dispatched agent prompts and five issue bodies before it was caught.
@@ -413,7 +413,7 @@ violation contains {
 # already builds, or filing a fact-family row for something that ships.
 #
 # Measured 2026-08-30: `schema/policy-input.schema.json` declared `base-delta` and
-# `symbols` and `.claude/rules/policy-modules.md` named neither, while that file's
+# `symbols` and `rules/policy-modules.md` named neither, while that file's
 # own closing sentence said `rules-drift` held the lists to the schemas. A false
 # assurance, which is worse than an unclaimed one.
 #

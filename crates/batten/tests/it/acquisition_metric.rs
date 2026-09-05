@@ -15,7 +15,7 @@
 //! `--help` invocation and read the gap as a regression — a step change that
 //! never happened, in a series nobody re-derives.
 //!
-//! `.claude/rules/rust.md` records exactly this hazard for a future
+//! `rules/rust.md` records exactly this hazard for a future
 //! instruction-count series, which is why `metric=` exists at all. §5 of
 //! CLOUD-935 says the distinct stamp must be **asserted rather than assumed**,
 //! and this is that assertion.

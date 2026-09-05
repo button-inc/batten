@@ -230,7 +230,7 @@ const HOOK_HANDLERS: &str = "hook-handlers";
 /// was an hour old. The check was telling the truth. Whether a container's
 /// install is current is a property of the WORLD, and bare `doctor` answers a
 /// property of the COMMIT — so folding it in made a commit gate answer on install
-/// recency. `.claude/rules/toolchain.md` records that exact defect for
+/// recency. `rules/toolchain.md` records that exact defect for
 /// `lock-check`, whose remedy was the same split: the pure gate keeps its
 /// question, the world-fact gets its own caller. House style §2 already specifies
 /// `doctor <SUB>` for a focused diagnostic, so the shape was available.
@@ -352,7 +352,7 @@ impl Mediator {
 ///
 /// Neither should be made to match the other — aligning them would put a second
 /// authority in front of one of the two subjects, the class
-/// `.claude/rules/policy-modules.md` records for the shell tokenizer one layer
+/// `rules/policy-modules.md` records for the shell tokenizer one layer
 /// over. And the task is left UNTOUCHED rather than extended, because
 /// `shell edit refused` is right about it: a migration replaces a shell gate, it
 /// does not maintain one. The three-way split lives here, in the engine, which is
@@ -1589,7 +1589,7 @@ pub struct SessionReport {
 /// `false` only if the parent is unreadable too. Where both are readable and the
 /// leaf is a permission-denied directory this returns `true`, which is the one
 /// case worth naming as a bound; this sandbox runs as root, so it is not a
-/// condition the suite can create (`.claude/rules/rust.md`), and inventing an
+/// condition the suite can create (`rules/rust.md`), and inventing an
 /// assertion over a premise nothing produced is what that rule forbids.
 //MUTANT-SUITE crates/batten/tests/it/session_drain.rs
 //MUTANT store-absence-reads-unreadable|s@    target.parent().is_some_and(Path::is_dir)@    false@|a_pointer_at_an_unwritten_store_is_zero_and_never_could_not_look

@@ -126,7 +126,7 @@ pub struct Declared {
     /// every command in the session and a result shape identical for all of them.
     ///
     /// The value is a `[[pattern]]` id rather than an inline regex, for the
-    /// reason `.claude/rules/policy-modules.md` gives for a module: one concept,
+    /// reason `rules/policy-modules.md` gives for a module: one concept,
     /// one spelling, refused at load rather than duplicated at leisure. An
     /// undeclared id fails the load and says which recorder named it.
     ///
@@ -296,7 +296,7 @@ pub enum Value {
     /// until the next label matching `label`.
     ///
     /// **Both patterns are `[[pattern]]` ids, never inline regexes**, which is the
-    /// same load-time refusal `.claude/rules/policy-modules.md` records for a
+    /// same load-time refusal `rules/policy-modules.md` records for a
     /// policy module and for the same measured reason: one concept, one spelling.
     /// The censused use narrows a body to one clause of a structured block, and
     /// that block's grammar already has exactly one definition elsewhere.

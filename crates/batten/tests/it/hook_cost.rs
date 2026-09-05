@@ -8,7 +8,7 @@
 //! key, that the emitted text is hashed and dropped, and that a repeat survives
 //! the whole path from JSONL bytes to a verdict. A case over a fabricated
 //! `Stream` passes over a field the parse may be unable to fill, which is the
-//! silent dead gate `.claude/rules/policy-modules.md` opens by warning about.
+//! silent dead gate `rules/policy-modules.md` opens by warning about.
 //!
 //! **Fixture transcripts, in the host's real shape**, because a session's cost
 //! is a property of the world rather than of the commit: a case reading this

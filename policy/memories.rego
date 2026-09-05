@@ -157,7 +157,7 @@ violation contains {
 #
 # A DECLARED SOURCE THAT WOULD NOT READ is not a file with no stale references. A
 # module iterating only `lines` reports green over a file it never opened, which
-# is the class `.claude/rules/policy-modules.md` records for this channel — and
+# is the class `rules/policy-modules.md` records for this channel — and
 # here it is the exact failure the predecessor could not have: a shell `grep` over
 # an unreadable file is loud, and an absent map key is silent.
 violation contains {

@@ -3,7 +3,7 @@
 //!
 //! **This is the tier the module's own `test_` rules cannot be.** A `with input
 //! as` block writes the shape it then reads, so it is green over a key the engine
-//! never fills — CLOUD-845's defect, and `.claude/rules/policy-modules.md` records
+//! never fills — CLOUD-845's defect, and `rules/policy-modules.md` records
 //! both live instances of it being found by adding this tier rather than by
 //! reading. `Fact::BaseDelta` is brand new here, so "the schema says
 //! `input.tree["base-delta"]` exists" is exactly the untested claim about the
@@ -757,7 +757,7 @@ fn a_mapping_naming_no_policy_surface_is_refused() {
 
 /// The successor KIND obligation, over the engine (CLOUD-1182).
 ///
-/// Over the binary rather than `with input as`, for `.claude/rules/policy-modules.md`'s
+/// Over the binary rather than `with input as`, for `rules/policy-modules.md`'s
 /// reason: the module's own cases fabricate the `lines` map, so they pass over a
 /// field the boundary might never carry into `successors_for`. `kind:` rides the
 /// same space-separated row the invocation field does, and this is what shows the
@@ -945,7 +945,7 @@ fn a_carried_row_whose_named_subject_died_is_admitted() {
 // binary proves the ENGINE builds that entry — and it did not until this row's
 // `line_sources` learned `tests/**/*.bats`. With the module's cases alone the arm
 // passed its own suite and refused every real withdrawal, which is exactly the
-// class `.claude/rules/policy-modules.md` records both live instances of.
+// class `rules/policy-modules.md` records both live instances of.
 // ---------------------------------------------------------------------------
 
 /// A dying suite declaring a subject that is not itself governed when deleted —

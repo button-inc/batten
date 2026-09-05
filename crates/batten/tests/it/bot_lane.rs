@@ -7,7 +7,7 @@
 //!
 //! # Why the stub rather than a fixture policy
 //!
-//! `.claude/rules/policy-modules.md`'s second tier exists because the load-time
+//! `rules/policy-modules.md`'s second tier exists because the load-time
 //! tier cannot see whether the ENGINE builds what a predicate reads. The same
 //! reasoning applies one level up here: `bot::conventional_type` and
 //! `bot::closing_key` are already pinned as pure functions in their own module,
@@ -76,7 +76,7 @@
 // never ran on Windows either — it stubbed the same client the same way — so
 // nothing is narrowed that was covered. A `.cmd` twin of the dispatch would be a
 // second authority over what the stub answers, which is the class
-// `.claude/rules/policy-modules.md` refuses one level down.
+// `rules/policy-modules.md` refuses one level down.
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

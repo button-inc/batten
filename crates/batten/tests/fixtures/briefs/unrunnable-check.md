@@ -15,7 +15,7 @@ Only the corpus fixtures and the loader that reads them.
 
 ## Per-scope instructions
 
-`.claude/rules/rust.md` binds here.
+`rules/rust.md` binds here.
 
 ## Already read
 

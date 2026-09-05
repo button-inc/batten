@@ -12,7 +12,7 @@
 //! ```text
 //! {"type":"attachment","attachment":{
 //!   "type":"nested_memory",
-//!   "displayPath":".claude/rules/scanning.md",
+//!   "displayPath":"rules/scanning.md",
 //!   "content":{"type":"Project","content":"<the whole document>"}}}
 //! ```
 //!
@@ -112,12 +112,12 @@ fn the_captured_host_transcript_carries_source_bearing_injections() {
     assert_eq!(
         injected,
         vec![
-            ".claude/rules/scanning.md",
-            ".claude/rules/toolchain.md",
-            ".claude/rules/scanning.md",
-            ".claude/rules/rust.md",
-            ".claude/rules/scanning.md",
-            ".claude/rules/rust.md",
+            "rules/scanning.md",
+            "rules/toolchain.md",
+            "rules/scanning.md",
+            "rules/rust.md",
+            "rules/scanning.md",
+            "rules/rust.md",
         ],
         "the captured session's injections, in order"
     );
@@ -134,7 +134,7 @@ fn a_host_emitting_the_event_is_reported_as_reporting_them() {
 // ---------------------------------------------------------------------------
 
 /// **The one that proves no prose is being read.** The unsupported fixture holds
-/// an assistant turn that names `.claude/rules/toolchain.md` in ordinary text. A
+/// an assistant turn that names `rules/toolchain.md` in ordinary text. A
 /// predicate that pattern-matched message bodies would count it; this must not.
 #[test]
 fn prose_naming_a_rules_file_is_not_an_injection() {
@@ -176,12 +176,12 @@ fn unrelated_attachment_types_are_silent() {
 fn the_census_counts_each_document_separately() {
     let census = stream("memory-injection").memory_injections();
     assert_eq!(
-        census.get(".claude/rules/scanning.md").copied(),
+        census.get("rules/scanning.md").copied(),
         Some(3),
         "census: {census:?}"
     );
-    assert_eq!(census.get(".claude/rules/rust.md").copied(), Some(2));
-    assert_eq!(census.get(".claude/rules/toolchain.md").copied(), Some(1));
+    assert_eq!(census.get("rules/rust.md").copied(), Some(2));
+    assert_eq!(census.get("rules/toolchain.md").copied(), Some(1));
     assert_eq!(census.values().sum::<usize>(), 6);
 }
 

@@ -6,7 +6,7 @@
 //! strings. What it cannot see is whether the ENGINE builds the inputs that
 //! predicate reads — the merge base, the table on each side, the set of other
 //! changed paths. A dead reader and a clean branch are byte-identical on the
-//! decision surface, which is the failure `.claude/rules/policy-modules.md`
+//! decision surface, which is the failure `rules/policy-modules.md`
 //! records for exactly this shape.
 //!
 //! So these cases build real repositories and run the real verb.

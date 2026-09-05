@@ -116,7 +116,7 @@ const PROVISION_HINT: &str = "mise install";
 /// (CLOUD-1324). A toolchain pin is what decides whether [`ANALYSER`] means the
 /// binary a bare `PATH` lookup finds or a pinned build reached through a runner,
 /// and the engine already owns that ladder — one authority over an argv, which
-/// `.claude/rules/policy-modules.md` states for its own surface and which holds
+/// `rules/policy-modules.md` states for its own surface and which holds
 /// here for the same reason. Reaching back for it would be the `symbols -> rules`
 /// back-edge `policy/module-layering.rego` forbids by name, so the launcher
 /// arrives already resolved and this module only spawns it.
@@ -155,7 +155,7 @@ impl Launcher {
     /// The analyser's flags with this launcher's prefix in front.
     ///
     /// Extracted rather than inlined at the two spawn sites for
-    /// `.claude/rules/rust.md`'s reason: the failing condition is an ARGV
+    /// `rules/rust.md`'s reason: the failing condition is an ARGV
     /// composition, which a test can create, rather than a container whose
     /// `PATH` a test cannot rearrange without `unsafe`.
     #[must_use]
@@ -320,7 +320,7 @@ pub fn resolve(root: &Path, launcher: &Launcher) -> Look<Resolved> {
 /// Parse an analyser stream into sites.
 ///
 /// Separated from the spawn for `secrets.rs`'s `parse_line` reason and
-/// `.claude/rules/rust.md`'s: the failing condition is a STREAM SHAPE rather than
+/// `rules/rust.md`'s: the failing condition is a STREAM SHAPE rather than
 /// a repository state, so the decision is extracted and tested directly rather
 /// than through a fixture that has to make a real analyser misbehave.
 ///

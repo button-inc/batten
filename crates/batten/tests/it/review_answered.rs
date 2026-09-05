@@ -18,7 +18,7 @@
 //! record, then a `PreToolUse` `gh pr ready`, which reads it. Nothing writes a
 //! receipt by hand. A module's own `test_` rules cannot do this — a `with input
 //! as` case fabricates the very shape the engine may be unable to produce, the
-//! defect class `.claude/rules/policy-modules.md` records twice.
+//! defect class `rules/policy-modules.md` records twice.
 //!
 //! # THE FACT IS TOOL-SOURCED SINCE CLOUD-690, and that is what this tier covers
 //!

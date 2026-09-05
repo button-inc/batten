@@ -5,7 +5,7 @@
 //! returned a per-component disposition — the thing that decides which scanner
 //! answers which question. It is Done and it lives entirely in Linear: nothing
 //! in the working tree named it, so an agent with a syntax question reached for
-//! `grep` and cited that rejection as cover. `.claude/rules/scanning.md` is
+//! `grep` and cited that rejection as cover. `rules/scanning.md` is
 //! where the three-row taxonomy now binds, at the trigger.
 //!
 //! WHAT THIS FILE ASSERTS, AND WHAT IT CANNOT. It asserts **presence**: the
@@ -41,7 +41,7 @@ use std::fs;
 use common::at_root;
 
 /// The rules file the taxonomy lives in.
-const RULES: &str = ".claude/rules/scanning.md";
+const RULES: &str = "rules/scanning.md";
 
 /// The always-loaded file whose index has to route a reader to [`RULES`].
 ///
@@ -125,7 +125,7 @@ const BARE_PRODUCTS: &[&str] = &["`grep`", "`rg`", "`Grep`", "`Read`", "`Glob`"]
 const CAPABILITY_ROWS: &[usize] = &[0, 3];
 
 fn rules_text() -> String {
-    fs::read_to_string(at_root(RULES)).expect("`.claude/rules/scanning.md` is committed")
+    fs::read_to_string(at_root(RULES)).expect("`rules/scanning.md` is committed")
 }
 
 #[test]

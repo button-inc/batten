@@ -6,7 +6,7 @@
 //! shelled out for the diff itself. This drives `rules::run_static` over a real
 //! fixture repository with a real `origin/main` and a real record on disk, so it
 //! proves the ENGINE builds the shape the predicate reads — the seam
-//! `.claude/rules/policy-modules.md` names as the one a `with input as` case
+//! `rules/policy-modules.md` names as the one a `with input as` case
 //! cannot reach. The module's own `test_` rules are the other tier and pin the
 //! predicate; neither replaces the other.
 //!
@@ -810,7 +810,7 @@ fn the_set_refusal_carries_the_id_and_nothing_else() {
 // finding it asserted the absence of.
 //
 // Stated rather than dropped, because the pair is the general rule
-// `.claude/rules/policy-modules.md` gives for the two tiers: a `with input as`
+// `rules/policy-modules.md` gives for the two tiers: a `with input as`
 // case cannot prove the ENGINE builds a shape, and this tier cannot construct a
 // shape the engine's own scaffolding excludes. Neither replaces the other, and
 // silently deleting the assertion would have left the guard untested in both.

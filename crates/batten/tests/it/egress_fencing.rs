@@ -4,7 +4,7 @@
 //!
 //! A `with input as` block writes the shape it then reads, so it stays green over
 //! a key the engine never fills — CLOUD-845's defect, and
-//! `.claude/rules/policy-modules.md` records both live instances of it being
+//! `rules/policy-modules.md` records both live instances of it being
 //! found by adding this tier rather than by reading. Every case below goes in
 //! through `batten check`, the same door `verify` and the hk gate come through.
 //!
@@ -20,7 +20,7 @@
 //! unproxied is `batten doctor egress`'s subject and is read from the live
 //! environment; the tree owns only the `[env]` block that fences the resolver
 //! host. Stating that narrowly is deliberate — a suite implying the broader claim
-//! would be the defect `.claude/rules/scanning.md` records for its own case.
+//! would be the defect `rules/scanning.md` records for its own case.
 
 use crate::common;
 

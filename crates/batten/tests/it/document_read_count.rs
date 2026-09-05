@@ -5,7 +5,7 @@
 //! case acquiring a document in the same process would race the delta below
 //! under a harness that threads rather than forks.
 //!
-//! **A counter rather than a clock**, per `.claude/rules/rust.md`: a single
+//! **A counter rather than a clock**, per `rules/rust.md`: a single
 //! small read is well inside the noise of a process start, so a timing
 //! assertion here discriminates nothing. That is exactly how CLOUD-460's four
 //! subprocesses per call went unmeasured.
@@ -163,7 +163,7 @@ fn rows_declaring_one_path_read_it_once() {
 /// one document per distinct declared path. If the walk, the config load or the
 /// evaluator dominated instead, the sweep would still produce a tidy curve and
 /// it would be a curve about something else — which is the shape
-/// `.claude/rules/rust.md` warns about when it says CLOUD-834 measured
+/// `rules/rust.md` warns about when it says CLOUD-834 measured
 /// PROJECTION and was read as a statement about resolution.
 ///
 /// So this is the counter half of a two-instrument measurement, and it is a

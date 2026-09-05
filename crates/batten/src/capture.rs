@@ -733,7 +733,7 @@ pub enum LiveRead {
 /// large change to the dependency surface" — a premise that dies the moment
 /// CLOUD-745 vendors an HTTP client, while the conclusion does not. The surviving
 /// reason is the kernel one above, and it is sufficient on its own. The crate's
-/// concurrency posture is `.claude/rules/rust.md`'s to state; this comment is a
+/// concurrency posture is `rules/rust.md`'s to state; this comment is a
 /// reader of it, not a second derivation.
 ///
 /// ## What the lock protects, which is less than it looks
@@ -1396,7 +1396,7 @@ pub struct CallRow {
 ///
 /// Enforced **at write time**, and the trigger is the write — never a clock,
 /// never a schedule, never a background sweeper. That is
-/// `.claude/rules/toolchain.md`'s split between a gate and a schedule, and
+/// `rules/toolchain.md`'s split between a gate and a schedule, and
 /// [`prune`]'s own doc already refuses a time-based sweeper on the same grounds.
 #[derive(
     Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
@@ -1971,7 +1971,7 @@ pub fn find_in(dir: &Path, selector: &Selector<'_>) -> Result<Option<Resolved>> 
 /// **The whole lifecycle, and that is the design.** A capture is content-addressed
 /// and never expires on its own; this is the one removal path. A time-based
 /// sweeper would put a property of the world inside a verb — the split
-/// `.claude/rules/toolchain.md` draws between a gate and a schedule — and the
+/// `rules/toolchain.md` draws between a gate and a schedule — and the
 /// store is bounded by how many *distinct* outputs a repository produces, not by
 /// how often it runs them, because identical bytes are one record.
 ///
@@ -2017,7 +2017,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_store_mode_is_decided_by_a_constant_rather_than_by_the_umask() {
-        // THE EXTRACTED DECISION, which is what `.claude/rules/rust.md` asks for
+        // THE EXTRACTED DECISION, which is what `rules/rust.md` asks for
         // where the environment cannot produce the failing condition: this sandbox
         // runs as root, so permission bits never bite and a test that tried to
         // assert enforcement would assert its own premise. What is checkable is

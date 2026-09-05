@@ -2134,7 +2134,7 @@ regex = '^runs:[A-Za-z0-9][A-Za-z0-9._+-]*$'
 # module-versus-verb on the premise that "a module's Rust second tier also lives
 # there" — it does not. A module's second tier is `crates/batten/tests/*.rs`,
 # which is `has_binary_test`'s column and a different field on the same row. So
-# the honest split for `crates/batten/src/` is the one `.claude/rules/toolchain.md`
+# the honest split for `crates/batten/src/` is the one `rules/toolchain.md`
 # already draws for its third home: mechanism, or a verb.
 #
 # MARKED RATHER THAN POSITIONAL, and validated rather than prefix-tested, for the
@@ -2835,7 +2835,7 @@ reason = """
 Reach for the structured surface this session offers rather than a text utility \
 over a path this repository contains: a range of one file's contents, a pattern \
 across the tree, paths by glob, or what a NAME resolves to. \
-`.claude/rules/scanning.md` picks between those question classes. Downstream of \
+`rules/scanning.md` picks between those question classes. Downstream of \
 a pipe these same utilities are filters over another command's output and are \
 not refused."""
 
@@ -3196,14 +3196,61 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "read the key from `[[pattern]] ready-issue-key`, or let the program's retirement carry its derivation away; a twenty-first spelling is how the first twenty arrived"
 
+# THREE SPELLINGS, NOT ONE (CLOUD-761). This row carried `CLOUD-\[0-9\]` alone,
+# which refuses the ONE way the twenty measured derivations happened to be
+# written and waves through every other way of writing the same expression. A
+# class a second spelling escapes is not a class — it is the first spelling, with
+# a gate attached — and the whole reason twenty copies could accumulate is that
+# nothing refused the twenty-first before it was typed.
+#
+# The alternation is the escape forms a regex author reaches for next: the
+# character class, `\d`, and `\d` inside a class. Measured over the tree at
+# `6481e41`: zero hits under either glob for the two added spellings, so this
+# adds a refusal and removes none.
+#
+# WHAT IT DELIBERATELY DOES NOT MATCH is a bare CITATION. `CLOUD-761` in a
+# provenance comment carries no backslash and no character class, which is the
+# discriminator CLOUD-1100 already found for this row: a grammar constant is a
+# regex over keys where a citation is a literal key, and the crate is full of the
+# latter. Nor does it reach `[A-Z]+-[0-9]+` — a shape naming no consumer is what
+# rule 1 asks for, and `tests/it/claim_race.rs` and `src/race.rs` are right to
+# carry it.
 [[rule]]
 id = "no-tracker-key-in-core"
 kind = "forbid"
 glob = "crates/**"
-regex = 'CLOUD-\[0-9\]'
+regex = 'CLOUD-(\[0-9\]|\\d|\[\\d\])'
 severity = "deny"
 scope = "tree"
 no_fix_reason = "declare it as a `[[pattern]]` row and read it by id; a tracker's vocabulary in the core is rule 1's violation, and moving it is the fix rather than rewording it"
+
+# THE SAME CLASS, ONE DIRECTORY OVER, AND IT HAD NO GATE AT ALL (CLOUD-761). A
+# `[[rule]]`'s `glob` is one pattern, so the module tree gets its own row rather
+# than a widened one — and it is a `forbid` rather than the ratchet
+# `issue-key-derivations-not-growing` has to be for `mise-tasks/**`, because the
+# direction is available here: `policy/**` carries ZERO derivations today, so
+# nothing has to be waited out.
+#
+# It CAN be a flat refusal precisely because the registry already answers the
+# question a module would otherwise re-spell: a module reads
+# `data.batten.patterns["ready-issue-key"]` by id, so the token reaching a
+# predicate is the consumer's one declaration. A module composing its own is the
+# second authority `rules/policy-modules.md` refuses at load for inline
+# patterns generally, said here for the one token this consumer has already been
+# bitten by.
+#
+# A PRESET IS OUT OF SCOPE and that is not an oversight: a preset ships to
+# consumers who declare no rows, so `policy-modules.md`'s own exemption tells its
+# author to write the literal inline. This glob names the in-repo module tree,
+# which is exactly where the exemption does not apply.
+[[rule]]
+id = "no-tracker-key-in-modules"
+kind = "forbid"
+glob = "policy/**"
+regex = 'CLOUD-(\[0-9\]|\\d|\[\\d\])'
+severity = "deny"
+scope = "tree"
+no_fix_reason = "read the key from `[[pattern]] ready-issue-key` by id; a module composing its own key expression is a second authority over one definition, which is what the registry exists to make unwritable"
 
 # A RETIREMENT LEDGER ARM IS EXEMPT, and this is a structural collision rather
 # than a convenience (CLOUD-1294). `bats-tests-not-deleted` matches an arm by the
@@ -4398,7 +4445,7 @@ no_fix_reason = "migrate the predicate onto a rule kind, or waive the increase d
 # considered and rejected: the `mise-tasks/` programs carry no extension at all,
 # so an extension-anchored glob is exactly how this class reappears one directory
 # over. The cost is a known false positive — a `#!` inside a fenced code block in
-# `.claude/rules/*.md` would count as a program. Zero today; if one lands, the
+# `rules/*.md` would count as a program. Zero today; if one lands, the
 # answer is CLOUD-1058's line-anchored `regex`, not a per-file exception.
 [[rule]]
 id = "claude-shell-not-growing"
@@ -5053,7 +5100,7 @@ delta_sources = ["**"]
 # was indistinguishable from a real one because the finding is byte-identical.
 #
 # Measured on CLOUD-312 row 10: three cases in two suites, no landable spelling.
-# The cost of reading them is `.claude/rules/rust.md`'s ~5.4 µs per declared
+# The cost of reading them is `rules/rust.md`'s ~5.4 µs per declared
 # document against ~137 suites — under a millisecond, on a 100 ms budget.
 #
 # AND CLOUD-1088 IS ITS SECOND CONSUMER, which is why the glob now carries two
@@ -5162,7 +5209,7 @@ severity = "deny"
 # `line_sources` is `obligations-bound`'s set plus the preset tree, and it has to
 # carry BOTH SIDES: the declaring files and the suites they name. A set holding
 # only the declarations would make every suite a could-not-look and the rule
-# would decide nothing -- the exact shape `.claude/rules/policy-modules.md` warns
+# would decide nothing -- the exact shape `rules/policy-modules.md` warns
 # a dead gate takes.
 #
 # NO `delta_sources` AND NO `base`: the subject is the tree's whole declaration
@@ -5287,7 +5334,7 @@ kind = "policy"
 scope = "tree"
 line_sources = [
   "policy/*.rego",
-  ".claude/rules/*.md",
+  "rules/*.md",
   "crates/batten/src/*.rs",
   "mise-tasks/*.sh",
   "batten.toml",
@@ -5377,7 +5424,7 @@ severity = "deny"
 id = "claim-order-is-stated"
 kind = "policy"
 scope = "tree"
-line_sources = ["AGENTS.md", ".claude/rules/toolchain.md"]
+line_sources = ["AGENTS.md", "rules/toolchain.md"]
 module = "policy/claim-order-is-stated.rego"
 severity = "deny"
 
@@ -5819,6 +5866,40 @@ tool = "hyperfine"
 version = "1.20.0"
 input = "target/release/batten"
 
+# The agentic trials protocol (CLOUD-1116). A completeness predicate over the two
+# records in `bench/agentic/`, and nothing else — it decides whether a row that
+# CLAIMS an outcome carries the arms, the fixture, the run count and the falsifier
+# that would let anyone else check the claim. Whether the treatment HELPED is a
+# judgement, and non-negotiable rule 3 keeps a judgement out of a verdict.
+#
+# `documents` RATHER THAN `sources`, and the difference is the could-not-look arm.
+# `sources` is the GLOB field: its entries are matched against the walked file
+# list, so an absent record matches nothing, is never declared, is never acquired,
+# and never reaches `input.tree.missing` — the arm simply cannot fire. `documents`
+# is the literal field and is unioned into the declared set unconditionally, so an
+# absent path is acquired, fails, and is named with its cause. That is what the
+# joint predicate needs, since either record absent leaves the other unjudgeable.
+#
+# MEASURED, NOT REASONED. This row's first spelling was `sources`, and over the
+# compiled binary a tree carrying NEITHER record answered nothing at all — a
+# deleted `method.toml` and a satisfied one, byte-identical on the decision
+# surface. `a_tree_with_no_records_at_all_is_silent` is the case that caught it;
+# every other case in that file passed over the broken spelling.
+#
+# `deny` RATHER THAN `warn`, and the row's own acceptance clause is what licenses
+# it: the mutation replay over the record set exists before this is set to `deny`.
+# It is `a_replay_over_the_committed_records_fires_on_every_required_key` in
+# `crates/batten/tests/it/agentic_record.rs` — a test rather than a paragraph, so
+# it re-runs whenever the record set grows. Measured 2026-09-05: 6 trial rows, 13
+# required keys, 78 mutations, 78 fired, 0 false positives.
+[[rule]]
+id = "agentic-experiment-record"
+kind = "policy"
+scope = "tree"
+documents = ["bench/agentic/trials.toml", "bench/agentic/method.toml"]
+module = "policy/agentic-experiment-record.rego"
+severity = "deny"
+
 [[rule]]
 id = "release-tag-shape"
 kind = "policy"
@@ -5855,7 +5936,7 @@ tags = "v*"
 # `input.tree.staged["mise.lock"]` never resolved, Rego read undefined as *does
 # not hold*, and `violation` was empty on every run. Its four `test_` rules
 # passed throughout, because `with input as` fabricates the shape the engine
-# could not produce — the dead-gate class `.claude/rules/policy-modules.md`
+# could not produce — the dead-gate class `rules/policy-modules.md`
 # opens with, landed and live in this file.
 #
 # The column is a FALLBACK, consulted only where the extension names no format,
@@ -6229,6 +6310,12 @@ line_sources = [
   "*.md",
   ".claude/*.md",
   ".claude/**/*.md",
+  # CLOUD-1152's neutral home. The doctrine moved out of the vendor directory and
+  # the globs follow it: a `mem:` edge written in a rules file is the same broken
+  # edge wherever the file lives, and a glob that stopped selecting it would
+  # report green over the whole relocated surface.
+  "rules/*.md",
+  "rules/**/*.md",
   ".serena/memories/*.md",
   ".serena/memories/**/*.md",
   "crates/**/*.md",
@@ -6290,7 +6377,7 @@ id = "hk-fix-selection"
 kind = "policy"
 scope = "tree"
 sources = ["mise.toml"]
-line_sources = ["hk.pkl", ".claude/rules/toolchain.md"]
+line_sources = ["hk.pkl", "rules/toolchain.md"]
 module = "policy/hk-fix-selection.rego"
 severity = "deny"
 
@@ -6349,7 +6436,7 @@ severity = "deny"
 # Whether this container is actually unproxied is `batten doctor egress`'s subject
 # and is read from the live environment; the tree owns only the `[env]` block. A
 # row claiming the broader property would be the defect
-# `.claude/rules/scanning.md` records for its own case.
+# `rules/scanning.md` records for its own case.
 #
 # WHY IT EXISTS: THE MITIGATION WAS ALREADY DELETED ONCE. `65757c86` removed the
 # fencing on the reasoning that honouring the CA bundle made it unnecessary, which
@@ -7257,6 +7344,7 @@ tracked = [
 [contract]
 tracked = [
   "AGENTS.md",
+  "rules/**",
   ".claude/rules/**",
   ".claude/settings.json",
   "hk.pkl",
@@ -8479,7 +8567,7 @@ target = "mise.toml"
 id = "claim declare dropped"
 gloss = "the instruction surface no longer states the claim order, or no longer carries its reason"
 class = """
-The claim receipt is keyed by the branch checked out when `claim check` mints it, which makes two orderings fail in opposite directions: claiming before branching strands the receipt on a branch nothing will land, and claiming a second time refuses `not-todo` against the caller's own claim. AGENTS.md carries the ORDER — branch first, then claim ONCE — and `.claude/rules/toolchain.md` carries both failure directions; a budget forces the split, so both arms are required. The remedy is to restore the sentence that went missing in the file the finding names, never to widen the always-loaded file past its ceiling.
+The claim receipt is keyed by the branch checked out when `claim check` mints it, which makes two orderings fail in opposite directions: claiming before branching strands the receipt on a branch nothing will land, and claiming a second time refuses `not-todo` against the caller's own claim. AGENTS.md carries the ORDER — branch first, then claim ONCE — and `rules/toolchain.md` carries both failure directions; a budget forces the split, so both arms are required. The remedy is to restore the sentence that went missing in the file the finding names, never to widen the always-loaded file past its ceiling.
 """
 
 [[verdict.route]]
@@ -8509,7 +8597,7 @@ class = """
 [[verdict.route]]
 id = "rule read first"
 kind = "document"
-target = ".claude/rules/toolchain.md"
+target = "rules/toolchain.md"
 
 [[verdict.route]]
 id = "task run first"
@@ -8743,6 +8831,55 @@ id = "module read first"
 kind = "document"
 target = "policy/perf-assert.rego"
 
+# The agentic record set (CLOUD-1116). Three classes, and the split is the record
+# set's own: a row that does not say enough to be checked, a row that says more
+# than it has checked, and a record the gate could not read.
+[[verdict]]
+id = "test declare partial"
+gloss = "a declared agentic trial names fewer than the fields an outcome can be read against"
+class = """
+The failure here is not an absent record, it is a HALF one -- a trial missing its baseline arm reads exactly like a trial that ran, and the write-up is the same length. CLOUD-1089 paid for that twice in one survey: two instruments returned exit 0 while measuring nothing, and both would have been written up as clean results had a human not looked. So a row owes its question and intended outcome, both arms, the model, fixture and run count that make a rerun a rerun, the intervention class, the governed action that bounds the attribution window, the evidence the treatment arm shows, its canary, and the falsifier's statement, downside and disposition. The method record beside it owes the window, what is held constant, what is measured, what deliberately is not, and how a measurement becomes a verdict. Add the field; do not delete the row to silence this.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/agentic-experiment-record.rego"
+
+[[verdict.route]]
+id = "source read first"
+kind = "document"
+target = "bench/agentic/method.toml"
+
+[[verdict]]
+id = "test state early"
+gloss = "a trial's disposition asserts a finding with no result recorded beside it"
+class = """
+`pending` is the honest state for a declared-but-unrun trial and asserts nothing. Every other disposition is a claim about a measurement, so it owes a `[trial.result]` -- and a disposition the method record does not declare at all owes one more thing than that, because a vocabulary invented at the row means nothing to a reader. This is CLOUD-680's laundering shape arriving through the record channel rather than through an override: the cheapest route to a finding is to write one down. The remedy is to run the arms and record the result, or to set the disposition back to `pending`.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/agentic-experiment-record.rego"
+
+[[verdict.route]]
+id = "source read first"
+kind = "document"
+target = "bench/agentic/trials.toml"
+
+[[verdict]]
+id = "input read absent"
+gloss = "a declared agentic record could not be read, so the joint predicate cannot decide"
+class = """
+Could-not-look, never a verdict about the tree. The two records are a JOINT predicate -- the method record owns what "improved" means and the workload record owns each experiment's arms -- so either one absent leaves the other unjudgeable, and reporting green over that would be a dead gate and a clean tree coming out byte-identical on the decision surface. Restore the file or fix the row's `documents`; nothing about any trial is being claimed.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/agentic-experiment-record.rego"
+
 [[verdict]]
 id = "tool judge dirty"
 gloss = "a third-party validator judged this file and reported something"
@@ -8765,7 +8902,7 @@ class = """
 [[verdict.route]]
 id = "rule read first"
 kind = "document"
-target = ".claude/rules/commits.md"
+target = "rules/commits.md"
 
 [[verdict.route]]
 id = "source read first"
@@ -8895,7 +9032,7 @@ target = "mise run lock-complete"
 [[verdict.route]]
 id = "rule read first"
 kind = "document"
-target = ".claude/rules/toolchain.md"
+target = "rules/toolchain.md"
 
 [[verdict]]
 id = "commit declare empty"
@@ -8912,7 +9049,7 @@ target = "batten.toml"
 [[verdict.route]]
 id = "rule read first"
 kind = "document"
-target = ".claude/rules/commits.md"
+target = "rules/commits.md"
 
 [[verdict]]
 id = "hook wire duplicate"
@@ -8942,7 +9079,7 @@ target = "AGENTS.md"
 [[verdict.route]]
 id = "rule read first"
 kind = "document"
-target = ".claude/rules/toolchain.md"
+target = "rules/toolchain.md"
 
 # --- the rest of `hooks-wiring-check`'s consumer half (CLOUD-1160) ------------
 
@@ -9109,7 +9246,7 @@ standing.
 [[verdict.route]]
 id = "rule read first"
 kind = "document"
-target = ".claude/rules/policy-modules.md"
+target = "rules/policy-modules.md"
 
 [[verdict.route]]
 id = "config read first"
@@ -9590,7 +9727,7 @@ the successor on a `// carried:`, `// subsumed:` or `// changed:` row.
 [[verdict.route]]
 id = "rule read first"
 kind = "document"
-target = ".claude/rules/policy-modules.md"
+target = "rules/policy-modules.md"
 
 # --- the same rule, said before the work instead of after it (CLOUD-1131) -----
 
@@ -9604,7 +9741,7 @@ The same doctrine as `shell edit refused` and none of its force: this class refu
 [[verdict.route]]
 id = "rule read first"
 kind = "document"
-target = ".claude/rules/toolchain.md"
+target = "rules/toolchain.md"
 
 # --- the pole of the gate (CLOUD-386) ----------------------------------------
 
@@ -10061,7 +10198,7 @@ never the duration, which is a property of the machine and is reported.
 [[verdict.route]]
 id = "rule read first"
 kind = "document"
-target = ".claude/rules/toolchain.md"
+target = "rules/toolchain.md"
 
 [[verdict]]
 id = "suite retire never"
@@ -10097,7 +10234,7 @@ decide over.
 [[verdict.route]]
 id = "rule read first"
 kind = "document"
-target = ".claude/rules/toolchain.md"
+target = "rules/toolchain.md"
 
 [[verdict]]
 id = "suite admit stale"
@@ -10243,14 +10380,14 @@ the predicate went, so the gate it replaced has no successor anything can run. A
 least one successor must be a policy surface, and that is THREE shapes rather than \
 one: a `policy/*.rego` consumer module, a preset under \
 `crates/batten/src/policy/presets/**`, or `crates/batten/src/*.rs` engine source. \
-`.claude/rules/toolchain.md` argues the order between them — the preset is the DRY \
+`rules/toolchain.md` argues the order between them — the preset is the DRY \
 home and engine source is mechanism only.
 """
 
 [[verdict.route]]
 id = "rule read first"
 kind = "document"
-target = ".claude/rules/policy-modules.md"
+target = "rules/policy-modules.md"
 
 [[verdict]]
 id = "test port missing"
@@ -10258,7 +10395,7 @@ gloss = "a retirement arm names no compiled-binary test, so nothing proves the p
 class = """
 A module's own `test_` rules are the load-time tier and they fabricate their own \
 input, so they cannot prove the ENGINE builds the shape the predicate reads. \
-`.claude/rules/policy-modules.md` records both live instances of that defect \
+`rules/policy-modules.md` records both live instances of that defect \
 being found by adding the second tier rather than by reading. At least one \
 successor must be a `crates/batten/tests/*.rs` case.
 """
@@ -10266,7 +10403,7 @@ successor must be a `crates/batten/tests/*.rs` case.
 [[verdict.route]]
 id = "rule read first"
 kind = "document"
-target = ".claude/rules/policy-modules.md"
+target = "rules/policy-modules.md"
 
 [[verdict]]
 id = "shell port unnamed"
@@ -10285,7 +10422,7 @@ makes that case visible instead of automatic.
 [[verdict.route]]
 id = "rule read first"
 kind = "document"
-target = ".claude/rules/toolchain.md"
+target = "rules/toolchain.md"
 
 [[verdict]]
 id = "shell retire never"
@@ -11205,7 +11342,7 @@ scope = "tree"
 module = "policy/rules-drift.rego"
 severity = "deny"
 line_sources = [
-  ".claude/rules/*.md",
+  "rules/*.md",
   ".serena/memories/*.md",
   ".serena/memories/**/*.md",
   "AGENTS.md",
@@ -11273,7 +11410,7 @@ regex = '^[a-z][a-z0-9_]*[(\[ ]'
 id = "policy-input-key-subscripted"
 regex = '`input\.(tree|call)\["[a-z][a-z0-9-]+"\]'
 
-# The sentence `.claude/rules/policy-modules.md` closes its key lists with. The
+# The sentence `rules/policy-modules.md` closes its key lists with. The
 # predicate is scoped to the file that MAKES this claim: a file promising the
 # lists are held in both directions is wrong when a key is missing, and a file
 # promising nothing is an ordinary consumer.
@@ -11337,7 +11474,7 @@ Could-not-look is not clean (CLOUD-251). A declared source that is ABSENT is ord
 [[verdict.route]]
 id = "rule read first"
 kind = "document"
-target = ".claude/rules/policy-modules.md"
+target = "rules/policy-modules.md"
 
 [[verdict]]
 id = "default state other"
@@ -11349,7 +11486,7 @@ A stale parenthetical in a rules file is not a typo: these files are read by an 
 [[verdict.route]]
 id = "rule read first"
 kind = "document"
-target = ".claude/rules/toolchain.md"
+target = "rules/toolchain.md"
 
 [[verdict]]
 id = "event wire missing"
@@ -11391,7 +11528,7 @@ target = "crates/batten/src/policy.rs"
 id = "rule count other"
 gloss = "a rules file states how many arms a rule has and the module has a different number"
 class = """
-Predicate 1 one shape up: a restated VALUE against a restated CLOSED COUNT. CLOUD-1150 measured what one costs — `.claude/rules/toolchain.md` said one sibling-edit admission was allowed where `shell-retirement.rego` carried three, and a grooming session wrote that premise into two dispatched agent prompts and five issue bodies before anyone read the module. The module's own heads are the authority. Correct the number, or drop the `(N arms)` and let the reader read it there — dropping it is always allowed, because this class never demands that a count be restated.
+Predicate 1 one shape up: a restated VALUE against a restated CLOSED COUNT. CLOUD-1150 measured what one costs — `rules/toolchain.md` said one sibling-edit admission was allowed where `shell-retirement.rego` carried three, and a grooming session wrote that premise into two dispatched agent prompts and five issue bodies before anyone read the module. The module's own heads are the authority. Correct the number, or drop the `(N arms)` and let the reader read it there — dropping it is always allowed, because this class never demands that a count be restated.
 """
 
 [[verdict.route]]
@@ -11409,7 +11546,7 @@ Predicate 3 run backwards, and it fails in the opposite direction: a named key t
 [[verdict.route]]
 id = "task run first"
 kind = "document"
-target = ".claude/rules/policy-modules.md"
+target = "rules/policy-modules.md"
 
 [[verdict]]
 id = "drift read unread"

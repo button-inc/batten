@@ -3782,7 +3782,7 @@ impl Rule {
         // a consumer for is a tool: CLOUD-312's row 6 is `fanout-guard`, which
         // fires on `Task`. Admitting it on a `pattern` row would ship a
         // combination with no test behind it and no caller asking for it, and
-        // `.claude/rules/rust.md`'s reading is that the cheap default is the one
+        // `rules/rust.md`'s reading is that the cheap default is the one
         // direction the mistake is expensive in. Widening this is one line plus
         // the cases that prove it.
         if self.tool.is_none() {
@@ -4288,7 +4288,7 @@ impl Rule {
     /// alternation could never be satisfied and the row would deny every call it
     /// selected. That failure is invisible from the config — the row reads as
     /// configured and the refusal names a real receipt — which is the class
-    /// `.claude/rules/policy-modules.md` records one layer down for a key the
+    /// `rules/policy-modules.md` records one layer down for a key the
     /// engine never builds.
     ///
     /// So ADJUDICATION reads the two columns apart, because they mean different
@@ -5910,7 +5910,7 @@ pub struct RunOptions<'a> {
     /// tree run makes: `[[rule.minted]]`'s `max_age_days` (CLOUD-1187).
     ///
     /// Supplied rather than read here, and that is the whole reason the field
-    /// exists. `.claude/rules/policy-modules.md` states the principle for the
+    /// exists. `rules/policy-modules.md` states the principle for the
     /// two landed cases this joins — a waiver's expiry and a receipt's age:
     /// **the clock is the boundary's, never the decision's.** `rules.rs` holds
     /// the projection, so a `SystemTime::now` here would put a value that
@@ -6459,7 +6459,7 @@ fn evaluate_rules(
         //
         // Deltas over the process-global counters rather than an accumulator
         // threaded through nine read sites. Sound because this loop is serial,
-        // which `.claude/rules/rust.md` records as a measured verdict rather
+        // which `rules/rust.md` records as a measured verdict rather
         // than an accident.
         //
         // AROUND `isolate` RATHER THAN AROUND `run_rule`, which is where the
@@ -7282,7 +7282,7 @@ pub(crate) fn want_for(path: &str, wanted: Wanted) -> Option<Want> {
 
 /// Refuse a run whose declared read set has passed `limit` (CLOUD-850).
 ///
-/// **Extracted so it is testable at any size**, which is `.claude/rules/rust.md`'s
+/// **Extracted so it is testable at any size**, which is `rules/rust.md`'s
 /// standing instruction: where the environment cannot cheaply produce the failing
 /// condition, extract the decision and test it directly rather than asserting a
 /// conclusion over a precondition that was never created. Building a
@@ -7936,7 +7936,7 @@ pub(crate) struct Projected {
     /// document is projected from.
     ///
     /// The causes were always computed and always dropped at the projection site,
-    /// which made `.claude/rules/policy-modules.md`'s "a module may rely on that"
+    /// which made `rules/policy-modules.md`'s "a module may rely on that"
     /// true of this enum and false of the surface a module actually reads.
     pub causes: Vec<(String, NotAcquired)>,
 }
@@ -8626,7 +8626,7 @@ pub(crate) fn tree_document(
     // guessing which keys are facts.
     // COULD-NOT-LOOK CARRIES ITS CAUSE (CLOUD-1309). A bare list of names let a
     // module see THAT a declared source was not acquired and never WHY, so
-    // `.claude/rules/policy-modules.md`'s promise -- "the two causes stay distinct
+    // `rules/policy-modules.md`'s promise -- "the two causes stay distinct
     // and a module may rely on that" -- was false of the projection while true of
     // the Rust enum. The causes were computed here all along and discarded one
     // line later; this is the same data, keyed.
@@ -8819,7 +8819,7 @@ fn policy_rule(
     // absent-via-`documents` were both SILENT at exit 0, taking an unconditional
     // predicate down with them. That is a gate switched off by the state of one
     // of its own inputs, which is strictly worse than the vacuous pass CLOUD-251
-    // was guarding against — and `.claude/rules/policy-modules.md` requires every
+    // was guarding against — and `rules/policy-modules.md` requires every
     // module to write a clause that could never fire.
     //
     // Evaluating first preserves what CLOUD-251 actually wanted. A module that
@@ -13077,7 +13077,7 @@ mod tests {
                 // bundle, so no `policy` row runs and nothing here resolves a
                 // class. A fixture supplying a registry no consumer supplies is
                 // how a deny case passes for the wrong reason
-                // (`.claude/rules/policy-modules.md`), and the tier that DOES
+                // (`rules/policy-modules.md`), and the tier that DOES
                 // drive a module is the compiled-binary one.
                 verdicts: &[],
             }
@@ -13835,7 +13835,7 @@ mod tests {
     #[test]
     fn isolate_contains_a_returned_failure_and_a_panic_and_lets_typed_answers_through() {
         // CLOUD-126's four arms, exercised directly. THIS IS THE EXTRACTED
-        // DECISION, not a convenience: `.claude/rules/rust.md` requires a test be
+        // DECISION, not a convenience: `rules/rust.md` requires a test be
         // shown able to fail, and neither of the two contained shapes has a
         // config-reachable input in this environment — see
         // `an_erroring_rule_is_contained_and_its_siblings_still_report` for the

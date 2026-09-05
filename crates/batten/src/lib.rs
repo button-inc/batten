@@ -178,7 +178,7 @@ pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 // scatter the one place a reader can see the whole surface and what each arm
 // answers to, and would put a verb's rationale somewhere its dispatch is not.
 //
-// `#[expect]` rather than `#[allow]` for `.claude/rules/rust.md`'s reason: it is
+// `#[expect]` rather than `#[allow]` for `rules/rust.md`'s reason: it is
 // self-cleaning in both directions, so if the table ever shrinks back under the
 // ceiling this annotation goes red rather than quietly outliving its cause.
 #[expect(
@@ -5009,7 +5009,7 @@ fn run_override_request(
     let (epoch, _) = epoch::describe(root, None)?;
     // `user.email` rather than a name: it is the accountable identity
     // `[attribution]` already decides over, and it is never a model identity
-    // (`.claude/rules/commits.md`). An unset one is the empty string rather than
+    // (`rules/commits.md`). An unset one is the empty string rather than
     // a failure — the author is a field of the record, not a precondition of it,
     // and refusing an override because git has no email configured would put a
     // gate in front of the break-glass for a reason unrelated to the situation.
@@ -7894,7 +7894,7 @@ fn run_hook(
     // **THE COST IS REAL AND IS PAID HERE RATHER THAN HIDDEN.** `perf`'s
     // `passthrough` arm is exactly this shape — a `Read` with a `file_path`,
     // no command, no write — and its below-`noop` reading came from taking the
-    // skip. That reading is load-bearing (`.claude/rules/rust.md`), so it is
+    // skip. That reading is load-bearing (`rules/rust.md`), so it is
     // re-measured with `perf-pair` against the merge base rather than argued
     // about, and the number travels with the change.
     //
@@ -13819,7 +13819,7 @@ mod tests {
     /// `machine` is always true there and the attended arm would never run. The
     /// e2e suite asserts the SILENT half against the real binary; this asserts
     /// that the other half exists and is reached for the right reasons
-    /// (`.claude/rules/rust.md`: extract the decision rather than assert a
+    /// (`rules/rust.md`: extract the decision rather than assert a
     /// conclusion over a precondition the environment never created).
     #[test]
     fn a_clean_run_speaks_only_when_a_person_is_reading() {

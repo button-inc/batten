@@ -1,7 +1,7 @@
 //! A rules file may not contradict the manifest about which builtins exist
 //! (CLOUD-1104).
 //!
-//! `.claude/rules/policy-modules.md` told every policy-module author that this
+//! `rules/policy-modules.md` told every policy-module author that this
 //! build of regorus carries no `regex` builtins, as the stated reason a module
 //! must anchor on `input.call.segments`. It does carry them: `Cargo.toml`
 //! enables the feature, and `policy/stop-posture.rego` calls `regex.find_n` over
@@ -67,7 +67,12 @@ const CRATE: &str = "regorus";
 const FEATURES: &str = "workspace.dependencies.regorus.features";
 
 /// The directory whose prose is judged.
-const RULES_DIR: &str = ".claude/rules";
+///
+/// The neutral home since CLOUD-1152. `.claude/rules/` holds pointer stubs
+/// carrying Claude Code's `paths:` trigger and no rule of its own, so judging
+/// that directory would judge five files that make no claim — and would be
+/// silent over the five that do.
+const RULES_DIR: &str = "rules";
 
 /// The words that turn naming a feature into denying it.
 ///
@@ -174,7 +179,7 @@ fn no_rules_file_denies_a_builtin_the_manifest_enables() {
 #[test]
 fn the_case_fires_on_the_clause_this_row_removed() {
     // THE DISCRIMINATOR (CLOUD-418), over the real text rather than a paraphrase:
-    // this is `.claude/rules/policy-modules.md`'s clause as it stood at `1bdb15f`.
+    // this is `rules/policy-modules.md`'s clause as it stood at `1bdb15f`.
     // Without this the case above is satisfied by a predicate that never fires,
     // which is the shape a copy-forward would sail straight past.
     let paragraph = "There is **one parser**, and a module must not grow a second: no `split` of \

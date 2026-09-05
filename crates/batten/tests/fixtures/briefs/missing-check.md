@@ -16,7 +16,7 @@ vocabulary is out of scope; so is anything under `crates/batten/src/hook.rs`.
 
 ## Per-scope instructions
 
-`.claude/rules/rust.md` binds here: prefer an end-to-end test over the compiled
+`rules/rust.md` binds here: prefer an end-to-end test over the compiled
 binary, and branch on the named `ExitCode` variants rather than integer literals.
 
 ## Already read

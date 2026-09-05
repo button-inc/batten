@@ -775,7 +775,7 @@ pub fn mint(
     // Measured 2026-09-01: an agent read the branch-keyed receipt as forbidding a
     // second row, declined to pull one onto an open branch, and reported the
     // storage key as the rule. The prose that pointed it there is corrected in
-    // `.claude/rules/toolchain.md`; this is the half that makes the correction
+    // `rules/toolchain.md`; this is the half that makes the correction
     // true rather than merely stated.
     //
     // THE BASE IS WHAT MAKES THE UNION SAFE, and it is CLOUD-516's arm reused

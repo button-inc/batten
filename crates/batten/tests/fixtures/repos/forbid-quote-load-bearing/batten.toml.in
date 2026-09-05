@@ -1,0 +1,22 @@
+version = 1
+
+# CLOUD-313 case: a literal carrying a leading quote PURELY to suppress a false
+# positive, reproducing `no-source-built-tool`'s shape without depending on this
+# repository's own rule table.
+#
+# The quote is the whole predicate. `cargo:` appears in ordinary prose — a
+# comment explaining why a backend is refused is the obvious example, and this
+# fixture carries one — while `"cargo:` can only be a quoted TOML key declaring
+# that backend. Without the quote the rule reports the explanation of itself,
+# which is the historical instance CLOUD-313 exists for.
+#
+# Nothing pinned that in the real rule: the reasoning was a comment. The clean
+# case below is what makes the quote load-bearing rather than remembered.
+[[rule]]
+id = "no-built-backend"
+kind = "forbid"
+glob = "pins.toml"
+pattern = "\"cargo:"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "pin an attested binary instead; what to pin is a supply-chain decision, not a rewrite"
