@@ -90,17 +90,37 @@ jobs:
       # matrix. The body runs `batten lease guard`, installed from `main` and
       # pinned to trunk's version rather than to this head's, so a clone
       # carrying stale rules cannot dodge the predicate by carrying a stale copy
-      # of it. Every justification lives on `run_lease_guard`. An unreadable
-      # body runs — fail open, which
-      # is the whole posture: waving one matrix through costs one matrix, while
-      # a predicate that cannot read itself would stop the fleet.
+      # of it. Every justification lives on `run_lease_guard`. THREE DIFFERENT
+      # FAILURES FAIL OPEN below, one `|| exit 0` each: a binary that will not
+      # download, a policy that will not fetch, and a guard that will not run.
+      # That is the whole posture — waving one matrix through costs one matrix,
+      # while a precondition that cannot reach its own inputs would stop the
+      # fleet. What keeps those three from reading as *ran and allowed* is
+      # trunk's installer refusing a binary that does not carry the verb
+      # (`BATTEN_REQUIRE`); until that installer IS trunk's, this step is
+      # vacuous by construction rather than by accident.
       - name: Landing lease precondition
+        # NOT ON WINDOWS, AND THE SKIP IS THE POINT (CLOUD-1460). `install.sh`'s
+        # `detect_target` handles `Linux` and `Darwin` and returns 1 for anything
+        # else, so on this matrix's Windows leg the installer dies with "no
+        # release target" — and the `|| exit 0` below, which exists so a guard
+        # that cannot run never reds a job, swallowed it. The step reported green
+        # having installed nothing and asked the lease nothing, which is
+        # byte-identical on the decision surface to a guard that ran and allowed.
+        #
+        # The condition does not close the hole: this leg is still unserialised
+        # against the fleet, and closing it needs a Windows target in the
+        # installer, which is CLOUD-1460's. What it buys is that the hole is now
+        # a VISIBLE skipped step rather than a green one nobody can tell from a
+        # real pass. Found in review of PR #848.
+        if: runner.os != 'Windows'
         # EXPLICIT, because this workflow is the one that runs on Windows. A
         # `run:` step with no `shell:` takes the runner's default, which is
         # PowerShell there — so the bash body below is handed to `pwsh`, which
         # reports `body=$(gh api …)` is not a cmdlet and exits 1 in the FIRST
-        # step of the job. Every other caller of this block is ubuntu-only and
-        # never had to say so; `action` is a three-OS matrix and does.
+        # step of the job. The condition above means this no longer fires on
+        # Windows, and the line stays: the two say different things, and a matrix
+        # that grows another non-default-bash runner needs it.
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -118,9 +138,10 @@ jobs:
           # `!cancelled()`, fails its `needs:` assertion, and `land` re-drafts a
           # healthy PR — fleet-wide, from one bad response. `batten lease guard`
           # promises it never exits non-zero; these are what make that true at the
-          # call site too, for the cases the promise cannot cover: a binary that
-          # will not download and one that will not run are different failures
-          # from one that ran and decided.
+          # call site too, for the three cases the promise cannot cover: a binary
+          # that will not download, a policy that will not fetch, and a guard that
+          # will not run. Each is a different failure from one that ran and
+          # decided, and all three run rather than stopping the fleet.
           #
           # THE VERSION IS TRUNK'S, NEVER THIS HEAD'S. The installer comes from
           # trunk and resolves the version from trunk's own manifest, which is the

@@ -227,6 +227,14 @@ violation contains {
 
 vocabulary := {"patterns": {
 	"clippy-lint-escape": `^\s*(?:#!?\[\s*(?:expect|allow)\(\s*)?clippy::[a-z_]+`,
+	# THE EXEMPTION'S OWN PATTERN, and omitting it made every case here read the
+	# engine-source arm as absent. `idiom_pattern` names this id, so a vocabulary
+	# without it leaves `data.batten.patterns["clippy-test-idiom"]` undefined —
+	# Rego reads undefined as does-not-hold, the exemption never fires, and the
+	# deny cases pass for the wrong reason while the allow case that needs it has
+	# nothing to assert. Copied byte-for-byte from `batten.toml`'s row, which is
+	# what the consumer actually supplies. Found in review.
+	"clippy-test-idiom": `^\s*(?:#!?\[\s*(?:expect|allow)\(\s*)?clippy::(?:expect_used|unwrap_used|panic)\b`,
 	"spawn-placement-entry": `^\s*"[a-z_]+",\s*$`,
 }}
 
@@ -304,6 +312,34 @@ test_a_test_modules_escape_is_not_refused if {
 	count(violation) == 0 with input as tree(
 		{"crates/batten/tests/it/thing.rs": ["#![allow(clippy::expect_used)]"]},
 		{"crates/batten/tests/it/thing.rs": []},
+	)
+}
+
+# THE IDIOM EXEMPTION UNDER `src/`, WHICH IS THE ARM THE PATH EXCLUSION CANNOT
+# REACH. A `#[cfg(test)] mod tests` lives inside `crates/batten/src/**`, so the
+# case above — which is under `tests/` — passes on the path alone and says
+# nothing about `idiom_pattern`. Measured before the exemption existed: three
+# files were refused for opening their test module the way every file in the
+# crate opens its test module.
+#
+# It is also the case that would have caught the vocabulary gap this file's
+# `vocabulary` comment records: with `clippy-test-idiom` undefined the exemption
+# never fires, and NOTHING above notices, because every other case here is a deny
+# whose refusal an absent exemption only makes more certain.
+test_the_test_module_idiom_is_exempt_under_src_too if {
+	count(violation) == 0 with input as tree(
+		{"crates/batten/src/thing.rs": ["#[allow(clippy::expect_used)]"]},
+		{"crates/batten/src/thing.rs": []},
+	)
+}
+
+# AND THE EXEMPTION IS THREE NAMED LINTS, never a shape. `too_many_arguments` is
+# an escape and stays refused — without this the case above reads as "any added
+# `clippy::` line under `src/` is fine", which is the rule switched off.
+test_a_lint_outside_the_idiom_set_is_still_refused if {
+	count(violation) == 1 with input as tree(
+		{"crates/batten/src/thing.rs": ["#[allow(clippy::too_many_arguments)]"]},
+		{"crates/batten/src/thing.rs": []},
 	)
 }
 

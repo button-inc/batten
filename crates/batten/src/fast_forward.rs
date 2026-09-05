@@ -74,10 +74,25 @@ const MAX_PAGES: u32 = 20;
 /// STRING `null` for a missing field — not empty, and it would sail past a
 /// caller's guard as a pull request number. Reading the document here, an absent
 /// entry is `None` by construction and there is no rendering to be fooled by.
+/// # THE HEAD FILTER IS `owner:branch`, NEVER A BARE BRANCH
+///
+/// The forge documents this parameter as *"head user or head organization and
+/// branch name in the format of `user:ref-name`"*. A bare ref is not that shape,
+/// and an unmatched filter returns an empty array rather than an error — so the
+/// failure is `None`, which reads exactly like *this branch has no open pull
+/// request* and sends the lap down the has-nothing-to-land path.
+///
+/// The owner is taken from `repo` rather than from a second argument, which is
+/// correct for a branch in the repository being landed and is the only case this
+/// loop has: `land` drives THIS repository's own branches, trunk-based, and a
+/// fork's head would carry the fork owner instead. Stated rather than left
+/// implied — a consumer landing fork branches needs the head owner threaded
+/// through, and this function would answer `None` for every one of them.
 #[must_use]
 pub fn open_pull_request(repo: &str, branch: &str) -> Option<String> {
+    let owner = repo.split('/').next().unwrap_or(repo);
     let raw = run(&format!(
-        "repos/{repo}/pulls?head={branch}&state=open&per_page=1"
+        "repos/{repo}/pulls?head={owner}:{branch}&state=open&per_page=1"
     ))?;
     let document = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
     let number = document.as_array()?.first()?.get("number")?;

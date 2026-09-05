@@ -109,6 +109,42 @@ impl Compensation {
     pub const fn undoes_something(self) -> bool {
         !matches!(self, Self::Nothing)
     }
+
+    /// Whether this undo is owed as soon as its step is ATTEMPTED, rather than
+    /// once the step has succeeded.
+    ///
+    /// # A step's SUCCESS is not always what creates the effect
+    ///
+    /// The driver records an effectful row as entered on [`ExitCode::Success`]
+    /// alone, and for `Ready` that is exactly right: a refused ready bought no
+    /// matrix, so re-drafting over it would draft a pull request the lap never
+    /// made ready. Applied to the step that WAITS, the same rule inverts the arm
+    /// it exists for (PR #848's review). A wait comes back `Success` only when it
+    /// is GREEN; red, stale and unanswered are the three outcomes where runs are
+    /// still billing against a head nothing will land — and those were the three
+    /// that recorded nothing. [`Self::Abandon`] therefore ran only after a green
+    /// wait whose fast-forward then lapped, which is CLOUD-900's *"runs on a
+    /// superseded head keep spending"* backwards: it cancelled a green head's
+    /// runs and never a red one's.
+    ///
+    /// # Why it hangs off the COMPENSATION rather than off the step
+    ///
+    /// A `step == Wait` arm in the driver is the `step == Verify` exception this
+    /// module exists to have removed, reintroduced one field later. And the
+    /// discrimination is not really the step's: what makes this undo attempt-owed
+    /// is that it cancels runs the steps BEFORE it bought, so it is owed from the
+    /// moment those runs can exist. A consumer who hangs `Abandon` off a
+    /// different step inherits the same reading without declaring anything.
+    ///
+    /// A `match` rather than a comparison, for [`Self::is_durable`]'s reason: an
+    /// arm nobody has written yet is a compile error rather than a default.
+    #[must_use]
+    pub const fn owed_on_attempt(self) -> bool {
+        match self {
+            Self::Abandon => true,
+            Self::Nothing | Self::Redraft | Self::ReleaseLease => false,
+        }
+    }
 }
 
 /// One step of a declared pipeline.
@@ -131,6 +167,24 @@ pub struct StepRow {
     /// This is where the driver's `step == Verify` exception goes: a per-step
     /// slot rather than an `if` in the loop.
     pub precheck: Option<Precheck>,
+}
+
+impl StepRow {
+    /// Whether this row owes its undo, given how its primitive finished.
+    ///
+    /// **THE DRIVER'S RULE, HERE RATHER THAN IN THE LOOP**, for the reason
+    /// [`StepRow::precheck`] exists: a `step == Wait` arm in `run_land_lap` is
+    /// the `step == Verify` exception this module was written to remove,
+    /// reintroduced one conjunction later. It is also what makes the rule
+    /// testable without driving a whole lap against a forge.
+    ///
+    /// `succeeded` is the primitive's own answer, which is right for `Ready` and
+    /// wrong on its own for `Wait` — see [`Compensation::owed_on_attempt`], which
+    /// carries the measurement.
+    #[must_use]
+    pub const fn entered(&self, succeeded: bool) -> bool {
+        self.effectful && (succeeded || self.compensate.owed_on_attempt())
+    }
 }
 
 /// A question a row asks before its primitive runs.
@@ -335,6 +389,68 @@ impl Default for Pipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A WAIT THAT DID NOT SUCCEED STILL OWES ITS ABANDON, AND A READY THAT
+    /// DID NOT SUCCEED OWES NOTHING.**
+    ///
+    /// The driver's rule was `effectful && succeeded`, which is right for the
+    /// second half and inverts the first: `land wait` answers success only when
+    /// the head is GREEN, so red, stale and unanswered — the three outcomes where
+    /// runs are billing against a head nothing will land — recorded no entry and
+    /// `Compensation::Abandon` never ran for them.
+    ///
+    /// Four assertions rather than one, because each half of the conjunction can
+    /// be got wrong on its own: a rule that always returned `true` passes the
+    /// wait cases, a rule that kept `&& succeeded` passes the ready cases, and a
+    /// rule ignoring `effectful` passes both.
+    #[test]
+    fn a_wait_owes_its_undo_on_the_attempt_and_a_ready_owes_its_undo_on_success() {
+        let shipped = Pipeline::default();
+        // `is_some_and` rather than an unwrap: the crate's lints refuse a panic
+        // on a reachable path even here, and a step the composition does not
+        // declare should read as *did not enter* rather than end the run.
+        let entered = |step: Step, succeeded: bool| {
+            shipped
+                .steps
+                .iter()
+                .find(|row| row.step == step)
+                .is_some_and(|row| row.entered(succeeded))
+        };
+
+        assert!(
+            entered(Step::Wait, false),
+            "a red, stale or unanswered wait leaves runs live and owes the abandon"
+        );
+        assert!(entered(Step::Wait, true), "a green wait owes it too");
+        assert!(
+            !entered(Step::Ready, false),
+            "a refused ready bought no matrix, so there is no draft to undo"
+        );
+        assert!(entered(Step::Ready, true));
+        assert!(
+            !entered(Step::Verify, true),
+            "a step that is not effectful never owes an undo, however it ended"
+        );
+    }
+
+    /// **`Abandon` IS THE ONLY ATTEMPT-OWED UNDO, and the mirror is what makes
+    /// this case discriminate.** Without the second half, a predicate returning
+    /// `true` for everything would satisfy the first — and that predicate would
+    /// re-draft over a ready that never fired.
+    #[test]
+    fn only_the_undo_that_cancels_runs_is_owed_before_its_step_succeeds() {
+        assert!(Compensation::Abandon.owed_on_attempt());
+        for compensation in [
+            Compensation::Nothing,
+            Compensation::Redraft,
+            Compensation::ReleaseLease,
+        ] {
+            assert!(
+                !compensation.owed_on_attempt(),
+                "{compensation:?} undoes an effect its own step's success creates"
+            );
+        }
+    }
 
     /// **THE INVARIANT, AND THE PAIR THAT SHOWS IT DISCRIMINATES.**
     ///

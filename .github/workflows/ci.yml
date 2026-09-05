@@ -125,10 +125,15 @@ jobs:
       # matrix. The body runs `batten lease guard`, installed from `main` and
       # pinned to trunk's version rather than to this head's, so a clone
       # carrying stale rules cannot dodge the predicate by carrying a stale copy
-      # of it. Every justification lives on `run_lease_guard`. An unreadable
-      # body runs — fail open, which
-      # is the whole posture: waving one matrix through costs one matrix, while
-      # a predicate that cannot read itself would stop the fleet.
+      # of it. Every justification lives on `run_lease_guard`. THREE DIFFERENT
+      # FAILURES FAIL OPEN below, one `|| exit 0` each: a binary that will not
+      # download, a policy that will not fetch, and a guard that will not run.
+      # That is the whole posture — waving one matrix through costs one matrix,
+      # while a precondition that cannot reach its own inputs would stop the
+      # fleet. What keeps those three from reading as *ran and allowed* is
+      # trunk's installer refusing a binary that does not carry the verb
+      # (`BATTEN_REQUIRE`); until that installer IS trunk's, this step is
+      # vacuous by construction rather than by accident.
       - name: Landing lease precondition
         env:
           GH_TOKEN: ${{ github.token }}
