@@ -485,8 +485,19 @@ pub fn alive(git_dir: &Path, options: Alive<'_>) -> Reading {
         // module's header says it exists to remove, and it is the dangerous
         // direction: a successor reads it as a clear field and starts a second
         // landing.
-        let Ok(body) = std::fs::read_to_string(&file) else {
-            return Reading::Unreadable(file.clone());
+        //
+        // **AND `NotFound` IS NOT ONE OF THOSE CAUSES** (review of #848). This
+        // module deregisters an entry by DELETING it — three lines down, and from
+        // every exiting task — so a file listed by `read_dir` and gone by the time
+        // it is read is the ordinary race, not a registry nobody can see. Reading
+        // it as could-not-look turned a healthy answer into `Unreadable` and hid
+        // every entry later in sort order, which is the same conflation running
+        // the other way: the fix above must not buy its direction by inventing a
+        // failure the tree does not have.
+        let body = match std::fs::read_to_string(&file) {
+            Ok(body) => body,
+            Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Reading::Unreadable(file.clone()),
         };
         let entry = Entry::parse(&body);
         if !entry.is_complete() {

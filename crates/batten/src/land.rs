@@ -1163,7 +1163,17 @@ pub const fn progress(step: Step, code: crate::exit::ExitCode) -> Progress {
         // and asks again. Stopping instead would make every waiter a human
         // decision, and lapping is what lets the speculation path find a holder
         // to bet on at all.
+        //
+        // **A READY THAT COULD NOT LOOK JOINS THEM** (review of #848). `Ready`'s
+        // two exit codes were one arm, so a single transient 403 or 5xx on the
+        // pulls list — or on the draft-state read — ended the landing at exit `3`
+        // where every sibling arm laps. The split is by exit code and the step's
+        // own arms carry it: a refused body gate, a gate declared and unrunnable,
+        // and a branch with no pull request are all `Violation` (the tree or the
+        // forge state is wrong and no lap changes it), and `Internal` is reserved
+        // for a forge read that did not answer.
         (Step::Push | Step::Lease, Violation)
+        | (Step::Ready, Internal)
         | (Step::Wait | Step::FastForward, Violation | Internal) => Progress::Lap,
 
         // STOPS. The replay and the gate both answer about THIS tree, so a
@@ -1182,7 +1192,10 @@ pub const fn progress(step: Step, code: crate::exit::ExitCode) -> Progress {
         // environment cannot answer and then exit `3` anyway, which is the same
         // outcome later and less legibly — so it joins `Push`'s could-not-look
         // rather than `Wait`'s.
-        (Step::Replay | Step::Verify | Step::Ready, Violation | Internal)
+        // A READY REFUSAL IS THE AUTHOR'S, which is why it stays here while
+        // `Ready`'s could-not-look moved to the lap above.
+        (Step::Replay | Step::Verify, Violation | Internal)
+        | (Step::Ready, Violation)
         | (Step::Push | Step::Lease, Internal)
         | (_, Usage) => Progress::Stop,
     }
@@ -2608,9 +2621,16 @@ mod tests {
             super::progress(super::Step::Ready, Violation),
             super::Progress::Stop
         );
+        // **AND `Internal` LAPS, which is the split this case used to assert
+        // away** (review of #848). Both codes stopped, so one transient 403 or
+        // 5xx on the pulls list ended the landing at exit 3 where every sibling
+        // arm laps. `Violation` is the tree or the forge state being wrong — a
+        // refused body gate, a gate declared and unrunnable, a branch with no
+        // pull request — and no lap changes any of those. `Internal` is a forge
+        // read that did not answer, and a lap is exactly how you re-ask.
         assert_eq!(
             super::progress(super::Step::Ready, Internal),
-            super::Progress::Stop
+            super::Progress::Lap
         );
         assert_eq!(
             super::progress(super::Step::Ready, Success),

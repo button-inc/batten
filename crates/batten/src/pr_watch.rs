@@ -258,6 +258,21 @@ pub struct Poll {
     polls: u64,
     /// The current reading's signature.
     signature: u64,
+    /// The last backoff the SERVER asked for, held across a poll that could not
+    /// look.
+    ///
+    /// **A `Retry-After` must outlive one transport failure** (review of #848).
+    /// `absorb`'s could-not-look arm recomputed the wait from the response alone,
+    /// and a `None` response has none — so a `403` carrying `Retry-After: 300`
+    /// was honoured once, and the very next reset connection dropped the wait
+    /// back to the configured cadence and resumed hammering for the rest of the
+    /// rate-limit window. That is exactly the behaviour `Answer::backoff` exists
+    /// to stop, reintroduced by the arm that has no answer to read it from.
+    ///
+    /// Cleared by a real reading, because a `200` is the server saying the window
+    /// is over — holding it past that would be a second authority over a cadence
+    /// the endpoint already answers for.
+    backoff: Option<u64>,
     /// The last thing said out loud, so a stall is stated once rather than
     /// every second.
     announced: String,
@@ -279,7 +294,9 @@ impl Poll {
     pub fn absorb(&mut self, answer: Option<&crate::rest::Answer>, configured: u64) -> f64 {
         self.polls += 1;
         let Some(answer) = answer else {
-            return interval_for(configured, None);
+            // The server's last word stands: a poll that could not look learned
+            // nothing that would retire it.
+            return wait_for(configured, None, self.backoff);
         };
         // AN ETAG SURVIVES A RESPONSE THAT CARRIES NONE, which is what keeps a
         // single unvalidated answer from turning every later request
@@ -305,6 +322,12 @@ impl Poll {
             self.runs = runs_from_body(&answer.body);
             self.signature = signature(&answer.body);
         }
+        // A reading retires the window; anything else may extend it.
+        self.backoff = if answer.is_reading() {
+            None
+        } else {
+            answer.backoff.or(self.backoff)
+        };
         // THE SERVER'S BACKOFF OUTRANKS THE CONFIGURED FLOOR. `Answer::backoff`
         // carries `Retry-After`, and it had no consumer at all — a `403` that
         // said "wait 60 seconds" was answered by continuing at the configured

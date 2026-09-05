@@ -1383,7 +1383,16 @@ pub fn terms(root: &Path) -> std::result::Result<Terms, TermsMissing> {
     // inside it, so it is the half that moves, back to the width the field docs
     // already declare. Restoring the relation cannot widen the window a waiter
     // sees; it can only shorten it.
-    if resolved.beat >= resolved.ttl {
+    //
+    // **AND THE GUARD IS THE RATIO, NOT THE LIMIT** (review of #848). This fired
+    // only at `beat >= ttl`, so it enforced "a beat shorter than the TTL" while
+    // the paragraph above calls the RELATION the safety property. `LAND_LOCK_TTL=31`
+    // against the shipped 30s beat passed both filters and loaded with a
+    // one-second margin between a renewal and expiry — and the renewal is a smart
+    // HTTP round trip, so a second of latency leaves the lease expired while its
+    // holder is alive. That is the same two-landers outcome the measurement above
+    // describes, reached by an env var rather than by two.
+    if resolved.beat.saturating_mul(BEATS_PER_TTL) > resolved.ttl {
         resolved.beat = (resolved.ttl / BEATS_PER_TTL).max(1);
     }
     if let Ok(reference) = std::env::var("LAND_LOCK_BRANCH") {
@@ -1403,16 +1412,27 @@ pub fn terms(root: &Path) -> std::result::Result<Terms, TermsMissing> {
 /// of this comparison is exactly the drift that made the shell and the engine
 /// disagree about the same lease.
 ///
-/// **Absent, released, expired and garbage are one answer here.** The next
-/// `acquire` wins, so nothing is authorised away from this clone. `Garbage` is
-/// deliberately in that set for [`observe`]'s reason — a lease nothing can parse
-/// stays held to every DECISION, and the decision this feeds is the
+/// **Absent, released and expired are one answer here**: the next `acquire`
+/// wins, so nothing is authorised away from this clone.
+///
+/// **`Garbage` IS NOT IN THAT SET, and the sentence putting it there was false
+/// about the column it feeds** (review of #848). It read *"a lease nothing can
+/// parse stays held to every DECISION, and the decision this feeds is the
 /// `landing-loop` preset's, which reads a could-not-look column rather than this
-/// one.
+/// one"* — but [`adjudicate`] turned the `true` into exit `0`, and `batten.toml`
+/// maps `"0"` to `authorised`, so the column recorded AUTHORISED. The preset's
+/// refusal could not hold and this clone landed beside a live holder.
+///
+/// It also contradicted [`Observed::Garbage`]'s own doc one screen up — *"Every
+/// decision below still treats this as held"* — which is the reading that
+/// survives: a ref that is there and will not parse has not shown this clone
+/// owns anything, and the safe direction over a lease is the closed one.
 #[must_use]
 pub fn authorises_this_clone(observed: &Observed, holder: &str, now: i64) -> bool {
-    let Observed::Held { body, .. } = observed else {
-        return true;
+    let body = match observed {
+        Observed::Absent => return true,
+        Observed::Garbage { .. } => return false,
+        Observed::Held { body, .. } => body,
     };
     if body.released() || body.expired(now) {
         return true;
@@ -1481,6 +1501,15 @@ pub fn adjudicate(asked: Asked, root: &Path, now: i64) -> Option<(i32, String)> 
             let Ok(holder) = Local::under(&git_dir).holder() else {
                 return unknown;
             };
+            // A REF THAT WILL NOT PARSE IS COULD-NOT-LOOK ON THIS COLUMN, never
+            // a verdict. `authorises_this_clone` now fails closed on it, which is
+            // right for a caller deciding whether to spend — but `2` here would
+            // record `held-elsewhere`, asserting a holder nobody could read. `3`
+            // is unmapped, so the column reads `-` and the preset sees that it
+            // could not look.
+            if matches!(observed, Observed::Garbage { .. }) {
+                return unknown;
+            }
             if authorises_this_clone(&observed, &holder, now) {
                 Some((0, String::new()))
             } else {
@@ -2448,6 +2477,18 @@ pub enum Guarded {
 /// So `authority` is `None` where the caller never asked — one fewer forge read
 /// on a head that is doomed either way — and `None` is not a third verdict.
 ///
+/// **AN UNREADABLE STALENESS ROW IS NOT A STOP, so it does not skip the lease**
+/// (review of #848). This arm returned `Run` before the `authority` match at all,
+/// which INVERTS the ordering the paragraph above claims to conserve: in the
+/// shell an unreadable row left `stop` UNSET — it said *"cannot read this head's
+/// landing mechanism; not judging its age"* and carried on — so the lease table
+/// was still entered. Measured consequence: with the forge rate-limited or the
+/// credential absent, `decide` yields `Unknown`, the lease was never observed,
+/// and a rival's live lease was ignored while this job spent a matrix.
+///
+/// `Unknown` still never stops on its own — it contributes no refusal — it just
+/// stops being a reason not to ask the other half.
+///
 /// # EVERY COULD-NOT-LOOK RUNS
 ///
 /// This gate is the opposite of every other refusal in this repository. A
@@ -2467,20 +2508,23 @@ pub fn guard(carries: &Carries, authority: Option<&Authority>) -> Guarded {
                 ),
             };
         }
-        Carries::Unknown { because } => {
-            return Guarded::Run {
-                why: format!("{because}; not judging this head's age"),
-            };
-        }
-        Carries::Current => {}
+        Carries::Unknown { .. } | Carries::Current => {}
     }
+    let unjudged = match carries {
+        Carries::Unknown { because } => format!("{because}; not judging this head's age. "),
+        _ => String::new(),
+    };
     match authority {
-        Some(Authority::Stop(why)) => Guarded::Stop { why: why.clone() },
-        Some(Authority::Run(why)) => Guarded::Run { why: why.clone() },
+        Some(Authority::Stop(why)) => Guarded::Stop {
+            why: format!("{unjudged}{why}"),
+        },
+        Some(Authority::Run(why)) => Guarded::Run {
+            why: format!("{unjudged}{why}"),
+        },
         // The caller could not read the lease at all. `authorises` fails open by
         // contract and so does this.
         None => Guarded::Run {
-            why: String::from("the lease could not be read, so nothing refuses this branch"),
+            why: format!("{unjudged}the lease could not be read, so nothing refuses this branch"),
         },
     }
 }
@@ -3230,17 +3274,35 @@ mod tests {
             authorises_this_clone(&body("theirs", now, ""), "anyone", now),
             "zero seconds left is none left — the `>=` the expiry comparison uses"
         );
+    }
+
+    /// **A REF THAT WILL NOT PARSE HAS NOT SHOWN THIS CLONE OWNS ANYTHING**, and
+    /// it lived in the case above asserting the opposite (review of #848).
+    ///
+    /// The premise there was that garbage "reaches the preset as could-not-look
+    /// on the COLUMN, so answering it here as a refusal would fail closed twice".
+    /// It did not: [`adjudicate`] turned the `true` into exit `0` and
+    /// `batten.toml` maps `"0"` to `authorised`, so the column recorded
+    /// AUTHORISED, the `landing-loop` refusal could not hold, and this clone
+    /// landed beside a live holder. It also contradicted [`Observed::Garbage`]'s
+    /// own doc — "Every decision below still treats this as held".
+    ///
+    /// Moved to its own case because it is not one of "absent, released and
+    /// expired": those three are provably free, and this one is unread.
+    /// `adjudicate` answers `3` for it now, which is the could-not-look column
+    /// the old premise described but did not produce.
+    #[test]
+    fn a_lease_nobody_can_parse_authorises_nobody() {
         assert!(
-            authorises_this_clone(
+            !authorises_this_clone(
                 &Observed::Garbage {
                     sha: String::from("1111111111111111111111111111111111111111"),
                     why: String::from("the ref carries no lease body"),
                 },
                 "anyone",
-                now
+                1000
             ),
-            "a lease nothing can parse reaches the preset as could-not-look on the \
-             COLUMN, so answering it here as a refusal would fail closed twice"
+            "an unparseable lease must not read as free"
         );
     }
 
@@ -3965,7 +4027,10 @@ mod staleness_tests {
         };
         for (carries, authority) in [
             (&unknown, None),
-            (&unknown, Some(Authority::Stop(String::from("held")))),
+            (
+                &unknown,
+                Some(Authority::Run(String::from("nobody holds it"))),
+            ),
             (&Carries::Current, None),
         ] {
             let verdict = guard(carries, authority.as_ref());
@@ -3995,14 +4060,20 @@ mod staleness_tests {
         ));
     }
 
-    /// **AN UNKNOWN STALENESS READING OUTRANKS A LEASE THAT SAYS STOP**, and the
-    /// case is here because the arm order makes it easy to get backwards.
+    /// **AN UNKNOWN STALENESS READING DOES NOT OUTRANK A LEASE THAT SAYS STOP**,
+    /// and this doc asserted the opposite over a predecessor that says so in the
+    /// other direction (review of #848).
     ///
-    /// It is not a preference between two verdicts: a `Carries::Unknown` means
-    /// the head was never judged, and the predecessor never consults the lease
-    /// table on that path at all — it sets `stop` from the staleness row and
-    /// enters the table only when it is empty. The second element of the pair
-    /// above pins it.
+    /// Read at `origin/main:mise-tasks/ci-lease-precondition.sh:163`: the
+    /// unreadable arm is `say "cannot read this head's mise-tasks/land.sh; not
+    /// judging its age"` and sets NOTHING, so `if [[ -z "${stop:-}" ]]` holds and
+    /// the lease table is entered. Only the STALE arm sets `stop=1`. So `Unknown`
+    /// never skipped the lease; the port made it do so, and the case below pinned
+    /// the port rather than the behaviour it claimed to conserve.
+    ///
+    /// What is true, and what this case actually shows, is the STALE half: a head
+    /// that provably does not carry trunk's landing mechanism stops without the
+    /// lease being read at all.
     #[test]
     fn a_stale_head_stops_without_the_lease_being_consulted() {
         // A stop from staleness names the commit the head is missing, so the
@@ -4025,6 +4096,39 @@ mod staleness_tests {
                 );
             }
             Guarded::Run { why } => panic!("a stale head must not spend a matrix: {why}"),
+        }
+    }
+
+    /// **AND AN UNJUDGED HEAD STILL ANSWERS TO THE LEASE**, which is the arm the
+    /// case above used to assert away.
+    ///
+    /// With the forge rate-limited or the credential absent, `decide` yields
+    /// `Carries::Unknown`. Returning `Run` there without asking the lease meant a
+    /// rival's live hold was ignored and this job spent a matrix beside it —
+    /// two landers, which is the one thing this module exists to prevent.
+    #[test]
+    fn an_unjudged_head_still_stops_on_a_lease_somebody_else_holds() {
+        let unknown = Carries::Unknown {
+            because: String::from("the forge did not answer"),
+        };
+        let verdict = guard(
+            &unknown,
+            Some(&Authority::Stop(String::from("somebody else holds it"))),
+        );
+        match verdict {
+            Guarded::Stop { why } => {
+                assert!(
+                    why.contains("somebody else holds it"),
+                    "the lease's own reason reaches the reader: {why}"
+                );
+                assert!(
+                    why.contains("not judging this head's age"),
+                    "and so does the reading that could not be taken: {why}"
+                );
+            }
+            Guarded::Run { why } => {
+                panic!("an unjudged head must still answer to the lease: {why}")
+            }
         }
     }
 

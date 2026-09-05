@@ -49,7 +49,7 @@
 //! raced without becoming a second authority over when to stop asking, which is
 //! the mistake `pr_watch::read` was made public to avoid (CLOUD-1338).
 
-use crate::pr_watch::{interval_for, wait_for};
+use crate::pr_watch::wait_for;
 
 /// What the staleness poll needs.
 #[derive(Debug, Clone)]
@@ -108,6 +108,14 @@ pub struct Poll {
     head: Option<String>,
     /// How many requests this poll has made.
     polls: u64,
+    /// The last backoff the SERVER asked for, held across a poll that could not
+    /// look.
+    ///
+    /// `crate::pr_watch::Poll`'s field carries the measurement and the reason;
+    /// this is the other arm of the same race and takes the same reading. A
+    /// `200` retires the window, anything else may extend it, and a response
+    /// that could not be taken at all learned nothing that would retire it.
+    backoff: Option<u64>,
 }
 
 impl Poll {
@@ -123,7 +131,9 @@ impl Poll {
     pub fn absorb(&mut self, answer: Option<&crate::rest::Answer>, configured: u64) -> f64 {
         self.polls += 1;
         let Some(answer) = answer else {
-            return interval_for(configured, None);
+            // The server's last word stands — `crate::pr_watch::Poll::backoff`
+            // carries the measurement, and these two are the arms of one race.
+            return wait_for(configured, None, self.backoff);
         };
         // AN ETAG SURVIVES A RESPONSE THAT CARRIES NONE, which is what keeps a
         // single unvalidated answer from turning every later request
@@ -142,6 +152,12 @@ impl Poll {
         if answer.is_reading() {
             self.head = head_from_body(&answer.body);
         }
+        // A reading retires the window; anything else may extend it.
+        self.backoff = if answer.is_reading() {
+            None
+        } else {
+            answer.backoff.or(self.backoff)
+        };
         // The cadence is clamped and the backoff is not — `wait_for` carries the
         // reason, and it is the same reading the sibling arm takes.
         wait_for(configured, answer.poll_floor, answer.backoff)

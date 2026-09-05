@@ -1595,8 +1595,27 @@ fn piped_through(
         // The early `?` also abandoned a live child without waiting, leaking a
         // zombie per occurrence. Dropping the handle closes the pipe either way,
         // and `wait_with_output` below is what actually decides.
+        //
+        // **ON A THREAD, because `Diagnostics::Keep` made a blocking write here a
+        // DEADLOCK** (review of #848). Nothing drains stdout or stderr until
+        // `wait_with_output` below, and this write completes first — so with
+        // stderr piped, a gate that emits more than one pipe buffer (~64 KiB) of
+        // diagnostics before consuming all of stdin blocks writing stderr while
+        // this blocks writing stdin, and the lap hangs with no timeout. With
+        // `Stdio::null()` that was unreachable: the child could only ever block on
+        // stdout, which the caller was not filling. `land::ready` feeds a pull
+        // request BODY on stdin to a gate that takes `Keep`, which is exactly the
+        // shape.
+        //
+        // Detached rather than joined: the handle closes when the thread's owned
+        // pipe drops, and `wait_with_output` is what decides. A caller must never
+        // wait on the writer, because a gate that ignores its stdin is the case
+        // above that legitimately never drains it.
         if let Some(mut pipe) = child.stdin.take() {
-            let _ = pipe.write_all(stdin.as_bytes());
+            let body = stdin.to_owned();
+            drop(std::thread::spawn(move || {
+                let _ = pipe.write_all(body.as_bytes());
+            }));
         }
     }
     let finished = child.wait_with_output().ok()?;

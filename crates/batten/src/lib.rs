@@ -7481,14 +7481,18 @@ fn run_lease_guard(
     let repo = repo_or_placeholder(root);
     let carries = lease_staleness(root, overrides, &repo, head);
 
-    // THE LEASE IS ASKED ONLY IF THE HEAD IS CURRENT, which is the predecessor's
-    // ordering: one fewer forge read on a head that is doomed either way.
+    // THE LEASE IS ASKED UNLESS STALENESS ALREADY STOPPED, which is the
+    // predecessor's ordering: one fewer forge read on a head that is doomed
+    // either way. `Unknown` is NOT such a head — the shell left `stop` unset on
+    // an unreadable row and entered the lease table anyway, and skipping it here
+    // let a rate-limited forge wave a rival's live lease through (review of
+    // #848). `lease::guard`'s header carries the measurement.
     let authority = match &carries {
-        lease::Carries::Current => {
+        lease::Carries::Stale { .. } => None,
+        lease::Carries::Current | lease::Carries::Unknown { .. } => {
             let observed = lease::observe(terms).ok();
             Some(lease::authorises(observed.as_ref(), branch, now))
         }
-        _ => None,
     };
     let guarded = lease::guard(&carries, authority.as_ref());
     report_guard(&guarded, &repo, run, out, err)
@@ -7768,7 +7772,12 @@ fn run_land_ready(
                     "::error:: land: {gate} is declared in LAND_BODY_GATES and will not run, so \
                      its verdict is unknown rather than clean"
                 )?;
-                return Ok(ExitCode::Internal);
+                // `Violation` rather than `Internal`, and the lap is UNCHANGED:
+                // `land::progress` stops on both arms for this step before and
+                // after. What the code now says is which KIND of stop it is —
+                // this one is the author's to fix, and `Internal` is reserved for
+                // a forge read that did not answer, which laps (review of #848).
+                return Ok(ExitCode::Violation);
             }
         }
     }
@@ -7805,12 +7814,14 @@ fn spend_the_matrix(
     let repo = repo_or_placeholder(root);
     let pr = match fast_forward::look_up_pull_request(&repo, branch) {
         fast_forward::Lookup::Found(pr) => pr,
+        // A BRANCH WITH NO PULL REQUEST IS A STATE, NOT A FAILED READ, so it
+        // stops rather than lapping: no number of laps opens one.
         fast_forward::Lookup::None => {
             writeln!(
                 err,
                 "::error:: land: no open pull request for {branch}, so there is nothing to ready and no run to buy"
             )?;
-            return Ok(ExitCode::Internal);
+            return Ok(ExitCode::Violation);
         }
         fast_forward::Lookup::Unreadable(status) => {
             writeln!(
