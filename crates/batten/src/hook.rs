@@ -5233,35 +5233,53 @@ fn substitution_decision(
     cwd: Option<&Path>,
 ) -> Option<Refusal> {
     for (index, segment) in parsed.iter().enumerate() {
-        let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
-        let program_index = effective_program(&tokens)?;
-        let program = tokens[program_index];
-        let operands = &tokens[program_index + 1..];
-        if !substitutes
-            .iter()
-            .any(|entry| substitute_matches(entry, program, operands))
-        {
-            continue;
-        }
-        // Clause 2. The PRECEDING segment's terminator is what says whether this
-        // stage was fed by a pipe — the existing discard predicate reads the
-        // FOLLOWING one, which is why both live here rather than one deriving
-        // the other.
+        // Clause 2 first, because it is the SEGMENT's fact and cheap: the
+        // PRECEDING segment's terminator says whether this stage was fed by a
+        // pipe. The discard predicate reads the FOLLOWING one, which is why both
+        // live here rather than one deriving the other. Hoisted above the line
+        // walk so a piped stage costs no per-line work at all.
         if index > 0 && parsed[index - 1].terminator == Some(Separator::Pipe) {
             continue;
         }
-        // Operands only, and the scan STOPS at the first redirection: everything
-        // past a `>` is a destination this call writes, never a target it read
-        // instead of reaching for a tool. `grep pat > out.txt` is stdin-fed and
-        // must allow, which a scan that merely skipped the `>` would not do.
-        let Some(target) = tokens[program_index + 1..]
-            .iter()
-            .take_while(|token| !token.contains('>') && !token.contains('<'))
-            .find(|token| !token.starts_with('-') && names_a_repository_path(token, root, cwd))
-        else {
-            continue;
-        };
-        return Some(substitution_refusal(rule, program, target));
+        // PER LINE and by RESOLVED program (CLOUD-1381), matching every other
+        // mediated walk. Clause 2 stays the segment's above, for the reason
+        // `pipeline_rules` states: a pipe is a property of the list.
+        for line_words in line_bounded_words(segment) {
+            let tokens: Vec<&str> = line_words.iter().map(String::as_str).collect();
+            // `continue`, NEVER `?`. This read `effective_program(&tokens)?`, and
+            // the `?` returns from the whole FUNCTION rather than skipping the
+            // segment — so the first element with no resolvable program ended the
+            // scan and everything after it went unjudged. Measured over the
+            // running hook: `grep needle crates/batten/src/lib.rs` denied, and
+            // `FOO=1 && grep needle crates/batten/src/lib.rs` ALLOWED, because a
+            // bare assignment resolves no program. Every other skip in this loop
+            // was already a `continue`; this one was the odd path out and it
+            // failed open.
+            let Some(program_index) = effective_program(&tokens) else {
+                continue;
+            };
+            let program = program_token(tokens[program_index]);
+            let operands = &tokens[program_index + 1..];
+            if !substitutes
+                .iter()
+                .any(|entry| substitute_matches(entry, program, operands))
+            {
+                continue;
+            }
+            // Operands only, and the scan STOPS at the first redirection:
+            // everything past a `>` is a destination this call writes, never a
+            // target it read instead of reaching for a tool. `grep pat >
+            // out.txt` is stdin-fed and must allow, which a scan that merely
+            // skipped the `>` would not do.
+            let Some(target) = tokens[program_index + 1..]
+                .iter()
+                .take_while(|token| !token.contains('>') && !token.contains('<'))
+                .find(|token| !token.starts_with('-') && names_a_repository_path(token, root, cwd))
+            else {
+                continue;
+            };
+            return Some(substitution_refusal(rule, program, target));
+        }
     }
     None
 }

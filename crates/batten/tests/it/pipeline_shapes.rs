@@ -288,6 +288,48 @@ fn a_text_utility_aimed_at_a_repository_path_is_refused() {
     assert_denied("tail -5 mise.toml");
 }
 
+/// TWO EVASIONS, AND THE FIRST HAD NOTHING TO DO WITH NEWLINES (CLOUD-1381).
+///
+/// `substitution_decision` resolved its program with `effective_program(&tokens)?`
+/// — and `?` returns from the whole FUNCTION rather than skipping the element, so
+/// the first one with no resolvable program ended the scan and everything after
+/// it went unjudged. Every other skip in that loop was already a `continue`;
+/// this one path failed OPEN. Measured over the running hook:
+/// `grep needle crates/batten/src/lib.rs` denied, and the same command behind a
+/// bare `FOO=1 &&` allowed, because an assignment alone resolves no program.
+///
+/// The second is this branch's own class: a newline is whitespace to `segments`,
+/// so the walk read the first line's program and missed the utility on the
+/// second.
+///
+/// Both are the permissive direction, which is the one nothing reports: a call
+/// that should have been refused simply proceeds, and the refusal that never ran
+/// is indistinguishable from a clean adjudication.
+#[test]
+fn a_utility_behind_a_program_less_element_is_still_refused() {
+    assert_denied("FOO=1 && grep needle crates/batten/src/lib.rs");
+    assert_denied("echo hi\ngrep needle crates/batten/src/lib.rs");
+    // The assignment form on a later LINE as well, so neither fix alone passes
+    // this case.
+    assert_denied("echo hi\nFOO=1 head -5 AGENTS.md");
+}
+
+/// The anti-vacuity half: the three clauses that must still allow, or the row
+/// refuses ordinary work rather than substitution.
+///
+/// Asserted here beside the denies because a deny-only suite cannot tell a fix
+/// that closed an evasion from one that simply started refusing everything —
+/// which is the direction that gets a guard switched off rather than tightened.
+#[test]
+fn the_three_allow_clauses_survive_the_per_line_walk() {
+    // Clause 2: downstream of a pipe, so it filters another command's output.
+    assert_allowed("git ls-files | grep crates/batten");
+    // Clause 3: a path outside the repository names nothing a tool replaces.
+    assert_allowed("grep needle /tmp/scratch.txt");
+    // The redirect destination is written, not read instead of using a tool.
+    assert_allowed("grep pat > out.txt");
+}
+
 #[test]
 fn the_same_utility_downstream_of_a_pipe_is_a_filter_and_is_untouched() {
     // THE LOAD-BEARING HALF, and the reason this row is a `pipeline` and not a
