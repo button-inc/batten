@@ -152,6 +152,7 @@ mod inverted_board_cases;
 mod issue_key;
 mod judge_kind;
 mod land;
+mod land_entry_gates;
 mod land_forge_reads;
 mod land_hand_stepping;
 mod landed_check;
