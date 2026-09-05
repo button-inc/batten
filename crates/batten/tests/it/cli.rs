@@ -2867,6 +2867,21 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
         rule: "gh-run-watch",
         site: CensusSite::Checkout,
     },
+    // The landing loop's own hand-stepping (CLOUD-1461), which belongs with the
+    // `gh` lifecycle rows above rather than apart from them: all five refuse an
+    // ad-hoc spelling of a step `mise run land` already drives.
+    //
+    // The census case is the DENY arm only. Its allow arm — `git rebase
+    // --continue`, the one spelling a conflict exit requires by hand — cannot be
+    // written here, because this table pairs a call with the row that must
+    // refuse it and an allowed call has no such row. It lives in
+    // `crates/batten/tests/it/land_hand_stepping.rs` with the other three
+    // allows, and that file is what stops the row becoming a blanket refusal.
+    ShapeCase {
+        call: CensusCall::Command("git rebase origin/main"),
+        rule: "rebase-not-hand-stepped",
+        site: CensusSite::Checkout,
+    },
     ShapeCase {
         call: CensusCall::Command("cargo test -p batten"),
         rule: "no-bare-cargo",
