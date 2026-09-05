@@ -7618,11 +7618,21 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
     // newline as a separator in the first place. Per-line words come from the
     // ORIGINAL parse, so both answers are the same parser's and neither is
     // re-derived by splitting a string.
+    // THE SOURCE MUST BE THE STRING THE SPANS WERE COMPUTED AGAINST. `flatten`
+    // slices `raw` out of it by span, so handing it the original text while
+    // reading nodes parsed from the joined text is a latent mis-slice. It
+    // happens to be harmless today — the join replaces one `\n` with one space,
+    // so every offset is preserved — but that is an accident of this particular
+    // join, not a property anything holds, and an earlier revision wrote
+    // `map_or(command, |_| command)`, which returned the original from both arms
+    // and so could never have used the joined text at all.
     let joined = joined_parse(command, &nodes);
-    let reading = joined.as_ref().unwrap_or(&nodes);
+    let (reading, source) = joined
+        .as_ref()
+        .map_or((&nodes, command), |(text, parsed)| (parsed, text.as_str()));
     let mut out: Vec<Segment> = Vec::new();
     for node in reading {
-        flatten(node, joined.as_ref().map_or(command, |_| command), None, &mut out);
+        flatten(node, source, None, &mut out);
     }
     // Where the join happened, `flatten` gave every segment one `lines` entry
     // over the fused words. Replace that with the per-node reading, which is
@@ -7657,7 +7667,7 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
 /// bound is narrower than it sounds — a heredoc's own newline already cannot
 /// separate two commands, because everything up to the delimiter belongs to the
 /// body.
-fn joined_parse(command: &str, nodes: &[rable::Node]) -> Option<Vec<rable::Node>> {
+fn joined_parse(command: &str, nodes: &[rable::Node]) -> Option<(String, Vec<rable::Node>)> {
     if !command.contains('\n') || nodes.len() < 2 || nodes.iter().any(opens_heredoc) {
         return None;
     }
@@ -7669,7 +7679,10 @@ fn joined_parse(command: &str, nodes: &[rable::Node]) -> Option<Vec<rable::Node>
     // whenever one was absorbed — and that is what this compares.
     let joined = command.replace('\n', " ");
     let reparsed = rable::parse(&joined, false).ok()?;
-    (words_in(&reparsed) == words_in(nodes)).then_some(reparsed)
+    // The joined TEXT travels with its parse, because the caller slices spans
+    // out of it. Returning the nodes alone is what let the source and the spans
+    // come from different strings.
+    (words_in(&reparsed) == words_in(nodes)).then_some((joined, reparsed))
 }
 
 /// Every word any command in this forest carries, for the conservation check
@@ -7826,17 +7839,26 @@ fn flatten_in(
             out.push(segment);
             out.append(&mut nested);
         }
-        rable::NodeKind::Pipeline {
-            commands,
-            separators,
-        } => {
+        rable::NodeKind::Pipeline { commands, .. } => {
             for (index, command) in commands.iter().enumerate() {
                 // A stage's terminator is the pipe that FOLLOWS it; the last
                 // stage inherits whatever followed the pipeline itself.
+                //
+                // BOTH PIPE SPELLINGS ARE `Pipe`, DELIBERATELY. `rable`
+                // distinguishes `|` from `|&` (`PipeSep::PipeBoth`) and this
+                // collapses them, because the only question `Separator` exists
+                // to answer is what happens to the first stage's exit STATUS —
+                // and that is identical for both: the pipeline exits with the
+                // last stage's. `|&` additionally redirects stderr, which is a
+                // question about output rather than about status and which no
+                // `pipeline` row asks.
+                //
+                // Written as a plain value rather than a lookup: an earlier
+                // revision consulted `separators.get(index)` and returned the
+                // same thing from both arms, which read as a distinction being
+                // made and was not one.
                 let follows = if index + 1 < commands.len() {
-                    separators
-                        .get(index)
-                        .map_or(Some(Separator::Pipe), |_| Some(Separator::Pipe))
+                    Some(Separator::Pipe)
                 } else {
                     after
                 };

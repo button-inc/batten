@@ -447,6 +447,26 @@ as a leaf operation over a token whose extent is already settled. That boundary
 is stated here because it is the one place a reader will expect more than
 arrived.
 
+**AND A PARSE IS NECESSARY WITHOUT BEING SUFFICIENT — the residue is named here
+so the next author finds it rather than discovering it** (CLOUD-1381's own
+acceptance). A correct tree gives STRUCTURE; it does not make a command whose
+text is not known until it runs decidable. `eval "$CMD"`, `bash -c "$VAR"`,
+`sh -c "$(build_it)"` and anything assembled at runtime all parse cleanly, and
+what they parse to is a two-word command whose second word is an expansion. The
+program that will actually run is not in the tree, because it is not in the
+string.
+
+**Those read as an ordinary allowed command today, NOT as could-not-look, and
+that gap is the honest statement of where this row got to.** `Look::CouldNotLook`
+is reserved for a command the parser could not read at all; a command it read
+perfectly and whose MEANING is deferred to runtime is a different thing, and
+collapsing them would make every `eval` in a task body unanalysable. Closing it
+is a predicate — a module refusing an interpreter flag whose operand is not a
+literal — and a predicate is a row of its own, not a property of the parser.
+What the parse buys is that such a rule is now WRITABLE: `segments` carries the
+program and its operands as structure, so "an `eval` whose argument contains an
+expansion" is a question a module can ask. Before, it was not.
+
 There is **one parser**, and a module must not grow a second: no `split` of the
 command line, in Rego or in Rust. **The reason is not effort, and giving it as
 effort was this file's own defect** (CLOUD-1104): the cost was stated as ~60
