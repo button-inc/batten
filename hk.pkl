@@ -1005,6 +1005,16 @@ local gate = new Mapping<String, Step> {
         // for exactly the commits that add a policy module, which is when the
         // `rego.metadata.*` refusal has anything to catch.
         "policy/**/*.rego",
+        // CLOUD-761's `no-tracker-key-in-modules` row scopes a `forbid` to
+        // `policy/**` — the whole tree rather than the `.rego` files above it —
+        // so the broader glob has to follow it here, and `batten-glob-check`
+        // refused the commit until it did. The two entries are not redundant:
+        // every tracked path under `policy/` is a module today, so they select
+        // the same set, and the day one is not, the narrow entry would leave the
+        // key rule silent for exactly the file that escaped the module shape.
+        // Broad because the rule is: a key expression is a second authority
+        // wherever it is written, not only inside a module.
+        "policy/**",
         // CLOUD-876's `policy-lint-rule-tests` row runs the custom Regal rule's
         // own suite, keyed on `.regal/rules/**/*.rego` — same coupling again:
         // the commit that edits the rule is exactly the commit whose suite has

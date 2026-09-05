@@ -649,6 +649,22 @@ fn closes_a_key(text: &str, at: usize) -> bool {
         .is_none_or(|c| !c.is_ascii_digit())
 }
 
+// THE DECLARED MUTATION (CLOUD-761), beside the reader it applies to.
+//
+// `engine-ready` resolves this file, so `mise run mutant` APPLIES the row rather
+// than only binding it. The obligation itself is bound in
+// `crates/batten/tests/it/issue_key.rs`, because `obligations-bound`'s
+// `line_sources` covers `crates/batten/tests/**` and not this directory — the
+// same split a `.rego` module already has, where `#MUTANT-SUITE` names a suite
+// somewhere else entirely. The row is spelled identically in both places, so a
+// reader comparing them sees one claim rather than two.
+//
+// It loosens the CASE axis at the one place the grammar compiles a consumer
+// expression, which is what makes it discriminate: `key_of` and `keys_in`
+// compose no key expression of their own, so there is nothing else here for a
+// mutation to reach.
+//MUTANT-SUITE crates/batten/tests/it/issue_key.rs
+//MUTANT case-insensitive-key-accepted|s@^            Regex::new(&row.regex)@            Regex::new(\&format!("(?i){}", row.regex))@|the_committed_reader_refuses_the_lowercase_spelling
 impl Grammar {
     /// Is this WHOLE string a key? The four shell `case` globs' question.
     ///

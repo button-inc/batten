@@ -3196,14 +3196,61 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "read the key from `[[pattern]] ready-issue-key`, or let the program's retirement carry its derivation away; a twenty-first spelling is how the first twenty arrived"
 
+# THREE SPELLINGS, NOT ONE (CLOUD-761). This row carried `CLOUD-\[0-9\]` alone,
+# which refuses the ONE way the twenty measured derivations happened to be
+# written and waves through every other way of writing the same expression. A
+# class a second spelling escapes is not a class — it is the first spelling, with
+# a gate attached — and the whole reason twenty copies could accumulate is that
+# nothing refused the twenty-first before it was typed.
+#
+# The alternation is the escape forms a regex author reaches for next: the
+# character class, `\d`, and `\d` inside a class. Measured over the tree at
+# `6481e41`: zero hits under either glob for the two added spellings, so this
+# adds a refusal and removes none.
+#
+# WHAT IT DELIBERATELY DOES NOT MATCH is a bare CITATION. `CLOUD-761` in a
+# provenance comment carries no backslash and no character class, which is the
+# discriminator CLOUD-1100 already found for this row: a grammar constant is a
+# regex over keys where a citation is a literal key, and the crate is full of the
+# latter. Nor does it reach `[A-Z]+-[0-9]+` — a shape naming no consumer is what
+# rule 1 asks for, and `tests/it/claim_race.rs` and `src/race.rs` are right to
+# carry it.
 [[rule]]
 id = "no-tracker-key-in-core"
 kind = "forbid"
 glob = "crates/**"
-regex = 'CLOUD-\[0-9\]'
+regex = 'CLOUD-(\[0-9\]|\\d|\[\\d\])'
 severity = "deny"
 scope = "tree"
 no_fix_reason = "declare it as a `[[pattern]]` row and read it by id; a tracker's vocabulary in the core is rule 1's violation, and moving it is the fix rather than rewording it"
+
+# THE SAME CLASS, ONE DIRECTORY OVER, AND IT HAD NO GATE AT ALL (CLOUD-761). A
+# `[[rule]]`'s `glob` is one pattern, so the module tree gets its own row rather
+# than a widened one — and it is a `forbid` rather than the ratchet
+# `issue-key-derivations-not-growing` has to be for `mise-tasks/**`, because the
+# direction is available here: `policy/**` carries ZERO derivations today, so
+# nothing has to be waited out.
+#
+# It CAN be a flat refusal precisely because the registry already answers the
+# question a module would otherwise re-spell: a module reads
+# `data.batten.patterns["ready-issue-key"]` by id, so the token reaching a
+# predicate is the consumer's one declaration. A module composing its own is the
+# second authority `.claude/rules/policy-modules.md` refuses at load for inline
+# patterns generally, said here for the one token this consumer has already been
+# bitten by.
+#
+# A PRESET IS OUT OF SCOPE and that is not an oversight: a preset ships to
+# consumers who declare no rows, so `policy-modules.md`'s own exemption tells its
+# author to write the literal inline. This glob names the in-repo module tree,
+# which is exactly where the exemption does not apply.
+[[rule]]
+id = "no-tracker-key-in-modules"
+kind = "forbid"
+glob = "policy/**"
+regex = 'CLOUD-(\[0-9\]|\\d|\[\\d\])'
+severity = "deny"
+scope = "tree"
+no_fix_reason = "read the key from `[[pattern]] ready-issue-key` by id; a module composing its own key expression is a second authority over one definition, which is what the registry exists to make unwritable"
 
 # A RETIREMENT LEDGER ARM IS EXEMPT, and this is a structural collision rather
 # than a convenience (CLOUD-1294). `bats-tests-not-deleted` matches an arm by the

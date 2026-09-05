@@ -19,7 +19,44 @@
 //! evidence source is a property of a real one: a branch, a commit range, an
 //! `origin/main` to read it since. A separate target rather than more of
 //! `tests/cli.rs`, on `tests/claim_receipt.rs`'s precedent.
+//!
+//! # The conformance fixture every retirement tier imports (CLOUD-761)
+//!
+//! CLOUD-1142 landed the DEFINITION — `ready::Grammar::key_of` and `keys_in`,
+//! the three axes decided (case sensitive, the explicit character-class
+//! boundary, the project prefix mandatory). What it could not land is the
+//! obligation: nineteen governed shell consumers still re-derive the key, each
+//! retires whole under CLOUD-1164, and its successor's tier has to be held to
+//! the same seven examples rather than to whichever ones its author remembered.
+//!
+//! [`conformance`] is that set, exported so a successor tier IMPORTS it. A tier
+//! that re-types the examples is a twentieth derivation wearing a test's
+//! clothes: it can drift from this one silently, and the drift is invisible
+//! precisely because both files are green.
+//!
+//! **The reader under test is the engine's, resolved from the COMMITTED table**
+//! (`Grammar::resolve(&common::committed_patterns())`), never a fixture
+//! expression. `Grammar::committed()` states the reason for the in-crate half
+//! and it holds here: a fixture would let the `[[pattern]] ready-issue-key` row
+//! change while every case below kept passing, which is the drift one definition
+//! exists to remove.
+//!
+//! # The declared mutation, and why the row is in THIS file
+//!
+//! `obligations-bound` binds a §7 obligation by reading the declared file's
+//! lines for a row beginning `#MUTANT <slug>|`, and its `line_sources` covers
+//! `crates/batten/tests/**` and not `crates/batten/src/**` — so the row lives
+//! here even though the expression it applies belongs to `ready.rs`'s reader.
+//! It is a block comment because the match is on a line PREFIX and Rust has no
+//! line comment starting with `#`. The same row is declared beside the reader in
+//! `crates/batten/src/ready.rs`, where `engine-ready` resolves it, so
+//! `mise run mutant` APPLIES it rather than only binding it — the gap
+//! `crates/batten/tests/it/commit_arm_sequencing.rs` records for its own row.
 
+/*
+#MUTANT-SUITE crates/batten/tests/it/issue_key.rs
+#MUTANT case-insensitive-key-accepted|s@^            Regex::new(&row.regex)@            Regex::new(\&format!("(?i){}", row.regex))@|the_committed_reader_refuses_the_lowercase_spelling
+*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -379,5 +416,164 @@ fn a_requires_key_row_without_a_base_is_a_load_error() {
         stderr(&output).contains("requires `base`"),
         "the refusal names the missing column: {}",
         stderr(&output)
+    );
+}
+
+/// One conformance example: a subject, whether the WHOLE of it is a key, and how
+/// many keys the subject CONTAINS.
+///
+/// Both questions, because they are different ones and the four shell `case`
+/// globs conflate them. `<PREFIX>-1x` is not a key and carries one; a glob
+/// answering "is this a key" by matching a prefix cannot tell those apart, which
+/// is why it accepts the string outright.
+pub(crate) struct KeyExample {
+    /// The text the reader is asked about.
+    pub subject: String,
+    /// Whether `key_of` resolves the whole subject.
+    pub whole_key: bool,
+    /// How many keys `keys_in` finds in it.
+    pub contains: usize,
+}
+
+/// The consumer's own key, spelled from parts so this file carries no derivation
+/// of the token.
+///
+/// `no-tracker-key-in-core` refuses one anywhere under `crates/**`, and a test is
+/// not exempt from the rule it is testing — the same dodge `tests/it/cli.rs`
+/// uses to seed the banned shapes it asserts on.
+pub(crate) fn key(n: u32) -> String {
+    format!("{}-{n}", "CL".to_owned() + "OUD")
+}
+
+/// The committed grammar, resolved the way a consumer's run resolves it.
+///
+/// `Grammar::committed()` is `#[cfg(test)]` and therefore unreachable from this
+/// target, so the route is the public one over the committed `[[pattern]]`
+/// table. That is not a workaround: reading the shipped table is what makes a
+/// registry row's drift red HERE rather than only in the crate's own unit tests.
+pub(crate) fn committed_grammar() -> batten::ready::Grammar {
+    batten::ready::Grammar::resolve(&common::committed_patterns())
+        .expect("the committed pattern table resolves a ready grammar")
+}
+
+/// CLOUD-761's fixed example set, exported for the retirement tiers that succeed
+/// the nineteen shell consumers.
+///
+/// Each row is a site that behaves DIFFERENTLY today: the four `case` globs
+/// (`[A-Z]*-[0-9]*`) accept `AB-1`, `Z-9` and `A-1foo`; five sites match
+/// case-insensitively and normalise up, which is the shipped defect — a body
+/// writing the lowercase spelling is accepted by one gate and invisible to two
+/// others; and two landed sites commented the short-key-inside-a-long-one case
+/// by name while spelling the boundary two different ways.
+///
+/// A successor tier imports this rather than re-typing it. Re-typing is how a
+/// twentieth derivation arrives, and it arrives green.
+pub(crate) fn conformance() -> Vec<KeyExample> {
+    vec![
+        // The positive arm, first: without it every refusal below is satisfied
+        // by a definition that refuses everything.
+        KeyExample {
+            subject: key(757),
+            whole_key: true,
+            contains: 1,
+        },
+        // CASE: SENSITIVE. Refused rather than normalised.
+        KeyExample {
+            subject: key(757).to_lowercase(),
+            whole_key: false,
+            contains: 0,
+        },
+        // PROJECT PREFIX: MANDATORY. All three are accepted by a glob, which
+        // cannot anchor.
+        KeyExample {
+            subject: "AB-1".to_owned(),
+            whole_key: false,
+            contains: 0,
+        },
+        KeyExample {
+            subject: "Z-9".to_owned(),
+            whole_key: false,
+            contains: 0,
+        },
+        KeyExample {
+            subject: "A-1foo".to_owned(),
+            whole_key: false,
+            contains: 0,
+        },
+        // Not a key, and it CONTAINS one — the pair a glob collapses.
+        KeyExample {
+            subject: format!("{}x", key(1)),
+            whole_key: false,
+            contains: 1,
+        },
+        // BOUNDARY: the greedy match takes the whole number, so the short key
+        // never appears inside the long one.
+        KeyExample {
+            subject: key(179),
+            whole_key: true,
+            contains: 1,
+        },
+    ]
+}
+
+#[test]
+fn the_committed_reader_decides_every_conformance_example() {
+    // The whole set through the engine's own reader, in one case, because the
+    // obligation a successor tier inherits is the SET rather than any one arm.
+    let grammar = committed_grammar();
+    for example in conformance() {
+        assert_eq!(
+            grammar.key_of(&example.subject).is_some(),
+            example.whole_key,
+            "`key_of` disagrees about {}",
+            example.subject
+        );
+        assert_eq!(
+            grammar.keys_in(&example.subject).len(),
+            example.contains,
+            "`keys_in` disagrees about {}",
+            example.subject
+        );
+    }
+}
+
+#[test]
+fn the_committed_reader_refuses_the_lowercase_spelling() {
+    // THE DECLARED MUTATION'S CASE. Stated on its own rather than left inside
+    // the loop above: `mutate` selects a case by substring, so the arm the
+    // mutation must redden has to be nameable.
+    //
+    // The shipped defect CLOUD-761 measured is exactly this spelling — one gate
+    // accepts it, two others cannot find it, and nothing says so.
+    let grammar = committed_grammar();
+    assert!(
+        grammar.key_of(&key(757).to_lowercase()).is_none(),
+        "the lowercase spelling is refused, never normalised"
+    );
+    assert!(
+        grammar.keys_in(&key(757).to_lowercase()).is_empty(),
+        "and it is not found inside a span either"
+    );
+    // ANTI-VACUITY, in the same case: a reader that refused everything would
+    // satisfy the assertions above. The mutation must leave this green.
+    assert!(
+        grammar.key_of(&key(757)).is_some(),
+        "the consumer's own key still parses"
+    );
+}
+
+#[test]
+fn a_shorter_key_is_not_found_inside_a_longer_one() {
+    // The case two landed sites commented on by name, and the one the exported
+    // set can only express as a count. A successor tier asking "does this text
+    // carry key K" compares against `keys_in` rather than searching again — the
+    // derivation this definition removes rather than adds.
+    let grammar = committed_grammar();
+    let found = grammar.keys_in(&key(179));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].as_str(), key(179));
+    assert!(
+        !found.iter().any(|k| k.as_str() == key(17)),
+        "the short key is not inside the long one"
     );
 }
