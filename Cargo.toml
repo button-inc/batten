@@ -654,6 +654,13 @@ toml = "1.1"
 # somebody else's defect and should not outlive it.
 tinyvec = "=1.12.0"
 unicode-normalization = "0.1"
+# X.509, for reading a trust bundle's certificate subjects (CLOUD-1455). The
+# RustCrypto line rather than the nom-based one: `const-oid` is already resolved
+# in this tree, `der`'s `pem` feature decodes the bundle without a second base64
+# dependency, and the whole set is `no_std`-capable parsing with no network, no
+# runtime and no process — which is what keeps it off `ambient_authority.rs`'s
+# list on a property rather than by not having been noticed.
+x509-cert = { version = "0.2", default-features = false, features = ["pem"] }
 # YAML, for the `[[budget.<name>.embedded]]` entries that count a string carried
 # INSIDE a host's config file rather than a file of its own (CLOUD-298). TOML and
 # JSON are already vendored, so this is the one format the extension dispatch

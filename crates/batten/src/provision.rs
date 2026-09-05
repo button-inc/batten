@@ -222,6 +222,30 @@ pub struct ProvisionEnv {
     /// others, and inventing one is a claim this row cannot make.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub from_first_set: Vec<String>,
+    /// Apply this row only where the host's trust bundle carries a certificate
+    /// authority whose subject names this ORGANISATION.
+    ///
+    /// **This is what keeps a bypass from being applied to somebody's working
+    /// proxy.** A row without it applies everywhere, which is right for a row
+    /// that only ever adds a credential; it is wrong for one that routes traffic
+    /// around a proxy, because a proxy is a legitimate part of most networks and
+    /// the only one worth going around is one that refuses by policy what it was
+    /// asked to carry.
+    ///
+    /// The condition is the CA rather than the proxy variables, and the
+    /// difference is the whole reason the field is spelled this way. Every
+    /// intercepting environment sets those variables, so keying on them would
+    /// refuse to honour a real proxy the moment somebody configured one. Keying
+    /// on the authority in the trust path names the specific interceptor and
+    /// goes false the day those variables point at a CA the operator chose.
+    ///
+    /// Measured 2026-09-05 in this sandbox: the bundle those variables name
+    /// carries five interception authorities, presenting three different common
+    /// names across the direct and proxied paths, and the ORGANISATION is the
+    /// only field common to all five — so a row matching a common name would
+    /// silently miss whichever path the author did not test.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when_trust_names: Option<String>,
 }
 
 /// One platform's artifact: where it comes from, and what it must hash to.
@@ -785,6 +809,115 @@ pub fn exec_launcher(
     become_process(command, &launch.exec)
 }
 
+/// The environment variables naming a trust bundle, most specific first.
+///
+/// A list because no single one is universal: a host sets a dozen of these, each
+/// for a different tool, and they normally agree. The first that names a
+/// readable file is the answer.
+const TRUST_BUNDLE_VARS: &[&str] = &["SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"];
+
+/// Where the system keeps its trust bundle when the environment names none.
+const SYSTEM_TRUST_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
+
+/// Whether the host's trust bundle carries a CA whose subject names `org`.
+///
+/// **A field match, never a byte search.** The organisation is read out of the
+/// parsed subject, so a certificate merely mentioning the name — in a URL, a
+/// policy identifier, an extension — does not answer yes. That distinction is
+/// the whole reason this costs a parser: the predicate decides whether to route
+/// a tool's traffic around a proxy, and a substring standing in for a field is
+/// the estimate non-negotiable rule 3 refuses.
+///
+/// Could-not-look answers **false**, and the direction is deliberate. This
+/// condition guards a BYPASS, so failing to read the bundle leaves the host's
+/// proxy honoured — the same direction every other unreadable fact in this tree
+/// fails in, and the safe one here: the cost of a wrong `false` is a refusal the
+/// operator can see, and the cost of a wrong `true` is traffic silently leaving
+/// a path they chose.
+fn trust_names(org: &str) -> bool {
+    // A VARIABLE THAT IS SET DECIDES WHICH BUNDLE, EVEN IF IT CANNOT BE READ.
+    // Falling through to the system store when the named file is missing would
+    // answer this question about a bundle the operator did not choose — and in an
+    // intercepting sandbox the system store carries the interceptor too, so the
+    // fallback would resurrect the bypass exactly where the operator had pointed
+    // the tool somewhere else. The system path is for a host that names none.
+    let bundle = TRUST_BUNDLE_VARS
+        .iter()
+        .find_map(|name| std::env::var_os(name))
+        .map_or_else(|| PathBuf::from(SYSTEM_TRUST_BUNDLE), PathBuf::from);
+    let Ok(text) = fs::read_to_string(&bundle) else {
+        return false;
+    };
+    // Split on the PEM footer rather than feeding the whole file: a bundle is a
+    // concatenation, and the parser takes one document at a time.
+    text.split_inclusive(PEM_FOOTER)
+        .filter(|block| block.contains(PEM_FOOTER))
+        .filter_map(|block| organisation_of(block.trim_start()))
+        .any(|named| named == org)
+}
+
+/// The end of one certificate in a concatenated bundle.
+const PEM_FOOTER: &str = "-----END CERTIFICATE-----";
+
+/// The organisation a single PEM certificate's SUBJECT names, if it names one.
+///
+/// Public so the compiled-binary tier can build a one-certificate bundle out of
+/// the host's own and assert both arms against a real authority, rather than
+/// against a literal whose shape its author imagined.
+#[must_use]
+pub fn organisation_of(pem: &str) -> Option<String> {
+    use x509_cert::der::DecodePem as _;
+
+    x509_cert::Certificate::from_pem(pem)
+        .ok()?
+        .tbs_certificate
+        .subject
+        .0
+        .iter()
+        .flat_map(|name| name.0.iter())
+        .find(|attribute| attribute.oid == ORGANISATION_NAME)
+        .and_then(|attribute| attribute_text(&attribute.value))
+}
+
+/// X.520's `organizationName`, the attribute a CA's `O =` is carried in.
+///
+/// Written as the OID rather than taken from a name database, because the
+/// database is a separate feature of a separate crate and this needs exactly one
+/// arc. `new_unwrap` is `const`, so a malformed literal is a build failure rather
+/// than a runtime one.
+const ORGANISATION_NAME: x509_cert::der::asn1::ObjectIdentifier =
+    x509_cert::der::asn1::ObjectIdentifier::new_unwrap("2.5.4.10");
+
+/// The text of a distinguished-name attribute, whichever string type it used.
+///
+/// X.509 lets a `DirectoryString` be any of several ASN.1 string types, and real
+/// certificates use more than one: reading only `Utf8String` would answer "no
+/// organisation" for a CA that spelled it `PrintableString`, which is a silent
+/// false negative on exactly the certificate this predicate is looking for.
+fn attribute_text(value: &x509_cert::der::Any) -> Option<String> {
+    use x509_cert::der::asn1::{Ia5StringRef, PrintableStringRef, TeletexStringRef, Utf8StringRef};
+
+    value
+        .decode_as::<Utf8StringRef<'_>>()
+        .map(|got| got.as_str().to_owned())
+        .or_else(|_| {
+            value
+                .decode_as::<PrintableStringRef<'_>>()
+                .map(|got| got.as_str().to_owned())
+        })
+        .or_else(|_| {
+            value
+                .decode_as::<Ia5StringRef<'_>>()
+                .map(|got| got.as_str().to_owned())
+        })
+        .or_else(|_| {
+            value
+                .decode_as::<TeletexStringRef<'_>>()
+                .map(|got| got.as_str().to_owned())
+        })
+        .ok()
+}
+
 /// Turn a launcher's declared rules into the variables to set, reading the
 /// environment this process was started with.
 ///
@@ -793,6 +926,11 @@ pub fn exec_launcher(
 fn resolved_env(rules: &[ProvisionEnv]) -> Vec<(String, String)> {
     rules
         .iter()
+        .filter(|rule| {
+            rule.when_trust_names
+                .as_deref()
+                .is_none_or(|org| trust_names(org))
+        })
         .filter_map(|rule| {
             let value = if rule.prepend_list.is_empty() {
                 rule.from_first_set

@@ -2403,6 +2403,13 @@
           "items": {
             "type": "string"
           }
+        },
+        "when_trust_names": {
+          "description": "Apply this row only where the host's trust bundle carries a certificate\nauthority whose subject names this ORGANISATION.\n\n**This is what keeps a bypass from being applied to somebody's working\nproxy.** A row without it applies everywhere, which is right for a row\nthat only ever adds a credential; it is wrong for one that routes traffic\naround a proxy, because a proxy is a legitimate part of most networks and\nthe only one worth going around is one that refuses by policy what it was\nasked to carry.\n\nThe condition is the CA rather than the proxy variables, and the\ndifference is the whole reason the field is spelled this way. Every\nintercepting environment sets those variables, so keying on them would\nrefuse to honour a real proxy the moment somebody configured one. Keying\non the authority in the trust path names the specific interceptor and\ngoes false the day those variables point at a CA the operator chose.\n\nMeasured 2026-09-05 in this sandbox: the bundle those variables name\ncarries five interception authorities, presenting three different common\nnames across the direct and proxied paths, and the ORGANISATION is the\nonly field common to all five — so a row matching a common name would\nsilently miss whichever path the author did not test.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false,

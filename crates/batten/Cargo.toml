@@ -129,6 +129,16 @@ toml.workspace = true
 # live with the pin rather than here.
 tinyvec.workspace = true
 unicode-normalization.workspace = true
+# Reading a trust bundle's certificate SUBJECTS, so a `[[provision.env]]` row can
+# be conditioned on which CA the host trusts rather than on a refusal it has
+# already suffered (CLOUD-1455). A parser rather than a substring search over the
+# DER, deliberately: this predicate decides whether to route a tool's traffic
+# around somebody's proxy, and non-negotiable rule 3 wants a field match, not a
+# byte that happens to appear somewhere in a certificate.
+#
+# It reaches no ambient authority — no network, no runtime, no process — so it is
+# outside `ambient_authority.rs`'s list by property rather than by omission.
+x509-cert.workspace = true
 yaml-rust2.workspace = true
 
 # Process-group ownership for `batten exec` (CLOUD-427). Unix-only rather than

@@ -1027,3 +1027,143 @@ fn an_env_row_declaring_both_rules_is_refused_at_load() {
         "the refusal says two rules cannot decide one variable"
     );
 }
+
+/// An organisation no certificate authority carries, so the negative arm cannot
+/// pass by accident.
+#[cfg(unix)]
+const ABSENT_ORG: &str = "No Such Certificate Authority Organisation";
+
+/// An `[[provision.env]]` row conditioned on that, otherwise identical to the
+/// shipped shape.
+#[cfg(unix)]
+fn conditioned_rows(org: &str) -> String {
+    format!(
+        "\n[[provision.env]]\nname = \"NO_PROXY\"\nwhen_trust_names = \"{org}\"\n\
+         prepend_list = [\"api.example.invalid\"]\n"
+    )
+}
+
+/// A bundle holding exactly one certificate, taken from the host's own, plus the
+/// organisation that certificate names.
+///
+/// Built from a real bundle rather than a literal because the predicate is about
+/// PARSING: a hand-written fixture would assert that the fixture is shaped the
+/// way its author imagined, which is the tautology the second tier exists to
+/// avoid. `None` where the host has no readable bundle or none of its
+/// authorities names an organisation — the case is skipped rather than passing
+/// vacuously.
+#[cfg(unix)]
+fn one_certificate_bundle(into: &Path) -> Option<String> {
+    let source = ["SSL_CERT_FILE", "CURL_CA_BUNDLE"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+        .or_else(|| {
+            let system = PathBuf::from("/etc/ssl/certs/ca-certificates.crt");
+            system.is_file().then_some(system)
+        })?;
+    let text = fs::read_to_string(&source).ok()?;
+    const FOOTER: &str = "-----END CERTIFICATE-----";
+    for block in text.split_inclusive(FOOTER).filter(|b| b.contains(FOOTER)) {
+        let pem = block.trim_start();
+        let Some(org) = batten::provision::organisation_of(pem) else {
+            continue;
+        };
+        fs::write(into, pem).ok()?;
+        return Some(org);
+    }
+    None
+}
+
+/// THE ROW APPLIES ONLY WHERE THE NAMED AUTHORITY IS TRUSTED, and the negative
+/// arm is what makes the positive one mean anything: without it this passes over
+/// a build that ignores the condition entirely and applies every row.
+#[cfg(unix)]
+#[test]
+fn a_conditioned_row_applies_only_where_the_trust_bundle_names_that_authority() {
+    let Some(system_env) = env_binary() else {
+        return;
+    };
+    let env = Env::new("provision-trust-condition");
+    let bundle = env.repo.parent().unwrap().join("one-ca.pem");
+    let Some(present_org) = one_certificate_bundle(&bundle) else {
+        return;
+    };
+    let bytes = fs::read(&system_env).unwrap();
+
+    let run = |org: &str, dest: &Path| -> String {
+        let (url, sha) = env.artifact("demo.bin", &bytes);
+        env.config(&linking_manifest(&url, &sha, dest, &conditioned_rows(org)));
+        assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
+        #[expect(
+            clippy::disallowed_types,
+            reason = "the launcher must be spawned for the condition to be exercised (CLOUD-320)"
+        )]
+        let ran = std::process::Command::new(dest.join("demo"))
+            .env("SSL_CERT_FILE", &bundle)
+            .env_remove("CURL_CA_BUNDLE")
+            .env_remove("REQUESTS_CA_BUNDLE")
+            .env("NO_PROXY", "localhost")
+            .output()
+            .expect("run the launcher");
+        String::from_utf8_lossy(&ran.stdout).into_owned()
+    };
+
+    let matched = run(&present_org, &env.repo.parent().unwrap().join("bin-yes"));
+    assert!(
+        matched
+            .lines()
+            .any(|line| line == "NO_PROXY=api.example.invalid,localhost"),
+        "the row must apply where the bundle names {present_org}: {matched}"
+    );
+
+    let unmatched = run(ABSENT_ORG, &env.repo.parent().unwrap().join("bin-no"));
+    assert!(
+        unmatched.lines().any(|line| line == "NO_PROXY=localhost"),
+        "the row must NOT apply where no authority names {ABSENT_ORG} — an \
+         operator's own proxy stays honoured: {unmatched}"
+    );
+}
+
+/// COULD-NOT-LOOK IS `false`, so an unreadable bundle leaves the host's proxy
+/// alone. The other direction would move traffic off a path the operator chose
+/// on the strength of a file this process failed to open.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_trust_bundle_does_not_apply_the_bypass() {
+    let Some(system_env) = env_binary() else {
+        return;
+    };
+    let env = Env::new("provision-trust-unreadable");
+    let dest = env.repo.parent().unwrap().join("bin-unreadable");
+    let bytes = fs::read(&system_env).unwrap();
+    let (url, sha) = env.artifact("demo.bin", &bytes);
+    env.config(&linking_manifest(
+        &url,
+        &sha,
+        &dest,
+        &conditioned_rows("Anthropic"),
+    ));
+    assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
+
+    #[expect(
+        clippy::disallowed_types,
+        reason = "as above: the launcher must be spawned (CLOUD-320)"
+    )]
+    let ran = std::process::Command::new(dest.join("demo"))
+        .env(
+            "SSL_CERT_FILE",
+            env.repo.parent().unwrap().join("nowhere.pem"),
+        )
+        .env_remove("CURL_CA_BUNDLE")
+        .env_remove("REQUESTS_CA_BUNDLE")
+        .env("NO_PROXY", "localhost")
+        .output()
+        .expect("run the launcher");
+    let seen = String::from_utf8_lossy(&ran.stdout);
+    assert!(
+        seen.lines().any(|line| line == "NO_PROXY=localhost"),
+        "a bundle that cannot be read is not evidence of an interceptor: {seen}"
+    );
+}

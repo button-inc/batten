@@ -385,8 +385,32 @@ link = "~/.local/bin"
 # release asset is served from `github.com/<owner>/<repo>/releases/download/…`
 # before it ever redirects, so the proxy gets first refusal on the biggest
 # single source of these 403s.
+# AND THE BYPASS APPLIES ONLY WHERE THE INTERCEPTOR IS. A proxy is a legitimate
+# part of most networks and these rows honour one: `when_trust_names` reads the
+# host's trust bundle, and they apply only where a certificate authority under
+# that organisation is in it. Point `SSL_CERT_FILE` at a CA you chose and the
+# condition goes false, the rows do not apply, and the runner uses your proxy.
+#
+# THE ORGANISATION RATHER THAN A COMMON NAME, measured 2026-09-05: the bundle
+# here carries five interception authorities —
+#
+#   CN = CCR Upstream Proxy CA (staging)
+#   CN = CCR agent-proxy interception CA (production) 2026-08
+#   CN = sandbox-egress-gateway-production Egress Gateway CA
+#   CN = sandbox-egress-gateway-staging Egress Gateway CA
+#   CN = sandbox-egress-production TLS Inspection CA
+#
+# — and the direct path and the proxied path present DIFFERENT ones, so a row
+# keyed on a common name would silently miss whichever the author did not test.
+# `O` is the one field all five share.
+#
+# NOT THE PROXY VARIABLES, which is the same distinction one step out. Every
+# intercepting environment sets those, so a row keyed on them could never tell an
+# interceptor from a proxy somebody wants — and the point of this row is to be
+# false on the second.
 [[provision.env]]
 name = "NO_PROXY"
+when_trust_names = "Anthropic"
 prepend_list = [
   "github.com",
   "api.github.com",
@@ -397,6 +421,7 @@ prepend_list = [
 
 [[provision.env]]
 name = "no_proxy"
+when_trust_names = "Anthropic"
 prepend_list = [
   "github.com",
   "api.github.com",
