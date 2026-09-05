@@ -6,8 +6,17 @@
 //! `the_same_bytes_under_one_domain_are_one_address` green. That asymmetry is the
 //! anti-vacuity property — a suite where both cases fail under the mutation would
 //! be asserting that hashing happens, not that separation does.
+//!
+//! CLOUD-1360's declared mutation lives here too and is a different one:
+//! `inline-address-parity-broken`. Making `DocumentInput::address` mint under a
+//! fixed domain rather than the caller's — or return a digest of the ARM rather
+//! than of the document — must redden
+//! `an_inline_document_and_its_address_name_the_same_thing`, while
+//! `the_two_arms_are_distinguishable_in_a_diagnostic` stays green. Green under
+//! both spellings is the anti-vacuity half: a suite where both reddened would be
+//! asserting the enum has two variants, not that they agree.
 
-use batten::identity::{AddressDomain, ContentAddress, Fingerprint};
+use batten::identity::{AddressDomain, ContentAddress, DocumentInput, Fingerprint};
 
 const BYTES: &[u8] = b"the payload, whatever it happens to be";
 
@@ -178,5 +187,112 @@ fn bcp_compatibility_is_an_open_question_and_this_records_which_one() {
     assert!(
         !address.ends_with(&bare_hex),
         "the address digests a versioned, domain-separated preimage — never the payload alone"
+    );
+}
+
+// --- the payload contract: inline and addressed are one document (CLOUD-1360)
+
+#[test]
+fn an_inline_document_and_its_address_name_the_same_thing() {
+    // THE DECLARED MUTATION'S TARGET, and clause 1 of the contract. A consumer
+    // handed either arm must reach the same identity, or "address it when it is
+    // cheaper" becomes a decision about VERDICTS rather than about transport.
+    let inline = DocumentInput::Inline(BYTES.to_vec());
+    let addressed = DocumentInput::Address(ContentAddress::of(AddressDomain::Capture, BYTES));
+
+    assert_eq!(
+        inline.address(AddressDomain::Capture),
+        addressed.address(AddressDomain::Capture),
+        "the two representations of one document resolve to one identity"
+    );
+}
+
+#[test]
+fn parity_holds_under_the_domain_the_caller_names_and_not_a_fixed_one() {
+    // The half a fixed-domain mutation slips past when only one domain is ever
+    // exercised: the inline arm must follow the CALLER's domain, because a
+    // consumer reading a payload and a consumer reading a capture are handed the
+    // same bytes and must not be told they are the same document.
+    let inline = DocumentInput::Inline(BYTES.to_vec());
+
+    assert_ne!(
+        inline.address(AddressDomain::Capture),
+        inline.address(AddressDomain::Payload),
+        "the inline arm is domain-separated exactly as the addressed arm is"
+    );
+}
+
+#[test]
+fn a_differing_inline_document_does_not_match_the_address() {
+    // Parity is agreement between two representations of ONE document, never a
+    // blanket equality. An inline byte string that is not what the address names
+    // must be distinguishable, or the contract would admit substitution — the
+    // thing clause 2's `Mismatch` outcome exists to refuse.
+    let addressed = DocumentInput::Address(ContentAddress::of(AddressDomain::Capture, BYTES));
+    let nearly = DocumentInput::Inline(b"the payload, whatever it happens to b".to_vec());
+
+    assert_ne!(
+        nearly.address(AddressDomain::Capture),
+        addressed.address(AddressDomain::Capture)
+    );
+}
+
+#[test]
+fn the_two_arms_are_distinguishable_in_a_diagnostic() {
+    // The anti-vacuity case: green whichever way `address` is spelled. Parity is
+    // about the document the two arms name, NOT about erasing which arm a
+    // consumer was handed — a diagnostic that could not say "inline" or
+    // "address" could not report where a resolution came from.
+    assert_eq!(DocumentInput::Inline(BYTES.to_vec()).as_str(), "inline");
+    assert_eq!(
+        DocumentInput::Address(ContentAddress::of(AddressDomain::Capture, BYTES)).as_str(),
+        "address"
+    );
+}
+
+#[test]
+fn the_arm_token_is_a_pointer_and_never_the_document() {
+    // Clause 4. `as_str` is what a diagnostic prints, so it must not be a route
+    // to the bytes — asserted rather than assumed, because a `Display` added
+    // later for convenience is exactly how this leaks.
+    let secret = b"payload bytes that must not reach a message".to_vec();
+    let inline = DocumentInput::Inline(secret.clone());
+
+    assert!(!inline.as_str().contains("payload"));
+    assert_eq!(
+        inline.as_str().len(),
+        "inline".len(),
+        "the token is the arm's name and carries nothing of the document"
+    );
+}
+
+#[test]
+fn a_git_oid_shaped_string_is_not_a_content_address() {
+    // Clause 6, held at the parser rather than by convention. A Git OID is 40 or
+    // 64 bare hex characters over Git's own `<type> <len>\0` preimage; neither
+    // spelling may be read as an address, because an accepted one would put two
+    // different algorithms over two different preimages into one namespace.
+    for oid in ["a".repeat(40), "a".repeat(64)] {
+        assert!(
+            ContentAddress::parse(&oid).is_err(),
+            "a Git OID is interoperability metadata, never an address: {oid}"
+        );
+    }
+}
+
+#[test]
+fn no_bcp_component_is_adopted_and_the_grammar_is_why() {
+    // Clause 5's non-adoption, recorded as a case so it is falsifiable rather
+    // than a sentence in a doc comment. The reason is concrete: what a BCP
+    // encoding adds over `blake3` is an addressable sub-structure, which
+    // CLOUD-1368 refuses outright — a chunk binds to the whole-document address
+    // and never becomes a second canonical identity.
+    //
+    // This case reverses the day an adapter arrives: it would then assert
+    // CONFORMANCE against that adapter instead, which is the row's own standard.
+    let address = ContentAddress::of(AddressDomain::Capture, BYTES);
+    assert!(
+        address.render().starts_with("b3-1-"),
+        "the grammar is Batten's, whatever computes the digest underneath it"
     );
 }
