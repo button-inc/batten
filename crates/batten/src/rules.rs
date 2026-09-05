@@ -5321,6 +5321,43 @@ fn validate_rows(rules: &[Rule]) -> anyhow::Result<()> {
                 )));
             }
         }
+        // ONE PLAN ID, ONE QUERY — the same argument as the row above, over
+        // `[[rule.plan]]` (CLOUD-949). `plan_facts` writes every declared query
+        // into one map keyed by `id`, so two queries sharing an id and differing
+        // in `hook`, `required` or `prohibited_profiles` resolve to whichever
+        // was inserted last. That is a false green of the worst kind: the
+        // module reads `input.tree.plan["gate"]` and is answered about a
+        // DIFFERENT surface than the row it belongs to declared, so a required
+        // step can go unchecked while the gate reports clean.
+        //
+        // Refused at LOAD rather than deduplicated at acquisition, because
+        // silently picking one of two disagreeing declarations is the same
+        // defect one layer down. An IDENTICAL redeclaration is accepted: it
+        // names one query, so there is nothing to resolve.
+        //
+        // The per-row `validate` cannot see this — the collision is between
+        // rows as often as within one — which is why it lives here beside
+        // CLOUD-444's, whose reasoning it borrows wholesale.
+        for query in &rule.plan {
+            let collides = |other: &crate::hk::PlanQuery| {
+                other.id == query.id && other != query
+            };
+            if let Some(prior) = rules[..index]
+                .iter()
+                .find(|prior| prior.plan.iter().any(collides))
+            {
+                return Err(UsageError::raise(format!(
+                    "rules {} and {}: both declare the plan `{}` with different terms; one plan id has one query",
+                    prior.id, rule.id, query.id
+                )));
+            }
+            if rule.plan.iter().any(collides) {
+                return Err(UsageError::raise(format!(
+                    "rule {}: declares the plan `{}` twice with different terms; one plan id has one query",
+                    rule.id, query.id
+                )));
+            }
+        }
     }
     Ok(())
 }
