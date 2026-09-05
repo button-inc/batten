@@ -69,11 +69,26 @@
 //! # Closed enums, deliberately
 //!
 //! Unlike [`crate::config::Strictness`] and [`crate::rules::RuleKind`], these
-//! three are **not** `#[non_exhaustive]`. Their contract is a total bijection
-//! across three axes, so a fourth rank is not an additive variant — it is a
-//! redesign of the taxonomy that must break every consumer's match. Keeping
-//! them closed makes the compiler say so. Do not "fix" this to match the other
-//! enums.
+//! three are **not** `#[non_exhaustive]`. A new variant is not additive here —
+//! it must break every consumer's match. Keeping them closed makes the compiler
+//! say so. Do not "fix" this to match the other enums.
+//!
+//! **THE CONTRACT SAID "A TOTAL BIJECTION ACROSS THREE AXES" AND THAT IS NOW
+//! NARROWER BY ONE VARIANT** (CLOUD-340). [`RuleSeverity::Ask`] shares
+//! [`RuleSeverity::Deny`]'s row, so the map is total and no longer injective.
+//!
+//! The distinction the old wording could not carry: `ask` is not a fourth
+//! **rank**. Ranks order by how bad a finding is, and an escalation is exactly
+//! as blocking as a refusal — what differs is *who decides*, which is an
+//! orthogonal axis. Giving it a row of its own would have invented a fourth
+//! latency tier and a fourth report level that nothing means, to describe a
+//! difference that is not about severity at all.
+//!
+//! So the three RANKS are still a bijection with the tiers and the levels, and
+//! the fourth token is a disposition riding the blocking rank. The old sentence
+//! is corrected rather than deleted because it was right about the cost: this
+//! variant did break every consumer's match, which is why the change is
+//! `feat!` and not `feat`.
 //!
 //! # The one promotion point
 //!
@@ -137,6 +152,18 @@ pub enum RuleSeverity {
     /// A match is reported but does not by itself fail the run (it can be
     /// promoted by `--fail-on-warning`, CLOUD-49).
     Warn,
+    /// A match blocks the call and hands the decision to a human (CLOUD-340).
+    ///
+    /// **A DISPOSITION AT `Deny`'S RANK, NOT A FOURTH RANK.** It blocks exactly
+    /// as `deny` does; what differs is who decides, which is orthogonal to how
+    /// bad the finding is. That is why it maps to `deny`'s row rather than
+    /// getting one of its own — see the module header, where the bijection this
+    /// breaks is corrected rather than quietly widened.
+    ///
+    /// Mediated-call rules only. A tree-scoped rule has no caller to ask, so
+    /// `ask` there is a config error rather than a silent downgrade, refused by
+    /// `rules::validate`.
+    Ask,
     /// A match fails the run.
     Deny,
 }
@@ -146,7 +173,29 @@ impl RuleSeverity {
     ///
     /// A new variant must be added here or
     /// [`tests::table_covers_every_variant_exactly_once`] fails.
-    pub const ALL: &'static [RuleSeverity] =
+    pub const ALL: &'static [RuleSeverity] = &[
+        RuleSeverity::Allow,
+        RuleSeverity::Warn,
+        RuleSeverity::Ask,
+        RuleSeverity::Deny,
+    ];
+
+    /// The three RANKS, which is what [`TABLE`] is a bijection over.
+    ///
+    /// **NOT a subset chosen for convenience — it is the axis itself.** A rank
+    /// orders findings by how bad they are, and there are three of those, in
+    /// one-to-one correspondence with the tiers and the report levels.
+    /// [`RuleSeverity::Ask`] is a fourth TOKEN and not a fourth rank: it rides
+    /// [`RuleSeverity::Deny`]'s row because it blocks exactly as a refusal does,
+    /// and what differs — who decides — is orthogonal to severity.
+    ///
+    /// So the two consts answer two different questions, and a caller must pick
+    /// deliberately. [`RuleSeverity::ALL`] is the config VOCABULARY: every token
+    /// a consumer may write, and what an exhaustiveness sweep walks. This is the
+    /// ORDERED axis: what the table maps, and what a bijection may be asserted
+    /// over. Reaching for `ALL` where a rank is meant is what the three tests
+    /// below caught when `Ask` landed (CLOUD-340).
+    pub const RANKS: &'static [RuleSeverity] =
         &[RuleSeverity::Allow, RuleSeverity::Warn, RuleSeverity::Deny];
 
     /// The stable lowercase token used in config and machine output.
@@ -155,6 +204,7 @@ impl RuleSeverity {
         match self {
             RuleSeverity::Allow => "allow",
             RuleSeverity::Warn => "warn",
+            RuleSeverity::Ask => "ask",
             RuleSeverity::Deny => "deny",
         }
     }
@@ -281,7 +331,11 @@ pub const fn row_for_rule(rule: RuleSeverity) -> Mapping {
     match rule {
         RuleSeverity::Allow => TABLE[0],
         RuleSeverity::Warn => TABLE[1],
-        RuleSeverity::Deny => TABLE[2],
+        // `Ask` SHARES `Deny`'S ROW, which is what makes the map total without
+        // making it injective. An escalation blocks, so its latency tier and its
+        // report level are a refusal's; only the channel differs, and a channel
+        // is not a rank.
+        RuleSeverity::Ask | RuleSeverity::Deny => TABLE[2],
     }
 }
 
@@ -340,11 +394,16 @@ mod tests {
     fn table_covers_every_variant_exactly_once() {
         // Totality and bijectivity: the adapter can convert any value of any
         // axis, and no rank is reachable by two different values of one axis.
-        assert_eq!(TABLE.len(), RuleSeverity::ALL.len());
+        // THE RULE AXIS IS `RANKS`, NOT `ALL` (CLOUD-340). `ask` is a fourth
+        // token sharing `deny`'s row, so the map is total and not injective —
+        // and asserting the old property over `ALL` is what this test did until
+        // that variant landed and it went red, which is the enum being closed
+        // doing its job.
+        assert_eq!(TABLE.len(), RuleSeverity::RANKS.len());
         assert_eq!(TABLE.len(), AdvisoryTier::ALL.len());
         assert_eq!(TABLE.len(), ReportLevel::ALL.len());
 
-        for &rule in RuleSeverity::ALL {
+        for &rule in RuleSeverity::RANKS {
             let hits = TABLE.iter().filter(|row| row.rule == rule).count();
             assert_eq!(hits, 1, "{} appears {hits} times", rule.as_str());
         }
@@ -375,7 +434,7 @@ mod tests {
         // CLOUD-168's v1 acceptance: the adapter round-trips every documented
         // pair. All six directed conversions between the three axes compose to
         // identity, over every variant of every axis.
-        for &rule in RuleSeverity::ALL {
+        for &rule in RuleSeverity::RANKS {
             let row = row_for_rule(rule);
             assert_eq!(row_for_tier(row.tier).rule, rule);
             assert_eq!(row_for_report(row.report).rule, rule);
@@ -409,9 +468,52 @@ mod tests {
         let rules: Vec<RuleSeverity> = TABLE.iter().map(|row| row.rule).collect();
         let tiers: Vec<AdvisoryTier> = TABLE.iter().map(|row| row.tier).collect();
         let reports: Vec<ReportLevel> = TABLE.iter().map(|row| row.report).collect();
-        assert_eq!(rules, RuleSeverity::ALL);
+        assert_eq!(rules, RuleSeverity::RANKS);
         assert_eq!(tiers, AdvisoryTier::ALL);
         assert_eq!(reports, ReportLevel::ALL);
+    }
+
+    #[test]
+    fn ask_is_a_disposition_rather_than_a_fourth_rank() {
+        // THE PROPERTY THE THREE TESTS ABOVE STOPPED ASSERTING, stated as its own
+        // case rather than left as their absence (CLOUD-340). Without it, `RANKS`
+        // reads as a subset somebody trimmed to make a red test green.
+        //
+        // Every token is a rank OR `Ask`, and nothing else: a fifth variant added
+        // without a decision fails here as well as at the closed enum.
+        for &severity in RuleSeverity::ALL {
+            assert!(
+                RuleSeverity::RANKS.contains(&severity) || severity == RuleSeverity::Ask,
+                "{} is neither a rank nor the escalation",
+                severity.as_str()
+            );
+        }
+        assert_eq!(RuleSeverity::ALL.len(), RuleSeverity::RANKS.len() + 1);
+
+        // It shares `Deny`'s row ENTIRELY — the same latency tier and the same
+        // report level, not merely the same blocking answer. A row of its own
+        // would have invented a fourth tier and a fourth level that mean nothing,
+        // to describe a difference that is not about severity at all.
+        assert_eq!(
+            row_for_rule(RuleSeverity::Ask),
+            row_for_rule(RuleSeverity::Deny)
+        );
+
+        // And it BLOCKS, on both settings of the one promotion knob: an
+        // escalation that fell through to a clean run would be the policy
+        // inversion `hook::disposed`'s degradation exists to prevent.
+        for fail_on_warning in [false, true] {
+            assert_eq!(
+                promote(row_for_rule(RuleSeverity::Ask).report, fail_on_warning),
+                ReportLevel::Fail
+            );
+        }
+
+        // The reverse lookup answers `Deny`, and that is not a defect to fix. The
+        // map is total and not injective, so `row_for_report` must pick one
+        // preimage; the refusal is the right one, because a stored `fail` says
+        // the run was blocked and never who was asked about it.
+        assert_eq!(row_for_report(ReportLevel::Fail).rule, RuleSeverity::Deny);
     }
 
     #[test]

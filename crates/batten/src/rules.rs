@@ -4052,6 +4052,52 @@ impl Rule {
         Ok(())
     }
 
+    /// `ask` is a MEDIATED-CALL disposition, and both refusals below are config
+    /// faults rather than silent downgrades (CLOUD-340).
+    ///
+    /// Extracted for the reason its neighbours are: `validate` is at its line
+    /// ceiling, and this is a question about a value INSIDE the row — a
+    /// severity, not a kind — which the per-kind census structurally cannot ask.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) when a non-`mediated_call` row declares
+    /// `ask`, or when an `ask` row carries no `reason`.
+    fn validate_ask_disposition(&self) -> anyhow::Result<()> {
+        // A tree-scoped rule has no caller to ask: `batten check` walks a
+        // repository and answers to whoever ran it, so there is no in-band
+        // decision channel and no call to hold open. Accepting `ask` there and
+        // rendering it as a deny would be a downgrade nobody wrote down — the
+        // shape this repository refuses everywhere else — so it is exit 1 here.
+        //
+        // The `reason` requirement is the same one a deny carries and for a
+        // sharper version of the same purpose: an escalation reaches a HUMAN as
+        // the entire explanation, with none of the surrounding output a check
+        // run has. A refusal that reads "denied by rule 7" is poor; an escalation
+        // that reads that way is unanswerable.
+        if self.severity == Some(crate::severity::RuleSeverity::Ask) {
+            if self.scope != RuleScope::MediatedCall {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `severity = \"ask\"` hands the decision to a human, and a \
+                     `scope = \"{}\"` rule has no caller to hand it to — a repository walk \
+                     answers to whoever ran it. Use `deny`, or move the row to \
+                     `scope = \"mediated_call\"`",
+                    self.id,
+                    self.scope.as_str(),
+                )));
+            }
+            if self.reason.as_ref().is_none_or(|it| it.trim().is_empty()) {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `severity = \"ask\"` requires a `reason` — it reaches a person \
+                     as the whole explanation, with none of the output a check run carries \
+                     around it",
+                    self.id,
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// The three obligations a policy row carries that [`RuleKind::permits`]
     /// cannot express (CLOUD-833, CLOUD-836).
     ///
@@ -4379,6 +4425,7 @@ impl Rule {
         // the general mechanism, and these are the three things a flat column
         // list structurally cannot say about one kind.
         self.validate_policy_source()?;
+        self.validate_ask_disposition()?;
         for column in self.kind.requires() {
             let present = self
                 .columns()
