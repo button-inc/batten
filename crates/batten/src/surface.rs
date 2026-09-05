@@ -4788,6 +4788,197 @@ mod tests {
         }
     }
 
+    /// The positional shape of one row's flag list, as a verdict (CLOUD-1185).
+    ///
+    /// Extracted as a function over the flag slice rather than written as a loop
+    /// inside each test, and that is what makes the cases below able to fail:
+    /// a fixture slice is judged by the SAME code as the real surface, so a test
+    /// that passes over `SURFACE` cannot be passing because it never looked
+    /// (CLOUD-418).
+    ///
+    /// Returns the first violation, or `None`.
+    fn positional_violation(flags: &[FlagDecl]) -> Option<String> {
+        let positionals: Vec<&FlagDecl> = flags.iter().filter(|flag| flag.positional).collect();
+
+        // A trailing positional swallows every remaining token, so anything
+        // declared after it is unreachable. `exec`'s comment is the only place
+        // this was written down before, and it was prose.
+        if let Some(index) = positionals
+            .iter()
+            .position(|flag| matches!(flag.value, ValueDecl::Trailing))
+        {
+            if index != positionals.len() - 1 {
+                return Some(format!(
+                    "trailing positional {:?} is not last; everything after it is unreachable",
+                    positionals[index].id
+                ));
+            }
+            if positionals
+                .iter()
+                .filter(|flag| matches!(flag.value, ValueDecl::Trailing))
+                .count()
+                > 1
+            {
+                return Some(String::from("more than one trailing positional"));
+            }
+        }
+
+        // An OPTIONAL positional before a REQUIRED one cannot be parsed
+        // unambiguously — clap has no way to know whether a single token filled
+        // the optional or the required slot. This is the invariant that makes
+        // several positionals on one row safe, and it is why the assertion is
+        // shaped this way rather than as a bare count (see the census below).
+        let mut seen_optional: Option<&str> = None;
+        for flag in &positionals {
+            if flag.required {
+                if let Some(earlier) = seen_optional {
+                    return Some(format!(
+                        "required positional {:?} follows optional {:?}; a single token \
+                         could fill either slot",
+                        flag.id, earlier
+                    ));
+                }
+            } else {
+                seen_optional = Some(flag.id);
+            }
+        }
+
+        // `arg_of` applies only `required` on the positional branch and drops
+        // the rest with no diagnostic, so a row setting these is documenting
+        // behaviour the parser does not implement.
+        for flag in &positionals {
+            if flag.global {
+                return Some(format!("positional {:?} declares `global`", flag.id));
+            }
+            if !matches!(flag.env, EnvDecl::None) {
+                return Some(format!(
+                    "positional {:?} declares an env equivalent",
+                    flag.id
+                ));
+            }
+            if flag.hidden {
+                return Some(format!("positional {:?} declares `hidden`", flag.id));
+            }
+            if flag.long.is_some() || flag.short.is_some() {
+                return Some(format!(
+                    "positional {:?} declares a long or short spelling",
+                    flag.id
+                ));
+            }
+        }
+        None
+    }
+
+    /// Every row's positionals are in an order clap can parse, and declare only
+    /// the columns `arg_of` actually applies to them (CLOUD-1185).
+    ///
+    /// **There is deliberately no "at most one positional" rule, and the row that
+    /// asked for one is corrected rather than obeyed.** CLOUD-1185's §2 asked for
+    /// "at most one non-trailing positional per row", on a premise its own Why
+    /// states: *"No row does either today, so the mixed case is an untested clap
+    /// configuration."* That premise expired when `mcp call` landed (CLOUD-1260)
+    /// with three — `server`, `method`, and an optional `params` — which is the
+    /// `VERB OBJECT` grammar working as intended, not a defect.
+    ///
+    /// So what is asserted is the hazard the row was actually pointing at. Several
+    /// positionals are safe exactly when a token cannot be ambiguous about which
+    /// slot it fills: required before optional, and a trailing variadic last. A
+    /// count would have refused a landed, correct row while catching nothing the
+    /// ordering rules miss.
+    #[test]
+    fn every_rows_positionals_are_unambiguous() {
+        for decl in std::iter::once(&ROOT).chain(SURFACE) {
+            assert!(
+                positional_violation(decl.flags).is_none(),
+                "{}: {}",
+                decl.path,
+                positional_violation(decl.flags).unwrap_or_default()
+            );
+        }
+    }
+
+    /// The census above is shown able to fail, one fixture per clause.
+    ///
+    /// Each fixture is the real defect rather than an imitation of it: the
+    /// trailing case is `exec`'s flag list with one flag appended after it, and
+    /// the ordering case is `mcp call`'s with its optional moved ahead of a
+    /// required one.
+    #[test]
+    fn the_positional_census_discriminates() {
+        // `const` rather than `let`: `FlagDecl` is not `Copy` (its `Rung` and
+        // `ValueDecl` are not), and each fixture is used several times below.
+        // A const item instantiates fresh at every use, so the cases read as the
+        // shapes they are testing rather than as clones of one binding.
+        const REQUIRED: FlagDecl = FlagDecl::positional("first", "a required positional");
+        const OPTIONAL: FlagDecl =
+            FlagDecl::positional_optional("second", "an optional positional");
+        const TAIL: FlagDecl = FlagDecl::trailing("rest", "every remaining token");
+
+        // The real surface's own shapes stay clean, including `mcp call`'s three.
+        assert!(positional_violation(&[REQUIRED, OPTIONAL]).is_none());
+        assert!(positional_violation(&[REQUIRED, REQUIRED, OPTIONAL]).is_none());
+        assert!(positional_violation(&[REQUIRED, TAIL]).is_none());
+
+        // Something after the trailing variadic is unreachable.
+        assert!(positional_violation(&[TAIL, REQUIRED]).is_some());
+        assert!(positional_violation(&[TAIL, TAIL]).is_some());
+
+        // A required slot after an optional one cannot be filled unambiguously.
+        assert!(positional_violation(&[OPTIONAL, REQUIRED]).is_some());
+
+        // Columns `arg_of` silently drops on the positional branch.
+        assert!(
+            positional_violation(&[FlagDecl {
+                global: true,
+                ..REQUIRED
+            }])
+            .is_some()
+        );
+        assert!(
+            positional_violation(&[FlagDecl {
+                env: EnvDecl::Clap("BATTEN_SOMETHING"),
+                ..REQUIRED
+            }])
+            .is_some()
+        );
+        assert!(
+            positional_violation(&[FlagDecl {
+                hidden: true,
+                ..REQUIRED
+            }])
+            .is_some()
+        );
+        assert!(
+            positional_violation(&[FlagDecl {
+                long: Some("first"),
+                ..REQUIRED
+            }])
+            .is_some()
+        );
+    }
+
+    /// A row that dispatches to children declares no positional (CLOUD-1185).
+    ///
+    /// [`is_noun`] reads `flags.is_empty()`, so a positional on a parent flips it
+    /// from noun to verb and silently drops `subcommand_required(true)` and
+    /// `arg_required_else_help(true)` — a real behaviour change with no compile
+    /// error. The bare invocation stops listing its sub-verbs and starts trying to
+    /// act.
+    #[test]
+    fn a_row_with_children_declares_no_positional() {
+        for decl in SURFACE {
+            if !has_children(decl.path) {
+                continue;
+            }
+            assert!(
+                !decl.flags.iter().any(|flag| flag.positional),
+                "{} has children and declares a positional; that flips `is_noun` \
+                 and drops `subcommand_required`",
+                decl.path
+            );
+        }
+    }
+
     #[test]
     fn every_flag_id_is_snake_case() {
         // An id is not an internal detail: `spec.rs` emits it as the flag's
