@@ -5673,7 +5673,11 @@ fn run_land(
         // through its conditional endpoint rather than the git remote, so this
         // arm stopped being ref-shaped when CLOUD-390's poll landed — and a
         // resolution nothing reads would refuse a clone that can still answer.
-        cli::LandCommand::Wait { reference } => run_land_wait(root, reference, &branch, out, err),
+        // The verdict is the LAP's to read; a hand-driven wait reports the code
+        // and nothing else, exactly as it did before the tap needed one.
+        cli::LandCommand::Wait { reference } => {
+            run_land_wait(root, reference, &branch, out, err).map(|(code, _)| code)
+        }
         cli::LandCommand::Push => {
             let Some(url) = land_remote(root, err)? else {
                 return Ok(ExitCode::Internal);
@@ -5743,51 +5747,76 @@ fn run_land_lap(
         .ok()
         .and_then(|declared| declared.parse::<u32>().ok())
         .unwrap_or(LAPS);
+    // THE COMPOSITION, VALIDATED BEFORE A LAP SPENDS ANYTHING. A pipeline that
+    // would ready and then abandon fails to LOAD rather than in production,
+    // which is the whole difference between a schema and a convention.
+    let pipeline = pipeline::Pipeline::default();
+    let faults = pipeline.validate();
+    if !faults.is_empty() {
+        for fault in &faults {
+            writeln!(
+                err,
+                "::error:: land: the landing composition will not load: {fault:?}"
+            )?;
+        }
+        return Ok(ExitCode::Usage);
+    }
+
     'laps: for lap in 1..=laps {
         writeln!(out, "land: lap {lap} of {laps}")?;
-        // THE ORDER IS THE LAP, and every step after `replay` is about a head
-        // that descends from the current base. What each ANSWER means is
-        // `land::progress`'s — one table, read here rather than re-derived per
-        // step, so a reader asking "does this lap or stop" has one place to look
-        // and a change to the policy cannot land in four `if`s out of five.
-        for step in [
-            land::Step::Replay,
-            land::Step::Verify,
-            land::Step::Ready,
-            land::Step::Push,
-            land::Step::Wait,
-            land::Step::FastForward,
-        ] {
+        // WHAT THIS LAP HAS ENTERED, which is what it owes an undo for. A lap
+        // that stopped at `verify` never readied, so it owes no re-draft —
+        // computing the owed set from the composition alone would compensate
+        // effects nobody caused.
+        let mut entered: Vec<land::Step> = Vec::new();
+        // WHAT THE WAIT SAW, or `None` where no lap took a reading. The tap
+        // refuses to draft on `None` deliberately — see `land::closes_the_tap`.
+        let mut seen: Option<land::TapVerdict> = None;
+        // THE ORDER IS THE LAP, and it is DECLARED rather than an array literal
+        // in this function. What each answer means is `land::progress`'s — one
+        // table, read here rather than re-derived per step — and what each step
+        // leaves behind is its row's `compensate`.
+        for row in &pipeline.steps {
+            let step = row.step;
+            // THE ROW'S OWN QUESTION, where the driver used to carry a
+            // `step == Verify` exception. A pre-check runs BEFORE the primitive
+            // and can only lap, never land: it exists to spend nothing.
+            if let Some(pipeline::Precheck::BaseMoved) = row.precheck {
+                let trunk = trunk_watch(
+                    reference,
+                    "",
+                    &std::env::var("GH_REPO")
+                        .unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned()),
+                    1,
+                );
+                if let Some(moved) = land::stale(root, &trunk, reference) {
+                    writeln!(
+                        out,
+                        "land: lap {lap} — {reference} moved to {moved} before {step:?}; lapping before a matrix is spent"
+                    )?;
+                    unwind_lap(root, branch, &pipeline, &entered, seen, out, err)?;
+                    continue 'laps;
+                }
+            }
             let code = match step {
                 land::Step::Replay => run_land_replay(root, url, reference, branch, out)?,
                 land::Step::Verify => run_land_verify(root, branch, out, err)?,
                 land::Step::Ready => run_land_ready(root, out, err)?,
                 land::Step::Push => run_land_push(root, url, branch, out)?,
-                land::Step::Wait => run_land_wait(root, reference, branch, out, err)?,
+                land::Step::Wait => {
+                    let (code, verdict) = run_land_wait(root, reference, branch, out, err)?;
+                    seen = verdict;
+                    code
+                }
                 land::Step::FastForward => run_land_fast_forward(branch, out, err)?,
             };
+            // ENTERED ONLY ON SUCCESS, and that is the discrimination the undo
+            // rests on: a `Ready` that REFUSED bought no matrix, so re-drafting
+            // over it would draft a pull request the lap never made ready.
+            if code == ExitCode::Success && row.effectful {
+                entered.push(step);
+            }
             match land::progress(step, code) {
-                // THE ONE PLACE THE LAP ASKS A QUESTION OF ITS OWN, and it asks
-                // it here because this is the last free moment: everything after
-                // `verify` is metered. A base that moved while the gate ran makes
-                // the push a matrix spent to learn what one ref read already
-                // knows. Fails open — see `land::stale`.
-                land::Progress::Proceed if step == land::Step::Verify => {
-                    let trunk = trunk_watch(
-                        reference,
-                        "",
-                        &std::env::var("GH_REPO")
-                            .unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned()),
-                        1,
-                    );
-                    if let Some(moved) = land::stale(root, &trunk, reference) {
-                        writeln!(
-                            out,
-                            "land: lap {lap} — {reference} moved to {moved} while the gate ran; lapping before a matrix is spent"
-                        )?;
-                        continue 'laps;
-                    }
-                }
                 land::Progress::Proceed => {}
                 land::Progress::Landed => {
                     writeln!(out, "land: landed on lap {lap}")?;
@@ -5798,6 +5827,11 @@ fn run_land_lap(
                         out,
                         "land: lap {lap} — {step:?} says lap; rebasing and retrying"
                     )?;
+                    // A LAP COMPENSATES TOO, and missing this is what a
+                    // `Progress::Compensate` variant would have done: a lap that
+                    // readied, spent and then laps has a ready pull request and a
+                    // live matrix for a SHA about to be replaced.
+                    unwind_lap(root, branch, &pipeline, &entered, seen, out, err)?;
                     continue 'laps;
                 }
                 // CARRYING THE STEP'S OWN CODE rather than a code of the loop's.
@@ -5805,7 +5839,10 @@ fn run_land_lap(
                 // `1`, and an unreadable clone is `3` — the caller reads the same
                 // answer it would have got running that step by hand, which is
                 // what keeps the loop from becoming a second exit vocabulary.
-                land::Progress::Stop => return Ok(code),
+                land::Progress::Stop => {
+                    unwind_lap(root, branch, &pipeline, &entered, seen, out, err)?;
+                    return Ok(code);
+                }
             }
         }
     }
@@ -5817,6 +5854,145 @@ fn run_land_lap(
         "::error:: land: {laps} lap(s) bought no landing. A conflict, a failed gate or red CI will lose again — read the lap lines above for how each ended. If every lap lost only to contention, running this again commits up to {laps} more."
     )?;
     Ok(ExitCode::Internal)
+}
+
+/// Run the undos this lap owes, newest first.
+///
+/// # This is where the compensation cluster gets its entry point
+///
+/// `redraft`, `abandon` and the lease tombstone were all built and none of them
+/// were reached: a lap that readied — *"the one site that buys a matrix"* — and
+/// then stopped at `push`, `wait` or `fast-forward` returned with the pull
+/// request ready and CI still spending, while the tap sat uncalled in the same
+/// file. PR #848's review found that; this function is the answer to it.
+///
+/// # Every arm is a DURABLE EXTERNAL WRITE, which is why none of them is a trap
+///
+/// [`crate::pipeline::Compensation`]'s header carries the argument and
+/// `land.sh:353` carries the measurement — *"a trap runs on the container kill
+/// too"* — so an in-process rollback does not run in the one case compensation
+/// exists for. Each arm here lands on the forge or on a remote ref.
+///
+/// # Nothing here is fatal, in either direction
+///
+/// The caller is already leaving: it is lapping or stopping with an answer, and
+/// an undo that could not be performed must not replace that answer with its own.
+/// So every arm reports what it could not do and carries on to the next — which
+/// also means the LATER undos still run when an earlier one cannot, and reversing
+/// that would let one unreadable pull request strand a live matrix.
+fn unwind_lap(
+    root: &Path,
+    branch: &str,
+    pipeline: &pipeline::Pipeline,
+    entered: &[land::Step],
+    seen: Option<land::TapVerdict>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<()> {
+    let owed = pipeline.unwind(entered);
+    if owed.is_empty() {
+        return Ok(());
+    }
+    let repo = std::env::var("GH_REPO").unwrap_or_else(|_| pr_watch::REPO_PLACEHOLDER.to_owned());
+    // ONE OBSERVATION FOR TWO QUESTIONS. Whether this clone owns the pull request
+    // and whether it owes the lease back are the same fact, and asking twice
+    // invites the two answers to disagree across the gap between them.
+    let holder = lease_identity(root).ok().map(|(_, holder)| holder);
+    let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+    let mine = match (&holder, lease::terms(root)) {
+        (Some(holder), Ok(terms)) => matches!(
+            lease::observe(&terms),
+            Ok(lease::Observed::Held { ref body, .. }) if body.holder == *holder
+        ),
+        // COULD NOT LOOK IS NOT HELD. A clone that cannot read the lease has not
+        // shown it owns the pull request, and `closes_the_tap` refusing to draft
+        // somebody else's work is the property that keeps a refused second land
+        // from touching the live one's.
+        _ => false,
+    };
+
+    for compensation in owed {
+        match compensation {
+            // Filtered out by `Pipeline::unwind`, and matched rather than
+            // wildcarded so a new arm is a compile error here.
+            pipeline::Compensation::Nothing => {}
+            pipeline::Compensation::Abandon => {
+                let Ok(sha) = git::head_commit(root) else {
+                    writeln!(
+                        err,
+                        "::error:: land: this clone's HEAD will not read, so the runs on it keep spending"
+                    )?;
+                    continue;
+                };
+                // The fan-in by the consumer's own name, and an unset one cancels
+                // NOTHING — `land::abandon` holds that guard, because cancelling
+                // the fan-in's own run leaves the one required context
+                // `cancelled`, which is not an answer and wedges the branch.
+                let fanin = std::env::var("CI_FANIN_CHECK").unwrap_or_default();
+                let report = land::abandon(&repo, &sha, &fanin);
+                // COUNTS AND AN ABBREVIATED SHA, never a line from a cancelled
+                // run (non-negotiable rule 4). The predecessor carried the
+                // pointer too — `abandon-matrix.bats` pins it — because three
+                // counts with no subject cannot be told from another head's.
+                writeln!(
+                    out,
+                    "land: undo on {} — {} run(s) cancelled, {} spared, {} refused",
+                    sha.get(..7).unwrap_or(&sha),
+                    report.cancelled,
+                    report.spared,
+                    report.refused
+                )?;
+            }
+            pipeline::Compensation::ReleaseLease => match (&holder, lease::terms(root)) {
+                (Some(holder), Ok(terms)) => {
+                    lease_hand_back(root, &terms, holder, now);
+                    writeln!(out, "land: undo — the landing lease is handed back")?;
+                }
+                // Not an error: a lap that never took the lease owes nothing, and
+                // a clone with no remote had nowhere to take one from.
+                _ => {
+                    writeln!(out, "land: undo — no lease of this clone's to hand back")?;
+                }
+            },
+            pipeline::Compensation::Redraft => {
+                let Some(pr) = fast_forward::open_pull_request(&repo, branch) else {
+                    writeln!(
+                        err,
+                        "::error:: land: no open pull request could be read for {branch}, so the tap stays open"
+                    )?;
+                    continue;
+                };
+                let read = land::draft_state(&repo, &pr);
+                let state = land::Tap {
+                    // NOT A CLAIM THIS FUNCTION MAKES UP: every site that reaches
+                    // here is a lap that laps or stops, and the one that lands
+                    // returns before the undo. A merge closes nothing.
+                    landed: false,
+                    singleton_held: mine,
+                    is_draft: read.as_ref().map(|(draft, _)| *draft),
+                    verdict: seen,
+                };
+                if !land::closes_the_tap(&state) {
+                    continue;
+                }
+                let Some((_, node)) = read else {
+                    continue;
+                };
+                if land::redraft(&node) {
+                    writeln!(
+                        out,
+                        "land: undo — the pull request is a draft again; the next push buys no runner"
+                    )?;
+                } else {
+                    writeln!(
+                        err,
+                        "::error:: land: the pull request would not go back to draft, so every push from here spends a runner on an unfixed failure"
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The url of the remote this lap lands against, or `None` having said why.
@@ -6418,10 +6594,10 @@ fn run_land_wait(
     branch: &str,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<ExitCode> {
+) -> Result<(ExitCode, Option<land::TapVerdict>)> {
     let Ok(sha) = git::head_commit(root) else {
         writeln!(err, "::error:: land: cannot read this clone's HEAD")?;
-        return Ok(ExitCode::Internal);
+        return Ok((ExitCode::Internal, None));
     };
     let required = std::env::var("CI_REQUIRED_CHECKS").unwrap_or_default();
     let roster = checks_green::Roster {
@@ -6440,7 +6616,7 @@ fn run_land_wait(
     // would be a hang whose cause is a typo.
     if let Err(problem) = checks_green::decide(&[], &roster) {
         writeln!(err, "::error:: land wait: {problem}")?;
-        return Ok(ExitCode::Usage);
+        return Ok((ExitCode::Usage, None));
     }
 
     // The base as this clone last saw it. The wait is asking whether the REMOTE
@@ -6501,7 +6677,11 @@ fn run_land_wait(
             writeln!(out, "land: no answer yet on {sha} after {asks} ask(s)")?;
         }
     }
-    Ok(code)
+    // THE READING TRAVELS WITH THE CODE, because the exit table cannot carry it:
+    // a stale base and an unanswered wait are both a lap, and only one of them
+    // took a checks reading at all. Deriving the tap's verdict from the code in
+    // the driver would be a second authority over an answer this function holds.
+    Ok((code, land::tap_verdict(&waited)))
 }
 
 /// How many beats a holder may stop progressing before its lease is disbelieved.

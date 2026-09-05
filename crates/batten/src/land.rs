@@ -1302,6 +1302,27 @@ pub fn closes_the_tap(state: &Tap) -> bool {
     }
 }
 
+/// What one wait leaves the tap to read, or `None` where nobody looked.
+///
+/// **`Stale` is `None`, and that is the load-bearing arm.** The staleness arm
+/// won the race, so the green arm was voided UNREAD — no checks reading was
+/// taken, and [`closes_the_tap`] must not be handed a verdict nobody looked up.
+/// `Unanswered` is the opposite case and must not be collapsed into it: the
+/// green arm asked its full count and never saw a terminal answer, which IS a
+/// reading, and is precisely what `Pending` means.
+///
+/// Pure, and separate from [`wait`] for the reason [`worthless`] is separate
+/// from [`abandon`]: the mapping is the decision, and a decision reachable only
+/// through a network call is a decision nothing tests.
+#[must_use]
+pub const fn tap_verdict(waited: &Waited) -> Option<TapVerdict> {
+    match waited {
+        Waited::Green { .. } => Some(TapVerdict::Green),
+        Waited::Unanswered => Some(TapVerdict::Pending),
+        Waited::Stale { .. } => None,
+    }
+}
+
 /// What the tap decision reads. Every field is a reading the caller already
 /// took, so the decision itself opens nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2172,6 +2193,55 @@ mod tests {
             Some(true),
             Some(TapVerdict::Red)
         )));
+    }
+
+    /// **THE ARM THAT DECIDES WHETHER THE TAP CAN EVER FIRE, and the pair that
+    /// shows it discriminates.**
+    ///
+    /// A lap leaves without landing on one of three readings, and two of them
+    /// must not be collapsed. `Unanswered` means the green arm asked its whole
+    /// count and saw nothing terminal — a reading, and the one that closes the
+    /// tap. `Stale` means the staleness arm won the race and the green arm was
+    /// voided UNREAD, so there is no reading, and `closes_the_tap` must leave a
+    /// pull request ready rather than draft it on a failure to look.
+    ///
+    /// Collapsing them either way is a live defect: `Stale → Pending` drafts on
+    /// something nobody read, and `Unanswered → None` makes `Compensation::
+    /// Redraft` unreachable from every path the driver has — which is the state
+    /// PR #848's review found the cluster in.
+    #[test]
+    fn a_wait_that_read_nothing_is_not_a_pending_reading() {
+        assert_eq!(
+            tap_verdict(&Waited::Unanswered),
+            Some(TapVerdict::Pending),
+            "asking the full count and seeing nothing terminal IS a reading"
+        );
+        assert_eq!(
+            tap_verdict(&Waited::Stale {
+                base: String::from("0000000"),
+            }),
+            None,
+            "the green arm was voided unread, so nobody looked"
+        );
+        assert_eq!(
+            tap_verdict(&Waited::Green {
+                verdict: String::from("green"),
+            }),
+            Some(TapVerdict::Green)
+        );
+    }
+
+    /// And the mapping reaches the decision: a lap that ran out of asks over a
+    /// pull request it owns closes the tap, and one whose base moved does not.
+    #[test]
+    fn an_unanswered_lap_closes_the_tap_and_a_stale_one_does_not() {
+        let unanswered = tap_verdict(&Waited::Unanswered);
+        assert!(closes_the_tap(&tap(false, true, Some(false), unanswered)));
+
+        let stale = tap_verdict(&Waited::Stale {
+            base: String::from("0000000"),
+        });
+        assert!(!closes_the_tap(&tap(false, true, Some(false), stale)));
     }
 
     /// The narrowing keeps every verdict's arm and drops only the findings, so a
