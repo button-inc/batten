@@ -154,6 +154,7 @@ dependencies = [
  "json5",
  "jsonschema",
  "proc-macro2",
+ "rable",
  "regex",
  "regex-syntax",
  "regorus",
@@ -1130,7 +1131,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c91d8cffac8849493a82233811bd02b2b183b8cf39bf704de0fa0841b737595"
 dependencies = [
  "bstr",
- "hashbrown 0.15.5",
+ "hashbrown 0.17.1",
 ]
 
 [[package]]
@@ -2419,6 +2420,15 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "rable"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f601efcd059ce48cd6350771ca52e5a079274b88058a5fcec8c383bfaebe69c"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "rand"

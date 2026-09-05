@@ -336,6 +336,33 @@ operand", a question a line answers and a segment does not. So a module reading
 line splitting to compensate — that would be the second authority two sections
 up already refuses.
 
+**AND SINCE CLOUD-1381 THAT ONE PARSER IS A PARSER**, which the paragraph below
+was written before and is worth stating because it changes what the rule buys.
+`hook::segments` was a character walk — one `chars.next()` loop deciding quoting,
+escapes, heredoc bodies, here-strings and whether an `&` belonged to a
+redirection, all at one position in one pass. It could not fail, so a command it
+mis-split produced a confident wrong shape that no gate could tell from a correct
+one, and CLOUD-857 is that measured. It is `rable` now, a GNU Bash 5.3-compatible
+recursive-descent parse, and two things follow that a module may rely on.
+
+`input.call.segments` is `null` where the command **would not parse**. Rego reads
+that as undefined and therefore as _does not hold_, so a predicate over segments
+cannot fire on a call nobody could read — the same abstention shape as
+`input.tree.missing`, one surface over. Do not read an absent segment list as a
+clean command.
+
+And a command inside `$(…)`, `<(…)`, a subshell or a compound body **is a
+segment** (CLOUD-1257, which the walk could not reach at all). So a predicate
+counting segments, or asserting something about every one of them, now sees
+commands it did not see before; that is the gate working rather than a
+regression, and a module written against the walk's blindness is the thing to
+re-read.
+
+The parser delimits words and does **not** remove quotes — `hook::unquote` does,
+as a leaf operation over a token whose extent is already settled. That boundary
+is stated here because it is the one place a reader will expect more than
+arrived.
+
 There is **one parser**, and a module must not grow a second: no `split` of the
 command line, in Rego or in Rust. **The reason is not effort, and giving it as
 effort was this file's own defect** (CLOUD-1104): the cost was stated as ~60
