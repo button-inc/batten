@@ -2233,6 +2233,15 @@ mod tests {
     /// THE RE-LINK MUST SURVIVE A TARGET THAT IS IN USE, which is what making
     /// the declared environment part of the freshness verdict made reachable.
     ///
+    /// **UNIX-ONLY, BECAUSE THE SUBJECT IS.** `ETXTBSY` is a Unix refusal and
+    /// the inode this asserts over is a Unix concept — `std::os::unix` does not
+    /// exist on the Windows target at all, so a case reaching for it does not
+    /// merely fail there, it does not TYPE-CHECK (`cross-check` caught exactly
+    /// that). Windows refuses a busy target too and refuses it differently; the
+    /// rename-over remedy is what both want, and asserting the Unix mechanism
+    /// is honest about which one is being shown.
+    ///
+
     /// `fs::write` truncates in place and the kernel refuses that for a file
     /// some process is EXECUTING — `ETXTBSY`. The thing on `PATH` is exactly
     /// what a session runs, so a busy target is the ORDINARY case here. It was
@@ -2247,6 +2256,7 @@ mod tests {
     /// the property `ETXTBSY` actually needs: the bytes reach a DIFFERENT inode
     /// and are renamed over. An in-place write leaves the target's own inode
     /// holding them, and would fail the moment that inode were busy.
+    #[cfg(unix)]
     #[test]
     fn a_relink_replaces_the_target_rather_than_writing_through_it() {
         let rule = |name: &str| ProvisionEnv {
