@@ -592,6 +592,9 @@ _batten() {
             batten__subcmd__help__subcmd__land,wait)
                 cmd="batten__subcmd__help__subcmd__land__subcmd__wait"
                 ;;
+            batten__subcmd__help__subcmd__landed,abandoned)
+                cmd="batten__subcmd__help__subcmd__landed__subcmd__abandoned"
+                ;;
             batten__subcmd__help__subcmd__landed,check)
                 cmd="batten__subcmd__help__subcmd__landed__subcmd__check"
                 ;;
@@ -802,11 +805,17 @@ _batten() {
             batten__subcmd__land__subcmd__help,wait)
                 cmd="batten__subcmd__land__subcmd__help__subcmd__wait"
                 ;;
+            batten__subcmd__landed,abandoned)
+                cmd="batten__subcmd__landed__subcmd__abandoned"
+                ;;
             batten__subcmd__landed,check)
                 cmd="batten__subcmd__landed__subcmd__check"
                 ;;
             batten__subcmd__landed,help)
                 cmd="batten__subcmd__landed__subcmd__help"
+                ;;
+            batten__subcmd__landed__subcmd__help,abandoned)
+                cmd="batten__subcmd__landed__subcmd__help__subcmd__abandoned"
                 ;;
             batten__subcmd__landed__subcmd__help,check)
                 cmd="batten__subcmd__landed__subcmd__help__subcmd__check"
@@ -4123,8 +4132,22 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__landed)
-            opts="check"
+            opts="check abandoned"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__landed__subcmd__abandoned)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -5563,12 +5586,66 @@ _batten() {
             return 0
             ;;
         batten__subcmd__landed)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help check help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help check abandoned help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__landed__subcmd__abandoned)
+            opts="-q -v -y -h --claimed --merged-prs --landed-by --refs --instant --max-idle-days --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --claimed)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --merged-prs)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --landed-by)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --refs)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --instant)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --max-idle-days)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
                     return 0
@@ -5639,8 +5716,22 @@ _batten() {
             return 0
             ;;
         batten__subcmd__landed__subcmd__help)
-            opts="check help"
+            opts="check abandoned help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__landed__subcmd__help__subcmd__abandoned)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

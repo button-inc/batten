@@ -1,0 +1,31 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-landed-abandoned 1  batten 
+.SH NAME
+batten\-landed\-abandoned \- Refuse an In Progress claim with no landing, no pull request, no branch and no recent touch
+.SH SYNOPSIS
+\fBbatten landed abandoned\fR [\fB\-\-claimed\fR] [\fB\-\-merged\-prs\fR] [\fB\-\-landed\-by\fR] [\fB\-\-refs\fR] [\fB\-\-instant\fR] [\fB\-\-max\-idle\-days\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Refuse an In Progress claim with no landing, no pull request, no branch and no recent touch
+.SH OPTIONS
+.TP
+\fB\-\-claimed\fR
+`<CLOUD\-id>` lines a commit on origin/main closes, from `claimed\-keys \-\-closing\-only`
+.TP
+\fB\-\-merged\-prs\fR
+`<CLOUD\-id><TAB><pr\-number>` lines, one per closing key in a MERGED pull request
+.TP
+\fB\-\-landed\-by\fR
+`<CLOUD\-id><TAB><ref>` lines the caller asserts carry the work
+.TP
+\fB\-\-refs\fR
+Branch names the remote carries, one per line
+.TP
+\fB\-\-instant\fR
+The instant to measure the idle bound against, ISO\-8601 (default: now)
+.TP
+\fB\-\-max\-idle\-days\fR
+Days a claim may be idle before it reads as abandoned (default: 2)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

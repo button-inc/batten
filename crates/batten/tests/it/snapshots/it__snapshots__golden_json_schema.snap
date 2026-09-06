@@ -1218,6 +1218,64 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
+          "path": "landed abandoned",
+          "id": "landed.abandoned",
+          "about": "Refuse an In Progress claim with no landing, no pull request, no branch and no recent touch",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "claimed",
+              "short": null,
+              "long": "claimed",
+              "takes_value": true,
+              "positional": false,
+              "help": "`<CLOUD-id>` lines a commit on origin/main closes, from `claimed-keys --closing-only`"
+            },
+            {
+              "name": "instant",
+              "short": null,
+              "long": "instant",
+              "takes_value": true,
+              "positional": false,
+              "help": "The instant to measure the idle bound against, ISO-8601 (default: now)"
+            },
+            {
+              "name": "landed_by",
+              "short": null,
+              "long": "landed-by",
+              "takes_value": true,
+              "positional": false,
+              "help": "`<CLOUD-id><TAB><ref>` lines the caller asserts carry the work"
+            },
+            {
+              "name": "max_idle_days",
+              "short": null,
+              "long": "max-idle-days",
+              "takes_value": true,
+              "positional": false,
+              "help": "Days a claim may be idle before it reads as abandoned (default: 2)"
+            },
+            {
+              "name": "merged_prs",
+              "short": null,
+              "long": "merged-prs",
+              "takes_value": true,
+              "positional": false,
+              "help": "`<CLOUD-id><TAB><pr-number>` lines, one per closing key in a MERGED pull request"
+            },
+            {
+              "name": "refs",
+              "short": null,
+              "long": "refs",
+              "takes_value": true,
+              "positional": false,
+              "help": "Branch names the remote carries, one per line"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "landed check",
           "id": "landed.check",
           "about": "Refuse a board column that contradicts main's history or a declined key",
@@ -2866,6 +2924,10 @@ expression: stdout_of(&output)
     {
       "id": "generate.schema",
       "path": "generate schema"
+    },
+    {
+      "id": "landed.abandoned",
+      "path": "landed abandoned"
     },
     {
       "id": "landed.check",

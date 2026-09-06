@@ -2441,6 +2441,25 @@ fn run_landed_abandoned(
         for (key, _) in evidence_file(path, "--claimed")? {
             evidence.claimed.insert(key);
         }
+    } else {
+        // ABSENCE IS A READING, AND HERE IT LEANS THE UNSAFE WAY. On the sibling
+        // arm a missing `--claimed` under-reports; on this one it does the
+        // opposite, because landedness is what RESCUES a claim — a key whose
+        // only landing is a closing keyword on `main` reads as unlanded, and an
+        // unlanded stale row with no PR and no branch reads as ABANDONED.
+        //
+        // The predecessor could not reach this state: `landed-check.sh` read
+        // `main`'s log itself, so arm one was always live behind the drain.
+        // Taking it as a file makes it omittable, and a sweep that ran without
+        // it says so rather than reporting a column it half-checked.
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            "landed: no --claimed evidence, so a key whose only landing is a closing keyword on \
+             main reads as unlanded — and an unlanded idle claim reads as abandoned. Supply \
+             `claimed-keys --closing-only` output to decide on all three arms.",
+        )?;
     }
     for (key, _) in evidence_file(merged_prs, "--merged-prs")? {
         evidence.merged.insert(key);

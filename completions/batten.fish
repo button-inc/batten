@@ -1303,29 +1303,30 @@ complete -c batten -n "__fish_batten_using_subcommand ready; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand ready; and __fish_seen_subcommand_from lint" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand ready; and __fish_seen_subcommand_from help" -f -a "lint" -d 'Refuse an issue whose Ready block fails a checkable clause of the Definition of Ready'
 complete -c batten -n "__fish_batten_using_subcommand ready; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
 normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -l silent -d 'Say nothing but a verdict or a usage error'
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -l debug -d 'Add resolution detail'
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -l trace -d 'Add everything'
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -l no-color -d 'Never colour stderr, whatever it is attached to'
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -l no-input -d 'Never prompt; treat the run as unattended'
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -f -a "check" -d 'Refuse a board column that contradicts main\'s history or a declined key'
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -f -a "check" -d 'Refuse a board column that contradicts main\'s history or a declined key'
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -f -a "abandoned" -d 'Refuse an In Progress claim with no landing, no pull request, no branch and no recent touch'
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l claimed -d '`<CLOUD-id>` lines a commit on origin/main closes, from `claimed-keys --closing-only`' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l merged-prs -d '`<CLOUD-id><TAB><pr-number>` lines, one per closing key in a MERGED pull request' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l landed-by -d '`<CLOUD-id><TAB><ref>` lines the caller asserts carry the work' -r
@@ -1351,7 +1352,35 @@ complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l claimed -d '`<CLOUD-id>` lines a commit on origin/main closes, from `claimed-keys --closing-only`' -r
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l merged-prs -d '`<CLOUD-id><TAB><pr-number>` lines, one per closing key in a MERGED pull request' -r
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l landed-by -d '`<CLOUD-id><TAB><ref>` lines the caller asserts carry the work' -r
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l refs -d 'Branch names the remote carries, one per line' -r
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l instant -d 'The instant to measure the idle bound against, ISO-8601 (default: now)' -r
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l max-idle-days -d 'Days a claim may be idle before it reads as abandoned (default: 2)' -r
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+standard\t'The default: a finding is a violation'
+strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+quiet\t'Suppress ordinary progress; keep warnings'
+normal\t'The default'
+verbose\t'Explain what is being checked'
+debug\t'Add resolution detail'
+trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from help" -f -a "check" -d 'Refuse a board column that contradicts main\'s history or a declined key'
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from help" -f -a "abandoned" -d 'Refuse an In Progress claim with no landing, no pull request, no branch and no recent touch'
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand checks; and not __fish_seen_subcommand_from green help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
@@ -3374,6 +3403,7 @@ complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from commit" -f -a "check" -d 'Refuse a commit subject that does not follow the configured convention'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from ready" -f -a "lint" -d 'Refuse an issue whose Ready block fails a checkable clause of the Definition of Ready'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from landed" -f -a "check" -d 'Refuse a board column that contradicts main\'s history or a declined key'
+complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from landed" -f -a "abandoned" -d 'Refuse an In Progress claim with no landing, no pull request, no branch and no recent touch'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from checks" -f -a "green" -d 'Refuse a head whose required checks are red, still running, or not yet registered'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from pr" -f -a "watch" -d 'Poll a head\'s check runs until the required set answers, then report the verdict'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from pr" -f -a "derive" -d 'The tracker row a bot\'s pull request implies, as a payload the refinement gate reads'

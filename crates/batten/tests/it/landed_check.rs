@@ -512,9 +512,8 @@ fn the_finding_carries_no_body_text() {
 
 /// A board payload with the three keys the abandonment arm reads.
 fn dated_board(id: &str, updated: &str, attachment: Option<&str>, branch: &str) -> String {
-    let attachments = attachment
-        .map(|url| format!(r#"[{{"url":"{url}"}}]"#))
-        .unwrap_or_else(|| "[]".to_owned());
+    let attachments =
+        attachment.map_or_else(|| "[]".to_owned(), |url| format!(r#"[{{"url":"{url}"}}]"#));
     format!(
         r#"[{{"id":"{id}","status":"In Progress","updatedAt":"{updated}",
              "attachments":{attachments},"gitBranchName":"{branch}"}}]"#
@@ -563,6 +562,20 @@ fn the_boundary_builds_the_claim_the_predicate_decides_over() {
 
 /// THE ANTI-VACUITY MIRROR. Without this the case above passes over an arm that
 /// refuses everything, which is the direction that gets a sweep switched off.
+///
+/// **AND IT IS THE ONE SHAPE WHERE THIS ARM DELIBERATELY DISAGREES WITH THE
+/// PROGRAM IT REPLACES** (CLOUD-1516). The branch here is EMPTY, which is what
+/// makes the row interesting: `in-progress-drain.sh:275` reads its loop as
+/// `while IFS=$'\t' read -r id branch has_pr`, tab is an IFS *whitespace*
+/// character, so bash collapses `<id><TAB><TAB>true` into two fields — `branch`
+/// takes `true` and `has_pr` is empty, the rescue never fires, and a row with an
+/// open pull request reports as an abandoned claim.
+///
+/// Its own suite is green over that because both of its pull-request cases pass
+/// a non-empty branch, so the combination is never constructed. This arm reads
+/// typed fields and has no delimiter to collapse. Conserve the decision, not the
+/// defect (CLOUD-1176) — so the divergence is deliberate, and this case is where
+/// it is pinned rather than left for a reader to re-derive.
 #[test]
 fn a_claim_a_pull_request_is_serving_is_left_alone() {
     let out = abandoned_run(
@@ -585,7 +598,7 @@ fn a_claim_a_pull_request_is_serving_is_left_alone() {
         Some(0),
         "a served claim is clean: {whole}"
     );
-    assert!(!whole.contains("claimed-abandoned"), "{whole}");
+    assert!(whole.contains("0 claimed-abandoned"), "{whole}");
 }
 
 /// THE REFS FILE IS EVIDENCE THE ENGINE OPENS. The predicate's unit case is
@@ -692,4 +705,42 @@ fn the_abandonment_finding_carries_no_body_text() {
         !whole.contains("SECRET-CUSTOMER-DETAIL"),
         "the sweep echoed a body: {whole}"
     );
+}
+
+/// ABSENCE IS A READING, AND IT LEANS THE UNSAFE WAY HERE. Paired so the notice
+/// is asserted to fire on absence AND to stay quiet when the arm is supplied —
+/// either half alone passes over a line that is always printed or never is.
+#[test]
+fn an_abandonment_sweep_without_the_claimed_arm_says_so() {
+    let out = abandoned_run(
+        "abandoned-claimed-absent",
+        &[],
+        &dated_board("CLOUD-1", "2026-08-20", None, ""),
+    );
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(err.contains("--claimed"), "{err}");
+    assert!(err.contains("reads as abandoned"), "{err}");
+}
+
+#[test]
+fn an_abandonment_sweep_with_the_claimed_arm_is_quiet_about_it() {
+    let dir = common::scratch("abandoned-claimed-supplied");
+    std::fs::write(dir.join("merged.tsv"), "").expect("evidence is writable");
+    std::fs::write(dir.join("claimed.tsv"), "CLOUD-9\n").expect("evidence is writable");
+    let out = common::run_with_stdin(
+        &dir,
+        &[
+            "landed",
+            "abandoned",
+            "--merged-prs",
+            "merged.tsv",
+            "--claimed",
+            "claimed.tsv",
+            "--instant",
+            "2026-08-20",
+        ],
+        &dated_board("CLOUD-1", "2026-08-20", None, ""),
+    );
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(!err.contains("--claimed"), "{err}");
 }
