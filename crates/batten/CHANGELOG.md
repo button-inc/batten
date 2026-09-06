@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.144](https://github.com/button-inc/batten/compare/v0.0.143...v0.0.144) - 2026-09-06
+
+### Added
+
+- *(facts)* collapse the Rust parse to one call site
+- *(facts)* make a deferral's reversal condition data a gate can read
+- *(ci-drift)* project the host settings whose change weakens a control
+- *(config)* compute the version floor a release owes
+- *(contract)* report an added path apart from a changed one
+- *(policy)* refuse a landing lap taken off the task
+
+### Fixed
+
+- *(policy)* place the two modules this bundle added, and cite two rows by key
+- *(engine)* [**breaking**] anchor an admission to the finding, not to the commit
+- *(hook)* normalise the operand window and the substitution target
+- *(hook)* stop the substitution scan failing open on a program-less element
+- *(hook)* read every mediated walk per line and by resolved program
+- *(hook)* resolve a program per line, so a force push cannot ride a newline
+- *(hook)* decide a shape row per line, so a newline stops being a bypass
+- *(landed)* [**breaking**] wire the evidence arm the port declared and never filled
+
+### Other
+
+- *(snapshot)* accept the golden schema the new flag moves
+- *(pipeline)* move a fixture the new row now decides
+- *(census)* the shape row a new gate owes an entry in
+
 ## [0.0.143](https://github.com/button-inc/batten/compare/v0.0.142...v0.0.143) - 2026-09-05
 
 ### Added
