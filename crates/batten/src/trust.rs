@@ -3870,6 +3870,36 @@ mod tests {
         assert!(weakenings(&working, &base).is_empty());
     }
 
+    /// Adding a fast-forward prefix switches the runner-side guard OFF.
+    ///
+    /// **The direction is INVERTED from its neighbour one field over, and that
+    /// is the assertion** (review of #848). A landing PATH is evidence, so
+    /// removing one weakens; a fast-forward prefix is an EXEMPTION —
+    /// `fast_forward_lane` answers "not judging it" for a branch it matches,
+    /// before any staleness or lease read runs — so ADDING one weakens. The
+    /// census row declared the whole `lease` field compared while
+    /// `entry_weakenings` compared only `landing_paths`, so the key that
+    /// disables the guard was asserted covered and was not.
+    #[test]
+    fn adding_a_fast_forward_prefix_is_a_weakening() {
+        let base = config("[lease]\nfast_forward_branches = [\"release/\"]\n");
+        let working = config("[lease]\nfast_forward_branches = [\"release/\", \"agents/\"]\n");
+        assert_eq!(
+            only(&base, &working),
+            Weakening::new(
+                WeakeningKind::FastForwardLaneAdded,
+                "agents/",
+                "absent",
+                "present",
+            )
+        );
+        // THE REVERSE MUST STAY SILENT, or the comparison is symmetric and
+        // prices the retirement that narrows the exemption — which is the same
+        // anti-vacuity its neighbour keeps, in the opposite direction.
+        assert!(weakenings(&working, &base).is_empty());
+        assert!(weakenings(&base, &base).is_empty());
+    }
+
     /// Dropping the whole table is that move at its limit, not a silent one.
     ///
     /// `landing_paths` reads absent and empty alike as could-not-look, so this
