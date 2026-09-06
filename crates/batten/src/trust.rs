@@ -1108,7 +1108,11 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "outcome",
         coverage: Coverage::NotPolicyBearing(
-            "a post-tool signature ADVISES and cannot refuse (CLOUD-945): the classifier rides              the advisory channel at a batch boundary, so narrowing the table changes what a              session is TOLD and never whether a call is allowed. Removing a row makes the              engine say LESS, which is the direction a weakening check does not need to              guard — and adding one cannot deny, because no arm here reaches a verdict",
+            "a post-tool signature ADVISES and cannot refuse (CLOUD-945): the classifier \
+             rides the advisory channel at a batch boundary, so narrowing the table changes \
+             what a session is TOLD and never whether a call is allowed. Removing a row makes \
+             the engine say LESS, which is the direction a weakening check does not need to \
+             guard — and adding one cannot deny, because no arm here reaches a verdict",
         ),
     },
     FieldCoverage {
