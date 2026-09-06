@@ -116,6 +116,25 @@ pub const SURFACES: &[&[&str]] = &[&["check"], &["fix"], &["run", "pre-commit"]]
 /// anyone edits anything.
 pub const PLAN_FLAGS: &[&str] = &["--all", "--plan", "--json"];
 
+/// The runner's per-invocation step suppression, which the plan spawn scrubs.
+///
+/// `--all` above answers the same question one axis over — a plan taken over
+/// changed paths is a property of the tree — and this is the property of the
+/// CALLER. The variable removes named steps from the plan the runner emits, so a
+/// contract acquired under it records those steps as `skipped` and every later
+/// comparison from a shell that does not set it reads as drift.
+///
+/// Measured on this repository's own `ci` job (CLOUD-947), which sets
+/// `HK_SKIP_STEPS: test:bats,batten-check` so those two run in their own lanes:
+/// `hk drift` there reported both steps restatused on two surfaces and refused,
+/// over an artifact and a config that had not moved.
+///
+/// Scrubbed rather than declared, because a contract that varied by caller could
+/// not be committed at all. That CI skips a step is a real fact and it is
+/// `ci-suite-lane`'s, which decides whether the skip and the lane that covers it
+/// stay paired; it is not this artifact's.
+pub const CALLER_SKIP: &str = "HK_SKIP_STEPS";
+
 /// One step, reduced to what the contract is about.
 ///
 /// Four fields and no fifth: the name is the step's identity, the status is
@@ -569,6 +588,9 @@ fn plan(root: &Path, surface: &[&str]) -> Look<serde_json::Value> {
         .args(surface)
         .args(PLAN_FLAGS)
         .current_dir(root)
+        // See [`CALLER_SKIP`]: the contract is the config's plan, and this
+        // variable is the caller's.
+        .env_remove(CALLER_SKIP)
         // Both streams captured, NEITHER forwarded: the runner narrates its file
         // walk on stderr, and echoing a child's stream would put output Batten
         // never shaped onto Batten's own.

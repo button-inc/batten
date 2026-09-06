@@ -59,6 +59,38 @@ fn the_committed_contract_is_the_one_the_binary_derives() {
     );
 }
 
+/// **And it is the same contract from a caller that suppresses steps** — the
+/// arm CI found and this file could not, because every case here ran from a
+/// shell that sets nothing.
+///
+/// `.github/workflows/ci.yml`'s `ci` job hands the runner
+/// `HK_SKIP_STEPS: test:bats,batten-check`, so those two run in their own lanes.
+/// Measured on `478a8482`: `hk drift` there reported both steps restatused on
+/// two surfaces and exited `2`, over an artifact and a config that had not
+/// moved. A contract that varied by caller could not be committed at all, so the
+/// plan spawn scrubs the variable ([`hk::CALLER_SKIP`]) and this is the case
+/// that says so.
+///
+/// Set on the CHILD rather than on this process: the subject is what the
+/// spawned runner's environment carries, and mutating the harness's own would
+/// leak into every other case in the binary.
+#[test]
+fn a_caller_suppressing_steps_does_not_drift_the_contract() {
+    let root = common::at_root(".");
+    let output = common::batten_at_real_root()
+        .args(["hk", "drift"])
+        .current_dir(&root)
+        .env(hk::CALLER_SKIP, "test:bats,batten-check")
+        .output()
+        .expect("run batten");
+    assert_eq!(
+        code(&output),
+        Some(0),
+        "a caller's step suppression is not the config's plan.\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// The committed artifact is a projection this build can read back.
 ///
 /// Separate from the gate above because they fail for different reasons: this
