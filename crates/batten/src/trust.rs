@@ -1299,6 +1299,19 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[WeakeningKind::ProvisionRemoved]),
     },
     FieldCoverage {
+        field: "credential",
+        coverage: Coverage::NoMonotoneReading(
+            "the endpoint a session's own credential is MEASURED against, which no rule \
+             reads and no finding is decided by. Its two directions move the launched \
+             environment in opposite ways and neither lowers a bar: dropping it leaves \
+             every credential unproven, so `provision` strips nothing and the host's own \
+             proxy wiring survives untouched — more conservative about the environment, \
+             not less. Declaring it lets a proven credential earn a removal, and the \
+             removal is already conditional on the control arm refusing a known-bad token, \
+             so a substituting route cannot buy one either way",
+        ),
+    },
+    FieldCoverage {
         field: "transcript",
         coverage: Coverage::Compared(&[WeakeningKind::TranscriptPathRemoved]),
     },

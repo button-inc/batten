@@ -243,6 +243,29 @@ pub fn get(url: &str, headers: &[(String, String)]) -> Result<Response> {
         url,
         headers,
         body: None,
+        direct: false,
+    }])?
+    .pop()
+    .ok_or_else(|| anyhow::anyhow!("fetch: the exchange returned no answer"))
+}
+
+/// [`get`], refusing a proxy even where the environment names one.
+///
+/// The one caller is the credential probe, and [`Call::direct`] carries why: a
+/// question about a credential cannot be asked over a route that answers with
+/// somebody else's.
+///
+/// # Errors
+///
+/// [`get`]'s, and one more in practice — a host the fence would not reach at
+/// all fails to connect here rather than being carried. That failure is the
+/// honest answer to "would this credential work once the proxy is gone".
+pub fn get_direct(url: &str, headers: &[(String, String)]) -> Result<Response> {
+    spend(&[Call {
+        url,
+        headers,
+        body: None,
+        direct: true,
     }])?
     .pop()
     .ok_or_else(|| anyhow::anyhow!("fetch: the exchange returned no answer"))
@@ -262,6 +285,20 @@ pub struct Call<'a> {
     pub headers: &'a [(String, String)],
     /// The request body, or `None` for a GET.
     pub body: Option<&'a [u8]>,
+    /// Refuse a proxy for this call even where the environment names one.
+    ///
+    /// **A ROUTE IS PART OF A CALL, NOT PART OF THE PROCESS.** Every other
+    /// caller in this crate wants the ambient answer and sets `false`, which is
+    /// what [`is_direct`] and [`proxy_for`] read. One caller cannot: a probe
+    /// asking whether a CREDENTIAL authenticates has no answer on a route that
+    /// substitutes its own, and on this container that route answers `200` to a
+    /// token of zeroes. Asking it over the proxy measures the proxy.
+    ///
+    /// So the probe declares the route the fence it is deciding about WOULD
+    /// install, rather than the one currently configured — which is the only
+    /// ordering that terminates: the fence is the thing being proven, so it
+    /// cannot also be its own precondition.
+    pub direct: bool,
 }
 
 /// Run a sequence of calls on **one** runtime and one connection pool.
@@ -525,7 +562,8 @@ const PROXY_HEAD_LIMIT: usize = 8192;
 async fn exchange(call: &Call<'_>) -> Result<Response> {
     let mut target = call.url.to_owned();
     for _hop in 0..=MAX_REDIRECTS {
-        let (answer, location) = one_exchange(&target, call.headers, call.body).await?;
+        let (answer, location) =
+            one_exchange(&target, call.headers, call.body, call.direct).await?;
         let Some(next) = redirect_target(&target, answer.status, location.as_deref())? else {
             return Ok(answer);
         };
@@ -594,6 +632,7 @@ async fn one_exchange(
     url: &str,
     headers: &[(String, String)],
     body: Option<&[u8]>,
+    direct: bool,
 ) -> Result<(Response, Option<String>)> {
     let (connect_timeout, total_timeout) = bounds();
     let uri: hyper::Uri = url
@@ -609,7 +648,14 @@ async fn one_exchange(
         .enable_http2()
         .wrap_connector(Tunnelled {
             inner: connector,
-            proxy: proxy_for(uri.host().unwrap_or_default()),
+            // A DECLARED DIRECT CALL IS NOT AN OVERRIDE OF `NO_PROXY` — it is a
+            // call whose subject is the route. `proxy_for` stays the one
+            // authority for every caller that wants the ambient answer.
+            proxy: if direct {
+                None
+            } else {
+                proxy_for(uri.host().unwrap_or_default())
+            },
         });
     let client: Client<_, http_body_util::Full<hyper::body::Bytes>> =
         Client::builder(TokioExecutor::new()).build(https);

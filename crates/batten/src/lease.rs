@@ -162,6 +162,7 @@ pub fn advertise(remote: &str, service: Service) -> Result<Advertisement> {
         url: &url,
         headers: &headers("*/*", None),
         body: None,
+        direct: false,
     }])?;
     let response = responses
         .first()
@@ -430,6 +431,7 @@ pub fn swap(remote: &str, update: &Update, pack: &[u8]) -> Result<Outcome> {
             Some(&content_type),
         ),
         body: Some(&body),
+        direct: false,
     }])?;
     let response = responses
         .first()
@@ -953,6 +955,7 @@ pub fn fetch_object(remote: &str, id: &str) -> Result<Object> {
             )),
         ),
         body: Some(&body),
+        direct: false,
     }])?;
     let response = responses
         .first()
@@ -1968,6 +1971,7 @@ pub fn fetch(remote: &str, repo: &std::path::Path, reference: &str) -> Result<Fe
             )),
         ),
         body: Some(&body),
+        direct: false,
     }])?;
     let response = responses
         .first()

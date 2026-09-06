@@ -1767,6 +1767,7 @@ fn post_all(
             url: &wiring.endpoint,
             headers: &headers,
             body: Some(body),
+            direct: false,
         })
         .collect();
     crate::fetch::spend(&calls)

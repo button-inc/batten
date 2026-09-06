@@ -571,6 +571,18 @@ pub struct Config {
     /// non-negotiable rule 1 from consumers to vendors — a grep of `crates/` for
     /// the configured patterns returns nothing. The type and the predicate are
     /// [`crate::attribution`].
+    /// How a session credential is PROVED usable before anything is stripped on
+    /// the strength of it (CLOUD-1569).
+    ///
+    /// Consumer config because the forge is the consumer's, which is
+    /// non-negotiable rule 1: the engine holds the mechanism — refuse a known-bad
+    /// credential first, then test the real one — and the endpoint that
+    /// mechanism speaks to is a fact about this repository, not about batten.
+    ///
+    /// Absent means the capability is not declared, which reads as
+    /// could-not-look rather than as healthy: no removal is authorised.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<crate::provision::CredentialProbe>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attribution: Option<crate::attribution::Attribution>,
     /// The commit-subject convention this repository holds itself to
@@ -2803,6 +2815,7 @@ impl Config {
     #[must_use]
     pub fn declaring_nothing() -> Self {
         Config {
+            credential: None,
             unresolvable: Vec::new(),
             version: SUPPORTED_VERSION,
             deferrals: Vec::new(),

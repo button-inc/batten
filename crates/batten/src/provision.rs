@@ -241,7 +241,12 @@ pub struct Provision {
 #[serde(deny_unknown_fields)]
 #[schemars(extend("oneOf" = serde_json::json!([
     { "required": ["prepend_list"], "not": { "required": ["from_first_set"] } },
-    { "required": ["from_first_set"], "not": { "required": ["prepend_list"] } }
+    { "required": ["from_first_set"], "not": { "required": ["prepend_list"] } },
+    { "required": ["unset"], "not": { "anyOf": [
+        { "required": ["prepend_list"] },
+        { "required": ["from_first_set"] },
+        { "required": ["reject_prefix"] }
+    ] } }
 ])))]
 pub struct ProvisionEnv {
     /// The variable to set.
@@ -287,6 +292,94 @@ pub struct ProvisionEnv {
     /// silently miss whichever path the author did not test.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when_trust_names: Option<String>,
+    /// Treat a candidate whose value starts with this as if it were not set.
+    ///
+    /// **A FAST PATH, NEVER THE DECISION.** The authority on whether a
+    /// credential is usable is [`Credential`], which is measured against the
+    /// forge; this is a cheap syntactic hint that lets an obvious marker lose
+    /// without spending a probe on it. A host that stops prefixing its
+    /// placeholder tomorrow — which this one can, without warning — degrades to
+    /// the measurement rather than to a wrong answer, because the probe is what
+    /// actually decides (CLOUD-1569).
+    ///
+    /// **A placeholder is not a weak credential, it is a MARKER**, and the
+    /// difference decides the verdict. This container injects `GITHUB_TOKEN`
+    /// and `GH_TOKEN` carrying a literal `proxy-` prefix: proxied, the value
+    /// never reaches GitHub because the proxy substitutes its own; fenced, it is
+    /// sent verbatim and GitHub answers `Bad credentials`. So `from_first_set`
+    /// alone cannot express the intent — the placeholder IS set and IS
+    /// non-empty, so it wins the first-set race against nothing (CLOUD-1569).
+    ///
+    /// Applied to every candidate, including the row's own name where it appears
+    /// in the list, which is what lets one row say "prefer a real credential,
+    /// and if there is none, leave nothing behind rather than a marker".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reject_prefix: Option<String>,
+    /// Remove the variable from the launched environment entirely.
+    ///
+    /// **Unset is not "set to empty", and only unset is honest here.** An empty
+    /// `HTTPS_PROXY` is read by some clients as "no proxy" and by others as a
+    /// malformed URL, and an empty credential is refused by some tools and taken
+    /// as anonymous by others — so writing one is a claim this row cannot make.
+    /// The distinction already exists one field up, where `from_first_set`
+    /// resolving to nothing writes nothing.
+    ///
+    /// Pair it with `when_trust_names`: clearing a proxy variable is right in a
+    /// container whose egress is intercepted by an authority the row names, and
+    /// wrong on a machine whose proxy somebody configured deliberately.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unset: bool,
+}
+
+/// How a credential is proved usable, declared by the consumer.
+///
+/// **One field, and the control credential is NOT one of them.** A caller does
+/// not get to choose what "known bad" means: the engine sends a syntactically
+/// plausible token that must be refused, because a consumer that could name it
+/// could name one the route happens to accept and turn the control arm into a
+/// rubber stamp.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialProbe {
+    /// The endpoint that answers 2xx for a good credential and refuses a bad
+    /// one.
+    ///
+    /// It must be a route the fence sends DIRECT. Pointed at one an intercepting
+    /// proxy carries, the control arm fails — the junk credential is accepted —
+    /// and the engine reports could-not-look rather than pretending to a verdict
+    /// it cannot reach.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe_url: Option<String>,
+}
+
+/// Whether the credential this container was given actually works.
+///
+/// **A PAT can be expired or revoked, and stripping the injected one on that
+/// assumption strands the session with NOTHING** — which is strictly worse than
+/// the scoped credential it replaced. A token that 403s third-party repos still
+/// clones, fetches and pushes this one. So every rule that REMOVES something is
+/// conditional on this, and the fallback direction is "keep what the host gave
+/// us and say so loudly", never "clear it and hope".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Credential {
+    /// Proved usable against the forge, within the receipt's freshness bound.
+    Live,
+    /// Absent, rejected, or not checkable right now. Removals are skipped.
+    Unusable,
+}
+
+/// What a resolved rule does to one variable.
+///
+/// Two arms rather than an `Option<String>`, because the third state — a rule
+/// that resolved to nothing and must leave the variable ALONE — is not the same
+/// as one that resolved to a removal, and collapsing them would make a missing
+/// credential clear an inherited one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnvAction {
+    /// Set the variable to this value.
+    Set(String),
+    /// Remove the variable from the child's environment.
+    Unset,
 }
 
 /// One platform's artifact: where it comes from, and what it must hash to.
@@ -844,8 +937,15 @@ pub fn exec_launcher(
     )]
     let mut command = std::process::Command::new(&launch.exec);
     command.args(args);
-    for (name, value) in resolved_env(&launch.env) {
-        command.env(name, value);
+    for (name, action) in resolved_env(&launch.env, credential_health()) {
+        match action {
+            EnvAction::Set(value) => command.env(name, value),
+            // `env_remove` rather than `env("", …)`: the child must not see the
+            // name at all. A cleared-to-empty proxy variable is read as "no
+            // proxy" by some clients and as a malformed URL by others, which is
+            // the ambiguity this arm exists to avoid.
+            EnvAction::Unset => command.env_remove(name),
+        };
     }
     become_process(command, &launch.exec)
 }
@@ -959,27 +1059,259 @@ fn attribute_text(value: &x509_cert::der::Any) -> Option<String> {
         .ok()
 }
 
+/// The endpoint a credential is proved against, from the consumer's config.
+///
+/// **Config rather than an engine literal, which is non-negotiable rule 1.** The
+/// engine holds the MECHANISM — refuse a known-bad credential, then test the
+/// real one — and the forge whose credential this is belongs to the repository
+/// that holds it. A hostname baked in here would be a consumer identifier in
+/// `crates/batten`, and would be simply wrong for a consumer on another forge.
+fn credential_probe_url() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    let root = crate::git::repo_root(&cwd).ok()?;
+    let config = crate::config::load(&root).ok()?;
+    config.credential.as_ref()?.probe_url.clone()
+}
+
+/// Where a credential verdict is cached, keyed by the credential's DIGEST.
+///
+/// **The value never reaches disk, which is rule 4 rather than caution.** The
+/// receipt's name is a digest and its body is one word, so the store answers
+/// "has this exact credential been proved recently" while carrying nothing that
+/// could leak it. Keying by digest is also what makes the answer correct when a
+/// session's credential is ROTATED mid-run: the new value simply has no receipt
+/// and is proved on first use, where a name-keyed one would report the old
+/// verdict about a value that no longer exists.
+///
+/// Under the COMMON git dir, beside every other receipt, so it dies with the
+/// checkout and a linked worktree reads what the main one wrote.
+fn credential_receipt_path(value: &str) -> Option<std::path::PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    let common = crate::git::common_dir(&cwd).ok()?;
+    let dir = std::path::Path::new(&common).join("batten-receipts");
+    Some(dir.join(format!("credential.{}", digest(value.as_bytes()))))
+}
+
+/// How long a credential verdict is trusted before it is re-proved.
+///
+/// **The bound is what makes a mid-session revocation detectable at all.** A
+/// verdict cached for the session cannot see a token revoked after boot, and one
+/// re-proved per invocation costs a network round trip inside a launcher whose
+/// whole budget is ~100 ms. Five minutes bounds the blind window to something a
+/// human notices while keeping the probe off all but one call in a burst.
+const CREDENTIAL_MAX_AGE: u64 = 300;
+
+/// Whether this exact credential is usable, re-proved when its receipt ages out.
+///
+/// Failure to look is `false`, and the direction is deliberate: an unprovable
+/// candidate is skipped rather than trusted, and if NO candidate proves usable
+/// the caller keeps the host's own wiring instead of stripping it.
+fn credential_usable(value: &str) -> bool {
+    let Some(receipt) = credential_receipt_path(value) else {
+        return false;
+    };
+    if let Ok(meta) = std::fs::metadata(&receipt)
+        && let Ok(age) = meta
+            .modified()
+            .and_then(|at| at.elapsed().map_err(std::io::Error::other))
+        && age.as_secs() < CREDENTIAL_MAX_AGE
+        && let Ok(body) = std::fs::read_to_string(&receipt)
+    {
+        return body.starts_with("live");
+    }
+    // ORDER IS THE WHOLE DESIGN: establish the route can REFUSE before believing
+    // that it accepted. Reversed, a substituting route reports every credential
+    // live — including one that has been revoked.
+    let live = match credential_probe_url() {
+        // No declared endpoint is could-not-look, not health. Reading it as
+        // healthy would authorise stripping the host's wiring on a consumer that
+        // never said how to check.
+        None => false,
+        Some(probe) => route_honours_credentials(&probe) && probe_credential(&probe, value),
+    };
+    if let Some(dir) = receipt.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    // Best effort: a receipt we cannot write costs a probe per call, which is
+    // slow rather than wrong. Failing the launch over it would be the opposite
+    // of what this exists for.
+    let _ = std::fs::write(&receipt, if live { "live\n" } else { "unusable\n" });
+    if !live {
+        // LOUD, AND ON THE RE-PROVE RATHER THAN ONCE, because this is the state
+        // where the session silently degrades: the fence is not applied, the
+        // host's credential is used, and third-party reads 403. Saying so at the
+        // boundary is the difference between that and an unexplained refusal
+        // three tasks later. Pointer-only — no value, no digest, no identity.
+        eprintln!(
+            "::error:: batten: a declared session credential did not authenticate — keeping the host's proxy wiring, so third-party reads will 403. Re-checked every {CREDENTIAL_MAX_AGE}s."
+        );
+    }
+    live
+}
+
+/// The names a session credential may arrive under, most specific first.
+///
+/// `GITHUB_TOKEN`/`GH_TOKEN` are deliberately absent: a host may inject a
+/// substitutable placeholder under those, so probing them would measure the
+/// host's own credential rather than one we hold — the exact conflation this
+/// whole mechanism exists to undo.
+const CREDENTIAL_NAMES: [&str; 2] = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN"];
+
+/// Whether ANY declared credential is usable, which is what gates every removal.
+///
+/// Separate from per-candidate selection because the two ask different
+/// questions: selection asks "which value do I write", this asks "have I proved
+/// a replacement exists at all" — and only the second may authorise stripping
+/// the host's proxy wiring.
+fn credential_health() -> Credential {
+    if CREDENTIAL_NAMES
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .filter(|value| !value.is_empty())
+        .any(|value| credential_usable(&value))
+    {
+        Credential::Live
+    } else {
+        Credential::Unusable
+    }
+}
+
+/// Whether the route to `probe` honours the credential we send, at all.
+///
+/// **THIS IS THE CONTROL ARM, AND WITHOUT IT EVERY VERDICT BELOW IS WORTHLESS.**
+/// A success proves our credential worked only on a path that would have REFUSED
+/// a bad one. Where the route substitutes — an intercepting proxy answering with
+/// its own identity, which is this class of container's whole behaviour — a
+/// junk credential succeeds exactly as a real one does, so "it worked" carries
+/// no information about what we hold.
+///
+/// Measured 2026-09-06 on `git` traffic to the forge: a deliberately invalid
+/// token was accepted with the proxy variables SET and with them CLEARED, which
+/// is why the probe is not a `git` call and why clearing the environment is not
+/// evidence of anything. On the API route, the same junk token is refused and a
+/// real one is not — so that route can answer and the git route cannot.
+fn route_honours_credentials(probe: &str) -> bool {
+    // Syntactically plausible so the refusal is about the CREDENTIAL rather than
+    // about malformed input, which a route could reject without ever consulting
+    // an identity — and that would read as honesty it has not demonstrated.
+    const MUST_FAIL: &str = "ghp_0000000000000000000000000000000000";
+    !probe_credential(probe, MUST_FAIL)
+}
+
+/// Whether `probe` answers 2xx for `token`.
+///
+/// DIRECT, NEVER THE AMBIENT ROUTE, and this is the correction that makes the
+/// whole mechanism able to fire. This function first read `NO_PROXY` through
+/// [`crate::fetch::get`], on the reasoning that a second reader of that list is
+/// drift — true, and beside the point: the fence is what the verdict AUTHORISES,
+/// so routing the proof through the un-fenced environment makes the fence its
+/// own precondition and nothing can ever be proven.
+///
+/// Measured on this container, `api.github.com/rate_limit`, a token of zeroes:
+/// `200` through the proxy and `401` direct. Through the proxy the control arm
+/// passes, the route is read as substituting, and every credential resolves
+/// `Unusable` forever — the mechanism loads clean and decides nothing, which is
+/// exactly the dead-gate shape the policy-module rules record one layer up.
+///
+/// Pointer-only: the verdict is a boolean over a status and no body is read.
+fn probe_credential(probe: &str, token: &str) -> bool {
+    let headers = [("Authorization".to_owned(), format!("Bearer {token}"))];
+    crate::fetch::get_direct(probe, &headers)
+        .is_ok_and(|response| (200..300).contains(&response.status))
+}
+
 /// Turn a launcher's declared rules into the variables to set, reading the
 /// environment this process was started with.
 ///
 /// A rule that resolves to nothing sets nothing, which is what keeps an absent
 /// credential absent rather than empty.
-fn resolved_env(rules: &[ProvisionEnv]) -> Vec<(String, String)> {
+fn resolved_env(rules: &[ProvisionEnv], credential: Credential) -> Vec<(String, EnvAction)> {
+    resolved_env_from(
+        rules,
+        credential,
+        &|name| std::env::var(name).ok(),
+        // A credential is only ever asked about once per receipt window, so a
+        // row naming three candidates costs at most three probes per window
+        // rather than three per invocation.
+        &|value| credential_usable(value),
+    )
+}
+
+/// [`resolved_env`] over a supplied lookup.
+///
+/// The environment is process-global, so a test that set it would race every
+/// other test in the binary. Taking the reader makes the resolver a pure
+/// function of its inputs — which is also what lets a case assert the
+/// three-way distinction between set, absent, and removed without touching the
+/// process it is running in.
+fn resolved_env_from(
+    rules: &[ProvisionEnv],
+    credential: Credential,
+    lookup: &dyn Fn(&str) -> Option<String>,
+    usable: &dyn Fn(&str) -> bool,
+) -> Vec<(String, EnvAction)> {
+    // EVERY REMOVAL IS CONDITIONAL ON A PROVEN REPLACEMENT. With an unusable
+    // credential the rows below degrade to the host's own wiring rather than to
+    // an empty one: the proxy variables stay, and a placeholder is preferred to
+    // nothing. That is the direction `doctor` can still report on; the other one
+    // leaves a session that cannot reach the forge at all and cannot say why.
+    let removals_allowed = credential == Credential::Live;
     rules
         .iter()
         .filter(|rule| rule.when_trust_names.as_deref().is_none_or(trust_names))
         .filter_map(|rule| {
+            if rule.unset {
+                // Skipped rather than inverted when the credential is unusable:
+                // the row says "this variable should be gone", and the honest
+                // answer without a replacement is to leave the host's value
+                // alone, not to write one of our own.
+                return removals_allowed.then(|| (rule.name.clone(), EnvAction::Unset));
+            }
             let value = if rule.prepend_list.is_empty() {
-                rule.from_first_set
-                    .iter()
-                    .find_map(|from| std::env::var(from).ok().filter(|got| !got.is_empty()))?
+                // `reject_prefix` is ignored outright when the credential is
+                // unusable, which is what makes the placeholder WIN there. It
+                // is a marker rather than a credential, and proxied it is
+                // substituted for one that works — so it beats an empty
+                // variable, and this is the arm that keeps it.
+                let reject = removals_allowed
+                    .then_some(rule.reject_prefix.as_deref())
+                    .flatten();
+                // FIRST USABLE, NOT FIRST SET. The prefix drops an obvious
+                // marker without spending a probe; `usable` is what decides,
+                // and it is measured against the forge rather than read off the
+                // value's shape. That ordering is what keeps this from encoding
+                // one host's placeholder convention: a host that changes its
+                // spelling costs an extra probe, not a wrong credential.
+                let real = rule.from_first_set.iter().find_map(|from| {
+                    lookup(from)
+                        .filter(|got| !got.is_empty())
+                        .filter(|got| reject.is_none_or(|bad| !got.starts_with(bad)))
+                        // NOT ASKED ON AN UNPROVEN ROUTE. Where the session's
+                        // own credential could not be measured, this probe
+                        // travels the same route and would answer with the same
+                        // substitution — so the reading is worthless and the
+                        // honest move is to keep whatever the host set.
+                        .filter(|got| !removals_allowed || usable(got))
+                });
+                match real {
+                    Some(value) => value,
+                    // NO REAL CANDIDATE. With a `reject_prefix` declared, that
+                    // is not the same as "nothing to do": the variable may still
+                    // be carrying the very marker the row rejected, and leaving
+                    // it is how a fenced request goes out with a placeholder and
+                    // comes back `Bad credentials`. Clear it instead, so the
+                    // tool sees an absent credential and says so.
+                    None => {
+                        let carries_marker = reject.is_some_and(|bad| {
+                            lookup(&rule.name).is_some_and(|got| got.starts_with(bad))
+                        });
+                        return carries_marker.then(|| (rule.name.clone(), EnvAction::Unset));
+                    }
+                }
             } else {
-                prepended(
-                    &std::env::var(&rule.name).unwrap_or_default(),
-                    &rule.prepend_list,
-                )
+                prepended(&lookup(&rule.name).unwrap_or_default(), &rule.prepend_list)
             };
-            Some((rule.name.clone(), value))
+            Some((rule.name.clone(), EnvAction::Set(value)))
         })
         .collect()
 }
@@ -1306,6 +1638,38 @@ fn validate_env(entry: &Provision) -> Result<()> {
                 entry.name
             )));
         }
+        // A REMOVAL IS THE THIRD SHAPE, and it is the one the "declares nothing"
+        // arm below would otherwise refuse. `unset` states an outcome rather
+        // than a source, so it is complete on its own and pairing it with a
+        // source would be two rules for one variable with no order between them
+        // — the same fault the first arm names (CLOUD-1569).
+        if rule.unset {
+            if !rule.prepend_list.is_empty() || !rule.from_first_set.is_empty() {
+                return Err(UsageError::raise(format!(
+                    "provision {}: env {} declares `unset` beside a source; a row \
+                     either removes the variable or decides its value, and one \
+                     carrying both says nothing about which wins",
+                    entry.name, rule.name
+                )));
+            }
+            if rule.reject_prefix.is_some() {
+                return Err(UsageError::raise(format!(
+                    "provision {}: env {} declares `unset` beside `reject_prefix`; \
+                     the prefix filters CANDIDATES, and a row that keeps none has \
+                     nothing to filter",
+                    entry.name, rule.name
+                )));
+            }
+            continue;
+        }
+        if rule.reject_prefix.is_some() && rule.from_first_set.is_empty() {
+            return Err(UsageError::raise(format!(
+                "provision {}: env {} declares `reject_prefix` with no \
+                 `from_first_set`; the prefix decides which CANDIDATE is real, so a \
+                 row with no candidates applies it to nothing",
+                entry.name, rule.name
+            )));
+        }
         match (rule.prepend_list.is_empty(), rule.from_first_set.is_empty()) {
             (false, false) => {
                 return Err(UsageError::raise(format!(
@@ -1317,9 +1681,10 @@ fn validate_env(entry: &Provision) -> Result<()> {
             }
             (true, true) => {
                 return Err(UsageError::raise(format!(
-                    "provision {}: env {} declares neither `prepend_list` nor \
-                     `from_first_set`, so it would set nothing — and a launcher that \
-                     sets nothing cannot be told from one that was never written",
+                    "provision {}: env {} declares neither `prepend_list`, \
+                     `from_first_set` nor `unset`, so it would set nothing — and a \
+                     launcher that sets nothing cannot be told from one that was \
+                     never written",
                     entry.name, rule.name
                 )));
             }
@@ -1374,6 +1739,217 @@ pub fn binary_path(repo_root: &Path, entry: &Provision) -> Result<PathBuf> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A row that sets `name` from `from_first_set`, rejecting `proxy-`.
+    fn credential_row(name: &str) -> ProvisionEnv {
+        ProvisionEnv {
+            name: name.to_owned(),
+            prepend_list: Vec::new(),
+            from_first_set: vec!["BATTEN_TEST_PAT".to_owned(), name.to_owned()],
+            when_trust_names: None,
+            reject_prefix: Some("proxy-".to_owned()),
+            unset: false,
+        }
+    }
+
+    /// A row that removes `name` outright.
+    fn unset_row(name: &str) -> ProvisionEnv {
+        ProvisionEnv {
+            name: name.to_owned(),
+            prepend_list: Vec::new(),
+            from_first_set: Vec::new(),
+            when_trust_names: None,
+            reject_prefix: None,
+            unset: true,
+        }
+    }
+
+    /// The environment a case declares, as the resolver's lookup.
+    ///
+    /// Injected rather than set on the process: the environment is global, so a
+    /// case that wrote it would race every other test in this binary — and the
+    /// three-way distinction below (set / absent / removed) is exactly what a
+    /// racing reader would blur.
+    fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
+        let owned: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
+        move |name| {
+            owned
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+        }
+    }
+
+    /// A prober that answers `true` for every value.
+    ///
+    /// The default for a case whose subject is the RESOLVER's ordering rather
+    /// than the measurement: `Credential` already carries the route's verdict,
+    /// and a case that also stubbed the per-value probe to `false` would be
+    /// asserting two mechanisms at once and could not say which one refused.
+    fn anything_authenticates(_value: &str) -> bool {
+        true
+    }
+
+    /// THE PREMISE CASE. Every assertion below is about a row FIRING; if the
+    /// resolver returned nothing for a well-formed row they would all pass over
+    /// a mechanism that is absent (CLOUD-249's shape).
+    #[test]
+    fn a_plain_row_resolves_at_all() {
+        let got = resolved_env_from(
+            &[credential_row("PROBE_TOKEN")],
+            Credential::Live,
+            &env_of(&[("BATTEN_TEST_PAT", "ghp_real")]),
+            &anything_authenticates,
+        );
+        assert_eq!(
+            got,
+            vec![(
+                "PROBE_TOKEN".to_owned(),
+                EnvAction::Set("ghp_real".to_owned())
+            )]
+        );
+    }
+
+    #[test]
+    fn a_placeholder_loses_to_a_real_credential() {
+        let got = resolved_env_from(
+            &[credential_row("PROBE_TOKEN")],
+            Credential::Live,
+            &env_of(&[
+                ("BATTEN_TEST_PAT", "ghp_real"),
+                ("PROBE_TOKEN", "proxy-injected"),
+            ]),
+            &anything_authenticates,
+        );
+        assert_eq!(
+            got,
+            vec![(
+                "PROBE_TOKEN".to_owned(),
+                EnvAction::Set("ghp_real".to_owned())
+            )],
+            "the `proxy-` value must not win the first-set race"
+        );
+    }
+
+    /// The arm `from_first_set` alone cannot express: no real credential exists,
+    /// so the variable must be CLEARED rather than left carrying a marker that
+    /// GitHub answers `Bad credentials` to once the fence is up.
+    #[test]
+    fn a_placeholder_with_no_replacement_is_unset() {
+        let got = resolved_env_from(
+            &[credential_row("PROBE_TOKEN")],
+            Credential::Live,
+            &env_of(&[("PROBE_TOKEN", "proxy-injected")]),
+            &anything_authenticates,
+        );
+        assert_eq!(got, vec![("PROBE_TOKEN".to_owned(), EnvAction::Unset)]);
+    }
+
+    /// A real credential under a name we do not reject is left ALONE, not
+    /// cleared: the row removes markers, never credentials.
+    #[test]
+    fn an_unrecognised_value_is_kept() {
+        let got = resolved_env_from(
+            &[credential_row("PROBE_TOKEN")],
+            Credential::Live,
+            &env_of(&[("PROBE_TOKEN", "ghp_somebody_elses")]),
+            &anything_authenticates,
+        );
+        assert_eq!(
+            got,
+            vec![(
+                "PROBE_TOKEN".to_owned(),
+                EnvAction::Set("ghp_somebody_elses".to_owned())
+            )]
+        );
+    }
+
+    /// EVEN A PLACEHOLDER BEATS NOTHING. With no usable credential the marker is
+    /// preferred: proxied it is substituted for one that works, so clearing it
+    /// strands the session where keeping it merely scopes it.
+    #[test]
+    fn an_unusable_credential_keeps_the_placeholder() {
+        let got = resolved_env_from(
+            &[credential_row("PROBE_TOKEN")],
+            Credential::Unusable,
+            &env_of(&[("PROBE_TOKEN", "proxy-injected")]),
+            &anything_authenticates,
+        );
+        assert_eq!(
+            got,
+            vec![(
+                "PROBE_TOKEN".to_owned(),
+                EnvAction::Set("proxy-injected".to_owned())
+            )],
+            "a marker beats an empty variable when nothing replaces it"
+        );
+    }
+
+    /// The same rule for the proxy: never strip the host's wiring without a
+    /// proven replacement, or the session can reach the forge by no route.
+    #[test]
+    fn an_unusable_credential_keeps_the_proxy() {
+        let env = env_of(&[("HTTPS_PROXY", "http://127.0.0.1:1")]);
+        assert_eq!(
+            resolved_env_from(
+                &[unset_row("HTTPS_PROXY")],
+                Credential::Unusable,
+                &env,
+                &anything_authenticates
+            ),
+            Vec::new(),
+            "a removal with no replacement proven must be skipped"
+        );
+        assert_eq!(
+            resolved_env_from(
+                &[unset_row("HTTPS_PROXY")],
+                Credential::Live,
+                &env,
+                &anything_authenticates
+            ),
+            vec![("HTTPS_PROXY".to_owned(), EnvAction::Unset)]
+        );
+    }
+
+    /// THE CASE `reject_prefix` CANNOT REACH, and the reason the probe is the
+    /// authority rather than the prefix. `ghp_revoked` carries no marker and is
+    /// spelled exactly like a live PAT, so nothing about its TEXT distinguishes
+    /// it — only the measurement does. It loses to the next candidate, and with
+    /// no candidate left the variable is cleared rather than left carrying a
+    /// credential every fenced request will be refused for.
+    #[test]
+    fn a_credential_that_does_not_authenticate_loses() {
+        let only_the_second_one_works = |value: &str| value == "ghp_live";
+        assert_eq!(
+            resolved_env_from(
+                &[credential_row("PROBE_TOKEN")],
+                Credential::Live,
+                &env_of(&[
+                    ("BATTEN_TEST_PAT", "ghp_revoked"),
+                    ("PROBE_TOKEN", "ghp_live"),
+                ]),
+                &only_the_second_one_works
+            ),
+            vec![(
+                "PROBE_TOKEN".to_owned(),
+                EnvAction::Set("ghp_live".to_owned())
+            )],
+            "first USABLE, not first set"
+        );
+        assert_eq!(
+            resolved_env_from(
+                &[credential_row("PROBE_TOKEN")],
+                Credential::Live,
+                &env_of(&[("PROBE_TOKEN", "proxy-injected")]),
+                &only_the_second_one_works
+            ),
+            vec![("PROBE_TOKEN".to_owned(), EnvAction::Unset)],
+            "no usable candidate leaves the marker cleared, never standing"
+        );
+    }
 
     /// A response carrying `status` over a body that would digest cleanly if it
     /// ever reached [`digest`] — which is the point: a case whose body was

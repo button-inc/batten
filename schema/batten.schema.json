@@ -16,7 +16,6 @@
       ]
     },
     "attribution": {
-      "description": "What produced commits may carry about the tooling that made them\n(CLOUD-274), enforcing the attribution decision record (CLOUD-268).\nAbsent means this repository declares no attribution policy and the gate\nis simply not active — not that everything is permitted, which is why an\nabsent table is a usage error at the gate rather than a silent pass.\n\nConsumer-specific by nature, and the reason it lives here: the engine\ncarries the matcher, this file carries the vendor literals. That extends\nnon-negotiable rule 1 from consumers to vendors — a grep of `crates/` for\nthe configured patterns returns nothing. The type and the predicate are\n[`crate::attribution`].",
       "anyOf": [
         {
           "$ref": "#/$defs/Attribution"
@@ -86,6 +85,17 @@
       "anyOf": [
         {
           "$ref": "#/$defs/Contract"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "credential": {
+      "description": "What produced commits may carry about the tooling that made them\n(CLOUD-274), enforcing the attribution decision record (CLOUD-268).\nAbsent means this repository declares no attribution policy and the gate\nis simply not active — not that everything is permitted, which is why an\nabsent table is a usage error at the gate rather than a silent pass.\n\nConsumer-specific by nature, and the reason it lives here: the engine\ncarries the matcher, this file carries the vendor literals. That extends\nnon-negotiable rule 1 from consumers to vendors — a grep of `crates/` for\nthe configured patterns returns nothing. The type and the predicate are\n[`crate::attribution`].\nHow a session credential is PROVED usable before anything is stripped on\nthe strength of it (CLOUD-1569).\n\nConsumer config because the forge is the consumer's, which is\nnon-negotiable rule 1: the engine holds the mechanism — refuse a known-bad\ncredential first, then test the real one — and the endpoint that\nmechanism speaks to is a fact about this repository, not about batten.\n\nAbsent means the capability is not declared, which reads as\ncould-not-look rather than as healthy: no removal is authorised.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CredentialProbe"
         },
         {
           "type": "null"
@@ -1025,6 +1035,20 @@
         "scheme": {
           "description": "The scheme prefixed to the value, space-separated. Empty sends the value\nalone, which is what a bare token header wants.",
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CredentialProbe": {
+      "description": "How a credential is proved usable, declared by the consumer.\n\n**One field, and the control credential is NOT one of them.** A caller does\nnot get to choose what \"known bad\" means: the engine sends a syntactically\nplausible token that must be refused, because a consumer that could name it\ncould name one the route happens to accept and turn the control arm into a\nrubber stamp.",
+      "type": "object",
+      "properties": {
+        "probe_url": {
+          "description": "The endpoint that answers 2xx for a good credential and refuses a bad\none.\n\nIt must be a route the fence sends DIRECT. Pointed at one an intercepting\nproxy carries, the control arm fails — the junk credential is accepted —\nand the engine reports could-not-look rather than pretending to a verdict\nit cannot reach.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false
@@ -2579,6 +2603,17 @@
             "type": "string"
           }
         },
+        "reject_prefix": {
+          "description": "Treat a candidate whose value starts with this as if it were not set.\n\n**A FAST PATH, NEVER THE DECISION.** The authority on whether a\ncredential is usable is [`Credential`], which is measured against the\nforge; this is a cheap syntactic hint that lets an obvious marker lose\nwithout spending a probe on it. A host that stops prefixing its\nplaceholder tomorrow — which this one can, without warning — degrades to\nthe measurement rather than to a wrong answer, because the probe is what\nactually decides (CLOUD-1569).\n\n**A placeholder is not a weak credential, it is a MARKER**, and the\ndifference decides the verdict. This container injects `GITHUB_TOKEN`\nand `GH_TOKEN` carrying a literal `proxy-` prefix: proxied, the value\nnever reaches GitHub because the proxy substitutes its own; fenced, it is\nsent verbatim and GitHub answers `Bad credentials`. So `from_first_set`\nalone cannot express the intent — the placeholder IS set and IS\nnon-empty, so it wins the first-set race against nothing (CLOUD-1569).\n\nApplied to every candidate, including the row's own name where it appears\nin the list, which is what lets one row say \"prefer a real credential,\nand if there is none, leave nothing behind rather than a marker\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unset": {
+          "description": "Remove the variable from the launched environment entirely.\n\n**Unset is not \"set to empty\", and only unset is honest here.** An empty\n`HTTPS_PROXY` is read by some clients as \"no proxy\" and by others as a\nmalformed URL, and an empty credential is refused by some tools and taken\nas anonymous by others — so writing one is a claim this row cannot make.\nThe distinction already exists one field up, where `from_first_set`\nresolving to nothing writes nothing.\n\nPair it with `when_trust_names`: clearing a proxy variable is right in a\ncontainer whose egress is intercepted by an authority the row names, and\nwrong on a machine whose proxy somebody configured deliberately.",
+          "type": "boolean"
+        },
         "when_trust_names": {
           "description": "Apply this row only where the host's trust bundle carries a certificate\nauthority whose subject names this ORGANISATION.\n\n**This is what keeps a bypass from being applied to somebody's working\nproxy.** A row without it applies everywhere, which is right for a row\nthat only ever adds a credential; it is wrong for one that routes traffic\naround a proxy, because a proxy is a legitimate part of most networks and\nthe only one worth going around is one that refuses by policy what it was\nasked to carry.\n\nThe condition is the CA rather than the proxy variables, and the\ndifference is the whole reason the field is spelled this way. Every\nintercepting environment sets those variables, so keying on them would\nrefuse to honour a real proxy the moment somebody configured one. Keying\non the authority in the trust path names the specific interceptor and\ngoes false the day those variables point at a CA the operator chose.\n\nMeasured 2026-09-05 in this sandbox: the bundle those variables name\ncarries five interception authorities, presenting three different common\nnames across the direct and proxied paths, and the ORGANISATION is the\nonly field common to all five — so a row matching a common name would\nsilently miss whichever path the author did not test.",
           "type": [
@@ -2607,6 +2642,30 @@
           },
           "required": [
             "from_first_set"
+          ]
+        },
+        {
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "prepend_list"
+                ]
+              },
+              {
+                "required": [
+                  "from_first_set"
+                ]
+              },
+              {
+                "required": [
+                  "reject_prefix"
+                ]
+              }
+            ]
+          },
+          "required": [
+            "unset"
           ]
         }
       ],

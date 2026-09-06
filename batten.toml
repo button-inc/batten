@@ -453,6 +453,73 @@ prepend_list = [
 name = "MISE_GITHUB_TOKEN"
 from_first_set = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN", "MISE_GITHUB_TOKEN"]
 
+# THE INJECTED PLACEHOLDER MUST LOSE TO A REAL CREDENTIAL, ON EVERY NAME A TOOL
+# READS (CLOUD-1569). `GITHUB_TOKEN` and `GH_TOKEN` arrive in this container
+# carrying a value whose literal prefix is `proxy-`: it is not a credential, it
+# is the marker of one the proxy will substitute for its own. Proxied that never
+# reaches GitHub; fenced — which the two rows above do — it is sent verbatim and
+# GitHub answers `Bad credentials`. So the fence WITHOUT these rows converts a
+# 403 into a 401, which is precisely the bug this file's own `[env]` comment has
+# recorded all along and which #889 then re-diagnosed as a scope problem.
+#
+# `from_first_set` is the whole mechanism and no prefix test is needed: the real
+# names are tried first, so a placeholder is overwritten wherever a PAT exists
+# and left alone where none does. That last part is why the ambient name is
+# still listed last rather than omitted — in CI there is no PAT and the runner's
+# own token is the right answer, and a row that wrote nothing there would strip
+# a working credential to fix a container that is not CI.
+#
+# WHAT THIS STILL CANNOT DO, stated rather than implied. A `[[provision.env]]`
+# row can only SET a variable. It cannot UNSET one, and it cannot refuse a value
+# by its prefix — the schema carries `from_first_set`, `prepend_list` and
+# `when_trust_names` and nothing else. So a placeholder survives wherever no
+# real credential exists to displace it, and the proxy variables cannot be
+# cleared here at all even in a disposable container that declares itself one.
+# Both are CLOUD-1569's engine half.
+[[provision.env]]
+name = "GITHUB_TOKEN"
+from_first_set = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN", "GITHUB_TOKEN"]
+reject_prefix = "proxy-"
+
+[[provision.env]]
+name = "GH_TOKEN"
+from_first_set = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN", "GH_TOKEN"]
+reject_prefix = "proxy-"
+
+# THE PROXY VARIABLES GO, IN A CONTAINER THIS ROW CAN NAME. `when_trust_names`
+# is the whole safety argument: it fires only where the trust bundle carries an
+# interception authority whose organisation is Anthropic, so a developer's
+# deliberately-configured proxy is never cleared. Where it DOES fire, the egress
+# is intercepted at the network layer regardless — the same certificate chain is
+# presented on both routes and must be trusted on both — so clearing these
+# trades away no confidentiality. It decides one thing only: whether the
+# injected credential is substituted for ours, or ours is respected.
+#
+# `NO_PROXY` above is kept rather than made redundant by this. The two answer
+# different clients: a tool reading `NO_PROXY` is steered per host, and a tool
+# that reads only `HTTPS_PROXY` is steered by its absence. Dropping either
+# leaves whichever class does not read the other still going through the proxy,
+# which is how `land-lock`'s `git push` stayed proxied while `mise` did not.
+[[provision.env]]
+name = "HTTPS_PROXY"
+when_trust_names = "Anthropic"
+unset = true
+
+[[provision.env]]
+name = "https_proxy"
+when_trust_names = "Anthropic"
+unset = true
+
+[[provision.env]]
+name = "ALL_PROXY"
+when_trust_names = "Anthropic"
+unset = true
+
+[[provision.env]]
+name = "all_proxy"
+when_trust_names = "Anthropic"
+unset = true
+
 [provision.platforms.linux-x86_64]
 url = "https://github.com/jdx/mise/releases/download/v2026.9.1/mise-v2026.9.1-linux-x64"
 sha256 = "c98423c8470d6dc416d9f7036d0646d8ef5ae92ad9186907f8fcc84cbe7db4ea"
@@ -7783,6 +7850,25 @@ body_template = ".github/bot-lane-row.md"
 # model-versioned co-authorship trailer, 20 a session URL. The injection is
 # environment-level and the host's own suppression setting does not govern every
 # path, so the invariant is only checkable on the produced commit.
+# HOW A CREDENTIAL IS PROVED BEFORE ANYTHING IS STRIPPED ON ITS STRENGTH
+# (CLOUD-1569). The engine holds the mechanism — refuse a known-bad credential
+# first, then test the real one — and this names the endpoint it speaks to,
+# because the forge is this repository's fact rather than batten's (rule 1).
+#
+# THE CONTROL ARM IS WHY THIS IS AN API URL AND NOT A GIT REMOTE. Measured
+# 2026-09-06: a deliberately invalid token was ACCEPTED on `github.com` git
+# traffic with the proxy variables cleared as well as set, so a `git` probe
+# cannot tell our credential working from the interceptor answering for us. The
+# same junk token is refused here (401) while a real one is not (200), which is
+# what makes a verdict possible at all.
+#
+# It must stay a route the fence sends direct — `api.github.com` is in the
+# `[[provision.env]]` no-proxy list above. Pointed at a route the proxy carries,
+# the control arm fails and the engine reports could-not-look rather than
+# inventing a verdict.
+[credential]
+probe_url = "https://api.github.com/rate_limit"
+
 [attribution]
 # Authorship. Both fields are judged: a repair reaching only `author` leaves the
 # vendor identity on every commit's `committer`, absent from `git log`'s default

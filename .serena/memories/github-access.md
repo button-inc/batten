@@ -117,8 +117,45 @@ credential) → 403. Fenced out via `NO_PROXY`, mise sends that placeholder dire
 and GitHub rejects it → 401. Neither is a repository-scope verdict. `GH_TOKEN` is
 not a name mise reads: setting only that still 401s.
 
-`github.com` stays proxied so `git` keeps its proxy auth to this repo; only the
-API and asset hosts are fenced.
+**`github.com` MUST BE FENCED TOO, AND "IT STAYS PROXIED SO `git` KEEPS ITS PROXY
+AUTH" IS THE WORST SENTENCE THIS FILE HAS EVER CARRIED.** It shipped 2026-08-06
+in `01ecabdd`, was still here on 2026-09-06, and it is why the fleet's landing
+lock is wedged.
+
+Proxied, `git` authenticates with **the injected token, not yours** — the same
+substitution §"The core fact" measures for the API, one protocol over. That token
+is scoped, so it 403s writes it does not cover. Measured 2026-09-06, the same
+`git push --delete` twice:
+
+| route                                       | result                         |
+| ------------------------------------------- | ------------------------------ |
+| through the proxy                           | `RPC failed; HTTP 403 curl 22` |
+| `github.com` fenced + PAT credential helper | **exit 0, ref deleted**        |
+
+**FENCING WEAKENS NOTHING, AND THAT IS THE WHOLE POINT.** Egress TLS is
+intercepted at the network layer either way (see the interception section below),
+so the Anthropic cert chain is presented on both routes and must be trusted on
+both. The ONLY thing the fence changes is **whose credential is respected —
+theirs or the PAT you were given.** Reading it as a security trade is the error;
+there is no trade.
+
+`git` needs a credential once the proxy stops supplying one, which is the half
+the old sentence mistook for a reason to stay proxied. Hand it the PAT:
+
+```
+git -c credential.helper='!f() { echo username=x-access-token; echo password=$BATTEN_GITHUB_TOKEN; }; f' push …
+```
+
+A helper rather than a token in the URL: the URL form puts the credential in
+`argv`, where `ps` and any command log will carry it.
+
+**What it cost, so the next reader does not re-derive it.** `land-lock`'s CAS is
+a `git push` to a ref another VM minted. The injected token is not scoped for it,
+so the push 403s; `swap` discards stderr (`land-lock.sh:442`), so `acquire`
+renders the refusal as `still held by <the last holder>` and names a session that
+released hours earlier. Measured: 34 identical refusals, 120s apart, zero
+successes, against a lease `status` reads as `released`. No session can take over
+a lease minted by a different VM while `github.com` is proxied — CLOUD-1569.
 
 **THE WIRING IS ON THREE SURFACES, AND NAMING ONLY TWO IS HOW #889 "FIXED" THIS
 AND CHANGED NOTHING:**
@@ -238,8 +275,12 @@ dropped), confirm green, and land.
 
 ## Hygiene
 
-- `git` over `github.com` (clone/fetch/push/ls-remote) uses proxied git auth —
-  leave it alone.
+- **`git` over `github.com` must be FENCED and given the PAT — do NOT "leave it
+  alone".** That instruction stood here from `01ecabdd` until 2026-09-06 and is
+  the direct cause of CLOUD-1569: proxied, `git` authenticates with the injected
+  token, which 403s any write it is not scoped for, including the landing lease's
+  CAS. See §"Why the toolchain runs here" for the measurement and the credential
+  helper. Interception applies on both routes, so fencing trades away nothing.
 - Confirming CI: **one continuous background `gh` poll, no timeout, never
   event-driven.** Do not wait on the webhook / PR activity subscription — in this
   ephemeral cloud env a webhook can only wake a session that still exists, and an
