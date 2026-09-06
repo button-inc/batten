@@ -1500,14 +1500,30 @@ pub(crate) fn classify_in_env(
 /// a signal is honoured; `report_bundle` states the ordering argument at its own
 /// site, and the same one holds here — there is no record to seal on this path,
 /// so nothing is lost by raising as soon as the outcomes are in hand.
+///
+/// **A PER-TARGET PAIR RATHER THAN AN INLINE `#[cfg(unix)]`**, because the whole
+/// body is unix-only and the parameter would then be unused on Windows —
+/// `cross-check` denies warnings on `x86_64-pc-windows-gnu` (CLOUD-397), so that
+/// spelling does not type-check there. `report_bundle` gets away with the inline
+/// form only because it reads `outcomes` elsewhere in the same function.
+#[cfg(unix)]
 fn reraise(outcomes: &[Outcome]) -> Result<()> {
-    #[cfg(unix)]
     if let Some(signal) = outcomes.iter().find_map(|outcome| outcome.received) {
         // Restores the default disposition and raises on self, so this does not
         // return.
         signal_hook::low_level::emulate_default_handler(signal)
             .context("re-raise the signal Batten was sent")?;
     }
+    Ok(())
+}
+
+/// The other half of [`reraise`]: a target with no POSIX signal to re-raise.
+///
+/// `Ok(())` rather than an error — the caller's next statement is the classify
+/// path, and a platform that cannot be interrupted this way has nothing to say
+/// about it.
+#[cfg(not(unix))]
+fn reraise(_outcomes: &[Outcome]) -> Result<()> {
     Ok(())
 }
 
