@@ -7908,7 +7908,15 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
             (1, false) => delta_bases
                 .iter()
                 .next()
-                .and_then(|base| crate::git::base_delta(root, base, &deltas).ok())
+                .and_then(|base| {
+                    // THE IDENTITY IS PAID FOR ONLY BY A ROW THAT DECLARES ITS
+                    // CONSUMER. `patch-id` keys a `[[rule.minted]]` receipt and
+                    // nothing else reads it, so a tree whose rules declare no
+                    // minted row pays no merge-base walk — the same declaration
+                    // economy every other git fact here already keeps.
+                    let wants = rules.iter().any(|rule| !rule.minted.is_empty());
+                    crate::git::base_delta(root, base, &deltas, wants).ok()
+                })
                 .flatten(),
             _ => None,
         },

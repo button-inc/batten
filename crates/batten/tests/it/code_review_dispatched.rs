@@ -313,6 +313,7 @@ fn a_prose_only_branch_owes_no_code_review() {
         &root,
         "refs/remotes/origin/main",
         &[String::from("crates/**")],
+        true,
     )
     .expect("the repository opens")
     .expect("the base resolves");
@@ -370,6 +371,7 @@ fn a_change_with_no_identity_owes_no_review() {
         &root,
         "refs/remotes/origin/main",
         &[String::from("crates/**")],
+        true,
     )
     .expect("the repository opens")
     .expect("the base resolves");
@@ -419,6 +421,90 @@ fn an_unlistable_store_is_could_not_look_and_never_a_refusal() {
     assert!(
         verdicts(&root).is_empty(),
         "a checkout whose receipt store cannot be listed must abstain, not refuse"
+    );
+}
+
+/// THE WRITER AND THE READER AGREE, driven through the real mint boundary.
+///
+/// Every other case here files the receipt by hand, which proves the predicate
+/// and nothing about the half that writes it. If `mint_receipts` composed a
+/// different key — another base, another separator, a different authority root —
+/// the gate would refuse forever with every one of those cases green. That is the
+/// same class this module's own header refuses for `with input as`, one layer
+/// over: a fabricated artifact cannot prove the engine produces it.
+///
+/// So this drives the boundary itself and then asks the gate, with nothing
+/// hand-written in between.
+#[test]
+fn the_mint_boundary_writes_the_receipt_this_gate_reads() {
+    let root = repo("code-review-writer");
+    assert_eq!(
+        verdicts(&root),
+        vec![String::from(RULE)],
+        "the fixture starts owing a review"
+    );
+
+    let row: batten::mint::Declared = serde_json::from_value(serde_json::json!({
+        "name": RECEIPT,
+        "tool": "Skill",
+        "selects_at": "skill",
+        "selects": "code-review",
+        "key": "delta",
+        "key_base": "refs/remotes/origin/main",
+        "mode": "replace",
+        "body": "{git:HEAD} {now}",
+    }))
+    .expect("the committed row's shape loads");
+
+    // The envelope as the live host sends one: the skill named in the INPUT, and
+    // a result carrying no JSON at all — which is what `record_mints` had to stop
+    // giving up on for this row to fire.
+    batten::mint_receipts_for_test(
+        &[row],
+        "Skill",
+        &serde_json::json!({"skill": "code-review"}),
+        &serde_json::Value::Null,
+        &root,
+    );
+
+    assert!(
+        verdicts(&root).is_empty(),
+        "the receipt the boundary wrote must be the one the module looks up"
+    );
+}
+
+/// AND A DIFFERENT SKILL WRITES NOTHING, through the same boundary.
+///
+/// Without the selector the row mints on every dispatch its tool matched, and the
+/// receipt attests that *something* ran. This is that arm over the engine rather
+/// than over `selects` alone.
+#[test]
+fn another_skill_mints_nothing_through_the_boundary() {
+    let root = repo("code-review-wrong-skill");
+    let row: batten::mint::Declared = serde_json::from_value(serde_json::json!({
+        "name": RECEIPT,
+        "tool": "Skill",
+        "selects_at": "skill",
+        "selects": "code-review",
+        "key": "delta",
+        "key_base": "refs/remotes/origin/main",
+        "mode": "replace",
+        "body": "{git:HEAD} {now}",
+    }))
+    .expect("the committed row's shape loads");
+
+    batten::mint_receipts_for_test(
+        &[row],
+        "Skill",
+        &serde_json::json!({"skill": "batten"}),
+        &serde_json::Value::Null,
+        &root,
+    );
+
+    assert_eq!(
+        verdicts(&root),
+        vec![String::from(RULE)],
+        "a dispatch of another skill must leave the review still owed"
     );
 }
 

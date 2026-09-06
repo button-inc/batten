@@ -1326,9 +1326,17 @@ body = "{join:issues[].id}\nbase {git:origin/main}"
 # KEYED `delta`, so the receipt is stale by construction. `key_base` is
 # `origin/main` because that is what this repository lands onto; the identity is
 # a MERGE-BASE diff, so `land`'s per-lap rebase does not re-buy the review, and
-# any commit that moves code does. The boundary refuses to mint at all while the
-# tree is dirty — a receipt keyed to committed bytes must not be taken in a
-# session looking at something else.
+# any commit that moves code does.
+#
+# THE TREE'S CLEANLINESS IS NOT CHECKED HERE, AND AN EARLIER DRAFT OF THIS BLOCK
+# CLAIMED IT WAS. The conjunct was withdrawn during this change — `git::uncommitted`
+# counts an uninitialised gitlink as changed forever (CLOUD-1500), so `Ok(0)` could
+# never hold and the receipt could never be minted at all. What remains true is
+# narrower and worth stating exactly: the identity is over COMMITTED bytes, so an
+# uncommitted edit cannot move the key. A review dispatched over a dirty tree
+# therefore attests the committed change it was keyed to and says nothing about
+# what was uncommitted at the time. `tree-clean` is what refuses a dirty tree on
+# the landing path, and it is the only thing that does.
 #
 # THE BODY CARRIES NO FINDING AND HAS NOWHERE TO PUT ONE. Two fields: the head
 # this was taken at, and the instant. Rule 4 holds structurally rather than by

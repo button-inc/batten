@@ -11265,6 +11265,28 @@ fn recover_spilled(result: &serde_json::Value) -> Option<serde_json::Value> {
 /// authority — [`mcp::payload`] for JSON-RPC content blocks, [`facts::payload_in`]
 /// for the harness envelope. Every failure is silent, as the mint boundary has
 /// always been: the gate that reads the receipt simply denies again.
+/// [`mint_receipts`] reached from the integration tier (CLOUD-1484).
+///
+/// **The boundary itself, never a re-implementation.** The half that WRITES a
+/// receipt and the half that READS it must be shown to agree, and a test that
+/// hand-writes the file proves the reader against an artifact the engine may not
+/// produce — a different key base, separator or authority root leaves the gate
+/// refusing forever with every case green. That is the `with input as` class one
+/// layer over, so the tier calls the real function.
+///
+/// `pub` and named for its caller rather than made generally available: nothing
+/// in the binary reaches it, and the name says who it is for.
+#[doc(hidden)]
+pub fn mint_receipts_for_test(
+    declared: &[crate::mint::Declared],
+    tool: &str,
+    input: &serde_json::Value,
+    result: &serde_json::Value,
+    root: &Path,
+) {
+    mint_receipts(declared, tool, input, result, root, None);
+}
+
 fn mint_receipts(
     declared: &[crate::mint::Declared],
     tool: &str,
@@ -13423,7 +13445,7 @@ impl<'a> CheckScope<'a> {
                 // tree — the flag narrows which files rules SEE, and a glob here
                 // would be a second selection layered under `PathSet`'s.
                 let whole_tree = ["**".to_owned()];
-                let delta = git::base_delta(root, rev, &whole_tree)?.ok_or_else(|| {
+                let delta = git::base_delta(root, rev, &whole_tree, false)?.ok_or_else(|| {
                     UsageError::raise(format!(
                         "check: --since {rev} resolves but its change-set could not be read"
                     ))

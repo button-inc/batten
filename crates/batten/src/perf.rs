@@ -401,7 +401,7 @@ fn base_commit(repo: &Path, base_ref: &str) -> Result<String> {
 /// `base..HEAD`, so an uncommitted change could move the measured cost while the
 /// skip looked only at what was committed.
 fn changed_between(repo: &Path, base: &str) -> Result<BTreeSet<String>> {
-    let delta = crate::git::base_delta(repo, base, &[String::from("**")])?.ok_or_else(|| {
+    let delta = crate::git::base_delta(repo, base, &[String::from("**")], false)?.ok_or_else(|| {
         anyhow::anyhow!(
             "perf-pair: could not diff the base against this tree, so the skip could not be decided. No measurement."
         )

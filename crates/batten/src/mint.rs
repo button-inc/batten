@@ -654,6 +654,107 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    /// A row declaring a selector mints only for the value it names.
+    ///
+    /// Fails by: comparing with `starts_with`, or returning `true` on an
+    /// unresolvable path. Either makes the row mint on every dispatch its tool
+    /// matched, which is the false green `batten.toml` says the column exists to
+    /// remove — the receipt would attest that *something* ran.
+    #[test]
+    fn a_selector_admits_only_the_value_it_names() {
+        let row: Declared = serde_json::from_value(serde_json::json!({
+            "name": "code-review", "tool": "Skill",
+            "selects_at": "skill", "selects": "code-review",
+            "key": "delta", "key_base": "origin/main",
+            "mode": "replace", "body": "{now}",
+        }))
+        .expect("the committed row's shape loads");
+
+        assert!(selects(&row, &serde_json::json!({"skill": "code-review"})));
+        assert!(
+            !selects(&row, &serde_json::json!({"skill": "batten"})),
+            "another skill must not mint this row's receipt"
+        );
+        assert!(
+            !selects(&row, &serde_json::json!({"skill": "code-review-extra"})),
+            "EQUALITY, never a prefix: a longer name nobody declared must not match"
+        );
+        assert!(
+            !selects(&row, &serde_json::json!({})),
+            "an unresolvable path does not select — minting on a maybe is the forgery this removes"
+        );
+        assert!(
+            !selects(&row, &serde_json::Value::Null),
+            "the dispatch path passes a null input, which must select nothing"
+        );
+    }
+
+    /// A row declaring NO selector is judged exactly as it was before the column
+    /// existed, which is every landed row.
+    #[test]
+    fn a_row_with_no_selector_selects_everything_its_tool_matched() {
+        let row: Declared = serde_json::from_value(serde_json::json!({
+            "name": "issue-read", "tool": "get_issue", "key": "named",
+            "key_from": "id", "mode": "replace", "body": "{id}",
+        }))
+        .expect("a landed row's shape loads");
+        assert!(selects(&row, &serde_json::json!({"anything": 1})));
+        assert!(selects(&row, &serde_json::Value::Null));
+    }
+
+    /// Each new load-time refusal fires, and a well-formed row still loads.
+    ///
+    /// Fails by: dropping any one arm. Half a selector is the dangerous half —
+    /// `selects_at` alone narrows nothing while reading as though it did.
+    #[test]
+    fn the_new_load_refusals_each_fire() {
+        let row = |extra: serde_json::Value| -> Declared {
+            let mut base = serde_json::json!({
+                "name": "r", "tool": "T", "key": "delta",
+                "key_base": "origin/main", "mode": "replace", "body": "{now}",
+            });
+            let (Some(o), Some(e)) = (base.as_object_mut(), extra.as_object()) else {
+                unreachable!("both are objects")
+            };
+            for (k, v) in e {
+                if v.is_null() {
+                    o.remove(k);
+                } else {
+                    o.insert(k.clone(), v.clone());
+                }
+            }
+            serde_json::from_value(base).expect("shape loads")
+        };
+
+        assert!(
+            validate(&[row(serde_json::json!({}))]).is_ok(),
+            "the well-formed row loads"
+        );
+        assert!(
+            validate(&[row(serde_json::json!({"key_base": null}))]).is_err(),
+            "`delta` with no `key_base` names no base to measure against"
+        );
+        assert!(
+            validate(&[row(
+                serde_json::json!({"key": "branch", "key_base": "origin/main"})
+            )])
+            .is_err(),
+            "a `key_base` on a row keyed otherwise would be read by nothing"
+        );
+        assert!(
+            validate(&[row(serde_json::json!({"selects_at": "skill"}))]).is_err(),
+            "half a selector narrows nothing while reading as though it did"
+        );
+        assert!(
+            validate(&[row(serde_json::json!({"selects": "x"}))]).is_err(),
+            "a value compared to nothing"
+        );
+        assert!(
+            validate(&[row(serde_json::json!({"selects_at": "  ", "selects": "x"}))]).is_err(),
+            "an empty `selects_at`"
+        );
+    }
+
     #[test]
     fn an_absent_optional_records_the_could_not_look_token_never_a_hash_of_nothing() {
         // CLOUD-691's measured forgery, in the one place this module could

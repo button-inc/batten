@@ -2772,7 +2772,12 @@ pub fn materialize_rev(dir: &Path, rev: &str, dest: &Path) -> Result<()> {
 /// # Errors
 ///
 /// Raises only when the repository cannot be opened at all.
-pub fn base_delta(dir: &Path, base: &str, globs: &[String]) -> Result<Option<BaseDelta>> {
+pub fn base_delta(
+    dir: &Path,
+    base: &str,
+    globs: &[String],
+    wants_patch_id: bool,
+) -> Result<Option<BaseDelta>> {
     let repository = open(dir)?;
     let hash = repository.object_hash();
 
@@ -2907,7 +2912,17 @@ pub fn base_delta(dir: &Path, base: &str, globs: &[String]) -> Result<Option<Bas
     // could-not-look and the three path lists above are still answered, which is
     // `base_date`'s posture one field down and for its reason: collapsing the
     // whole fact over one unreadable field is the opposite error.
-    delta.patch_id = branch_patch_id(dir, base).ok().flatten();
+    //
+    // PAID ONLY WHERE A ROW ASKED, which is the economy every other git fact in
+    // `resolve_git_facts` already keeps and which `mint_receipts` states one
+    // module over: a caller must not pay a git invocation for a question it
+    // never asks. This one is not cheap — a second repository open, a merge-base
+    // walk and a tree diff — and `base_delta` runs on every `check` that declares
+    // any `delta_sources`, which is most of them. Ungated it charged the whole
+    // tree for a field one module reads.
+    if wants_patch_id {
+        delta.patch_id = branch_patch_id(dir, base).ok().flatten();
+    }
     // THE BASE'S OWN TIMESTAMP, resolved here because this is where the base rev
     // has already been resolved. Every failure leaves `None` rather than a
     // fabricated instant: a consumer comparing against could-not-look must skip
@@ -3314,7 +3329,14 @@ pub fn branch_patch_id(dir: &Path, base_ref: &str) -> Result<Option<String>> {
     let Some(base) = resolve_ref(dir, base_ref)? else {
         return Ok(None);
     };
-    let head = head_commit(dir)?;
+    // `None` RATHER THAN `?`, so the doc above is true of the body. `head_commit`
+    // raises on an unresolvable HEAD — an empty repository, a broken ref — and
+    // propagating that would make this function raise where it promises
+    // could-not-look. Latent while both callers swallow the error, and a trap for
+    // the next one that follows the doc instead of reading the code.
+    let Ok(head) = head_commit(dir) else {
+        return Ok(None);
+    };
     Ok(cumulative_patch_id(dir, &base, &head)
         .ok()
         .flatten()
