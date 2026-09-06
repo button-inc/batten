@@ -382,7 +382,6 @@ url = "https://example.invalid/mise"
 sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
 "#;
 
-
 // ---------------------------------------------------------------------------
 // THE SECOND SURFACE (CLOUD-1550).
 //
@@ -444,7 +443,10 @@ fn a_provision_fence_on_a_later_row_passes() {
 /// unable to fill.
 #[test]
 fn an_unreadable_mise_toml_is_refused_rather_than_read_as_clean() {
-    let root = fixture_p("provision-unreadable", "[env\nNO_PROXY = ", PROVISION_FENCED);
+    let root = fixture_p(
+        "provision-unreadable",
+        "[env\nNO_PROXY = ",
+        PROVISION_FENCED,
+    );
     denied(&root);
 }
-

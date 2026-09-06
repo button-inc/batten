@@ -1122,6 +1122,30 @@ pub fn removals_unannounced(
 /// newer column still refuses through `deny_unknown_fields`, so the file is never
 /// half-understood. What it reports is `unknown field` where
 /// `min_batten_version` exists to say `this build is too old`.
+///
+/// **AND THAT SENTENCE IS TRUE AT A TERMINAL AND FALSE AT THE HOOK, WHICH IS THE
+/// SURFACE THIS ENGINE EXISTS TO DEFEND** (CLOUD-1326, still open). The refusal
+/// survives as an *exit code*, and on the mediated path an exit code is the whole
+/// verdict: `crate::exit` makes `2` the policy denial, and `1`/`3` the only codes
+/// a Batten failure produces, *so no failure path can block a call*. A config
+/// this build cannot parse is a `UsageError` — exit `1` — which the harness reads
+/// as a non-blocking hook error and then runs the tool anyway. Refuse and permit
+/// are the same byte there.
+///
+/// So the window does not cost the diagnostic alone. It disarms every mediated
+/// rule, silently, for as long as it is open — and in a disposable per-session
+/// container the window is not "the life of the PR" but *every session that
+/// provisions the released binary between a config key landing and the release
+/// carrying it*. Measured 2026-09-06: floor `0.0.82`, `main` at `v0.0.145`
+/// declaring `[[outcome]]`, provisioned binary `0.0.144`. `deny_unknown_fields`
+/// refused exactly as designed; `no-tool-substitution`, `protected-mutation` and
+/// `commit-attribution` all permitted for the whole session, and six commits
+/// carrying a `trailer_deny` trailer reached the remote before a rebuild made the
+/// same gate refuse the seventh.
+///
+/// The floor could not have helped and that is not its fault — it can only name a
+/// version that already exists, per the paragraph above. What is missing is a
+/// refusal that does not depend on parsing the file it is refusing over.
 #[must_use]
 pub fn additions_since(
     released: &std::collections::BTreeSet<String>,
