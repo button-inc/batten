@@ -617,7 +617,6 @@ main() {
 		fi
 	fi
 
-
 	api_get "$asset_url" "application/octet-stream" "$tmp/$asset" "$asset_anon" ||
 		die 2 "could not download $asset from $tag."
 
