@@ -3718,17 +3718,21 @@ mod tests {
         // about the loader. Reading only the first would report every section
         // the split moved as unwrapped — the false positive that gets a gate
         // switched off.
-        let parse_body = ["fn validate_tables", "fn validate_sections"]
-            .iter()
-            .map(|name| {
-                let start = source
-                    .find(name)
-                    .unwrap_or_else(|| panic!("`{name}` is declared here"));
-                let rest = &source[start..];
-                &rest[..rest.find("\n}").expect("the function closes")]
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let parse_body = [
+            "fn validate_tables",
+            "fn validate_sections",
+            "fn validate_remedy_tables",
+        ]
+        .iter()
+        .map(|name| {
+            let start = source
+                .find(name)
+                .unwrap_or_else(|| panic!("`{name}` is declared here"));
+            let rest = &source[start..];
+            &rest[..rest.find("\n}").expect("the function closes")]
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
         let parse_body = parse_body.as_str();
 
         let mut seen = Vec::new();
@@ -3804,17 +3808,21 @@ mod tests {
         // about the loader. Reading only the first would report every section
         // the split moved as unwrapped — the false positive that gets a gate
         // switched off.
-        let parse_body = ["fn validate_tables", "fn validate_sections"]
-            .iter()
-            .map(|name| {
-                let start = source
-                    .find(name)
-                    .unwrap_or_else(|| panic!("`{name}` is declared here"));
-                let rest = &source[start..];
-                &rest[..rest.find("\n}").expect("the function closes")]
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let parse_body = [
+            "fn validate_tables",
+            "fn validate_sections",
+            "fn validate_remedy_tables",
+        ]
+        .iter()
+        .map(|name| {
+            let start = source
+                .find(name)
+                .unwrap_or_else(|| panic!("`{name}` is declared here"));
+            let rest = &source[start..];
+            &rest[..rest.find("\n}").expect("the function closes")]
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
         let parse_body = parse_body.as_str();
 
         let listed: Vec<(&str, &str, Native)> = VALIDATED_AT_LOAD
