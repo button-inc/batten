@@ -4899,14 +4899,21 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
     let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
         return Vec::new();
     };
-    for segment in parsed {
-        let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+    // PER LINE, and this walk is the one where missing it is WORST (CLOUD-1287).
+    // A receipt row is a PRECONDITION — `gh pr ready` demands a verify receipt —
+    // so a walk that cannot see the two-line spelling does not merely fail to
+    // deny: it silently stops DEMANDING the precondition. That is the permissive
+    // direction, and nothing reports it.
+    for (_index, _segment, line) in per_line(&parsed) {
+        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
         let Some(program_index) = effective_program(&tokens) else {
             continue;
         };
+        // Normalised with the program, for the reason `matching_shape_rows`
+        // states: a grouped command's closing paren rides the last operand.
         let words: Vec<&str> = tokens[program_index + 1..]
             .iter()
-            .copied()
+            .map(|token| program_token(token))
             .filter(|token| !token.starts_with('-'))
             .collect();
         for rule in &policy.shapes {
@@ -4920,14 +4927,21 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
             let Some((program, wanted)) = rule.trigger() else {
                 continue;
             };
-            if tokens[program_index] != program {
+            // The RESOLVED program, so a grouped or wrapped spelling is the same
+            // program here as it is in `programs` (CLOUD-1382). One identity.
+            if program_token(tokens[program_index]) != program {
                 continue;
             }
             if !operands_match(&words, &wanted) {
                 continue;
             }
+            // THIS LINE's span, not the segment's, for the reason
+            // `matching_shape_rows` states: matching against the whole segment
+            // lets line one's text qualify line two's program, which on a
+            // precondition row means demanding a receipt for a command that never
+            // carried the literal.
             if let Some(contains) = rule.contains.as_deref()
-                && !segment.raw.contains(contains)
+                && !line.raw.contains(contains)
             {
                 continue;
             }
@@ -5228,7 +5242,7 @@ enum Discard {
 ///
 /// Derived from the parse rather than by re-splitting `raw`, which is what the
 /// character walk this replaced had to do.
-fn per_line(parsed: &[Segment]) -> Vec<(usize, &Segment, &Vec<String>)> {
+fn per_line(parsed: &[Segment]) -> Vec<(usize, &Segment, &SegmentLine)> {
     parsed
         .iter()
         .enumerate()
@@ -5288,7 +5302,7 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
         // with it: `terminator` and the stage position below are the SPAN's, and
         // a line has neither.
         for (index, segment, line) in per_line(&parsed) {
-            let tokens: Vec<&str> = line.iter().map(String::as_str).collect();
+            let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
             let Some(program_index) = effective_program(&tokens) else {
                 continue;
             };
@@ -5338,7 +5352,7 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
                         // first line's program.
                         stage.lines.iter().any(|stage_line| {
                             let stage_tokens: Vec<&str> =
-                                stage_line.iter().map(String::as_str).collect();
+                                stage_line.words.iter().map(String::as_str).collect();
                             effective_program(&stage_tokens).is_some_and(|at| {
                                 let named = program_token(stage_tokens[at]);
                                 filters.iter().any(|filter| filter == named)
@@ -5400,7 +5414,7 @@ fn substitution_decision(
         if index > 0 && parsed[index - 1].terminator == Some(Separator::Pipe) {
             continue;
         }
-        let tokens: Vec<&str> = line.iter().map(String::as_str).collect();
+        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
         // `continue`, NEVER `?`. A `?` here returns from the whole function, so
         // the first element with no resolvable program ends the scan and every
         // LATER element goes unjudged — which is the permissive direction and the
@@ -6846,8 +6860,8 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
     parsed
         .iter()
         .flat_map(|segment| segment.lines.iter())
-        .filter_map(|words| {
-            let tokens: Vec<&str> = words.iter().map(String::as_str).collect();
+        .filter_map(|line| {
+            let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
             let index = effective_program(&tokens)?;
             let program = program_token(tokens[index]);
             Some(serde_json::json!({
@@ -6953,8 +6967,13 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
     let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
         return Vec::new();
     };
-    for segment in parsed {
-        let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+    // PER LINE (CLOUD-1287). A shape row keyed on a program is evaded outright by
+    // writing an innocuous first line: `words` concatenates across the newline, so
+    // `effective_program` resolves line one's program and line two never reaches a
+    // row at all. Measured on the walk this replaced — `git rebase origin/main`
+    // refused, and `echo starting` on the line before it ALLOWED.
+    for (_index, _segment, line) in per_line(&parsed) {
+        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
         let Some(program_index) = effective_program(&tokens) else {
             continue;
         };
@@ -6962,9 +6981,14 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
         // value behind, but the blocked words are adjacent, so that never hides
         // a real match (`gh -R o/r pr merge` still matches; `gh pr view
         // merge-fix` never does).
+        //
+        // NORMALISED first, because a grouped command's closing paren lands on the
+        // LAST token — which is a matched operand whenever the command takes no
+        // trailing argument, so `(gh pr merge)` would not match where
+        // `(gh pr merge 42)` did.
         let words: Vec<&str> = tokens[program_index + 1..]
             .iter()
-            .copied()
+            .map(|token| program_token(token))
             .filter(|token| !token.starts_with('-'))
             .collect();
         for rule in &policy.shapes {
@@ -6992,7 +7016,9 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
             let Some((program, wanted)) = rule.shape() else {
                 continue;
             };
-            if tokens[program_index] != program {
+            // The RESOLVED program, so a grouped or wrapped spelling is the same
+            // program here as it is in `programs` (CLOUD-1382). One identity.
+            if program_token(tokens[program_index]) != program {
                 continue;
             }
             if !operands_match(&words, &wanted) {
@@ -7009,11 +7035,15 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
             {
                 continue;
             }
-            // The extra literal is matched against the segment as written,
-            // because the thing it looks for lives inside a quoted argument and
-            // so is not one of the words above.
+            // The extra literal is matched against the span as written, because
+            // the thing it looks for lives inside a quoted argument and so is not
+            // one of the words above — and against THIS LINE's span rather than
+            // the segment's, or line one's text qualifies line two's program.
+            // `echo origin/main` followed by `git rebase --continue` would
+            // otherwise satisfy a row keyed on `origin/main` and refuse the second
+            // line for a string it never contained.
             if let Some(needle) = rule.contains.as_deref()
-                && !segment.raw.contains(needle)
+                && !line.raw.contains(needle)
             {
                 continue;
             }
@@ -7234,8 +7264,8 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
         // as `stat -c %s batten.toml` allowed bare and REFUSED after a `cd`,
         // naming `cd`. `lines` is the parse's own split, so this needs no
         // re-tokenizing of `raw`.
-        for words in &segment.lines {
-            let tokens: Vec<&str> = words.iter().map(String::as_str).collect();
+        for line in &segment.lines {
+            let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
             // Operands of the effective program, plus any redirect target. Both are
             // candidates; a redirect needs no program at all.
             let mut candidates: Vec<Target<'_>> = Vec::new();
@@ -7803,7 +7833,7 @@ struct Segment {
     ///
     /// Not projected to the policy input: no module asks this, and adding a key
     /// no predicate reads would be schema surface with no consumer.
-    lines: Vec<Vec<String>>,
+    lines: Vec<SegmentLine>,
     /// The control-flow node this segment sits inside, and which half of it.
     ///
     /// `None` at the top level. `Some(("until", "condition"))` for the test of
@@ -7831,6 +7861,29 @@ struct Segment {
     /// not a LINE of the one containing it, so it is excluded from both sides of
     /// that walk rather than merely tolerated.
     nested: bool,
+}
+
+/// One constituent command of a segment: its own words, and its own span.
+///
+/// **The `raw` half is what makes `contains` decidable per line**, and it is the
+/// reason this is a struct rather than the bare word list it replaced. A `shape`
+/// row's extra literal is matched against the span AS WRITTEN, because the thing
+/// it looks for lives inside a quoted argument and so is not one of the words. If
+/// that match reads the whole SEGMENT, line one's text qualifies line two's
+/// program: `echo origin/main` followed by `git rebase --continue` satisfies a
+/// row keyed on `origin/main` and the second line is refused for a string it
+/// never contained. That is an over-deny, which is the direction that gets a
+/// guard switched off rather than the sanctioned one.
+///
+/// Pairing them in one type rather than carrying two lists is deliberate: a
+/// parallel `Vec` of spans is a second reading that can desync from the words it
+/// describes, and nothing would notice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SegmentLine {
+    /// This command's arguments, quotes resolved and escapes applied.
+    words: Vec<String>,
+    /// This command's own span, exactly as written.
+    raw: String,
 }
 
 /// The shell operator between two segments — what happens to the first one's
@@ -8001,13 +8054,19 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
     // count reaches each segment's own length lands on a boundary every time.
     // Matching by value would break on a command that repeats a word.
     if joined.is_some() {
-        let mut per_line: Vec<Vec<String>> = Vec::new();
+        // Named for what it holds rather than `per_line`, which is the helper
+        // every walk reads this through — a local shadowing that name reads as the
+        // function to anybody scanning for it.
+        let mut line_readings: Vec<SegmentLine> = Vec::new();
         for node in &nodes {
             let mut produced: Vec<Segment> = Vec::new();
             flatten(node, command, None, &mut produced);
             for segment in produced {
                 if !segment.nested {
-                    per_line.push(segment.words);
+                    line_readings.push(SegmentLine {
+                        words: segment.words,
+                        raw: segment.raw,
+                    });
                 }
             }
         }
@@ -8024,16 +8083,16 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
         // them keep the single fused entry `flatten` gave them — which is the
         // pre-CLOUD-1287 reading, conservative and consistent, rather than a
         // half-applied one.
-        let mut lines = per_line.into_iter();
-        let mut assignment: Vec<Vec<Vec<String>>> = Vec::new();
+        let mut lines = line_readings.into_iter();
+        let mut assignment: Vec<Vec<SegmentLine>> = Vec::new();
         let mut landed = true;
         for segment in out.iter().filter(|segment| !segment.nested) {
             let wanted = segment.words.len();
-            let mut taken: Vec<Vec<String>> = Vec::new();
+            let mut taken: Vec<SegmentLine> = Vec::new();
             let mut counted = 0;
             while counted < wanted {
                 let Some(line) = lines.next() else { break };
-                counted += line.len();
+                counted += line.words.len();
                 taken.push(line);
             }
             if counted != wanted || taken.is_empty() {
@@ -8276,7 +8335,10 @@ fn flatten_in(
             if segment.words.iter().any(String::is_empty) {
                 segment.words.retain(|word| !word.is_empty());
             }
-            segment.lines = vec![segment.words.clone()];
+            segment.lines = vec![SegmentLine {
+                words: segment.words.clone(),
+                raw: segment.raw.clone(),
+            }];
             // Everything the descent produced is nested, however deep: an inner
             // `$(…)` inside an outer one is still not a line of the command that
             // contains them.
@@ -14776,12 +14838,56 @@ deny contains "refused by themodule" if {
     /// its own: CLOUD-1287's measured over-deny on a protected READ,
     /// re-introduced by the change whose message says it is gone by
     /// construction.
+    /// The word half of each constituent command, which is what the splitting
+    /// cases below are about.
+    ///
+    /// A projection rather than a comparison against whole [`SegmentLine`]s: the
+    /// span half is a different assertion with a different failure, and
+    /// `a_lines_span_is_its_own_and_not_the_segments` is where it is made.
+    fn line_words(segment: &Segment) -> Vec<Vec<String>> {
+        segment
+            .lines
+            .iter()
+            .map(|line| line.words.clone())
+            .collect()
+    }
+
+    /// Each line carries ITS OWN span, which is what makes `contains` decidable
+    /// per line (CLOUD-1287).
+    ///
+    /// **Shown able to fail**: point `raw` at the segment instead of the line and
+    /// both halves of this go red, because the segment's span holds both lines'
+    /// text. That is the over-deny it exists to stop — a `shape` row keyed on
+    /// `origin/main` matching the SECOND line, which never contained it, because
+    /// the first line did.
+    #[test]
+    fn a_lines_span_is_its_own_and_not_the_segments() {
+        let parsed = parsed_ok("echo origin/main\ngit rebase --continue");
+        assert_eq!(
+            parsed.len(),
+            1,
+            "a newline is not a segment boundary: {parsed:?}"
+        );
+        let lines = &parsed[0].lines;
+        assert_eq!(lines.len(), 2, "two constituent commands: {lines:?}");
+        assert!(
+            lines[0].raw.contains("origin/main"),
+            "the first line wrote it: {:?}",
+            lines[0].raw
+        );
+        assert!(
+            !lines[1].raw.contains("origin/main"),
+            "the second line did not, and matching the segment would say it did: {:?}",
+            lines[1].raw
+        );
+    }
+
     #[test]
     fn every_segment_keeps_its_own_per_line_split() {
         let parsed = parsed_ok("cd /tmp\nstat -c %s batten.toml && echo hi");
         assert_eq!(parsed.len(), 2, "the `&&` is a real boundary: {parsed:?}");
         assert_eq!(
-            parsed[0].lines,
+            line_words(&parsed[0]),
             vec![
                 vec!["cd".to_owned(), "/tmp".to_owned()],
                 vec![
@@ -14794,7 +14900,7 @@ deny contains "refused by themodule" if {
             "the newline is still a boundary for PROGRAM identity"
         );
         assert_eq!(
-            parsed[1].lines,
+            line_words(&parsed[1]),
             vec![vec!["echo".to_owned(), "hi".to_owned()]],
             "a segment spanning no newline is its own single line"
         );
@@ -14807,7 +14913,7 @@ deny contains "refused by themodule" if {
             .find(|segment| !segment.nested)
             .expect("the outer command is a segment");
         assert_eq!(
-            outer.lines,
+            line_words(outer),
             vec![
                 vec!["rm".to_owned(), "$(cat list)".to_owned()],
                 vec![
@@ -14925,9 +15031,9 @@ deny contains "refused by themodule" if {
             2,
             "and a boundary for program identity"
         );
-        assert_eq!(parsed[0].lines[0][0], "cd");
+        assert_eq!(parsed[0].lines[0].words[0], "cd");
         assert_eq!(
-            parsed[0].lines[1][0], "stat",
+            parsed[0].lines[1].words[0], "stat",
             "the second line's operand belongs to the second line's program"
         );
     }
