@@ -7010,6 +7010,48 @@ expires = "2026-10-31"
 # The expiry is short on purpose. PR #842 carries CLOUD-1387's fix; this should
 # be removed by whoever lands it, and the date is what forces the question if
 # they do not.
+# CLOUD-1547's own row, refused by the gate it is landing beside — and the two
+# reasons it cannot be cleared are both mechanism defects rather than facts about
+# this branch.
+#
+# The row is NOT a punt: this PR implements CLOUD-1547 and closes it, so its §1
+# names these paths because they are the files this change edits. That is exactly
+# what `closes` exempts. The exemption cannot fire here because the `pr-closes`
+# record is minted from a `gh pr view --jq .body` call and there is **no `gh` on
+# this host** — so `closes` is empty, and empty is not `closes_unreadable` either,
+# because nothing ever attempted the call for the blocked store to record.
+# CLOUD-1126 named that shape and CLOUD-1481 carries the residual.
+#
+# AND THE CLASS'S OWN OVERRIDE ROUTE IS SPENT WITHOUT SUPPRESSING. `issue file
+# same` declares `path admit first`; nine admissions were issued and spent against
+# these subjects and the findings did not move. The consumption is NOT missing —
+# `admission::Anchor::Finding` exists for exactly this and `apply_admissions`
+# suppresses stored findings by fingerprint. What fails is the ANCHOR RESOLVER:
+# `lib.rs:5428` matches stored findings on `(rule, path)`, and on ZERO matches it
+# falls back to `Anchor::Call`. Measured here, with the findings live and being
+# reported in the same session: `Admits-anchor: call:2dee1726…`, and nothing
+# queries a call anchor for a tree finding. The ambiguity arm refuses precisely
+# to avoid "an override that appears to work"; the zero arm walks into it.
+# CLOUD-1551, which also records why the match returned zero as the open question.
+#
+# A `[[waiver]]` and never `severity = "allow"`: this names the rule, states why,
+# and LAPSES. Short on purpose — it should be removed by whoever lands CLOUD-1551,
+# and the date is what forces the question if they do not. UNNARROWED because the
+# eight findings are eight paths under one row, and a `path =` would need eight
+# rows that all lapse together anyway.
+#
+# IT NAMES THE RULE AND SO IT IS WIDER THAN THE PREDICATE IT IS FOR, which is a
+# cost rather than a choice. A waiver keys on a `[[rule]]` id — `config-lint`
+# refuses `filed-over-own-diff` as `waiver-names-no-rule`, because that is one of
+# the two PREDICATES `filed-here` publishes. So this also suppresses
+# `filed-unrefined`, which reports nothing today and would be silenced if it
+# started to. Stated rather than absorbed: whoever lands CLOUD-1551 removes this,
+# and until then an unrefined row this branch files goes unreported.
+[[waiver]]
+rule = "filed-here"
+reason = "CLOUD-1547 is implemented and closed by this PR, so `closes` is the exemption that applies; it cannot fire because `pr-closes` is minted from a `gh pr view` call and there is no `gh` on this host (CLOUD-1126, residual on CLOUD-1481). The class's own `path admit first` override route does not consume — eight admissions were spent and the findings did not move, because the anchor resolver falls back to a `call:` anchor on zero stored-finding matches and nothing queries one for a tree finding (CLOUD-1551). Remove this with CLOUD-1551."
+expires = "2026-10-11"
+
 [[waiver]]
 rule = "claim-before-code"
 reason = "CLOUD-1387: `captured::reduce` selects the first capture whose bytes MENTION the key rather than the one it is the subject of, so a response quoting the row shadows its real payload and `present` answers false over a row that is on a project. Fix is open in PR #842; remove this waiver with it."
