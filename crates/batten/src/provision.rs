@@ -805,16 +805,49 @@ const LAUNCHER_VERB: &str = "provision-exec";
 /// **An entry declaring [`Provision::env`] gets a LAUNCHER instead**, and the
 /// copy above is what it launches. See [`launcher`] for the shape and for why the
 /// environment cannot be baked in at this point.
+/// # WRITTEN BESIDE AND RENAMED OVER, BECAUSE THE TARGET MAY BE RUNNING
+///
+/// `fs::write` truncates in place, and the kernel refuses that for a file some
+/// process is executing: `ETXTBSY`, *"Text file busy"*. The thing on `PATH` is
+/// exactly the thing a session runs, so the target being busy is the ORDINARY
+/// case here rather than a rare one — a `batten` on `PATH` re-provisioning while
+/// a task runs it is a session doing what it is supposed to do.
+///
+/// This was invisible while `freshness_of` never compared the declared
+/// environment: a warm cache answered `Fresh`, `apply` returned `AlreadyFresh`
+/// before reaching `install`, and the write that would have failed never
+/// happened. Making the launcher's environment part of the freshness verdict
+/// (CLOUD-1455) is what made the re-link real, and the re-link is what found
+/// this. Both are the same second-run shape the link check records: the failure
+/// needs a warm cache to appear at all.
+///
+/// `rename` over a busy target succeeds — it swaps the directory entry and the
+/// running process keeps its own open inode — so the temp file is made
+/// executable BEFORE the rename and the file on `PATH` is never a moment
+/// non-executable. Same directory, so it cannot cross a filesystem.
 fn link_onto_path(entry: &Provision, dest: &str, cached: &Path, binary: &[u8]) -> Result<()> {
     let dir = expand_home(dest)?;
     fs::create_dir_all(&dir).context("create the linked binary's directory")?;
     let path = dir.join(&entry.binary);
-    if entry.env.is_empty() {
-        fs::write(&path, binary).context("write the linked binary")?;
+    // Keyed on the PID so two provisions running at once cannot write each
+    // other's staging file, and dot-prefixed so a directory listing of `PATH`
+    // does not offer it as a command.
+    let staged = dir.join(format!(".{}.{}.tmp", entry.binary, std::process::id()));
+    let written = if entry.env.is_empty() {
+        fs::write(&staged, binary).context("write the linked binary")
     } else {
-        fs::write(&path, launcher(entry, cached)?).context("write the linked launcher")?;
+        launcher(entry, cached)
+            .and_then(|bytes| fs::write(&staged, bytes).context("write the linked launcher"))
+    };
+    if let Err(err) = written.and_then(|()| make_executable(&staged)) {
+        let _ = fs::remove_file(&staged);
+        return Err(err);
     }
-    make_executable(&path)
+    if let Err(err) = fs::rename(&staged, &path) {
+        let _ = fs::remove_file(&staged);
+        return Err(err).context("move the linked binary into place");
+    }
+    Ok(())
 }
 
 /// The bytes of the launcher that stands in for a tool needing an environment.
@@ -2195,6 +2228,74 @@ mod tests {
         // tells the operator to rewrite, so it is stale rather than fresh.
         std::fs::write(&linked, b"#!/x provision-exec\nnot json\n").expect("write a broken one");
         assert!(!launcher_declares(&linked, &declared));
+    }
+
+    /// THE RE-LINK MUST SURVIVE A TARGET THAT IS IN USE, which is what making
+    /// the declared environment part of the freshness verdict made reachable.
+    ///
+    /// `fs::write` truncates in place and the kernel refuses that for a file
+    /// some process is EXECUTING — `ETXTBSY`. The thing on `PATH` is exactly
+    /// what a session runs, so a busy target is the ORDINARY case here. It was
+    /// unreachable while a warm cache always answered `Fresh`: `apply` returned
+    /// `AlreadyFresh` before `install`, and the write that would have failed
+    /// never happened.
+    ///
+    /// **THE INODE IS THE ASSERTION, and it is what makes this testable at
+    /// all.** This sandbox cannot make a file execute-busy on demand, so
+    /// asserting "the write succeeded over a busy target" would assert a
+    /// premise that was never created — `rust.md`'s rule. What CAN be pinned is
+    /// the property `ETXTBSY` actually needs: the bytes reach a DIFFERENT inode
+    /// and are renamed over. An in-place write leaves the target's own inode
+    /// holding them, and would fail the moment that inode were busy.
+    #[test]
+    fn a_relink_replaces_the_target_rather_than_writing_through_it() {
+        let rule = |name: &str| ProvisionEnv {
+            name: name.to_owned(),
+            prepend_list: Vec::new(),
+            from_first_set: vec![String::from("SOURCE")],
+            when_trust_names: None,
+        };
+        let mut declared = entry("tool", &"a".repeat(64));
+        declared.env = vec![rule("TOKEN")];
+
+        let dir = std::env::temp_dir().join(format!("batten-relink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        let dest = dir.display().to_string();
+        link_onto_path(&declared, &dest, Path::new("/cache/bin/tool"), &[]).expect("first link");
+
+        let linked = dir.join("tool");
+        let inode = |path: &Path| {
+            std::fs::metadata(path)
+                .map(|meta| std::os::unix::fs::MetadataExt::ino(&meta))
+                .expect("the target has an inode")
+        };
+        let before = inode(&linked);
+
+        let mut relinked = declared.clone();
+        relinked.env = vec![rule("OTHER_TOKEN")];
+        link_onto_path(&relinked, &dest, Path::new("/cache/bin/tool"), &[]).expect("the re-link");
+        assert_ne!(
+            before,
+            inode(&linked),
+            "the bytes went through the target's own inode, so a target being \
+             executed would have refused them with ETXTBSY"
+        );
+        assert!(
+            launcher_declares(&linked, &relinked),
+            "and the file on PATH carries what the re-link declared"
+        );
+
+        // NOTHING IS LEFT BESIDE IT: the directory is on `PATH`, so a surviving
+        // staging file is a command a shell would offer.
+        let strays: Vec<String> = std::fs::read_dir(&dir)
+            .expect("the directory reads")
+            .filter_map(std::result::Result::ok)
+            .map(|found| found.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "tool")
+            .collect();
+        assert!(strays.is_empty(), "staging files left behind: {strays:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The same entry spelled as a platform table instead of a single url.
