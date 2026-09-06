@@ -174,24 +174,97 @@ fn a_successful_command_advises_nothing() {
     );
 }
 
+/// This build's own OS family, as its token.
+///
+/// Read off an [`outcome::Outcome`] rather than restated, because the engine
+/// resolves it privately and a token spelled here would be a second authority
+/// over which family this build is.
+/// A signature for `family`, built the way a consumer's config builds one.
+///
+/// Deserialized rather than constructed: [`Signature`] is `#[non_exhaustive]`,
+/// so config is the only way to make one from outside the crate — which is the
+/// type saying that a signature is a declaration rather than a literal.
+fn signature_for(family: &str) -> Signature {
+    serde_json::from_value(serde_json::json!({
+        "class": "command-not-found",
+        "code": 127,
+        "family": family,
+    }))
+    .expect("a signature row")
+}
+
+fn host_family() -> String {
+    let outcome = outcome::classify(&serde_json::json!({}), "true", &[]);
+    serde_json::to_value(outcome.family)
+        .expect("the family serializes")
+        .as_str()
+        .expect("as its declared token")
+        .to_owned()
+}
+
 /// A host that DOES supply a code is recognised — the anti-vacuity half.
 ///
 /// Without this the refusals above would be unconditional and would prove
 /// nothing: a classifier that always answered `Unknown` satisfies every negative
 /// in this file.
+///
+/// **The signature is the committed one where it names this host's family, and
+/// one built for this host where it does not** — which is not a weakening, it is
+/// the case finally measuring what it claims. It asserted the committed rows
+/// unconditionally, and those declare `family = "unix"` because a POSIX exit-code
+/// convention is what this repository surveyed. On a build whose family is
+/// `unsupported` nothing matched, the answer was `Unknown`, and the case failed
+/// naming a class — measured on the windows job at `d1b3fa7b`.
+///
+/// The consumer is right and is left alone: declaring 127 for `unsupported`
+/// would be a claim about a platform nobody surveyed, and
+/// `the_declared_signatures_are_anchored_on_a_code` is where the committed rows
+/// are judged. What belongs here is that the MATCHER reaches its arm, and that
+/// is true of every host once the row names it.
 #[test]
 fn a_code_bearing_host_reaches_the_declared_arm() {
+    let family = host_family();
+    let mut signatures = declared();
+    if !signatures
+        .iter()
+        .any(|signature| signature.family == family)
+    {
+        signatures.push(signature_for(&family));
+    }
+
     let with_code = serde_json::json!({
         "stdout": "",
         "stderr": "sh: 1: example-program: not found",
         "interrupted": false,
         "exitCode": 127,
     });
-    let classified = outcome::classify(&with_code, "example-program --version", &declared());
+    let classified = outcome::classify(&with_code, "example-program --version", &signatures);
     assert_eq!(classified.class, Class::CommandNotFound);
     assert!(classified.class.advisable());
     assert_eq!(classified.token.as_deref(), Some("example-program"));
     assert_eq!(classified.code, Some(127));
+}
+
+/// And a row for a family this build is NOT reaches no class, which is what
+/// keeps the case above from passing on the row rather than on the match.
+///
+/// The other direction of the same fact: the committed rows are unix's, so on a
+/// unix build this asserts that an `unsupported` row is inert, and on any other
+/// build that the committed unix rows are.
+#[test]
+fn a_signature_for_another_family_reaches_no_class() {
+    let family = host_family();
+    let elsewhere = vec![signature_for(if family == "unix" {
+        "unsupported"
+    } else {
+        "unix"
+    })];
+    let with_code = serde_json::json!({"stdout": "", "stderr": "", "exitCode": 127});
+    assert_eq!(
+        outcome::classify(&with_code, "example-program --version", &elsewhere).class,
+        Class::Unknown,
+        "a row declared for another OS family is not this host's answer"
+    );
 }
 
 /// Nothing the payload carried reaches the advisory (rule 4).
