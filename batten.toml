@@ -4923,6 +4923,55 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "migrate the predicate onto a rule kind, or waive the increase deliberately with a reason and an expiry; which of the two is the whole question"
 
+# A BAN YOU CAN WAIVE AT WILL IS NOT A BAN (CLOUD-1148, over CLOUD-1177's
+# inventory).
+#
+# Measured at this row's baseline: 11 `#[expect(clippy::disallowed_methods, …)]`
+# annotations standing over 13 `std::thread::sleep` sites in `crates/batten/src`.
+# The delay ban is therefore waived at essentially every site it governs, which
+# is the same as not having it.
+#
+# `crates/batten/tests/it/sleep_ban.rs` is the gate that was supposed to stop
+# this, and its own comment says so — "what stops the ban being satisfied by
+# thirteen waivers". It does not, and the reason is worth stating because it is a
+# non-negotiable rule 3 defect in a gate rather than a missing one. What it
+# decides is the FORM of the justification: `expect` rather than `allow`, a
+# `reason` present, a backticked token in it, and that token appearing elsewhere
+# in the same file. Every clause is a property of the SENTENCE. None asks whether
+# the delay was necessary, because clippy cannot ask that and neither can a text
+# scan — so the gate estimates whether an author thought about it, and an author
+# who copies the neighbouring annotation's shape passes.
+#
+# Measured 2026-09-06, by this agent, against itself: a grace loop was written
+# into `exec::terminate_group` with a blocking sleep, annotated in about thirty
+# seconds by copying the shape of the annotation three hundred lines above it
+# (`group_is_empty` and `GROUP_GRACE` both resolve in that file, so the bound
+# clause was satisfied), and it passed. The delay was then found to be
+# unnecessary — the group's leader is already dead, so nothing is mid-exit — and
+# deleted outright. The gate had certified a delay that should never have
+# existed.
+#
+# So the decidable property is the COUNT, and this row is it: the waivers may
+# fall and may never rise. That is a real object with a real exit code and no
+# judgement in it, which is what rule 3 asks for. It does not migrate the 11 —
+# that is its own change, and it touches the runtime posture `.claude/rules/rust.md`
+# records — it makes the migration MONOTONIC, so no twelfth can arrive while it
+# is pending.
+#
+# `disallowed_methods` rather than the sleep paths specifically: the same
+# argument applies to every ban in that list, and a row that named only the sleep
+# would leave the multi-thread-runtime ban waivable at will for the same reason.
+[[rule]]
+id = "delay-waivers-not-growing"
+kind = "ratchet"
+glob = "crates/batten/src/**/*.rs"
+pattern = "clippy::disallowed_methods"
+direction = "non_increasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "a waiver is not a fix: either the delay has a bound it can exit on and needs no sleep, or it is a backoff and belongs on the async path where it can be cancelled. Adding a twelfth exemption is the thing this row refuses"
+
 # The other spelling of the same concept — see the block above for why it is a
 # second row rather than a second pattern on the first.
 [[rule]]
