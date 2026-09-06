@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.144](https://github.com/button-inc/batten/compare/v0.0.143...v0.0.144) - 2026-09-06
+
+### Added
+
+- *(identity)* the payload contract is a type, and both its arms name one document
+- *(store)* a chunk is storage bookkeeping, never a second canonical identity
+- *(capture)* [**breaking**] choose inline or addressed transport from a measured threshold
+- *(capture)* locators find a payload, addresses name one, and freshness costs no bytes
+- *(store)* resolve a content address by rehashing before anything decodes it
+- *(identity)* a versioned, domain-separated BLAKE3 content address
+- *(store)* a lost secret-identity key is the verdict, not a log line
+- *(mcp)* census a connector's tools against the grants that reach them
+- *(mcp)* [**breaking**] project each element of an array result
+- *(facts)* collapse the Rust parse to one call site
+- *(facts)* make a deferral's reversal condition data a gate can read
+- *(ci-drift)* project the host settings whose change weakens a control
+- *(config)* compute the version floor a release owes
+- *(contract)* report an added path apart from a changed one
+- *(policy)* refuse a landing lap taken off the task
+
+### Fixed
+
+- *(capture)* clear the gates verify raised, and articulate the one split-out
+- *(capture)* four review findings, each a could-not-look or an undeclared emission
+- *(capture)* the index writer must not destroy what it could not read
+- *(mcp)* drop the redundant continue on the unreachable arm
+- *(policy)* place the two modules this bundle added, and cite two rows by key
+- *(engine)* [**breaking**] anchor an admission to the finding, not to the commit
+- *(hook)* normalise the operand window and the substitution target
+- *(hook)* stop the substitution scan failing open on a program-less element
+- *(hook)* read every mediated walk per line and by resolved program
+- *(hook)* resolve a program per line, so a force push cannot ride a newline
+- *(hook)* decide a shape row per line, so a newline stops being a bypass
+- *(landed)* [**breaking**] wire the evidence arm the port declared and never filled
+
+### Other
+
+- *(snapshot)* accept the golden schema the new flag moves
+- *(pipeline)* move a fixture the new row now decides
+- *(census)* the shape row a new gate owes an entry in
+
 ## [0.0.143](https://github.com/button-inc/batten/compare/v0.0.142...v0.0.143) - 2026-09-05
 
 ### Added
