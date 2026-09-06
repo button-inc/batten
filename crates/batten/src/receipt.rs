@@ -490,6 +490,33 @@ fn validate_check_name(check: &str) -> Result<()> {
     }
 }
 
+/// Refuse a `[receipt] verified_by` naming a check no receipt can ever be
+/// written for.
+///
+/// # AT LOAD, BECAUSE THE ALTERNATIVE IS A CONFIG THAT IS PERMANENTLY UNUSABLE
+///
+/// `receipt record` and `receipt status` already refuse these names, and nothing
+/// held the config table to the same rule (review of #848). So
+/// `verified_by = ["fmt check"]` loaded clean, `receipt record "fmt check"`
+/// exited `1` with *"not a valid identifier"*, no receipt could ever exist, and
+/// [`run_verified`] — which validates nothing and hashes the name straight into
+/// a path — reported `NOT verified: <head> fmt check missing` forever. The
+/// refusal pointed at a missing receipt rather than at the unwritable name that
+/// made it missing, which is the inert-typo class every other declared table in
+/// `config::validate_tables` is refused at load for.
+///
+/// Fail-closed either way; what changes is that the diagnosis names the cause.
+///
+/// # Errors
+///
+/// [`crate::UsageError`] naming the first offending check.
+pub fn validate_verified_by(checks: &[String]) -> Result<()> {
+    for check in checks {
+        validate_check_name(check)?;
+    }
+    Ok(())
+}
+
 /// The canonical receipt path for a check: `<state>/receipts/<fingerprint>.json`.
 fn receipt_path(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
     let fingerprint = identity::scope_fingerprint(check, RECEIPT_SCOPE_KEY);
@@ -1817,7 +1844,25 @@ pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
     // missing" about checks they never named, while the ones they did name were
     // never asked about. It passes in this repository only because the two sets
     // happen to coincide.
-    let required = verified_by(Path::new(&facts.repo_root))?;
+    // THE WORKING TREE'S ROOT, NOT THE REPOSITORY'S — and the difference decides
+    // the answer in a linked worktree, which is where agents work (review of
+    // #848). `git::repo_root` resolves to the parent of the COMMON git dir on
+    // purpose, so it is the MAIN checkout; anchoring a committed config there
+    // reads a different branch's `batten.toml` than the one being judged. A
+    // worktree tightening `verified_by` was judged against the main checkout's
+    // looser set and a head carrying half its receipts exited 0.
+    //
+    // `facts.repo_root` is still right for `receipt_path` below: a receipt store
+    // is repository state and one store across every worktree is the property
+    // CLOUD-164 bought. Config is the working tree's; state is the
+    // repository's.
+    //
+    // This read `Path::new(".")` before either, which found no `batten.toml` at
+    // all from a subdirectory — `authority_site` performs no directory walk by
+    // design. `worktree_root` walks up, so both defects close together.
+    let authority = crate::git::worktree_root(Path::new(&facts.repo_root))
+        .unwrap_or_else(|_| std::path::PathBuf::from(&facts.repo_root));
+    let required = verified_by(&authority)?;
     let mut unverified = Vec::new();
     for check in &required {
         let statement = load_statement(&receipt_path(&facts.repo_root, check)?);

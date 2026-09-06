@@ -2300,9 +2300,26 @@ regex = '^\s*(?:#!?\[\s*(?:expect|allow)\(\s*)?clippy::[a-z_]+'
 # — `too_many_arguments`, `cast_precision_loss`, and `disallowed_types` above all
 # — stays refused, because those are claims about the code rather than about how
 # a test reports failure.
+#
+# EVERY LINT ON THE LINE MUST BE EXEMPT, AND THIS MATCHED ONLY THE FIRST (review
+# of #848). The row read `…clippy::(?:expect_used|unwrap_used|panic)\b` and
+# stopped there, so `#[allow(clippy::expect_used, clippy::disallowed_types)]`
+# satisfied it wholesale — the exemption was one lint name wide, and the lint it
+# waived second is the spawn escape `spawn-widening` exists to refuse. Multi-lint
+# attributes are this crate's own idiom (ten `#[allow(clippy::unwrap_used,
+# clippy::expect_used)]` sites), so the bypass was one keystroke from the
+# universal case.
+#
+# The list may repeat, and what follows it decides: a `reason =`, the closing
+# paren, or the end of the line. A NON-exempt lint after the comma reaches none
+# of those, so the alternation fails and the line is refused.
+#
+# `,\s*$` is the multi-line attribute, and it is not slack: a trailing comma
+# means the list continues on the next line, which carries its own lint name and
+# is judged on its own by the same pair of rows.
 [[pattern]]
 id = "clippy-test-idiom"
-regex = '^\s*(?:#!?\[\s*(?:expect|allow)\(\s*)?clippy::(?:expect_used|unwrap_used|panic)\b'
+regex = '^\s*(?:#!?\[\s*(?:expect|allow)\(\s*)?clippy::(?:expect_used|unwrap_used|panic)\b(?:\s*,\s*clippy::(?:expect_used|unwrap_used|panic)\b)*\s*(?:,\s*reason\s*=|,\s*$|\)|$)'
 
 # ONE MEMBER OF THE SPAWN PLACEMENT SET (CLOUD-1338).
 #

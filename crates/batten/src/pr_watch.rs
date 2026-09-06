@@ -74,6 +74,16 @@ pub const DEFAULT_INTERVAL: u64 = 1;
 /// before that landed, which is how it survived unnoticed.
 const PER_PAGE: u32 = 100;
 
+/// How many requests may go unanswered FROM THE START before the poll refuses.
+///
+/// Generous, and it costs nothing to be: the bound only ever fires where no
+/// request has been answered at all, so a real forge answers one of these long
+/// before the count is reached and resets it to zero permanently. What it stops
+/// is a poll that was never going to be answered — a credential the endpoint
+/// refuses, a repository this token cannot see — which is a fact about the
+/// invocation and does not become truer by asking again.
+pub(crate) const UNANSWERED_BEFORE_REFUSING: u64 = 30;
+
 /// What the poll needs that is not the roster.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -299,6 +309,27 @@ pub struct Poll {
     /// The last thing said out loud, so a stall is stated once rather than
     /// every second.
     announced: String,
+    /// Has ANY request ever been answered — a `200` or a `304`?
+    ///
+    /// **The discriminator between a transient failure and a poll that will
+    /// never be answered** (review of #848). `read` moved off the forge CLI,
+    /// which authenticates from its own keyring, onto [`crate::rest::get`],
+    /// which reads `$GH_TOKEN`/`$GITHUB_TOKEN` alone — so a machine
+    /// authenticated by `gh auth login` and nothing else now gets `401` on every
+    /// request. Every `401` is a could-not-look, no reading ever replaces the
+    /// empty run set, the verdict stays `Pending`, its line is announced once
+    /// and then deduped, and the loop polls one request a second forever against
+    /// a guaranteed refusal, holding the landing lease throughout.
+    ///
+    /// **A COUNT OF CONSECUTIVE FAILURES WOULD BE THE WRONG PREDICATE**, which
+    /// is why this is a boolean about the whole poll rather than a streak: a
+    /// twenty-minute forge outage in the middle of a landing is exactly the
+    /// transient a wait must survive, and it is indistinguishable from a run of
+    /// failures. What is not survivable is never having been answered AT ALL —
+    /// that is a statement about the invocation (a credential, a repository, a
+    /// permission), which belongs before the loop's patience rather than inside
+    /// it.
+    answered_ever: bool,
 }
 
 impl Poll {
@@ -354,6 +385,7 @@ impl Poll {
         // `304`, and `None.or(Some(3000))` sleeps another 50 minutes — for the
         // rest of an unbounded `watch()`, holding the landing lease throughout.
         // That is strictly worse than the over-polling the retention fixed.
+        self.answered_ever = self.answered_ever || answer.answered();
         self.backoff = if answer.answered() {
             None
         } else {
@@ -403,6 +435,17 @@ impl Poll {
     #[must_use]
     pub fn etag(&self) -> Option<&str> {
         self.etag.as_deref()
+    }
+
+    /// How many requests this poll has made without ever being answered.
+    ///
+    /// `0` once anything has answered, which is what makes a caller's bound a
+    /// statement about the INVOCATION rather than about the forge's uptime. See
+    /// [`Poll::answered_ever`] for why a consecutive-failure streak is the wrong
+    /// predicate here.
+    #[must_use]
+    pub const fn unanswered_from_the_start(&self) -> u64 {
+        if self.answered_ever { 0 } else { self.polls }
     }
 
     /// Say `line` unless it is what was said last.
@@ -464,6 +507,22 @@ pub fn watch(
         // EVERY poll pushes, including the ones that learned nothing: proving
         // the loop turned is the tick's whole job.
         push_progress(config, poll.polls(), poll.signature());
+
+        // NOTHING HAS EVER ANSWERED, SO THIS IS THE INVOCATION (review of #848).
+        // A credential the endpoint refuses answers `401` forever, and every
+        // `401` is a could-not-look the poll is right to survive — so the loop
+        // sat at one request a second against a guaranteed refusal, announced
+        // one `Pending` line, and never stopped. The bound is on requests that
+        // were never answered AT ALL, which a forge outage mid-wait resets;
+        // `Poll::answered_ever` carries why that is the discriminator rather
+        // than a streak.
+        if poll.unanswered_from_the_start() >= UNANSWERED_BEFORE_REFUSING {
+            writeln!(
+                err,
+                "::error:: pr watch: {UNANSWERED_BEFORE_REFUSING} requests and not one was answered, so this is the credential or the repository rather than the checks — set $GH_TOKEN (or $GITHUB_TOKEN) to something this repository accepts"
+            )?;
+            return Ok(ExitCode::Usage);
+        }
 
         let verdict = match checks_green::decide(poll.runs(), roster) {
             Ok(verdict) => verdict,

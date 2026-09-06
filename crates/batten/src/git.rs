@@ -434,6 +434,61 @@ fn plain(path: PathBuf) -> PathBuf {
     PathBuf::from(rest)
 }
 
+/// Resolve the root of THIS WORKING TREE — the checkout `start` is actually in.
+///
+/// # THE SIBLING TO [`repo_root`], AND CHOOSING BETWEEN THEM IS THE WHOLE POINT
+///
+/// `repo_root` answers with the MAIN checkout on purpose, because per-repository
+/// state must be one store across every linked worktree (CLOUD-164). That makes
+/// it the wrong anchor for anything a BRANCH decides, and the difference is
+/// invisible until somebody works in a linked worktree — which is where agents
+/// work.
+///
+/// Measured (review of #848): `receipt verified` anchored `[receipt]
+/// verified_by` on `repo_root`, so a worktree whose branch TIGHTENED the check
+/// set was judged against the main checkout's looser one and a head carrying
+/// half the receipts exited `0`. The reverse is as bad — a main config naming a
+/// check the branch retired makes the worktree permanently unverifiable.
+///
+/// **The rule: committed config is the WORKING TREE's, state is the
+/// REPOSITORY's.** A `batten.toml` is a file this branch may change, so it is
+/// read from here; a receipt store is shared, so it is rooted on `repo_root`.
+///
+/// A relative `start` resolves against the process working directory, and the
+/// returned path is absolute. Unlike a bare cwd read this WALKS UP, so a call
+/// from a subdirectory finds the checkout's own authority rather than none —
+/// which is the defect on the other side of this one.
+///
+/// # Errors
+///
+/// As [`repo_root`]: not a directory, not inside a repository, or a bare
+/// repository with no working tree to root.
+pub fn worktree_root(start: &Path) -> Result<PathBuf> {
+    if !start.is_dir() {
+        return Err(UsageError::raise(format!(
+            "{} is not a directory",
+            start.display()
+        )));
+    }
+    let repo = open_upwards(start, Vec::new()).map_err(|_| {
+        UsageError::raise(format!(
+            "{} is not inside a git repository",
+            start.display()
+        ))
+    })?;
+    let Some(workdir) = repo.workdir() else {
+        return Err(UsageError::raise(format!(
+            "{} is inside a bare repository, which has no working tree to root",
+            start.display()
+        )));
+    };
+    Ok(plain(
+        workdir
+            .canonicalize()
+            .unwrap_or_else(|_| workdir.to_path_buf()),
+    ))
+}
+
 /// Resolve the root of the repository containing `start`: the working-tree
 /// directory whose `.git` is the repository's *common* directory.
 ///

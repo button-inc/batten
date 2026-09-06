@@ -896,6 +896,27 @@ pub enum WeakeningKind {
     ///
     /// So this kind covers the shrink, and the fallback covers the limit.
     VerifiedCheckRemoved,
+    /// A prefix is new in `lease.fast_forward_branches`, so the runner-side
+    /// landing precondition stops judging every branch under it (CLOUD-1148).
+    ///
+    /// **ADDED-DIRECTION, WHICH IS THE OPPOSITE OF ITS NEIGHBOUR ONE FIELD
+    /// OVER**, and the asymmetry is the reason it is its own kind rather than a
+    /// second use of [`WeakeningKind::LandingPathRemoved`]. A landing PATH is
+    /// evidence — a shorter list reaches back less far, so removal weakens. A
+    /// fast-forward prefix is an EXEMPTION: `fast_forward_lane` answers
+    /// `Success` — "not judging it" — for a branch it matches, before any
+    /// staleness or lease read happens at all. So adding one switches the guard
+    /// off, and one line adds it for a whole fleet.
+    ///
+    /// Found in review of #848: the `lease` census row declared the field
+    /// `Compared`, and `entry_weakenings` compared only `landing_paths`. The
+    /// key that turns the guard off was compared by nothing, and `config lint`
+    /// reported the file as not weakened.
+    ///
+    /// **APPENDED, NEVER INSERTED**, for the `Ord` reason
+    /// [`WeakeningKind::LandingPathRemoved`] states: declaration order is sort
+    /// order, so a kind in the middle silently reorders every finding after it.
+    FastForwardLaneAdded,
 }
 
 impl WeakeningKind {
@@ -962,6 +983,7 @@ impl WeakeningKind {
         WeakeningKind::PerfExemptionAdded,
         WeakeningKind::LandingPathRemoved,
         WeakeningKind::VerifiedCheckRemoved,
+        WeakeningKind::FastForwardLaneAdded,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -982,6 +1004,7 @@ impl WeakeningKind {
             WeakeningKind::EpochPathRemoved => "epoch-path-removed",
             WeakeningKind::VerifiedCheckRemoved => "verified-check-removed",
             WeakeningKind::LandingPathRemoved => "landing-path-removed",
+            WeakeningKind::FastForwardLaneAdded => "fast-forward-lane-added",
             WeakeningKind::ReadyCutoverRelaxed => "ready-cutover-relaxed",
             WeakeningKind::PerfExemptionAdded => "perf-exemption-added",
             WeakeningKind::VerbRemoved => "verb-removed",
@@ -1135,7 +1158,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     },
     FieldCoverage {
         field: "lease",
-        coverage: Coverage::Compared(&[WeakeningKind::LandingPathRemoved]),
+        coverage: Coverage::Compared(&[
+            WeakeningKind::LandingPathRemoved,
+            WeakeningKind::FastForwardLaneAdded,
+        ]),
     },
     FieldCoverage {
         field: "receipt",
@@ -1971,6 +1997,22 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         "lease.landing_paths",
     ));
 
+    // The same table's OTHER key, and the direction is inverted (review of
+    // #848). `fast_forward_branches` is an EXEMPTION rather than evidence:
+    // `fast_forward_lane` answers "not judging it" for a branch it matches,
+    // before any staleness or lease read runs at all. So a prefix ADDED is what
+    // switches the runner-side precondition off, and one row can do it for a
+    // whole fleet of agent branches.
+    //
+    // The census row above declared this field `Compared` while only
+    // `landing_paths` reached a comparison, so the key that disables the guard
+    // was asserted covered and was not.
+    found.extend(added_entries(
+        WeakeningKind::FastForwardLaneAdded,
+        &fast_forward_branches(base),
+        &fast_forward_branches(working),
+    ));
+
     // The evidence `verified` demands (CLOUD-1338). Removed-direction only, for
     // the reason above one field over: the verb reports a head verified when NO
     // declared check is unverified, so dropping a name can only remove a way to
@@ -2316,6 +2358,14 @@ fn landing_paths(config: &Config) -> Vec<String> {
         .lease
         .as_ref()
         .map_or_else(Vec::new, |lease| lease.landing_paths.clone())
+}
+
+/// The prefixes `fast_forward_lane` declines to judge.
+fn fast_forward_branches(config: &Config) -> Vec<String> {
+    config
+        .lease
+        .as_ref()
+        .map_or_else(Vec::new, |lease| lease.fast_forward_branches.clone())
 }
 
 /// Each `[[verb]]` row as the entry a weakening keys on.

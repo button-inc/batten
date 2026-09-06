@@ -6971,12 +6971,41 @@ fn run_land_lap(
     // WHAT THE ACCOUNTING SUPPORTS, never the lap counter. The two look
     // interchangeable and are not: a lap that stopped before the ready bought
     // nothing, so reporting laps as spend states a cost that was never paid.
+    say_the_laps_are_spent(laps, &ledger, err)?;
+    Ok(ExitCode::Internal)
+}
+
+/// The exhaustion refusal, which has two readings and used to have one.
+///
+/// # A CONTENDED FLEET IS NOT A FAILING BRANCH
+///
+/// `Ledger::lease_waits` was charged by `charge_the_lap` and read by nothing
+/// here (review of #848), so on a contended fleet — where every lap exits
+/// `Lease → Violation → Lap` having spent no CI at all — this named only `laps`
+/// and `paid` and then asserted *"a conflict, a failed gate or red CI will lose
+/// again"* over a landing that bought nothing and failed nothing. That is the
+/// CLOUD-413 mis-diagnosis [`land::Bound::LeaseWaits`] exists to prevent,
+/// arriving through the ordinary exit rather than through the bound.
+///
+/// **CONDITIONAL RATHER THAN APPENDED**, because the two cases want opposite
+/// advice — run it again, versus go and read the failure — and printing both
+/// would be the hedge that leaves a reader no better off.
+fn say_the_laps_are_spent(laps: u32, ledger: &land::Ledger, err: &mut dyn Write) -> Result<()> {
+    if ledger.lease_waits > 0 {
+        writeln!(
+            err,
+            "::error:: land: {laps} lap(s) bought no landing, spending {} CI matri(ces); {} of those lost only to another branch holding the landing lease, and spent nothing. A saturated fleet is not a failing branch — run this again.",
+            ledger.spent(),
+            ledger.lease_waits
+        )?;
+        return Ok(());
+    }
     writeln!(
         err,
         "::error:: land: {laps} lap(s) bought no landing, spending {} CI matri(ces). A conflict, a failed gate or red CI will lose again — read the lap lines above for how each ended. If every lap lost only to contention, running this again commits up to {laps} more.",
         ledger.spent()
     )?;
-    Ok(ExitCode::Internal)
+    Ok(())
 }
 
 /// Run the undos this lap owes, newest first.
@@ -7028,10 +7057,15 @@ fn unwind_lap(
     let holder = lease_identity(root).ok().map(|(_, holder)| holder);
     let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
     let mine = match (&holder, lease::terms(root)) {
-        (Some(holder), Ok(terms)) => matches!(
-            lease::observe(&terms),
-            Ok(lease::Observed::Held { ref body, .. }) if body.holder == *holder
-        ),
+        // THROUGH `lease::holds_now`, WHICH IS THE ONE READING OF "IS IT STILL
+        // MINE" (review of #848). This compared `body.holder` alone, so a lease
+        // this clone once held but has RELEASED or let EXPIRE still answered
+        // yes — and `closes_the_tap` would then re-draft a pull request another
+        // lander now owns. The two clauses it dropped are exactly the ones that
+        // change over time, which a bare comparison never can.
+        (Some(holder), Ok(terms)) => {
+            lease::observe(&terms).is_ok_and(|observed| lease::holds_now(&observed, holder, now))
+        }
         // COULD NOT LOOK IS NOT HELD. A clone that cannot read the lease has not
         // shown it owns the pull request, and `closes_the_tap` refusing to draft
         // somebody else's work is the property that keeps a refused second land
@@ -7481,6 +7515,26 @@ fn place_the_bet(
     // THE HOLDER ALREADY LANDED. Their head is on the trunk, so an ordinary replay
     // reaches it and a bet would borrow a range that is not borrowed.
     if speculation::carries(root, &candidate, &tracking) {
+        return Ok(());
+    }
+    // **AND THE HOLDER MUST BE BUILT ON CURRENT TRUNK, OR THE REPLAY THAT
+    // FOLLOWS CARRIES THE BORROWED RANGE ONTO IT** (review of #848).
+    //
+    // `Precheck::BetSettled` sits on the `Replay` row, so this runs and then
+    // `run_land_replay` immediately fetches a fresh trunk and rebases onto it.
+    // If trunk advanced past `candidate` while the holder was still mid-landing,
+    // `gitwrite::rebase`'s `Rebase::Current` short-circuit does not fire and the
+    // range `tracking..branch` — which now contains the commits just borrowed —
+    // is replayed onto trunk. `Step::Push` then publishes copies of another
+    // branch's commits under this pull request, which is precisely the state the
+    // whole speculation machinery exists to prevent.
+    //
+    // The clause above is the OTHER direction and does not cover this: it asks
+    // whether the holder is already IN trunk. This asks whether trunk is already
+    // in the holder — that is, whether betting on it linearizes this branch
+    // forward rather than sideways. A holder that trunk has passed is a bet
+    // worth nothing anyway, so declining costs a lap and no correctness.
+    if !speculation::carries(root, &tracking, &candidate) {
         return Ok(());
     }
     let Ok(undo) = git::head_commit(root) else {
@@ -8451,7 +8505,22 @@ fn fast_forward_lane(
 ///
 /// `None` is could-not-look and every caller reads it that way.
 fn lease_config(root: &Path, overrides: &resolve::Overrides) -> Option<config::Lease> {
-    let site = config::authority_site(root, overrides.config_in.as_deref().map(Path::new));
+    // ANCHORED ON THE WORKING TREE'S ROOT, BECAUSE `authority_site` PERFORMS NO
+    // DIRECTORY WALK BY DESIGN (house-style §8, review of #848). `root` is
+    // `Path::new(".")` from `run_lease`, so a call from a subdirectory resolved
+    // `./batten.toml`, found nothing, left `landing_paths` empty, and
+    // `lease::carries` short-circuited to `Carries::Unknown` — exit 3, whose
+    // documented CI treatment is "run anyway". The staleness half fails open
+    // again, by the third route this function's own doc records.
+    //
+    // Only where `--config-in` names none: that flag is the runner's answer and
+    // it must keep winning, which is the paragraph above.
+    let anchored = if overrides.config_in.is_some() {
+        root.to_path_buf()
+    } else {
+        crate::git::worktree_root(root).unwrap_or_else(|_| root.to_path_buf())
+    };
+    let site = config::authority_site(&anchored, overrides.config_in.as_deref().map(Path::new));
     config::load_site(&site)
         .ok()
         .and_then(|(loaded, _)| loaded.lease)
@@ -9085,7 +9154,8 @@ fn run_land_wait(
         .unwrap_or(3600);
 
     let trunk = trunk_watch(reference, &base, &config.repo, config.interval);
-    let waited = land::wait(&config, &roster, &trunk, asks, out)?;
+    let holding = Heartbeat::for_clone(root);
+    let waited = land::wait(&config, &roster, &trunk, asks, &|| holding.beat(), out)?;
     let (answers, code) = match &waited {
         land::Waited::Green { verdict } => (
             land::answers(&sha, Some(verdict.as_str()), None),
@@ -9152,6 +9222,59 @@ fn run_land_wait(
     // took a checks reading at all. Deriving the tap's verdict from the code in
     // the driver would be a second authority over an answer this function holds.
     Ok((code, land::tap_verdict(&waited)))
+}
+
+/// The lap's landing-lease heartbeat, paced by the terms it read once.
+///
+/// # THE LAP HELD A 120-SECOND LEASE THROUGH A TWENTY-MINUTE WAIT
+///
+/// `Step::Lease` acquires once and nothing renewed it (review of #848), so the
+/// lease lapsed inside `Step::Wait`, a rival took it and bought a matrix
+/// concurrently, and this lap's own later jobs then failed their step-0 guard
+/// against the new holder and were cancelled mid-landing. The predecessor
+/// backgrounded a heartbeat process; [`lease::beat`] carries the rest of the
+/// reasoning.
+///
+/// # THE PACE IS THE LEASE'S, NOT THE POLL'S
+///
+/// The wait polls about once a second and a CAS per second would be a rate limit
+/// of our own making, so a beat is taken only once `terms.beat` has elapsed.
+/// `last` is an `AtomicI64` because the wait calls this from inside a scoped
+/// thread, so it must be `Sync` without being `mut`.
+///
+/// Terms that will not resolve leave this inert, which is the same fail-open the
+/// rest of the lease surface takes: a clone that cannot read its lease never
+/// acquired one to renew.
+struct Heartbeat<'clone> {
+    root: &'clone Path,
+    terms: Option<lease::Terms>,
+    last: std::sync::atomic::AtomicI64,
+}
+
+impl<'clone> Heartbeat<'clone> {
+    fn for_clone(root: &'clone Path) -> Self {
+        Self {
+            root,
+            terms: lease::terms(root).ok(),
+            last: std::sync::atomic::AtomicI64::new(0),
+        }
+    }
+
+    /// Renew if a beat has elapsed. Silent and best-effort in every arm — see
+    /// [`lease::beat`] for why one failed beat is not a lost lease.
+    fn beat(&self) {
+        let Some(terms) = self.terms.as_ref() else {
+            return;
+        };
+        let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+        if now.saturating_sub(self.last.load(std::sync::atomic::Ordering::Relaxed)) < terms.beat {
+            return;
+        }
+        self.last.store(now, std::sync::atomic::Ordering::Relaxed);
+        // Bound rather than dropped: `beat` answers a `bool`, and dropping a
+        // `Copy` is a lint of its own.
+        let _renewed = lease::beat(self.root, terms, now);
+    }
 }
 
 /// How many beats a holder may stop progressing before its lease is disbelieved.
@@ -9288,7 +9411,28 @@ fn run_lease_status(
         // Reported as what it is rather than as a hold. Every DECISION still
         // treats it as held; this is the one place the two can be told apart,
         // which is the whole reason it is a state and not a default body.
-        lease::Observed::Garbage { .. } => return lease_report(json, "garbage", &[], out),
+        //
+        // **AND IT IS NOT A SUCCESS** (review of #848). `lease_report` answers
+        // `Ok(ExitCode::Success)` for every state it renders, so this arm exited
+        // `0` over a lease nobody could parse — the third channel this verb
+        // carries its verdict in, saying "authorised" about a ref that has told
+        // us nothing. `authorises_this_clone` reads `Garbage` as fail-CLOSED and
+        // its own doc says why: a ref that is there and will not parse has not
+        // shown this clone owns anything. The exit code has to agree with the
+        // predicate, or the two channels contradict each other on the one state
+        // where it matters.
+        //
+        // `Internal`, not `Violation`: this is a could-not-look about the ref,
+        // never a verdict about the branch — the same class the unreadable-terms
+        // arm above already takes.
+        lease::Observed::Garbage { .. } => {
+            lease_report(json, "garbage", &[], out)?;
+            writeln!(
+                err,
+                "::error:: lease: the lease ref is there and will not parse, so whether anyone holds it is unknown"
+            )?;
+            return Ok(ExitCode::Internal);
+        }
     };
     // Checked BEFORE expiry, because a tombstone satisfies both: its expiry is the
     // sentinel, so `now >= 0` is trivially true and the expired arm would render a

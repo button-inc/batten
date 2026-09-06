@@ -398,20 +398,36 @@ impl Default for Pipeline {
                     compensate: Compensation::ReleaseLease,
                     precheck: None,
                 },
-                StepRow {
-                    step: Step::Ready,
-                    effectful: true,
-                    compensate: Compensation::Redraft,
-                    // THE DRIVER'S OLD EXCEPTION, as a row column. It ran after
-                    // `Verify` answered and before `Ready` dispatched, which is
-                    // exactly this slot.
-                    precheck: Some(Precheck::BaseMoved),
-                },
+                // **THE PUSH PUBLISHES THE HEAD THE READY THEN BUYS A MATRIX
+                // FOR, AND THESE TWO WERE THE OTHER WAY ROUND** (review of
+                // #848). `Ready` ran first, so on any lap that replayed, the
+                // forge still held the SUPERSEDED head when `mark_ready` fired:
+                // the forge emitted `ready_for_review` on that sha and started a
+                // full matrix there, `Push` then moved the remote and started a
+                // second, and `Wait` polled only the second. The first was
+                // unreachable by `Compensation::Abandon`, which reads
+                // `git::head_commit` — so it billed to completion with nothing
+                // able to cancel it.
+                //
+                // Reading the forge's head instead of this clone's made the
+                // DECISION agree with the forge and left the ACT firing on the
+                // stale sha; the order is what fixes the act. With the push
+                // first there is one head, one matrix, and `Abandon` reaches it.
                 StepRow {
                     step: Step::Push,
                     effectful: true,
                     compensate: Compensation::ReleaseLease,
                     precheck: None,
+                },
+                StepRow {
+                    step: Step::Ready,
+                    effectful: true,
+                    compensate: Compensation::Redraft,
+                    // THE DRIVER'S OLD EXCEPTION, as a row column. It ran after
+                    // `Verify` answered and before `Ready` dispatched, and it
+                    // still does — closer to the spend it guards, now that the
+                    // push no longer sits between them.
+                    precheck: Some(Precheck::BaseMoved),
                 },
                 StepRow {
                     step: Step::Wait,

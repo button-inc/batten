@@ -7459,13 +7459,45 @@ fn joined_lines(raw: &str) -> Vec<String> {
 /// where `'` differs from `\"` in every shell: inside `'…'` a backslash is a
 /// literal. Nothing else here needs to know shell grammar — the question is only
 /// *does this line end mid-argument*.
+///
+/// # THE ERROR DIRECTION IS NOT SYMMETRIC, WHICH IS WHY TWO CONSTRUCTS ARE READ
+///
+/// A wrong `None` splits a line that should have joined, which is CLOUD-1287's
+/// false-refusal direction. A wrong `Some` JOINS lines that should have split,
+/// and [`joined_lines`]'s caller then judges every one of them by the FIRST
+/// line's program — so `protected_mutation`, the unknown-program arm and every
+/// shape and pipeline rule go silent for the rest of the call. That is the
+/// under-deny direction, and it is the one that gets a guard switched off.
+///
+/// Both known sources of a spurious `Some` are apostrophes that are not quotes,
+/// and both were live when the quote tracking landed (review of #848):
+///
+/// * a `#` COMMENT — `echo hi # don't do it` ends with what looks like an open
+///   span, so a following `rm <protected>` joined it as an operand of `echo` and
+///   was allowed, where the same line alone denies; and
+/// * `$'…'` ANSI-C quoting, where a backslash DOES escape — `$'it\'s'` closes on
+///   its last `'` in bash and re-opened here.
+///
+/// A construct this does not know still reports the pre-existing reading; what
+/// it must not do is invent an open span, which is what these two arms prevent.
 fn quote_after(line: &str, opening: Option<char>) -> Option<char> {
+    // `Some('$')` is the ANSI-C span. It is a single-quoted span in which a
+    // backslash escapes, so it needs its own state rather than a flag on `'`,
+    // and it is reported to the caller as the `'` it visually is.
     let mut quote = opening;
-    let mut chars = line.chars();
+    let mut chars = line.chars().peekable();
+    let mut previous: Option<char> = None;
     while let Some(c) = chars.next() {
         match quote {
             Some('\'') => {
                 if c == '\'' {
+                    quote = None;
+                }
+            }
+            Some('$') => {
+                if c == '\\' {
+                    chars.next();
+                } else if c == '\'' {
                     quote = None;
                 }
             }
@@ -7477,15 +7509,32 @@ fn quote_after(line: &str, opening: Option<char>) -> Option<char> {
                 }
             }
             None => {
+                // A `#` in WORD POSITION opens a comment and the rest of the
+                // line is not shell at all, so nothing after it can open a span.
+                // In the middle of a word it is an ordinary character, which is
+                // why the preceding character decides rather than the `#` alone.
+                if c == '#'
+                    && previous.is_none_or(|prior| {
+                        prior.is_whitespace() || matches!(prior, ';' | '&' | '|' | '(')
+                    })
+                {
+                    return None;
+                }
                 if c == '\\' {
                     chars.next();
+                } else if c == '$' && chars.peek() == Some(&'\'') {
+                    chars.next();
+                    quote = Some('$');
                 } else if c == '\'' || c == '"' {
                     quote = Some(c);
                 }
             }
         }
+        previous = Some(c);
     }
-    quote
+    // The ANSI-C span is reported as the single quote a reader sees; the caller
+    // only ever asks whether something is open.
+    quote.map(|open| if open == '$' { '\'' } else { open })
 }
 
 fn protected_mutation(policy: &Policy, command: &str) -> Decision {
@@ -10878,6 +10927,59 @@ mod tests {
             lines.len(),
             2,
             "the span closed, so line two stands: {lines:?}"
+        );
+    }
+
+    /// AN APOSTROPHE IN A `#` COMMENT IS NOT AN OPEN SPAN, and reading it as one
+    /// was the under-deny this whole quote tracking bought (review of #848).
+    ///
+    /// `#` in word position ends the shell for the rest of the line, so bash
+    /// runs line two as its own command. Joining meant line two's operands
+    /// became `echo`'s, and `protected_mutation` — which compares whole operands
+    /// — saw one word of prose where it should have seen a protected path.
+    #[test]
+    fn an_apostrophe_inside_a_comment_does_not_swallow_the_next_line() {
+        let lines = joined_lines("echo hi # don't do it\nrm batten.toml");
+        assert_eq!(
+            lines.len(),
+            2,
+            "the comment is not a quoted span: {lines:?}"
+        );
+        assert_eq!(lines[1], "rm batten.toml");
+
+        // AND A `#` MID-WORD IS STILL AN ORDINARY CHARACTER, which is what says
+        // the preceding character decides rather than the `#` alone. Without
+        // this the fix is satisfied by treating every `#` as a comment, which
+        // would stop reading a fragment identifier or a colour literal.
+        let spans = joined_lines("echo 'a#b\nc'\nrm batten.toml");
+        assert_eq!(
+            spans.len(),
+            2,
+            "a `#` inside a word opens nothing and closes nothing: {spans:?}"
+        );
+    }
+
+    /// `$'…'` IS ANSI-C QUOTING, WHERE A BACKSLASH ESCAPES. Read as a plain
+    /// single-quoted span, `$'it\'s'` closed on the `\'` and RE-OPENED on the
+    /// final quote, so every following line joined — the same under-deny by the
+    /// other route.
+    #[test]
+    fn an_ansi_c_quoted_word_closes_and_does_not_swallow_the_next_line() {
+        let lines = joined_lines("echo $'it\\'s'\nrm batten.toml");
+        assert_eq!(
+            lines.len(),
+            2,
+            "the ANSI-C span closed on its last quote: {lines:?}"
+        );
+        assert_eq!(lines[1], "rm batten.toml");
+
+        // ANTI-VACUITY: an ANSI-C span left genuinely open still joins, or the
+        // arm is satisfied by never opening one at all.
+        let open = joined_lines("echo $'still\nopen'\nrm batten.toml");
+        assert_eq!(
+            open.len(),
+            2,
+            "the span spans lines one and two, and line three stands: {open:?}"
         );
     }
 

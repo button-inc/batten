@@ -1700,6 +1700,16 @@ fn validate_tables(config: &Config, text: &str, source: &str) -> Result<()> {
     if let Some(mcp) = &config.mcp {
         crate::mcp::validate(mcp)?;
     }
+    // And `[receipt] verified_by`, which names checks that must be WRITABLE
+    // (review of #848). `receipt record` and `receipt status` already refuse a
+    // name that is not an identifier, and this table was held to no such rule —
+    // so a row naming one loaded clean, no receipt for it could ever be written,
+    // and `receipt verified` reported it missing forever, pointing at the
+    // absence rather than at the name that guaranteed it. The inert-typo class
+    // every table above is refused at load for.
+    if let Some(receipt) = &config.receipt {
+        crate::receipt::validate_verified_by(&receipt.verified_by)?;
+    }
     // And the marker table, for the identical reason in the identical shape
     // (CLOUD-253). Both tables arrived in one commit; CLOUD-242 wired one of
     // them up and nobody checked the sibling, so an empty `token` — which

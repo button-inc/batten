@@ -538,6 +538,7 @@ pub fn wait(
     roster: &crate::checks_green::Roster,
     trunk: &crate::main_watch::Config,
     asks: u32,
+    heartbeat: &(dyn Fn() + Sync),
     out: &mut dyn std::io::Write,
 ) -> Result<Waited> {
     writeln!(
@@ -567,6 +568,32 @@ pub fn wait(
                 // this arm only decides when to ask.
                 let raw = crate::pr_watch::read(config, poll.etag());
                 let interval = poll.absorb(raw.as_ref(), config.interval);
+                // THE HOLDER'S HEARTBEAT, AND THIS LOOP IS THE ONLY PLACE THAT
+                // SPENDS REAL TIME (review of #848). A lap acquires its lease
+                // once and then waits out a whole matrix here, so without a beat
+                // the TTL lapses mid-wait and a rival takes a lease this process
+                // still believes it holds. The predecessor backgrounded a
+                // heartbeat process; this is that obligation, in the one loop
+                // whose iterations are seconds rather than microseconds.
+                //
+                // A CALLBACK RATHER THAN A `lease` CALL, because `land` must not
+                // depend on `lease` — `module-layering` refuses the edge, and
+                // the caller is where the terms and this clone's identity
+                // already live. It decides its own cadence; this only says WHEN
+                // there is time to spend.
+                heartbeat();
+                // AND THE SAME NEVER-ANSWERED BOUND `pr_watch::watch` TAKES
+                // (review of #848). A credential the forge refuses answers a
+                // could-not-look to every request, so this arm would spend its
+                // whole ask count — 3600 by default — learning nothing, while
+                // the lap holds the lease and the operator sees one line. Left
+                // to the `Unanswered` verdict, which is what the lap already
+                // laps on, so the shape of the refusal is unchanged.
+                if poll.unanswered_from_the_start() >= crate::pr_watch::UNANSWERED_BEFORE_REFUSING {
+                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    drop(green.send(Waited::Unanswered));
+                    return;
+                }
                 // BOTH TERMINAL ANSWERS END THE WAIT, not only the one the lap
                 // hopes for. Breaking on `Green` alone made a red head
                 // byte-identical to a pending one for the whole ask count.
@@ -2352,7 +2379,7 @@ mod lap_tests {
         // that will not accept output, and a `Vec` always accepts, so a panic
         // would be reporting the impossible case as the interesting one.
         assert_eq!(
-            super::wait(&config, &roster, &trunk, 1, &mut out).ok(),
+            super::wait(&config, &roster, &trunk, 1, &|| (), &mut out).ok(),
             Some(super::Waited::Unanswered),
             "an unreachable forge is a could-not-look, never a verdict about the work"
         );

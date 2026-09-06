@@ -1335,6 +1335,21 @@ pub fn terms_from_environment() -> Option<Terms> {
         .ok()
         .filter(|url| !url.trim().is_empty())
         .unwrap_or_else(|| String::from("https://github.com"));
+    // **A NON-DEFAULT `LAND_LOCK_REMOTE` IS UNANSWERABLE FROM HERE, SO IT IS
+    // REFUSED RATHER THAN GUESSED** (review of #848). The environment names THIS
+    // repository; `LAND_LOCK_REMOTE` names an ALIAS, and resolving an alias to a
+    // URL needs the clone this function exists to work without. Building the
+    // environment's slug anyway would read a lease ref on the wrong repository —
+    // finding none, answering `Run`, and spending the matrix while a rival holds
+    // the real lease. That is the two-lander condition this function was added
+    // to close, reintroduced for every consumer whose lease does not live on
+    // `origin`.
+    //
+    // `None` is the documented fail-open and leaves such a consumer exactly
+    // where it was, which is the honest answer: a reading nobody can take.
+    if remote_name() != "origin" {
+        return None;
+    }
     let slug = std::env::var("GITHUB_REPOSITORY")
         .ok()
         .filter(|slug| !slug.trim().is_empty())?;
@@ -1438,8 +1453,28 @@ pub fn terms(root: &Path) -> std::result::Result<Terms, TermsMissing> {
     let url = remotes
         .iter()
         .find(|(configured, _)| *configured == name)
-        .map(|(_, url)| url.clone())
-        .ok_or(TermsMissing::NoRemote)?;
+        .map(|(_, url)| url.clone());
+    let Some(url) = url else {
+        // **AN EMPTY LIST IS TWO ANSWERS, AND THE `map_err` ABOVE REACHES
+        // NEITHER** (review of #848). `git::remotes` answers `Ok(vec![])` for a
+        // directory it cannot open at all — its own comment says so, on the
+        // shell-era reason that a non-zero exit could not be told from an empty
+        // one — so that `map_err` never fires and `Unreadable`, the
+        // could-not-look half of this very type, was UNCONSTRUCTIBLE. A clone
+        // whose `.git` is corrupt or permission-denied reported the FACT "no
+        // remote is configured" and `lease status` exited 0 over it.
+        //
+        // Asked here rather than by widening `git::remotes`, whose empty answer
+        // every other caller already reads as a fact: this is the one caller
+        // that needs the two apart, so it takes the second reading itself.
+        return Err(if crate::git::worktree_root(root).is_err() {
+            TermsMissing::Unreadable(String::from(
+                "this directory could not be read as a repository, so whether a lease remote is configured is unknown",
+            ))
+        } else {
+            TermsMissing::NoRemote
+        });
+    };
     let mut resolved = Terms {
         remote: url,
         ..Terms::default()
@@ -1523,6 +1558,32 @@ pub fn authorises_this_clone(observed: &Observed, holder: &str, now: i64) -> boo
         return true;
     }
     body.holder == holder
+}
+
+/// Does `holder` hold this lease RIGHT NOW?
+///
+/// # THE COMPLEMENT OF [`authorises_this_clone`], AND NOT ITS NEGATION
+///
+/// That predicate answers *may this clone proceed*, so it is `true` for a lease
+/// that is absent, released or expired — nobody is in the way. This one answers
+/// *do I still own what I took*, and every one of those states is `false`: a
+/// lease I released is a lease somebody else may hold.
+///
+/// The distinction is why this is a function rather than a comparison at the
+/// call site. `unwind_lap` open-coded `body.holder == holder` and dropped both
+/// time-varying clauses (review of #848), so a lap whose lease had lapsed still
+/// read as owning the pull request and would re-draft one another lander now
+/// owns. A comparison cannot go stale; a lease can, and that is the whole
+/// content of the two clauses.
+#[must_use]
+pub fn holds_now(observed: &Observed, holder: &str, now: i64) -> bool {
+    let Observed::Held { body, .. } = observed else {
+        // Absent is nobody's. Garbage has not SHOWN this clone owns anything,
+        // which is the same closed direction `authorises_this_clone` takes over
+        // a ref that will not parse.
+        return false;
+    };
+    !body.released() && !body.expired(now) && body.holder == holder
 }
 
 /// The lease reading this run's recorder columns share.
@@ -1810,6 +1871,54 @@ pub fn renewal(terms: &Terms, body: &Body, progress: Option<&str>, now: i64) -> 
         nonce: nonce(),
         ..body.clone()
     }
+}
+
+/// One heartbeat: renew this clone's lease if it still holds it.
+///
+/// # THE LAP HAD NO HEARTBEAT AT ALL, WHICH IS WHAT THIS EXISTS FOR
+///
+/// The lap acquires once and then spends the whole of CI inside `Step::Wait`
+/// (review of #848). The TTL is 120 seconds by default and the wait polls up to
+/// an hour, so roughly two minutes into a twenty-minute matrix the lease read
+/// EXPIRED, [`authorises`] handed it to the next branch, and a second lander
+/// bought a matrix concurrently — the exact overlap the singleton exists to
+/// prevent. Worse, the first branch's own later jobs then failed their step-0
+/// guard against the new holder and were cancelled mid-landing.
+///
+/// The predecessor backgrounded a heartbeat process, which is why
+/// [`crate::run_lease_hold`]'s doc and `note_release`'s both speak as though one
+/// exists. The port dropped it and nothing noticed, because a lease that expires
+/// under you fails by letting somebody ELSE succeed.
+///
+/// # SILENT AND BEST-EFFORT, AND `false` IS NOT AN ALARM
+///
+/// Every arm answers `false` without writing anything: no identity, no lease, a
+/// lease held by somebody else, a rejected CAS, a push that did not go through.
+/// The caller drives this from inside a poll, where a diagnostic per beat would
+/// bury the wait's own output, and where a single failed push must NOT be read
+/// as a lost lease — [`crate::run_lease_hold`] states the reason and this shares
+/// it: the TTL is deliberately several beats wide precisely so one blip is
+/// survivable. What a caller does with a run of failures is the caller's; one is
+/// not news.
+///
+/// Progress is carried forward rather than rewritten, for [`renewal`]'s own
+/// reason: a beat that erased it would make the lease unstealable to every rival.
+#[must_use]
+pub fn beat(root: &Path, terms: &Terms, now: i64) -> bool {
+    let Ok((_, holder)) = crate::lease_identity(root) else {
+        return false;
+    };
+    let Ok(observed) = observe(terms) else {
+        return false;
+    };
+    if !holds_now(&observed, &holder, now) {
+        return false;
+    }
+    let Observed::Held { body, .. } = &observed else {
+        return false;
+    };
+    let renewed = renewal(terms, body, None, now);
+    matches!(cas(terms, &observed, &renewed, now), Ok(Outcome::Applied))
 }
 
 /// Fill the one successor slot, re-minting every other field verbatim.
@@ -2267,19 +2376,36 @@ pub fn health(observed: &Observed, terms: &Terms, now: i64) -> Health {
     // A body whose arithmetic will not close is garbage rather than a duration,
     // and garbage is the state this module already refuses to read as an
     // occupancy.
+    // **EXPIRY IS ASKED BEFORE THE ARITHMETIC, AND THE ORDER IS THE FIX** (review
+    // of #848). The `checked_sub` below removed a panic and kept the wrong
+    // verdict: an underflowing `expires` took the guard arm and reported
+    // `Wedged` — blocking — over a lease `Body::expired`, `authorises`, `turn`
+    // and `authorises_this_clone` ALL already treat as free and takeable. So
+    // `lease check` exited 2 with "landing is blocked until it expires" while
+    // the next `acquire` would have won, which is the outcome the comment on the
+    // guard named as the defect it was closing.
+    //
+    // `expired` is the one authority on whether a lease has lapsed, and it is
+    // total — a comparison, never a subtraction. Reaching for it first means the
+    // arithmetic below only ever runs on a lease that is genuinely live.
+    if body.expired(now) {
+        return Health::Free(format!(
+            "free — lapsed by {} {}s ago{behind}",
+            body.holder,
+            now.saturating_sub(body.expires)
+        ));
+    }
+    // A body whose arithmetic will not close is GARBAGE rather than a duration,
+    // which is what the prose here always said and what the arm now returns. It
+    // is unreachable for any lease that reached this line — `expired` is false,
+    // so `expires > now` and the difference is positive — and it is kept because
+    // a total function that cannot answer must say so rather than pick a side.
     let Some(left) = body.expires.checked_sub(now) else {
-        return Health::Wedged(format!(
+        return Health::Garbage(format!(
             "held by {}{behind} with an expiry that will not compare — the body is not a lease this can read",
             body.holder
         ));
     };
-    if left <= 0 {
-        return Health::Free(format!(
-            "free — lapsed by {} {}s ago{behind}",
-            body.holder,
-            left.saturating_neg()
-        ));
-    }
     if left > terms.ttl {
         return Health::Wedged(format!(
             "held by {}{behind} for another {left}s, beyond the {}s any lease may claim",
@@ -2706,9 +2832,28 @@ pub enum Carries {
 /// Empty on any failure, which is the same could-not-look posture
 /// [`crate::main_watch::read`] takes: every failure to reach the forge is a
 /// reading nobody took, never a verdict.
+///
+/// # A NON-2xx BODY IS NOT A READING, AND THE STATUS IS WHAT SAYS SO
+///
+/// This returned `answer.body` for every status, so a `401`, a `403` and a
+/// rate-limited `5xx` were handed to the callers as text to parse (review of
+/// #848). No verdict flips today — the forge's error bodies are JSON OBJECTS, so
+/// `newest_landing_commit`'s `as_array()` and `head_carries`'s status match both
+/// abandon — but that is the reading being rescued by the accident of a body's
+/// SHAPE rather than by a status test, and a proxy that wraps errors in an array
+/// or a fifth `status` token would turn a refusal into a verdict.
+///
+/// [`crate::rest::Answer::is_reading`] is the one test, and this file's own
+/// siblings already take it.
 #[must_use]
 fn forge_read(path: &str) -> String {
-    crate::rest::get(path, None).map_or_else(String::new, |answer| answer.body)
+    crate::rest::get(path, None).map_or_else(String::new, |answer| {
+        if answer.is_reading() {
+            answer.body
+        } else {
+            String::new()
+        }
+    })
 }
 
 /// The newest commit at `trunk` touching any of `paths`.
@@ -2729,6 +2874,29 @@ fn forge_read(path: &str) -> String {
 /// inventory to buy them. Everything outside `A-Za-z0-9-._~` is escaped, which is
 /// the conservative direction: over-escaping a segment the server would have
 /// accepted costs nothing, and under-escaping is the defect.
+/// Percent-encode one PATH component, keeping `/` as the separator it is.
+///
+/// The sibling to [`query_value`], and the difference is the whole reason both
+/// exist: a query value has no structure, so `/` is escaped there; a path
+/// component like `owner/repo` or a ref named `release/1.x` carries its
+/// separators, and escaping them would ask the forge about a repository nobody
+/// named. What must NOT survive is `?`, `#` and whitespace, each of which
+/// re-keys or truncates the request.
+fn path_value(raw: &str) -> String {
+    let mut encoded = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
+            encoded.push(char::from(byte));
+        } else {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    encoded
+}
+
 fn query_value(raw: &str) -> String {
     let mut encoded = String::with_capacity(raw.len());
     for byte in raw.bytes() {
@@ -2807,7 +2975,8 @@ pub fn newest_landing_commit(
         // one silently truncated or re-keyed the query, so the request asked
         // about a different path than the row declared.
         let raw = forge_read(&format!(
-            "repos/{repo}/commits?sha={}&path={}&per_page=1",
+            "repos/{}/commits?sha={}&path={}&per_page=1",
+            path_value(repo),
             query_value(trunk),
             query_value(path)
         ));
@@ -2860,7 +3029,18 @@ pub fn newest_landing_commit(
 /// where a clone exists.
 #[must_use]
 pub fn head_carries(repo: &str, wanted: &str, head: &str) -> Option<bool> {
-    let raw = forge_read(&format!("repos/{repo}/compare/{wanted}...{head}"));
+    // ENCODED, for the reason `newest_landing_commit` states two functions up
+    // and this one did not carry (review of #848). `head` reaches here from a
+    // CLI positional or a workflow expression, so a `?`, a `#` or a space in it
+    // re-keys or truncates the path and the forge answers about a DIFFERENT
+    // comparison — or 404s, which reads back as `Carries::Unknown` and switches
+    // the staleness half of the guard off without saying so.
+    let raw = forge_read(&format!(
+        "repos/{}/compare/{}...{}",
+        path_value(repo),
+        path_value(wanted),
+        path_value(head)
+    ));
     let document = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
     let status = document.get("status")?.as_str()?;
     match status {
