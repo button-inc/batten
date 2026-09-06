@@ -102,11 +102,37 @@ import rego.v1
 
 rules contains "test-target-added"
 
-# The branch's own diff. `base-delta` is NULL when the base rev does not resolve,
-# so `added` does not hold and this rule goes silent — could-not-look, never a
-# fabricated empty delta that would pass the gate on ignorance. That is
-# `filed-here.rego`'s reading of the same fact and it is deliberate here too.
-delta := input.tree["base-delta"]
+# The branch's own diff, BOUND THROUGH AN OBJECT GUARD because `null` is not
+# `undefined` (review of #848).
+#
+# THE COMMENT HERE ASSERTED THE READING `fixture-forks.rego` REFUTES, and it is
+# corrected rather than quietly rewritten: it read that a null `base-delta` makes
+# this rule "go silent — could-not-look, never a fabricated empty delta that
+# would pass the gate on ignorance", as though silence WERE the report. It is
+# not. A rule that refuses nothing and a tree that added no target are
+# byte-identical on the decision surface, which is the dead-gate class this
+# repository exists to refuse. Silence is the fabricated empty delta, one level
+# over.
+delta := d if {
+	d := input.tree["base-delta"]
+	is_object(d)
+}
+
+# THE COULD-NOT-LOOK ARM. `spawn-widening.rego` and `fixture-forks.rego` carry it
+# for the same fact; this module did not, so a shallow clone, a detached CI
+# checkout with the base unfetched, or a fork with no `origin/main` passed the
+# ratchet over a branch adding as many test targets as it liked.
+#
+# `not delta` rather than `not input.tree["base-delta"]`: only `false` and
+# undefined make `not` hold in Rego, so the bare spelling would be DEAD for
+# exactly the `null` this arm exists for.
+violation contains {
+	"rule": "test-target-added",
+	"verdict": "diff read absent",
+	"subjects": [{"path": "batten.toml"}],
+} if {
+	not delta
+}
 
 # A path is a NEW TEST TARGET when it is added, sits directly under
 # `crates/batten/tests/`, and ends in `.rs`.
@@ -246,9 +272,20 @@ test_another_crates_test_file_is_not_this_rules_business if {
 	}}}
 }
 
-# COULD NOT LOOK. A null `base-delta` must go silent rather than read as an empty
-# diff — the distinction `filed-here.rego` records and the one a migration gate
-# has to keep.
-test_an_unresolvable_base_refuses_nothing if {
-	count(violation) == 0 with input as {"tree": {"base-delta": null}}
+# COULD NOT LOOK. A null `base-delta` is REPORTED, never passed: this case
+# asserted the opposite — `count(violation) == 0` — and was green over a gate
+# that reported clean on every tree it had not read.
+test_an_unresolvable_base_reports_rather_than_passing if {
+	some v in violation with input as {"tree": {"base-delta": null}}
+	v.verdict == "diff read absent"
+}
+
+# AND THE ARM MUST NOT FIRE OVER A DELTA THAT DID RESOLVE, which is what says the
+# object guard binds rather than that the arm is unconditional.
+test_a_resolved_delta_reports_no_read_failure if {
+	count(violation) == 0 with input as {"tree": {"base-delta": {
+		"added": [],
+		"edited": [],
+		"deleted": [],
+	}}}
 }

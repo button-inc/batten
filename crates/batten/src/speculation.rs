@@ -326,7 +326,22 @@ pub fn settle(bet: &Bet, main_now: Option<&str>, base_on_main: bool, live: Live)
     // The measured incident: a holder whose CI died in a provider incident held
     // the lease going nowhere, a sibling linearized onto its published head, and
     // the two branches ended at the identical sha with neither able to land.
-    if bet.main_at_bet.as_deref() == Some(main_now) {
+    // A PLACED BET WITH NO `main_at_bet` IS THE SAME POSITION AS AN ADOPTED ONE,
+    // and reading it as a moved trunk was this arm's own defect (review of #848).
+    // The field is a reading that may not have taken when the bet was placed, and
+    // `Some(main_now) != None` is true, so the comparison below fell through to
+    // `Lost` — unwinding a speculation that is very much alive, on the strength
+    // of a reading nobody ever got. It is could-not-look on the SAME side of the
+    // comparison the `main_now` arm above already defers for, so it defers the
+    // same way.
+    let Some(main_at_bet) = bet.main_at_bet.as_deref() else {
+        return if live.decide() {
+            Settle::Pending
+        } else {
+            Settle::Lost
+        };
+    };
+    if main_at_bet == main_now {
         return if live.decide() {
             Settle::Pending
         } else {
@@ -542,6 +557,38 @@ mod tests {
         // WON still outranks it: an ancestry that resolved is an answer whether
         // or not the tip did.
         assert_eq!(settle(&placed(), None, true, Live::No), Settle::Landed);
+    }
+
+    /// THE OTHER SIDE OF THE SAME COMPARISON, and it read as a moved trunk.
+    ///
+    /// `main_at_bet` is a reading that may not have taken when the bet was
+    /// placed. `Some(main_now) != None` is true, so the comparison fell straight
+    /// through to `Lost` and unwound a speculation that was very much alive —
+    /// the same defect the test above records, on the operand nobody checked.
+    #[test]
+    fn a_placed_bet_with_no_main_at_bet_defers_to_the_lease_too() {
+        let unread = Bet {
+            main_at_bet: None,
+            ..placed()
+        };
+        assert_eq!(
+            settle(&unread, Some(MAIN), false, Live::Yes),
+            Settle::Pending,
+            "a reading that never took is a could-not-look on this side of the \
+             comparison exactly as it is on the other"
+        );
+        assert_eq!(settle(&unread, Some(MAIN), false, Live::No), Settle::Lost);
+        assert_eq!(
+            settle(&unread, Some(MAIN), false, Live::Unreadable),
+            Settle::Lost
+        );
+
+        // ANTI-VACUITY: a bet whose reading DID take is still judged by it, so a
+        // moved trunk with a dead holder is still lost.
+        assert_eq!(
+            settle(&placed(), Some(MOVED), false, Live::No),
+            Settle::Lost
+        );
     }
 
     /// A `main` that moved without taking the base is a lost bet, whoever placed

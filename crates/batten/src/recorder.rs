@@ -471,6 +471,24 @@ pub fn satisfied(declared: &Declared, context: &Context<'_>) -> bool {
 /// are missing. Reading it the other way round would file a could-not-look for
 /// every unrelated tool call in the session, which is the noise that gets a
 /// channel ignored.
+///
+/// # A ROW WITH NO INPUT SELECTOR IS SELECTED BY EVERY CALL OF ITS TOOL
+///
+/// Both selector lists are `all` over a possibly-empty collection, so an empty
+/// one holds vacuously. That is correct and intended where the tool's identity
+/// IS the question — [`Declared::requires_input_matching`] says so, and a board
+/// write is any `save_issue` at all — and it is a trap for a GENERAL RUNNER,
+/// where every call in the session arrives under one tool name. Such a row does
+/// not merely over-record: it reports [`Outcome::Blocked`] for every unrelated
+/// command that lacks its result paths, which is a could-not-look filed against
+/// calls the author never meant, and the noise the ordering above exists to
+/// keep out arriving by the one route ordering cannot stop.
+///
+/// **Stated rather than gated, and the gap is named rather than papered over**
+/// (non-negotiable rule 2's honest half). A load-time refusal would have to know
+/// which tool names are runners, and that is a consumer fact — a core carrying
+/// the list would violate rule 1. The declaration a consumer CAN make is
+/// `requires_input_matching`, and every row here over a runner carries one.
 #[must_use]
 pub fn outcome(declared: &Declared, context: &Context<'_>) -> Outcome {
     let selected = declared

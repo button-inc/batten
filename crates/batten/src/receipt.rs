@@ -1733,19 +1733,43 @@ pub(crate) const VERIFIED_BY: [&str; 2] = ["verify", "linear-check"];
 /// their receipts resolve to `Missing`, so `verified` refuses loudly on their
 /// first run rather than passing quietly. A wrong answer that announces itself
 /// is the acceptable failure here; a silent one is not.
-fn verified_by(root: &Path) -> Vec<String> {
+/// # NO CONFIG AND A CONFIG THAT WILL NOT LOAD ARE DIFFERENT ANSWERS
+///
+/// This was one `.ok()` over both, which is the could-not-look collapse the rest
+/// of this crate refuses (review of #848). `load_site` reports an ABSENT
+/// `batten.toml` as an error too, so the fixture repository that legitimately
+/// has none took the same branch as a consumer whose config is malformed — and
+/// the substituted default is a SUBSET of what such a consumer may have
+/// declared. A `verified_by = ["verify", "linear-check", "audit"]` that failed
+/// to parse would be answered by asking about the first two, and a head proven
+/// on partial evidence would be reported verified. That is the one direction the
+/// doc above calls unacceptable: a wrong answer that announces itself is fine,
+/// a silent one is not.
+///
+/// Presence is asked first, so an absent site keeps the default and a present
+/// one that will not load propagates.
+///
+/// # Errors
+///
+/// Propagates [`crate::config::load_site`] where the file is there and unreadable.
+fn verified_by(root: &Path) -> Result<Vec<String>> {
     let site = crate::config::authority_site(root, None);
-    crate::config::load_site(&site)
-        .ok()
-        .and_then(|(loaded, _)| loaded.receipt)
-        .map(|receipt| receipt.verified_by)
+    let declared = if site.path.is_file() {
+        crate::config::load_site(&site)?
+            .0
+            .receipt
+            .map(|receipt| receipt.verified_by)
+    } else {
+        None
+    };
+    Ok(declared
         .filter(|declared| !declared.is_empty())
         .unwrap_or_else(|| {
             VERIFIED_BY
                 .iter()
                 .map(|check| (*check).to_owned())
                 .collect()
-        })
+        }))
 }
 
 /// Is HEAD verified — every check in [`VERIFIED_BY`] valid against this commit?
@@ -1793,7 +1817,7 @@ pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
     // missing" about checks they never named, while the ones they did name were
     // never asked about. It passes in this repository only because the two sets
     // happen to coincide.
-    let required = verified_by(Path::new(&facts.repo_root));
+    let required = verified_by(Path::new(&facts.repo_root))?;
     let mut unverified = Vec::new();
     for check in &required {
         let statement = load_statement(&receipt_path(&facts.repo_root, check)?);
@@ -2672,5 +2696,34 @@ mod tests {
             verify,
             identity::scope_fingerprint("verify", RECEIPT_SCOPE_KEY)
         );
+    }
+
+    /// NO CONFIG AND A CONFIG THAT WILL NOT LOAD ARE DIFFERENT ANSWERS.
+    ///
+    /// One `.ok()` covered both, and the substituted default is a SUBSET of what
+    /// a consumer may have declared — so a `verified_by` that failed to parse
+    /// was answered by asking about our two names, and a head proven on partial
+    /// evidence reported verified.
+    #[test]
+    fn an_unreadable_config_is_could_not_look_and_an_absent_one_takes_the_default() {
+        let dir = std::env::temp_dir().join(format!("batten-verified-by-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+
+        // ABSENT: the fixture repository with no `batten.toml` at all, which is
+        // the case the default exists for.
+        assert_eq!(
+            verified_by(&dir).expect("an absent config is not a failure"),
+            VERIFIED_BY.map(str::to_owned).to_vec()
+        );
+
+        // PRESENT AND UNREADABLE: could-not-look, reported rather than defaulted.
+        std::fs::write(dir.join("batten.toml"), "this is not toml [[[").expect("write");
+        assert!(
+            verified_by(&dir).is_err(),
+            "a config that will not load must not be answered with the compiled default"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -9060,6 +9060,20 @@ fn run_land_wait(
         interval: 1,
         progress: None,
     };
+    // AND THE REPOSITORY, before the loop, for the reason
+    // `pr_watch::Config::names_a_repository` gives. The lap's own poll is the
+    // other unbounded loop over this config, and it inherits the same shape: an
+    // unresolved slug leaves the placeholder in the path, the forge answers 404,
+    // `pr_watch::read` reports that as could-not-look because it cannot tell it
+    // from a dropped connection, and the wait spends its whole ask count on a
+    // question that was never going to be answered (review of #848).
+    if !config.names_a_repository() {
+        writeln!(
+            err,
+            "::error:: land wait: no repository resolved, so every check-run read would 404 — set $GH_REPO, or run this in a clone whose remote names one"
+        )?;
+        return Ok((ExitCode::Usage, None));
+    }
     // A COUNT, never a deadline (CLOUD-1177). The default is generous because
     // the cost of too many asks is a few conditional requests the forge answers
     // `304`, and the cost of too few is a lap that reports no answer while one

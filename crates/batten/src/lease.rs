@@ -2767,7 +2767,15 @@ fn query_value(raw: &str) -> String {
 /// additional path — three, for a four-row declaration — against a guard that
 /// already spends one request per path.
 ///
-/// # An unorderable pair is could-not-look for the WHOLE reading
+/// # A PATH THAT WOULD NOT READ IS COULD-NOT-LOOK FOR THE WHOLE READING
+///
+/// Not just an unorderable pair: a response that will not parse, is not an
+/// array, or carries an entry with no `sha` abandons the reading too. Skipping
+/// one leaves the newest-so-far holding an EARLIER path's commit, and returning
+/// that as authoritative is the same too-lenient verdict — a head missing the
+/// unread path's landing commit read as `Current` — that the ancestry ordering
+/// above exists to prevent. An empty array is not that: it is the answer that
+/// nothing on the trunk has touched the path.
 ///
 /// Where [`head_carries`] cannot answer, the two candidates cannot be ordered at
 /// all, and there is no safe way to pick one: taking the older makes the guard
@@ -2803,15 +2811,23 @@ pub fn newest_landing_commit(
             query_value(trunk),
             query_value(path)
         ));
+        // A PATH THAT WOULD NOT READ ABANDONS THE WHOLE READING, exactly as an
+        // unorderable pair does below. `continue`ing left `newest` holding an
+        // EARLIER path's commit and returned it as authoritative, so the guard
+        // reported `Current` for a head missing whatever the unread path landed
+        // — the same too-lenient answer the ancestry ordering above exists to
+        // stop, reached by the other route.
         let Ok(document) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return None;
+        };
+        let rows = document.as_array()?;
+        // An EMPTY array is an answer rather than a failure to read: no commit
+        // on the trunk has ever touched this path. That path contributes no
+        // candidate and the others still do.
+        let Some(entry) = rows.first() else {
             continue;
         };
-        let Some(entry) = document.as_array().and_then(|rows| rows.first()) else {
-            continue;
-        };
-        let Some(sha) = entry.get("sha").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
+        let sha = entry.get("sha").and_then(serde_json::Value::as_str)?;
         let Some((held, _)) = newest.as_ref() else {
             newest = Some((sha.to_owned(), path.clone()));
             continue;

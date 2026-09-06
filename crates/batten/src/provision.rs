@@ -648,6 +648,19 @@ fn freshness_of(entry: &Provision, cache_root: &Path) -> Result<Freshness> {
         if !relaunches_a_present_interpreter(&linked) {
             return Ok(Freshness::Missing);
         }
+        // AND THE DECLARED ENVIRONMENT IS PART OF WHAT IS CACHED, which is the
+        // other half of CLOUD-1455 and the one a byte-identical artifact hides.
+        // Every other input to this verdict lives in the cache — the artifact's
+        // digest, the binary's presence — but `[[provision.env]]` reaches the
+        // tool only through the launcher's own second line. Edit a row, and a
+        // warm cache reports `Fresh`, `apply` returns `AlreadyFresh` before
+        // reaching `install`, and the tool keeps running with the environment
+        // the manifest USED to declare. That is the same second-run shape the
+        // link check above records: the change never appears on the run that
+        // makes it.
+        if !launcher_declares(&linked, entry) {
+            return Ok(Freshness::Missing);
+        }
     }
     let cached = match fs::read(dir.join(ARTIFACT)) {
         Ok(bytes) => bytes,
@@ -906,6 +919,33 @@ fn relaunches_a_present_interpreter(linked: &Path) -> bool {
         Some((interpreter, verb)) if verb == LAUNCHER_VERB => Path::new(interpreter).is_file(),
         _ => true,
     }
+}
+
+/// Does the launcher at `linked` carry the environment rules `entry` declares?
+///
+/// The rules only, never the whole file: the `#!` line names the batten that ran
+/// the last `apply`, and comparing bytes would call every launcher stale as soon
+/// as that binary moved — churn over a question
+/// [`relaunches_a_present_interpreter`] already answers on its own terms.
+///
+/// Unreadable is `true` for the same reason its sibling gives: presence was
+/// answered above, and re-linking does not fix a permissions failure. A body
+/// that will not parse is `false`, because that is precisely the launcher
+/// [`exec_launcher`] refuses and tells the operator to rewrite.
+fn launcher_declares(linked: &Path, entry: &Provision) -> bool {
+    let Ok(bytes) = fs::read(linked) else {
+        return true;
+    };
+    let Some(body) = bytes.split_once_newline() else {
+        return false;
+    };
+    let Ok(carried) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return false;
+    };
+    let Ok(declared) = serde_json::to_value(&entry.env) else {
+        return false;
+    };
+    carried.get("env") == Some(&declared)
 }
 
 /// Become the tool a launcher stands for, with the environment its row declares.
@@ -2106,6 +2146,55 @@ mod tests {
             link: None,
             env: Vec::new(),
         }
+    }
+
+    /// THE DECLARED ENVIRONMENT IS PART OF WHAT IS CACHED (CLOUD-1455's other
+    /// half). It reaches the tool only through the launcher's second line, so a
+    /// warm cache holding a byte-identical artifact reported `Fresh` after an
+    /// `[[provision.env]]` edit, `apply` returned `AlreadyFresh` before reaching
+    /// `install`, and the tool kept running with the environment the manifest
+    /// used to declare.
+    ///
+    /// Over `launcher_declares` rather than through `freshness_of`, because the
+    /// premise this asserts is the launcher's own bytes — `rust.md`'s rule that a
+    /// test must be shown able to fail rather than depending on a condition the
+    /// sandbox cannot create.
+    #[test]
+    fn a_launcher_carrying_another_environment_is_not_fresh() {
+        let rule = |name: &str| ProvisionEnv {
+            name: name.to_owned(),
+            prepend_list: Vec::new(),
+            from_first_set: vec![String::from("SOURCE")],
+            when_trust_names: None,
+        };
+        let mut declared = entry("tool", &"a".repeat(64));
+        declared.env = vec![rule("TOKEN")];
+
+        let dir = std::env::temp_dir().join(format!("batten-launcher-env-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        let linked = dir.join("tool");
+        std::fs::write(
+            &linked,
+            launcher(&declared, Path::new("/cache/bin/tool")).expect("bytes"),
+        )
+        .expect("write the launcher");
+
+        assert!(
+            launcher_declares(&linked, &declared),
+            "the launcher this entry just wrote carries this entry's environment"
+        );
+
+        let mut edited = declared.clone();
+        edited.env = vec![rule("OTHER_TOKEN")];
+        assert!(
+            !launcher_declares(&linked, &edited),
+            "an edited row must reach the tool, and it only can if the cache reports stale"
+        );
+
+        // A body that will not parse is the launcher `exec_launcher` refuses and
+        // tells the operator to rewrite, so it is stale rather than fresh.
+        std::fs::write(&linked, b"#!/x provision-exec\nnot json\n").expect("write a broken one");
+        assert!(!launcher_declares(&linked, &declared));
     }
 
     /// The same entry spelled as a platform table instead of a single url.

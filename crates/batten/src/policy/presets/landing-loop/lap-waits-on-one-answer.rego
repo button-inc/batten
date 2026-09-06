@@ -59,19 +59,52 @@ rules contains "lap-waits-on-one-answer"
 #MUTANT loser-read|s@^\tcount(wait_answered) > 1$@\tfalse@|the_landing_loop_preset_refuses_a_lap_that_read_both_answers
 #MUTANT single-answer-unpriced|s@^\tcount(wait_answered) > 1$@\ttrue@|the_landing_loop_preset_refuses_a_lap_that_read_both_answers
 
-# Every wait outcome this lap recorded, in write order.
+# Does a LATER line in this record open another lap?
+#
+# A `rebase` line is the first thing a lap writes — `Replay::line` has no other
+# spelling, `current` and `replayed` included — so a wait line with one after it
+# belongs to a lap that has already finished.
+#
+# DEFINED ABOVE ITS READER because regorus resolves a rule defined below its
+# reader as undefined; this module's header records that being measured twice,
+# both times silently.
+#
+# Undefined where there is no later `rebase` line, which is what makes
+# `not wait_ended_a_lap_ago` hold for the lines of the lap standing now.
+wait_ended_a_lap_ago(lines, index) if {
+	some later, line in lines
+	later > index
+	startswith(line, "rebase ")
+}
+
+# Every wait outcome THE LAP STANDING NOW recorded, in write order.
 #
 # A COMPREHENSION RATHER THAN A SET, and here that is load-bearing twice over
 # rather than once: a set de-duplicates, so a lap that recorded the SAME arm
 # twice would collapse to one member and read as a lap that answered once —
 # which is the exact reading this module exists to refuse.
 #
+# **SCOPED TO THIS LAP, AND IT READ THE WHOLE HISTORY** (review of #848). The
+# record is APPEND-ONLY — `land::record`'s own doc says so, because a lap that
+# conflicted and a later lap that resolved it are two facts — so this read every
+# wait line the branch had ever written. A second lap therefore inherited the
+# first's answered arm, `wait_answered` reached two, and the gate refused a
+# branch whose every lap waited on exactly one answer. The sibling reading
+# replays already had this right and takes `last_replay` for the same reason;
+# this module took the count and did not.
+#
+# The lines of one record are iterated WITH THEIR INDEX rather than flattened,
+# because position is the only thing that says which lap a line belongs to, and
+# `input.tree.records[_][_]` discards it.
+#
 # The `is_object` guard is first because `some .. in null` is a hard evaluation
 # FAULT in Rego, and a fault takes the whole bundle down rather than missing
 # quietly.
 wait_answers := [answer |
 	is_object(input.tree.records)
-	line := input.tree.records[_][_]
+	lines := input.tree.records[_]
+	some index, line in lines
+	not wait_ended_a_lap_ago(lines, index)
 	columns := split(line, " ")
 	count(columns) == 4
 	columns[0] == "wait"
@@ -246,6 +279,34 @@ test_another_kinds_line_is_skipped if {
 		"rebase green success abc1234",
 		"rebase stale moved abc1234",
 	])
+}
+
+# THE CASE THAT WAS MISSING, AND THE ONE THE DEFECT LIVED IN. The record is
+# append-only, so a branch that has lapped twice carries both laps' wait lines —
+# and reading them together made two correct laps look like one lap that read
+# both answers. Each lap here answered exactly once.
+test_two_laps_answering_once_each_is_clean if {
+	count(violation) == 0 with input as wait_record([
+		"rebase replayed abc1234 -",
+		"wait green success abc1234",
+		"rebase replayed def5678 -",
+		"wait stale moved def5678",
+	])
+}
+
+# AND ITS DISCRIMINATING PARTNER: the same two answers INSIDE one lap still
+# refuse. Without this the fix is satisfied by a module that reads no wait line
+# at all, which is the non-gate the anti-vacuity cases above exist to refuse.
+test_two_arms_answering_within_one_lap_is_still_refused if {
+	some v in violation with input as wait_record([
+		"rebase replayed abc1234 -",
+		"wait green success abc1234",
+		"rebase replayed def5678 -",
+		"wait green success def5678",
+		"wait stale moved def5678",
+	])
+	v.subjects[0].count == 2
+	v.subjects[1].artifact == "def5678"
 }
 
 # COULD-NOT-LOOK OVER THE WHOLE STORE, and without the `is_object` guard this

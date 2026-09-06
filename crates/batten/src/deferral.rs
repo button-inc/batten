@@ -88,7 +88,13 @@ pub enum Fact {
 /// [`crate::UsageError`] naming the row and the key.
 pub fn validate(deferrals: &[Deferral]) -> crate::Result<()> {
     for deferral in deferrals {
-        if semver::Version::parse(&deferral.reaches).is_err() {
+        // ONE PARSER, AND THERE WERE TWO (review of #848). This called
+        // `semver::Version::parse` directly while [`satisfied`] fills a missing
+        // patch — so `reaches = "1.98"`, which is exactly the spelling
+        // `rust-version` uses and the one `satisfied` exists to accept, was
+        // refused at load. The two readings of one string could disagree in both
+        // directions; they are [`version`] now.
+        if version(&deferral.reaches).is_none() {
             return Err(crate::UsageError::raise(format!(
                 "deferral {}: `reaches = \"{}\"` is not a version, so its condition could \
                  never be compared",
@@ -105,6 +111,22 @@ pub fn validate(deferrals: &[Deferral]) -> crate::Result<()> {
     Ok(())
 }
 
+/// The ONE reading of a version string this module has.
+///
+/// `rust-version = "1.98"` is a valid manifest value and not valid semver, so a
+/// missing patch is filled rather than refused. Shared by [`validate`] and
+/// [`satisfied`] because a load-time refusal and a runtime comparison over the
+/// same string must not be able to disagree — the class
+/// `.claude/rules/policy-modules.md` records for parsers, arriving here.
+fn version(text: &str) -> Option<semver::Version> {
+    let filled = if text.split('.').count() == 2 {
+        format!("{text}.0")
+    } else {
+        text.to_owned()
+    };
+    semver::Version::parse(&filled).ok()
+}
+
 /// Whether `reaches` has been met by `pin`.
 ///
 /// Both are parsed as semver; either failing to parse is **not satisfied**,
@@ -112,17 +134,7 @@ pub fn validate(deferrals: &[Deferral]) -> crate::Result<()> {
 /// deferral is reported only when the tree can show the condition holds.
 #[must_use]
 pub fn satisfied(reaches: &str, pin: &str) -> bool {
-    let parse = |text: &str| {
-        // `rust-version = "1.98"` is a valid manifest value and not valid
-        // semver, so a missing patch is filled rather than refused.
-        let filled = if text.split('.').count() == 2 {
-            format!("{text}.0")
-        } else {
-            text.to_owned()
-        };
-        semver::Version::parse(&filled).ok()
-    };
-    match (parse(reaches), parse(pin)) {
+    match (version(reaches), version(pin)) {
         (Some(reaches), Some(pin)) => pin >= reaches,
         _ => false,
     }
@@ -147,5 +159,26 @@ mod tests {
         // reading would refuse every deferral on a manifest it could not parse.
         assert!(!satisfied("nightly", "1.98"));
         assert!(!satisfied("1.88.0", "stable"));
+    }
+
+    /// ONE PARSER, AND THE TWO USED TO DISAGREE. `validate` called
+    /// `semver::Version::parse` outright while `satisfied` fills a missing patch,
+    /// so a `reaches` written the way `rust-version` is written — the spelling
+    /// `satisfied` exists to accept — was refused at load and never reached the
+    /// comparison at all.
+    #[test]
+    fn a_two_component_reaches_validates_exactly_where_satisfied_accepts_it() {
+        let row = |reaches: &str| Deferral {
+            issue: String::from("CLOUD-647"),
+            fact: Fact::RustVersion,
+            reaches: reaches.to_owned(),
+            reason: String::from("upstream has not raised its pin"),
+        };
+        assert!(satisfied("1.98", "1.98"));
+        assert!(validate(std::slice::from_ref(&row("1.98"))).is_ok());
+        // And the refusal still reaches what `satisfied` cannot compare, which is
+        // what says the shared parser did not become a rubber stamp.
+        assert!(!satisfied("nightly", "1.98"));
+        assert!(validate(std::slice::from_ref(&row("nightly"))).is_err());
     }
 }

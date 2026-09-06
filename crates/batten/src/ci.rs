@@ -335,12 +335,33 @@ pub fn derive_host(payload: &str) -> Result<Host> {
 /// separates a real comparison from a non-zero exit on any non-200.
 ///
 /// A key the config leaves unclaimed is skipped: this polices what the tree
-/// says, and says nothing about what it does not.
+/// says, and says nothing about what it does not. A key the config DOES claim
+/// and the host did not report is a [`Drift`] carrying `+unreported`, never a
+/// skip — see the comment on the comparison for the credential-scope shape that
+/// makes it live.
 #[must_use]
 pub fn host_drift(committed: &Host, host: &Host) -> Vec<Drift> {
     let mut found = Vec::new();
     let mut compare = |key: &str, mine: Option<bool>, theirs: Option<bool>| {
-        let (Some(mine), Some(theirs)) = (mine, theirs) else {
+        // AN UNCLAIMED KEY IS SKIPPED; AN UNREPORTED ONE IS NOT. The two were one
+        // `else { return }` (review of #848), so a key the tree DOES claim and
+        // the host did not report read as agreement — the answer this comparison
+        // exists never to give. `derive_host` guards only the all-absent payload;
+        // a partial one is the live shape, because
+        // `security_and_analysis.secret_scanning_push_protection` is absent
+        // whenever the credential lacks the scope to see it, which is a
+        // could-not-look about the strongest control in the table.
+        let Some(mine) = mine else {
+            return;
+        };
+        let Some(theirs) = theirs else {
+            found.push(Drift {
+                id: HOST_SETTING_DRIFT,
+                key: format!("host.{key}"),
+                // The same two-token shape, with could-not-look on the host's
+                // side spelled as a TOKEN rather than as a value it never sent.
+                tokens: vec![format!("-{mine}"), String::from("+unreported")],
+            });
             return;
         };
         if mine != theirs {
@@ -587,6 +608,34 @@ mod tests {
         );
         assert!(ci(&["final"], Some(&["fast-forward"])).validate().is_err());
         assert!(ci(&["final"], Some(&["squash"])).validate().is_ok());
+    }
+
+    /// AN UNREPORTED KEY IS NOT AGREEMENT, and it read as agreement.
+    ///
+    /// The live shape is `security_and_analysis`: it is absent whenever the
+    /// credential lacks the scope to see it, so the strongest control in the
+    /// table was the one whose could-not-look passed silently.
+    #[test]
+    fn a_key_the_tree_claims_and_the_host_does_not_report_is_drift() {
+        let claimed = Host {
+            delete_branch_on_merge: Some(true),
+            web_commit_signoff_required: None,
+            secret_scanning_push_protection: Some(true),
+        };
+        let partial = Host {
+            delete_branch_on_merge: Some(true),
+            web_commit_signoff_required: None,
+            secret_scanning_push_protection: None,
+        };
+        let found = host_drift(&claimed, &partial);
+        assert_eq!(found.len(), 1, "the unreported claim is the one finding");
+        assert_eq!(found[0].key, "host.secret_scanning_push_protection");
+        assert_eq!(found[0].rendered(), "-true,+unreported");
+
+        // ANTI-VACUITY, both halves. A key the tree does NOT claim stays skipped
+        // — this polices what the tree says — and a key both sides report and
+        // agree on is still clean.
+        assert!(host_drift(&partial, &partial).is_empty());
     }
 
     #[test]

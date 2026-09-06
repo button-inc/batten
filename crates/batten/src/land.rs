@@ -100,13 +100,39 @@ impl Replay {
                 // list would need a separator this format does not have. The
                 // count is not lost: the caller reports it, and the module's job
                 // is to say WHERE to look first rather than to enumerate.
-                let path = paths.first().map_or("-", String::as_str);
+                // **WHITESPACE IS COLLAPSED, because the format is columnar and
+                // a path may carry a space** (review of #848). The module reading
+                // this requires `count(columns) == 4`, so `docs/my notes.md` made
+                // FIVE and the line was dropped from `replays` entirely —
+                // `last_replay` fell back to the previous lap's clean line and
+                // `rebase-conflict-stops-the-lap` reported clean over the lap's
+                // one human stop. A dropped line and a clean tree are
+                // byte-identical on the decision surface, which is the shape this
+                // repository refuses everywhere.
+                //
+                // Collapsed rather than quoted: the reader splits on spaces and
+                // has no unquoting, so a quote would move the defect rather than
+                // remove it. The path is a POINTER — what a reader opens — and
+                // `_` keeps it one column and still legible.
+                let path = paths
+                    .first()
+                    .map_or_else(|| String::from("-"), |path| columnar(path));
                 format!("rebase conflicted {commit} {path}")
             }
             Self::Current => String::from("rebase current - -"),
             Self::Replayed { head, .. } => format!("rebase replayed {head} -"),
         }
     }
+}
+
+/// One column's worth of `value`: whitespace collapsed so it cannot become two.
+///
+/// The record is space-separated with a fixed column count, and its readers
+/// enforce that count precisely so a re-columned line is not read through a
+/// shifted lens. A value carrying a space breaks that silently — the line is
+/// skipped, and a skipped line reads as no finding.
+fn columnar(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join("_")
 }
 
 /// Bring `reference` forward from `remote` into this clone, and answer where it
@@ -1378,12 +1404,43 @@ pub fn retire_branch(root: &Path, remote: &str, branch: &str) -> Retired {
     // `.git/batten-receipts` keys a branch as `branch.replace('/', "-")`, so a
     // sweep spelling it differently would delete nothing and report a clean
     // count — the silent-empty-answer shape this repository refuses everywhere.
+    // **AND THE CLAIM PARTITION, which the sweep did not carry** (review of
+    // #848). `recorder::record_path` names a branch-keyed record
+    // `{record}.{branch}.{claim}` whenever a claim receipt answers — and
+    // `board-writes` is written through exactly that path — so on any CLAIMED
+    // branch this unlinked `board-writes.<slug>`, got ENOENT, and reported
+    // `receipts: 0` while the real record survived. The next branch reusing that
+    // name is then judged against the previous one's filings, which is verbatim
+    // the CLOUD-774 failure the constant's own doc says this sweep exists to
+    // prevent.
+    //
+    // A PREFIX SWEEP rather than a second spelling of the claim: the sweep must
+    // not need to know which claim was live when each record was written, and
+    // asking would be a second authority over a name `record_path` already owns.
     let slug = branch.replace('/', "-");
     let store = crate::git::git_dir(root).map(|dir| dir.join("batten-receipts"));
     let receipts = store.map_or(0, |dir| {
-        BRANCH_KEYED_RECEIPTS
-            .iter()
-            .filter(|family| std::fs::remove_file(dir.join(format!("{family}.{slug}"))).is_ok())
+        let Ok(listing) = std::fs::read_dir(&dir) else {
+            return 0;
+        };
+        listing
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| {
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else {
+                    return false;
+                };
+                BRANCH_KEYED_RECEIPTS.iter().any(|family| {
+                    // `{family}.{slug}` exactly, or `{family}.{slug}.{claim}` —
+                    // never `{family}.{slug}-2`, which is a DIFFERENT branch.
+                    let stem = format!("{family}.{slug}");
+                    name == stem
+                        || name
+                            .strip_prefix(&stem)
+                            .is_some_and(|rest| rest.starts_with('.'))
+                })
+            })
+            .filter(|entry| std::fs::remove_file(entry.path()).is_ok())
             .count()
     });
 

@@ -89,6 +89,29 @@ pub struct Config {
     pub progress: Option<Progress>,
 }
 
+impl Config {
+    /// Can a REQUEST be built from this config's repository?
+    ///
+    /// [`REPO_PLACEHOLDER`] is the forge CLI's own substitution and nothing in
+    /// this crate performs it — [`crate::rest::get`] sends the path it is given,
+    /// so `{owner}/{repo}` reaches the endpoint verbatim and the forge answers
+    /// `404`. That is the same defect `repo_slug` was written to remove one layer
+    /// up, and it survives at every site still reaching for the rendering
+    /// fallback.
+    ///
+    /// **The failure it produces is the worst shape a wait has**: [`read`]
+    /// answers `None` for a `404` exactly as it does for a dropped connection,
+    /// because both are could-not-look, and a poll that must survive a transient
+    /// failure therefore polls a guaranteed-404 forever without saying anything.
+    /// So the question is asked BEFORE the loop, where the roster's own
+    /// usability is already asked, and answered as a statement about the
+    /// invocation rather than about the checks.
+    #[must_use]
+    pub fn names_a_repository(&self) -> bool {
+        !self.repo.trim().is_empty() && self.repo != REPO_PLACEHOLDER
+    }
+}
+
 /// The caller's progress recorder: a program and the identity it files under.
 #[derive(Debug, Clone)]
 pub struct Progress {
@@ -417,6 +440,16 @@ pub fn watch(
         writeln!(err, "::error:: pr watch: {problem}")?;
         return Ok(ExitCode::Usage);
     }
+    // AND THE REPOSITORY, for the reason [`Config::names_a_repository`] gives:
+    // an unresolved slug makes every request a 404, every 404 a could-not-look,
+    // and the loop below unbounded and silent.
+    if !config.names_a_repository() {
+        writeln!(
+            err,
+            "::error:: pr watch: no repository resolved, so every read would 404 — set $GH_REPO, or run this in a clone whose remote names one"
+        )?;
+        return Ok(ExitCode::Usage);
+    }
 
     writeln!(
         out,
@@ -687,6 +720,34 @@ mod tests {
             interval: 1,
             progress: None,
         }
+    }
+
+    /// THE PLACEHOLDER IS A GUARANTEED 404, AND THE LOOP CANNOT TELL. `read`
+    /// answers `None` for a 404 exactly as it does for a dropped connection,
+    /// because both are could-not-look — so a poll that must survive a transient
+    /// failure polls this one forever without saying anything.
+    #[test]
+    fn a_config_naming_no_repository_is_not_pollable() {
+        assert!(
+            !config().names_a_repository(),
+            "the rendering fallback is not a repository a request can be built from"
+        );
+        assert!(
+            !Config {
+                repo: String::from("   "),
+                ..config()
+            }
+            .names_a_repository()
+        );
+        // ANTI-VACUITY: a resolved slug is pollable, or the guard refuses every
+        // wait rather than the unresolved ones.
+        assert!(
+            Config {
+                repo: String::from("owner/repo"),
+                ..config()
+            }
+            .names_a_repository()
+        );
     }
 
     /// One answer, as `rest::get` hands it back.
