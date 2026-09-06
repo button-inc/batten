@@ -248,7 +248,22 @@ fn the_mise_preset_names_the_task_and_fails_open_on_a_stale_receipt() {
             "call": {
                 "command": "a-program --flag",
                 "segments": [{"words": ["a-program", "--flag"], "raw": "a-program --flag", "terminator": null}],
-                "programs": [{"name": "a-program", "mediated": mediated}],
+                // EVERY FIELD THE ENGINE EMITS, because the predicate compares
+                // the whole argv against `program` and `arguments` rather than
+                // matching `name` alone. This envelope is hand-written, so it can
+                // drift from the projection — and it did: the fixture kept the
+                // shape the predicate read before it was corrected to a whole-argv
+                // match, so `reaches` went undefined, the module refused nothing,
+                // and the case failed on an empty `violations` rather than on a
+                // wrong verdict. `name` is the basename and `program` is the
+                // spelling as reached, which is why both are here and why the
+                // predicate reads the second.
+                "programs": [{
+                    "name": "a-program",
+                    "program": "a-program",
+                    "arguments": ["--flag"],
+                    "mediated": mediated,
+                }],
                 "operation": "run",
                 "event": "pre_tool",
             },
