@@ -61,20 +61,44 @@ hour and reaches for `add_repo`, which is blocked (below) and is not the fix.
 3. **`mcp__github__*` tools — LAST RESORT**, only after (1) and (2) both actually
    failed for that operation.
 
+## A degraded session start repairs itself, and says batten is broken
+
+**A `batten startup` row you did not cause means the SessionStart chain did not
+run — `batten startup --repair` FIRST, before other work, and SAY the repair was
+needed.** The `[[hook.handler]]` rows already reap autonomously (`session-wiring`
+removes the launcher's hook registrations at the same cadence the launcher writes
+them), so needing to repair BY HAND is never the finding: it is evidence the
+chain was skipped, and the skip is the defect. A gate that detects what it is
+wired to fix and waits to be asked is sensor only — non-negotiable rule 2.
+
+The measured cause, 2026-09-06 (CLOUD-1326, CLOUD-1506): the container provisions
+the RELEASED binary, `main` had already landed `[[outcome]]`, and 0.0.144 exits
+`1` on `unknown field`. `session-batten` died, every handler after it silently did
+not run, and nothing reaped. Worse, exit `1` is a Batten FAILURE, and
+`crate::exit` makes only `2` a denial — so no failure path blocks a call. Every
+mediated gate permitted for half a session: `no-tool-substitution`,
+`protected-mutation`, and `commit-attribution`, which let six commits carrying a
+`trailer_deny` trailer reach the remote. **At the hook boundary, refuse and permit
+are the same byte.** `mise run install:local` is the unblock.
+
+A repair the host refuses is the ONE ask to put to a human (CLOUD-680's shape).
+Name the refusal you actually got; never assert which settings key would have
+granted it unless you measured that key doing something.
+
 ## Why the toolchain runs here (a per-host fence, NOT unsetting the proxy)
 
 **`mise` NEEDS BOTH HALVES, AND THE FIRST ONE IS `NO_PROXY`.** Re-measured
 2026-09-06 over `mise ls-remote aqua:EmbarkStudios/cargo-deny`, second container,
 **`mise cache clear` before EACH arm**:
 
-| arm                                                        | result               |
-| ---------------------------------------------------------- | -------------------- |
-| `NO_PROXY` prepended, no explicit token                    | **401**              |
-| proxy on, `NO_PROXY` untouched, no token                   | 403                  |
-| proxy on, `NO_PROXY` untouched, `MISE_GITHUB_TOKEN=<pat>`  | 403                  |
-| `NO_PROXY` prepended **+** `MISE_GITHUB_TOKEN=<pat>`       | **OK, 100 versions** |
-| `HTTPS_PROXY` unset **+** `MISE_GITHUB_TOKEN=<pat>`        | OK, 100 versions     |
-| `HTTPS_PROXY` unset, no token                              | 401                  |
+| arm                                                       | result               |
+| --------------------------------------------------------- | -------------------- |
+| `NO_PROXY` prepended, no explicit token                   | **401**              |
+| proxy on, `NO_PROXY` untouched, no token                  | 403                  |
+| proxy on, `NO_PROXY` untouched, `MISE_GITHUB_TOKEN=<pat>` | 403                  |
+| `NO_PROXY` prepended **+** `MISE_GITHUB_TOKEN=<pat>`      | **OK, 100 versions** |
+| `HTTPS_PROXY` unset **+** `MISE_GITHUB_TOKEN=<pat>`       | OK, 100 versions     |
+| `HTTPS_PROXY` unset, no token                             | 401                  |
 
 Rows 3 and 4 differ **only** in `NO_PROXY`, so **mise does honour it**. Row 4
 succeeds with `HTTPS_PROXY` still set, so unsetting the proxy buys nothing over
@@ -99,11 +123,11 @@ API and asset hosts are fenced.
 **THE WIRING IS ON THREE SURFACES, AND NAMING ONLY TWO IS HOW #889 "FIXED" THIS
 AND CHANGED NOTHING:**
 
-| surface | reaches | note |
-| ------- | ------- | ---- |
-| `batten.toml` `[[provision.env]]` | the provisioned wrapper at `~/.local/bin/mise` | **the one that actually runs in a provisioned container** |
-| `setup.sh` heredoc wrapper | the same path, when setup.sh writes it | what #889 edited |
-| `mise.toml` `[env]` | task bodies and what mise SPAWNS, never mise's own resolver (CLOUD-1455) | carries `GH_TOKEN` |
+| surface                           | reaches                                                                  | note                                                      |
+| --------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------- |
+| `batten.toml` `[[provision.env]]` | the provisioned wrapper at `~/.local/bin/mise`                           | **the one that actually runs in a provisioned container** |
+| `setup.sh` heredoc wrapper        | the same path, when setup.sh writes it                                   | what #889 edited                                          |
+| `mise.toml` `[env]`               | task bodies and what mise SPAWNS, never mise's own resolver (CLOUD-1455) | carries `GH_TOKEN`                                        |
 
 The real defect (CLOUD-1474) was ONE missing name in the token chain: all three
 read `GITHUB_PERSONAL_ACCESS_TOKEN`/`MISE_GITHUB_TOKEN`, the container injects
