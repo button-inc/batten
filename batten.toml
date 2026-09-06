@@ -726,20 +726,50 @@ it rather than holding a foreground poll open."""
 # deny is refused rather than shipped: committed-and-pushed is what survives a
 # container reclaim, so denying it outright would make the reclaim advice
 # unfollowable. Named as a known limit so the silence is not read as coverage.
+# WARN RATHER THAN DENY, AND THE DENY'S OWN REMEDY IS WHY (measured 2026-09-06,
+# one lap after this row landed). The reason below used to end "resolve it and
+# `git rebase --continue`, which this row does not touch" — and that remedy is
+# UNREACHABLE against this engine, so the deny had no route at all.
+#
+# `gitwrite.rs`'s header states the design it collides with, and states it as a
+# deliberate one: "**Nothing moves on a conflict.** The ref is written and the
+# worktree touched only after every commit in the range has replayed, so a
+# refusal leaves the clone exactly as it was — no detached HEAD, no `rebase
+# --abort` to remember, no half-replayed state for the next lap to discover."
+# That is right for a loop left running unattended, and it means `land` NEVER
+# leaves a rebase to continue. So on a conflict there is nothing to resolve and
+# nothing to `--continue`, and the one command that produces the resolvable state
+# is the one this row denied. Measured on this branch: `land` reported
+# `install.sh` conflicted, the tree was clean, and the branch had no landable next
+# step in any spelling.
+#
+# The distinguishing fact — is a conflict outstanding — is real and RECORDED, in
+# the lap record `rebase-conflict-stops-the-lap` reads. It is not reachable from
+# a `mediated_call` shape row, which compares words in a command line. So this
+# row cannot tell the race it measured from the resolution it blocks, and a deny
+# that cannot tell them apart must not be the one that stops the resolution.
+#
+# `warn` keeps what the row actually bought: the nudge still fires, still names
+# the loop, and still reaches the agent at the call. What it stops doing is
+# deadlocking a conflicted branch. Narrowing it to a predicate that can see the
+# lap record is the follow-up; until then this is the same "named as a known
+# limit so the silence is not read as coverage" the `git push` paragraph above
+# takes, applied to this row's own over-reach rather than to a neighbour's.
 [[rule]]
 id = "rebase-not-hand-stepped"
 kind = "shape"
 scope = "mediated_call"
-severity = "deny"
+severity = "warn"
 pattern = "git rebase"
 contains = "origin/main"
 reason = """
 Rebasing onto `main` by hand is a lap of the loop `mise run land` drives, and \
 taking it off the task is the race the contract refuses rather than a repair. \
 Background `mise run land`; it fetches, rebases, verifies, pushes and waits, \
-and stops only for a rebase conflict, a failed `verify`, or red CI. A conflict \
-is the one step that is yours: resolve it and `git rebase --continue`, which \
-this row does not touch."""
+and stops only for a rebase conflict, a failed `verify`, or red CI. A CONFLICT \
+is the one step that is yours, and it is why this warns rather than denies: the \
+engine replays without moving anything, so a conflict leaves no rebase to \
+`--continue`, and re-creating it by hand is the only route to resolving it."""
 
 # The toolchain pin, given a mechanism (CLOUD-271). AGENTS.md has said "never a
 # bare `cargo`" since long before anything enforced it, which non-negotiable
