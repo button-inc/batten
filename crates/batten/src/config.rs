@@ -1600,6 +1600,50 @@ fn under<T>(native: crate::verdict::Native, result: Result<T>) -> Result<T> {
 ///
 /// Returns a [`UsageError`] (→ exit `1`) under the class of whichever table
 /// refused; see [`under`].
+/// The remedies `[[redirect]]` and `[[verb]]` carry, resolved against the command
+/// surface and the rule table (CLOUD-1189).
+///
+/// Here rather than in `redirect::validate` because it is the one clause needing
+/// a THIRD table — the `[[rule]]` ids — and a validator reaching past its own
+/// argument for them is how one table's checker quietly becomes the config's.
+///
+/// Both remedy tables in ONE call, because they answer one question and two
+/// spellings of "does this remedy name a real command" is the drift a shared
+/// question does not survive — `verdict-routes-resolve`'s note about the two
+/// sources of "what tasks exist" is the same reasoning one table over.
+///
+/// Split out of [`validate_tables`] rather than inlined: that function crossed
+/// the 100-line lint when this branch and `main` each landed a table into it,
+/// and this is the block with a rationale of its own rather than one more
+/// `under(...)` call in the list.
+fn validate_remedy_tables(config: &Config) -> Result<()> {
+    let rule_ids: Vec<String> = config.rules.iter().map(|rule| rule.id.clone()).collect();
+    let remedies = config
+        .redirects
+        .iter()
+        .flat_map(|entry| {
+            std::iter::once((
+                format!("redirect[{}].mutation", entry.glob),
+                entry.mutation.as_str(),
+            ))
+            .chain(
+                entry
+                    .read
+                    .as_deref()
+                    .map(|read| (format!("redirect[{}].read", entry.glob), read)),
+            )
+        })
+        .chain(config.verbs.iter().filter_map(|verb| {
+            verb.redirect
+                .as_deref()
+                .map(|text| (format!("verb[{}].redirect", verb.verb), text))
+        }));
+    under(
+        Native::RemedyUnresolved,
+        crate::redirect::validate_remedies(remedies, &rule_ids),
+    )
+}
+
 fn validate_tables(config: &Config, text: &str, source: &str) -> Result<()> {
     // The verb table is validated here, at load, because nothing else validates
     // it anywhere: `verbs::validate` had no caller outside its own tests, so a
@@ -1655,43 +1699,7 @@ fn validate_tables(config: &Config, text: &str, source: &str) -> Result<()> {
         Native::RedirectTableRefused,
         crate::redirect::validate(&config.redirects),
     )?;
-    // The remedies those two tables carry, resolved against the command surface
-    // and the rule table (CLOUD-1189). Here rather than in `redirect::validate`
-    // because it is the one clause needing a THIRD table — the `[[rule]]` ids —
-    // and a validator reaching past its own argument for them is how one table's
-    // checker quietly becomes the config's.
-    //
-    // Both remedy tables in one call, because they answer one question and two
-    // spellings of "does this remedy name a real command" is the drift a shared
-    // question does not survive — `verdict-routes-resolve`'s note about the two
-    // sources of "what tasks exist" is the same reasoning one table over.
-    {
-        let rule_ids: Vec<String> = config.rules.iter().map(|rule| rule.id.clone()).collect();
-        let remedies = config
-            .redirects
-            .iter()
-            .flat_map(|entry| {
-                std::iter::once((
-                    format!("redirect[{}].mutation", entry.glob),
-                    entry.mutation.as_str(),
-                ))
-                .chain(
-                    entry
-                        .read
-                        .as_deref()
-                        .map(|read| (format!("redirect[{}].read", entry.glob), read)),
-                )
-            })
-            .chain(config.verbs.iter().filter_map(|verb| {
-                verb.redirect
-                    .as_deref()
-                    .map(|text| (format!("verb[{}].redirect", verb.verb), text))
-            }));
-        under(
-            Native::RemedyUnresolved,
-            crate::redirect::validate_remedies(remedies, &rule_ids),
-        )?;
-    }
+    validate_remedy_tables(config)?;
     // And the MCP table, at load for the identical reason (CLOUD-1260). Every
     // clause is a property of the TABLE — a duplicated id, a path that would
     // leave its root, a reduction over no fields at all — so it is knowable
