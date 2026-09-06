@@ -6985,10 +6985,14 @@ fn run_land_lap(
     // `task::singleton_acquire` (with a liveness-based reclaim),
     // `task::register` (the reader `alive` answers from), and `exec`'s process
     // group protocol. This is the wiring, not new machinery.
-    // `_guard`, never `_`: the binding is what holds the lock and the
-    // registration for the rest of this function. A bare `_` drops it here, which
-    // releases the lock at the moment it was taken and reads as working.
-    let Some(_guard) = run_land_singleton(root, out, err)? else {
+    // NAMED, never `_`: the binding is what holds the lock and the registration
+    // for the rest of this function, and a bare `_` drops it here — releasing the
+    // lock at the moment it was taken, which reads as working.
+    //
+    // And named WITHOUT the underscore since it gained `phase`: clippy refuses
+    // using an underscore-prefixed binding, and rightly — the prefix is a promise
+    // to the reader that nothing touches it.
+    let Some(guard) = run_land_singleton(root, out, err)? else {
         return Ok(ExitCode::Violation);
     };
 
@@ -7096,7 +7100,7 @@ fn run_land_lap(
             // reader wants it is that a gate can hold for minutes — so announcing
             // it on completion would name every phase exactly when it stopped
             // being true. `land.sh` pushed at the transition for the same reason.
-            _guard.phase(step.as_str(), lap);
+            guard.phase(step.as_str(), lap);
             let code = match step {
                 land::Step::Replay => run_land_replay(root, url, reference, branch, out)?,
                 land::Step::Verify => {
