@@ -465,6 +465,10 @@ fn the_mint_boundary_writes_the_receipt_this_gate_reads() {
         &serde_json::json!({"skill": "code-review"}),
         &serde_json::Value::Null,
         &root,
+        // No body piece here reads the result, so the grammar is inert for these
+        // rows — passed explicitly so a case that adds an `{authority:…}` piece
+        // has to decide rather than inherit a hidden default.
+        None,
     );
 
     assert!(
@@ -499,6 +503,10 @@ fn another_skill_mints_nothing_through_the_boundary() {
         &serde_json::json!({"skill": "batten"}),
         &serde_json::Value::Null,
         &root,
+        // No body piece here reads the result, so the grammar is inert for these
+        // rows — passed explicitly so a case that adds an `{authority:…}` piece
+        // has to decide rather than inherit a hidden default.
+        None,
     );
 
     assert_eq!(

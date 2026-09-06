@@ -11246,6 +11246,12 @@ fn recover_spilled(result: &serde_json::Value) -> Option<serde_json::Value> {
 /// refusing forever with every case green. That is the `with input as` class one
 /// layer over, so the tier calls the real function.
 ///
+/// **Every argument the boundary takes, including the grammar.** The helper's
+/// whole justification is fidelity, so a parameter it supplied itself would be the
+/// divergence it exists to remove: `record_mints` passes a grammar built from the
+/// resolved policy, and a hard-coded `None` here would judge `{authority:…}` body
+/// pieces differently from production while claiming to be the same call.
+///
 /// `pub` and named for its caller rather than made generally available: nothing
 /// in the binary reaches it, and the name says who it is for.
 #[doc(hidden)]
@@ -11255,8 +11261,9 @@ pub fn mint_receipts_for_test(
     input: &serde_json::Value,
     result: &serde_json::Value,
     root: &Path,
+    grammar: Option<&ready::Grammar>,
 ) {
-    mint_receipts(declared, tool, input, result, root, None);
+    mint_receipts(declared, tool, input, result, root, grammar);
 }
 
 /// Write every receipt these rows mint from one already-unframed result.
@@ -11399,24 +11406,28 @@ fn mint_receipts(
 }
 
 fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
-    // Before the config load, the cheap question first: an event that is not the
-    // post-tool one must do no config work here — which is nearly every call, now
-    // that batten is registered on every surface. `perf-gate` holds the mediated
-    // path to a ratio, and this is the call that would move it.
+    // THERE IS NO CHEAP GATE HERE, AND THE TWO THAT WERE TRIED WERE BOTH WRONG
+    // (CLOUD-1484).
     //
-    // GATED ON THE EVENT, NEVER ON THE RESULT'S NULLNESS (CLOUD-1484). It was the
-    // latter, which read as the same question and is not: a post-tool event whose
-    // host sent no `tool_response`, or sent `null`, took the early return — so a
-    // row reading nothing FROM the result still minted nothing, and the paragraph
-    // below saying a null result is not an early return was false of the code
-    // immediately above it. For `code-review` that is a gate nothing can clear:
+    // It began `if envelope.result.is_null() { return; }`, which reads as "is this
+    // the post-tool event" and is not that question. A post-tool event whose host
+    // sent no `tool_response` took the return, so a row reading nothing FROM the
+    // result minted nothing — for `code-review` a gate nothing can clear, since
     // the dispatch happens, no receipt is written, and the refusal names a remedy
-    // that has already been run. `mint_receipts_for_test` cannot see it either,
-    // because the tier enters below this guard — the one seam the compiled cases
-    // do not cross.
-    if envelope.event != hook::Event::PostTool {
-        return;
-    }
+    // already run.
+    //
+    // The repair was `envelope.event != Event::PostTool`, which is the right
+    // question asked in the wrong place: `record_post_tool` is the only caller and
+    // it is already gated on exactly that at this function's call site. So the
+    // guard was unreachable, and adding it DELETED the only filter without
+    // replacing it while a comment claimed otherwise.
+    //
+    // Both are gone. The event is decided at the call site, and the config load is
+    // paid on every post-tool event — which is the cost of admitting a dispatch
+    // whose result carried nothing, stated here rather than bought back with a
+    // predicate that cannot express it. A cheaper filter would have to distinguish
+    // "no row names this tool" before the rows are known, which is the thing being
+    // loaded.
     // THE ENVELOPE IS THE SHAPE. A connector wraps every response in content
     // blocks, so reading fields off `envelope.result` directly matches nothing in
     // production while passing every fixture, which hands the engine a bare

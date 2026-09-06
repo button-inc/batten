@@ -676,11 +676,19 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
             ("selects_at", mint.selects_at.as_deref()),
             ("selects", mint.selects.as_deref()),
         ] {
+            // TRIMMED-EMPTY *AND* SURROUNDED BY WHITESPACE, because only the first
+            // was checked and the second fails in the same silent direction:
+            // `selects = "code-review "` loads clean, compares against a value no
+            // host sends, and the row mints nothing — so its gate denies forever
+            // with a remedy that cannot clear it. Refusing rather than trimming,
+            // because trimming would decide on the author's behalf which of two
+            // readings they meant.
             if let Some(text) = value
-                && text.trim().is_empty()
+                && (text.trim().is_empty() || text.trim() != text)
             {
                 return Err(crate::error::UsageError::raise(format!(
-                    "`[[mint]]` `{}` declares an empty `{column}`, which can never match",
+                    "`[[mint]]` `{}` declares a `{column}` that is empty or padded, which can \
+                     never match",
                     mint.name
                 )));
             }
@@ -846,6 +854,23 @@ mod tests {
         assert!(
             validate(&[row(serde_json::json!({"selects_at": "  ", "selects": "x"}))]).is_err(),
             "an empty `selects_at`"
+        );
+        // PADDING FAILS THE SAME WAY AS EMPTY, and only the empty half was
+        // checked: a padded value compares against nothing any host sends, so
+        // the row mints nothing and its gate denies forever.
+        assert!(
+            validate(&[row(
+                serde_json::json!({"selects_at": " skill", "selects": "x"})
+            )])
+            .is_err(),
+            "a padded `selects_at` resolves nothing"
+        );
+        assert!(
+            validate(&[row(
+                serde_json::json!({"selects_at": "skill", "selects": "x "})
+            )])
+            .is_err(),
+            "a padded `selects` matches nothing"
         );
     }
 
