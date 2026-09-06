@@ -409,6 +409,16 @@ an absent key as undefined and `not undefined` HOLDS, so the negated spelling
 denies everything on an engine that stopped emitting the field, where the
 comparison allows — the direction a miss is supposed to fail in.
 
+**That is a rule about the DIRECTION, and copying the spelling onto a conjunct
+that EXEMPTS inverts it** (CLOUD-1521). `x != true` and `x == false` are both
+undefined on an absent key, so the body does not hold; `not x == true` holds.
+Inside a refusal that means `== false` is right, as above. Inside an exemption it
+silently exempts everything — measured on `policy/task-substitution.rego`, whose
+`entry.mediated != true` permits every substitution on a build that stops
+emitting the field. Ask which way an absent key must resolve to REFUSE, then pick
+the spelling; and write a case that OMITS the key, because a suite where every
+fixture spells it cannot see this at all.
+
 Segments arrive with heredoc **bodies already dropped**, which is the same
 change read forwards. A body is data, not shell, so a `;` in a commit message no
 longer splits the list and a `nohup` in a documentation paragraph is no longer an
