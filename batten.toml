@@ -6827,10 +6827,10 @@ root = "target"
 keep = 2
 
 [prune.warm]
-mb = 8971
-worst_mb = 8971
+mb = 9472
+worst_mb = 9472
 multiplier = 1
-measured = "2026-09-04"
+measured = "2026-09-05"
 
 [prune.cold]
 mb = 21455
@@ -7090,6 +7090,34 @@ measured = "2026-09-04"
 # negative, so the next move that raises cold should take the exact measurement
 # rather than scale again: the model's own warning is that a floor nothing can
 # satisfy refuses every lap and gets switched off.
+# THE 2026-09-05 WARM RESCALE, AND IT FINISHES A MOVE RATHER THAN MAKING ONE
+# (CLOUD-205). The entry above moved the BASIS to 208 and left `[prune.warm]` at
+# 8971 — which is 45.54 x 197, the figure for the basis it replaced. So the warm
+# floor was budgeting for 197 stems against a basis of 208, and the block above
+# says exactly what that costs: "a floor taken against a smaller stem count
+# passes and then lets the build write more than it budgeted for."
+#
+# Measured here before the correction: `target-prune` refused two consecutive
+# `land` laps at ~15510 MB free against a LEARNED floor of 15256 MB, and the
+# second died mid-build as the rustc IO error this block predicts — `unable to
+# copy ... .dwo`, which reads as a suite regression rather than a full disk.
+#
+# WARM SCALES BY THE STEM MODEL, as the moves above it did: 45.54 x 208 = 9472.
+#
+# COLD DOES NOT MOVE, and that is the entry above being obeyed rather than
+# ignored. It ends: "the next move that raises cold should take the exact
+# measurement rather than scale again: the model's own warning is that a floor
+# nothing can satisfy refuses every lap and gets switched off." Scaling would put
+# cold at 108.91 x 208 = 22653 MB against the ~21065 MB this container offers.
+#
+# SO THE COLD FLOOR IS KNOWINGLY UNDER-BUDGETED AGAINST ITS OWN BASIS, and that
+# trade is deliberate rather than an oversight. A floor too low is latent — cold
+# is judged only after warm is breached and the escalation drops the cache —
+# where a floor nothing can satisfy is immediate and total. The exact measurement
+# is OWED and needs a build from an empty `target`, which needs more free space
+# than this container has: it cannot be taken here, which is different from being
+# skipped. Whoever can take it should move `[prune.cold] mb`, `worst_mb` and
+# `measured` together.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
 count = 208
