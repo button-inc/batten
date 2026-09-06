@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.145](https://github.com/button-inc/batten/compare/v0.0.144...v0.0.145) - 2026-09-06
+
+### Added
+
+- *(hook)* decide a loop from its node, not from a keyword
+- *(hook)* parse bash with rable instead of scanning it
+- *(preset)* mise preset, receipt-backed execution integrity
+- *(policy)* advise on recognized shell tool failures
+- *(hk)* define hk execution-evidence capability and conformance fixtures
+- *(hk)* record a bounded hk runtime-observation receipt
+- *(hk)* make hk's effective plan a pre-admission fact
+- *(hk)* generate and drift-check the adopted hk surface contract
+- *(hook)* [**breaking**] `severity = "ask"` reaches the escalation the engine already had
+- *(hook)* refuse a second start of a task this clone already holds
+- *(hook)* refuse a reset that would leave work referenced by nothing
+- *(hook)* [**breaking**] the hatch stops answering for any class with a real way out
+- *(landed)* say so when the claimed arm is unsupplied, and carry the derived artifacts
+- *(landed)* sweep a board for claims nobody is serving
+
+### Fixed
+
+- *(outcome)* the anti-vacuity case measures the matcher, not the host
+- *(hk)* the contract is the config's plan, not the caller's
+- *(outcome)* let the signature fixture declare the host's own family
+- *(hook)* read the shape and receipt walks per line, with their own spans
+- *(hook)* read the pipeline walk per line, through one reading
+- *(hook)* judge every element of a substitution scan, per line and resolved
+- *(hook)* close two bypasses and two wrong verdicts
+- *(hk)* [**breaking**] a version skew is could-not-look, not drift
+- *(spec)* rebuild the committed row set from main, plus the hk rows
+- *(hook)* the per-line consume drained on a mismatch it called abstention
+- *(hook)* repair three gates, one of them mine
+- *(hook)* two expressions that read as decisions and were not
+- *(tests)* stop the reclaim census cases hanging on a network they do not use
+- *(hook)* keep env assignments as words; stop walking control-flow bodies
+- *(hk)* refuse colliding plan ids at load, and show drift able to fire
+- *(taskset)* decide a task's argv by parse, and stop the preset
+- *(hook)* a newline splits the program, not the segment
+- *(config)* [**breaking**] close the six review findings on the forward-compatible loader
+- *(config)* [**breaking**] a key in a plain section costs the key, and the report names the release
+- *(config)* a header may carry a trailing comment, and that was a fail-open
+- *(config)* lex strings properly, and check the prune against the parser
+- *(config)* a quoted header is not a section boundary, and the tier that says so
+- *(config)* [**breaking**] a row from a newer schema costs its row, not the whole file
+- *(task)* EPERM is a live process, and reading it as dead fails open
+- *(hook)* a live-root case must not name the one task a lock guards
+- *(hook)* land's allow is a fact about the world, not about the commit
+- *(prune)* a lap is not charged for the cleanup that outran it
+- *(landed)* clear the four gates verify raised on the rebased head
+
+### Other
+
+- *(hook)* split the parse walk under the line ceiling
+- *(generated)* regenerate the derived artifacts on the new base
+- *(preset)* the compiled tier's envelope had drifted from the predicate
+- *(facts)* the census counts 39 after the rebase
+- *(cli)* document the three functions this branch adds, and regenerate
+- *(hook)* put unquote's rationale back on unquote
+- *(install)* the fixture names its own repository rather than this one
+- *(agents)* stop promising that a task count answers "safe to end?"
+- *(hook)* a corpse is unexpressible off unix, so the case that needs one is gated
+- *(prune)* the fixture moves to the generation that repaired the arithmetic
+- *(landed)* enrol the module in the mutation sweep and make its rows readable
+
 ## [0.0.144](https://github.com/button-inc/batten/compare/v0.0.143...v0.0.144) - 2026-09-06
 
 ### Added
