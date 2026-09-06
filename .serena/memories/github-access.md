@@ -13,11 +13,41 @@ integration`; GraphQL pinned to a tiny allowlist). GitHub itself is reachable �
 a direct PAT-authenticated request to `api.github.com` returns 200 with the full
 5000/hr limit. Go _around_ the proxy.
 
+**THROUGH THE PROXY, YOUR TOKEN IS NOT USED AT ALL — the proxy answers with its
+own credential, whatever you send.** Measured 2026-09-06, `api.github.com/user`
+and `/rate_limit`, four requests through the proxy:
+
+| credential sent          | identity returned | core limit | third-party repo |
+| ------------------------ | ----------------- | ---------- | ---------------- |
+| our batten PAT           | `wenzowski`       | 15000      | 403              |
+| the ambient GITHUB_TOKEN | `wenzowski`       | 15000      | 403              |
+| a made-up `ghp_…` string | `wenzowski`       | 15000      | 403              |
+| no Authorization header  | `wenzowski`       | 15000      | 403              |
+
+A bogus token and NO token return the same identity and the same limit as a real
+PAT, so nothing you inject reaches GitHub on that path. The same four requests
+with the proxy actually bypassed (`curl --noproxy '*'`, proxy vars unset):
+
+| credential sent | identity    | core limit | third-party repo |
+| --------------- | ----------- | ---------- | ---------------- |
+| our batten PAT  | `wenzowski` | **5000**   | **200**          |
+| none            | —           | 60         | 403              |
+
+`5000` versus `15000` is the discriminator worth remembering: 15000 means the
+proxy answered and your PAT was discarded, 5000 means your PAT got through.
+
+**So a 403 on a third-party repo is NOT evidence the repo is out of scope.** It
+is the ordinary reading when the request went through the proxy, and it says
+nothing about the allowlist. Re-run it bypassed before concluding anything —
+diagnosing this as a scope problem, a bad token, or an expired token costs an
+hour and reaches for `add_repo`, which is blocked (below) and is not the fix.
+
 ## Fixed preference order (fall through only on an observed failure)
 
 1. **`gh` through mise — default for everything.** `mise exec -- gh <…>`.
-   `mise.toml [env]` sets `GH_TOKEN` to our PAT and `NO_PROXY=api.github.com`, so
-   `gh` authenticates as us and reaches GitHub directly. PR create/ready/view,
+   `mise.toml [env]` sets `GH_TOKEN` to our PAT, so `gh` authenticates as us.
+   (`NO_PROXY` is also set there and does nothing for mise itself — see the
+   toolchain section. `gh` and `curl` do read it.) PR create/ready/view,
    comments, landing (`gh pr comment <n> --body /fast-forward`), issues, `gh api`.
 2. **GitHub API direct with our PAT**, routed around the proxy — `gh api …`, or
    `env -u HTTPS_PROXY curl -H "Authorization: Bearer
@@ -28,19 +58,44 @@ $GITHUB_PERSONAL_ACCESS_TOKEN" …`. `rate_limit`, repo, `pulls/<n>`,
 
 ## Why the toolchain runs here (ignore /root/.ccr/README.md on this point)
 
-`mise.toml [env]` sends `api.github.com` + asset hosts around the proxy via
-`NO_PROXY` and authenticates mise via `MISE_GITHUB_TOKEN` =
-`GITHUB_PERSONAL_ACCESS_TOKEN`; `github.com` stays proxied so `git` keeps its
-proxy auth. So with the PAT set (sandbox default),
-`mise install` / `mise run ci|cross-check|verify` all run green with no ceremony.
-The `403 — GitHub access not enabled for this session` you may see is the proxy
-answering for _third-party tool repos_ (uv, hk, cargo-deny, release-plz) — not an
-egress block. Only if `GITHUB_PERSONAL_ACCESS_TOKEN` is genuinely absent may a
-tool install fail; say exactly that, not "policy blocks GitHub."
+**`mise` NEEDS BOTH HALVES, AND `NO_PROXY` IS NOT ONE OF THEM.** Measured
+2026-09-06 over `mise ls-remote aqua:EmbarkStudios/cargo-deny`, one container,
+four arms:
 
-If a 403 persists _with_ the PAT present, that's a real env-wiring bug — diagnose
-(`env -u HTTPS_PROXY curl -H "Authorization: Bearer $GITHUB_PERSONAL_ACCESS_TOKEN"
-https://api.github.com/rate_limit` should be 200), don't surrender.
+| arm                                                   | result               |
+| ----------------------------------------------------- | -------------------- |
+| as the container ships it                             | 403                  |
+| `GITHUB_PERSONAL_ACCESS_TOKEN=<pat>` (proxy still on) | 403                  |
+| `MISE_GITHUB_TOKEN=<pat>` (proxy still on)            | 403                  |
+| `HTTPS_PROXY=` unset, no token                        | 401                  |
+| `HTTPS_PROXY=` unset **+** `MISE_GITHUB_TOKEN=<pat>`  | **OK, 100 versions** |
+
+So: **mise honours `HTTPS_PROXY` and ignores `NO_PROXY`.** With
+`api.github.com` in `NO_PROXY`, mise still goes through the proxy and still gets
+the proxy's 403 — `NO_PROXY` steers only tools that read it (curl does, mise does
+not). The lever is unsetting `HTTPS_PROXY` for mise's own process. And the token
+half is separately required: unproxied without a PAT is a plain 401.
+
+`github.com` stays proxied so `git` keeps its proxy auth to this repo.
+
+**The wiring that does this is `setup.sh`'s mise wrapper.** It was wrong in both
+halves until CLOUD-1474 (2026-09-06) — it prepended `NO_PROXY`, which mise
+ignores, and it read the PAT only from `GITHUB_PERSONAL_ACCESS_TOKEN`, which the
+container does not inject; the injected name is `BATTEN_GITHUB_TOKEN`. A fresh
+container therefore provisioned nothing and `toolchain-is-provisioned` failed
+`not-provisioned`. It now does `unset HTTPS_PROXY https_proxy ALL_PROXY
+all_proxy` plus a first-set lookup across `GITHUB_PERSONAL_ACCESS_TOKEN`,
+`BATTEN_GITHUB_TOKEN` — leaving an explicit `MISE_GITHUB_TOKEN` (CI's) alone.
+
+**`mise.toml:480-502` still documents the old, wrong mechanism** and its
+`[env]` cannot fix it anyway: `[env]` reaches what mise SPAWNS, never mise's own
+resolver (CLOUD-1455). Read the wrapper, not that comment block.
+
+Do not report this as "policy blocks GitHub" or as a repo-scope problem. If a 403
+persists after BOTH halves are applied, that is a real env-wiring bug — diagnose
+(`env -u HTTPS_PROXY curl -H "Authorization: Bearer $BATTEN_GITHUB_TOKEN"
+https://api.github.com/rate_limit` should report limit 5000, not 15000), don't
+surrender.
 
 ## CI-checks scope gap (don't misdiagnose as a proxy problem)
 
@@ -158,8 +213,17 @@ dropped), confirm green, and land.
 Egress TLS is intercepted at the network layer, **not** by the `HTTPS_PROXY` env
 var. Every connection presents a certificate issued by `O = Anthropic, CN =
 Egress Gateway ... CA`, and unsetting `HTTPS_PROXY` or adding a host to `NO_PROXY`
-changes nothing — those only steer tools that _read_ the vars, and the
-interception is below that layer. Verify in one line:
+changes nothing **for the certificate** — those only steer tools that _read_ the
+vars, and the interception is below that layer.
+
+**THAT IS ABOUT THE CERTIFICATE ONLY, AND READING IT WIDER IS HOW A SESSION
+CONCLUDES THE PAT IS USELESS.** Measured 2026-09-06: this paragraph was read as
+"nothing can get around the proxy, so your token is always discarded", which is
+false and contradicts §"The core fact" above. TLS is intercepted either way, and
+the CA is the same either way — but **who answers is not the same**. Bypassed,
+your PAT reaches GitHub and returns limit 5000 and 200 on a third-party repo;
+proxied, the proxy answers with its own credential and 403s it. Interception is
+not authorization. Verify in one line:
 
 ```
 openssl s_client -connect github.com:443 -servername github.com </dev/null 2>/dev/null | grep ' i:'
