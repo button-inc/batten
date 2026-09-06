@@ -750,7 +750,26 @@ struct LapJournal {
 ///   megabyte less, with no reclaim able to help. The bump is also the repair for
 ///   clones already wedged: their journals carry a number whose kind cannot be
 ///   recovered, and discarding is what returns them to the declared floors.
-const JOURNAL_GENERATION: &str = "2026-09-01.capped-is-capacity";
+/// * `2026-09-06.cleanup-is-not-cost` — the `spent` arithmetic. Before it, the
+///   sum was spelled `open.free_mb.saturating_sub(free_mb) + reclaimed +
+///   escalated`, which agrees with the corrected form only while a lap outspends
+///   its own cleanup. The escalation guarantees the other direction — it drops
+///   REGROWABLE roots accumulated across the clone's whole life — so a run that
+///   fires it closes with more free than it opened, the subtraction saturates at
+///   zero, and the entire cleanup is booked as that lap's consumption. The
+///   ratchet only climbs, so one such lap pinned the floor near the volume's
+///   whole cache footprint.
+///
+///   Measured on the container that found it: a standing warm observation of
+///   **21726MB with `capped: false`** on a volume holding ~22GB free in TOTAL —
+///   a lap genuinely costing that would have exhausted the disk rather than
+///   recording a reading — against real laps of 7, 919, 980 and 6025MB on the
+///   same clone. `capped` cannot rescue it, because the reading is not a capacity
+///   reading: it is a cost reading of something that was never a cost. So the
+///   bump is the repair for clones already wedged, exactly as the entry above is
+///   — the number's KIND is unrecoverable from the journal, and discarding
+///   returns them to the declared floors.
+const JOURNAL_GENERATION: &str = "2026-09-06.cleanup-is-not-cost";
 
 /// What a journal read produced, and what it had to throw away to produce it.
 ///
@@ -1852,8 +1871,32 @@ fn lap(
         // run handed back is space the lap had spent, and a difference of two
         // readings alone would report a lap that reclaimed 5GB as having consumed
         // nothing at all.
-        let spent =
-            open.free_mb.saturating_sub(free_mb) + reclaimed_mb + escalated_mb.unwrap_or_default();
+        //
+        // **SUMMED BEFORE THE SUBTRACTION, NEVER AFTER, AND THAT IS THE WHOLE
+        // DEFECT.** The spelling above was `open.free_mb.saturating_sub(free_mb)
+        // + reclaimed + escalated`, which is the same number only while the lap
+        // outspends the cleanup. The escalation guarantees the other direction:
+        // it drops REGROWABLE roots — `semver-checks`, `perf`, `<triple>/` —
+        // accumulated across the clone's whole life and superseded by nothing, so
+        // a run that fires it hands back more than the lap ever spent, `free_mb`
+        // closes ABOVE `open.free_mb`, the subtraction saturates to zero, and the
+        // entire cleanup is then booked as this lap's consumption.
+        //
+        // The ratchet only climbs, so ONE such lap sets the floor to roughly the
+        // volume's whole cache footprint and every later lap is refused however
+        // little it costs. Measured on the container that found this: a standing
+        // warm observation of 21726MB with `capped: false`, on a volume holding
+        // ~22GB free in TOTAL — a lap genuinely costing that much would have
+        // exhausted the disk rather than recording a tidy reading — against real
+        // laps of 7, 919, 980 and 6025MB on the same clone. Six `[prune.*.basis]`
+        // entries had been written against that floor, each paying a
+        // protected-path admission, none of them measuring anything.
+        //
+        // `saturating_sub` on the SUM is still right and is not the same trap: it
+        // floors a genuinely negative cost at zero, where the old spelling floored
+        // an intermediate term and then added to it.
+        let handed_back = reclaimed_mb + escalated_mb.unwrap_or_default();
+        let spent = (open.free_mb + handed_back).saturating_sub(free_mb);
         // THE DECLARATION IS A LOWER BOUND, so an observation under it moves
         // nothing and must not be reported as though it had. The journal still
         // RECORDS it — the worst lap seen is the history's answer whatever the
@@ -2835,6 +2878,128 @@ mod tests {
             },
         );
         journal
+    }
+
+    /// A lap store of this test's own, so the journal it writes decides nothing
+    /// else.
+    fn lap_store(name: &str) -> LapStore {
+        let git_dir = build_root(name).join("git");
+        mkdir(&git_dir);
+        LapStore {
+            git_dir,
+            head: String::from("abcdef12"),
+        }
+    }
+
+    /// An open lap in a named state. `basis` and `tree_basis` are the stored
+    /// STRINGS, which is what the journal round-trips.
+    fn opened(free_mb: u64) -> OpenLap {
+        OpenLap {
+            free_mb,
+            basis: String::from(Basis::Warm.as_str()),
+            tree_basis: Some(String::from(Basis::Warm.as_str())),
+            head: String::from("abcdef12"),
+            measured: String::from("2026-09-06"),
+        }
+    }
+
+    /// THE CLEANUP IS NOT THE LAP'S COST, and the saturating subtraction said it
+    /// was (CLOUD-1481-adjacent; found while a bundle could not land).
+    ///
+    /// The escalation drops REGROWABLE cache — `semver-checks`, `perf`,
+    /// `<triple>/` — accumulated across the clone's whole life and superseded by
+    /// nothing. A run that drops it hands back more than the lap spent, so
+    /// `free_mb` ends ABOVE `open.free_mb`, `open.free_mb - free_mb` saturates to
+    /// zero, and `+ reclaimed + escalated` then books the entire cleanup as
+    /// consumption.
+    ///
+    /// The ratchet takes the max, so ONE such lap sets the floor to roughly the
+    /// volume's whole cache footprint and every later lap is refused however
+    /// little it costs. Measured on this container: a standing warm observation of
+    /// **21726MB, `capped: false`**, on a volume with ~22GB free in total — a
+    /// genuine lap of that cost would have exhausted the disk rather than
+    /// recording a reading — against real laps of 7, 919, 980 and 6025MB.
+    ///
+    /// The arithmetic the comment at the site already claims (`start - end +
+    /// reclaimed_in_between`) is right; the saturating spelling is what breaks it
+    /// in the one direction the escalation guarantees.
+    #[test]
+    fn a_lap_whose_reclaim_outran_it_is_not_charged_for_the_cleanup() {
+        let store = lap_store("prune-cleanup-not-cost");
+        let config = floors(1000);
+        let journal = LapJournal {
+            open: Some(opened(100)),
+            ..LapJournal::default()
+        };
+        // The build spent 10. This run then handed back 50 of cache that was
+        // already sitting there when the lap opened, so free CLOSES ABOVE where it
+        // opened: 100 - 10 + 50.
+        let lap = lap(
+            &store,
+            &config,
+            journal,
+            false,
+            &Tally {
+                free_mb: 140,
+                reclaimed_mb: 0,
+                escalated_mb: Some(50),
+                basis: Basis::Warm,
+                tree_basis: Basis::Warm,
+            },
+        );
+        let Ok(lap) = lap else {
+            panic!("fixture: the lap must close")
+        };
+        let Some(consumed) = lap.consumed else {
+            panic!("fixture: a closing lap reports what it cost")
+        };
+        assert_eq!(
+            consumed.mb, 10,
+            "the lap spent 10 and the run handed back 50 that predated it; \
+             charging the cleanup is what poisons the ratchet"
+        );
+        assert!(
+            consumed.raised.is_none(),
+            "and a 10MB lap under a 1000MB declaration raises no floor at all"
+        );
+    }
+
+    /// THE ORDINARY DIRECTION IS UNMOVED, which is what keeps the fix from being a
+    /// licence to under-count: where the lap outspends the cleanup, the reclaim's
+    /// bytes are still IN the cost rather than subtracted from it.
+    #[test]
+    fn a_lap_that_outspent_its_reclaim_still_counts_what_it_handed_back() {
+        let store = lap_store("prune-cost-includes-reclaim");
+        let config = floors(1000);
+        let journal = LapJournal {
+            open: Some(opened(1000)),
+            ..LapJournal::default()
+        };
+        // Spent 300, handed back 100: free closes at 800 and the cost is 300, not
+        // the 200 a difference of two readings alone would report.
+        let lap = lap(
+            &store,
+            &config,
+            journal,
+            false,
+            &Tally {
+                free_mb: 800,
+                reclaimed_mb: 100,
+                escalated_mb: None,
+                basis: Basis::Warm,
+                tree_basis: Basis::Warm,
+            },
+        );
+        let Ok(lap) = lap else {
+            panic!("fixture: the lap must close")
+        };
+        let Some(consumed) = lap.consumed else {
+            panic!("fixture: a closing lap reports what it cost")
+        };
+        assert_eq!(
+            consumed.mb, 300,
+            "space handed back mid-lap is space the lap had spent"
+        );
     }
 
     /// THE BAND THAT COST A WHOLE SESSION, as an assertion about the number.
