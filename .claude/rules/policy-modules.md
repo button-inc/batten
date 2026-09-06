@@ -435,13 +435,31 @@ rather than the sanctioned one.
 
 The bound above still holds for segment identity — `terminator` is unmoved and no
 landed `pipeline` verdict changed. What changed is narrower and lives in the
-engine rather than in a module: `hook::line_bounded_words` splits a segment's own
-`raw` at newlines and re-enters `segments` per line, and only the mutation walk
-and the unknown-program walk read it. Both ask "which program was handed this
-operand", a question a line answers and a segment does not. So a module reading
-`input.call.segments` sees exactly what it saw before, and must not grow its own
-line splitting to compensate — that would be the second authority two sections
-up already refuses.
+engine rather than in a module: a segment carries `lines`, one `SegmentLine` per
+constituent command, and `hook::per_line` is the one reading of it. Every walk
+that resolves a PROGRAM reads that; the walks that ask about the SPAN — what a
+terminator hands the status to, where a stage sits among the others — keep
+reading the segment. So a module reading `input.call.segments` sees exactly what
+it saw before, and must not grow its own line splitting to compensate — that
+would be the second authority two sections up already refuses.
+
+**THE HELPER THIS PARAGRAPH USED TO NAME IS GONE, and both halves of what it said
+about it were narrower than the truth** (CLOUD-1381). It described
+`hook::line_bounded_words`, which split a segment's own `raw` at newlines and
+re-entered `segments` per line, and said "only the mutation walk and the
+unknown-program walk read it". A parser does not need to re-split anything — the
+constituent commands are nodes, so `lines` is derived rather than recovered — and
+the reading is now every mediated walk rather than two: the shape rows, the
+receipt rows, both pipeline scans and the substitution scan were all resolving the
+FIRST line's program, which is a bypass on four surfaces and a silently undemanded
+precondition on the fifth.
+
+A `SegmentLine` carries its own `raw` as well as its words, and that half is what
+makes a row's `contains` decidable per line. Matching it against the whole segment
+lets line one's text qualify line two's program — `echo origin/main` then
+`git rebase --continue` satisfies a row keyed on `origin/main` and refuses the
+second line for a string it never contained, which is an over-deny and so the
+direction that gets a guard switched off.
 
 **AND SINCE CLOUD-1381 THAT ONE PARSER IS A PARSER**, which the paragraph below
 was written before and is worth stating because it changes what the rule buys.
