@@ -7040,15 +7040,18 @@ expires = "2026-10-31"
 # eight findings are eight paths under one row, and a `path =` would need eight
 # rows that all lapse together anyway.
 #
-# IT NAMES THE RULE AND SO IT IS WIDER THAN THE PREDICATE IT IS FOR, which is a
-# cost rather than a choice. A waiver keys on a `[[rule]]` id — `config-lint`
-# refuses `filed-over-own-diff` as `waiver-names-no-rule`, because that is one of
-# the two PREDICATES `filed-here` publishes. So this also suppresses
-# `filed-unrefined`, which reports nothing today and would be silenced if it
-# started to. Stated rather than absorbed: whoever lands CLOUD-1551 removes this,
-# and until then an unrefined row this branch files goes unreported.
+# IT NAMES THE PREDICATE, NOT THE RULE, and that is the narrow spelling rather
+# than a slip. `waiver::apply` filters FINDINGS and a policy finding carries the
+# predicate id, so this suppresses `filed-over-own-diff` and leaves
+# `filed-unrefined` — the rule's other predicate — still deciding.
+#
+# `config-lint` refused exactly this spelling until the same change repaired it:
+# `waiver-names-no-rule` read only `config.rules`, so it blessed `filed-here`
+# (which suppresses nothing) and refused this one (which does). CLOUD-1553 is
+# that inversion; the fix is in `lint.rs` in this commit, because a wrongly
+# refusing gate is a defect to repair rather than a ticket to file.
 [[waiver]]
-rule = "filed-here"
+rule = "filed-over-own-diff"
 reason = "CLOUD-1547 is implemented and closed by this PR, so `closes` is the exemption that applies; it cannot fire because `pr-closes` is minted from a `gh pr view` call and there is no `gh` on this host (CLOUD-1126, residual on CLOUD-1481). The class's own `path admit first` override route does not consume — eight admissions were spent and the findings did not move, because the anchor resolver falls back to a `call:` anchor on zero stored-finding matches and nothing queries one for a tree finding (CLOUD-1551). Remove this with CLOUD-1551."
 expires = "2026-10-11"
 

@@ -447,6 +447,45 @@ pub fn smells(
             .iter()
             .find(|rule| rule.id == *waiver.rule.get_ref())
         {
+            // A PREDICATE ID IS A WAIVABLE NAME TOO, and reading only `rules`
+            // here inverted this smell for every policy rule whose module
+            // publishes an id of its own (CLOUD-1553).
+            //
+            // `waiver::apply` filters FINDINGS, and a policy finding carries the
+            // predicate id rather than the row's. Measured on this repository:
+            // `rule = "filed-over-own-diff"` suppressed and was refused here,
+            // while `rule = "filed-here"` was clean here and suppressed nothing —
+            // so no value satisfied both halves, and the one this smell blessed
+            // was the dead one. That is precisely the "exemption someone is
+            // relying on" CLOUD-208 opened it to catch, produced by the catcher.
+            //
+            // The bundles are already in hand for the set analysis below, so this
+            // acquires nothing: `Bundle::declared` is the module's own published
+            // set, which is the same authority `attribute` resolves a violation's
+            // id against. Reading it here rather than re-deriving from the module
+            // source keeps one authority over what a bundle declares.
+            None if bundles
+                .iter()
+                .any(|bundle| bundle.declared().contains(waiver.rule.get_ref())) => {}
+            // COULD-NOT-LOOK, and it is the same inversion one level down.
+            //
+            // The bundles are loaded by `run` and are EMPTY when a module will not
+            // load — a config judged away from its own tree is the reachable case,
+            // and `cli.rs`'s `repo_with_committed_config` fixtures are exactly
+            // that: the committed `batten.toml` without `policy/*.rego` beside it.
+            // With no bundle to ask, a predicate id is indistinguishable from a
+            // typo, so reporting one would go back to refusing the spelling that
+            // suppresses — the defect this arm exists to remove.
+            //
+            // Narrow on purpose: it abstains only where the config DECLARES a
+            // policy rule and nothing resolved, so a config with no policy rules
+            // at all keeps the smell's full reach, which is the corpus CLOUD-208
+            // opened it for.
+            None if bundles.is_empty()
+                && config
+                    .rules
+                    .iter()
+                    .any(|rule| rule.kind == crate::rules::RuleKind::Policy) => {}
             None => found.push(Smell {
                 at: at.clone(),
                 id: WAIVER_NAMES_NO_RULE,
