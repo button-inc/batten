@@ -60,6 +60,16 @@ use common::scratch;
 /// The tag the fixture host publishes.
 const TAG: &str = "v9.9.9";
 
+/// The repository the fixture host serves.
+///
+/// Named by the fixture rather than defaulted, so this suite does not spell out
+/// where this repository is hosted — `no-origin-literal-in-fixtures` refuses
+/// that literal anywhere under `crates/batten/tests/**`, and it is right to: a
+/// fixture that hard-codes the origin is testing this deployment rather than the
+/// installer. `install.sh` reads `BATTEN_REPO`, so naming one here is the
+/// supported route and not a workaround.
+const REPO: &str = "example/pkg";
+
 /// The archive payload: a `batten` executable at the archive root, which is what
 /// `mise-tasks/dist.sh` produces and what the installer requires.
 fn tarball(dir: &std::path::Path) -> Vec<u8> {
@@ -173,25 +183,25 @@ fn release_routes(base: &str, asset: &str, archive: &[u8]) -> Vec<Route> {
     );
     vec![
         Route {
-            path: "/button-inc/batten/releases/latest".to_owned(),
+            path: format!("/{REPO}/releases/latest"),
             status: 302,
-            location: Some(format!("{base}/button-inc/batten/releases/tag/{TAG}")),
+            location: Some(format!("{base}/{REPO}/releases/tag/{TAG}")),
             body: Vec::new(),
         },
         Route {
-            path: format!("/button-inc/batten/releases/tag/{TAG}"),
+            path: format!("/{REPO}/releases/tag/{TAG}"),
             status: 200,
             location: None,
             body: b"<html>the tag page</html>".to_vec(),
         },
         Route {
-            path: format!("/button-inc/batten/releases/download/{TAG}/SHA256SUMS"),
+            path: format!("/{REPO}/releases/download/{TAG}/SHA256SUMS"),
             status: 200,
             location: None,
             body: sums.into_bytes(),
         },
         Route {
-            path: format!("/button-inc/batten/releases/download/{TAG}/{asset}"),
+            path: format!("/{REPO}/releases/download/{TAG}/{asset}"),
             status: 200,
             location: None,
             body: archive.to_vec(),
@@ -223,6 +233,7 @@ fn install(name: &str, web: &str, target: &str) -> (Option<i32>, String, String,
         .env("NO_PROXY", "127.0.0.1,localhost")
         .env("no_proxy", "127.0.0.1,localhost")
         .env("BATTEN_API", "http://127.0.0.1:1")
+        .env("BATTEN_REPO", REPO)
         .env("BATTEN_WEB", web)
         .env("BATTEN_TARGET", target)
         .env("BATTEN_INSTALL_DIR", &dest)
