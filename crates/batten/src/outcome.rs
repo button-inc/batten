@@ -313,17 +313,36 @@ pub fn advice_key(session: &str, tool: &str, class: Class) -> String {
 mod tests {
     use super::*;
 
+    /// The token this build's own signatures must carry.
+    ///
+    /// Hardcoding `"unix"` here made every recognition case assert a platform
+    /// fact rather than the matcher: on a build where `family_of()` is
+    /// `Unsupported` no row matched, `classify` returned [`Class::Unknown`], and
+    /// the case failed for a reason it was not written to measure.
+    fn host_family() -> String {
+        family_token(family_of()).to_owned()
+    }
+
+    /// A surveyed token that is NOT this build's, so a row carrying it is a row
+    /// this host must not match.
+    fn other_family() -> String {
+        match family_of() {
+            Family::Unix => "unsupported".to_owned(),
+            Family::Unsupported => "unix".to_owned(),
+        }
+    }
+
     fn signatures() -> Vec<Signature> {
         vec![
             Signature {
                 class: "command-not-found".to_owned(),
                 code: 127,
-                family: "unix".to_owned(),
+                family: host_family(),
             },
             Signature {
                 class: "permission-denied".to_owned(),
                 code: 126,
-                family: "unix".to_owned(),
+                family: host_family(),
             },
         ]
     }
@@ -384,6 +403,32 @@ mod tests {
             classify(&denied, "example-program", &signatures()).class,
             Class::PermissionDenied,
             "the alternative spelling is read too"
+        );
+    }
+
+    /// The family column DISCRIMINATES, which is what makes the case above a
+    /// measurement of the matcher rather than of the host.
+    ///
+    /// Same code, same payload, one column changed: a row declared for a family
+    /// this build is not reaches no class. Asserted explicitly because it used
+    /// to be true only by accident of where the suite ran.
+    #[test]
+    fn a_signature_for_another_family_does_not_match_this_host() {
+        let elsewhere = vec![Signature {
+            class: "command-not-found".to_owned(),
+            code: 127,
+            family: other_family(),
+        }];
+        let with_code = serde_json::json!({"stdout": "", "stderr": "", "exitCode": 127});
+        assert_eq!(
+            classify(&with_code, "example-program --version", &elsewhere).class,
+            Class::Unknown,
+            "a row for another OS family is not this host's answer"
+        );
+        assert_eq!(
+            classify(&with_code, "example-program --version", &signatures()).class,
+            Class::CommandNotFound,
+            "and the same code on this host's own row still is"
         );
     }
 
@@ -470,7 +515,10 @@ mod tests {
         twice.push(Signature {
             class: "permission-denied".to_owned(),
             code: 127,
-            family: "unix".to_owned(),
+            // The host's own token, so the pair actually collides with the row
+            // `signatures()` declares — on a build where that is not `unix`, a
+            // hardcoded token here is a second family and no duplicate at all.
+            family: host_family(),
         });
         assert!(
             validate(&twice).is_err(),
