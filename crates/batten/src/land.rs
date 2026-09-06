@@ -838,8 +838,8 @@ pub enum Refusal {
     ///
     /// `verify` reserves exit `2` for exactly this and says so on its own error
     /// line — *"main moved under this branch — rebase and verify again, there is
-    /// nothing here to fix"* — and `mise.toml` states the other half of the
-    /// contract in as many words: *"`land` reads a 2 from `verify` as 'main moved
+    /// nothing here to fix"* — and the consumer's task manifest states the other
+    /// half in as many words: *"`land` reads a 2 from `verify` as 'main moved
     /// under the run, lap'"*. The engine read it as [`Self::Tree`], because every
     /// non-zero fell through to the pattern scan and an empty scan is `Tree`.
     ///
@@ -984,7 +984,7 @@ pub fn verify(
         // disk-full or a rate limit.
         // EXIT 2 IS "MAIN MOVED", AND IT IS READ BEFORE THE PATTERNS FOR THE SAME
         // REASON THE THREE BELOW ARE (CLOUD-318). `verify` reserves this code for
-        // that one verdict and `mise.toml` declares both halves of the contract;
+        // that one verdict and the consumer's task manifest declares both halves;
         // reaching the pattern scan meant an empty scan classified it `Tree`, so
         // the self-healing class became the loop's hardest stop. A consumer
         // cannot be asked to write a pattern for it either — the remedy is a lap,
@@ -1204,6 +1204,28 @@ pub enum Progress {
 /// qualifies — rather than as an `if` in the driver, which is where the last
 /// thing needing per-step room ended up and what the declared pipeline exists to
 /// stop happening again.
+impl Step {
+    /// The phase token this step registers under.
+    ///
+    /// **Written out rather than derived from `Debug`, because the registry is a
+    /// STORE and a rename must not silently move what is in it** (CLOUD-425). A
+    /// reader — `mise run alive`, or `lease::progress_of` comparing a phase to
+    /// the one before it — is matching text another process wrote, possibly by an
+    /// older build. Lower case for the same reason: it is a token, not a label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Replay => "replay",
+            Self::Verify => "verify",
+            Self::Lease => "lease",
+            Self::Ready => "ready",
+            Self::Push => "push",
+            Self::Wait => "wait",
+            Self::FastForward => "fast-forward",
+        }
+    }
+}
+
 #[must_use]
 pub const fn progress_of(
     step: Step,
@@ -2446,6 +2468,44 @@ mod lap_tests {
 
 #[cfg(test)]
 mod tests {
+
+    /// EVERY STEP HAS A DISTINCT, STABLE PHASE TOKEN.
+    ///
+    /// Distinct because `task::stamp_for` only moves a stamp when the VALUE
+    /// changes, so two steps sharing a token would leave `phase_since` frozen
+    /// across the pair — and `lease::progress_of` reads that as no progress,
+    /// which is the wrong direction: a live holder reported stalled is one a
+    /// sibling may reclaim the lease from.
+    ///
+    /// Stable because the registry is a store another process reads, possibly
+    /// written by an older build. Deriving these from `Debug` would let a rename
+    /// move a stored phase silently, which is what the written-out match refuses.
+    #[test]
+    fn every_step_registers_under_its_own_token() {
+        let steps = [
+            Step::Replay,
+            Step::Verify,
+            Step::Lease,
+            Step::Ready,
+            Step::Push,
+            Step::Wait,
+            Step::FastForward,
+        ];
+        let tokens: std::collections::BTreeSet<&str> =
+            steps.iter().map(|step| step.as_str()).collect();
+        assert_eq!(
+            tokens.len(),
+            steps.len(),
+            "two steps sharing a token freeze `phase_since` across the pair: {tokens:?}"
+        );
+        for token in &tokens {
+            assert!(
+                !token.is_empty() && token.chars().all(|c| c.is_ascii_lowercase() || c == '-'),
+                "a phase is a token another process matches, not a label: {token:?}"
+            );
+        }
+    }
+
     use super::*;
 
     /// The verify family writes the same four columns every other family does.

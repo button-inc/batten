@@ -6746,6 +6746,40 @@ struct LandSingleton {
     pid: String,
 }
 
+impl LandSingleton {
+    /// Push what this lap is doing now, and that it went round.
+    ///
+    /// **A REGISTRATION THAT NEVER MOVES IS WORSE THAN NONE, because something
+    /// reads it as progress** (CLOUD-425, CLOUD-499). `land.sh` pushed a phase at
+    /// every transition the loop already had; the port registered once and went
+    /// quiet, which looks like observability lost and is not.
+    ///
+    /// [`lease::progress_of`] derives `advance` from `phase_since`/`sig_at` and
+    /// takes `tick_at` from this registry. With nothing pushed, `advance` is
+    /// frozen at the instant of registration and `tick_at` stays `0` for the
+    /// whole landing — so the stall detector reads a healthy lap that is eight
+    /// minutes into a gate as one that has stopped making progress. The wrong
+    /// direction, too: a live holder reported stalled is one a sibling may
+    /// reclaim the lease from.
+    ///
+    /// Both signals, because they answer different questions and
+    /// [`task::stamp_for`] only moves a stamp when the VALUE changes. The phase
+    /// is what a lap is doing and repeats across laps; the tick is the loop going
+    /// round, so it carries the lap number and therefore always differs. Pushing
+    /// only the phase would leave `tick_at` frozen through six steps of one lap.
+    fn phase(&self, phase: &str, lap: u32) {
+        let now = boundary_epoch();
+        task::push(&self.git_dir, &self.pid, task::Signal::Phase, phase, now);
+        task::push(
+            &self.git_dir,
+            &self.pid,
+            task::Signal::Tick,
+            &lap.to_string(),
+            now,
+        );
+    }
+}
+
 impl Drop for LandSingleton {
     fn drop(&mut self) {
         task::unregister(&self.git_dir, &self.pid);
@@ -6792,12 +6826,29 @@ fn run_land_singleton(
     };
     let pid = std::process::id().to_string();
 
-    // THE REAP. `program_root` is the consumer's fact and reaches the crate as
-    // one, never as a literal (non-negotiable rule 1) — it is what tells a live
-    // task from a recycled pid wearing its number.
-    let program_root =
-        std::env::var("BATTEN_TASK_PROGRAM_ROOT").unwrap_or_else(|_| String::from("mise-tasks"));
-    let abandoned = task::abandoned(&git_dir, &program_root);
+    // THE REAP, AND IT ABSTAINS WHERE THE CONSUMER HAS NOT SAID WHERE ITS
+    // PROGRAMS LIVE (non-negotiable rule 1).
+    //
+    // `program_root` is what tells a live task from a recycled pid wearing its
+    // number, and *where a consumer keeps its programs* is a fact about that
+    // consumer. The first version of this defaulted the value to a literal, which
+    // `document_facts::no_artifact_name_reaches_the_core` refused — correctly, and
+    // `task.rs`'s own header names that test as the reason the root is a
+    // parameter there rather than a constant.
+    //
+    // Absent, this reaps NOTHING rather than guessing. A wrong root makes
+    // `matches_cmdline` miss every live task, so every entry reads as abandoned
+    // and the reaper signals the group of a lap that is running — the direction
+    // a miss must never fail in.
+    //
+    // ONLY THE REAP IS CONDITIONAL. The lock and the registration below run
+    // either way: `singleton_acquire` reclaims on `pid_exists`, which needs no
+    // root at all, and skipping them here would trade a reaper for the
+    // concurrent-lands defect the lock exists to stop — a strictly worse bargain
+    // than reaping nothing.
+    let abandoned = std::env::var("BATTEN_TASK_PROGRAM_ROOT")
+        .map(|root| task::abandoned(&git_dir, &root))
+        .unwrap_or_default();
     // TWO PASSES OVER THE WHOLE SET, NEVER A GRACE PERIOD PER GROUP. Signalling
     // every group before re-observing any of it is what gives each one its
     // chance to act on the TERM — the walk itself, rather than a delay standing
@@ -7040,6 +7091,12 @@ fn run_land_lap(
                 unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
                 continue 'laps;
             }
+            // THE PHASE, PUSHED BEFORE THE STEP RUNS RATHER THAN AFTER IT. A step
+            // is what this lap is doing WHILE it blocks, and the whole reason a
+            // reader wants it is that a gate can hold for minutes — so announcing
+            // it on completion would name every phase exactly when it stopped
+            // being true. `land.sh` pushed at the transition for the same reason.
+            _guard.phase(step.as_str(), lap);
             let code = match step {
                 land::Step::Replay => run_land_replay(root, url, reference, branch, out)?,
                 land::Step::Verify => {
@@ -8345,8 +8402,8 @@ fn run_land_verify(
         // the three were previously told the wrong thing.
         // MAIN MOVED, WHICH IS THE LOOP WORKING (CLOUD-318). Reported and coded
         // apart from every other refusal, because it is not one: the gate is
-        // saying the run raced trunk, `mise.toml` declares that `land` reads this
-        // as "lap", and the next replay is the whole remedy. `Internal` rather
+        // saying the run raced trunk, the consumer's task manifest declares that
+        // `land` reads this as "lap", and the next replay is the whole remedy. `Internal` rather
         // than `Violation` is what carries it — `progress`'s table already laps a
         // could-not-look from `Verify`'s neighbours for the same reason, and a
         // `2` here would land in the cell that stops.
