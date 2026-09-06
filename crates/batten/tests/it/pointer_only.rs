@@ -778,6 +778,29 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Board,
         disposition: Disposition::PointerOnly,
     },
+    // The abandonment arm (CLOUD-1513), reading the SAME body source: a row's
+    // description is the widest prose on this surface and this arm reads three
+    // more of the row's keys than its sibling does. `--instant` is pinned so the
+    // census reads the same bytes on any day.
+    //
+    // WHAT REACHES THE RENDERER IS THE LANDED BUCKET, not the abandoned one, and
+    // that distinction is worth stating because it is what makes the run
+    // non-vacuous. `landed-merged.tsv` names the seeded row, so it is landed and
+    // never becomes a candidate — which is also why no `updatedAt` demand fires
+    // over a payload that carries no such key. An abandoned reading here would
+    // need a dated row, and it would assert nothing more about leakage than the
+    // landed one already does.
+    Verb {
+        path: "landed abandoned",
+        args: &[
+            "--merged-prs",
+            "landed-merged.tsv",
+            "--instant",
+            "2026-08-20",
+        ],
+        stdin: Stdin::Board,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "check",
         args: &[],

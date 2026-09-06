@@ -510,6 +510,12 @@ mod tests {
                 // consumer treating an entry as a prefix must be handed only what
                 // is actually read-only, and a noun is not a command.
                 "landed check".to_owned(),
+                // The other half of the same question (CLOUD-1513), and read for
+                // the same reason plus one of its own: the remote's branch names
+                // arrive as `--refs` EVIDENCE rather than through a
+                // `git ls-remote`, so this arm starts no program either. That
+                // was the design constraint the flag exists to satisfy.
+                "landed abandoned".to_owned(),
                 // FIVE OF THE TEN LEASE ARMS, and the noun is NOT among them
                 // (CLOUD-1274). `lease acquire|renew|hold|release|reserve` each
                 // reach `swap`, which is a compare-and-swap against a REMOTE ref
@@ -794,6 +800,7 @@ mod tests {
             // The board sweep and its noun (CLOUD-186, CLOUD-1127), ported off
             // `mise-tasks/landed-check.sh`.
             "landed".to_owned(),
+            "landed abandoned".to_owned(),
             "landed check".to_owned(),
             // THE LANDING LEASE, ten arms and a noun (CLOUD-1274, CLOUD-393).
             // The noun is UNCLASSIFIED rather than read, because half the

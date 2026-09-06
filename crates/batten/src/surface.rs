@@ -1641,6 +1641,75 @@ const DECLINED: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--refs <file>` on `landed abandoned` (CLOUD-1513).
+///
+/// The remote's branch names, one per line. **Evidence rather than a spawn, and
+/// that is what keeps the arm on the read-only allowlist**: `spec.rs` admits
+/// `landed check` there precisely because it "starts no program", so resolving
+/// this with a `git ls-remote` would take the arm off it. The program being
+/// retired gathered them itself; gathering is the caller's half of
+/// agents-fetch-gates-decide, where a credential belongs.
+///
+/// Absent is an empty list, which is a legitimate reading: a repository whose
+/// branches the caller did not gather cannot rescue any claim, and the refusal
+/// for a gather that FAILED belongs to the caller that ran it.
+const REFS: FlagDecl = FlagDecl {
+    id: "refs",
+    long: Some("refs"),
+    short: None,
+    help: "Branch names the remote carries, one per line",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--instant <ISO-8601>` on `landed abandoned` (CLOUD-1513).
+///
+/// The instant the idle bound is measured against. **Supplied rather than read**,
+/// which is the split `.claude/rules/policy-modules.md` states for every clock
+/// here: the boundary owns it and the decision is handed the answer. Two
+/// reasons, and both are load-bearing — house style §6 requires byte-stable
+/// output, which a value differing per invocation cannot give; and without it
+/// every fixture date drifts out of the bound as the calendar moves, so a suite
+/// rots on a date nobody edited.
+const INSTANT: FlagDecl = FlagDecl {
+    id: "instant",
+    long: Some("instant"),
+    short: None,
+    help: "The instant to measure the idle bound against, ISO-8601 (default: now)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--max-idle-days <n>` on `landed abandoned` (CLOUD-1513).
+///
+/// How long a claim may sit untouched and still read as live. Declared rather
+/// than fixed because the right number is a property of the fleet's cadence
+/// rather than of the predicate, and the report echoes the value it used so a
+/// reader is never left inferring which bound produced a finding.
+const MAX_IDLE_DAYS: FlagDecl = FlagDecl {
+    id: "max_idle_days",
+    long: Some("max-idle-days"),
+    short: None,
+    help: "Days a claim may be idle before it reads as abandoned (default: 2)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const ISSUE: FlagDecl = FlagDecl {
     id: "issue",
     long: Some("issue"),
@@ -3159,6 +3228,26 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         effect: Effect::Read,
         flags: &[CLAIMED, MERGED_PRS, LANDED_BY, DECLINED],
+    },
+    // The other half of the same question, and it is a SEPARATE arm rather than
+    // a flag on `check` because the two demand different keys of different
+    // subsets: `check` needs `id` and `status` of every row, this needs three
+    // more of a subset it has not identified until the narrowing has run.
+    //
+    // `kind:verb` without a new top-level noun. CLOUD-1182 measured 77 of 113
+    // engine-source retirements landing a brand-new verb and named that the
+    // scope creep; an arm under an existing noun costs the surface nothing.
+    //
+    // Read, and the `--refs` flag is what keeps it so — see that declaration.
+    // No data channel, for the reason the sibling above states at length: the
+    // payload IS stdin, so an unconditional document is unwritable.
+    CommandDecl {
+        path: "landed abandoned",
+        id: "landed.abandoned",
+        about: "Refuse an In Progress claim with no landing, no pull request, no branch and no recent touch",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[CLAIMED, MERGED_PRS, LANDED_BY, REFS, INSTANT, MAX_IDLE_DAYS],
     },
     CommandDecl {
         path: "ready lint",

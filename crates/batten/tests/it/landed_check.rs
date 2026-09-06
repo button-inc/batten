@@ -500,3 +500,196 @@ fn the_finding_carries_no_body_text() {
         "the sweep echoed a body: {whole}"
     );
 }
+
+// --- the abandonment arm (CLOUD-1513) ------------------------------------
+//
+// THE SECOND TIER, and what it buys over the predicate's own unit cases. Those
+// construct a `Claim` directly, which is the fabricate-the-shape defect
+// `.claude/rules/policy-modules.md` records for `with input as`: they pass over
+// a payload key the engine never reads and over an evidence file it never
+// opens. Only a run of the compiled binary proves the boundary BUILDS what the
+// predicate decides over.
+
+/// A board payload with the three keys the abandonment arm reads.
+fn dated_board(id: &str, updated: &str, attachment: Option<&str>, branch: &str) -> String {
+    let attachments = attachment
+        .map(|url| format!(r#"[{{"url":"{url}"}}]"#))
+        .unwrap_or_else(|| "[]".to_owned());
+    format!(
+        r#"[{{"id":"{id}","status":"In Progress","updatedAt":"{updated}",
+             "attachments":{attachments},"gitBranchName":"{branch}"}}]"#
+    )
+}
+
+/// Run the arm against a scratch dir carrying empty merged-PR evidence.
+fn abandoned_run(name: &str, extra: &[&str], payload: &str) -> std::process::Output {
+    let dir = common::scratch(name);
+    std::fs::write(dir.join("merged.tsv"), "").expect("evidence is writable");
+    let mut args = vec![
+        "landed",
+        "abandoned",
+        "--merged-prs",
+        "merged.tsv",
+        "--instant",
+        "2026-08-20",
+    ];
+    args.extend_from_slice(extra);
+    common::run_with_stdin(&dir, &args, payload)
+}
+
+/// THE ENGINE READS THE THREE KEYS. A unit case cannot show this: it hands the
+/// predicate a `Claim` already built, so it passes over a boundary that never
+/// parsed `attachments` at all.
+#[test]
+fn the_boundary_builds_the_claim_the_predicate_decides_over() {
+    let out = abandoned_run(
+        "abandoned-reads-the-keys",
+        &[],
+        &dated_board("CLOUD-1", "2026-08-01", None, ""),
+    );
+    let whole = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a dead claim is the verdict: {whole}"
+    );
+    assert!(whole.contains("claimed-abandoned"), "{whole}");
+    assert!(whole.contains("CLOUD-1"), "{whole}");
+}
+
+/// THE ANTI-VACUITY MIRROR. Without this the case above passes over an arm that
+/// refuses everything, which is the direction that gets a sweep switched off.
+#[test]
+fn a_claim_a_pull_request_is_serving_is_left_alone() {
+    let out = abandoned_run(
+        "abandoned-pr-rescues",
+        &[],
+        &dated_board(
+            "CLOUD-1",
+            "2026-08-01",
+            Some("https://github.com/o/r/pull/12"),
+            "",
+        ),
+    );
+    let whole = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a served claim is clean: {whole}"
+    );
+    assert!(!whole.contains("claimed-abandoned"), "{whole}");
+}
+
+/// THE REFS FILE IS EVIDENCE THE ENGINE OPENS. The predicate's unit case is
+/// handed a set; this proves a `--refs` path is read and its lines become that
+/// set — the arm that keeps this verb off a `git ls-remote` spawn.
+#[test]
+fn a_branch_named_in_the_refs_evidence_rescues_a_claim() {
+    let dir = common::scratch("abandoned-refs-evidence");
+    std::fs::write(dir.join("merged.tsv"), "").expect("evidence is writable");
+    std::fs::write(
+        dir.join("refs.txt"),
+        "feat/live
+",
+    )
+    .expect("refs are writable");
+    let out = common::run_with_stdin(
+        &dir,
+        &[
+            "landed",
+            "abandoned",
+            "--merged-prs",
+            "merged.tsv",
+            "--refs",
+            "refs.txt",
+            "--instant",
+            "2026-08-20",
+        ],
+        &dated_board("CLOUD-1", "2026-08-01", None, "feat/live"),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a live branch rescues: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// THE BOUND THE RUN USED REACHES THE READER. A reader who cannot see which
+/// number produced a finding has to look it up, and the one they find may not be
+/// the one that ran.
+#[test]
+fn the_report_names_the_bound_it_used_rather_than_the_default() {
+    let out = abandoned_run(
+        "abandoned-names-its-bound",
+        &["--max-idle-days", "5"],
+        &dated_board("CLOUD-1", "2026-08-01", None, ""),
+    );
+    let whole = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(whole.contains("idle > 5d"), "{whole}");
+}
+
+/// A KEY DEMANDED OF A ROW THAT OWES IT IS EXIT 1, NEVER A CLEAN COLUMN — and
+/// the boundary is what turns an absent JSON key into that refusal.
+#[test]
+fn a_stale_row_missing_a_key_refuses_rather_than_sweeping_clean() {
+    let out = abandoned_run(
+        "abandoned-demands-its-keys",
+        &[],
+        r#"[{"id":"CLOUD-1","status":"In Progress","updatedAt":"2026-08-01"}]"#,
+    );
+    let whole = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(1), "could-not-look: {whole}");
+    assert!(whole.contains("attachments"), "{whole}");
+}
+
+/// Missing merged-PR evidence refuses rather than reporting every merged row as
+/// an abandoned claim. The over-reporting direction is the one that gets a drain
+/// switched off, which is why this arm is required where `--claimed` is not.
+#[test]
+fn a_sweep_with_no_merged_pr_evidence_refuses_rather_than_over_reporting() {
+    let dir = common::scratch("abandoned-needs-evidence");
+    let out = common::run_with_stdin(
+        &dir,
+        &["landed", "abandoned", "--instant", "2026-08-20"],
+        &dated_board("CLOUD-1", "2026-08-01", None, ""),
+    );
+    let whole = String::from_utf8_lossy(&out.stderr).to_string();
+    assert_eq!(out.status.code(), Some(1), "{whole}");
+    assert!(whole.contains("--merged-prs"), "{whole}");
+}
+
+/// The arm must not echo a body either. Asserted separately from the sibling's
+/// case because this arm reads three more of the row's keys, so it has three
+/// more places a payload could leak from.
+#[test]
+fn the_abandonment_finding_carries_no_body_text() {
+    let out = abandoned_run(
+        "abandoned-carries-no-body",
+        &[],
+        r#"[{"id":"CLOUD-1","status":"In Progress","updatedAt":"2026-08-01",
+             "attachments":[],"gitBranchName":"",
+             "description":"SECRET-CUSTOMER-DETAIL"}]"#,
+    );
+    let whole = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !whole.contains("SECRET-CUSTOMER-DETAIL"),
+        "the sweep echoed a body: {whole}"
+    );
+}

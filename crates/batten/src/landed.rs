@@ -336,6 +336,336 @@ pub fn rows_from(value: &serde_json::Value) -> Result<Vec<Row>> {
     Ok(rows)
 }
 
+/// A board row carrying the fields the ABANDONMENT sweep reads.
+///
+/// Separate from [`Row`] rather than widening it, because the two arms demand
+/// different keys of different subsets and collapsing them would make the
+/// narrowing below unexpressible: `landed check` needs `id` and `status` of
+/// every row, and this needs three more keys of a subset it has not identified
+/// yet.
+///
+/// **Every added field is `Option`, and the distinction is presence rather than
+/// truthiness.** `None` is the key being ABSENT from the payload, which is
+/// could-not-look; `Some` holding an empty value is the tracker saying there is
+/// no branch or no attachment, which is an answer. The predecessor spelled this
+/// as `has($k)` against a value read, and conflating the two would turn a row
+/// with no PR into a refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Claim {
+    /// The issue key.
+    pub id: String,
+    /// The column it holds.
+    pub status: String,
+    /// When the row was last written, as the tracker stamped it.
+    pub updated_at: Option<String>,
+    /// The URLs the row's attachments name.
+    pub attachments: Option<Vec<String>>,
+    /// The branch name the tracker minted for the row.
+    pub branch: Option<String>,
+}
+
+impl Claim {
+    fn is_in_progress(&self) -> bool {
+        self.status == "In Progress"
+    }
+
+    /// Whether any attachment is a pull request.
+    ///
+    /// A PR rescues a claim; **any other attachment does not**, which is the
+    /// conjunct's whole content — it is "no PR", never "no attachments". A row
+    /// carrying a design document is still an abandoned claim.
+    fn has_pull_request(&self) -> bool {
+        self.attachments
+            .as_ref()
+            .is_some_and(|urls| urls.iter().any(|url| is_pull_request_url(url)))
+    }
+
+    /// Whether the row's branch is one the caller's refs list carries.
+    ///
+    /// The empty name short-circuits false rather than being looked up, so a row
+    /// the tracker gave no branch can never match a stray blank line in the
+    /// evidence.
+    fn has_live_branch(&self, refs: &BTreeSet<String>) -> bool {
+        self.branch
+            .as_deref()
+            .is_some_and(|name| !name.is_empty() && refs.contains(name))
+    }
+}
+
+/// Whether a URL names a pull request.
+///
+/// `/pull/` followed by at least one digit, anywhere in the URL. Deliberately
+/// not a `[[pattern]]` row: a preset cannot read one (see
+/// `.claude/rules/policy-modules.md`), and this is a forge's URL shape rather
+/// than a consumer's vocabulary, so rule 1 is not in play.
+fn is_pull_request_url(url: &str) -> bool {
+    url.match_indices("/pull/").any(|(at, marker)| {
+        url.get(at + marker.len()..)
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(|first| first.is_ascii_digit())
+    })
+}
+
+/// Days since the epoch for an ISO-8601 instant, or `None` when it cannot be
+/// read as a date at all.
+///
+/// **The shape is checked before the arithmetic, and that ordering is the
+/// point.** `not-a-date` splits into three hyphen-separated parts exactly like a
+/// real date, so a parser that split first and added second would answer a
+/// number instead of admitting it could not read one — and an unreadable stamp
+/// would silently become a row that is not stale.
+///
+/// Whole days only, from the first ten characters: the bound is a day count, so
+/// a time of day never participates and two instants on one date are one answer.
+#[must_use]
+pub fn day_of(instant: &str) -> Option<i64> {
+    let bytes = instant.get(..10)?.as_bytes();
+    if bytes.get(4) != Some(&b'-') || bytes.get(7) != Some(&b'-') {
+        return None;
+    }
+    let digit = |index: usize| -> Option<i64> {
+        let byte = *bytes.get(index)?;
+        byte.is_ascii_digit().then(|| i64::from(byte - b'0'))
+    };
+    let mut year = 0_i64;
+    for index in 0..4 {
+        year = year * 10 + digit(index)?;
+    }
+    let month = digit(5)? * 10 + digit(6)?;
+    let day = digit(8)? * 10 + digit(9)?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+
+    // days_from_civil, the standard civil-calendar conversion. Integer only, so
+    // it needs no date library and cannot disagree with the predecessor's awk.
+    let shifted = if month <= 2 { year - 1 } else { year };
+    let era = if shifted >= 0 { shifted } else { shifted - 399 } / 400;
+    let year_of_era = shifted - era * 400;
+    let month_index = (month + 9) % 12;
+    let day_of_year = (153 * month_index + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    Some(era * 146_097 + day_of_era - 719_468)
+}
+
+/// How long a claim may sit untouched, and the instant it is measured against.
+///
+/// **The instant is supplied rather than read**, which is the same split
+/// `.claude/rules/policy-modules.md` states for every other clock here: the
+/// boundary owns the clock and the decision is handed the answer. Two reasons,
+/// both load-bearing — §6 requires byte-stable output, which a value that
+/// differs per invocation cannot give; and without it every fixture date drifts
+/// out of the bound as the calendar moves, so the suite rots on a date nobody
+/// changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bound {
+    /// Days a claim may be idle and still be live.
+    pub max_idle_days: i64,
+    /// The day the bound is measured against, from [`day_of`].
+    ///
+    /// A NUMBER rather than a string, so the parse and its refusal happen once
+    /// at the boundary and this predicate stays pure. The boundary is also where
+    /// the clock legitimately lives when no instant was supplied.
+    pub today: i64,
+}
+
+/// What the abandonment sweep decided.
+///
+/// Three buckets, and they are disjoint. A landed row is never also reported as
+/// abandoned — its work is on `main`, so the claim is discharged rather than
+/// dead — and a row whose stamp will not parse is neither, because staleness is
+/// unknown rather than false.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Drain {
+    /// How many rows hold the In Progress column at all.
+    pub in_progress: usize,
+    /// In Progress while the work is on `main`.
+    pub landed_unswept: Vec<String>,
+    /// In Progress with no landing, no PR, no branch, and idle past the bound.
+    pub abandoned: Vec<String>,
+    /// In Progress with a stamp that cannot be read as a date.
+    pub unreadable: Vec<String>,
+}
+
+impl Drain {
+    /// Whether the column is honest.
+    #[must_use]
+    pub fn is_clean(&self) -> bool {
+        self.landed_unswept.is_empty() && self.abandoned.is_empty() && self.unreadable.is_empty()
+    }
+}
+
+/// Sweep a board for claims nobody is serving.
+///
+/// # The narrowing is behaviour, not an optimisation
+///
+/// A projected-away key must be a NAMED refusal rather than a rule that
+/// silently scans nothing — but demanded of the rows whose verdict depends on
+/// it, never of the column. `updatedAt` is demanded of the CANDIDATES (In
+/// Progress and not landed); `attachments` and `gitBranchName` are demanded only
+/// of the STALE ones. So a fresh row is never demanded of `attachments` — which
+/// matters because a tracker's list projection cannot carry it, making
+/// `get_issue` the only source — a landed row is never demanded of anything, and
+/// a row in another column is never demanded at all. An unresolved row in a
+/// mixed payload still refuses, which is what keeps the narrowing from being a
+/// hole.
+///
+/// # Errors
+///
+/// [`UsageError`] when the instant will not parse, or when a row whose verdict
+/// needs a key does not carry it. Both are exit 2: a sweep that cannot read its
+/// inputs must never render as a clean column.
+pub fn drain(
+    claims: &[Claim],
+    evidence: &Evidence,
+    refs: &BTreeSet<String>,
+    bound: &Bound,
+) -> Result<Drain> {
+    let today = bound.today;
+
+    let mut in_progress = 0_usize;
+    let mut landed_unswept = Vec::new();
+    let mut candidates = Vec::new();
+    for claim in claims {
+        if !claim.is_in_progress() {
+            continue;
+        }
+        in_progress += 1;
+        if evidence.landed(&claim.id) {
+            landed_unswept.push(claim.id.clone());
+            continue;
+        }
+        candidates.push(claim);
+    }
+
+    demand("updatedAt", &candidates, |claim| claim.updated_at.is_none())?;
+
+    let mut unreadable = Vec::new();
+    let mut stale = Vec::new();
+    for claim in candidates {
+        let Some(stamp) = claim.updated_at.as_deref() else {
+            continue;
+        };
+        let Some(day) = day_of(stamp) else {
+            unreadable.push(claim.id.clone());
+            continue;
+        };
+        // STRICTLY greater. A claim idle for exactly the bound is still live,
+        // and the boundary case is the one a reader checks.
+        if today - day > bound.max_idle_days {
+            stale.push(claim);
+        }
+    }
+
+    // `attachments` first, matching the order the predecessor reports them in:
+    // a row missing both names the one a tracker's list projection cannot
+    // supply, which is the one whose remedy is a different fetch.
+    demand("attachments", &stale, |claim| claim.attachments.is_none())?;
+    demand("gitBranchName", &stale, |claim| claim.branch.is_none())?;
+
+    let mut abandoned = Vec::new();
+    for claim in stale {
+        if claim.has_pull_request() || claim.has_live_branch(refs) {
+            continue;
+        }
+        abandoned.push(claim.id.clone());
+    }
+
+    // Sorted and deduplicated so the report is byte-stable whatever order the
+    // payload arrived in. Asserted rather than inherited: the predecessor bought
+    // this with `sort -u` and a port that merely happened to preserve order
+    // would pass today and drift the first time the loop changed.
+    for bucket in [&mut landed_unswept, &mut abandoned, &mut unreadable] {
+        bucket.sort();
+        bucket.dedup();
+    }
+
+    Ok(Drain {
+        in_progress,
+        landed_unswept,
+        abandoned,
+        unreadable,
+    })
+}
+
+/// Refuse when a row whose verdict needs `key` does not carry it.
+fn demand(key: &str, claims: &[&Claim], absent: impl Fn(&Claim) -> bool) -> Result<()> {
+    let missing: Vec<&str> = claims
+        .iter()
+        .filter(|claim| absent(claim))
+        .map(|claim| claim.id.as_str())
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(UsageError::raise(format!(
+        "landed: no `{key}` on unresolved In Progress issue(s): {}. \
+         The abandonment verdict reads that key, so a payload without it cannot \
+         answer — re-fetch those rows individually.",
+        missing.join(" ")
+    )))
+}
+
+/// Parse the richer board the abandonment sweep reads.
+///
+/// # Errors
+///
+/// [`UsageError`] when the value is not a set of payloads carrying `id` and
+/// `status`. The three added keys are OPTIONAL here and refused later by
+/// [`drain`], because whether a row owes them depends on where it falls in the
+/// narrowing — which is not knowable while parsing.
+pub fn claims_from(value: &serde_json::Value) -> Result<Vec<Claim>> {
+    let items: Vec<&serde_json::Value> = match value {
+        serde_json::Value::Array(items) => match items.as_slice() {
+            [serde_json::Value::Array(inner)] => inner.iter().collect(),
+            _ => items.iter().collect(),
+        },
+        other => vec![other],
+    };
+
+    let mut claims = Vec::with_capacity(items.len());
+    for item in items {
+        let (Some(id), Some(status)) = (
+            item.get("id").and_then(serde_json::Value::as_str),
+            item.get("status").and_then(serde_json::Value::as_str),
+        ) else {
+            return Err(UsageError::raise(
+                "landed: not a set of get_issue payloads (need id and status per issue)".to_owned(),
+            ));
+        };
+        claims.push(Claim {
+            id: id.to_owned(),
+            status: status.to_owned(),
+            updated_at: item
+                .get("updatedAt")
+                .map(|value| value.as_str().unwrap_or_default().to_owned()),
+            // A present-but-not-an-array `attachments` reads as present and
+            // empty rather than absent: the key IS there, so the payload is not
+            // the could-not-look case the demand exists to catch.
+            attachments: item.get("attachments").map(|value| {
+                value
+                    .as_array()
+                    .map(|entries| {
+                        entries
+                            .iter()
+                            .filter_map(|entry| {
+                                entry
+                                    .get("url")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(str::to_owned)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }),
+            branch: item
+                .get("gitBranchName")
+                .map(|value| value.as_str().unwrap_or_default().to_owned()),
+        });
+    }
+    Ok(claims)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,4 +813,251 @@ mod tests {
         );
         assert_eq!(rows_from(&bare).ok(), rows_from(&wrapped).ok());
     }
+
+    // --- the abandonment sweep -------------------------------------------
+
+    /// A claim with every key present. The defaults are the ABANDONED shape, so
+    /// each case below reads as "this one thing rescues it".
+    fn claim(id: &str, since: &str) -> Claim {
+        Claim {
+            id: id.to_owned(),
+            status: "In Progress".to_owned(),
+            updated_at: Some(since.to_owned()),
+            attachments: Some(Vec::new()),
+            branch: Some(String::new()),
+        }
+    }
+
+    fn bound() -> Bound {
+        Bound {
+            max_idle_days: 2,
+            today: day_of("2026-08-20").unwrap_or_default(),
+        }
+    }
+
+    fn swept(claims: &[Claim]) -> Drain {
+        drain(claims, &Evidence::default(), &BTreeSet::new(), &bound()).unwrap_or_default()
+    }
+
+    #[test]
+    fn every_conjunct_satisfied_is_claimed_abandoned() {
+        let report = swept(&[claim("CLOUD-1", "2026-08-01")]);
+        assert_eq!(report.abandoned, vec!["CLOUD-1".to_owned()]);
+        assert_eq!(report.in_progress, 1);
+        assert!(!report.is_clean());
+    }
+
+    /// THE VERDICTS ARE EXCLUSIVE. A row satisfying every abandonment conjunct
+    /// whose work is nonetheless on `main` is landed, not dead — its claim was
+    /// discharged. Reporting both would price one row twice and tell a reader to
+    /// do two contradictory things with it.
+    #[test]
+    fn a_landed_row_is_not_also_reported_as_abandoned() {
+        let report = drain(
+            &[claim("CLOUD-1", "2026-08-01")],
+            &Evidence {
+                claimed: keys(&["CLOUD-1"]),
+                ..Evidence::default()
+            },
+            &BTreeSet::new(),
+            &bound(),
+        )
+        .unwrap_or_default();
+        assert_eq!(report.landed_unswept, vec!["CLOUD-1".to_owned()]);
+        assert!(report.abandoned.is_empty());
+    }
+
+    /// THE BOUND IS EXCLUSIVE AT THE THRESHOLD, and this is the case that pins
+    /// it. Both arms are asserted because either alone passes over a predicate
+    /// that never fires.
+    ///
+    /// SHOWN ABLE TO FAIL: `#MUTANT abandoned-ignores-bound` neuters the
+    /// comparison, and the second arm below is what goes red.
+    #[test]
+    fn the_idle_bound_is_exclusive_at_exactly_the_threshold() {
+        assert!(
+            swept(&[claim("CLOUD-1", "2026-08-18")])
+                .abandoned
+                .is_empty(),
+            "exactly the bound is still live"
+        );
+        assert_eq!(
+            swept(&[claim("CLOUD-1", "2026-08-17")]).abandoned,
+            vec!["CLOUD-1".to_owned()],
+            "one day past it is not"
+        );
+    }
+
+    /// A PR rescues; ANY OTHER ATTACHMENT DOES NOT. The conjunct is "no pull
+    /// request", never "no attachments", so a row carrying a design document is
+    /// still an abandoned claim.
+    ///
+    /// SHOWN ABLE TO FAIL: `#MUTANT abandoned-ignores-pr` drops the rescue, and
+    /// the first arm goes red.
+    #[test]
+    fn only_a_pull_request_attachment_rescues_a_claim() {
+        let mut with_pr = claim("CLOUD-1", "2026-08-01");
+        with_pr.attachments = Some(vec!["https://github.com/o/r/pull/12".to_owned()]);
+        assert!(swept(&[with_pr]).abandoned.is_empty());
+
+        let mut with_doc = claim("CLOUD-2", "2026-08-01");
+        with_doc.attachments = Some(vec!["https://tracker.example/document/abc".to_owned()]);
+        assert_eq!(swept(&[with_doc]).abandoned, vec!["CLOUD-2".to_owned()]);
+    }
+
+    #[test]
+    fn a_claim_with_a_live_remote_branch_is_not_abandoned() {
+        let mut live = claim("CLOUD-1", "2026-08-01");
+        live.branch = Some("feat/live".to_owned());
+        let report = drain(
+            &[live],
+            &Evidence::default(),
+            &keys(&["feat/live"]),
+            &bound(),
+        )
+        .unwrap_or_default();
+        assert!(report.abandoned.is_empty());
+    }
+
+    /// PRESENCE, NOT TRUTHINESS. An empty branch name and an empty attachment
+    /// list are the tracker SAYING there is no branch and no PR — data, not
+    /// absence — so the row is judged rather than refused, and the blank name
+    /// must not match a blank line in the caller's refs.
+    #[test]
+    fn an_empty_value_is_an_answer_and_never_a_refusal() {
+        let report = drain(
+            &[claim("CLOUD-1", "2026-08-01")],
+            &Evidence::default(),
+            &keys(&[""]),
+            &bound(),
+        )
+        .unwrap_or_default();
+        assert_eq!(report.abandoned, vec!["CLOUD-1".to_owned()]);
+    }
+
+    /// An unreadable stamp is its own bucket: staleness is UNKNOWN, which is
+    /// neither live nor dead. Reading it as fresh would hide the row; reading it
+    /// as stale would invent a finding.
+    #[test]
+    fn an_unreadable_stamp_is_reported_rather_than_read_as_fresh() {
+        let mut undated = claim("CLOUD-1", "2026-08-01");
+        undated.updated_at = Some("not-a-date".to_owned());
+        let report = swept(&[undated]);
+        assert_eq!(report.unreadable, vec!["CLOUD-1".to_owned()]);
+        assert!(report.abandoned.is_empty());
+    }
+
+    /// THE NARROWING, BOTH DIRECTIONS IN ONE CASE. The fresh row owes no
+    /// `attachments` — a tracker's list projection cannot carry that key, so
+    /// demanding it of the whole column forces a per-row fetch nobody needs —
+    /// while the stale one in the same payload still refuses.
+    #[test]
+    fn a_key_is_demanded_of_the_rows_whose_verdict_needs_it_and_no_others() {
+        let mut fresh = claim("CLOUD-1", "2026-08-20");
+        fresh.attachments = None;
+        assert!(
+            drain(
+                &[fresh.clone()],
+                &Evidence::default(),
+                &BTreeSet::new(),
+                &bound()
+            )
+            .is_ok(),
+            "a fresh row is already resolved by the bound, so it owes no attachments"
+        );
+
+        let mut stale = claim("CLOUD-2", "2026-08-01");
+        stale.attachments = None;
+        assert!(
+            drain(
+                &[fresh, stale],
+                &Evidence::default(),
+                &BTreeSet::new(),
+                &bound()
+            )
+            .is_err(),
+            "the narrowing must not become a hole: a stale row still owes the key"
+        );
+    }
+
+    /// A row in another column is judged by neither verdict and owes no key.
+    /// Over-refusal is as much a defect as the silent scan.
+    #[test]
+    fn a_row_in_another_column_is_neither_swept_nor_demanded() {
+        let mut done = claim("CLOUD-1", "2026-08-01");
+        done.status = "Done".to_owned();
+        done.attachments = None;
+        done.updated_at = None;
+        let report =
+            drain(&[done], &Evidence::default(), &BTreeSet::new(), &bound()).unwrap_or_default();
+        assert!(report.is_clean());
+        assert_eq!(report.in_progress, 0);
+    }
+
+    /// Byte-stable regardless of input order — asserted rather than inherited,
+    /// because a port that merely happened to preserve order would pass today
+    /// and drift the first time the loop changed.
+    #[test]
+    fn the_id_list_is_byte_stable_whatever_order_the_payload_arrived_in() {
+        let one = claim("CLOUD-1", "2026-08-01");
+        let two = claim("CLOUD-2", "2026-08-01");
+        let forwards = swept(&[one.clone(), two.clone()]);
+        let backwards = swept(&[two, one]);
+        assert_eq!(forwards.abandoned, backwards.abandoned);
+        assert_eq!(forwards.abandoned.len(), 2, "and neither reading is empty");
+    }
+
+    /// THE SHAPE IS CHECKED BEFORE THE ARITHMETIC. `not-a-date` splits into
+    /// three hyphen-separated parts exactly like a real date, so a parser that
+    /// split first would answer a number instead of admitting it could not read.
+    #[test]
+    fn a_stamp_shaped_like_a_date_but_not_one_is_unreadable() {
+        assert!(day_of("not-a-date").is_none());
+        assert!(day_of("2026-13-01").is_none());
+        assert!(day_of("2026-08-99").is_none());
+        assert!(day_of("2026-08-20T11:22:33Z").is_some());
+        // A known offset, so the arithmetic is pinned and not merely non-None.
+        let (earlier, later) = (day_of("2026-08-18"), day_of("2026-08-20"));
+        assert_eq!(later.zip(earlier).map(|(a, b)| a - b), Some(2));
+    }
+
+    #[test]
+    fn a_pull_request_url_needs_a_number_after_the_marker() {
+        assert!(is_pull_request_url("https://github.com/o/r/pull/12"));
+        assert!(!is_pull_request_url("https://github.com/o/r/pull/"));
+        assert!(!is_pull_request_url("https://example.test/pulled/12"));
+    }
+
+    /// An absent key and a present-but-empty one must not read alike, because
+    /// the whole demand rests on telling them apart.
+    #[test]
+    fn parsing_keeps_an_absent_key_distinct_from_an_empty_one() {
+        let absent = serde_json::json!({ "id": "CLOUD-1", "status": "In Progress" });
+        let empty = serde_json::json!({
+            "id": "CLOUD-1", "status": "In Progress",
+            "attachments": [], "gitBranchName": ""
+        });
+        let absent = claims_from(&absent).unwrap_or_default();
+        let empty = claims_from(&empty).unwrap_or_default();
+        assert_eq!(
+            absent.first().map(|claim| claim.attachments.clone()),
+            Some(None)
+        );
+        assert_eq!(
+            empty.first().map(|claim| claim.attachments.clone()),
+            Some(Some(Vec::new()))
+        );
+        assert_eq!(
+            empty.first().and_then(|claim| claim.branch.clone()),
+            Some(String::new())
+        );
+    }
 }
+
+/*
+The mutations CLOUD-1513's Ready block declares. Each removes one conjunct, and
+the named case is the one that stops discriminating.
+
+#MUTANT abandoned-ignores-bound|s@today - day > bound.max_idle_days@true@|the_idle_bound_is_exclusive_at_exactly_the_threshold
+#MUTANT abandoned-ignores-pr|s@claim.has_pull_request() || claim.has_live_branch(refs)@false@|only_a_pull_request_attachment_rescues_a_claim
+*/

@@ -659,6 +659,31 @@ pub enum LandedCommand {
         /// `<CLOUD-id>` lines a PR body declined with `DO-NOT-CLOSE`.
         declined: Option<String>,
     },
+    /// Sweep a board for claims nobody is serving (CLOUD-1513).
+    ///
+    /// Appended rather than inserted, for the reason the parent enum's own
+    /// comment gives: the crate has no `repr`, so a shifted discriminant is a
+    /// break `batten semver check` reads as one.
+    Abandoned {
+        /// `<CLOUD-id>` lines a commit on `origin/main` CLOSES.
+        claimed: Option<String>,
+        /// `<CLOUD-id><TAB><pr-number>` lines, one per key a MERGED PR closed.
+        merged_prs: Option<String>,
+        /// `<CLOUD-id><TAB><ref>` lines the caller ASSERTS carry the work.
+        landed_by: Option<String>,
+        /// Branch names the remote carries, one per line.
+        ///
+        /// Evidence rather than a spawn, which is what keeps this arm on the
+        /// read-only allowlist.
+        refs: Option<String>,
+        /// The instant the idle bound is measured against, ISO-8601.
+        ///
+        /// Absent is now. Supplied so the same board at the same instant yields
+        /// the same bytes, which a clock READ can never do.
+        instant: Option<String>,
+        /// Days a claim may be idle before it reads as abandoned.
+        max_idle_days: Option<String>,
+    },
 }
 
 /// Subcommands of `ready`.
@@ -1847,6 +1872,14 @@ fn landed_of(matches: &ArgMatches) -> Option<LandedCommand> {
             merged_prs: matches.get_one::<String>("merged_prs").cloned(),
             landed_by: matches.get_one::<String>("landed_by").cloned(),
             declined: matches.get_one::<String>("declined").cloned(),
+        }),
+        ("abandoned", matches) => Some(LandedCommand::Abandoned {
+            claimed: matches.get_one::<String>("claimed").cloned(),
+            merged_prs: matches.get_one::<String>("merged_prs").cloned(),
+            landed_by: matches.get_one::<String>("landed_by").cloned(),
+            refs: matches.get_one::<String>("refs").cloned(),
+            instant: matches.get_one::<String>("instant").cloned(),
+            max_idle_days: matches.get_one::<String>("max_idle_days").cloned(),
         }),
         _ => None,
     }

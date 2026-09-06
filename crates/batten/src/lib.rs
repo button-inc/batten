@@ -2207,7 +2207,41 @@ fn run_landed(
             mode,
             err,
         ),
+        LandedCommand::Abandoned {
+            claimed,
+            merged_prs,
+            landed_by,
+            refs,
+            instant,
+            max_idle_days,
+        } => run_landed_abandoned(
+            &AbandonAsk {
+                claimed: claimed.as_deref(),
+                merged_prs: merged_prs.as_deref(),
+                landed_by: landed_by.as_deref(),
+                refs: refs.as_deref(),
+                instant: instant.as_deref(),
+                max_idle_days: max_idle_days.as_deref(),
+            },
+            mode,
+            _out,
+            err,
+        ),
     }
+}
+
+/// What a caller supplies to the abandonment sweep.
+///
+/// Bundled rather than threaded, the way `ClaimAsk` is and for the same reason:
+/// the arm takes six caller-supplied values plus a mode and two writers, and
+/// `clippy::too_many_arguments` is the gate that says so.
+struct AbandonAsk<'a> {
+    claimed: Option<&'a str>,
+    merged_prs: Option<&'a str>,
+    landed_by: Option<&'a str>,
+    refs: Option<&'a str>,
+    instant: Option<&'a str>,
+    max_idle_days: Option<&'a str>,
 }
 
 /// Sweep a board for columns that contradict git and the forge.
@@ -2338,6 +2372,147 @@ fn run_landed_check(
             err,
             "landed: every column agrees with what git and the forge already did",
         )?;
+        return Ok(ExitCode::Success);
+    }
+    Ok(ExitCode::Violation)
+}
+
+/// Sweep a board for claims nobody is serving (CLOUD-1513).
+///
+/// # Errors
+///
+/// [`UsageError`] when the payload, the evidence or the instant cannot be read,
+/// or when a row whose verdict needs a key does not carry it. Every one is exit
+/// 2: a sweep that could not look must never render as a clean column.
+fn run_landed_abandoned(
+    ask: &AbandonAsk<'_>,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    // REQUIRED IN EFFECT, and for a sharper reason than on the sibling arm.
+    // Without merged-PR evidence more rows read as unlanded, so more read as
+    // ABANDONED — the sweep over-reports, and an over-reporting drain is the one
+    // that gets switched off. `--claimed` and `--landed-by` fail the safe way
+    // and stay optional.
+    let Some(merged_prs) = ask.merged_prs else {
+        return Err(UsageError::raise(
+            "landed: no --merged-prs evidence, so every row a merged pull request closed would \
+             read as an abandoned claim. Supply `<CLOUD-id><TAB><pr-number>` lines."
+                .to_owned(),
+        ));
+    };
+
+    // THE CLOCK IS THE BOUNDARY'S. An instant the caller names is parsed here
+    // and refused here; absent, the system clock answers — and either way the
+    // predicate is handed a day number, so the same board at the same instant
+    // yields the same bytes.
+    let today = match ask.instant {
+        Some(instant) => landed::day_of(instant).ok_or_else(|| {
+            UsageError::raise(format!(
+                "landed: cannot read --instant ('{instant}'); expected ISO-8601"
+            ))
+        })?,
+        None => i64::try_from(now_unix() / 86_400).unwrap_or_default(),
+    };
+    let max_idle_days = match ask.max_idle_days {
+        Some(raw) => raw.trim().parse::<i64>().map_err(|_| {
+            UsageError::raise(format!(
+                "landed: --max-idle-days ('{raw}') is not a whole number of days"
+            ))
+        })?,
+        None => 2,
+    };
+
+    let mut payload = String::new();
+    std::io::stdin().read_to_string(&mut payload)?;
+    if payload.trim().is_empty() {
+        return Err(UsageError::raise(
+            "landed: stdin is empty; expected get_issue payloads".to_owned(),
+        ));
+    }
+    let value: serde_json::Value = serde_json::from_str(&payload).map_err(|_| {
+        UsageError::raise("landed: stdin is not JSON; expected get_issue payloads".to_owned())
+    })?;
+    let claims = landed::claims_from(&value)?;
+
+    let mut evidence = landed::Evidence::default();
+    if let Some(path) = ask.claimed {
+        for (key, _) in evidence_file(path, "--claimed")? {
+            evidence.claimed.insert(key);
+        }
+    }
+    for (key, _) in evidence_file(merged_prs, "--merged-prs")? {
+        evidence.merged.insert(key);
+    }
+    if let Some(path) = ask.landed_by {
+        for (key, reference) in evidence_file(path, "--landed-by")? {
+            evidence
+                .asserted
+                .insert(key, reference.unwrap_or_else(|| "no ref given".to_owned()));
+        }
+    }
+    let mut refs = std::collections::BTreeSet::new();
+    if let Some(path) = ask.refs {
+        for (name, _) in evidence_file(path, "--refs")? {
+            refs.insert(name);
+        }
+    }
+
+    let report = landed::drain(
+        &claims,
+        &evidence,
+        &refs,
+        &landed::Bound {
+            max_idle_days,
+            today,
+        },
+    )?;
+
+    // Three blocks in a fixed order, each under its own label, so a reader can
+    // tell which verdict a key came from without counting. Pointer-only: keys
+    // and counts, never a line of any body.
+    for (label, ids) in [
+        (
+            "landed-unswept — In Progress while their work is on main",
+            &report.landed_unswept,
+        ),
+        (
+            "claimed-abandoned — In Progress with no landing, no pull request, no branch, idle \
+             past the bound",
+            &report.abandoned,
+        ),
+        (
+            "unreadable-updatedat — cannot date the claim, so staleness is unknown",
+            &report.unreadable,
+        ),
+    ] {
+        if ids.is_empty() {
+            continue;
+        }
+        output::message(mode, Verbosity::Normal, err, &format!("{label}:"))?;
+        for id in ids {
+            output::message(mode, Verbosity::Normal, err, &format!("  {id}"))?;
+        }
+    }
+
+    // THE BOUND IT USED, not the default. A reader who cannot see which number
+    // produced a finding has to go and look it up, and the one they find may not
+    // be the one that ran.
+    output::message(
+        mode,
+        Verbosity::Normal,
+        out,
+        &format!(
+            "landed: {} In Progress — {} landed-unswept, {} claimed-abandoned (idle > {}d)",
+            report.in_progress,
+            report.landed_unswept.len(),
+            report.abandoned.len(),
+            max_idle_days,
+        ),
+    )?;
+
+    if report.is_clean() {
         return Ok(ExitCode::Success);
     }
     Ok(ExitCode::Violation)
