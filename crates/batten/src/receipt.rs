@@ -834,6 +834,33 @@ pub(crate) fn verdicts(
         checks
             .iter()
             .map(|(check, key)| {
+                // RESOLVED ONCE PER CHECK, and the three readings below share it.
+                //
+                // Per CHECK rather than per call, which is the narrowing the arm
+                // below states: the base is a property of the row, so two rows
+                // keying on different bases must not answer from whichever was
+                // read first. Within one check there is exactly one base and
+                // therefore exactly one identity, so recomputing it was buying
+                // nothing.
+                //
+                // It is not free to recompute: each call is a repository open
+                // plus a merge-base walk and a tree diff, and the validity, the
+                // `max_age` branch and the `requires_field` branch each wanted
+                // it — so a row declaring both paid THREE of them on every
+                // mediated call, against the ~100 ms budget `perf-assert` holds
+                // this path to. `Option` is the same three-valued answer the
+                // arms already read; computing it here changes no verdict.
+                //
+                // Only a `delta`-keyed check pays anything at all: every other
+                // keying leaves this `None` without opening a repository, which
+                // is the same cheap-when-irrelevant `max_age` takes below.
+                let delta_identity = if *key == ReceiptKey::Delta {
+                    key_bases
+                        .get(check)
+                        .and_then(|base| delta_subject(&facts.repo_root, base))
+                } else {
+                    None
+                };
                 let verdict = match key {
                     ReceiptKey::Head => {
                         let statement = receipt_path(&facts.repo_root, check)
@@ -865,11 +892,10 @@ pub(crate) fn verdicts(
                     // resolve could push anything. A branch with nothing to
                     // review is refused and says so, which is loud and cheap to
                     // clear, where the permissive direction is silent.
-                    ReceiptKey::Delta => key_bases
-                        .get(check)
-                        .and_then(|base| delta_subject(&facts.repo_root, base))
+                    ReceiptKey::Delta => delta_identity
+                        .as_ref()
                         .map_or(Validity::Missing, |identity| {
-                            named_validity(&facts.git_dir, check, &identity)
+                            named_validity(&facts.git_dir, check, identity)
                         }),
                 };
                 // THE AGE IS READ LAST, AND ONLY OVER A RECEIPT THAT WAS
@@ -885,10 +911,7 @@ pub(crate) fn verdicts(
                         *key,
                         branch.as_ref().map(|(branch, _)| branch.as_str()),
                         named.as_deref(),
-                        key_bases
-                            .get(check)
-                            .and_then(|base| delta_subject(&facts.repo_root, base))
-                            .as_deref(),
+                        delta_identity.as_deref(),
                     )
                     .filter(|path| older_than(path, max_age, now))
                     .map_or(Validity::Valid, |_| Validity::Expired),
@@ -908,10 +931,7 @@ pub(crate) fn verdicts(
                         *key,
                         branch.as_ref().map(|(branch, _)| branch.as_str()),
                         named.as_deref(),
-                        key_bases
-                            .get(check)
-                            .and_then(|base| delta_subject(&facts.repo_root, base))
-                            .as_deref(),
+                        delta_identity.as_deref(),
                     )
                     .map_or(Validity::Valid, |path| {
                         if field_refutes(&path, bound) {
