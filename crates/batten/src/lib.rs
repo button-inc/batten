@@ -2190,7 +2190,7 @@ fn evidence_file(path: &str, what: &str) -> Result<Vec<(String, Option<String>)>
 fn run_landed(
     command: LandedCommand,
     mode: Mode,
-    _out: &mut dyn Write,
+    out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     match command {
@@ -2224,7 +2224,7 @@ fn run_landed(
                 max_idle_days: max_idle_days.as_deref(),
             },
             mode,
-            _out,
+            out,
             err,
         ),
     }
@@ -2488,6 +2488,25 @@ fn run_landed_abandoned(
         },
     )?;
 
+    render_drain(&report, max_idle_days, mode, out, err)?;
+    if report.is_clean() {
+        return Ok(ExitCode::Success);
+    }
+    Ok(ExitCode::Violation)
+}
+
+/// Render an abandonment sweep: three labelled blocks, then one summary.
+///
+/// Split out because the arm above was over the line budget, and this is the
+/// seam that already existed — everything above it resolves inputs and this
+/// says what was found, so the two have no shared state but the report.
+fn render_drain(
+    report: &landed::Drain,
+    max_idle_days: i64,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<()> {
     // Three blocks in a fixed order, each under its own label, so a reader can
     // tell which verdict a key came from without counting. Pointer-only: keys
     // and counts, never a line of any body.
@@ -2530,11 +2549,7 @@ fn run_landed_abandoned(
             max_idle_days,
         ),
     )?;
-
-    if report.is_clean() {
-        return Ok(ExitCode::Success);
-    }
-    Ok(ExitCode::Violation)
+    Ok(())
 }
 
 fn run_ready(
