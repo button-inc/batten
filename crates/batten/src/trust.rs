@@ -2007,11 +2007,32 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     // The census row above declared this field `Compared` while only
     // `landing_paths` reached a comparison, so the key that disables the guard
     // was asserted covered and was not.
-    found.extend(added_entries(
-        WeakeningKind::FastForwardLaneAdded,
-        &fast_forward_branches(base),
-        &fast_forward_branches(working),
-    ));
+    //
+    // **IT WIDENS A DECLARED LANE SET; IT DOES NOT PRICE INTRODUCING ONE, AND
+    // THE FIRST DRAFT DID** (review of #848). Both sides are `Vec`, so an ABSENT
+    // key and a DECLARED-EMPTY one arrive here identically — the collapse this
+    // crate refuses everywhere else — and reading absent as "exempts nobody"
+    // makes the base look like a gate that judged every branch.
+    //
+    // It is not one. Measured on this branch: `origin/main` carries neither
+    // `fast_forward_branches` NOR `fast_forward_lane`, so the base judges ZERO
+    // branches by a lane gate that does not exist, and a head declaring three
+    // prefixes judges every branch except three. That is strictly MORE gating,
+    // and pricing it as a weakening refuses the commit that INTRODUCES the
+    // guard — the one shape a gate must never refuse, because the alternative
+    // to a gate with three exemptions is no gate at all.
+    //
+    // So the comparison runs only where the base already declared a lane. Adding
+    // `claude/` to a live exemption set — the case the review named — still
+    // fires, and it is the case where the base genuinely was judging that branch
+    // a moment ago.
+    if !fast_forward_branches(base).is_empty() {
+        found.extend(added_entries(
+            WeakeningKind::FastForwardLaneAdded,
+            &fast_forward_branches(base),
+            &fast_forward_branches(working),
+        ));
+    }
 
     // The evidence `verified` demands (CLOUD-1338). Removed-direction only, for
     // the reason above one field over: the verb reports a head verified when NO
@@ -3898,6 +3919,44 @@ mod tests {
         // anti-vacuity its neighbour keeps, in the opposite direction.
         assert!(weakenings(&working, &base).is_empty());
         assert!(weakenings(&base, &base).is_empty());
+    }
+
+    /// INTRODUCING THE LANE SET IS NOT WIDENING IT, and the first draft priced
+    /// both the same (review of #848).
+    ///
+    /// A base that declares NO lane is not a gate exempting nobody — measured on
+    /// this branch, `origin/main` carries neither the key nor
+    /// `fast_forward_lane` itself, so it judges zero branches by a gate that
+    /// does not exist. A head declaring three prefixes judges every branch but
+    /// three, which is strictly MORE gating. Pricing that as a weakening refuses
+    /// the commit that introduces the guard, and the alternative to a guard with
+    /// three exemptions is no guard.
+    #[test]
+    fn introducing_the_lane_set_beside_its_gate_is_not_a_weakening() {
+        let base = config("[lease]\nlanding_paths = [\"a.sh\"]\n");
+        let working = config(
+            "[lease]\nlanding_paths = [\"a.sh\"]\nfast_forward_branches = [\"renovate/\", \"release-plz-\"]\n",
+        );
+        assert!(
+            weakenings(&base, &working).is_empty(),
+            "a lane set arriving with the gate that reads it is the guard being built"
+        );
+
+        // ANTI-VACUITY: the guard is not switched off wholesale. Once a lane IS
+        // declared, the next one added still fires — which is the case the
+        // review named, and the one where the base really was judging it.
+        let widened = config(
+            "[lease]\nlanding_paths = [\"a.sh\"]\nfast_forward_branches = [\"renovate/\", \"release-plz-\", \"claude/\"]\n",
+        );
+        assert_eq!(
+            only(&working, &widened),
+            Weakening::new(
+                WeakeningKind::FastForwardLaneAdded,
+                "claude/",
+                "absent",
+                "present",
+            )
+        );
     }
 
     /// Dropping the whole table is that move at its limit, not a silent one.
