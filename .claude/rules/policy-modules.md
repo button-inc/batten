@@ -185,8 +185,8 @@ rebase — `land` rebases every lap, and a per-lap re-attestation is the cost th
 gets a gate switched off. Its `null` is could-not-look AND the empty diff: a branch
 that changed nothing has no identity, `cumulative_patch_id` refuses to mint one so
 two empty changes cannot compare equal, and a predicate reading that absence as
-*unattested* refuses a checkout with nothing to review. Do not re-derive an
-identity from the path lists — that is a second notion of *the same change*, free
+_unattested_ refuses a checkout with nothing to review. Do not re-derive an
+identity from the path lists — that is a second notion of _the same change_, free
 to disagree with `landing`'s about exactly the rebase the key turns on.
 
 **`records-blocked` is the recorder surface's could-not-look, and its EMPTY value

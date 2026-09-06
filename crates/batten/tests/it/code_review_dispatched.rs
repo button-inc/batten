@@ -216,7 +216,10 @@ fn a_receipt_under_this_change_reaches_the_predicate_and_is_clean() {
 #[test]
 fn a_receipt_over_another_change_does_not_answer() {
     let root = repo("code-review-stale");
-    file_receipt(&root, "0000000000000000000000000000000000000000000000000000000000000000");
+    file_receipt(
+        &root,
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    );
     assert_eq!(
         verdicts(&root),
         vec![String::from(RULE)],
@@ -257,7 +260,10 @@ fn a_rebase_onto_a_moved_base_does_not_re_owe_the_review() {
 
     // Move the base under the branch with a change this branch never made, then
     // rebase onto it — the landing loop's own lap, in miniature.
-    common::git_in(&root, &["checkout", "-q", "-b", "trunk", "refs/remotes/origin/main"]);
+    common::git_in(
+        &root,
+        &["checkout", "-q", "-b", "trunk", "refs/remotes/origin/main"],
+    );
     fs::write(root.join("NOTES.md"), "trunk moved\n").expect("the trunk file");
     common::git_in(&root, &["add", "-A"]);
     common::git_in(&root, &["commit", "-q", "-m", "trunk"]);

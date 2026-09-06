@@ -398,7 +398,8 @@ pub(crate) fn scalar(value: &serde_json::Value, path: &str) -> Option<String> {
 /// see.
 #[must_use]
 pub fn selects(declared: &Declared, result: &serde_json::Value) -> bool {
-    let (Some(path), Some(expected)) = (declared.selects_at.as_deref(), declared.selects.as_deref())
+    let (Some(path), Some(expected)) =
+        (declared.selects_at.as_deref(), declared.selects.as_deref())
     else {
         return true;
     };
