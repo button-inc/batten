@@ -5213,12 +5213,38 @@ enum Discard {
     Orphaned,
 }
 
+/// Every constituent command, carrying the segment it came from and that
+/// segment's index among the stages.
+///
+/// **The two readings a mediated walk needs are different and this is the seam**
+/// (CLOUD-1287). `Segment::words` concatenates across a newline, because segment
+/// identity deliberately spans it — promoting a newline to a separator would move
+/// every landed `verdict-not-discarded` verdict. Program identity is the opposite:
+/// `cd /tmp` on line one must not own line two's operands, which was measured as
+/// `stat` refused while the refusal named `cd`. So every walk that resolves a
+/// PROGRAM reads this, and the two that ask about the SPAN — a terminator, a
+/// position among the stages — keep reading the segment, which is why the segment
+/// travels with the line rather than being replaced by it.
+///
+/// Derived from the parse rather than by re-splitting `raw`, which is what the
+/// character walk this replaced had to do.
+fn per_line(parsed: &[Segment]) -> Vec<(usize, &Segment, &Vec<String>)> {
+    parsed
+        .iter()
+        .enumerate()
+        .flat_map(|(index, segment)| segment.lines.iter().map(move |line| (index, segment, line)))
+        .collect()
+}
+
 /// Deny a verdict-bearing command whose exit status the surrounding structure
 /// throws away (CLOUD-443).
 ///
-/// Judged per SEGMENT against the operators the parser now retains. Every shape
-/// here fails green — exit 0 over a failure — which is what makes them worth a
-/// gate rather than a convention: nothing downstream can notice them.
+/// Judged against the operators the parser retains, per constituent COMMAND for
+/// the program and per SEGMENT for the structure — [`per_line`] is that seam, and
+/// the split is why a pager on the second line of a stage is now seen where
+/// `words` would have resolved only the first line's program. Every shape here
+/// fails green — exit 0 over a failure — which is what makes them worth a gate
+/// rather than a convention: nothing downstream can notice them.
 ///
 /// `&&` is absent by construction rather than by exclusion: it is the one
 /// separator that preserves a non-zero status, so there is no false green to
@@ -5257,8 +5283,12 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
         }
         let verdicts = rule.verdict.as_deref().unwrap_or_default();
         let filters = rule.filters.as_deref().unwrap_or_default();
-        for (index, segment) in parsed.iter().enumerate() {
-            let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+        // PER LINE, because a verdict-carrying program on line two is not the
+        // program `words` would resolve (CLOUD-1287). The segment still travels
+        // with it: `terminator` and the stage position below are the SPAN's, and
+        // a line has neither.
+        for (index, segment, line) in per_line(&parsed) {
+            let tokens: Vec<&str> = line.iter().map(String::as_str).collect();
             let Some(program_index) = effective_program(&tokens) else {
                 continue;
             };
@@ -5267,14 +5297,19 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
             // the resolved program — otherwise the wrapper that orphans the run
             // is the one token the parser hides.
             let detached_here = tokens.contains(&"nohup");
+            // NORMALISED, and the operand window is normalised with it: a grouped
+            // command's closing paren lands on the LAST token, which is a matched
+            // operand whenever the command takes no trailing argument, so
+            // `(mise run land)` would otherwise not match where `(mise run land x)`
+            // did.
             let words: Vec<&str> = tokens[program_index + 1..]
                 .iter()
-                .copied()
+                .map(|token| program_token(token))
                 .filter(|token| !token.starts_with('-'))
                 .collect();
             if !verdicts
                 .iter()
-                .any(|entry| entry.matches(tokens[program_index], &words))
+                .any(|entry| entry.matches(program_token(tokens[program_index]), &words))
             {
                 continue;
             }
@@ -5297,10 +5332,17 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
                     })
                     .chain(parsed.get(index + 1))
                     .any(|stage| {
-                        let stage_tokens: Vec<&str> =
-                            stage.words.iter().map(String::as_str).collect();
-                        effective_program(&stage_tokens).is_some_and(|at| {
-                            filters.iter().any(|filter| filter == stage_tokens[at])
+                        // Per line here too: a pager written on the second line of
+                        // a stage discards the verdict exactly as completely as one
+                        // written on the first, and `words` would resolve only the
+                        // first line's program.
+                        stage.lines.iter().any(|stage_line| {
+                            let stage_tokens: Vec<&str> =
+                                stage_line.iter().map(String::as_str).collect();
+                            effective_program(&stage_tokens).is_some_and(|at| {
+                                let named = program_token(stage_tokens[at]);
+                                filters.iter().any(|filter| filter == named)
+                            })
                         })
                     });
                 if piped_into_filter {
@@ -5342,67 +5384,67 @@ fn substitution_decision(
     root: Option<&Path>,
     cwd: Option<&Path>,
 ) -> Option<Refusal> {
-    for (index, segment) in parsed.iter().enumerate() {
-        // Clause 2, AND IT IS HOISTED ABOVE THE LINE WALK because it is a
-        // property of the SEGMENT rather than of a line. The PRECEDING segment's
-        // terminator is what says whether this stage was fed by a pipe — the
-        // existing discard predicate reads the FOLLOWING one, which is why both
-        // live here rather than one deriving the other.
+    // PER LINE (CLOUD-1287), through the same reading every other mediated walk
+    // takes. `words` concatenates across a newline, because segment identity
+    // deliberately spans it; program identity does not, so a segment-wide read
+    // here resolves the FIRST line's program and judges every later line's
+    // operands as that program's. Hand-rolling the split beside [`per_line`]
+    // would be a second reading of one fact, and the two can drift.
+    for (index, _segment, line) in per_line(parsed) {
+        // Clause 2, and it is the SEGMENT's rather than the line's: the PRECEDING
+        // segment's terminator is what says whether this stage was fed by a pipe
+        // — the existing discard predicate reads the FOLLOWING one, which is why
+        // both live here rather than one deriving the other. Every line of a
+        // piped segment takes this arm, which is the same answer a check hoisted
+        // above the lines would give.
         if index > 0 && parsed[index - 1].terminator == Some(Separator::Pipe) {
             continue;
         }
-        // PER LINE (CLOUD-1287). `words` concatenates across a newline, because
-        // segment identity deliberately spans it; program identity does not. A
-        // segment-wide read here resolves the FIRST line's program and then
-        // judges every later line's operands as that program's.
-        for line in &segment.lines {
-            let tokens: Vec<&str> = line.iter().map(String::as_str).collect();
-            // `continue`, NEVER `?`. A `?` here returns from the whole function,
-            // so the first element with no resolvable program ends the scan and
-            // every LATER element goes unjudged — which is the permissive
-            // direction and the one nothing reports. Measured:
-            // `grep needle crates/batten/src/lib.rs` refused, and
-            // `FOO=1 && grep needle crates/batten/src/lib.rs` ALLOWED, because a
-            // bare assignment resolves no program. It matches every other skip
-            // in this loop now.
-            let Some(program_index) = effective_program(&tokens) else {
-                continue;
-            };
-            // NORMALISED, the same way every other walk resolves a program: a
-            // grouped command carries its opening paren on the token, so
-            // `(grep …` is not `grep` until `program_token` has read it.
-            let program = program_token(tokens[program_index]);
-            let operands = &tokens[program_index + 1..];
-            if !substitutes
-                .iter()
-                .any(|entry| substitute_matches(entry, program, operands))
-            {
-                continue;
-            }
-            // Operands only, and the scan STOPS at the first redirection:
-            // everything past a `>` is a destination this call writes, never a
-            // target it read instead of reaching for a tool. `grep pat > out.txt`
-            // is stdin-fed and must allow, which a scan that merely skipped the
-            // `>` would not do.
-            //
-            // THE ORDER IS LOAD-BEARING. `take_while` reads the RAW token
-            // deliberately, because `>` and `<` are syntax `program_token` may
-            // strip — normalising first could walk the scan PAST a redirect and
-            // refuse a destination the call writes. Only the `find` side, which
-            // asks whether the token names a repository path, sees the
-            // normalised form: that is where a trailing `)` would otherwise stop
-            // `(grep needle crates/batten/src/lib.rs)` from matching the path the
-            // row selected on.
-            let Some(target) = tokens[program_index + 1..]
-                .iter()
-                .take_while(|token| !token.contains('>') && !token.contains('<'))
-                .map(|token| program_token(token))
-                .find(|token| !token.starts_with('-') && names_a_repository_path(token, root, cwd))
-            else {
-                continue;
-            };
-            return Some(substitution_refusal(rule, program, target));
+        let tokens: Vec<&str> = line.iter().map(String::as_str).collect();
+        // `continue`, NEVER `?`. A `?` here returns from the whole function, so
+        // the first element with no resolvable program ends the scan and every
+        // LATER element goes unjudged — which is the permissive direction and the
+        // one nothing reports. Measured:
+        // `grep needle crates/batten/src/lib.rs` refused, and
+        // `FOO=1 && grep needle crates/batten/src/lib.rs` ALLOWED, because a bare
+        // assignment resolves no program. It matches every other skip in this
+        // loop now.
+        let Some(program_index) = effective_program(&tokens) else {
+            continue;
+        };
+        // NORMALISED, the same way every other walk resolves a program: a grouped
+        // command carries its opening paren on the token, so `(grep …` is not
+        // `grep` until `program_token` has read it.
+        let program = program_token(tokens[program_index]);
+        let operands = &tokens[program_index + 1..];
+        if !substitutes
+            .iter()
+            .any(|entry| substitute_matches(entry, program, operands))
+        {
+            continue;
         }
+        // Operands only, and the scan STOPS at the first redirection: everything
+        // past a `>` is a destination this call writes, never a target it read
+        // instead of reaching for a tool. `grep pat > out.txt` is stdin-fed and
+        // must allow, which a scan that merely skipped the `>` would not do.
+        //
+        // THE ORDER IS LOAD-BEARING. `take_while` reads the RAW token
+        // deliberately, because `>` and `<` are syntax `program_token` may strip —
+        // normalising first could walk the scan PAST a redirect and refuse a
+        // destination the call writes. Only the `find` side, which asks whether
+        // the token names a repository path, sees the normalised form: that is
+        // where a trailing `)` would otherwise stop
+        // `(grep needle crates/batten/src/lib.rs)` from matching the path the row
+        // selected on.
+        let Some(target) = tokens[program_index + 1..]
+            .iter()
+            .take_while(|token| !token.contains('>') && !token.contains('<'))
+            .map(|token| program_token(token))
+            .find(|token| !token.starts_with('-') && names_a_repository_path(token, root, cwd))
+        else {
+            continue;
+        };
+        return Some(substitution_refusal(rule, program, target));
     }
     None
 }
