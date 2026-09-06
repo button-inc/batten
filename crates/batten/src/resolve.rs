@@ -1227,6 +1227,7 @@ pub fn resolve_with_env(
     let mut paths = Paths::from_authority(&repo, present, origin);
 
     // Layer 2 — the git-ignored local file. Optional, and raise-only.
+    let mut local_unresolvable = Vec::new();
     let local_path = dir.join(LOCAL_CONFIG_FILE);
     if local_path.exists() {
         // Ungated: `min_batten_version` is authority-only, and the refusal in
@@ -1240,6 +1241,11 @@ pub fn resolve_with_env(
         // `protected` that looked applied and wasn't — is now either applied or
         // a load error, with no third outcome.
         let local = config::load_override(&local_path)?;
+        // Read off before the value moves. A key the override layer could not
+        // resolve is a gate that is OFF in exactly the way an authority one is,
+        // so it joins the same report rather than being dropped silently here
+        // (CLOUD-1428) — which would be the vacuous pass one file along.
+        local_unresolvable.clone_from(&local.unresolvable);
         apply_local(
             local,
             &repo,
@@ -1279,7 +1285,7 @@ pub fn resolve_with_env(
         fail_on_warning.raise(true, Source::Flag, flag, "fail_on_warning", bool_token)?;
     }
 
-    let resolved = assemble(
+    let mut resolved = assemble(
         &repo,
         present,
         strictness,
@@ -1288,6 +1294,11 @@ pub fn resolve_with_env(
         paths,
         base,
     );
+    // APPENDED, not merged: the two files are two authorities and a reader has
+    // to be able to tell which one is short a gate. Order follows the §8 chain
+    // — authority first, then the local layer — which also keeps the report
+    // byte-stable for identical input (§6).
+    resolved.unresolvable.extend(local_unresolvable);
 
     // CLOUD-332's boundary, decided HERE rather than in `config show`: the
     // resolver is the one authority, and a reader that decided this itself would

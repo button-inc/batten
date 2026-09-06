@@ -419,7 +419,25 @@ resolve_via_web() {
 	fi
 	asset=$(asset_name "${tag#v}" "$target")
 
-	web_get "$WEB/$REPO/releases/download/$tag/SHA256SUMS" "$tmp/SHA256SUMS" || return 1
+	# A RELEASE THAT PUBLISHES NO `SHA256SUMS` AT ALL IS THE SAME FAULT AS ONE
+	# WHOSE MANIFEST OMITS THIS ASSET, and returning `1` reported it as the
+	# opposite. `1` reaches the caller's `*` arm, which says "cannot read
+	# release metadata … set BATTEN_GITHUB_TOKEN … if the repository is
+	# private" — a could-not-look remedy for a release that was read perfectly
+	# well and does not carry what it must. Reachable with `BATTEN_VERSION`
+	# naming any tag from before `SHA256SUMS` was published, which is every tag
+	# in this repository's own history up to the one that added it. Review
+	# caught it; the comment below already claimed the classification this line
+	# was undoing.
+	#
+	# `404` is the release's answer and `3` is that answer's class. Any OTHER
+	# status — a transport failure, a proxy refusal, a `5xx` — genuinely is a
+	# could-not-look, so it keeps `1` and the caller's rate-limit remedy is the
+	# right one for it.
+	if ! web_get "$WEB/$REPO/releases/download/$tag/SHA256SUMS" "$tmp/SHA256SUMS"; then
+		[ "$(head -n 1 "$tmp/SHA256SUMS.code" 2>/dev/null || true)" = 404 ] || return 1
+		return 3
+	fi
 	# Exact field equality rather than a substring: one asset's name is a prefix
 	# of nothing else here today, and a route that depends on that staying true
 	# is a route that breaks on the next asset somebody adds.
@@ -537,7 +555,12 @@ main() {
 			die 2 "cannot read the release list from $REPO at $API. If you are being rate-limited, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN."
 		resolve_via_web || case $? in
 		3)
-			die 1 "release $tag publishes no sha256 for $asset in SHA256SUMS, and this script does not install unverified bytes."
+			# Both absences reach here and the message names neither
+			# specifically, because the remedy is one: no `SHA256SUMS` at all,
+			# and a `SHA256SUMS` with no row for this asset, are the same
+			# statement about the release — it does not publish the digest this
+			# script refuses to install without.
+			die 1 "release $tag publishes no sha256 for $asset, and this script does not install unverified bytes. Re-run release-artifacts.yml against that tag; uploads are idempotent."
 			;;
 		*)
 			die 2 "cannot read release metadata for $REPO from either $API or $WEB. If the API is rate-limiting this address, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN; if the repository is private, a token is required."

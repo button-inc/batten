@@ -318,8 +318,57 @@ fn an_asset_absent_from_sha256sums_installs_nothing() {
         routes
     });
 
-    let (code, _, _, installed) = install("install-web-nosum-run", &web, TARGET);
-    assert_ne!(code, Some(0), "no published digest means no install");
+    let (code, stdout, stderr, installed) = install("install-web-nosum-run", &web, TARGET);
+    assert_eq!(
+        code,
+        Some(1),
+        "a release that publishes no digest for this asset is a refusal, not a could-not-look: \
+         {stdout}{stderr}"
+    );
+    assert!(!installed.exists(), "nothing may reach the destination");
+}
+
+/// A RELEASE WITH NO `SHA256SUMS` AT ALL IS THE SAME REFUSAL (1), and it used to
+/// be reported as a could-not-look (2) with a rate-limit remedy.
+///
+/// The two absences are one statement about the release — it does not publish
+/// the digest this script will not install without — and the case above already
+/// pinned the manifest-present half. This is the half `resolve_via_web` got
+/// wrong: the fetch of `SHA256SUMS` returned `1`, which reaches the caller's
+/// `*` arm and says "cannot read release metadata … set `BATTEN_GITHUB_TOKEN` …
+/// if the repository is private". Every tag in a repository's history from
+/// before it started publishing a manifest reaches it, so this is the common
+/// shape rather than an exotic one, and the remedy it printed was for a fault
+/// that is not present.
+///
+/// The discriminating input is a host that resolves the tag and serves the
+/// ASSET — everything except the manifest. A case that simply served nothing
+/// would take the could-not-look arm one leg earlier and pass against the
+/// defect, which is what `a_web_host_that_serves_nothing_is_could_not_look`
+/// below is for.
+#[test]
+fn a_release_publishing_no_sha256sums_at_all_is_a_refusal() {
+    let dir = scratch("install-web-nomanifest");
+    let archive = tarball(&dir);
+    let asset = asset_name();
+    let web = host(|base| {
+        let mut routes = release_routes(base, &asset, &archive);
+        // Drop the manifest route, keeping the redirect, the tag page and the
+        // asset — so every leg but this one succeeds.
+        routes.remove(2);
+        routes
+    });
+
+    let (code, stdout, stderr, installed) = install("install-web-nomanifest-run", &web, TARGET);
+    assert_eq!(
+        code,
+        Some(1),
+        "an absent SHA256SUMS is the release's own fault, not the environment's: {stdout}{stderr}"
+    );
+    assert!(
+        stderr.contains("publishes no sha256"),
+        "the message must name the missing digest rather than a rate limit: {stderr}"
+    );
     assert!(!installed.exists(), "nothing may reach the destination");
 }
 

@@ -201,8 +201,15 @@ const ROW_UNRESOLVED: &str = "config-row-unresolved";
 /// Drop the rows at the indices the loader could not resolve.
 ///
 /// The located view and the parsed config must describe the same rows in the
-/// same order, because the pairing below is positional. `Unresolvable::index` is
-/// the row's ordinal in the source, which is precisely the index to remove.
+/// same order, because the pairing below is positional.
+/// [`config::Unresolvable::row_index`] is the row's ordinal in the source, which
+/// is precisely the index to remove.
+///
+/// **A KEY DROP REMOVES NO ROW, and `row_index` is what says so.** The two
+/// granularities used to share one `index` field, so a key dropped out of a
+/// plain `[section]` carried `0` — and any section whose name matched would
+/// have had its FIRST row silently filtered out of the located view here,
+/// re-opening the very misalignment this function exists to close.
 fn without_unresolvable<T>(
     rows: Vec<T>,
     section: &str,
@@ -213,7 +220,7 @@ fn without_unresolvable<T>(
         .filter(|(index, _)| {
             !dropped
                 .iter()
-                .any(|row| row.section == section && row.index == *index)
+                .any(|row| row.section == section && row.row_index().is_some_and(|at| at == *index))
         })
         .map(|(_, row)| row)
         .collect()

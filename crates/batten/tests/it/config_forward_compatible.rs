@@ -463,6 +463,197 @@ fn the_rest_of_the_section_still_applies() {
     );
 }
 
+/// A MULTI-LINE VALUE TRAVELS WITH ITS KEY, and the `=` inside one used to cut
+/// the extent in half.
+///
+/// `key_extent` ran to the first later line that began outside a string and
+/// contained an `=`. Every element of an array of inline tables is such a line,
+/// so the blank stopped INSIDE the value: the remaining bytes parsed as a
+/// different table, `prune_unresolvable`'s exactness guard abandoned the prune,
+/// and the file was refused at exit `1` with every mediated gate failing open —
+/// the defect this suite exists over, arriving through its own fix.
+///
+/// The discriminating input is a multi-line value under a key this build does
+/// NOT know, in a plain `[section]`, with a good row beside it: a single-line
+/// value passes against the defect, and a value with no `=` in it passes too.
+#[test]
+fn a_multi_line_value_is_not_cut_in_half_by_an_equals_inside_it() {
+    let dir = repo(
+        "config-forward-multiline",
+        &format!(
+            "{GOOD}\n[ready]\nfrom_a_newer_schema = [\n  {{ id = \"a\", weight = 1 }},\n  \
+             {{ id = \"b\", weight = 2 }},\n]\n\
+             prose_dialect_required_from = \"2026-01-01T00:00:00Z\"\n"
+        ),
+    );
+    let (code, stdout, stderr) = adjudicate(&dir);
+    assert_eq!(
+        code,
+        Some(0),
+        "a multi-line unknown value must cost its key, not the file: {stdout} {stderr}"
+    );
+    assert!(
+        stdout.contains(r#""permissionDecision":"deny""#) && stdout.contains("good-row"),
+        "the good row still decides: {stdout}"
+    );
+
+    let out = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten config show");
+    let shown = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        shown.contains("ready 1"),
+        "the known key beyond the multi-line value must survive: {shown}"
+    );
+}
+
+/// A BRACKETED LINE INSIDE AN ARRAY IS NOT A HEADER, which is the same reading
+/// one step along.
+///
+/// `[2]` written as an element of a nested array satisfies `header_of` — a name,
+/// a closing bracket, nothing after it — so the scan read a `[2]` TABLE there
+/// and every span past it resolved to the wrong owner. Counting brackets is what
+/// removes it; asserting it needs a nested array whose inner element stands
+/// alone on its line, because that is the only shape that produces the false
+/// header.
+#[test]
+fn a_bracketed_line_inside_an_array_is_not_read_as_a_header() {
+    let dir = repo(
+        "config-forward-false-header",
+        &format!(
+            "[ready]\nfrom_a_newer_schema = [\n  [1],\n  [2]\n]\n{GOOD}\n\
+             [[rule]]\nid = \"second-row\"\nkind = \"shape\"\nscope = \"mediated_call\"\n\
+             pattern = \"nevermatches /\"\nseverity = \"deny\"\nreason = \"must not be dropped\"\n"
+        ),
+    );
+    let (code, stdout, stderr) = adjudicate(&dir);
+    assert_eq!(code, Some(0), "the hook answered: {stdout} {stderr}");
+    assert!(
+        stdout.contains(r#""permissionDecision":"deny""#) && stdout.contains("good-row"),
+        "the row after the array must still decide: {stdout}"
+    );
+
+    let out = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten config show");
+    let said = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        !said.contains("good-row") && !said.contains("second-row"),
+        "no rule may be charged for the array's own brackets: {said}"
+    );
+}
+
+/// THE OVERRIDE FILE IS THE SECOND FILE IN THE §8 CHAIN, AND IT HAD THE SAME
+/// HOLE.
+///
+/// `batten.local.toml` deserializes into `OverrideConfig`, which carries
+/// `deny_unknown_fields` for its own good reason — the override surface is
+/// deliberately narrow. But `resolve` runs upstream of every verb, so one key
+/// from a newer schema there failed the whole resolution at exit `1`, and on the
+/// mediated path exit `1` is every gate off. Identical class, one file along,
+/// and it stayed open through the first four review rounds.
+///
+/// **The unknown key goes in a `[[rule]]` row, because the override surface has
+/// no plain `[section]` at all** — every key it admits is either a top-level
+/// scalar or an array of tables. The row is therefore the only granularity this
+/// file can be repaired at, and a top-level key here keeps the hard refusal for
+/// the authority's reason: that is where `version` lives, and an unknown
+/// neighbour of it is far likelier a typo than a newer schema.
+#[test]
+fn a_newer_key_in_the_local_override_costs_the_row_not_the_resolution() {
+    let dir = repo("config-forward-local", GOOD);
+    fs::write(
+        dir.join("batten.local.toml"),
+        "version = 1\n\
+         [[rule]]\n\
+         id = \"local-newer-row\"\n\
+         kind = \"shape\"\n\
+         scope = \"mediated_call\"\n\
+         pattern = \"nevermatches /\"\n\
+         severity = \"deny\"\n\
+         reason = \"a local row this build cannot resolve\"\n\
+         this_key_does_not_exist_in_any_version = true\n",
+    )
+    .unwrap();
+
+    let (code, stdout, stderr) = adjudicate(&dir);
+    assert_eq!(
+        code,
+        Some(0),
+        "an unknown key in the override must not fail the resolution: {stdout} {stderr}"
+    );
+    assert!(
+        stdout.contains(r#""permissionDecision":"deny""#) && stdout.contains("good-row"),
+        "the committed row still decides: {stdout}"
+    );
+
+    let out = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten config show");
+    let said = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        said.contains("local-newer-row"),
+        "and the drop is still named — silence here would be the vacuous pass \
+         one file along: {said}"
+    );
+}
+
+/// THE SQUAWK SENDS THE READER FORWARD, NEVER BACKWARD.
+///
+/// The note under a drop named `min_batten_version` as the release to install,
+/// on a string `!=`. `config::check_min_version` has already refused any load
+/// whose floor is ABOVE the running build, so the arm could only fire with the
+/// floor BELOW — this repository's own file, floor `0.0.82` on a `0.0.144`
+/// build, read "written for batten 0.0.82 and you are running 0.0.144 — install
+/// it", which is a downgrade instruction on the one channel that exists to send
+/// an agent for a newer binary.
+///
+/// The fixture SETS a floor, which every other case here omits: without one the
+/// note takes the absent arm and the defect is unreachable.
+#[test]
+fn the_report_never_tells_the_reader_to_install_an_older_release() {
+    let dir = scratch("config-forward-floor");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("batten.toml"),
+        format!("version = 1\nmin_batten_version = \"0.0.1\"\n{GOOD}{FROM_A_NEWER_SCHEMA}"),
+    )
+    .unwrap();
+
+    let out = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten config show");
+    let said = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        said.contains("newer-schema-row"),
+        "the drop is still reported: {said}"
+    );
+    assert!(
+        !said.contains("0.0.1 and you are running") && !said.contains("batten 0.0.1 —"),
+        "the declared floor is below this build and must never be offered as the \
+         release to install: {said}"
+    );
+    assert!(
+        said.contains("install the latest batten"),
+        "the remedy points forward: {said}"
+    );
+    // The floor is quoted with its key, never as a bare `0.0.1`: this build is
+    // `0.0.144`, which CONTAINS that substring, so a looser assertion would
+    // pass without the floor being named at all.
+    assert!(
+        said.contains("`min_batten_version` 0.0.1,"),
+        "and the stale floor is still named as the thing to raise: {said}"
+    );
+}
+
 /// MALFORMED TOML STAYS A HARD REFUSAL. A file that is not TOML is a different
 /// fault from a well-formed row naming a key from a newer schema, and collapsing
 /// the two is what produced the defect — a prune that swallowed a syntax error

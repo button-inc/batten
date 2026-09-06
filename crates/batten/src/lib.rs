@@ -13991,30 +13991,40 @@ fn report_unresolvable(config: &resolve::Resolved, mode: Mode, err: &mut dyn Wri
         )?;
     }
 
-    // AND IT SAYS WHICH RELEASE TO INSTALL, because tolerating the key is only
-    // half the repair. A config this build cannot fully read is a build that is
-    // BEHIND its config, and the reader's next move is to fetch the release the
-    // config was written for — not to hunt a typo, which is what the old wording
-    // ("or the key is a typo") sent every reader to do.
+    // AND IT SENDS THE READER TO A NEWER RELEASE, because tolerating the key is
+    // only half the repair. A config this build cannot fully read is a build
+    // that is BEHIND its config, and the reader's next move is to fetch a
+    // release that understands it — not to hunt a typo, which is what the old
+    // wording ("or the key is a typo") sent every reader to do.
     //
-    // `min_batten_version` is the field that names it. When it is AHEAD of this
-    // build the message is exact. When it is not, the floor itself is stale —
-    // the config grew a key and nobody raised it — so the message says that
-    // instead of inventing a version, because a number this build could not
-    // derive is worse than naming the gap.
-    let running = env!("CARGO_PKG_VERSION");
-    let note = match floor {
-        Some(declared) if declared != running => format!(
-            "config: this config is written for batten {declared} and you are running \
-             {running} — install it (`mise run deps-install`) and re-run; until then the \
-             lines above are OFF"
-        ),
-        _ => format!(
-            "config: this config declares keys batten {running} does not know, and its \
-             `min_batten_version` does not say which release does. Raise that floor in the \
-             release that added them; until then the lines above are OFF"
-        ),
-    };
+    // **IT CANNOT NAME THE RELEASE, AND SAYING IT COULD WAS A DOWNGRADE
+    // INSTRUCTION.** The obvious field to name is `min_batten_version`, and an
+    // arm here did: `Some(declared) if declared != running` → "written for
+    // batten {declared}, install it". The comparison is a string `!=`, but the
+    // ordering is what the sentence claims, and `config::check_min_version` has
+    // ALREADY refused this load if the floor is above the running build. So the
+    // arm could only ever fire with the floor BELOW — measured against this
+    // repository's own file, floor `0.0.82` on a `0.0.144` build, it read
+    // "written for batten 0.0.82 and you are running 0.0.144 — install it".
+    //
+    // The floor is therefore never the answer here: reaching this code at all
+    // proves it is stale or absent, which is the second half of the message
+    // rather than its subject. The remedy names the newest release without
+    // pretending to a version number this build cannot derive — a wrong number
+    // is worse than naming the gap, and it was worse in exactly this direction.
+    let running = config::VERSION;
+    let owed = floor.map_or_else(
+        || String::from("declares no `min_batten_version`"),
+        |declared| {
+            format!("declares `min_batten_version` {declared}, which is not above {running}")
+        },
+    );
+    let note = format!(
+        "config: this config declares keys batten {running} does not know, so it was written \
+         for a newer release — install the latest batten (`mise run deps-install`) and re-run. \
+         It {owed}, so raise that floor in the release that adds these keys. Until then the \
+         lines above are OFF"
+    );
     output::message(mode, Verbosity::Normal, err, &note)?;
     Ok(())
 }
