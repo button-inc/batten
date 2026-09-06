@@ -6830,13 +6830,13 @@ keep = 2
 mb = 9472
 worst_mb = 9472
 multiplier = 1
-measured = "2026-09-05"
+measured = "2026-09-06"
 
 [prune.cold]
 mb = 21455
 worst_mb = 21455
 multiplier = 1
-measured = "2026-09-04"
+measured = "2026-09-06"
 
 # THE BASIS EACH FLOOR WAS MEASURED AGAINST (CLOUD-1158), because `measured` is a
 # pointer to a basis and not the basis itself.
@@ -7118,14 +7118,50 @@ measured = "2026-09-04"
 # than this container has: it cannot be taken here, which is different from being
 # skipped. Whoever can take it should move `[prune.cold] mb`, `worst_mb` and
 # `measured` together.
+# THE 2026-09-06 MOVE, 208 -> 220, BOTH BASES, NEITHER FLOOR (CLOUD-205).
+#
+# WHAT MOVED THE BASIS was `land`'s own rebase rather than this branch's diff:
+# lapping onto `29b38b1a` brought the gate's walk of
+# `crates/batten/tests/**/*.rs` to 220 against a declared 208, twelve past a
+# tolerance of 10. So both counts move with both `measured` dates, and NEITHER
+# FLOOR MOVES — which is the 2026-09-01 and 2026-09-02 entries above being
+# followed rather than a step skipped. Their reasoning is unchanged and applies
+# exactly: since the target grouping a tracked test file is no longer a proxy for
+# a linked stem, so this basis is a trend counter over a quantity that no longer
+# drives the bytes the floors budget, and moving a floor needs the independent
+# measurement this block names — a build from an empty `target` for cold, a
+# minimal post-prune tree for warm — which is CLOUD-1158's and was not taken here.
+# No floor measurement is claimed by this entry.
+#
+# AND THE FIRST FORM OF THIS ENTRY SCALED WARM TO 10019 (45.54 x 220), WHICH IS
+# THE OPERATION THOSE TWO ENTRIES RETIRE. It is recorded rather than quietly
+# corrected, because the pull toward it is strong and structural: the two entries
+# immediately above this one — 2026-09-04 and 2026-09-05 — DO scale, so a reader
+# working backwards finds the retired model first and in the most recent hand.
+# The 2026-09-01 entry is the one carrying a measurement (147 linked artifacts ->
+# 4, `target/debug` 7.76 GB -> 2.05 GB), and a measurement outranks a precedent.
+#
+# THE CALLER'S MISREPORT IS MEASURED AGAIN, and the entry below already predicts
+# it: `verify` prints "not enough disk to run the gate, and pruning did not
+# recover it — the refusal above names free space and the floor." It named a STEM
+# COUNT, and free space was 4.5 GB clear — 14503 MB against a 9472 MB warm floor,
+# refused on three consecutive laps. It cost this branch two full `land` runs and
+# a floor edit made in the wrong direction before the refusal was read correctly.
+#
+# COLD'S STALENESS IS NOT LATENT, AND THE ENTRY ABOVE ASSUMED IT WAS. That entry
+# reasons that cold can be left alone because "cold is judged only after warm is
+# breached" — true of cold's FLOOR, false of cold's BASIS. Measured here: with
+# warm's basis refreshed to 220 and cold's left at 208, the very next lap refused
+# on `[prune.cold]`'s staleness arm with warm never breached. The two arms are
+# judged at different times and only one of them waits.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 208
+count = 220
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 208
+count = 220
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
