@@ -274,6 +274,105 @@ struct LocatedWaiver {
     path: Option<String>,
 }
 
+/// The dead-suppression diagnostics over the `[[waiver]]` table (CLOUD-208).
+///
+/// **Its own function because [`smells`] is at clippy's line ceiling** and this
+/// loop is the self-contained half: it reads the waiver table, the rules those
+/// waivers name, the predicate ids the bundles publish, and the date — nothing
+/// else in `smells` and nothing after it. Splitting it moves no verdict and no
+/// ordering, because the caller extends at the position the loop occupied and
+/// the whole list is sorted afterwards anyway.
+fn waiver_smells(
+    text: &str,
+    located: &Located,
+    config: &Config,
+    bundles: &[crate::policy::Bundle],
+    today: crate::waiver::Date,
+) -> Vec<Smell> {
+    let mut found = Vec::new();
+    for (waiver, parsed) in located.waivers.iter().zip(&config.waivers) {
+        let at = Where::Line(line_of(text, waiver.rule.span().start));
+        match config
+            .rules
+            .iter()
+            .find(|rule| rule.id == *waiver.rule.get_ref())
+        {
+            // A PREDICATE ID IS A WAIVABLE NAME TOO, and reading only `rules`
+            // here inverted this smell for every policy rule whose module
+            // publishes an id of its own (CLOUD-1553).
+            //
+            // `waiver::apply` filters FINDINGS, and a policy finding carries the
+            // predicate id rather than the row's. Measured on this repository:
+            // `rule = "filed-over-own-diff"` suppressed and was refused here,
+            // while `rule = "filed-here"` was clean here and suppressed nothing —
+            // so no value satisfied both halves, and the one this smell blessed
+            // was the dead one. That is precisely the "exemption someone is
+            // relying on" CLOUD-208 opened it to catch, produced by the catcher.
+            //
+            // The bundles are already in hand for the caller's set analysis, so
+            // this acquires nothing: `Bundle::declared` is the module's own
+            // published set, the same authority `attribute` resolves a
+            // violation's id against. Reading it rather than re-deriving from the
+            // module source keeps one authority over what a bundle declares.
+            None if bundles
+                .iter()
+                .any(|bundle| bundle.declared().contains(waiver.rule.get_ref())) => {}
+            // COULD-NOT-LOOK, and it is the same inversion one level down.
+            //
+            // The bundles are loaded by `run` and are EMPTY when a module will not
+            // load — a config judged away from its own tree is the reachable case,
+            // and `cli.rs`'s `repo_with_committed_config` fixtures are exactly
+            // that: the committed `batten.toml` without `policy/*.rego` beside it.
+            // With no bundle to ask, a predicate id is indistinguishable from a
+            // typo, so reporting one would go back to refusing the spelling that
+            // suppresses — the defect the arm above exists to remove.
+            //
+            // Narrow on purpose: it abstains only where the config DECLARES a
+            // policy rule and nothing resolved, so a config with no policy rules
+            // at all keeps the smell's full reach, which is the corpus CLOUD-208
+            // opened it for.
+            None if bundles.is_empty()
+                && config
+                    .rules
+                    .iter()
+                    .any(|rule| rule.kind == crate::rules::RuleKind::Policy) => {}
+            None => found.push(Smell {
+                at: at.clone(),
+                id: WAIVER_NAMES_NO_RULE,
+            }),
+            // The rule exists and still cannot be waived: `apply` filters
+            // findings, and this kind mints none (`waiver::reaches` says which,
+            // and says it once — this module must not carry a second list that
+            // can disagree with the filter it describes).
+            //
+            // Located by key rather than line, which is what carries the
+            // unreachable kind alongside the waiver's identity in one pointer —
+            // `host_drift` composes a `Where::Key` for the same reason. The key is
+            // distinct per waiver, so two of them cannot collapse under `dedup`
+            // (CLOUD-233).
+            Some(rule) if !crate::waiver::reaches(rule.kind) => found.push(Smell {
+                at: Where::Key(format!("{} {}", parsed.key(), rule.kind.as_str())),
+                id: WAIVER_UNREACHABLE_KIND,
+            }),
+            Some(_) => {}
+        }
+        // The expiry is a date, and `today` is the injected input the module docs
+        // in `crate::waiver` explain: the smell list for a given config is a
+        // function of (bytes, date), never of when the process happened to start.
+        if crate::waiver::Date::parse(&waiver.expires).is_ok_and(|expiry| expiry < today) {
+            found.push(Smell {
+                at,
+                id: WAIVER_EXPIRED,
+            });
+        }
+        // `path` is read but not linted: whether a glob matches anything is a
+        // question about the tree, not about this file, and answering it here
+        // would be the runtime diagnostic the caller's comment names.
+        let _ = &waiver.path;
+    }
+    found
+}
+
 /// Convert a byte offset into a 1-based line number.
 fn line_of(text: &str, offset: usize) -> usize {
     text.get(..offset)
@@ -440,86 +539,7 @@ pub fn smells(
     // index `i` is one row seen two ways. That pairing is what lets a pointer
     // reuse `Waiver::key`'s single rendering instead of re-deriving `rule` and
     // `path` into a second spelling of the same identity.
-    for (waiver, parsed) in located.waivers.iter().zip(&config.waivers) {
-        let at = Where::Line(line_of(text, waiver.rule.span().start));
-        match config
-            .rules
-            .iter()
-            .find(|rule| rule.id == *waiver.rule.get_ref())
-        {
-            // A PREDICATE ID IS A WAIVABLE NAME TOO, and reading only `rules`
-            // here inverted this smell for every policy rule whose module
-            // publishes an id of its own (CLOUD-1553).
-            //
-            // `waiver::apply` filters FINDINGS, and a policy finding carries the
-            // predicate id rather than the row's. Measured on this repository:
-            // `rule = "filed-over-own-diff"` suppressed and was refused here,
-            // while `rule = "filed-here"` was clean here and suppressed nothing —
-            // so no value satisfied both halves, and the one this smell blessed
-            // was the dead one. That is precisely the "exemption someone is
-            // relying on" CLOUD-208 opened it to catch, produced by the catcher.
-            //
-            // The bundles are already in hand for the set analysis below, so this
-            // acquires nothing: `Bundle::declared` is the module's own published
-            // set, which is the same authority `attribute` resolves a violation's
-            // id against. Reading it here rather than re-deriving from the module
-            // source keeps one authority over what a bundle declares.
-            None if bundles
-                .iter()
-                .any(|bundle| bundle.declared().contains(waiver.rule.get_ref())) => {}
-            // COULD-NOT-LOOK, and it is the same inversion one level down.
-            //
-            // The bundles are loaded by `run` and are EMPTY when a module will not
-            // load — a config judged away from its own tree is the reachable case,
-            // and `cli.rs`'s `repo_with_committed_config` fixtures are exactly
-            // that: the committed `batten.toml` without `policy/*.rego` beside it.
-            // With no bundle to ask, a predicate id is indistinguishable from a
-            // typo, so reporting one would go back to refusing the spelling that
-            // suppresses — the defect this arm exists to remove.
-            //
-            // Narrow on purpose: it abstains only where the config DECLARES a
-            // policy rule and nothing resolved, so a config with no policy rules
-            // at all keeps the smell's full reach, which is the corpus CLOUD-208
-            // opened it for.
-            None if bundles.is_empty()
-                && config
-                    .rules
-                    .iter()
-                    .any(|rule| rule.kind == crate::rules::RuleKind::Policy) => {}
-            None => found.push(Smell {
-                at: at.clone(),
-                id: WAIVER_NAMES_NO_RULE,
-            }),
-            // The rule exists and still cannot be waived: `apply` filters
-            // findings, and this kind mints none (`waiver::reaches` says which,
-            // and says it once — this module must not carry a second list that
-            // can disagree with the filter it describes).
-            //
-            // Located by key rather than line, which is what carries the
-            // unreachable kind alongside the waiver's identity in one pointer —
-            // `host_drift` below composes a `Where::Key` for the same reason. The
-            // key is distinct per waiver, so two of them cannot collapse under
-            // `dedup` (CLOUD-233).
-            Some(rule) if !crate::waiver::reaches(rule.kind) => found.push(Smell {
-                at: Where::Key(format!("{} {}", parsed.key(), rule.kind.as_str())),
-                id: WAIVER_UNREACHABLE_KIND,
-            }),
-            Some(_) => {}
-        }
-        // The expiry is a date, and `today` is the injected input the module docs
-        // in `crate::waiver` explain: the smell list for a given config is a
-        // function of (bytes, date), never of when the process happened to start.
-        if crate::waiver::Date::parse(&waiver.expires).is_ok_and(|expiry| expiry < today) {
-            found.push(Smell {
-                at,
-                id: WAIVER_EXPIRED,
-            });
-        }
-        // `path` is read but not linted: whether a glob matches anything is a
-        // question about the tree, not about this file, and answering it here
-        // would be the runtime diagnostic above wearing a disguise.
-        let _ = &waiver.path;
-    }
+    found.extend(waiver_smells(text, &located, &config, bundles, today));
 
     // `judge-over-protected-unstated` used to live here (CLOUD-135). It is gone
     // with the key it asked about: protected content now refuses the whole
