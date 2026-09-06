@@ -100,6 +100,15 @@ fn a_live_holder_denies_the_second_start() {
 /// a wall: a lock left behind by a crashed process must not make the task
 /// permanently unstartable. The acquiring path reclaims it; this must not
 /// pre-empt that with a refusal.
+///
+/// `cfg(unix)` BECAUSE WINDOWS HAS NO DEAD PID, and that is the probe's stated
+/// design rather than a gap this case may paper over. Off unix there is no
+/// `kill(pid, 0)`, so `pid_exists` answers on the PARSE alone — "nothing is ever
+/// reported dead, and nothing is ever REAPED" — which makes a corpse
+/// unexpressible there. Measured on the `windows` job, which runs the suite
+/// rather than only type-checking it: this case exited 2 where it wants 0,
+/// because the fixture's impossible pid parses perfectly well.
+#[cfg(unix)]
 #[test]
 fn a_dead_holder_allows() {
     let dir = fixture("singleton-gate-dead");
