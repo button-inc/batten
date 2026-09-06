@@ -13,12 +13,13 @@ These load when you are about to ask something about the whole tree rather than
 about the file in front of you. The question decides the tool, and the three
 questions are not interchangeable.
 
-| the question                                                            | instrument                    |
-| ----------------------------------------------------------------------- | ----------------------------- |
-| does this file contain this literal string                              | a structured text search      |
-| is this token in command position, inside a comment, or inside a string | a tree-sitter matcher         |
-| which type does this name resolve to                                    | clippy, rust-analyzer, Serena |
-| has this already been filed, decided, or measured                       | the board, before the tree    |
+| the question                                                            | instrument                                              |
+| ----------------------------------------------------------------------- | ------------------------------------------------------- |
+| does this file contain this literal string                              | a structured text search                                |
+| is this token in command position, inside a comment, or inside a string | a tree-sitter matcher                                   |
+| which type does this name resolve to                                    | clippy, rust-analyzer, Serena                           |
+| has this already been filed, decided, or measured                       | the board, before the tree                              |
+| is this pointer's behaviour live, or only present in the code           | a census over the store or session, before the sentence |
 
 Row two is the one the tree kept reaching past. Rows one and three both have a
 habit behind them — `grep` is in every hand, and `.claude/rules/rust.md` already
@@ -78,6 +79,37 @@ three attempts to file without searching in that same session and was right
 every time; it cannot reach a claim that something is _unfiled_, because no tool
 call is being made. That asymmetry is the reason this row is prose: the write
 has an object and an exit code, and the assertion has neither.
+
+## Row four has a write direction, and row five is what a pointer cannot answer
+
+Two failures from one session (2026-09-06), on rows filed the same hour, and
+each is the row above read in the direction its sentence did not point.
+
+**The write direction.** Row four says: before a claim about what is filed
+reaches a durable artifact, search. Its converse is the failure measured here: a
+root-cause analysis and six defects found mid-task were carried in chat — in a
+closing paragraph headed "left for you" — until a human asked what would survive
+the session's archive. AGENTS.md's output-posture paragraph already says a
+finding's home is an issue or a memory; what it does not say is WHEN. **A finding
+leaves the session in the turn it is found: filed, or fixed, before it reaches a
+sentence to a human.** The tell is a summary paragraph carrying findings no row
+owns. `filed-here` prices filing over fixing, `stop-posture` catches the hedge
+phrasing, and nothing decides "found, not filed, summarised" — so this is prose,
+for row four's own reason: no tool call is being made. CLOUD-1526 carries the
+grooming-specific half.
+
+**Row five.** A pointer confirmed in code is not a behaviour confirmed in the
+store. CLOUD-1523 was filed on `anchor()` returning `"."` and the drain keying
+its shard on that constant — correct at the line cited, verified by reading — and
+stated that the constant-keyed shard was the one growing. A census over the store
+found zero entries of that origin in 9,674; the growth was another writer's.
+CLOUD-1480 retracted six causes the same way, each naming a real symbol with a
+false causal claim attached, until one control settled it. Row three answers what
+a name resolves to; **row five asks whether the behaviour that code describes is
+occurring, and the instrument is a count over the live instance** — a census, a
+control, a `wc -l` — taken before the sentence is written. It names a capability
+rather than a product for row one's reason: which store and which counting tool a
+session has varies.
 
 ## The row names a class, and CLOUD-310 names the components
 

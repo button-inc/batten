@@ -95,6 +95,23 @@ const INSTRUMENTS: &[(&str, &[&str])] = &[
         "has this already been filed, decided, or measured",
         &["the board, before the tree"],
     ),
+    // ROW FIVE'S SUBJECT IS A COUNT OVER THE LIVE INSTANCE (CLOUD-1533). Row
+    // three resolves a name; nothing asked whether the behaviour that code
+    // describes is occurring. Measured: a row filed on a pointer confirmed in
+    // code stated the store behaviour that pointer implied, and a census over
+    // the store found zero entries of that origin. A capability row, for row
+    // one's reason — which store and which counting tool a session has varies —
+    // so it is the THIRD row `a_capability_row_names_no_bare_product` iterates.
+    //
+    // The mutation rewrites this question to one the file does not contain, so
+    // `the_rules_name_an_instrument_for_each_question_class` goes red: that is
+    // what proves the case reads the prose rather than its own table.
+    //MUTANT-SUITE crates/batten/tests/it/scanner_taxonomy.rs
+    //MUTANT row-five-question-dropped|s@"is this pointer's behaviour live, or only present in the code",@"is this pointer absent from the code",@|the_rules_name_an_instrument_for_each_question_class
+    (
+        "is this pointer's behaviour live, or only present in the code",
+        &["a census over the store or session"],
+    ),
 ];
 
 /// The issue that owns the per-component disposition this file must point at
@@ -118,11 +135,13 @@ const BARE_PRODUCTS: &[&str] = &["`grep`", "`rg`", "`Grep`", "`Read`", "`Glob`"]
 
 /// The [`INSTRUMENTS`] rows whose instrument cell answers with a CAPABILITY.
 ///
-/// Row one, because which search surface a session carries varies; and row four,
-/// because which connector answers the board does. Rows two and three are
-/// deliberately absent: row two names a class whose winner CLOUD-310 owns, and
-/// row three names the three tools that do name resolution here.
-const CAPABILITY_ROWS: &[usize] = &[0, 3];
+/// Row one, because which search surface a session carries varies; row four,
+/// because which connector answers the board does; and row five, because which
+/// store and which counting tool a session has does too (CLOUD-1533). Rows two
+/// and three are deliberately absent: row two names a class whose winner
+/// CLOUD-310 owns, and row three names the three tools that do name resolution
+/// here.
+const CAPABILITY_ROWS: &[usize] = &[0, 3, 4];
 
 fn rules_text() -> String {
     fs::read_to_string(at_root(RULES)).expect("`.claude/rules/scanning.md` is committed")
