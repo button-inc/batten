@@ -6865,10 +6865,10 @@ severity = "deny"
 id = "egress-fencing"
 kind = "policy"
 scope = "tree"
-documents = ["mise.toml"]
+documents = ["mise.toml", "batten.toml"]
 module = "policy/egress-fencing.rego"
 severity = "deny"
-reason = "mise.toml's [env] fences the resolver host out of the agent proxy so mise can resolve a release at all; removing or narrowing it restores the 403 the block exists for. Both spellings are checked because every client in this class reads the lower-case name first."
+reason = "Two surfaces fence the resolver host out of the agent proxy, and the tree owns both: mise.toml's [env] for what mise spawns, and batten.toml's [[provision.env]] for the wrapper that fences mise's own resolver (CLOUD-1455). Removing or narrowing either restores the 403 the fence exists for. Both spellings are checked on both, because every client in this class reads the lower-case name first."
 
 [[rule]]
 id = "mise-pin-agreement"
@@ -9154,6 +9154,48 @@ answers 403 for third-party tool repos — naming the tool rather than the proxy
 id = "task read first"
 kind = "document"
 target = "mise.toml"
+
+[[verdict]]
+id = "provision declare dropped"
+gloss = "no [[provision.env]] row carries a no-proxy key, so the provisioned mise wrapper fences nothing"
+class = """
+The surface that actually runs. `mise.toml`'s `[env]` reaches what mise SPAWNS,
+never mise's own resolver (CLOUD-1455) — the wrapper generated from these rows
+is what fences the resolver, so deleting the fence here restores the 403 while
+the `[env]` arms stay green. Measured on #889.
+"""
+
+[[verdict.route]]
+id = "provision read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "provision declare partial"
+gloss = "a [[provision.env]] no-proxy row no longer prepends the host mise's release resolver calls"
+class = """
+A fence that does not name the host it exists for fences nothing. The row
+survives, so a predicate asking only whether it exists would pass this.
+"""
+
+[[verdict.route]]
+id = "provision read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "provision read unread"
+gloss = "batten.toml would not parse, so the provisioned wrapper's fence could not be read"
+class = """
+Could-not-look, refused rather than reported clean: a module that iterates only
+`documents` reports green over a file it never read, and a dead gate and a clean
+tree are byte-identical on the decision surface.
+"""
+
+[[verdict.route]]
+id = "provision read first"
+kind = "document"
+target = "batten.toml"
 
 [[verdict]]
 id = "task declare partial"

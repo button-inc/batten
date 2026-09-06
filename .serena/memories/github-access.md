@@ -46,13 +46,18 @@ hour and reaches for `add_repo`, which is blocked (below) and is not the fix.
 
 1. **`gh` through mise — default for everything.** `mise exec -- gh <…>`.
    `mise.toml [env]` sets `GH_TOKEN` to our PAT, so `gh` authenticates as us.
-   (`NO_PROXY` is also set there and does nothing for mise itself — see the
-   toolchain section. `gh` and `curl` do read it.) PR create/ready/view,
+   (`NO_PROXY` is also set there and IS mise's lever as well as `gh`'s and
+   `curl`'s — see the toolchain section. An earlier revision of this line said it
+   "does nothing for mise itself"; that was measured backwards.) PR create/ready/view,
    comments, landing (`gh pr comment <n> --body /fast-forward`), issues, `gh api`.
 2. **GitHub API direct with our PAT**, routed around the proxy — `gh api …`, or
-   `env -u HTTPS_PROXY curl -H "Authorization: Bearer
-$GITHUB_PERSONAL_ACCESS_TOKEN" …`. `rate_limit`, repo, `pulls/<n>`,
-   `commits/<sha>/status` all return 200.
+   `curl --noproxy '*' -H "Authorization: Bearer $BATTEN_GITHUB_TOKEN" …`.
+   `rate_limit`, repo, `pulls/<n>`, `commits/<sha>/status` all return 200.
+   **`BATTEN_GITHUB_TOKEN` is the name this container injects** —
+   `GITHUB_PERSONAL_ACCESS_TOKEN` is UNSET here, so the older spelling of this
+   line sent an empty header and read as a token failure. Prefer
+   `--noproxy '*'` over `env -u HTTPS_PROXY`: it steers this one call instead of
+   handing an unproxied environment to whatever the command spawns.
 3. **`mcp__github__*` tools — LAST RESORT**, only after (1) and (2) both actually
    failed for that operation.
 
@@ -91,12 +96,27 @@ not a name mise reads: setting only that still 401s.
 `github.com` stays proxied so `git` keeps its proxy auth to this repo; only the
 API and asset hosts are fenced.
 
-**The wiring is `setup.sh`'s mise wrapper, and `mise.toml`'s `[env]` block.** The
-real defect (CLOUD-1474) was ONE missing name in the token chain: both surfaces
+**THE WIRING IS ON THREE SURFACES, AND NAMING ONLY TWO IS HOW #889 "FIXED" THIS
+AND CHANGED NOTHING:**
+
+| surface | reaches | note |
+| ------- | ------- | ---- |
+| `batten.toml` `[[provision.env]]` | the provisioned wrapper at `~/.local/bin/mise` | **the one that actually runs in a provisioned container** |
+| `setup.sh` heredoc wrapper | the same path, when setup.sh writes it | what #889 edited |
+| `mise.toml` `[env]` | task bodies and what mise SPAWNS, never mise's own resolver (CLOUD-1455) | carries `GH_TOKEN` |
+
+The real defect (CLOUD-1474) was ONE missing name in the token chain: all three
 read `GITHUB_PERSONAL_ACCESS_TOKEN`/`MISE_GITHUB_TOKEN`, the container injects
 `BATTEN_GITHUB_TOKEN`, so no token was set and the placeholder fell through. The
-`NO_PROXY` half was correct all along. `BATTEN_GITHUB_TOKEN` is now in both
+`NO_PROXY` half was correct all along. `BATTEN_GITHUB_TOKEN` is now in all three
 chains, and an explicit `MISE_GITHUB_TOKEN` (CI's) is still left alone.
+
+**A `[[provision.env]]` EDIT IS INERT ON A WARM CONTAINER** (CLOUD-1502).
+`batten provision status` compares the exec path and the pinned version, not the
+`env` rows, so it reports no drift over a wrapper whose chain disagrees with the
+manifest. Measured 2026-09-06. `batten provision apply` is the only route, and
+nothing tells you that — so after changing a `[[provision.env]]` row, read
+`~/.local/bin/mise` and confirm the chain before believing the fix reached you.
 
 **Do not unset `HTTPS_PROXY`.** `/root/.ccr/README.md` refuses it, it is unneeded
 (row 4), and it removes the policy boundary for every child process.

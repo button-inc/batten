@@ -42,7 +42,7 @@ version = 1
 id = "egress-fencing"
 kind = "policy"
 scope = "tree"
-documents = ["mise.toml"]
+documents = ["mise.toml", "batten.toml"]
 module = "policy/egress-fencing.rego"
 severity = "deny"
 reason = "mise.toml's [env] fences the resolver host out of the agent proxy so mise can resolve a release at all. Removing it restores the 403 the block exists for."
@@ -86,6 +86,66 @@ Could-not-look, kept loud.
 id = "task read first"
 kind = "document"
 target = "mise.toml"
+
+[[verdict]]
+id = "provision declare dropped"
+gloss = "no [[provision.env]] row carries a no-proxy key"
+class = """
+The surface that actually runs.
+"""
+
+[[verdict.route]]
+id = "provision read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "provision declare partial"
+gloss = "a [[provision.env]] no-proxy row no longer prepends the resolver host"
+class = """
+A fence that does not name the host it exists for fences nothing.
+"""
+
+[[verdict.route]]
+id = "provision read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "provision read unread"
+gloss = "batten.toml could not be read, so the wrapper's fence could not be judged"
+class = """
+Could-not-look, kept loud.
+"""
+
+[[verdict.route]]
+id = "provision read first"
+kind = "document"
+target = "batten.toml"
+"#;
+
+/// A `[[provision]]` row whose `[[provision.env]]` fences both spellings, as the
+/// committed one does. This is the surface that generates the wrapper at
+/// `~/.local/bin/mise` — the one that fences mise's OWN resolver, which
+/// `mise.toml`'s `[env]` cannot reach (CLOUD-1455).
+const PROVISION_FENCED: &str = r#"
+[[provision]]
+name = "mise"
+version = "1.0.0"
+unpack = "none"
+binary = "mise"
+
+[[provision.env]]
+name = "NO_PROXY"
+prepend_list = ["github.com", "api.github.com"]
+
+[[provision.env]]
+name = "no_proxy"
+prepend_list = ["github.com", "api.github.com"]
+
+[provision.platforms.linux-x86_64]
+url = "https://example.invalid/mise"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
 "#;
 
 /// A `mise.toml` whose `[env]` fences both spellings, as the committed one does.
@@ -103,6 +163,13 @@ no_proxy = "{% set cur = get_env(name='no_proxy', default='') %}{% if 'api.githu
 "#;
 
 fn fixture(name: &str, mise_toml: &str) -> PathBuf {
+    fixture_p(name, mise_toml, PROVISION_FENCED)
+}
+
+/// The same fixture with the SECOND surface under test. The `mise.toml` half is
+/// held fenced by every caller, so a finding here can only come from the
+/// provision rows.
+fn fixture_p(name: &str, mise_toml: &str, provision: &str) -> PathBuf {
     let root = common::scratch(&format!("egress-fencing-{name}"));
     fs::create_dir_all(root.join("policy")).expect("scratch policy dir");
     // The COMMITTED module, copied rather than restated: an inline copy drifts
@@ -112,7 +179,8 @@ fn fixture(name: &str, mise_toml: &str) -> PathBuf {
         .canonicalize()
         .expect("the committed module is where the row says it is");
     fs::copy(module, root.join("policy/egress-fencing.rego")).expect("install committed module");
-    fs::write(root.join("batten.toml"), AUTHORITY).expect("write the fixture authority");
+    fs::write(root.join("batten.toml"), format!("{AUTHORITY}{provision}"))
+        .expect("write the fixture authority");
     fs::write(root.join("mise.toml"), mise_toml).expect("write the fixture mise.toml");
     // No global or system config: a contributor's own git settings must not be
     // able to change a verdict here (CLOUD-282).
@@ -132,6 +200,10 @@ fn clean(root: &Path) {
 }
 
 fn denied(root: &Path) {
+    denied_at(root, "mise.toml");
+}
+
+fn denied_at(root: &Path, pointer: &str) {
     let output = common::run(root, &["check"]);
     assert_eq!(
         output.status.code(),
@@ -153,7 +225,7 @@ fn denied(root: &Path) {
         "the finding names the rule: {text}"
     );
     assert!(
-        text.contains("mise.toml"),
+        text.contains(pointer),
         "the finding points at the authority: {text}"
     );
 }
