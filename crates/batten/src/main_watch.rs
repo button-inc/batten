@@ -160,7 +160,11 @@ impl Poll {
         };
         // The cadence is clamped and the backoff is not — `wait_for` carries the
         // reason, and it is the same reading the sibling arm takes.
-        wait_for(configured, answer.poll_floor, answer.backoff)
+        //
+        // `self.backoff` rather than this answer's: an answer carrying none does
+        // not retire a window an earlier one opened, and
+        // `crate::pr_watch::Poll::absorb` states the measurement.
+        wait_for(configured, answer.poll_floor, self.backoff)
     }
 
     /// The validator for the next request.

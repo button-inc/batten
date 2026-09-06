@@ -333,7 +333,15 @@ impl Poll {
         // said "wait 60 seconds" was answered by continuing at the configured
         // 1s cadence, which is the predecessor defect `rest.rs` names as the
         // reason the field exists.
-        wait_for(configured, answer.poll_floor, answer.backoff)
+        //
+        // **`self.backoff`, NEVER `answer.backoff`** (review of #848). The field
+        // above was stored and then not read: a second `403` carrying no
+        // `Retry-After` of its own extended the window in the struct and returned
+        // the un-backed-off interval anyway. The could-not-look arm three
+        // screens up already reads `self.backoff`; this is the same window, and
+        // the assignment above makes the two spellings equal whenever the answer
+        // carries one.
+        wait_for(configured, answer.poll_floor, self.backoff)
     }
 
     /// The reading this poll currently holds.

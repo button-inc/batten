@@ -187,29 +187,27 @@ pub enum Lookup {
 /// branch*, and this asks *what became of the work there was*.
 #[must_use]
 pub fn pull_request_in_any_state(repo: &str, branch: &str) -> Lookup {
-    look_up(
-        repo,
-        branch,
-        &format!(
-            "repos/{repo}/pulls?head={}:{branch}&state=all&per_page=1",
-            repo.split('/').next().unwrap_or(repo)
-        ),
-    )
+    look_up(&format!(
+        "repos/{repo}/pulls?head={}:{branch}&state=all&per_page=1",
+        repo.split('/').next().unwrap_or(repo)
+    ))
 }
 
 /// The three-valued lookup [`open_pull_request`] flattens.
 #[must_use]
 pub fn look_up_pull_request(repo: &str, branch: &str) -> Lookup {
     let owner = repo.split('/').next().unwrap_or(repo);
-    look_up(
-        repo,
-        branch,
-        &format!("repos/{repo}/pulls?head={owner}:{branch}&state=open&per_page=1"),
-    )
+    look_up(&format!(
+        "repos/{repo}/pulls?head={owner}:{branch}&state=open&per_page=1"
+    ))
 }
 
 /// The reading both lookups share. One parser, two questions.
-fn look_up(_repo: &str, _branch: &str, path: &str) -> Lookup {
+///
+/// The path is the whole of the question: both callers bake the repository and
+/// the branch into it, so carrying them again as arguments was two more ways for
+/// a caller to name a different pull request than the one it asks for.
+fn look_up(path: &str) -> Lookup {
     let Some(answer) = crate::rest::get(path, None) else {
         // The request did not complete at all — no host, no route, no answer.
         // `0` rather than a status, because there was none to carry.

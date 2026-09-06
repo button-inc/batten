@@ -1306,6 +1306,59 @@ impl TermsMissing {
     }
 }
 
+/// Terms for a caller with no clone at all, built from the forge's own
+/// environment.
+///
+/// **THE PRE-CHECKOUT HALF OF `lease guard`, WHICH HAD NO SUCCESSOR** (review of
+/// #848, CLOUD-420). [`terms`] resolves the remote through `git::remotes`, which
+/// answers `Ok(vec![])` for a directory that is not a repository — so on the
+/// only deployment the verb has, a workflow's step 0 "before any checkout or
+/// toolchain install", it landed on [`TermsMissing::NoRemote`] and the lease was
+/// never read. The guard ran with its lease half switched off and only the
+/// staleness read could stop anything, so two landers could spend matrices
+/// concurrently: the exact condition the guard exists to prevent.
+///
+/// The predecessor solved it and said so at its own site —
+/// *"A throwaway repo in `RUNNER_TEMP` is what lets this run as the genuine FIRST
+/// step, before any checkout exists"* — building a `git init` clone with an
+/// `extraheader` credential purely so the shell's `git ls-remote` had somewhere
+/// to run. This engine needs none of that: [`advertise`] takes a URL and speaks
+/// smart HTTP through [`crate::rest`]'s own credential, so the remote is the
+/// only thing missing and the environment names it.
+///
+/// `None` where it does not — which keeps this a strictly ADDITIONAL reading. A
+/// caller that cannot build these terms is exactly where it was before, and the
+/// guard's fail-open posture is unchanged.
+#[must_use]
+pub fn terms_from_environment() -> Option<Terms> {
+    let server = std::env::var("GITHUB_SERVER_URL")
+        .ok()
+        .filter(|url| !url.trim().is_empty())
+        .unwrap_or_else(|| String::from("https://github.com"));
+    let slug = std::env::var("GITHUB_REPOSITORY")
+        .ok()
+        .filter(|slug| !slug.trim().is_empty())?;
+    let mut resolved = Terms {
+        remote: format!("{}/{slug}", server.trim_end_matches('/')),
+        ..Terms::default()
+    };
+    // The same two bounds `terms` honours, through the same reader, so a suite
+    // driving one path does not silently get the shipped values on the other.
+    if let Some(ttl) = env_secs("LAND_LOCK_TTL") {
+        resolved.ttl = ttl;
+    }
+    if let Some(beat) = env_secs("LAND_LOCK_HEARTBEAT") {
+        resolved.beat = beat;
+    }
+    if resolved.beat.saturating_mul(BEATS_PER_TTL) > resolved.ttl {
+        resolved.beat = (resolved.ttl / BEATS_PER_TTL).max(1);
+    }
+    if let Ok(reference) = std::env::var("LAND_LOCK_BRANCH") {
+        resolved.reference = format!("refs/heads/{reference}");
+    }
+    Some(resolved)
+}
+
 /// The remote the lease lives on, by configured name.
 ///
 /// Named here rather than at each reader because [`terms`] and every diagnostic
@@ -1443,6 +1496,32 @@ pub fn authorises_this_clone(observed: &Observed, holder: &str, now: i64) -> boo
     body.holder == holder
 }
 
+/// The lease reading this run's recorder columns share.
+///
+/// `None` is could-not-look, collapsed: no remote, no terms, or a lease that
+/// would not read are all answers the caller turns into the same `3`.
+///
+/// **A FAILED READING IS NOT CACHED**, which is what keeps this a pairing rather
+/// than a latch: a transient failure on the first column must not condemn the
+/// second to could-not-look for the rest of the run. Only a reading that
+/// succeeded is worth pairing, because only that one has something for the
+/// second column to agree with.
+fn paired_reading(root: &Path) -> Option<(Terms, Observed)> {
+    static READING: std::sync::Mutex<Option<(std::path::PathBuf, Terms, Observed)>> =
+        std::sync::Mutex::new(None);
+
+    // A poisoned lock is could-not-look like any other unreadable input; it is
+    // not worth a panic on a path whose whole posture is to answer `3`.
+    let mut held = READING.lock().ok()?;
+    if let Some((_, resolved, observed)) = held.as_ref().filter(|(at, ..)| at == root) {
+        return Some((resolved.clone(), observed.clone()));
+    }
+    let resolved = terms(root).ok()?;
+    let observed = observe(&resolved).ok()?;
+    *held = Some((root.to_path_buf(), resolved.clone(), observed.clone()));
+    Some((resolved, observed))
+}
+
 /// What a `[[recorder]]` column may ask the landing lease for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Asked {
@@ -1474,13 +1553,29 @@ pub enum Asked {
 /// answer `3` rather than `None`, because each is a reading the recorder should
 /// store as *could not look* rather than an evaluation that failed. `None` is
 /// reserved for the shape [`crate::recorder::evaluate`] already uses it for.
+/// # ONE OBSERVATION SERVES BOTH COLUMNS OF ONE RUN
+///
+/// **The `verdict` and `successor` columns could describe two different lease
+/// states** (review of #848). `crate::recorder` calls this once per [`Asked`],
+/// and each call took its own `terms` plus its own [`observe`] — two smart-HTTP
+/// round trips each — with nothing pairing them. So the status read at T1 could
+/// see a rival's live lease while the successor read at T2 saw the renewal that
+/// admitted this branch behind it, and the preset then compared a successor
+/// drawn from a lease state that never coexisted with the verdict.
+///
+/// That is [`observe`]'s own argument one level out: it takes the sha and the
+/// body from ONE read precisely so they cannot describe different leases, and
+/// the predecessor's measured 16-of-40 wrong bodies is what it cost when they
+/// could. Two columns of one row are the same pairing.
+///
+/// So the reading is taken once per root and reused. Scoped to the process — a
+/// `batten check` run reads these columns moments apart and then exits — which
+/// is what makes the cache a PAIRING rather than a staleness bet: the question
+/// is never "is this current", it is "do these two answers describe one lease".
 #[must_use]
 pub fn adjudicate(asked: Asked, root: &Path, now: i64) -> Option<(i32, String)> {
     let unknown = Some((crate::exit::ExitCode::Internal.code(), String::new()));
-    let Ok(resolved) = terms(root) else {
-        return unknown;
-    };
-    let Ok(observed) = observe(&resolved) else {
+    let Some((_resolved, observed)) = paired_reading(root) else {
         return unknown;
     };
     match asked {

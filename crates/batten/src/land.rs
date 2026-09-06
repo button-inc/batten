@@ -1365,7 +1365,13 @@ pub fn retire_branch(root: &Path, remote: &str, branch: &str) -> Retired {
         crate::lease::delete_ref(remote, &reference),
         Ok(crate::lease::Outcome::Applied)
     );
-    let tracking = format!("refs/remotes/origin/{branch}");
+    // `tracking_ref`, never a second spelling of it (review of #848). This file
+    // derives the prefix through `tracking_prefix` so a consumer whose
+    // `LAND_LOCK_REMOTE` is not `origin` gets the refs `advance` actually wrote;
+    // this site was left on the literal, so the retirement either deleted
+    // nothing and reported `Retired.tracking` false, or deleted a ref under
+    // another remote entirely.
+    let tracking = tracking_ref(&reference);
     let tracking_gone = crate::gitwrite::delete_ref(root, &tracking).is_ok();
 
     // THE SLUG IS THE STORE'S OWN SPELLING, not a second one. Every writer under
@@ -1946,12 +1952,38 @@ impl TapVerdict {
 /// which state they described, and the node id is only ever wanted in order to
 /// change the state this same read reported.
 #[must_use]
-pub fn draft_state(repo: &str, pr: &str) -> Option<(bool, String)> {
+pub fn draft_state(repo: &str, pr: &str) -> Option<Readiness> {
     let answer = crate::rest::get(&format!("repos/{repo}/pulls/{pr}"), None)?;
     let document = serde_json::from_str::<serde_json::Value>(&answer.body).ok()?;
     let draft = document.get("draft")?.as_bool()?;
     let node = document.get("node_id")?.as_str()?.to_owned();
-    Some((draft, node))
+    // FROM THE SAME DOCUMENT, so it costs no round trip and cannot describe a
+    // different pull request than the draft flag beside it.
+    let head = document.get("head")?.get("sha")?.as_str()?.to_owned();
+    Some(Readiness { draft, node, head })
+}
+
+/// What one read of a pull request says about whether readying it buys a run.
+///
+/// **`head` is here because the READY FIRES AGAINST IT, not against this
+/// clone's HEAD** (review of #848). `Step::Ready` precedes `Step::Push`, so on
+/// every lap that replayed, the local head is a sha the forge has never seen —
+/// and reading the check verdict for it mints a run on the pull request's
+/// SUPERSEDED head, charges it to the ledger, and leaves it uncancellable:
+/// `Compensation::Abandon` reads `git::head_commit`, which is the other sha.
+///
+/// Carried in the same struct as `draft` rather than fetched separately for
+/// [`crate::lease::adjudicate`]'s reason one module over: two reads of one
+/// subject can disagree, and here the disagreement would be between the flag
+/// that decides whether to ready and the sha the ready lands on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Readiness {
+    /// Whether the pull request is currently a draft.
+    pub draft: bool,
+    /// Its GraphQL node id, which is what the ready and re-draft mutations take.
+    pub node: String,
+    /// The sha the pull request's head ref points at RIGHT NOW.
+    pub head: String,
 }
 
 /// Convert a pull request back to a draft.

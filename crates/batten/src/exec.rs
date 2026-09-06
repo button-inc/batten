@@ -1473,6 +1473,7 @@ pub(crate) fn classify_in_env(
 ) -> Result<(i32, Vec<Hit>)> {
     let bundle = split_bundle(command)?;
     let outcomes = dispatch(repo_root, &bundle, settings, published, next_run())?;
+    reraise(&outcomes)?;
     let code = bundle_code(&outcomes);
     let mut found: Vec<Hit> = Vec::new();
     for outcome in &outcomes {
@@ -1480,6 +1481,34 @@ pub(crate) fn classify_in_env(
         found.extend(outputs::hits(patterns, Stream::Stderr, &outcome.err_bytes));
     }
     Ok((code, found))
+}
+
+/// Die of the signal a child was killed by, where one was.
+///
+/// **AN INTERRUPT IS NOT A VERDICT ABOUT THE TREE** (review of #848). Only
+/// `report_bundle` acted on `Outcome::received`, and [`classify_in_env`] goes
+/// `dispatch` → `bundle_code` → return, so it bypassed the re-raise entirely.
+/// Measured shape: Ctrl-C while `mise run verify` is `land`'s child returns
+/// `130`, `land::verify` falls past its `3 | 126 | 127` arm into the pattern
+/// scan, and the lap records `verify refused <sha>` in the landing log and
+/// prints "reproduce and fix locally" — for an interrupt the tree had nothing to
+/// do with. Batten also exited normally, so a shell `for` loop around
+/// `batten land` did not abort, which is the `WIFSIGNALED` property CLOUD-746 S2
+/// exists for.
+///
+/// Extracted rather than copied so the two entry points cannot drift about when
+/// a signal is honoured; `report_bundle` states the ordering argument at its own
+/// site, and the same one holds here — there is no record to seal on this path,
+/// so nothing is lost by raising as soon as the outcomes are in hand.
+fn reraise(outcomes: &[Outcome]) -> Result<()> {
+    #[cfg(unix)]
+    if let Some(signal) = outcomes.iter().find_map(|outcome| outcome.received) {
+        // Restores the default disposition and raises on self, so this does not
+        // return.
+        signal_hook::low_level::emulate_default_handler(signal)
+            .context("re-raise the signal Batten was sent")?;
+    }
+    Ok(())
 }
 
 /// A bundle's exit code: the FIRST non-zero in declaration order.

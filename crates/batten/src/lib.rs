@@ -7112,13 +7112,13 @@ fn unwind_lap(
                     // returns before the undo. A merge closes nothing.
                     landed: false,
                     singleton_held: mine,
-                    is_draft: read.as_ref().map(|(draft, _)| *draft),
+                    is_draft: read.as_ref().map(|state| state.draft),
                     verdict: seen,
                 };
                 if !land::closes_the_tap(&state) {
                     continue;
                 }
-                let Some((_, node)) = read else {
+                let Some(land::Readiness { node, .. }) = read else {
                     continue;
                 };
                 if land::redraft(&node) {
@@ -8339,8 +8339,20 @@ fn run_lease_guard(
 ///
 /// The staleness half is the FORGE's answer and needs no remote, so it is still
 /// asked — reaching the unleased `authorises` arm instead would skip a reading
-/// that was available. The lease half is `None`, which `lease::guard` reads as
-/// fail-open.
+/// that was available.
+///
+/// **AND THE LEASE HALF IS NO LONGER ALWAYS `None`** (review of #848,
+/// CLOUD-420). This is not a rare path: it is the ONLY path the verb has in CI,
+/// where the workflow runs it as step 0 before any checkout, so `git::remotes`
+/// is empty and `lease::terms` answers `NoRemote` every time. Passing `None`
+/// there meant the guard's whole reason for existing was switched off on every
+/// run — two landers could spend matrices concurrently while the step reported
+/// green.
+///
+/// `lease::terms_from_environment` is what closes it, and it carries the
+/// predecessor's own argument for why a clone was never actually needed. Where
+/// the environment names no repository either, the answer is still `None` and
+/// the fail-open posture is exactly what it was.
 fn run_lease_guard_unleased(
     root: &Path,
     overrides: &resolve::Overrides,
@@ -8354,7 +8366,19 @@ fn run_lease_guard_unleased(
     }
     let repo = repo_or_placeholder(root);
     let carries = lease_staleness(root, overrides, &repo, head);
-    let guarded = lease::guard(&carries, None);
+    // STALENESS FIRST AND THE LEASE ONLY IF IT DID NOT STOP, which is the same
+    // ordering the leased sibling takes and the predecessor's own.
+    let authority = match &carries {
+        lease::Carries::Stale { .. } => None,
+        lease::Carries::Current | lease::Carries::Unknown { .. } => {
+            let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+            lease::terms_from_environment().map(|terms| {
+                let observed = lease::observe(&terms).ok();
+                lease::authorises(observed.as_ref(), branch, now)
+            })
+        }
+    };
+    let guarded = lease::guard(&carries, authority.as_ref());
     report_guard(&guarded, &repo, run, out, err)
 }
 
@@ -8668,7 +8692,12 @@ fn spend_the_matrix(
             return Ok(ExitCode::Internal);
         }
     };
-    let Some((is_draft, node)) = land::draft_state(&repo, &pr) else {
+    let Some(land::Readiness {
+        draft: is_draft,
+        node,
+        head,
+    }) = land::draft_state(&repo, &pr)
+    else {
         writeln!(
             err,
             "::error:: land: the pull request's draft state will not read, so whether a ready would buy a run is unknown"
@@ -8679,7 +8708,12 @@ fn spend_the_matrix(
     // THE READING THIS LAP ALREADY OWNS. A verdict that cannot be taken is
     // `None`, which `buys_a_matrix` answers `Nothing` to — the same posture the
     // tap takes one direction over, and for the same reason.
-    let reading = head_verdict(root, &repo);
+    // **THE FORGE'S HEAD, NEVER THIS CLONE'S** (review of #848). `Ready` runs
+    // before `Push`, so on a lap that replayed, the local head is a sha the forge
+    // has never seen — and deciding from it mints a run on the pull request's
+    // superseded head that `Compensation::Abandon` can never cancel, because
+    // that reads `git::head_commit`. `Readiness::head` carries the reason.
+    let reading = verdict_for(&repo, &head);
     match land::buys_a_matrix(Some(is_draft), reading.as_ref()) {
         land::Spend::Nothing => {
             writeln!(
@@ -8860,14 +8894,23 @@ fn retire_the_branch(root: &Path, url: &str, branch: &str, out: &mut dyn Write) 
     Ok(())
 }
 
-/// What the required checks say about this clone's HEAD, or `None`.
+/// What the required checks say about a sha the CALLER names, or `None`.
 ///
-/// Every way this fails is a could-not-look — an unreadable HEAD, a roster that
-/// can decide nothing, a reading the forge would not give — and each answers
-/// `None` rather than a verdict, because [`land::buys_a_matrix`] spends nothing
-/// on one and that is the safe direction here.
-fn head_verdict(root: &Path, repo: &str) -> Option<checks_green::Verdict> {
-    let sha = git::head_commit(root).ok()?;
+/// Every way this fails is a could-not-look — a roster that can decide nothing,
+/// a reading the forge would not give — and each answers `None` rather than a
+/// verdict, because [`land::buys_a_matrix`] spends nothing on one and that is
+/// the safe direction here.
+///
+/// **THE SHA IS AN ARGUMENT, and reading this clone's HEAD instead was a defect
+/// rather than a shorthand** (review of #848). `Step::Ready` runs BEFORE
+/// `Step::Push`, so on every lap that replayed, the local head is a sha the
+/// forge has never seen: the ready then fired against the pull request's
+/// superseded head, minted a run on it, charged it to the ledger, and left it
+/// uncancellable, because `Compensation::Abandon` reads `git::head_commit` and
+/// that is the other sha. The ready asks about `Readiness::head`; a wait asks
+/// about the head it just pushed. One reading for both is what conflated them.
+fn verdict_for(repo: &str, sha: &str) -> Option<checks_green::Verdict> {
+    let sha = sha.to_owned();
     let roster = checks_green::Roster {
         required: roster_field(std::env::var("CI_REQUIRED_CHECKS").ok().as_deref()),
         absent_ok: roster_field(std::env::var("CI_ABSENT_OK_CHECKS").ok().as_deref()),
