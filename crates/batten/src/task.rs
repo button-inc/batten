@@ -390,8 +390,41 @@ fn pid_exists(pid: &str) -> bool {
     let Ok(raw) = pid.parse::<i32>() else {
         return false;
     };
+    // EPERM MEANS IT EXISTS, and reading it as dead is a false ALLOW on every
+    // consumer of this probe: the singleton gate stops refusing a second start,
+    // and `task alive` reports a live holder as a corpse the next caller may
+    // reclaim. Only ESRCH — no such process — is death.
+    //
+    // Measured in CI and invisible here: the probe answers `kill(pid, 0)`, which
+    // returns EPERM for a process this uid may not signal. This sandbox runs as
+    // root, so every pid is signallable and the arm never bites;
+    // `singleton_gate::a_live_holder_denies_the_second_start` holds a lock for
+    // pid 1 and passed locally while exiting 0 on the runner, where the job is
+    // unprivileged and pid 1 belongs to another uid. That is the condition
+    // `.claude/rules/rust.md` names — the sandbox cannot produce the failing
+    // state, so the case asserted its conclusion over a premise root had already
+    // satisfied.
     rustix::process::Pid::from_raw(raw)
-        .is_some_and(|pid| rustix::process::test_kill_process(pid).is_ok())
+        .is_some_and(|pid| lives(rustix::process::test_kill_process(pid)))
+}
+
+/// Whether a `kill(pid, 0)` answer means the process is THERE.
+///
+/// Extracted so it can be shown able to fail, which the probe above cannot be:
+/// this sandbox runs as root, so no test here can produce an EPERM from a real
+/// process, and a case asserting the conclusion would assert its own premise —
+/// `.claude/rules/rust.md`'s rule and the reason `markers::scannable` exists.
+/// The decision is the errno, so the decision is what gets tested.
+#[cfg(unix)]
+/// # The arms that are not written
+///
+/// Spelled as the one negation rather than four arms, because three of them
+/// agree on the answer AND the reason reduces to a single claim: **ESRCH is the
+/// only death.** `Ok` is a process signalled, EPERM is one present but not ours
+/// to signal, and every other errno is a probe that could not look — which this
+/// gate must not read as free, since a wrong answer here fails open.
+const fn lives(answer: Result<(), rustix::io::Errno>) -> bool {
+    !matches!(answer, Err(rustix::io::Errno::SRCH))
 }
 
 /// Off unix there is no probe, so nothing is ever reported dead — and nothing is
@@ -781,6 +814,45 @@ pub fn report_claim(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// EPERM IS LIFE, AND READING IT AS DEATH IS A FALSE ALLOW.
+    ///
+    /// `kill(pid, 0)` answers EPERM for a process this uid may not signal — it
+    /// exists, and the caller merely lacks the right to poke it. Every consumer
+    /// of the probe fails OPEN on a wrong reading here: the singleton gate stops
+    /// refusing a second `land`, and `task alive` reports a live holder as a
+    /// corpse the next caller reclaims.
+    ///
+    /// SHOWN ABLE TO FAIL, WHICH THE PROBE ITSELF CANNOT BE HERE (CLOUD-438).
+    /// The predecessor was `test_kill_process(pid).is_ok()`, which reads EPERM
+    /// as dead; against it the second case below returns `false` where it must
+    /// return `true`. That defect was invisible in this sandbox — it runs as
+    /// root, so every pid is signallable and EPERM never arrives — and CI is
+    /// where it surfaced, as `a_live_holder_denies_the_second_start` exiting 0
+    /// on an unprivileged runner holding a lock for pid 1. Testing the errno
+    /// rather than a live process is `.claude/rules/rust.md`'s own remedy for a
+    /// premise the environment cannot create.
+    ///
+    /// `cfg(unix)` like the function it tests: there is no `kill(pid, 0)` off
+    /// unix, so `rustix` is a `cfg(unix)` dependency and neither `lives` nor
+    /// `Errno` exists on the Windows target `cross-check` type-checks.
+    #[cfg(unix)]
+    #[test]
+    fn only_no_such_process_is_death() {
+        assert!(lives(Ok(())), "signalled: it is there");
+        assert!(
+            lives(Err(rustix::io::Errno::PERM)),
+            "EPERM is a process this uid may not signal, never an absent one"
+        );
+        assert!(
+            !lives(Err(rustix::io::Errno::SRCH)),
+            "ESRCH is the one answer that means death"
+        );
+        assert!(
+            lives(Err(rustix::io::Errno::INVAL)),
+            "a probe that could not look must not read as free"
+        );
+    }
 
     // TWO SIGHTINGS, all four combinations, with no clock and no second process.
     // The retiring suite raced a real child against a sleep to reach the middle
