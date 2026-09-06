@@ -1195,3 +1195,101 @@ fn a_mediated_admission_spends_after_the_tree_moves_under_it() {
         common::stderr(&spent)
     );
 }
+
+/// A second module in the same bundle, publishing a predicate whose id is NOT
+/// the enabling row's.
+///
+/// That inequality is the whole point. `ALWAYS` above names its predicate
+/// `always-refuses`, the same string as the `[[rule]]` id enabling it, so every
+/// case built on it matched a narrowing that filters rows by `declared.id ==
+/// rule` — and the suite stayed green over a mint that could not work for any
+/// real policy module, where a row carries many predicates under one id
+/// (CLOUD-832).
+const UNDER_A_ROW: &str = r#"
+package batten.admits.under
+
+import rego.v1
+
+rules contains "predicate-under-a-row"
+
+violation contains {
+	"rule": "predicate-under-a-row",
+	"verdict": "always probe probe",
+	"subjects": [{"path": "b.rs"}],
+}
+"#;
+
+fn admits_fixture_with_predicate(name: &str) -> PathBuf {
+    let root = admits_fixture(name);
+    common::write(&root, "policy-admits/under.rego", UNDER_A_ROW);
+    common::git_in(&root, &["add", "-A"]);
+    common::git_in(&root, &["commit", "-qm", "a predicate under the row"]);
+    root
+}
+
+/// A MINT FOR A POLICY PREDICATE ANCHORS THE FINDING, NOT THE CALL.
+///
+/// # The defect this exists because of
+///
+/// `admission_anchor` narrows the scan it runs to `declared.id == rule`, and a
+/// refusal names the PREDICATE — so for every policy module whose predicate ids
+/// differ from its enabling row's id, that filter selected NOTHING. The scan
+/// produced no finding, the match count was `0`, and the mint took the
+/// `Anchor::Call` fallback.
+///
+/// That fallback is documented as "never weaker than what shipped before", and
+/// for a tree finding it is fatal: CLOUD-1125 moved every tree finding to a
+/// `Finding` anchor, `apply_admissions` builds only that token, and
+/// `a_mediated_anchor_and_a_finding_anchor_are_not_interchangeable` above pins
+/// that the two do not collide. So the admission was answered, spent, and
+/// queried by nothing — the exact silent no-op the fallback's own comment warns
+/// a mismatched anchor produces.
+///
+/// Measured before the fix, on this repository: two admissions for
+/// `filed-over-own-diff` and `filed-and-left-open` — both predicates of the
+/// `filed-here` row — were issued, spent, committed, and honoured by neither
+/// gate. `batten-check` reported both findings unchanged afterwards.
+///
+/// # Why the existing cases could not see it
+///
+/// Every one of them mints against `always-refuses`, where the row id and the
+/// predicate id are the same string, so the narrowing matched by coincidence.
+/// The fixture is the reason the suite was green, which is why this case brings
+/// its own module rather than reusing that one.
+#[test]
+fn a_mint_for_a_policy_predicate_anchors_the_finding_not_the_call() {
+    use batten::admission::{Anchor, Record};
+
+    let root = admits_fixture_with_predicate("policy-predicate");
+    let issued = common::run_with_stdin(
+        &root,
+        &[
+            "override",
+            "request",
+            "--rule",
+            "predicate-under-a-row",
+            "--verdict",
+            "always probe probe",
+            "--subject",
+            "b.rs",
+        ],
+        "precondition=the refusal is the fixture's point\nlost=the finding is the subject\n\
+         rejected-route=admits fix probe has nothing to change\n",
+    );
+    let address = String::from_utf8_lossy(&issued.stdout).trim().to_owned();
+    assert_eq!(
+        address.len(),
+        64,
+        "an address was issued: {address:?} — {}",
+        common::stderr(&issued)
+    );
+
+    let path = batten::admission::record_path(&root, &address).expect("record path");
+    let record: Record =
+        serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("parse");
+    assert!(
+        matches!(record.binding.anchor, Anchor::Finding(_)),
+        "a policy predicate's mint anchors the finding it answers, never the HEAD: {:?}",
+        record.binding.anchor
+    );
+}

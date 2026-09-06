@@ -5594,12 +5594,40 @@ fn admission_anchor(
     // reader. Measured before this line existed: `override request` and
     // `override spend` each ran a full policy scan of the tree, ~90s on this
     // repository, on the path `land` mints inside.
-    let selected: Vec<_> = config
+    let exact: Vec<_> = config
         .rules
         .iter()
         .filter(|declared| declared.id == rule)
         .cloned()
         .collect();
+    // A POLICY PREDICATE IS NOT A ROW ID, and narrowing as though it were made
+    // every policy admission a silent no-op (CLOUD-1087, CLOUD-1125).
+    //
+    // `filed-here` publishes `filed-over-own-diff`; the refusal names the
+    // PREDICATE, so that is what `--rule` carries here. Filtering on
+    // `declared.id == rule` therefore selected NOTHING, the scan below produced
+    // no finding, the match count was `0`, and the mint took the `head()`
+    // fallback. That is fatal rather than merely weaker: CLOUD-1125 moved every
+    // tree finding to a `Finding` anchor, `apply_admissions` builds only that
+    // token, and the two are tagged apart — so the admission was answered,
+    // spent, and queried by nothing, which is exactly what the fallback's own
+    // comment warns a `Call` anchor cannot do. Measured on this branch: two
+    // admissions issued, spent, committed and honoured by neither gate.
+    //
+    // Only a `policy` row can publish an id that is not its own, so an empty
+    // exact match widens to those rows and no further. Every typed kind keeps
+    // the narrow fast path it was given, which is what the ~90s measurement
+    // above is about.
+    let selected: Vec<_> = if exact.is_empty() {
+        config
+            .rules
+            .iter()
+            .filter(|declared| declared.kind == rules::RuleKind::Policy)
+            .cloned()
+            .collect()
+    } else {
+        exact
+    };
     let Ok(scan) = rules::run_all_over(
         &selected,
         &config.provisions,
