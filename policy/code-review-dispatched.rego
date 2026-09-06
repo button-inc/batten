@@ -106,7 +106,21 @@ looked_at(id) if {
 	is_object(input.tree.minted[id])
 }
 
-delta := input.tree["base-delta"]
+# The branch's own diff, as the engine resolved it.
+#
+# GUARDED ON `is_object` FOR THE SAME REASON `looked_at` IS, and the guard was
+# missing here while its sibling carried one — the asymmetry the code review this
+# gate demands is what found it. `rules.rs` projects `base-delta` as `null` when
+# the base does not resolve, indexing `null` is a hard evaluation FAULT in Rego
+# rather than a silent miss, and a fault takes the whole BUNDLE down — every
+# predicate in it, not only this one. A fresh clone with no `origin/main` is the
+# reachable instance. Undefined here leaves `owed` and `subject` undefined too, so
+# every arm goes quiet, which is the could-not-look reading this module already
+# takes for an absent identity.
+delta := resolved if {
+	resolved := input.tree["base-delta"]
+	is_object(resolved)
+}
 
 # The identity of the change this branch is asking to land.
 #
@@ -317,6 +331,14 @@ test_a_change_with_no_identity_is_not_refused if {
 		"code-changed": ["crates/batten/src/lib.rs"],
 		"patch-id": null,
 	})
+}
+
+# A DELTA THE ENGINE COULD NOT BUILD, and without the `is_object` guard on
+# `delta` this case does not merely fail — it FAULTS, taking every predicate in
+# the bundle with it. `rules.rs` projects `null` here on a checkout whose base ref
+# does not resolve, which a fresh clone with no `origin/main` is.
+test_a_delta_the_engine_could_not_build_does_not_fault if {
+	count(violation) == 0 with input as attested_over(null)
 }
 
 attested_over(d) := {"tree": {"base-delta": d, "minted": {"code-review": {}}}}
