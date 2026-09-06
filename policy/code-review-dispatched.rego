@@ -224,13 +224,24 @@ test_the_refusal_names_the_receipt if {
 	ids == {"code-review"}
 }
 
-# A RECORD UNDER ANOTHER ID IS NOT THIS ONE HAVING RUN.
-test_another_receipts_record_does_not_answer if {
-	some v in violation with input as {"tree": {
+# A MAP NAMING ONLY ANOTHER ID IS COULD-NOT-LOOK, NOT A REFUSAL — and this case
+# asserted the opposite until the per-id guard landed.
+#
+# The reasoning that made it look right was that a record under another id is not
+# this one having run, which is true and is not what this shape says. `minted` is
+# keyed by DECLARED ROW, and `minted::fields` inserts an entry for every row whose
+# store it could list — so an id missing from the map means the engine never
+# looked for it, never that it looked and found nothing. Refusing here would be a
+# verdict about the engine's reach wearing a verdict about the branch.
+#
+# The claim the old case meant to make is `test_a_receipt_over_another_change_
+# does_not_answer` above, where the id IS present and the subject is another
+# change's.
+test_a_map_naming_only_another_id_is_not_refused if {
+	count(violation) == 0 with input as {"tree": {
 		"base-delta": changed,
 		"minted": {"other": {"abc": "cafe 1700000000"}},
 	}}
-	v.verdict == "patch read never"
 }
 
 # COULD-NOT-LOOK, and without the `is_object` guard this case does not merely
