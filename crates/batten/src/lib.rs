@@ -1323,18 +1323,21 @@ fn run_state_record(
 
     // THE WRITE PHASE STARTS HERE, and so does the lock. Everything above is a
     // READ, so nothing above needs one writer.
-    if !take_write_lock(&lock, surface)? {
-        // Someone else holds it. REPORTED, never silent: this turn mints
-        // nothing, so the nudge ladder reads a store this call did not advance,
-        // and a reader owed an explanation for the silence gets one — the same
-        // `persisted:false` reading the degraded-store arm below gives for the
-        // other reason a record does not happen.
-        writeln!(
-            err,
-            "batten: state record {context}: another writer holds the store; persisted:false"
-        )?;
-        return Ok(ExitCode::Success);
-    }
+    //
+    // LOSING IT IS NOT SILENCE, and it is not a return either (CLOUD-1541). It
+    // was both for one revision, and the cost was the contract
+    // `stop_posture::the_first_turn_on_a_fresh_claim_still_speaks` pins: the
+    // nudge ladder reads this store a few lines after this call, so a turn that
+    // returned here minted nothing and a FRESH claim — with no earlier record to
+    // fall back on — said nothing at all.
+    //
+    // So the two halves are separated. The SCAN's record needs one writer, since
+    // `findings::record` is an unlocked read/modify/write over every identity.
+    // The DETECTORS do not: `findings::record_sequence` writes one record file
+    // per identity by atomic rename and appends no journal entry, and the drain
+    // holding the lock is deriving the same value from the same transcript — so
+    // the two agree by construction rather than by exclusion.
+    let holds_lock = take_write_lock(&lock, surface)?;
 
     let bound = store::commit(store::resolve(&repo)?)?;
     if let Some(note) = &bound.note {
@@ -1356,17 +1359,25 @@ fn run_state_record(
     // The worktree actually scanned, not the main root — this is metadata for a
     // human reading a report, and naming the wrong directory would misdirect it.
     let here = std::env::current_dir().ok();
-    let recorded = findings::record(
-        &bound.dir,
-        &context,
-        &commit,
-        here.as_deref().and_then(Path::to_str),
-        &scan.findings,
-        schema,
-        // The rules that never looked. Without this the pass below reads their
-        // silence as "clean" and resolves every finding they cover (CLOUD-81).
-        &scan.not_evaluated,
-    )?;
+    // THE SCAN'S RECORD IS THE HALF THAT NEEDS THE LOCK. Skipped rather than
+    // resolved when this caller lost it: `Recorded::default()` is all zeroes, so
+    // the report below says nothing happened, which is true.
+    let recorded = if holds_lock {
+        findings::record(
+            &bound.dir,
+            &context,
+            &commit,
+            here.as_deref().and_then(Path::to_str),
+            &scan.findings,
+            schema,
+            // The rules that never looked. Without this the pass below reads
+            // their silence as "clean" and resolves every finding they cover
+            // (CLOUD-81).
+            &scan.not_evaluated,
+        )?
+    } else {
+        findings::Recorded::default()
+    };
 
     // The transcript-substrate detectors (CLOUD-97, CLOUD-98), folded in beside
     // the rule scan rather than through it: their identities are sequences over
@@ -1374,6 +1385,14 @@ fn run_state_record(
     // no vocabulary to express. They run AFTER `record` on purpose — that pass
     // resolves what this context no longer sees, and a raise written before it
     // would be reasoning about a store mid-update.
+    //
+    // AND THEY RUN WHETHER OR NOT THIS CALLER HOLDS THE LOCK (CLOUD-1541), which
+    // is the whole of that row's fix. The nudge ladder reads what this writes a
+    // few lines after the call returns, so skipping them is what silenced a
+    // fresh claim's first turn. They are safe unlocked for a reason the scan's
+    // record is not: one record file per identity, written by atomic rename,
+    // with no journal entry appended — and the holder is deriving the same value
+    // from the same transcript.
     register_transcript_detectors(
         &repo,
         &Recording {
@@ -1386,6 +1405,17 @@ fn run_state_record(
         mode,
         err,
     )?;
+
+    if !holds_lock {
+        // REPORTED, never silent: the detectors spoke, the scan's record did
+        // not, and a reader owed the difference gets the same `persisted:false`
+        // reading the degraded-store arm above gives for its own reason.
+        writeln!(
+            err,
+            "batten: state record {context}: another writer holds the store; persisted:false"
+        )?;
+        return Ok(ExitCode::Success);
+    }
 
     // Fold any dispositions this worktree journalled since the last record. A
     // lost lock race is not a failure — the entries stay in the shard and the

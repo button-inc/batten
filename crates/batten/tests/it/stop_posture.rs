@@ -1113,3 +1113,64 @@ fn a_stop_that_skipped_the_scan_holds_the_rule_finding_rather_than_resolving_it(
          which is the whole of CLOUD-81 on this path: {occurrences}"
     );
 }
+
+/// A CONTENDED STORE LOCK STILL SPEAKS (CLOUD-1541).
+///
+/// # The regression this exists because of
+///
+/// Detaching the state record put an advisory lock over the store's write
+/// phase, and the mediated path may not wait on it — the 100ms budget forbids
+/// it, and a revision that did wait measured 99–124s. So it `try_lock`s, and
+/// the first version RETURNED when it lost.
+///
+/// That silenced the contract `the_first_turn_on_a_fresh_claim_still_speaks`
+/// pins. The nudge ladder reads this store a few lines after `record_state`
+/// returns, so a turn that returned before the detectors ran minted nothing —
+/// and on a FRESH claim there is no earlier record to fall back on, so the turn
+/// said nothing at all.
+///
+/// # Why the suite could not see it, which is the point of this case
+///
+/// Every other case here runs with the lock free. The contended arm is the
+/// unrepresentative one to omit, because consecutive turns end inside the
+/// drain's window by construction — that window is the whole reason the lock
+/// exists.
+///
+/// # The lock is HELD BY THIS TEST, not by a spawned drain
+///
+/// A real drain would make the case a race: it holds the lock for as long as its
+/// scan takes, which is neither bounded nor knowable from here. Taking the lock
+/// directly makes the contended state a precondition the case CREATES, which is
+/// what `.claude/rules/rust.md` demands of a test whose environment would not
+/// otherwise produce the failing condition.
+#[test]
+fn a_stop_whose_store_lock_is_held_elsewhere_still_speaks() {
+    let (repo, home) = unlanded_fixture("stop-unlanded-contended");
+
+    // The same path `run_state_record` derives: `$GIT_DIR` beside the store it
+    // guards. Spelled here rather than imported because the constant is private
+    // — and a rename would leave this holding the wrong file, which the
+    // assertion below would catch rather than pass over: with the lock free the
+    // case proves nothing new, so it is the PAIR with the case above that
+    // discriminates, not this one alone.
+    let lock_path = repo.join(".git").join("batten-state-record.lock");
+    let held = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .expect("open the store's write lock");
+    fs4::FileExt::lock(&held).expect("hold the store's write lock");
+
+    let output = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let stdout = stdout_of(&output);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+
+    drop(fs4::FileExt::unlock(&held));
+
+    assert!(
+        stdout.contains(batten::completion::RULE_ID),
+        "the claim is still reported while another writer holds the store: \
+         {stdout}\n--- stderr ---\n{stderr}"
+    );
+}
