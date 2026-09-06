@@ -273,12 +273,18 @@ fn an_unknown_manifest_key_costs_its_row_and_is_named() {
     let shown = env.run(&["config", "show"]);
     let said = String::from_utf8_lossy(&shown.stderr);
     assert!(
-        said.contains("unresolved row"),
+        said.contains("unresolved provision"),
         "the dropped row must be named rather than silently discarded: {said}"
     );
+    // AND IT SAYS WHICH RELEASE TO FETCH, not just that something is wrong.
+    // The wording moved off "rebuild with install:local" deliberately: a
+    // consumer of this binary does not build it, and the useful instruction is
+    // to install the release the config was written for. `min_batten_version`
+    // is the field that names which — absent here, so the message says the
+    // floor cannot answer rather than inventing a version.
     assert!(
-        said.contains("install:local"),
-        "and it names the rebuild, because a stale binary is the likelier cause: {said}"
+        said.contains("deps-install") || said.contains("min_batten_version"),
+        "and it points at the release to install: {said}"
     );
     assert!(
         !said.contains("bogus"),

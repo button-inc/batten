@@ -13212,7 +13212,7 @@ fn announce_config(mode: Mode, err: &mut dyn Write, config: &resolve::Resolved) 
     // which is the silence this whole change exists to remove, reintroduced one
     // layer along. Review caught it. This is the one place both verbs already
     // pass through with `err` in hand.
-    report_unresolvable(&config.unresolvable, mode, err)?;
+    report_unresolvable(config, mode, err)?;
     announce_degrade(mode, err, config.base.as_ref())
 }
 
@@ -13972,11 +13972,12 @@ fn run_config_deprecations(json: bool, against: &str, out: &mut dyn Write) -> Re
 /// # Errors
 ///
 /// Propagates a write failure on `err`.
-fn report_unresolvable(
-    rows: &[config::Unresolvable],
-    mode: Mode,
-    err: &mut dyn Write,
-) -> Result<()> {
+fn report_unresolvable(config: &resolve::Resolved, mode: Mode, err: &mut dyn Write) -> Result<()> {
+    let rows = &config.unresolvable;
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let floor = config.min_batten_version.as_deref();
     // THROUGH THE VERBOSITY LADDER, like both lines it stands beside in
     // `announce_config`. A bare `writeln!` ignored `--log-level silent`, so
     // `check` and `config show` printed a line per dropped row on a channel the
@@ -13986,14 +13987,35 @@ fn report_unresolvable(
             mode,
             Verbosity::Normal,
             err,
-            &format!(
-                "config: unresolved row {} — this build may predate the key \
-                 (rebuild with `mise run install:local`), or the key is a typo. \
-                 Either way the row enforces nothing",
-                row.line()
-            ),
+            &format!("config: unresolved {} — it enforces nothing", row.line()),
         )?;
     }
+
+    // AND IT SAYS WHICH RELEASE TO INSTALL, because tolerating the key is only
+    // half the repair. A config this build cannot fully read is a build that is
+    // BEHIND its config, and the reader's next move is to fetch the release the
+    // config was written for — not to hunt a typo, which is what the old wording
+    // ("or the key is a typo") sent every reader to do.
+    //
+    // `min_batten_version` is the field that names it. When it is AHEAD of this
+    // build the message is exact. When it is not, the floor itself is stale —
+    // the config grew a key and nobody raised it — so the message says that
+    // instead of inventing a version, because a number this build could not
+    // derive is worse than naming the gap.
+    let running = env!("CARGO_PKG_VERSION");
+    let note = match floor {
+        Some(declared) if declared != running => format!(
+            "config: this config is written for batten {declared} and you are running \
+             {running} — install it (`mise run deps-install`) and re-run; until then the \
+             lines above are OFF"
+        ),
+        _ => format!(
+            "config: this config declares keys batten {running} does not know, and its \
+             `min_batten_version` does not say which release does. Raise that floor in the \
+             release that added them; until then the lines above are OFF"
+        ),
+    };
+    output::message(mode, Verbosity::Normal, err, &note)?;
     Ok(())
 }
 
@@ -14034,7 +14056,7 @@ fn run_config(
                     )?;
                 }
             }
-            report_unresolvable(&config.unresolvable, mode, err)?;
+            report_unresolvable(&config, mode, err)?;
             Ok(ExitCode::Success)
         }
         // The alarm beside `--config-from`'s control (CLOUD-87): a smell is a

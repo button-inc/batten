@@ -225,31 +225,36 @@ fn two_dropped_rows_in_one_section_report_distinct_pointers() {
     );
 }
 
-/// A PLAIN `[section]` IS NOT A DROPPABLE ROW, and reading it as one deleted
-/// somebody else's. `owning_row` scanned back for the nearest `[[name]]` without
-/// stopping at a `[name]` in between, so an unknown key under a plain table
-/// resolved to a `[[rule]]` row further up — a valid row blanked, and the file
-/// refused anyway. `[ready]` is a real plain section, which is what makes this
-/// the reviewed shape rather than an unknown table by another name.
+/// A KEY UNDER A PLAIN `[section]` NO LONGER TAKES THE FILE, and this case
+/// records the reversal rather than being deleted.
+///
+/// It used to assert the opposite — that such a key kept the hard refusal — and
+/// that WAS the design until 2026-09-06, when `[capture]` on `main` grew
+/// `inline_max_bytes`, every released binary predated it, the whole config
+/// failed to load, and every mediated gate failed open for a day because a load
+/// failure is exit `1` and exit `1` does not block a call. The refusal moved to
+/// `config lint`, which names the key and exits `2`; what it no longer does is
+/// take the rest of the file with it.
+///
+/// What it still holds is the OTHER half of the original claim: no `[[row]]` is
+/// dropped for a fault that is not in one. That was the defect the old case was
+/// really written for — `owning_row` charging a plain section's key to a
+/// `[[rule]]` further up and deleting it.
 #[test]
-fn a_key_under_a_plain_section_drops_nothing() {
+fn a_key_under_a_plain_section_drops_no_row() {
     let dir = repo(
         "config-forward-section",
         &format!("{GOOD}\n[ready]\nnot_a_key_this_build_knows = true\n"),
     );
-    let (code, _, stderr) = adjudicate(&dir);
-    assert_eq!(code, Some(1), "a top-level table's key is still a refusal");
-    // NAMING THE CONFIG IS THE ANTI-VACUITY HALF. This case asserted only the
-    // exit code, and passed for a year's worth of the wrong reason in review:
-    // the tier invoked a verb that had been renamed, so clap's `unrecognized
-    // subcommand` was the exit 1 being read as a config refusal.
+    let (code, stdout, stderr) = adjudicate(&dir);
+    assert_eq!(code, Some(0), "the file still loads: {stdout} {stderr}");
     assert!(
-        stderr.contains("invalid config"),
-        "exit 1 must be the CONFIG refusing, not the CLI: {stderr}"
+        stdout.contains(r#""permissionDecision":"deny""#) && stdout.contains("good-row"),
+        "the rule beside it must still enforce: {stdout}"
     );
     assert!(
-        !stderr.contains("unresolved row"),
-        "no row may be dropped for a fault that is not in one: {stderr}"
+        !stderr.contains("unresolved rule"),
+        "no ROW may be dropped for a fault that is not in one: {stderr}"
     );
 }
 
@@ -384,6 +389,77 @@ reason = "a row whose header carries whitespace and a comment"
     assert!(
         stdout.contains(r#""permissionDecision":"deny""#) && stdout.contains("good-row"),
         "a row whose header carries a comment must still decide: {stdout}"
+    );
+}
+
+/// A KEY IN A PLAIN `[section]` COSTS THE KEY, NOT THE FILE.
+///
+/// **This is the shape that actually took the fleet down, and the first version
+/// of this whole change did not cover it.** On 2026-09-06 `main`'s `[capture]`
+/// table grew `inline_max_bytes`; every released binary predated the field, the
+/// whole config failed to load, and because a config load failure is exit `1`
+/// — which does not block a call — every mediated gate failed open. No new
+/// session could start for a day. `inline_max_bytes` is not in a `[[row]]`, so
+/// the row-granular arm above could never have repaired it.
+///
+/// The good row must still DECIDE, which is what separates this from "the file
+/// happened to load": a build that dropped the whole `[section]`, or that
+/// swallowed the file wholesale, would satisfy a weaker assertion.
+#[test]
+fn a_key_in_a_plain_section_costs_the_key_not_the_file() {
+    let dir = repo(
+        "config-forward-section-key",
+        &format!("{GOOD}\n[ready]\nfrom_a_newer_schema = 1024\n"),
+    );
+    let (code, stdout, stderr) = adjudicate(&dir);
+    assert_eq!(code, Some(0), "the hook answered: {stdout} {stderr}");
+    assert!(
+        stdout.contains(r#""permissionDecision":"deny""#) && stdout.contains("good-row"),
+        "a rule beside an unreadable section key must still enforce: {stdout}"
+    );
+
+    let out = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten config show");
+    let said = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        said.contains("ready") && said.contains("from_a_newer_schema"),
+        "the dropped key is named by its table and its own name: {said}"
+    );
+}
+
+/// AND THE REST OF THAT TABLE SURVIVES. Dropping the whole `[section]` would
+/// also make the file load, so this is the half that says which granularity was
+/// chosen: a settings table keeps every key this build does understand and runs
+/// the unknown one on its own default.
+#[test]
+fn the_rest_of_the_section_still_applies() {
+    let dir = repo(
+        "config-forward-section-rest",
+        &format!(
+            "{GOOD}\n[ready]\nfrom_a_newer_schema = 1024\n\
+             prose_dialect_required_from = \"2026-01-01T00:00:00Z\"\n"
+        ),
+    );
+    let out = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten config show");
+    let shown = String::from_utf8_lossy(&out.stdout).into_owned();
+    let said = String::from_utf8_lossy(&out.stderr).into_owned();
+    // `config show` emits the table's resolved KEY COUNT, not its values, and
+    // that count is the exact discriminator: `ready 1` is the known key
+    // surviving, `ready 0` is the whole table having gone with the unknown one.
+    assert!(
+        shown.contains("ready 1"),
+        "the key this build DOES know must survive the drop: {shown}"
+    );
+    assert!(
+        said.contains("from_a_newer_schema") && !said.contains("prose_dialect_required_from"),
+        "and only the unknown one is dropped: {said}"
     );
 }
 

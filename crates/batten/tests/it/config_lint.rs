@@ -974,6 +974,20 @@ fn the_removed_protected_egress_key_is_refused_rather_than_ignored() {
     // for protected egress … not a latent key". A config still carrying it must
     // hear that it no longer does anything, rather than parsing green and
     // leaving its author believing protected content still crosses.
+    //
+    // **THE REFUSAL MOVED FROM THE LOADER TO THE LINT (CLOUD-1428), and the
+    // author still hears it.** This asserted exit `1` — the whole file failing
+    // to load — which on 2026-09-06 was measured as the worse failure: a key
+    // `main` added to `[capture]` took every released binary's whole config
+    // down, and since a load failure is exit `1`, which does not block a call,
+    // every mediated gate failed open for a day. So the key is named and the
+    // run is a verdict, rather than the file being dead.
+    //
+    // A key this engine deliberately REMOVED — as against one it never had —
+    // could keep the hard refusal, and the mechanism for that is
+    // `config::RETIRED_KEYS`. It carries top-level names only, so a sub-key like
+    // this one cannot be named there today; whoever retires the next sub-key
+    // should widen that census rather than rely on the loader's granularity.
     for answer in ["pointer", "raw"] {
         let dir = repo_with_config(
             &format!("judge-removed-{answer}"),
@@ -982,12 +996,13 @@ fn the_removed_protected_egress_key_is_refused_rather_than_ignored() {
         let output = lint(&dir, &[]);
         assert_eq!(
             output.status.code(),
-            Some(1),
-            "an unknown key is a usage error, never a silent ignore"
+            Some(2),
+            "a key that is gone is a config verdict, never a silent ignore"
         );
+        let said = format!("{}{}", stdout(&output), stderr(&output));
         assert!(
-            stderr(&output).contains("over_protected"),
-            "the refusal names the key that is gone"
+            said.contains("over_protected"),
+            "the refusal names the key that is gone: {said}"
         );
     }
 }
@@ -1384,11 +1399,10 @@ fn asking_for_a_comparison_the_config_cannot_join_is_a_usage_error() {
 
 #[test]
 fn a_malformed_ci_table_is_refused_at_parse() {
+    // A VALUE this build has an opinion about is still a load error: an empty
+    // roster, a duplicate, a merge method the schema does not admit. The engine
+    // knows every one of these keys and is refusing what they hold.
     for (name, table) in [
-        (
-            "ci-unknown-key",
-            "[ci]\nrequired_checks = [\"a\"]\nbogus = 1\n",
-        ),
         ("ci-empty", "[ci]\nrequired_checks = []\n"),
         ("ci-duplicate", "[ci]\nrequired_checks = [\"a\", \"a\"]\n"),
         (
@@ -1404,6 +1418,37 @@ fn a_malformed_ci_table_is_refused_at_parse() {
             "{name}: a malformed table is refused, never ignored"
         );
     }
+}
+
+/// AN UNKNOWN KEY IN `[ci]` IS A NAMED VERDICT, NOT A DEAD FILE (CLOUD-1428).
+///
+/// This case lived in the loop above and asserted exit `1` — the whole config
+/// failing to load. Measured 2026-09-06: `[capture]` on `main` grew
+/// `inline_max_bytes`, every released binary predated it, and because a load
+/// failure is exit `1` — which the exit contract says does not block a call —
+/// every mediated gate failed open and no session could start for a day.
+///
+/// So it still refuses and still names the key; what it no longer does is take
+/// the rest of the file with it. The distinction from the loop above is the one
+/// the whole change turns on: an unknown KEY is a schema this build predates, a
+/// bad VALUE is a schema it knows and rejects.
+#[test]
+fn an_unknown_ci_key_is_named_without_killing_the_file() {
+    let dir = repo_with_config(
+        "ci-unknown-key",
+        "version = 1\n\n[ci]\nrequired_checks = [\"a\"]\nbogus = 1\n",
+    );
+    let output = lint(&dir, &[]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an unknown key is a config verdict"
+    );
+    let said = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        said.contains("bogus") && said.contains("config-row-unresolved"),
+        "and it is named, by key and by class: {said}"
+    );
 }
 
 #[test]

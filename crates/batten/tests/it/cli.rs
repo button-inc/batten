@@ -7904,6 +7904,20 @@ fn adopting_a_store_id_that_does_not_exist_is_refused() {
 fn an_unknown_judge_key_is_a_hard_schema_error() {
     // The config surface stays narrow: a typo inside `[judge]` must never
     // silently widen — or silently fail to widen — the payload boundary.
+    //
+    // **THE REFUSAL MOVED FROM THE LOADER TO THE LINT, AND THAT IS THE WHOLE OF
+    // CLOUD-1428.** This asserted exit `1` — the whole file failing to load.
+    // Measured 2026-09-06: `[capture]` on `main` grew `inline_max_bytes`, every
+    // released binary predated the field, so the config did not load at all;
+    // and because a load failure is exit `1`, which the exit contract says does
+    // not block a call, EVERY mediated gate failed open and no session could
+    // start for a day. A narrow surface is worth keeping and is not worth that.
+    //
+    // So the key still refuses, and refuses by NAME — `config lint` reports
+    // `config-row-unresolved` and exits `2`, the verdict code. What it no longer
+    // does is take the other 4000 lines of policy down with it. Silent it is
+    // not: the loader squawks the release to install, `doctor` fails, and this
+    // is the pointer.
     let dir = repo_with_config(
         "judge-unknown-key",
         "version = 1\n\n[judge]\nbogus = true\n",
@@ -7911,10 +7925,15 @@ fn an_unknown_judge_key_is_a_hard_schema_error() {
     let output = common::run(&dir, &["config", "lint"]);
     assert_eq!(
         output.status.code(),
-        Some(1),
-        "an unknown key is a usage error"
+        Some(2),
+        "an unknown key is a config verdict, not a dead file"
     );
-    assert!(common::stderr(&output).contains("bogus"));
+    let said = format!("{}{}", common::stdout(&output), common::stderr(&output));
+    assert!(said.contains("bogus"), "the refusal names the key: {said}");
+    assert!(
+        said.contains("config-row-unresolved"),
+        "and names the class a reader can look up: {said}"
+    );
 }
 
 #[test]

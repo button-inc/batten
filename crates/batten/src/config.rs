@@ -2008,6 +2008,16 @@ fn scan_line(line: &str, state: Lex) -> Lex {
 /// makes this safe, and the previous one — "does the result still parse" — was
 /// not, because truncating a document to a section boundary leaves valid TOML.
 fn headers(text: &str) -> impl Iterator<Item = (usize, Header<'_>)> {
+    lines_in_code(text).filter_map(|(at, line)| header_of(line).map(|header| (at, header)))
+}
+
+/// Every line that BEGINS outside a string, as `(byte offset, line)`.
+///
+/// The shared reading behind `headers` and `key_extent`: a line continuing a
+/// multi-line string is not structure, and both callers would otherwise have to
+/// re-derive that separately — which is the second-authority shape this module
+/// already refuses for parsing.
+fn lines_in_code(text: &str) -> impl Iterator<Item = (usize, &str)> {
     let base = text.as_ptr() as usize;
     let mut state = Lex::Code;
     text.lines().filter_map(move |line| {
@@ -2016,11 +2026,40 @@ fn headers(text: &str) -> impl Iterator<Item = (usize, Header<'_>)> {
         let at = line.as_ptr() as usize - base;
         let began_in_code = state == Lex::Code;
         state = scan_line(line, state);
-        if !began_in_code {
-            return None;
-        }
-        header_of(line).map(|header| (at, header))
+        began_in_code.then_some((at, line))
     })
+}
+
+/// The table a key at `at` belongs to, as `(name, its header)`.
+///
+/// `None` for a key on the top-level table, which has no header to name.
+fn owning_table(text: &str, at: usize) -> Option<(String, Header<'_>)> {
+    headers(text)
+        .take_while(|(offset, _)| *offset <= at)
+        .last()
+        .map(|(_, header)| (header.name().to_owned(), header))
+}
+
+/// The half-open byte range of the key-value pair whose key starts at `at`.
+///
+/// It runs to the next line that begins outside a string AND opens either a
+/// header or another key — so a value spread over several lines (an array, a
+/// `"""` block) travels with its key rather than being cut in half. A cut would
+/// leave TOML that no longer lexes, which `prune_unresolvable`'s exactness guard
+/// would then refuse, turning a droppable key into a refused file.
+fn key_extent(text: &str, at: usize) -> (usize, usize) {
+    let start = text[..at].rfind('\n').map_or(0, |newline| newline + 1);
+    let end = lines_in_code(text)
+        .find(|(offset, line)| {
+            *offset > start && {
+                let trimmed = line.trim();
+                !trimmed.is_empty()
+                    && !trimmed.starts_with('#')
+                    && (header_of(line).is_some() || trimmed.contains('='))
+            }
+        })
+        .map_or(text.len(), |(offset, _)| offset);
+    (start, end)
 }
 
 /// Find the array-of-tables row containing `at`, as
@@ -2169,11 +2208,93 @@ fn prune_unresolvable(source: &str) -> (String, Vec<Unresolvable>) {
         if !is_unknown_key(&err) {
             break;
         }
+        let Some(span) = err.span() else {
+            break;
+        };
+
+        // A KEY IN A PLAIN `[section]` COSTS THE KEY, and this arm is what the
+        // row arm below could not reach. Measured 2026-09-06: `[capture]` on
+        // `main` grew `inline_max_bytes`, every released binary predated it, and
+        // the whole file failed to load — so every mediated gate failed open and
+        // no container could start for a day. That key is not in a `[[row]]`, so
+        // the granularity that repairs it is the key.
+        //
+        // The two granularities differ because the units differ. A `[[row]]` is
+        // ONE GATE: a key it cannot read could change what that gate enforces,
+        // so the honest move is to stop enforcing it and say so. A `[section]`
+        // is a SETTINGS TABLE: an unknown key there is a setting this build does
+        // not have, so the honest move is to run on the build's own default and
+        // say so. Dropping the whole `[capture]` table instead would switch off
+        // a feature the file plainly wants, which is worse than the disease.
+        if owning_row(source, span.start).is_none() {
+            let (at, end) = key_extent(source, span.start);
+            if text[at..end].trim().is_empty() {
+                break;
+            }
+            // A NAMED TABLE ONLY — the TOP-LEVEL table keeps the hard refusal,
+            // and that is a landed decision rather than an omission.
+            // `a_present_but_invalid_authority_is_still_a_usage_error` states
+            // it: invalidity must never select the defaults, because the
+            // operator wrote a file and answering with the engine's own rules
+            // would report green over rules they wrote. Top level is also where
+            // `version` and `min_batten_version` live — the keys that decide how
+            // the rest is read — and an unknown one there is far likelier a typo
+            // than a newer schema, which is the discrimination this arm cannot
+            // make and the floor below can.
+            let Some((name, header)) = owning_table(source, span.start) else {
+                break;
+            };
+            // A key under a `[[row]]` header that `owning_row` declined for some
+            // other reason is not this arm's business: dropping one key out of a
+            // row would leave that row enforcing something nobody wrote.
+            if header.is_row() {
+                break;
+            }
+            let table = Some((name, header));
+            let key = source
+                .get(span.start..span.end)
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_owned();
+            if key.is_empty() {
+                break;
+            }
+
+            // THE SAME EXACT GUARD THE ROW ARM USES. The blanked document must
+            // parse to this table minus precisely that key — a scan that took
+            // the wrong bytes is abandoned whole rather than trusted.
+            let mut expected = current.clone();
+            let removed = match table.as_ref() {
+                None => expected.remove(&key).is_some(),
+                Some((name, _)) => expected
+                    .get_mut(name.as_str())
+                    .and_then(toml::Value::as_table_mut)
+                    .is_some_and(|values| values.remove(&key).is_some()),
+            };
+            if !removed {
+                break;
+            }
+            let mut candidate = text.clone();
+            blank(&mut candidate, at, end);
+            match toml::from_str::<toml::Table>(&candidate) {
+                Ok(after) if after == expected => {}
+                _ => return (source.to_owned(), Vec::new()),
+            }
+
+            text = candidate;
+            current = expected;
+            dropped.push(Unresolvable {
+                section: table.map_or_else(|| String::from("(root)"), |(name, _)| name),
+                id: Some(key),
+                index: 0,
+            });
+            continue;
+        }
+
         // Located against the SOURCE, which the blanking above keeps aligned
         // with `text` byte for byte, so the index is the row's own ordinal in
         // the file the author wrote.
-        let Some((section, index, at)) = err.span().and_then(|span| owning_row(source, span.start))
-        else {
+        let Some((section, index, at)) = owning_row(source, span.start) else {
             break;
         };
         let end = row_end(source, at, &section);
