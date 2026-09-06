@@ -56,40 +56,50 @@ $GITHUB_PERSONAL_ACCESS_TOKEN" …`. `rate_limit`, repo, `pulls/<n>`,
 3. **`mcp__github__*` tools — LAST RESORT**, only after (1) and (2) both actually
    failed for that operation.
 
-## Why the toolchain runs here (ignore /root/.ccr/README.md on this point)
+## Why the toolchain runs here (a per-host fence, NOT unsetting the proxy)
 
-**`mise` NEEDS BOTH HALVES, AND `NO_PROXY` IS NOT ONE OF THEM.** Measured
-2026-09-06 over `mise ls-remote aqua:EmbarkStudios/cargo-deny`, one container,
-four arms:
+**`mise` NEEDS BOTH HALVES, AND THE FIRST ONE IS `NO_PROXY`.** Re-measured
+2026-09-06 over `mise ls-remote aqua:EmbarkStudios/cargo-deny`, second container,
+**`mise cache clear` before EACH arm**:
 
-| arm                                                   | result               |
-| ----------------------------------------------------- | -------------------- |
-| as the container ships it                             | 403                  |
-| `GITHUB_PERSONAL_ACCESS_TOKEN=<pat>` (proxy still on) | 403                  |
-| `MISE_GITHUB_TOKEN=<pat>` (proxy still on)            | 403                  |
-| `HTTPS_PROXY=` unset, no token                        | 401                  |
-| `HTTPS_PROXY=` unset **+** `MISE_GITHUB_TOKEN=<pat>`  | **OK, 100 versions** |
+| arm                                                        | result               |
+| ---------------------------------------------------------- | -------------------- |
+| `NO_PROXY` prepended, no explicit token                    | **401**              |
+| proxy on, `NO_PROXY` untouched, no token                   | 403                  |
+| proxy on, `NO_PROXY` untouched, `MISE_GITHUB_TOKEN=<pat>`  | 403                  |
+| `NO_PROXY` prepended **+** `MISE_GITHUB_TOKEN=<pat>`       | **OK, 100 versions** |
+| `HTTPS_PROXY` unset **+** `MISE_GITHUB_TOKEN=<pat>`        | OK, 100 versions     |
+| `HTTPS_PROXY` unset, no token                              | 401                  |
 
-So: **mise honours `HTTPS_PROXY` and ignores `NO_PROXY`.** With
-`api.github.com` in `NO_PROXY`, mise still goes through the proxy and still gets
-the proxy's 403 — `NO_PROXY` steers only tools that read it (curl does, mise does
-not). The lever is unsetting `HTTPS_PROXY` for mise's own process. And the token
-half is separately required: unproxied without a PAT is a plain 401.
+Rows 3 and 4 differ **only** in `NO_PROXY`, so **mise does honour it**. Row 4
+succeeds with `HTTPS_PROXY` still set, so unsetting the proxy buys nothing over
+the per-host fence — it is the same fence applied to every host, and via `exec`
+it strips the proxy from every child (cargo, rustup, uv, npm, task bodies).
 
-`github.com` stays proxied so `git` keeps its proxy auth to this repo.
+**THE PREVIOUS VERSION OF THIS SECTION SAID THE OPPOSITE AND WAS AN ARTEFACT OF
+A WARM CACHE.** `ls-remote` is cached, so the first arm that succeeds makes every
+later arm pass, and arms run before it keep their stale failure. Any re-measure
+here MUST `mise cache clear` between arms; without it this table is unreadable.
 
-**The wiring that does this is `setup.sh`'s mise wrapper.** It was wrong in both
-halves until CLOUD-1474 (2026-09-06) — it prepended `NO_PROXY`, which mise
-ignores, and it read the PAT only from `GITHUB_PERSONAL_ACCESS_TOKEN`, which the
-container does not inject; the injected name is `BATTEN_GITHUB_TOKEN`. A fresh
-container therefore provisioned nothing and `toolchain-is-provisioned` failed
-`not-provisioned`. It now does `unset HTTPS_PROXY https_proxy ALL_PROXY
-all_proxy` plus a first-set lookup across `GITHUB_PERSONAL_ACCESS_TOKEN`,
-`BATTEN_GITHUB_TOKEN` — leaving an explicit `MISE_GITHUB_TOKEN` (CI's) alone.
+**The 401 and the 403 are ONE bug seen from either side of the proxy.** The
+container injects a placeholder `GITHUB_TOKEN` whose value literally begins
+`proxy-`. Proxied, it never reaches GitHub (the proxy substitutes its own
+credential) → 403. Fenced out via `NO_PROXY`, mise sends that placeholder direct
+and GitHub rejects it → 401. Neither is a repository-scope verdict. `GH_TOKEN` is
+not a name mise reads: setting only that still 401s.
 
-**`mise.toml:480-502` still documents the old, wrong mechanism** and its
-`[env]` cannot fix it anyway: `[env]` reaches what mise SPAWNS, never mise's own
-resolver (CLOUD-1455). Read the wrapper, not that comment block.
+`github.com` stays proxied so `git` keeps its proxy auth to this repo; only the
+API and asset hosts are fenced.
+
+**The wiring is `setup.sh`'s mise wrapper, and `mise.toml`'s `[env]` block.** The
+real defect (CLOUD-1474) was ONE missing name in the token chain: both surfaces
+read `GITHUB_PERSONAL_ACCESS_TOKEN`/`MISE_GITHUB_TOKEN`, the container injects
+`BATTEN_GITHUB_TOKEN`, so no token was set and the placeholder fell through. The
+`NO_PROXY` half was correct all along. `BATTEN_GITHUB_TOKEN` is now in both
+chains, and an explicit `MISE_GITHUB_TOKEN` (CI's) is still left alone.
+
+**Do not unset `HTTPS_PROXY`.** `/root/.ccr/README.md` refuses it, it is unneeded
+(row 4), and it removes the policy boundary for every child process.
 
 Do not report this as "policy blocks GitHub" or as a repo-scope problem. If a 403
 persists after BOTH halves are applied, that is a real env-wiring bug — diagnose

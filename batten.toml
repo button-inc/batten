@@ -430,17 +430,28 @@ prepend_list = [
   "uploads.github.com",
 ]
 
-# TWO SOURCES, AND `GH_TOKEN` IS DELIBERATELY NOT THE THIRD. It is the obvious
+# THREE SOURCES, AND `GH_TOKEN` IS DELIBERATELY NOT ONE OF THEM. It is the obvious
 # candidate and it is measured harmful here: in this sandbox the ambient
 # `GH_TOKEN` is a proxy placeholder that answers 401 when sent straight to
 # GitHub, and these rows send traffic straight to GitHub. Anonymous is a worse
 # answer than authenticated and a better one than wrongly authenticated, so a row
-# that fell back to it would turn a rate-limited read into a refused one. The two
-# below are the same pair `mise.toml`'s own `GH_TOKEN` template already trusts:
-# the session's credential, then the job token CI's runner sets.
+# that fell back to it would turn a rate-limited read into a refused one. Those
+# below are the same names `mise.toml`'s own `GH_TOKEN` template trusts: the
+# session's credential, then the job token CI's runner sets.
+#
+# `BATTEN_GITHUB_TOKEN` IS THE NAME THIS CONTAINER ACTUALLY INJECTS, and its
+# absence here was the whole of CLOUD-1474. With only the two original names,
+# neither is set in a fresh container, so this row produced nothing and mise fell
+# through to exactly the ambient placeholder the paragraph above rules out —
+# sending it direct, over the fence these rows raise, for a `Bad credentials`
+# 401. That is the reported `mise verify` failure, and it is not a scope verdict:
+# the same missing token reads as 403 on the proxied side, because there the
+# proxy substitutes its own credential instead. Re-measure with `mise cache
+# clear` before each arm; `ls-remote` caches, and a warm cache makes every arm
+# after the first success pass.
 [[provision.env]]
 name = "MISE_GITHUB_TOKEN"
-from_first_set = ["GITHUB_PERSONAL_ACCESS_TOKEN", "MISE_GITHUB_TOKEN"]
+from_first_set = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN", "MISE_GITHUB_TOKEN"]
 
 [provision.platforms.linux-x86_64]
 url = "https://github.com/jdx/mise/releases/download/v2026.9.1/mise-v2026.9.1-linux-x64"
