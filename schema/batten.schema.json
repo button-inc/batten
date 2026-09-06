@@ -2730,6 +2730,11 @@
           "description": "Keyed to a value the CALL names, read through [`Rule::key_from`]\n(CLOUD-987).\n\n**The subject is one row of somebody's board, not one checkout**, and that\nis the whole reason this variant exists. CLOUD-312's row 2 bounds how stale\na read may be before a write is authorised, and `issue-read-check`'s header\nsays why the key cannot be the branch: *\"a branch legitimately updates\nseveral issues; a branch key would let a fresh read of one issue authorise\na stale write to another.\"* So collapsing this to [`ReceiptKey::Branch`]\nis not a simplification — it is the defect that comment refuses, and\nCLOUD-508 is the incident.\n\n**The value becomes a filename, so it is refused rather than sanitised.**\n[`SinkKey`]'s doc already states the hazard for a config-spelled key; a\nPAYLOAD-supplied one is strictly worse, because the call is what a rule is\njudging. A value that is not a single safe path component — empty, or\ncarrying a separator, or `.`/`..`, or absurdly long — resolves to\ncould-not-look and **allows**, rather than being rewritten into something\nthat would file under a subject the caller did not name. Rewriting could\nsilently collide two subjects onto one receipt, which is the one outcome\nworse than not looking.",
           "type": "string",
           "const": "named"
+        },
+        {
+          "description": "Keyed to the identity of the branch's whole CHANGE against\n[`Rule::key_base`] (CLOUD-1547) — the read side of [`crate::mint::MintKey::Delta`].\n\n**The fourth keying, and it exists because the other three price a review\nat the wrong rate.** [`ReceiptKey::Head`] expires on every commit AND on\nevery rebase, so a landing loop that rebases per lap re-buys the receipt\neach lap for a change that did not move — the false-positive rate\n[`ReceiptKey::Branch`]'s own doc says gets a guard bypassed.\n[`ReceiptKey::Branch`] goes the other way and expires on nothing but a\nrestart, so a branch reviewed once may then push anything. Neither is\n*these bytes, however they were replayed*.\n\nThe subject is [`crate::git::branch_patch_id`] — a merge-base diff over\nCOMMITTED bytes with line numbers excluded — so a rebase that changes no\ncontent resolves to the same name and the receipt still answers, while a\nsingle changed line files it under a name nothing looks up.\n\n**Read through the one identity the mint writes under, never re-derived.**\nA second notion of *the same change* is free to disagree with the first\nabout exactly the rebase this keying turns on, which is the class\n`.claude/rules/policy-modules.md` records for `base-delta` and the reason\n`receipt::delta_subject` and `mint::render` resolve through the same\nfunction rather than through two readings of one rule.\n\nAn identity that does not resolve — no `key_base`, an unresolvable base\nref, or an EMPTY diff — is could-not-look, and a rule keyed on it answers\n[`crate::receipt::Validity::Missing`] rather than fabricating a subject. A branch that\nchanged nothing has no identity, and minting one would let two empty\nchanges compare equal.",
+          "type": "string",
+          "const": "delta"
         }
       ]
     },
@@ -3350,6 +3355,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "key_base": {
+          "description": "Which ref a [`ReceiptKey::Delta`] receipt's identity is taken against\n(CLOUD-1547) — the read-side twin of [`crate::mint::Declared::key_base`].\n\nRequired by that key and refused without it, and refused ON any other:\nthe identity is a diff and a diff needs two sides, so a `delta` row with\nno base has no subject, and a base on a `head` row is a column the engine\nwould silently never read.\n\nA CONSUMER's ref name, so it lives on the row rather than as a constant in\nthe crate (non-negotiable rule 1): which branch a repository lands on is\nthat repository's business, and `must_land_on` already answers it for a\ndifferent question rather than for this one.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "key_from": {

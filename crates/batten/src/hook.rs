@@ -3451,6 +3451,47 @@ impl Policy {
         bounds
     }
 
+    /// The declared base ref, per check, for the `delta`-keyed rows this call
+    /// selects (CLOUD-1547).
+    ///
+    /// [`Policy::field_bound_for`]'s twin, empty for the same reason: a
+    /// repository declaring no `delta`-keyed row resolves no patch identity, and
+    /// resolving one costs a merge-base and a diff on the hottest path in the
+    /// binary.
+    ///
+    /// **First declaration wins where two rows disagree**, the same tie-break
+    /// `field_bound_for` takes and for its reason rather than `max_age`'s. Two
+    /// bases over one check are not two constraints that both hold — they are two
+    /// different identities for one change, so at most one receipt can exist and
+    /// combining them would make the check unsatisfiable. That is the config
+    /// error wearing a strict-policy costume, and declaration order is what every
+    /// other alternative on this surface breaks a tie by.
+    ///
+    /// **`receipt_` IS IN THE NAME BECAUSE [`Policy::key_base_for`] ALREADY MEANS
+    /// SOMETHING ELSE**, and the collision is worth the prefix rather than a
+    /// shorter name. That one answers `requires_key`'s question — since which
+    /// commit should this call's evidence be looked for — and returns one ref for
+    /// the whole call. This one answers which ref a `delta` receipt's identity is
+    /// diffed against, per check. Two refs, two questions, and a reader who
+    /// reached the wrong one would get a plausible value and a wrong receipt.
+    #[must_use]
+    pub fn receipt_key_base_for(
+        &self,
+        envelope: &Envelope,
+    ) -> std::collections::BTreeMap<String, String> {
+        let mut bases: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        for rule in matching_receipt_rows(self, envelope) {
+            let Some(base) = rule.key_base.as_ref() else {
+                continue;
+            };
+            for check in rule.receipt_names() {
+                bases.entry(check.clone()).or_insert_with(|| base.clone());
+            }
+        }
+        bases
+    }
+
     /// Whether any row on this call could read the pinned-program fact
     /// (CLOUD-1028).
     ///
@@ -5185,6 +5226,12 @@ fn receipt_refusal(
         ReceiptKey::Branch => "branch",
         ReceiptKey::Named => "row",
         ReceiptKey::Head => "commit",
+        // NOT "commit", which is the pointer this word exists to avoid sending.
+        // A delta receipt is keyed on the branch's whole change, so it survives a
+        // rebase and expires on a content edit — a reader told "commit" would go
+        // looking for a per-commit step and conclude the loop is re-buying one
+        // every lap, which is the opposite of what this keying does.
+        ReceiptKey::Delta => "change",
     };
     // THE BOUND TRAVELS TOO, and only on the class it is the measure for. A
     // reader acting on an expiry needs to know what the age was measured
@@ -9703,6 +9750,7 @@ mod tests {
             when_present: None,
             when_value: None,
             key_from: None,
+            key_base: None,
             key_shape: None,
             max_age: None,
             requires_field: None,

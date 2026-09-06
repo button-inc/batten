@@ -8427,6 +8427,12 @@ fn receipt_facts(
         receipt::verdicts(
             receipted,
             policy.named_receipt_subject(envelope).as_deref(),
+            // Resolved HERE beside the field bounds, for the identical reason
+            // the comment above gives: derivable from what this function already
+            // holds, read only on the branch that has a receipt store to ask,
+            // and a repository declaring no `delta`-keyed row gets an empty map
+            // and pays no merge-base.
+            &policy.receipt_key_base_for(envelope),
             max_ages,
             &policy.field_bound_for(envelope),
             now,

@@ -1336,6 +1336,20 @@ pub struct Rule {
     /// set somebody enumerated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_from: Option<crate::hook::Field>,
+    /// Which ref a [`ReceiptKey::Delta`] receipt's identity is taken against
+    /// (CLOUD-1547) — the read-side twin of [`crate::mint::Declared::key_base`].
+    ///
+    /// Required by that key and refused without it, and refused ON any other:
+    /// the identity is a diff and a diff needs two sides, so a `delta` row with
+    /// no base has no subject, and a base on a `head` row is a column the engine
+    /// would silently never read.
+    ///
+    /// A CONSUMER's ref name, so it lives on the row rather than as a constant in
+    /// the crate (non-negotiable rule 1): which branch a repository lands on is
+    /// that repository's business, and `must_land_on` already answers it for a
+    /// different question rather than for this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_base: Option<String>,
     /// Narrow [`Rule::when_present`] from *the key is there* to *the key holds
     /// THIS value* (CLOUD-312 row 3).
     ///
@@ -2604,6 +2618,36 @@ pub enum ReceiptKey {
     /// silently collide two subjects onto one receipt, which is the one outcome
     /// worse than not looking.
     Named,
+    /// Keyed to the identity of the branch's whole CHANGE against
+    /// [`Rule::key_base`] (CLOUD-1547) — the read side of [`crate::mint::MintKey::Delta`].
+    ///
+    /// **The fourth keying, and it exists because the other three price a review
+    /// at the wrong rate.** [`ReceiptKey::Head`] expires on every commit AND on
+    /// every rebase, so a landing loop that rebases per lap re-buys the receipt
+    /// each lap for a change that did not move — the false-positive rate
+    /// [`ReceiptKey::Branch`]'s own doc says gets a guard bypassed.
+    /// [`ReceiptKey::Branch`] goes the other way and expires on nothing but a
+    /// restart, so a branch reviewed once may then push anything. Neither is
+    /// *these bytes, however they were replayed*.
+    ///
+    /// The subject is [`crate::git::branch_patch_id`] — a merge-base diff over
+    /// COMMITTED bytes with line numbers excluded — so a rebase that changes no
+    /// content resolves to the same name and the receipt still answers, while a
+    /// single changed line files it under a name nothing looks up.
+    ///
+    /// **Read through the one identity the mint writes under, never re-derived.**
+    /// A second notion of *the same change* is free to disagree with the first
+    /// about exactly the rebase this keying turns on, which is the class
+    /// `.claude/rules/policy-modules.md` records for `base-delta` and the reason
+    /// `receipt::delta_subject` and `mint::render` resolve through the same
+    /// function rather than through two readings of one rule.
+    ///
+    /// An identity that does not resolve — no `key_base`, an unresolvable base
+    /// ref, or an EMPTY diff — is could-not-look, and a rule keyed on it answers
+    /// [`crate::receipt::Validity::Missing`] rather than fabricating a subject. A branch that
+    /// changed nothing has no identity, and minting one would let two empty
+    /// changes compare equal.
+    Delta,
 }
 
 /// One field of a receipt, and what it must say (CLOUD-1100).
@@ -3887,6 +3931,51 @@ impl Rule {
     /// A [`UsageError`] (→ exit `1`) for a command-triggered row with no
     /// `pattern`, for a write-triggered row carrying either command column, and
     /// for an empty `checks` list.
+    /// The `delta` key and its base travel together (CLOUD-1547).
+    ///
+    /// Refused in BOTH directions, for the reason `key_from`'s pair is and with
+    /// the same pair of silent failures one keying over.
+    ///
+    /// A `delta` key with no base has no second side to diff against, so it has
+    /// no identity at all and would read no file for any call — which reads as
+    /// *never reviewed* and denies everything. That is the direction that gets a
+    /// guard switched off rather than satisfied, and it is worse than the
+    /// permissive one here precisely because it looks like the gate working. A
+    /// base on any other key is the mirror: a column that reads as configured and
+    /// is never consulted.
+    ///
+    /// **Its own function rather than a fourth arm inside
+    /// [`Rule::validate_receipt_columns`]**, which clippy's line ceiling forced
+    /// and which is the right shape anyway: that one decides what a `trigger`
+    /// owes, and this decides what a `key` owes.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) for `key = "delta"` with no `key_base`, and
+    /// for a `key_base` on any other keying.
+    fn validate_delta_base(&self) -> anyhow::Result<()> {
+        match (self.receipt_key(), self.key_base.as_deref()) {
+            (ReceiptKey::Delta, None) => Err(UsageError::raise(format!(
+                "rule {}: `key = \"delta\"` requires `key_base` — the ref the identity is taken \
+                 against. Without one the change has no second side to diff, so the receipt \
+                 would be keyed on nothing and no call could ever satisfy it",
+                self.id
+            ))),
+            (key, Some(_)) if key != ReceiptKey::Delta => Err(UsageError::raise(format!(
+                "rule {}: `key_base` belongs to `key = \"delta\"`; a {} receipt is keyed on a ref \
+                 or a value rather than on a diff, so there is nothing to take a base against",
+                self.id,
+                match key {
+                    ReceiptKey::Head => "head-keyed",
+                    ReceiptKey::Branch => "branch-keyed",
+                    ReceiptKey::Named => "named-keyed",
+                    ReceiptKey::Delta => unreachable!("guarded by the arm above"),
+                }
+            ))),
+            _ => Ok(()),
+        }
+    }
+
     fn validate_receipt_columns(&self) -> anyhow::Result<()> {
         if self.kind != RuleKind::Receipt {
             return Ok(());
@@ -3955,11 +4044,13 @@ impl Rule {
                         ReceiptKey::Head => "head-keyed",
                         ReceiptKey::Branch => "branch-keyed",
                         ReceiptKey::Named => unreachable!("guarded by the arm above"),
+                        ReceiptKey::Delta => "delta-keyed",
                     }
                 )));
             }
             _ => {}
         }
+        self.validate_delta_base()?;
         // COMPILED AT LOAD, for the reason `resolves.reference` is and with the
         // failure running the same direction: left to adjudication an unparseable
         // expression is discarded per call, the subject resolves to absent,
@@ -13501,6 +13592,7 @@ mod tests {
             when_present: None,
             when_value: None,
             key_from: None,
+            key_base: None,
             key_shape: None,
             max_age: None,
             requires_field: None,

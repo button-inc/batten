@@ -8394,7 +8394,7 @@ _batten() {
             fi
             case "${prev}" in
                 --key)
-                    COMPREPLY=($(compgen -W "head branch named" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "head branch named delta" -- "${cur}"))
                     return 0
                     ;;
                 --strictness)

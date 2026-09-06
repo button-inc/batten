@@ -597,6 +597,15 @@ pub(crate) fn sourced_store(
             ReceiptKey::Head => head.clone()?,
             ReceiptKey::Branch => branch.clone()?,
             ReceiptKey::Named => named.clone()?,
+            // `delta` over an agent-sourced check is REFUSED AT LOAD
+            // (`facts::validate_keying`) for the reason `named` is, one step
+            // further along: the identity needs the row's `key_base`, and a
+            // `[[fact]]` row has no such column to read one from. So this is
+            // reachable only from a policy assembled in-process, and it answers
+            // could-not-look rather than fabricating a subject — written out
+            // rather than wildcarded, because `_ =>` would silently absorb a
+            // FIFTH keying, which is what the no-wildcard rule above is for.
+            ReceiptKey::Delta => return None,
         };
         subjects.insert((*check).clone(), subject);
     }
@@ -619,6 +628,12 @@ fn sourced_subject(key: ReceiptKey, named: Option<&str>) -> Option<String> {
         ReceiptKey::Named => named
             .filter(|value| safe_subject(value))
             .map(ToOwned::to_owned),
+        // Refused at load for an agent-sourced check, as `named` is and for one
+        // reason further on: the identity is taken against the row's `key_base`
+        // and a `[[fact]]` row carries none. Could-not-look here, never a
+        // fabricated subject — a write filed under a subject the reader resolves
+        // differently is the confusion every keying in this enum exists to avoid.
+        ReceiptKey::Delta => None,
     }
 }
 
@@ -692,23 +707,62 @@ pub(crate) fn safe_subject(subject: &str) -> bool {
         && !subject.contains(|ch: char| ch == '/' || ch == '\\' || ch == '\0' || ch.is_control())
 }
 
+/// The subject a [`ReceiptKey::Delta`] receipt is filed under (CLOUD-1547).
+///
+/// **One identity, read through the function the mint writes under.**
+/// [`crate::git::branch_patch_id`] is a merge-base diff over COMMITTED bytes with
+/// line numbers excluded, so a rebase that changes no content resolves to the
+/// same name and one changed line resolves to a different one. Re-deriving that
+/// here — from a tip diff, from the path lists, from anything else — would be a
+/// second notion of *the same change*, free to disagree with the mint's about
+/// exactly the rebase this keying exists to survive. The mint calls the same
+/// function; that shared call IS the agreement.
+///
+/// `None` is three things at once and they are one answer here: the base does not
+/// resolve, the identity could not be computed, and **the diff is empty**. A
+/// branch that changed nothing has no identity — `cumulative_patch_id` refuses to
+/// mint one so two empty changes cannot compare equal — and the caller reads that
+/// as [`Validity::Missing`] rather than as could-not-look, for the reason stated
+/// at the call site.
+///
+/// Held to [`safe_subject`] before it is returned, because it is about to become
+/// a path component and the writer refuses exactly what the reader refuses — the
+/// two halves disagreeing about which filenames exist is the confusion
+/// [`safe_subject`]'s own doc records.
+fn delta_subject(base: &str) -> Option<String> {
+    git::branch_patch_id(Path::new("."), base)
+        .ok()
+        .flatten()
+        .filter(|identity| safe_subject(identity))
+}
+
 /// Where a receipt for `check` under `key` lives, so its age can be read.
 ///
-/// One spelling per keying, taken from the three validity functions rather than
+/// One spelling per keying, taken from the four validity functions rather than
 /// invented here — a second spelling of a receipt filename is a second thing to
 /// drift, and the store this reads has to be the store they read.
+///
+/// `delta` is the already-resolved patch identity rather than a base ref this
+/// would resolve itself (CLOUD-1547): the caller has it, and re-deriving it here
+/// would be a second reading of the one identity the mint filed under.
 fn receipt_file(
     facts: &RepoFacts,
     check: &str,
     key: ReceiptKey,
     branch: Option<&str>,
     named: Option<&str>,
+    delta: Option<&str>,
 ) -> Option<std::path::PathBuf> {
     let store = Path::new(&facts.git_dir).join("batten-receipts");
     match key {
         ReceiptKey::Head => receipt_path(&facts.repo_root, check).ok(),
         ReceiptKey::Branch => branch.map(|branch| store.join(branch_receipt_name(check, branch))),
+        // One filename shape for both, deliberately: a `delta` subject is a
+        // patch identity and a `named` subject is a value the call supplied, and
+        // both are held to `safe_subject` before they get here, so the store has
+        // one spelling for *a receipt filed under a subject* rather than two.
         ReceiptKey::Named => named.map(|subject| store.join(format!("{check}.{subject}"))),
+        ReceiptKey::Delta => delta.map(|subject| store.join(format!("{check}.{subject}"))),
     }
 }
 
@@ -737,6 +791,7 @@ fn older_than(path: &Path, max_age: u64, now: std::time::SystemTime) -> bool {
 pub(crate) fn verdicts(
     checks: &BTreeMap<String, ReceiptKey>,
     subject: Option<&str>,
+    key_bases: &BTreeMap<String, String>,
     max_ages: &BTreeMap<String, u64>,
     field_bounds: &BTreeMap<String, crate::rules::FieldBound>,
     now: std::time::SystemTime,
@@ -787,6 +842,25 @@ pub(crate) fn verdicts(
                     ReceiptKey::Named => named.as_ref().map_or(Validity::Missing, |value| {
                         named_validity(&facts.git_dir, check, value)
                     }),
+                    // NOT resolved once above like `branch` and `named`, because
+                    // the base is PER ROW rather than per call: two rows may key
+                    // on different bases, and hoisting one identity would answer
+                    // both from whichever row happened to be read first.
+                    //
+                    // AND `Missing` RATHER THAN COULD-NOT-LOOK, which is the
+                    // opposite of the two arms above and is the deliberate half
+                    // (CLOUD-1547). An unresolvable base or an empty diff means
+                    // there is no change to have reviewed; answering could-not-
+                    // look would allow the call, so a branch whose base does not
+                    // resolve could push anything. A branch with nothing to
+                    // review is refused and says so, which is loud and cheap to
+                    // clear, where the permissive direction is silent.
+                    ReceiptKey::Delta => key_bases
+                        .get(check)
+                        .and_then(|base| delta_subject(base))
+                        .map_or(Validity::Missing, |identity| {
+                            named_validity(&facts.git_dir, check, &identity)
+                        }),
                 };
                 // THE AGE IS READ LAST, AND ONLY OVER A RECEIPT THAT WAS
                 // OTHERWISE GOOD (CLOUD-988). A receipt already Missing or stale
@@ -801,6 +875,10 @@ pub(crate) fn verdicts(
                         *key,
                         branch.as_ref().map(|(branch, _)| branch.as_str()),
                         named.as_deref(),
+                        key_bases
+                            .get(check)
+                            .and_then(|base| delta_subject(base))
+                            .as_deref(),
                     )
                     .filter(|path| older_than(path, max_age, now))
                     .map_or(Validity::Valid, |_| Validity::Expired),
@@ -820,6 +898,10 @@ pub(crate) fn verdicts(
                         *key,
                         branch.as_ref().map(|(branch, _)| branch.as_str()),
                         named.as_deref(),
+                        key_bases
+                            .get(check)
+                            .and_then(|base| delta_subject(base))
+                            .as_deref(),
                     )
                     .map_or(Validity::Valid, |path| {
                         if field_refutes(&path, bound) {
@@ -1504,6 +1586,17 @@ pub fn run_status(
                 "receipt status --key named: a named receipt is keyed on a subject the mediated call supplies, and this verb has none to give. It is read by `batten hook` from the declaring row's `key_from` projection.",
             ));
         }
+        // REFUSED FROM THIS VERB TOO, and for a reason one step past `named`'s
+        // (CLOUD-1547). A `delta` receipt's subject is an identity taken against
+        // the DECLARING ROW's `key_base`, and this verb is handed a check name
+        // and a keying — nothing that says which ref. Defaulting one would answer
+        // about a base the row never named, and two bases produce two identities
+        // for one change, which is the disagreement this keying exists to remove.
+        ReceiptKey::Delta => {
+            return Err(UsageError::raise(
+                "receipt status --key delta: a delta receipt is keyed on the identity of this branch's change against the declaring row's `key_base`, and this verb has no row to read one from. It is read by `batten hook` from that row.",
+            ));
+        }
         ReceiptKey::Head => {
             let statement = load_statement(&receipt_path(&facts.repo_root, check)?);
             (
@@ -1595,6 +1688,7 @@ const fn key_token(key: ReceiptKey) -> &'static str {
         ReceiptKey::Head => "head",
         ReceiptKey::Branch => "branch",
         ReceiptKey::Named => "named",
+        ReceiptKey::Delta => "delta",
     }
 }
 
