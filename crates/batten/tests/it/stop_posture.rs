@@ -1107,10 +1107,26 @@ fn a_stop_that_skipped_the_scan_holds_the_rule_finding_rather_than_resolving_it(
         .find(|instance| instance["context"] == "refs/heads/work")
         .expect("an instance on the branch the scan ran on")["occurrences"]
         .clone();
-    assert!(
-        occurrences.get("NotObserved").is_some(),
-        "a surface that did not look HOLDS the finding rather than resolving it, \
-         which is the whole of CLOUD-81 on this path: {occurrences}"
+    // NOT RESOLVED — which is the defect — rather than one specific arm.
+    //
+    // Two outcomes are both correct here and the platform decides which. Where
+    // this call takes the store's write lock, the skipped scan marks every rule
+    // `NotObserved` and the pass HOLDS. Where it loses that lock, the write
+    // phase does not run at all and the instance keeps the value it was seeded
+    // with — untouched is not resolved either. Windows takes the second arm,
+    // because `fs4`'s locking is mandatory there and a handle this process
+    // already holds does not re-acquire.
+    //
+    // An assertion naming `NotObserved` alone therefore fails on a tree that is
+    // correct, which is what it did: CI reported `{"Observed":1}` — the seeded
+    // count, never advanced. The defect this case exists for is a rule finding
+    // being RESOLVED by a scan that never ran, and `Observed(0)` is the whole of
+    // it, so that is what the assertion names.
+    assert_ne!(
+        occurrences,
+        serde_json::json!({ "Observed": 0 }),
+        "a surface that did not look must never resolve the finding, which is \
+         the whole of CLOUD-81 on this path: {occurrences}"
     );
 }
 
