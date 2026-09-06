@@ -114,9 +114,31 @@ fn repo_with_gh_policy(name: &str) -> PathBuf {
 /// points at `crates/batten/`, which has no `batten.toml` — that is the
 /// no-authority case, which several tests want.
 fn run_hook_in(dir: &std::path::Path, harness: &str, payload: &str, bypass: bool) -> Output {
+    run_hook_in_promoted(dir, harness, payload, bypass, false)
+}
+
+/// [`run_hook_in`], with `--fail-on-warning` selectable.
+///
+/// A `warn` shape row is SILENT on the mediated surface rather than advisory:
+/// `hook::blocks` is false, `adjudicate` returns `Decision::Allow`, and the
+/// document is empty — the same bytes a repository with no such row emits. So a
+/// warn row's predicate is only reachable with promotion on, and a census that
+/// could not turn it on could only cover deny rows (CLOUD-1148).
+///
+/// The flag is GLOBAL, so it leads the argv ahead of the subcommand.
+fn run_hook_in_promoted(
+    dir: &std::path::Path,
+    harness: &str,
+    payload: &str,
+    bypass: bool,
+    promoted: bool,
+) -> Output {
     let mut command = common::batten_at_real_root();
+    command.current_dir(dir);
+    if promoted {
+        command.arg("--fail-on-warning");
+    }
     command
-        .current_dir(dir)
         .args(["adjudicate", "--harness", harness])
         .env_remove("BATTEN_HOOK_BYPASS")
         .env_remove("BATTEN_GH_GUARD_BYPASS")
@@ -2904,7 +2926,15 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
     // `gh` lifecycle rows above rather than apart from them: all five refuse an
     // ad-hoc spelling of a step `mise run land` already drives.
     //
-    // The census case is the DENY arm only. Its allow arm — `git rebase
+    // THE ONE `warn` ROW IN THIS TABLE, so it is the case the promoted arm
+    // exists for (CLOUD-1148). It landed as a `deny` and deadlocked the first
+    // conflict it met — `gitwrite.rs` moves nothing on a conflict, so `land`
+    // never leaves a rebase to `--continue`, and the one command that produces
+    // the resolvable state was the one this row refused. `batten.toml` carries
+    // the measurement. The severity is read off the row here rather than
+    // written into the case, so this needs no edit if it ever denies again.
+    //
+    // The census case is the REFUSAL arm only. Its allow arm — `git rebase
     // --continue`, the one spelling a conflict exit requires by hand — cannot be
     // written here, because this table pairs a call with the row that must
     // refuse it and an allowed call has no such row. It lives in
@@ -3161,6 +3191,19 @@ const MANIFEST_ARTIFACTS: &[&str] = &["one.txt", "two.txt", "three.txt", "four.t
 #[test]
 fn the_committed_shape_rules_fire_on_every_banned_shape() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // THE ARM IS READ OFF THE ROW, never written into the case — the same
+    // discipline `census_gaps` already applies to the SITE, and for the same
+    // reason: a case naming its own arm would keep passing after the authority
+    // changed severity underneath it, which is the drift this census exists to
+    // catch. A `warn` row is silent at default strictness (see
+    // `run_hook_in_promoted`), so it is judged with promotion on.
+    let parsed = batten::config::parse(&committed_config(), "batten.toml").expect("parse");
+    let promoted_rows: std::collections::BTreeSet<&str> = parsed
+        .rules
+        .iter()
+        .filter(|rule| rule.severity() == batten::severity::RuleSeverity::Warn)
+        .map(|rule| rule.id.as_str())
+        .collect();
     for case in SHAPE_CENSUS {
         let dir = match case.site {
             CensusSite::Checkout => root.clone(),
@@ -3176,12 +3219,18 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
                 repeat,
             } => claude_spawn_payload(tool, &prompt.repeat(*repeat)),
         };
-        let output = run_hook_in(&dir, "exit-code", &payload, false);
+        let promoted = promoted_rows.contains(case.rule);
+        let output = run_hook_in_promoted(&dir, "exit-code", &payload, false, promoted);
         assert_eq!(
             output.status.code(),
             Some(2),
-            "the committed policy must still refuse {:?}",
-            case.call.describe()
+            "the committed policy must still refuse {:?}{}",
+            case.call.describe(),
+            if promoted {
+                " (its row is `warn`, so this is the promoted arm)"
+            } else {
+                ""
+            }
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
         // The rule id is still the engine's own attribution and is still what

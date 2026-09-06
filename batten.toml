@@ -726,6 +726,7 @@ it rather than holding a foreground poll open."""
 # deny is refused rather than shipped: committed-and-pushed is what survives a
 # container reclaim, so denying it outright would make the reclaim advice
 # unfollowable. Named as a known limit so the silence is not read as coverage.
+#
 # WARN RATHER THAN DENY, AND THE DENY'S OWN REMEDY IS WHY (measured 2026-09-06,
 # one lap after this row landed). The reason below used to end "resolve it and
 # `git rebase --continue`, which this row does not touch" — and that remedy is
@@ -749,12 +750,29 @@ it rather than holding a foreground poll open."""
 # row cannot tell the race it measured from the resolution it blocks, and a deny
 # that cannot tell them apart must not be the one that stops the resolution.
 #
-# `warn` keeps what the row actually bought: the nudge still fires, still names
-# the loop, and still reaches the agent at the call. What it stops doing is
-# deadlocking a conflicted branch. Narrowing it to a predicate that can see the
-# lap record is the follow-up; until then this is the same "named as a known
-# limit so the silence is not read as coverage" the `git push` paragraph above
-# takes, applied to this row's own over-reach rather than to a neighbour's.
+# WHAT `warn` COSTS, MEASURED, BECAUSE THIS PARAGRAPH FIRST CLAIMED THE OPPOSITE.
+# It read "the nudge still fires, still names the loop, and still reaches the
+# agent at the call". Every clause of that is false. A warn row makes
+# `hook::blocks` false, `adjudicate` returns `Decision::Allow`, and the decision
+# document is EMPTY — the same bytes a repository with no such row emits. Over
+# the compiled binary at this HEAD, `adjudicate --harness claude-code` on
+# `git rebase origin/main`: no output, exit 0. Under `--fail-on-warning`, the
+# same call: `"permissionDecision":"deny"`, reason `call name refused
+# rebase-not-hand-stepped`.
+#
+# So this row is SILENT on the surface it acts on, and live only under
+# promotion. That is the honest reading of the trade: the deadlock is gone
+# because the refusal is gone with it, not because it softened into advice. It
+# is the `git push` paragraph's "named as a known limit so the silence is not
+# read as coverage" applied to this row — and the correction is recorded rather
+# than quietly rewritten, because a comment overstating its own gate is the one
+# direction a severity column must never fail in, and it shipped here once.
+#
+# `crates/batten/tests/it/land_hand_stepping.rs` carries the whole predicate
+# under `--fail-on-warning`, plus an arm pinning the silence itself, so a
+# DELETED row still reddens. Narrowing this to a predicate that can see the lap
+# record — the fact that separates the race from the resolution — is the
+# follow-up that would let it deny again.
 [[rule]]
 id = "rebase-not-hand-stepped"
 kind = "shape"
