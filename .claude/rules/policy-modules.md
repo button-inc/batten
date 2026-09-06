@@ -174,6 +174,21 @@ path: a linked worktree may live anywhere on the machine, so its base is read to
 decide `present` and dropped at the boundary — rule 4 held in the fact's TYPE, the
 same way `commit-meta` has no body field.
 
+**`base-delta`'s `patch-id` is the one member of that fact NOT computed the way
+its siblings are, so it is worth the sentence they do not need** (CLOUD-1484). The
+three path lists are a tip diff over the WORKING TREE; this is a merge-base diff
+over COMMITTED bytes. The two therefore disagree on a stale branch and on a dirty
+one, deliberately: a module asking which files this branch touched wants the
+lists, and one asking whether a change was ATTESTED wants the identity, because an
+attestation must not move when somebody saves a file and must not be restated by a
+rebase — `land` rebases every lap, and a per-lap re-attestation is the cost that
+gets a gate switched off. Its `null` is could-not-look AND the empty diff: a branch
+that changed nothing has no identity, `cumulative_patch_id` refuses to mint one so
+two empty changes cannot compare equal, and a predicate reading that absence as
+*unattested* refuses a checkout with nothing to review. Do not re-derive an
+identity from the path lists — that is a second notion of *the same change*, free
+to disagree with `landing`'s about exactly the rebase the key turns on.
+
 **`records-blocked` is the recorder surface's could-not-look, and its EMPTY value
 is an answer** (CLOUD-1126). `records` already distinguishes a record that could
 not be read (absent from the map) from one that was read and is short; neither
@@ -190,7 +205,8 @@ and grouping them is worth a sentence because each answers a question no walk
 can: `input.tree["base-delta"]` is how the declared globs' paths differ from a
 declared base rev — `added`, `edited`, `deleted`, `code-changed` and the base side
 of every EDITED path's lines, which is what lets a module decide a CHANGE rather
-than a state (CLOUD-1059); `input.tree.symbols` is where a delegated analyser
+than a state (CLOUD-1059), plus `patch-id`, the identity of the whole change;
+`input.tree.symbols` is where a delegated analyser
 resolved a named type, by NAME rather than by spelling, and carries the
 `provenance` of the tool that produced it — the first `Cost::Effect` fact
 (CLOUD-760); `input.tree.external` is a file outside the repository root, resolved

@@ -76,6 +76,7 @@ mod claim;
 mod claim_order;
 mod claim_receipt;
 mod cli;
+mod code_review_dispatched;
 mod commit;
 mod commit_admission;
 mod commit_arm_sequencing;
