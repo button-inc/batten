@@ -245,6 +245,30 @@ enum Piece {
 /// has to point.
 const ABSENT: &str = "-";
 
+impl Piece {
+    /// Whether rendering this piece consults the tool RESULT.
+    ///
+    /// Exhaustive with no wildcard arm, which is `facts.rs`' rule and for its
+    /// reason: a variant added later must fail to compile rather than classify
+    /// itself as reading nothing, because that is the direction that silently
+    /// re-opens the record this predicate exists to withhold.
+    fn reads_the_result(&self) -> bool {
+        match self {
+            // `{authority:…}` is grouped with the path forms rather than given its
+            // own arm because `clippy::match_same_arms` refuses a repeated body —
+            // the distinction a reader wants lives here, as `git.rs` states for the
+            // same lint. It judges the whole result DOCUMENT where the others read
+            // a path into it, and both consult the result, which is all this asks.
+            Piece::Path(_)
+            | Piece::Digest(_)
+            | Piece::Slug(_)
+            | Piece::Join(_)
+            | Piece::Authority(_) => true,
+            Piece::Literal(_) | Piece::Now | Piece::Git(_) => false,
+        }
+    }
+}
+
 /// Split a body template into its pieces, or name the first thing wrong with it.
 ///
 /// Shared by [`validate`] and [`render`] so a template that loads is a template
@@ -387,8 +411,14 @@ pub(crate) fn scalar(value: &serde_json::Value, path: &str) -> Option<String> {
 /// nothing indistinguishable from one whose call failed, and only the second of
 /// those is a reason to try again.
 ///
-/// A row declaring no selector selects every result its `tool` matched, which is
+/// A row declaring no selector selects every call its `tool` matched, which is
 /// every landed row's behaviour.
+///
+/// **THE SUBJECT IS THE TOOL'S INPUT, NEVER ITS RESULT**, and the parameter is
+/// named for it: a dispatch names ITSELF in its arguments, while its result is
+/// whatever came back and on most hosts is prose. An author who reads this as the
+/// result writes a path that resolves to nothing on every call, and the row then
+/// mints nothing while loading clean — the dead gate this crate keeps recording.
 ///
 /// **A path that does not resolve to a single scalar does NOT select.** The
 /// failure direction is deliberate: an unreadable field means the boundary cannot
@@ -397,13 +427,13 @@ pub(crate) fn scalar(value: &serde_json::Value, path: &str) -> Option<String> {
 /// again with the same remedy, which is the safe direction and one the agent can
 /// see.
 #[must_use]
-pub fn selects(declared: &Declared, result: &serde_json::Value) -> bool {
+pub fn selects(declared: &Declared, input: &serde_json::Value) -> bool {
     let (Some(path), Some(expected)) =
         (declared.selects_at.as_deref(), declared.selects.as_deref())
     else {
         return true;
     };
-    scalar(result, path).is_some_and(|found| found == expected)
+    scalar(input, path).is_some_and(|found| found == expected)
 }
 
 /// Whether every required path resolved, which is this module's success test.
@@ -494,6 +524,18 @@ pub fn render(
     let Ok(pieces) = parse(&declared.body) else {
         return None;
     };
+    // A RESULT THAT SAID NOTHING CANNOT RENDER A BODY THAT READS IT (CLOUD-1484).
+    //
+    // `record_mints` now passes `Value::Null` where it used to return early, so a
+    // row reading none of the result can mint from a call whose answer carried no
+    // JSON. That widening must not reach a row that DOES read it: with
+    // `requires = []` its success test is vacuously true, every path piece records
+    // the could-not-look token, and under `MintMode::Replace` the all-`-` record
+    // overwrites a good receipt. No landed row is shaped that way, which is
+    // precisely why nothing would have caught it.
+    if result.is_null() && pieces.iter().any(Piece::reads_the_result) {
+        return None;
+    }
     let mut out = String::new();
     for piece in pieces {
         match piece {
@@ -614,13 +656,23 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
                 mint.name
             )));
         }
-        if let Some(at) = mint.selects_at.as_deref()
-            && at.trim().is_empty()
-        {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` declares an empty `selects_at`",
-                mint.name
-            )));
+        // BOTH HALVES, because only one was checked and the unchecked half is the
+        // one that fails silently: `selects = ""` loads clean, matches no value any
+        // host sends, and the row mints nothing — so its gate denies forever with a
+        // remedy that cannot clear it. A blank `selects_at` at least fails to
+        // resolve loudly.
+        for (column, value) in [
+            ("selects_at", mint.selects_at.as_deref()),
+            ("selects", mint.selects.as_deref()),
+        ] {
+            if let Some(text) = value
+                && text.trim().is_empty()
+            {
+                return Err(crate::error::UsageError::raise(format!(
+                    "`[[mint]]` `{}` declares an empty `{column}`, which can never match",
+                    mint.name
+                )));
+            }
         }
         if let Err(problem) = parse(&mint.body) {
             return Err(crate::error::UsageError::raise(format!(

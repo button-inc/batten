@@ -118,6 +118,15 @@ delta := input.tree["base-delta"]
 # Absent — a base that does not resolve, or an EMPTY diff — leaves every arm below
 # quiet. A branch that changed nothing has no identity, and reading that as
 # `unreviewed` would refuse a checkout with nothing to review.
+#
+# AND IT CAN UNDER-OWE, WHICH IS A NAMED HOLE RATHER THAN A PROPERTY. Committed
+# bytes are the subject, so an uncommitted code edit does not move the identity:
+# the receipt still answers and `batten check` reports clean over work no review
+# has read. Not repaired here, and for measured reasons rather than for want of
+# trying — a conjunct requiring a clean tree makes a DIRTY tree abstain, so
+# dirtying the tree would silence this gate, and refusing on dirt is a second
+# opinion where `tree-clean` already owns the question. `tree-clean` closes it on
+# the landing path; a bare `batten check` on a dirty tree is what stays uncovered.
 subject := delta["patch-id"]
 
 # The path prefixes this repository treats as code for the purpose of owing a

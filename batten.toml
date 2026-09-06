@@ -11546,6 +11546,16 @@ container, so this speaks where the branch is worked and is honestly silent in \
 CI until that store has a portable form.
 """
 
+# THE ROUTE NAMES THE SKILL, AND HOW IT IS INVOKED DECIDES WHETHER IT MINTS.
+#
+# The mint fires on a `Skill` TOOL CALL carrying `{"skill": "code-review"}`. An
+# agent that invokes the skill through its tool surface therefore clears this
+# gate. A person who TYPES the slash command may not: on hosts that expand it by
+# injecting the skill's text with no tool call, the boundary sees nothing, no
+# receipt is minted, and the gate re-denies with this same remedy — a loop whose
+# exit is not visible from the message. Stated here because a route that cannot
+# be walked is worse than none, and the reader who hits it is the one holding the
+# keyboard.
 [[verdict.route]]
 id = "verb run first"
 kind = "command"

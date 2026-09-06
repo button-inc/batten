@@ -7908,15 +7908,25 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
             (1, false) => delta_bases
                 .iter()
                 .next()
-                .and_then(|base| {
-                    // THE IDENTITY IS PAID FOR ONLY BY A ROW THAT DECLARES ITS
-                    // CONSUMER. `patch-id` keys a `[[rule.minted]]` receipt and
-                    // nothing else reads it, so a tree whose rules declare no
-                    // minted row pays no merge-base walk — the same declaration
-                    // economy every other git fact here already keeps.
-                    let wants = rules.iter().any(|rule| !rule.minted.is_empty());
-                    crate::git::base_delta(root, base, &deltas, wants).ok()
-                })
+                // RESOLVED UNCONDITIONALLY, AND THE OPTIMISATION THAT WAS HERE IS
+                // WITHDRAWN (CLOUD-1484).
+                //
+                // A review asked for this to be declaration-gated, as every other
+                // git fact here is, and the gating shipped keyed on
+                // `!rule.minted.is_empty()`. That is not the declaration that reads
+                // `patch-id`: a module may read the fact with no sibling
+                // `[[rule.minted]]` row, and it would then see `null`, decide
+                // nothing, and exit 0 — a dead gate bought to save a merge-base
+                // walk. Worse for the row that prompted it, where dropping the
+                // minted block would have silenced `code-review-dispatched`
+                // through two channels at once.
+                //
+                // The cost is real and is accepted rather than hidden: a second
+                // repository open, a merge-base walk and a tree diff, on every
+                // `check` declaring any `delta_sources`. Gating it honestly needs a
+                // column that says WHICH FACTS a row reads, which is a bigger
+                // change than this row and does not belong inside it.
+                .and_then(|base| crate::git::base_delta(root, base, &deltas, true).ok())
                 .flatten(),
             _ => None,
         },
