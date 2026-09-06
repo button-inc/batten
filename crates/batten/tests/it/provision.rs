@@ -945,17 +945,28 @@ fn a_launcher_hands_the_tool_an_environment_a_manifest_could_not() {
         .output()
         .expect("run the launcher");
     assert_eq!(ran.status.code(), Some(0), "{ran:?}");
-    let seen = String::from_utf8_lossy(&ran.stdout);
+    let all = String::from_utf8_lossy(&ran.stdout);
+    // NEVER `{all}` IN AN ASSERTION MESSAGE (non-negotiable rule 4). The launcher
+    // prints the WHOLE environment it was handed, inherited from this process —
+    // which in any real session carries live credentials, and in CI would put
+    // them in a public log the moment this case went red. Measured: it did go
+    // red, and the panic carried a session PAT. The report is narrowed to the
+    // two variables the case is about, and every other name is dropped before
+    // anything is formatted.
+    let seen: Vec<&str> = all
+        .lines()
+        .filter(|line| line.starts_with("NO_PROXY=") || line.starts_with("DEMO_TOKEN="))
+        .collect();
 
     assert!(
-        seen.lines().any(|line| line
-            == "NO_PROXY=api.example.invalid,assets.example.invalid,localhost,pypi.example.invalid"),
-        "the declared hosts are prepended and what the host already exempted is kept: {seen}"
+        seen.contains(
+            &"NO_PROXY=api.example.invalid,assets.example.invalid,localhost,pypi.example.invalid"
+        ),
+        "the declared hosts are prepended and what the host already exempted is kept: {seen:?}"
     );
     assert!(
-        seen.lines()
-            .any(|line| line == "DEMO_TOKEN=from-the-fallback"),
-        "the credential is taken from the first source that carries one: {seen}"
+        seen.contains(&"DEMO_TOKEN=from-the-fallback"),
+        "the credential is taken from the first source that carries one: {seen:?}"
     );
 }
 

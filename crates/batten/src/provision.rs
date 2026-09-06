@@ -1066,11 +1066,29 @@ fn attribute_text(value: &x509_cert::der::Any) -> Option<String> {
 /// real one — and the forge whose credential this is belongs to the repository
 /// that holds it. A hostname baked in here would be a consumer identifier in
 /// `crates/batten`, and would be simply wrong for a consumer on another forge.
-fn credential_probe_url() -> Option<String> {
-    let cwd = std::env::current_dir().ok()?;
-    let root = crate::git::repo_root(&cwd).ok()?;
-    let config = crate::config::load(&root).ok()?;
-    config.credential.as_ref()?.probe_url.clone()
+/// **EVERY STEP REPORTS ITS OWN FAILURE.** Written first as one `?` chain over
+/// `.ok()`, which collapsed four different could-not-looks into `None` and made
+/// the launcher's report say "no probe declared" over a repository that declares
+/// one — the same conflation [`Look`] exists to refuse, reintroduced one
+/// function up. A caller cannot act on the answer without knowing which step
+/// gave it.
+fn credential_probe_url() -> std::result::Result<String, String> {
+    let cwd = std::env::current_dir().map_err(|err| format!("no working directory: {err}"))?;
+    let root = crate::git::repo_root(&cwd)
+        .map_err(|err| format!("{} is in no repository: {err}", cwd.display()))?;
+    // The FILE, not the directory. `load` takes a path to `batten.toml`, and
+    // handing it the root read as `Is a directory (os error 21)` — swallowed by
+    // the `.ok()` chain this function used to be, and reported to the operator
+    // as "no probe declared" over a repository whose `[credential]` table was
+    // right there.
+    let at = root.join(crate::config::CONFIG_FILE);
+    let config =
+        crate::config::load(&at).map_err(|err| format!("{} will not load: {err}", at.display()))?;
+    config
+        .credential
+        .as_ref()
+        .and_then(|probe| probe.probe_url.clone())
+        .ok_or_else(|| "no `[credential] probe_url` is declared".to_owned())
 }
 
 /// Where a credential verdict is cached, keyed by the credential's DIGEST.
@@ -1122,13 +1140,25 @@ fn credential_usable(value: &str) -> bool {
     // ORDER IS THE WHOLE DESIGN: establish the route can REFUSE before believing
     // that it accepted. Reversed, a substituting route reports every credential
     // live — including one that has been revoked.
-    let live = match credential_probe_url() {
+    let verdict = match credential_probe_url() {
         // No declared endpoint is could-not-look, not health. Reading it as
         // healthy would authorise stripping the host's wiring on a consumer that
         // never said how to check.
-        None => false,
-        Some(probe) => route_honours_credentials(&probe) && probe_credential(&probe, value),
+        Err(why) => Verdict::NoProbe(why),
+        Ok(probe) => match route_honours_credentials(&probe) {
+            // Nobody could reach it. The reason is already on stderr.
+            None => Verdict::Unreachable,
+            // The route answered for a token of zeroes, so it is answering with
+            // an identity of its own and nothing it says about ours is evidence.
+            Some(false) => Verdict::RouteSubstitutes,
+            Some(true) => match probe_credential(&probe, value) {
+                Look::Answered(true) => Verdict::Live,
+                Look::Answered(false) => Verdict::Refused,
+                Look::CouldNotLook(_) => Verdict::Unreachable,
+            },
+        },
     };
+    let live = verdict == Verdict::Live;
     if let Some(dir) = receipt.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -1143,7 +1173,8 @@ fn credential_usable(value: &str) -> bool {
         // boundary is the difference between that and an unexplained refusal
         // three tasks later. Pointer-only — no value, no digest, no identity.
         eprintln!(
-            "::error:: batten: a declared session credential did not authenticate — keeping the host's proxy wiring, so third-party reads will 403. Re-checked every {CREDENTIAL_MAX_AGE}s."
+            "::error:: batten: {} — keeping the host's proxy wiring, so third-party reads will 403. Re-checked every {CREDENTIAL_MAX_AGE}s.",
+            verdict.why()
         );
     }
     live
@@ -1190,12 +1221,73 @@ fn credential_health() -> Credential {
 /// is why the probe is not a `git` call and why clearing the environment is not
 /// evidence of anything. On the API route, the same junk token is refused and a
 /// real one is not — so that route can answer and the git route cannot.
-fn route_honours_credentials(probe: &str) -> bool {
+/// **`None` IS COULD-NOT-LOOK AND IS NOT `false`.** A route that refused the
+/// junk credential and a route nothing could reach are different answers, and
+/// collapsing them is what made this mechanism's first live reading unreadable:
+/// every candidate resolved unusable, and the report could not say whether the
+/// forge had refused the token or the connection had never been made.
+fn route_honours_credentials(probe: &str) -> Option<bool> {
     // Syntactically plausible so the refusal is about the CREDENTIAL rather than
     // about malformed input, which a route could reject without ever consulting
     // an identity — and that would read as honesty it has not demonstrated.
     const MUST_FAIL: &str = "ghp_0000000000000000000000000000000000";
-    !probe_credential(probe, MUST_FAIL)
+    match probe_credential(probe, MUST_FAIL) {
+        Look::Answered(accepted) => Some(!accepted),
+        Look::CouldNotLook(why) => {
+            eprintln!("::error:: batten: the credential probe could not reach {probe}: {why}");
+            None
+        }
+    }
+}
+
+/// Why a credential did or did not prove usable.
+///
+/// **FOUR WAYS TO FAIL, AND THEY HAVE DIFFERENT REMEDIES**, which is the whole
+/// reason this is not a boolean. A revoked token is the operator's to replace; a
+/// substituting route means the fence is not up and the probe is measuring the
+/// proxy; an unreachable endpoint is the network; an undeclared probe is the
+/// consumer's own config. Reported as one line each, pointer-only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Verdict {
+    /// Proved against a route that demonstrably refuses a bad credential.
+    Live,
+    /// The route answered and refused this credential.
+    Refused,
+    /// The route accepted a token of zeroes, so it answers with its own
+    /// identity and says nothing about ours.
+    RouteSubstitutes,
+    /// Nothing was reached.
+    Unreachable,
+    /// No endpoint was resolved, carrying which step could not resolve one.
+    NoProbe(String),
+}
+
+impl Verdict {
+    /// The clause the report leads with. Never the credential, never a digest.
+    fn why(&self) -> String {
+        match self {
+            // Never rendered: the report is written only where `live` is false.
+            Self::Live => "the session credential authenticated".to_owned(),
+            Self::Refused => "a declared session credential did not authenticate".to_owned(),
+            Self::RouteSubstitutes => {
+                "the route to the credential probe answers for a token of zeroes, so it is \
+                 substituting its own identity and no credential can be proved over it"
+                    .to_owned()
+            }
+            Self::Unreachable => "the credential probe could not be reached".to_owned(),
+            Self::NoProbe(why) => format!("no credential probe could be resolved: {why}"),
+        }
+    }
+}
+
+/// What a probe found, keeping "the route answered" apart from "nobody could
+/// ask".
+enum Look {
+    /// The route answered, and whether it accepted the credential.
+    Answered(bool),
+    /// Nothing was reached. Carries the transport's own reason, which
+    /// [`crate::fetch`] writes as a pointer rather than a payload.
+    CouldNotLook(String),
 }
 
 /// Whether `probe` answers 2xx for `token`.
@@ -1214,10 +1306,12 @@ fn route_honours_credentials(probe: &str) -> bool {
 /// exactly the dead-gate shape the policy-module rules record one layer up.
 ///
 /// Pointer-only: the verdict is a boolean over a status and no body is read.
-fn probe_credential(probe: &str, token: &str) -> bool {
+fn probe_credential(probe: &str, token: &str) -> Look {
     let headers = [("Authorization".to_owned(), format!("Bearer {token}"))];
-    crate::fetch::get_direct(probe, &headers)
-        .is_ok_and(|response| (200..300).contains(&response.status))
+    match crate::fetch::get_direct(probe, &headers) {
+        Ok(response) => Look::Answered((200..300).contains(&response.status)),
+        Err(why) => Look::CouldNotLook(why.to_string()),
+    }
 }
 
 /// Turn a launcher's declared rules into the variables to set, reading the
@@ -1226,15 +1320,7 @@ fn probe_credential(probe: &str, token: &str) -> bool {
 /// A rule that resolves to nothing sets nothing, which is what keeps an absent
 /// credential absent rather than empty.
 fn resolved_env(rules: &[ProvisionEnv], credential: Credential) -> Vec<(String, EnvAction)> {
-    resolved_env_from(
-        rules,
-        credential,
-        &|name| std::env::var(name).ok(),
-        // A credential is only ever asked about once per receipt window, so a
-        // row naming three candidates costs at most three probes per window
-        // rather than three per invocation.
-        &|value| credential_usable(value),
-    )
+    resolved_env_from(rules, credential, &|name| std::env::var(name).ok())
 }
 
 /// [`resolved_env`] over a supplied lookup.
@@ -1248,7 +1334,6 @@ fn resolved_env_from(
     rules: &[ProvisionEnv],
     credential: Credential,
     lookup: &dyn Fn(&str) -> Option<String>,
-    usable: &dyn Fn(&str) -> bool,
 ) -> Vec<(String, EnvAction)> {
     // EVERY REMOVAL IS CONDITIONAL ON A PROVEN REPLACEMENT. With an unusable
     // credential the rows below degrade to the host's own wiring rather than to
@@ -1276,22 +1361,23 @@ fn resolved_env_from(
                 let reject = removals_allowed
                     .then_some(rule.reject_prefix.as_deref())
                     .flatten();
-                // FIRST USABLE, NOT FIRST SET. The prefix drops an obvious
-                // marker without spending a probe; `usable` is what decides,
-                // and it is measured against the forge rather than read off the
-                // value's shape. That ordering is what keeps this from encoding
-                // one host's placeholder convention: a host that changes its
-                // spelling costs an extra probe, not a wrong credential.
+                // FIRST SET, AND SELECTION NEVER PROBES. Written first as
+                // "first USABLE" — a per-candidate probe here — and that was
+                // wrong twice over. It is a SECOND AUTHORITY over the question
+                // [`credential_health`] already answers against the same names,
+                // so the two can disagree; and it makes a launcher's
+                // environment a function of the network, which §6's
+                // byte-stability forbids outright. Measured: the launcher tier
+                // went red because a fixture's synthetic token was probed
+                // against the live forge.
+                //
+                // The measurement stays where it decides something: `Credential`
+                // gates every REMOVAL, so a revoked PAT still costs the session
+                // nothing it had, and the loud report says so.
                 let real = rule.from_first_set.iter().find_map(|from| {
                     lookup(from)
                         .filter(|got| !got.is_empty())
                         .filter(|got| reject.is_none_or(|bad| !got.starts_with(bad)))
-                        // NOT ASKED ON AN UNPROVEN ROUTE. Where the session's
-                        // own credential could not be measured, this probe
-                        // travels the same route and would answer with the same
-                        // substitution — so the reading is worthless and the
-                        // honest move is to keep whatever the host set.
-                        .filter(|got| !removals_allowed || usable(got))
                 });
                 match real {
                     Some(value) => value,
@@ -1783,16 +1869,6 @@ mod tests {
         }
     }
 
-    /// A prober that answers `true` for every value.
-    ///
-    /// The default for a case whose subject is the RESOLVER's ordering rather
-    /// than the measurement: `Credential` already carries the route's verdict,
-    /// and a case that also stubbed the per-value probe to `false` would be
-    /// asserting two mechanisms at once and could not say which one refused.
-    fn anything_authenticates(_value: &str) -> bool {
-        true
-    }
-
     /// THE PREMISE CASE. Every assertion below is about a row FIRING; if the
     /// resolver returned nothing for a well-formed row they would all pass over
     /// a mechanism that is absent (CLOUD-249's shape).
@@ -1802,7 +1878,6 @@ mod tests {
             &[credential_row("PROBE_TOKEN")],
             Credential::Live,
             &env_of(&[("BATTEN_TEST_PAT", "ghp_real")]),
-            &anything_authenticates,
         );
         assert_eq!(
             got,
@@ -1822,7 +1897,6 @@ mod tests {
                 ("BATTEN_TEST_PAT", "ghp_real"),
                 ("PROBE_TOKEN", "proxy-injected"),
             ]),
-            &anything_authenticates,
         );
         assert_eq!(
             got,
@@ -1843,7 +1917,6 @@ mod tests {
             &[credential_row("PROBE_TOKEN")],
             Credential::Live,
             &env_of(&[("PROBE_TOKEN", "proxy-injected")]),
-            &anything_authenticates,
         );
         assert_eq!(got, vec![("PROBE_TOKEN".to_owned(), EnvAction::Unset)]);
     }
@@ -1856,7 +1929,6 @@ mod tests {
             &[credential_row("PROBE_TOKEN")],
             Credential::Live,
             &env_of(&[("PROBE_TOKEN", "ghp_somebody_elses")]),
-            &anything_authenticates,
         );
         assert_eq!(
             got,
@@ -1876,7 +1948,6 @@ mod tests {
             &[credential_row("PROBE_TOKEN")],
             Credential::Unusable,
             &env_of(&[("PROBE_TOKEN", "proxy-injected")]),
-            &anything_authenticates,
         );
         assert_eq!(
             got,
@@ -1894,60 +1965,13 @@ mod tests {
     fn an_unusable_credential_keeps_the_proxy() {
         let env = env_of(&[("HTTPS_PROXY", "http://127.0.0.1:1")]);
         assert_eq!(
-            resolved_env_from(
-                &[unset_row("HTTPS_PROXY")],
-                Credential::Unusable,
-                &env,
-                &anything_authenticates
-            ),
+            resolved_env_from(&[unset_row("HTTPS_PROXY")], Credential::Unusable, &env,),
             Vec::new(),
             "a removal with no replacement proven must be skipped"
         );
         assert_eq!(
-            resolved_env_from(
-                &[unset_row("HTTPS_PROXY")],
-                Credential::Live,
-                &env,
-                &anything_authenticates
-            ),
+            resolved_env_from(&[unset_row("HTTPS_PROXY")], Credential::Live, &env,),
             vec![("HTTPS_PROXY".to_owned(), EnvAction::Unset)]
-        );
-    }
-
-    /// THE CASE `reject_prefix` CANNOT REACH, and the reason the probe is the
-    /// authority rather than the prefix. `ghp_revoked` carries no marker and is
-    /// spelled exactly like a live PAT, so nothing about its TEXT distinguishes
-    /// it — only the measurement does. It loses to the next candidate, and with
-    /// no candidate left the variable is cleared rather than left carrying a
-    /// credential every fenced request will be refused for.
-    #[test]
-    fn a_credential_that_does_not_authenticate_loses() {
-        let only_the_second_one_works = |value: &str| value == "ghp_live";
-        assert_eq!(
-            resolved_env_from(
-                &[credential_row("PROBE_TOKEN")],
-                Credential::Live,
-                &env_of(&[
-                    ("BATTEN_TEST_PAT", "ghp_revoked"),
-                    ("PROBE_TOKEN", "ghp_live"),
-                ]),
-                &only_the_second_one_works
-            ),
-            vec![(
-                "PROBE_TOKEN".to_owned(),
-                EnvAction::Set("ghp_live".to_owned())
-            )],
-            "first USABLE, not first set"
-        );
-        assert_eq!(
-            resolved_env_from(
-                &[credential_row("PROBE_TOKEN")],
-                Credential::Live,
-                &env_of(&[("PROBE_TOKEN", "proxy-injected")]),
-                &only_the_second_one_works
-            ),
-            vec![("PROBE_TOKEN".to_owned(), EnvAction::Unset)],
-            "no usable candidate leaves the marker cleared, never standing"
         );
     }
 

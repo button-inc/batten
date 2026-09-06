@@ -668,6 +668,26 @@ async fn one_exchange(
         Some(_) => hyper::Method::POST,
         None => hyper::Method::GET,
     });
+    // A DEFAULT `User-Agent`, BECAUSE SOME SERVERS REFUSE A REQUEST WITHOUT ONE
+    // AND SAY SO AS AN AUTHORIZATION FAILURE. Measured 2026-09-06 against
+    // `api.github.com`: a valid credential with no `User-Agent` answers **403**,
+    // byte-indistinguishable from a revoked token — so a caller probing a
+    // credential over this transport got a confident wrong answer about the
+    // credential rather than about its own request. The git-http endpoints
+    // `lease.rs` speaks to tolerate the omission, which is why nothing here had
+    // needed one before.
+    //
+    // A caller's own header WINS: this is a floor, not a policy, and a consumer
+    // that must present a particular identity still can.
+    if !headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+    {
+        request = request.header(
+            hyper::header::USER_AGENT,
+            concat!("batten/", env!("CARGO_PKG_VERSION")),
+        );
+    }
     for (name, value) in headers {
         request = request.header(name.as_str(), value.as_str());
     }
