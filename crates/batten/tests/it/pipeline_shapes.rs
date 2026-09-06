@@ -161,7 +161,14 @@ fn the_prescribed_form_is_allowed_including_its_redirection() {
     // that did not exempt redirections would refuse the exact idiom the refusal
     // recommends, which is the worst failure this gate could have.
     assert_allowed("mise run verify >/tmp/verify.log 2>&1");
-    assert_allowed("mise run land >/tmp/land.log 2>&1");
+    // NOT `land`, and for CLOUD-438's reason rather than by preference: this
+    // case adjudicates against the LIVE root, `land.sh` is the one task that
+    // takes a singleton, and the singleton row refuses a second start while a
+    // live process holds it — so under `verify`, which runs this suite from
+    // inside `land`, the verdict here would turn on a lock rather than on the
+    // redirection this case is about. `gh_guard.rs` records the same swap after
+    // measuring the failure.
+    assert_allowed("mise run fmt >/tmp/fmt.log 2>&1");
     assert_allowed("mise exec -- cargo test -p batten >/tmp/test.log 2>&1");
     assert_allowed("git push origin branch >/tmp/push.log 2>&1");
     // The other redirection spellings that carry an `&`.

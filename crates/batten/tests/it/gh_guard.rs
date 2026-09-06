@@ -287,7 +287,21 @@ fn a_task_name_is_not_a_wrapped_program() {
     // `mise run` names a TASK; only `mise exec`/`mise x` run another program. A
     // wrapper-looking-through that did not know the difference would refuse the
     // command every deny in this file recommends.
-    allowed("mise run land");
+    //
+    // THE TASK NAMED HERE IS NO LONGER `land`, AND THE SWAP IS THE POINT RATHER
+    // THAN A DODGE (CLOUD-438). This case adjudicates against the LIVE root, and
+    // the singleton row refuses a second start of a task a live process in this
+    // clone already holds — so `mise run land` is refusable here for a reason
+    // that has nothing to do with wrapper look-through, and `verify` runs this
+    // suite from inside `land`, where the lock is held by the very process
+    // running the case. Measured failing there, which is the singleton row
+    // working.
+    //
+    // The property under test is the look-through and any task name exercises
+    // it, so the case names one no lock is ever taken for. That `land` itself is
+    // allowed when unheld is `singleton_gate.rs::an_unheld_task_starts`, where
+    // the lock state is written rather than inherited.
+    allowed("mise run fmt");
     allowed("mise exec --");
 }
 
