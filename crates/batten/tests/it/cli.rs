@@ -3187,9 +3187,20 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
     // the ROUTE, and a row that closed the sanctioned route too would ban the
     // toolchain outright. `mise exec` is looked through, so this pair is the
     // only thing standing between `require_via` and exactly that.
+    // `mise run land` LEFT THIS LIST FOR `gh pr ready`'S REASON, and CLOUD-438 is
+    // what moved it: the singleton row refuses a second start while a live
+    // process in this clone holds that task's lock, so against this checkout its
+    // verdict depends on whether a lock is held — a property of the world, not of
+    // the commit. It was measured failing here for exactly that reason, and the
+    // reason is the gate working: `verify` runs this suite from INSIDE `land`, so
+    // the lock is held by the very process running the case.
+    //
+    // Its allow arm is `singleton_gate.rs::an_unheld_task_starts`, where the lock
+    // state is written by the case rather than inherited from whatever is running
+    // — and `another_task_is_none_of_this_gates_business` beside it is what keeps
+    // the row from becoming a blanket refusal of `mise run`.
     for command in [
         "gh pr view 42",
-        "mise run land",
         "mise exec -- cargo test -p batten",
         "mise run test:cargo",
     ] {
