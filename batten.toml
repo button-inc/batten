@@ -5928,21 +5928,64 @@ subject = "tracker-body"
 # CLOUD-877 gives the receipt a portable form. That is stated here rather than
 # discovered: today this gate is enforced where `land` runs, and CI is honestly
 # silent rather than falsely green.
-[[rule]]
-id = "code-review-dispatched"
-kind = "policy"
-scope = "tree"
-base = "origin/main"
-delta_sources = ["crates/**", "policy/**", "mise-tasks/**", "batten.toml"]
-module = "policy/code-review-dispatched.rego"
-severity = "deny"
+#
+# RETIRED ONTO THE TRANSITION, AND THE TREE ROW IS GONE (CLOUD-1547). The keying
+# above is right and the ENFORCEMENT POINT was wrong: a tree row is decided by
+# `batten check` under `verify`, which is what an agent runs repeatedly WHILE
+# iterating, so every fix commit moved the identity and owed another review, and
+# the review that found something produced the fix that owed the next one.
+# Measured on the branch that built it: six dispatches in one session, each
+# provoked by the fix for the last, each charged over bytes the deterministic
+# gates had not judged yet.
+#
+# The row below is the successor, and it is ONE row where the design wanted two.
+#
+# WHAT IS NOT HERE, AND WHY IT IS NOT: a `push-needs-review` row over `git push`.
+# It is what would FREEZE the readied head — pricing a review to the ready
+# transition is only sound if the head cannot change under it, or the reviewed
+# diff is readied and an unreviewed one is pushed on top. Written and measured,
+# and it is too blunt to commit: a `receipt` row selects on a command pattern, so
+# it fires on EVERY push in the repository, and the thing it actually wants to
+# refuse is a push to a branch whose PR is already ready. `forge.rs` carries no
+# draft field at all, so that narrowing is unsayable today. Measured over the
+# suite: the row denied `forced_push.rs`'s benign fixture push, and 15 test files
+# drive a push that has nothing to do with review.
+#
+# So the freeze stays an open gap rather than a widened gate — the same gap
+# CLOUD-1446 already records for `ready-needs-receipts` ("nothing guards the next
+# push"), and CLOUD-1548 is where it closes, because a declared loop can name the
+# ready STATE where a command pattern cannot. The keying itself is not
+# pattern-specific and `review_receipt_delta.rs` exercises the push arm over its
+# own config, so what is missing here is the narrowing, not the mechanism.
+#
+# THE OTHER THING THIS ROW CANNOT CARRY, stated rather than discovered: the
+# retired module gated on `code-changed` intersected with `crates/`, `policy/`,
+# `mise-tasks/` and `batten.toml`, so a prose-only branch owed nothing. A
+# `receipt` row has no such column, so a documentation-only branch now buys one
+# review before readying. That is a widening, it is deliberate, and it is cheap at
+# one dispatch per branch — but it is a widening and not an oversight.
 
-[[rule.minted]]
-id = "code-review"
-mint = "code-review"
-field = 0
-recency = 1
-max_age_days = 30
+# THE READY TRANSITION, which is the event that spends CI minutes.
+#
+# The sibling of `ready-needs-receipts` rather than a column on it: that row is
+# `key = "head"` and asks whether THIS COMMIT was verified, which is the right
+# keying for `verify` and the wrong one for a review — a head-keyed review would
+# expire on every rebase and re-buy a model call each lap, the false-positive rate
+# that gets a guard switched off. One row cannot carry two keyings, and the two
+# questions genuinely have different answers.
+[[rule]]
+id = "ready-needs-review"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr ready"
+checks = ["code-review"]
+key = "delta"
+key_base = "origin/main"
+reason = """
+Dispatch the `code-review` skill over this branch's change, then retry. Readying \
+is what starts CI, so an unreviewed head spends the matrix before anyone has \
+looked at it."""
 
 # A third-party validator's verdict for a file it read (CLOUD-1171, the
 # adjudication half of `pkl-check`, `renovate-config-validator` and
@@ -11545,6 +11588,7 @@ fresh clone is could-not-look, not a refusal: the receipt store dies with the \
 container, so this speaks where the branch is worked and is honestly silent in \
 CI until that store has a portable form.
 """
+withdrawn = "CLOUD-1547 retired the tree rule that raised this. The question it asked is now asked at the two transitions that matter — `push-needs-review` and `ready-needs-review` — which are `receipt` rows and raise the `receipt read …` classes instead. The change is the enforcement POINT, not the predicate: a tree row is decided by `batten check` under `verify`, so it charged a model call per fix commit while the work was still being iterated, where a transition charges one per diff actually offered."
 
 # THE ROUTE NAMES THE SKILL, AND HOW IT IS INVOKED DECIDES WHETHER IT MINTS.
 #
@@ -11556,6 +11600,12 @@ CI until that store has a portable form.
 # exit is not visible from the message. Stated here because a route that cannot
 # be walked is worse than none, and the reader who hits it is the one holding the
 # keyboard.
+#
+# A TOMBSTONE STILL OWES A ROUTE, and this one is still walkable — which is why it
+# is kept verbatim rather than repointed at the successor rows. A reader meeting
+# the historical token needs the same thing the successors ask for: dispatch the
+# skill. What changed underneath them is where the demand is made, not what
+# satisfies it.
 [[verdict.route]]
 id = "verb run first"
 kind = "command"

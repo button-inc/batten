@@ -183,6 +183,7 @@ const RECEIPT_PERMITS: &[&str] = &[
     "checks_any",
     "key",
     "key_from",
+    "key_base",
     "key_shape",
     "max_age",
     "requires_field",
@@ -3203,6 +3204,12 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         declares: Declares::NotFactBearing("names where a receipt's key comes from"),
     },
     ColumnCensus {
+        field: "key_base",
+        declares: Declares::NotFactBearing(
+            "names the ref a delta-keyed receipt's identity is taken against",
+        ),
+    },
+    ColumnCensus {
         field: "when_value",
         declares: Declares::NotFactBearing("a condition over a fact another column declared"),
     },
@@ -4368,7 +4375,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 53] {
+    fn columns(&self) -> [(&'static str, bool); 54] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -4391,6 +4398,7 @@ impl Rule {
             ("when_present", self.when_present.is_some()),
             ("when_value", self.when_value.is_some()),
             ("key_from", self.key_from.is_some()),
+            ("key_base", self.key_base.is_some()),
             ("key_shape", self.key_shape.is_some()),
             ("max_age", self.max_age.is_some()),
             ("requires_field", self.requires_field.is_some()),
