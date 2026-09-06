@@ -156,15 +156,19 @@ did not run — REPAIR IT YOURSELF, FIRST, before any other work.** The handlers
 launcher's hook registrations at the same cadence the launcher writes them), so
 needing to run a repair BY HAND is never the finding — it is evidence the chain
 was skipped, and the skip is the defect. `batten startup --repair` runs the
-declared `repair` for every failing row; a row whose repair the classifier
-refuses is the ONE ask to put to a human (CLOUD-680's shape), never a shrug.
+declared `repair` for every failing row; a row whose repair the HARNESS refuses —
+by whatever permission mechanism that host is running — is the ONE ask to put to
+a human (CLOUD-680's shape), never a shrug. Name the refusal you actually got;
+do not assert which settings key would have granted it unless you measured that
+key doing something, because a host's permission surface is not this repo's to
+claim.
 
 **AND SAY SO, because a manual recovery that goes unreported reads as routine.**
 The measured cause (CLOUD-1474's session, 2026-09-06): the container provisions
 the RELEASED binary, `main` had already landed `[[outcome]]`, and 0.0.144 exits 1
 on `unknown field` — so `session-batten` died, every handler after it silently
 did not run, and `session-wiring` never reaped. The chain is gated behind an
-engine the committed config can outrun, and CLOUD-877's forward-compatibility
+engine the committed config can outrun, and CLOUD-1428's forward-compatibility
 lives in the binary that cannot start. `mise run install:local` is the unblock;
 the report is not optional.
 
