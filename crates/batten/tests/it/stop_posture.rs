@@ -974,3 +974,142 @@ fn the_stop_surface_never_exits_non_zero() {
         "an advisory never changes the exit code"
     );
 }
+
+/// The module the fixture below registers: it denies over every document it is
+/// given, so one `state record` mints a rule finding and the pair after it has
+/// something to hold.
+const HOLDS_MODULE: &str = r#"package batten
+
+rules contains "always-denies"
+
+violation contains {
+	"rule": "always-denies",
+	"verdict": "fixture always denies",
+	"subjects": [{"path": path}],
+} if {
+	some path, _ in input.tree.documents
+}
+
+deny contains entry if {
+	some entry in violation
+}
+"#;
+
+/// A TREE-scoped rule, which is the whole point: the mediated Stop path skips
+/// the scan, so this rule is exactly what it did not look at.
+const HOLDS_CONFIG: &str = r#"
+[[rule]]
+id = "always-denies"
+kind = "policy"
+scope = "tree"
+module = "policy/holds.rego"
+severity = "deny"
+# WITHOUT THIS THE MODULE DECIDES NOTHING. `input.tree.documents` is built from
+# the row's declared documents, so a tree rule that declares none iterates an
+# empty map, loads clean and mints no finding — the dead-gate class
+# `.claude/rules/policy-modules.md` opens with, met here on the first attempt.
+documents = ["batten.toml"]
+
+[[verdict]]
+id = "fixture always denies"
+gloss = "a fixture class, raised over every document"
+class = "Raised by the fixture module so a rule finding exists to hold."
+
+[[verdict.route]]
+id = "nothing to do"
+kind = "issue"
+target = "a fixture route, never followed"
+"#;
+
+/// The completion fixture plus a tree-scoped rule that always fires.
+fn holds_fixture(name: &str) -> (PathBuf, PathBuf) {
+    let (repo, home) = unlanded_fixture(name);
+    let config = fs::read_to_string(repo.join("batten.toml")).expect("read fixture config");
+    fs::write(repo.join("batten.toml"), format!("{config}{HOLDS_CONFIG}")).expect("extend config");
+    fs::write(repo.join("policy/holds.rego"), HOLDS_MODULE).expect("write fixture module");
+    common::git_in(&repo, &["add", "-A"]);
+    common::git_in(&repo, &["commit", "-q", "-m", "chore: fixture rule"]);
+    (repo, home)
+}
+
+/// Run a verb against the fixture's own store.
+fn verb_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
+    let mut command = batten();
+    common::state_home(&mut command, home);
+    command
+        .current_dir(dir)
+        .args(args)
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env_remove("BATTEN_HOOK_BYPASS")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command.output().expect("run batten verb")
+}
+
+/// A SKIPPED SCAN HOLDS A RULE FINDING — IT DOES NOT RESOLVE IT (CLOUD-1480).
+///
+/// # The regression this exists because of
+///
+/// Detaching the state record left the mediated path calling `findings::record`
+/// with `rules::Scan::default()` — an empty `findings` map AND an empty
+/// `not_evaluated` map. `findings::record` reads an empty `not_evaluated` as
+/// "every rule ran and saw nothing", so its zero-observation pass resolved every
+/// rule-produced finding on the context, at every end of turn, on the one path
+/// that runs at every end of turn.
+///
+/// That is CLOUD-81's fail-open reached by a new route: not a rule that was
+/// skipped, but a whole surface that declined to look and said nothing about
+/// having declined. Sequence findings escaped only because of the
+/// `FindingKind::Sequence` guard; every rule finding did not.
+///
+/// # Why the assertion is on the OBSERVATION and not on the listing's length
+///
+/// The record is never deleted either way — `state list` shows it in both
+/// worlds. What differs is the instance: `Observed(0)` is "the rule looked and
+/// it is gone", `NotObserved` is "nothing looked". Asserting presence would pass
+/// over the bug; only the observation discriminates.
+#[test]
+fn a_stop_that_skipped_the_scan_holds_the_rule_finding_rather_than_resolving_it() {
+    let (repo, home) = holds_fixture("stop-holds-rule-finding");
+
+    // The VERB scans the tree and mints the finding.
+    let recorded = verb_in(&repo, &home, &["state", "record"]);
+    assert!(
+        recorded.status.success(),
+        "the verb records: {}",
+        String::from_utf8_lossy(&recorded.stderr)
+    );
+    let seeded = stdout_of(&verb_in(&repo, &home, &["state", "list", "-J"]));
+    assert!(
+        seeded.contains("always-denies"),
+        "the seeding scan minted the fixture rule's finding: {seeded}"
+    );
+
+    // The mediated Stop path, which skips the scan.
+    let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+
+    // NAMED, not scanned. The listing carries other records — the sequence
+    // findings the detectors mint, whose `Observed(0)` is honest — so a bare
+    // `contains("NotObserved")` would pass on any store holding anything, and a
+    // bare `!contains("Observed": 0)` would fail on a store that is correct.
+    // Only THIS rule's instance on THIS ref discriminates.
+    let listing = stdout_of(&verb_in(&repo, &home, &["state", "list", "-J"]));
+    let records: serde_json::Value = serde_json::from_str(&listing).expect("the listing is JSON");
+    let occurrences = records
+        .as_array()
+        .expect("a listing is an array")
+        .iter()
+        .find(|record| record["rule"] == "always-denies")
+        .expect("the fixture rule's record survived the mediated turn")["instances"]
+        .as_array()
+        .expect("instances is an array")
+        .iter()
+        .find(|instance| instance["context"] == "refs/heads/work")
+        .expect("an instance on the branch the scan ran on")["occurrences"]
+        .clone();
+    assert!(
+        occurrences.get("NotObserved").is_some(),
+        "a surface that did not look HOLDS the finding rather than resolving it, \
+         which is the whole of CLOUD-81 on this path: {occurrences}"
+    );
+}

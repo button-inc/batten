@@ -1150,30 +1150,6 @@ fn run_state_record(
         .truncate(false)
         .write(true)
         .open(&lock_path)?;
-    // WHO MAY BLOCK ON THIS LOCK, and getting it wrong cost 100s. The first
-    // version keyed only on the drain marker, so the SYNCHRONOUS in-process call
-    // took the blocking branch and waited for the drain the previous turn had
-    // spawned — the hook serialised behind the very ~118s scan detaching it was
-    // meant to escape. Measured at 99-124s, worse than before the fix.
-    //
-    // The surface is the predicate, because it is the one that already means
-    // "there is a per-call budget here": `Surface::Hook` must never wait, and the
-    // drain must not either, since nobody reads its verdict. Only the VERB blocks,
-    // because a human ran it and a record it did not write must not be reported
-    // as one.
-    let may_block =
-        !matches!(surface, facts::Surface::Hook) && std::env::var_os(DRAIN_MARKER).is_none();
-    if may_block {
-        fs4::FileExt::lock(&lock)?;
-    } else {
-        match fs4::FileExt::try_lock(&lock) {
-            Ok(()) => {}
-            // Someone else is already doing this work. Clean exit rather than a
-            // wait: on the mediated path the budget forbids it, and for a drain
-            // there is nothing to report.
-            Err(_) => return Ok(ExitCode::Success),
-        }
-    }
     // **The ref comes from HERE, not from `repo`.** `repo_root` answers with the
     // MAIN worktree's root — which is exactly what makes every linked worktree
     // share one store — so asking it for the branch would report the main
@@ -1225,7 +1201,25 @@ fn run_state_record(
             surface,
         )?
     } else {
-        rules::Scan::default()
+        // NOT `Scan::default()`. An empty `not_evaluated` is read one call down
+        // as "every rule ran and saw nothing", so the zero-observation pass in
+        // `findings::record` resolves every rule-produced finding on this
+        // context — at every end of turn, on the one path that runs at every end
+        // of turn. That is CLOUD-81's fail-open exactly, reintroduced by
+        // deferring the scan rather than by skipping a rule.
+        //
+        // The honest answer is that this surface did not look, so every
+        // configured rule is `NotObserved` and the pass HOLDS. The drain re-mints
+        // the real observations when it finishes; until then a finding stays
+        // held rather than being resolved by a scan that never ran.
+        rules::Scan {
+            not_evaluated: config
+                .rules
+                .iter()
+                .map(|rule| (rule.id.clone(), findings::NotObserved::RuleSkipped))
+                .collect(),
+            ..rules::Scan::default()
+        }
     };
     if !scan.not_evaluated.is_empty() {
         // Never silent: a rule that did not look must say so, or a clean-looking
@@ -1251,6 +1245,42 @@ fn run_state_record(
             err,
             &format!("state record: not evaluated: {}", withheld.join(", ")),
         )?;
+    }
+
+    // THE LOCK IS TAKEN HERE, NOT ABOVE THE SCAN, and the scope is the whole
+    // point. Everything between the top of this function and this line is a
+    // READ — git refs, config resolution, the rule scan — and the scan is what
+    // takes ~118s. Holding the lock across it made the contended window longer
+    // than a turn, so the mediated path lost `try_lock` on most turns and
+    // returned before minting anything, silencing the nudge that
+    // `stop_posture::the_first_turn_on_a_fresh_claim_still_speaks` pins. Two
+    // readers racing settle nothing; only the writes below need one writer, and
+    // scoping the lock to them is what makes losing it rare rather than usual.
+    //
+    // WHO MAY BLOCK, and getting it wrong cost 100s. The first version keyed
+    // only on the drain marker, so the SYNCHRONOUS in-process call took the
+    // blocking branch and waited for the drain the previous turn had spawned —
+    // the hook serialised behind the very scan detaching it was meant to escape.
+    // Measured at 99-124s, worse than before the fix. The surface is the
+    // predicate, because it is the one that already means "there is a per-call
+    // budget here": `Surface::Hook` must never wait, and the drain must not
+    // either, since nobody reads its verdict. Only the VERB blocks, because a
+    // human ran it and a record it did not write must not be reported as one.
+    let may_block =
+        !matches!(surface, facts::Surface::Hook) && std::env::var_os(DRAIN_MARKER).is_none();
+    if may_block {
+        fs4::FileExt::lock(&lock)?;
+    } else if fs4::FileExt::try_lock(&lock).is_err() {
+        // Someone else holds the write phase. REPORTED, never silent: this turn
+        // mints nothing, so the nudge ladder reads a store this call did not
+        // advance, and a reader owed an explanation for the silence gets one —
+        // the same `persisted:false` reading the degraded-store arm below gives
+        // for the other reason a record does not happen.
+        writeln!(
+            err,
+            "batten: state record {context}: another writer holds the store; persisted:false"
+        )?;
+        return Ok(ExitCode::Success);
     }
 
     let bound = store::commit(store::resolve(&repo)?)?;
@@ -5511,6 +5541,10 @@ fn admission_anchor(
         rules::RunOptions {
             checks: policy::ModuleChecks::RunOverSelection,
             scope: &rules::Scope::Tree,
+            // A TREE verb, so the read surface: this re-runs one declared rule
+            // over one subject to recover its fingerprint, which is the same
+            // work `check` does and not the mediated boundary's.
+            surface: facts::Surface::Check,
             now: None,
         },
     ) else {
