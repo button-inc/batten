@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.146](https://github.com/button-inc/batten/compare/v0.0.145...v0.0.146) - 2026-09-06
+
+### Fixed
+
+- *(override)* anchor a policy predicate's mint on its finding, not the HEAD
+- *(hook)* let the detectors speak when another writer holds the store
+- *(hook)* hold rule findings the skipped scan never looked at
+- *(hook)* never let the mediated path wait on the drain's lock
+- *(hook)* keep the transcript detectors synchronous, detach only the scan
+- *(hook)* start the state record instead of awaiting it
+- *(rules)* withhold a rule whose declared fact this surface cannot resolve
+- *(rules)* [**breaking**] gate the effect facts on Surface, not on the dispatch enum
+- *(rules)* gate the two Cost::Effect facts on the effect surface, not declaration
+
+### Other
+
+- *(hook)* assert the skipped scan does not RESOLVE, not which arm it takes
+- *(exec)* place the drain's spawn at the child-process boundary
+- *(rules)* let the mediated caller choose its config-fault checks
+
 ## [0.0.145](https://github.com/button-inc/batten/compare/v0.0.144...v0.0.145) - 2026-09-06
 
 ### Added
