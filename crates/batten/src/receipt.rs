@@ -879,12 +879,15 @@ pub(crate) fn verdicts(
                     ReceiptKey::Named => named.as_ref().map_or(Validity::Missing, |value| {
                         named_validity(&facts.git_dir, check, value)
                     }),
-                    // NOT resolved once above like `branch` and `named`, because
-                    // the base is PER ROW rather than per call: two rows may key
-                    // on different bases, and hoisting one identity would answer
-                    // both from whichever row happened to be read first.
+                    // Resolved once per CHECK rather than once per call, which is
+                    // the distinction `branch` and `named` do not have to make:
+                    // the base is a property of the ROW, so a call-level hoist
+                    // would answer two rows keying on different bases from
+                    // whichever was read first. `delta_identity` above is that
+                    // per-check binding, and the `*key == ReceiptKey::Delta`
+                    // guard is what keeps every other keying from paying for it.
                     //
-                    // AND `Missing` RATHER THAN COULD-NOT-LOOK, which is the
+                    // `Missing` RATHER THAN COULD-NOT-LOOK, which is the
                     // opposite of the two arms above and is the deliberate half
                     // (CLOUD-1547). An unresolvable base or an empty diff means
                     // there is no change to have reviewed; answering could-not-
