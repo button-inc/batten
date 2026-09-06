@@ -2116,11 +2116,14 @@ description = "Provision the host dependencies mise does not: the released `batt
 #
 # `-y` because a provisioning script has no terminal; after `install.sh` because
 # the verb is the binary that script installs.
-run = """
-set -eu
-./install.sh
-batten wiring reclaim -y
-"""
+#
+# ONE LINE, JOINED BY `&&`, rather than a `"""` body: the reap must not run when
+# the install failed, which is the whole of what `set -e` bought here, and `&&`
+# says it in the form `inline-task-bodies-not-growing-basic` is counting. That
+# row is `non_increasing` against `origin/main` with no `admits_with`, so its
+# only routes are extraction or a waiver — and neither is worth spending on two
+# commands whose sequencing is the single thing being expressed.
+run = "./install.sh && batten wiring reclaim -y"
 
 # The report half of the same seam, and the setup script calls this one too.
 #
