@@ -63,7 +63,7 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{git_in, run_with_stdin, scratch, stdout, write};
+use common::{git_in, run_with_stdin, stdout, write};
 
 const RECEIPT: &str = "code-review";
 const CODE: &str = "crates/batten/src/lib.rs";
@@ -75,7 +75,6 @@ const CODE: &str = "crates/batten/src/lib.rs";
 /// fail — the discrimination the module doc calls an anti-vacuity pair. Every
 /// other case takes the committed `delta`.
 fn fixture(name: &str, key: &str) -> PathBuf {
-    let dir = scratch(name);
     // `key_base` is refused on any keying but `delta` (`Rule::validate_delta_base`),
     // so the alternative-keying fixtures must omit it — which is the load-time
     // half of the same pair these cases exercise at adjudication.
@@ -84,10 +83,14 @@ fn fixture(name: &str, key: &str) -> PathBuf {
     } else {
         ""
     };
-    write(
-        &dir,
-        "batten.toml",
-        &format!(
+    // THROUGH `common::Fixture`, never a hand-rolled `git init` chain: the builder
+    // copies a template rather than forking `git init` (CLOUD-1419 measured 1,819
+    // init processes over one run from exactly that habit), and `fixture-forks`
+    // refuses a new copy of it. `base_commit` also pins `refs/remotes/origin/main`,
+    // which is the ref these rows name — no remote is needed, because what the
+    // identity reads is a REF and a local one resolves identically.
+    common::Fixture::new(name)
+        .config(&format!(
             "version = 1\n\n\
              [[rule]]\nid = \"push-needs-review\"\nkind = \"receipt\"\n\
              scope = \"mediated_call\"\nseverity = \"deny\"\npattern = \"git push\"\n\
@@ -97,19 +100,11 @@ fn fixture(name: &str, key: &str) -> PathBuf {
              scope = \"mediated_call\"\nseverity = \"deny\"\npattern = \"gh pr ready\"\n\
              checks = [\"{RECEIPT}\"]\nkey = \"{key}\"\n{base}\
              reason = \"dispatch the code-review skill\"\n"
-        ),
-    );
-    // `git_in` blanks global and system config for CLOUD-282's reason: a
-    // contributor's own git settings must not change a verdict here.
-    git_in(&dir, &["init", "-q", "-b", "main", "."]);
-    write(&dir, "README.md", "base\n");
-    git_in(&dir, &["add", "-A"]);
-    git_in(&dir, &["commit", "-q", "-m", "base"]);
-    // The base ref the rows name. A real remote is not needed and would be a
-    // network dependency in a gate; what the identity reads is a REF, and a local
-    // one resolves identically.
-    git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    dir
+        ))
+        .file("README.md", "base\n")
+        .git()
+        .base_commit()
+        .build()
 }
 
 /// Commit a code change, so the branch has an identity at all.
