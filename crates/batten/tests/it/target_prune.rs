@@ -488,9 +488,16 @@ fn an_observed_floor_names_the_file_that_holds_it() {
     // written explicitly rather than left to `serde(default)` so the fixture says
     // which KIND of observation it holds — a cost, which is what makes an 8000MB
     // reading refuse against it.
+    //
+    // AND IT MOVED AGAIN (CLOUD-1511), which is this case doing its job a second
+    // time: `2026-09-06.cleanup-is-not-cost` repaired the `spent` arithmetic that
+    // booked a run's own cleanup as the lap's consumption, so every observation
+    // taken under the old spelling is a number whose kind cannot be recovered and
+    // the generation discards them. Same repair as before — the stamp moves, the
+    // assertion does not.
     std::fs::write(
         journal.join("laps.json"),
-        r#"{"taken_by":"2026-09-01.capped-is-capacity","open":null,"ratchet":{"warm":{"mb":9000,"head":"abcd1234","measured":"2026-08-30","capped":false},"cold":null}}"#,
+        r#"{"taken_by":"2026-09-06.cleanup-is-not-cost","open":null,"ratchet":{"warm":{"mb":9000,"head":"abcd1234","measured":"2026-08-30","capped":false},"cold":null}}"#,
     )
     .unwrap();
 
