@@ -783,7 +783,26 @@ shell = "bash -c"
 # either file.
 run = '''
 set -euo pipefail
-drift=$(mise exec pkl -- pkl eval -x 'new Listing {
+# `pkl` SHIPS ITS OWN ROOT BUNDLE AND IGNORES THE SYSTEM TRUST STORE, so in a
+# TLS-intercepting sandbox this resolves the `amends` package over HTTPS and dies
+# with `unable to find valid certification path` — which reads as a drift verdict
+# and is could-not-look. `mem:github-access` records the measurement: of
+# `SSL_CERT_FILE`, `--http-no-proxy` and unsetting `HTTPS_PROXY`, only
+# `--ca-certificates` works. Passed ONLY when the bundle exists, because the flag
+# REPLACES pkl's roots rather than adding to them — so off-sandbox, where there is
+# no bundle and no interception, this stays the bare invocation.
+ca=""
+if [ -n "${BATTEN_CA_BUNDLE:-}" ] && [ -f "${BATTEN_CA_BUNDLE}" ]; then
+	ca="${BATTEN_CA_BUNDLE}"
+elif [ -f /root/.ccr/ca-bundle.crt ]; then
+	ca=/root/.ccr/ca-bundle.crt
+fi
+if [ -n "$ca" ]; then
+	set -- --ca-certificates "$ca"
+else
+	set --
+fi
+drift=$(mise exec pkl -- pkl eval "$@" -x 'new Listing {
   for (name in gate.toMap().filter((k, v) -> v.fix != null && k != "cargo-clippy").keys.toList()) {
     when (!hooks["fix"].steps.containsKey(name)) { "unrouted " + name }
   }
