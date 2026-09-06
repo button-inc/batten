@@ -11237,6 +11237,28 @@ fn recover_spilled(result: &serde_json::Value) -> Option<serde_json::Value> {
     facts::payload_in(&serde_json::from_str(&bytes).ok()?)
 }
 
+/// [`mint_receipts`] reached from the integration tier (CLOUD-1484).
+///
+/// **The boundary itself, never a re-implementation.** The half that WRITES a
+/// receipt and the half that READS it must be shown to agree, and a test that
+/// hand-writes the file proves the reader against an artifact the engine may not
+/// produce — a different key base, separator or authority root leaves the gate
+/// refusing forever with every case green. That is the `with input as` class one
+/// layer over, so the tier calls the real function.
+///
+/// `pub` and named for its caller rather than made generally available: nothing
+/// in the binary reaches it, and the name says who it is for.
+#[doc(hidden)]
+pub fn mint_receipts_for_test(
+    declared: &[crate::mint::Declared],
+    tool: &str,
+    input: &serde_json::Value,
+    result: &serde_json::Value,
+    root: &Path,
+) {
+    mint_receipts(declared, tool, input, result, root, None);
+}
+
 /// Write every receipt these rows mint from one already-unframed result.
 ///
 /// **ONE minting authority, reached from two boundaries** (CLOUD-1264). The
@@ -11265,28 +11287,6 @@ fn recover_spilled(result: &serde_json::Value) -> Option<serde_json::Value> {
 /// authority — [`mcp::payload`] for JSON-RPC content blocks, [`facts::payload_in`]
 /// for the harness envelope. Every failure is silent, as the mint boundary has
 /// always been: the gate that reads the receipt simply denies again.
-/// [`mint_receipts`] reached from the integration tier (CLOUD-1484).
-///
-/// **The boundary itself, never a re-implementation.** The half that WRITES a
-/// receipt and the half that READS it must be shown to agree, and a test that
-/// hand-writes the file proves the reader against an artifact the engine may not
-/// produce — a different key base, separator or authority root leaves the gate
-/// refusing forever with every case green. That is the `with input as` class one
-/// layer over, so the tier calls the real function.
-///
-/// `pub` and named for its caller rather than made generally available: nothing
-/// in the binary reaches it, and the name says who it is for.
-#[doc(hidden)]
-pub fn mint_receipts_for_test(
-    declared: &[crate::mint::Declared],
-    tool: &str,
-    input: &serde_json::Value,
-    result: &serde_json::Value,
-    root: &Path,
-) {
-    mint_receipts(declared, tool, input, result, root, None);
-}
-
 fn mint_receipts(
     declared: &[crate::mint::Declared],
     tool: &str,
@@ -11399,11 +11399,22 @@ fn mint_receipts(
 }
 
 fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
-    // Before the config load, the cheap question first: a post-tool event for a
-    // tool no row names — which is nearly all of them, now that batten is
-    // registered on every surface — must do no config work here. `perf-gate`
-    // holds the mediated path to a ratio, and this is the call that would move it.
-    if envelope.result.is_null() {
+    // Before the config load, the cheap question first: an event that is not the
+    // post-tool one must do no config work here — which is nearly every call, now
+    // that batten is registered on every surface. `perf-gate` holds the mediated
+    // path to a ratio, and this is the call that would move it.
+    //
+    // GATED ON THE EVENT, NEVER ON THE RESULT'S NULLNESS (CLOUD-1484). It was the
+    // latter, which read as the same question and is not: a post-tool event whose
+    // host sent no `tool_response`, or sent `null`, took the early return — so a
+    // row reading nothing FROM the result still minted nothing, and the paragraph
+    // below saying a null result is not an early return was false of the code
+    // immediately above it. For `code-review` that is a gate nothing can clear:
+    // the dispatch happens, no receipt is written, and the refusal names a remedy
+    // that has already been run. `mint_receipts_for_test` cannot see it either,
+    // because the tier enters below this guard — the one seam the compiled cases
+    // do not cross.
+    if envelope.event != hook::Event::PostTool {
         return;
     }
     // THE ENVELOPE IS THE SHAPE. A connector wraps every response in content

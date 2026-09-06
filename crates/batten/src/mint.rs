@@ -645,6 +645,17 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
                 mint.name
             )));
         }
+        // THE SYMMETRIC CASE, which the arm above left silent. A `key_from` on a
+        // row keyed `delta` or `branch` is read by nothing exactly as a `key_base`
+        // on a `named` one is — the same inert declaration, and refusing one while
+        // ignoring the other is the half-coverage this function exists to refuse.
+        if mint.key != MintKey::Named && mint.key_from.is_some() {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[mint]]` `{}` declares a `key_from` and is not keyed `named`, so the \
+                 projection would be read by nothing",
+                mint.name
+            )));
+        }
         // HALF A SELECTOR IS THE DANGEROUS HALF. `selects_at` alone would leave
         // the row minting on every result its tool matched while LOOKING
         // narrowed, which is the reading a reviewer takes from the column's
@@ -739,6 +750,36 @@ mod tests {
         assert!(
             !selects(&row, &serde_json::Value::Null),
             "the dispatch path passes a null input, which must select nothing"
+        );
+    }
+
+    /// A `key_from` on a row keyed otherwise is refused, symmetrically with
+    /// `key_base`.
+    ///
+    /// Fails by: dropping the second arm. The first was landed alone, and the
+    /// asymmetry is the inert-declaration shape `validate` exists to refuse — a
+    /// column read by nothing, loading clean.
+    #[test]
+    fn a_projection_no_key_reads_is_refused_whichever_column_it_is() {
+        let named: Declared = serde_json::from_value(serde_json::json!({
+            "name": "r", "tool": "T", "key": "named", "key_from": "id",
+            "mode": "replace", "body": "{id}",
+        }))
+        .expect("shape loads");
+        assert!(
+            validate(&[named]).is_ok(),
+            "`key_from` on a `named` row is what it is for"
+        );
+
+        let delta: Declared = serde_json::from_value(serde_json::json!({
+            "name": "r", "tool": "T", "key": "delta", "key_base": "origin/main",
+            "key_from": "id", "mode": "replace", "body": "{now}",
+        }))
+        .expect("shape loads");
+        assert!(
+            validate(&[delta]).is_err(),
+            "a `key_from` a `delta` row never reads is the same inert declaration \
+             the `key_base` arm already refuses"
         );
     }
 
