@@ -510,6 +510,121 @@ fn signal_group(pgid: rustix::process::Pid, signal: rustix::process::Signal) {
     let _ = rustix::process::kill_process_group(pgid, signal);
 }
 
+/// Terminate the process group led by `pgid`, reporting whether it was there.
+///
+/// **The reaper's one primitive, and it belongs here rather than beside the
+/// registry that supplies the number** (CLOUD-1148). `task` owns a record store
+/// and its declared edges are `error` and `exit`; a `kill` there would make it a
+/// second authority over process lifetime. This module already owns the group
+/// protocol — [`group_is_empty`] and [`signal_group`] are its own — so the reaper
+/// borrows the primitive and the caller composes the two.
+///
+/// **A GROUP TERM IS A REQUEST, NOT A FACT** — so this verifies and escalates.
+///
+/// The first version of this function sent TERM and returned, on the reasoning
+/// that a `SIGKILL` would deny a cargo or git leaf the chance to remove its
+/// lockfile. That reasoning is plausible and it is WRONG, and the correction is
+/// recorded rather than quietly applied because it is the second time on this
+/// branch that a first-principles argument was made where a measured decision
+/// already existed. `land.sh`'s `reap_residue` is the measured one (CLOUD-434):
+/// a group TERM *"demonstrably missed grandchildren twice in one loaded gate
+/// run, and the survivors held bats' output fd and wedged the whole gate."*
+/// A survivor is not a leaf tidying up; it is the leak, and the escalation is
+/// what closes it.
+///
+/// **Verified with `kill -0 -- -pgid` rather than with a `wait`**, and the
+/// difference matters here in a way it does not for [`Forwarding`]: that path is
+/// waiting on its OWN child and can observe it exit, while this group's leader is
+/// already dead and this process was never its parent, so there is nothing to
+/// reap and no status to collect. Group emptiness is the only observation
+/// available, which is exactly what the shell used.
+///
+/// **AND NO GRACE PERIOD, BECAUSE THERE IS NOTHING TO BE GRACIOUS TO.** The
+/// supervised teardown above polls to a [`GROUP_GRACE`] deadline before
+/// escalating, and copying that here was the second wrong turn on this function:
+/// it bought the delay with a blocking `std::thread::sleep` behind an
+/// `#[expect]`, and a blocking sleep has no sanctioned site in this crate.
+///
+/// The grace exists there to avoid escalating a group that is *mid-exit* — a
+/// child this process just signalled and is actively waiting on. Neither premise
+/// holds here. The group's leader is already dead, this process was never its
+/// parent, and the members have by definition been running unattended since
+/// their parent died. A survivor of that is not tidying up.
+///
+/// So the verification the shell insisted on is kept and the timer is dropped:
+/// [`escalate_group`] is the second half, and the CALLER runs it over the whole
+/// set after signalling all of them. That ordering is what gives a group its
+/// chance to act on the TERM — the walk itself — without a delay standing in for
+/// an exit condition (CLOUD-1177).
+///
+/// Returns `false` for a group that is already empty, an unparseable pgid, or a
+/// platform with no process groups, so a caller counting reaps never counts a
+/// no-op. That count is the whole of what a caller may report (non-negotiable
+/// rule 4): a number and a pgid are pointers, and the command line of whatever
+/// was reaped is not.
+#[cfg(unix)]
+pub(crate) fn terminate_group(pgid: &str) -> bool {
+    let Some(group) = resolve_group(pgid) else {
+        return false;
+    };
+    if group_is_empty(group) {
+        return false;
+    }
+    signal_group(group, rustix::process::Signal::TERM);
+    true
+}
+
+/// The second half: `SIGKILL` a group that did not act on its `SIGTERM`.
+///
+/// **A GROUP TERM IS A REQUEST, NOT A FACT** (CLOUD-434, measured in
+/// `land.sh`'s `reap_residue`): a group TERM *"demonstrably missed grandchildren
+/// twice in one loaded gate run, and the survivors held bats' output fd and
+/// wedged the whole gate."* `kill -0 -- -pgid` is the observation that tells a
+/// request from a fact, and escalation is what closes the gap.
+///
+/// Separate from [`terminate_group`] so a caller signals the whole set before
+/// re-observing any of it. Reporting `true` means a group was still there AFTER
+/// being asked to leave, which is a different fact from the reap itself and is
+/// worth a caller counting separately.
+#[cfg(unix)]
+pub(crate) fn escalate_group(pgid: &str) -> bool {
+    let Some(group) = resolve_group(pgid) else {
+        return false;
+    };
+    if group_is_empty(group) {
+        return false;
+    }
+    signal_group(group, rustix::process::Signal::KILL);
+    true
+}
+
+/// A recorded `pgid` as a group this process may signal.
+///
+/// `0` is refused explicitly rather than by accident: `kill(0, …)` addresses the
+/// CALLER's own group, so reaping a record that carries it would signal the
+/// process doing the reaping.
+#[cfg(unix)]
+fn resolve_group(pgid: &str) -> Option<rustix::process::Pid> {
+    let raw = pgid.parse::<i32>().ok()?;
+    if raw <= 0 {
+        return None;
+    }
+    rustix::process::Pid::from_raw(raw)
+}
+
+/// Windows has no process groups, so there is nothing to reap and nothing to
+/// report — the same stance every other `#[cfg(unix)]` half of this module takes.
+#[cfg(not(unix))]
+pub(crate) fn terminate_group(_pgid: &str) -> bool {
+    false
+}
+
+/// As [`terminate_group`]: no process groups, so nothing to escalate.
+#[cfg(not(unix))]
+pub(crate) fn escalate_group(_pgid: &str) -> bool {
+    false
+}
+
 /// Drain `pipe` into `sink`, accumulating everything that passed through.
 ///
 /// The tee. Chunked rather than read-to-end-then-write so a long-running child's
@@ -2483,6 +2598,61 @@ mod tests {
         assert!(
             body.contains(".env(TASK_PGID_MANAGED_ENV"),
             "and it must tell a nested manager to stand down, in the same call"
+        );
+    }
+
+    /// THE REAPER SIGNALS NOTHING IT CANNOT RESOLVE, and every arm here is a
+    /// refusal rather than a kill (CLOUD-1148).
+    ///
+    /// `terminate_group` is handed a `pgid` read out of a record another process
+    /// wrote, possibly on a previous boot. Each way that string can fail to name
+    /// a live group must return `false` and send no signal — a caller counts the
+    /// `true`s and reports them, so a no-op counted as a reap is a false claim
+    /// that the machine was cleaned.
+    ///
+    /// The `true` arm is deliberately not here: it needs a real group with a real
+    /// member, which is a spawn, and a unit test that spawned one would be
+    /// asserting over `Command` rather than over this function. The compiled tier
+    /// drives it instead.
+    #[cfg(unix)]
+    #[test]
+    fn a_group_that_cannot_be_resolved_is_not_reaped() {
+        assert!(
+            !terminate_group("not-a-number"),
+            "a pgid that will not parse names no group"
+        );
+        assert!(
+            !terminate_group(""),
+            "an entry written before the field existed carries an empty pgid"
+        );
+        assert!(
+            !terminate_group("0"),
+            "0 is the caller's OWN group to `kill`, and reaping it would signal this process"
+        );
+        assert!(
+            !terminate_group("-1"),
+            "a negative pgid is `kill`'s every-process form and must never be resolved"
+        );
+        // Above every assignable pid on Linux, so the group is provably empty
+        // rather than merely unlikely — `ESRCH`, which `group_is_empty` reads.
+        assert!(
+            !terminate_group("4194305"),
+            "an empty group is nothing to reap and must not be counted as one"
+        );
+        // THE ESCALATION HALF TAKES THE SAME REFUSALS, and asserting it
+        // separately is the point: it is a second entry point over the same
+        // `kill`, so a guard added to one and not the other is a live defect
+        // that the first function's cases cannot see.
+        assert!(!escalate_group("not-a-number"));
+        assert!(!escalate_group(""));
+        assert!(
+            !escalate_group("0"),
+            "escalation would `SIGKILL` this process's own group"
+        );
+        assert!(!escalate_group("-1"));
+        assert!(
+            !escalate_group("4194305"),
+            "an empty group did not ignore a term; it is simply gone"
         );
     }
 

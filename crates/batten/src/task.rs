@@ -375,9 +375,33 @@ fn task_alive(program_root: &str, pid: &str, task: &str) -> bool {
 /// are accepted; the trailing space is what stops `land` matching a running
 /// `land-lock`, which is the pid-recycling defence above. A prefix glob would fix
 /// the first case and destroy the second.
+///
+/// # AND A THIRD, BECAUSE THE TASK MAY NO LONGER BE A FILE (CLOUD-1148)
+///
+/// Both spellings above are a PATH under the consumer's program directory, which
+/// silently assumes every task is a shell program. CLOUD-843's campaign is
+/// retiring that layer onto engine verbs, and the moment a task lands as one its
+/// running process stops matching: a lap is `batten land lap main`, and
+/// `/mise-tasks/land ` appears nowhere in it.
+///
+/// **The consequence is not a cosmetic gap in a report.** This predicate is what
+/// `abandoned` asks whether a registrant is still there, so a retired task's LIVE
+/// process reads as a corpse — the reaper would signal the lap that is running,
+/// and `singleton_acquire` would hand a second lap the lock a first one holds.
+/// Measured here as a red test rather than in the field: `land.sh` was deleted by
+/// this branch, and the first version of the reaper would have killed its own
+/// lap on the next start.
+///
+/// `batten` is the crate's own name rather than a consumer's, so writing it here
+/// keeps non-negotiable rule 1 — a grep for a specific consumer's identifiers
+/// still returns nothing. The trailing space does the same work it does above:
+/// `batten land ` matches `batten land lap` and `batten land verify`, which are
+/// both this task, and not a hypothetical `batten land-lock`.
 fn matches_cmdline(program_root: &str, task: &str, cmdline: &str) -> bool {
     let base = format!("/{program_root}/{task}");
-    cmdline.contains(&format!("{base} ")) || cmdline.contains(&format!("{base}.sh "))
+    cmdline.contains(&format!("{base} "))
+        || cmdline.contains(&format!("{base}.sh "))
+        || cmdline.contains(&format!("batten {task} "))
 }
 
 /// `kill -0`: existence and permission, and no signal delivered.
@@ -547,6 +571,57 @@ pub fn alive(git_dir: &Path, options: Alive<'_>) -> Reading {
     } else {
         Reading::Lines(lines)
     }
+}
+
+/// Every registered task whose registrant is GONE, with the group it led.
+///
+/// **The crash-only half of the registry, and the half that was missing**
+/// (CLOUD-1148). [`alive`] already deletes a dead entry's file, which tidies the
+/// STORE — and the store was never the thing that outlived the crash. A task is
+/// registered by the process that leads a group; when the container reaps that
+/// process, or a supervisor TERMs it, the group's other members are reparented
+/// to init and keep running. Deleting the record makes them invisible instead of
+/// dead, which is strictly worse: `alive` then answers "nothing registered" over
+/// a machine with four test suites on it. Measured exactly that way, five laps
+/// deep, on the branch that retired the shell lander.
+///
+/// So this is deliberately a READ that deletes nothing. It hands back the
+/// `pgid` its caller needs to signal, and the caller — which is the only layer
+/// that may reach both this store and a process group — decides. This module
+/// signals nothing itself: its declared edges are `error` and `exit`, and
+/// growing it a `kill` would make the registry a second authority over process
+/// lifetime as well as over its own format.
+///
+/// **`pgid` may be the pid**, per [`Entry`]'s own field doc, and that is safe
+/// rather than lucky: signalling a group led by a pid that no longer exists is
+/// `ESRCH`, which every caller here treats as nothing-to-do.
+///
+/// The liveness question is [`task_alive`]'s, unchanged — pid existence AND a
+/// cmdline that still names the task, because this clone measurably wrapped its
+/// pid space inside 20 minutes (CLOUD-432). An unevaluable corroboration reads as
+/// ALIVE there, so this under-reports rather than over-reports, which is the
+/// direction that cannot kill a working lap.
+#[must_use]
+pub fn abandoned(git_dir: &Path, program_root: &str) -> Vec<Entry> {
+    let dir = state_dir(git_dir);
+    let Ok(listing) = std::fs::read_dir(&dir) else {
+        // Could-not-look reaps nothing, which is the safe direction: a registry
+        // that cannot be read must never license signalling a group it guessed at.
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = listing
+        .filter_map(|found| found.ok().map(|found| found.path()))
+        .filter(|path| path.is_file())
+        .collect();
+    // Sorted for the byte-stability obligation every reader here carries.
+    files.sort();
+    files
+        .iter()
+        .filter_map(|file| std::fs::read_to_string(file).ok())
+        .map(|body| Entry::parse(&body))
+        .filter(Entry::is_complete)
+        .filter(|entry| !task_alive(program_root, &entry.pid, &entry.task))
+        .collect()
 }
 
 /// Write a reading out, as the reader's caller expects to read it.
@@ -833,6 +908,114 @@ pub fn report_claim(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scratch registry. `CARGO_TARGET_TMPDIR` is only defined for integration
+    /// crates, so this derives one the way `rules`'s own unit tests do.
+    fn registry(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join("batten-task-tests").join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        // `assert!` rather than `unwrap`: this module carries no
+        // `clippy::unwrap_used` allowance, and adding one to admit a helper
+        // would widen the lint's posture over every case in it.
+        assert!(
+            std::fs::create_dir_all(&dir).is_ok(),
+            "the scratch registry must be creatable"
+        );
+        dir
+    }
+
+    /// A pid this machine cannot have running.
+    ///
+    /// `/proc/sys/kernel/pid_max` is at most 2^22 on Linux, so this is above
+    /// every assignable number rather than merely unlikely — the environment
+    /// CAN produce the failing condition, which `.claude/rules/rust.md` asks for
+    /// rather than an assertion over a premise nothing established.
+    const NO_SUCH_PID: &str = "4194305";
+
+    /// THE REAPER'S SUBJECT: a registrant that is gone, with its group.
+    ///
+    /// The measured failure this closes (CLOUD-1148): a lap registers, the
+    /// container TERMs it, its `verify` is reparented to init and keeps running,
+    /// and `alive` deletes the record — so the machine has four test suites on it
+    /// and the registry answers "nothing registered". `abandoned` is what hands a
+    /// caller the group to signal.
+    #[test]
+    fn a_dead_registrant_is_abandoned_and_carries_its_group() {
+        let dir = registry("abandoned-reports-the-dead");
+        register(&dir, "land", NO_SUCH_PID, "lap", 100);
+        let found = abandoned(&dir, "mise-tasks");
+        assert_eq!(found.len(), 1, "the dead registrant is reported: {found:?}");
+        assert_eq!(found[0].pid, NO_SUCH_PID);
+        assert!(
+            !found[0].pgid.is_empty(),
+            "the group is what the caller signals, so it must be there: {:?}",
+            found[0]
+        );
+    }
+
+    /// THE OTHER DIRECTION, AND THE ONE THAT WOULD DO THE DAMAGE.
+    ///
+    /// Without it the arm above is satisfied by reporting every entry, and the
+    /// reaper TERMs the lap running right now. It is asserted over the DECISION
+    /// rather than over a live process for this module's own stated reason —
+    /// `matches_cmdline` was split out because a case that spawned one would
+    /// assert its own premise before its conclusion, and `rust.md` requires a
+    /// test be shown able to fail.
+    ///
+    /// Shown able to fail, measured: against the two-spelling predicate this
+    /// branch inherited, the first case here returns `false`, so `abandoned`
+    /// reported a running lap and the reaper would have killed it.
+    #[test]
+    fn a_retired_task_running_as_a_verb_is_still_alive() {
+        assert!(
+            matches_cmdline("mise-tasks", "land", "target/debug/batten land lap main "),
+            "a lap is a verb now, and reading it as a corpse licenses reaping it"
+        );
+        assert!(
+            matches_cmdline(
+                "mise-tasks",
+                "land",
+                "/home/user/batten/target/debug/batten land verify "
+            ),
+            "its children are the same task and must not be reaped either"
+        );
+        // THE SHELL SPELLINGS STAY, because the campaign is mid-flight and most
+        // tasks are still programs. A fix that moved the predicate rather than
+        // widening it would strand every task that has not been retired yet.
+        assert!(matches_cmdline(
+            "mise-tasks",
+            "land",
+            "bash /x/mise-tasks/land "
+        ));
+        assert!(matches_cmdline(
+            "mise-tasks",
+            "land",
+            "bash /x/mise-tasks/land.sh "
+        ));
+        // AND THE PID-RECYCLING DEFENCE SURVIVES THE WIDENING. The trailing space
+        // is what stops `land` matching a neighbour whose name it prefixes; a new
+        // arm that dropped it would reintroduce CLOUD-901 by the third route.
+        assert!(
+            !matches_cmdline("mise-tasks", "land", "target/debug/batten land-lock check "),
+            "`land` must not match `land-lock`, however the task is spelled"
+        );
+        assert!(
+            !matches_cmdline("mise-tasks", "land", "target/debug/batten check "),
+            "an unrelated verb is not this task"
+        );
+    }
+
+    /// A REGISTRY THAT CANNOT BE READ REAPS NOTHING.
+    ///
+    /// The safe direction, and the opposite one from `singleton_acquire`'s: there
+    /// an unreadable lock must not read as free, because two lands start. Here an
+    /// unreadable registry must not license signalling a group nobody resolved,
+    /// because the signal is irreversible and the guess is unfounded.
+    #[test]
+    fn an_unreadable_registry_reaps_nothing() {
+        let dir = registry("abandoned-could-not-look").join("absent");
+        assert!(abandoned(&dir, "mise-tasks").is_empty());
+    }
 
     /// EPERM IS LIFE, AND READING IT AS DEATH IS A FALSE ALLOW.
     ///

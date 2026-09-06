@@ -198,9 +198,31 @@ fn the_async_row_is_live_exactly_while_the_time_feature_is_on() {
 #[test]
 fn every_delay_carries_an_expect_naming_a_bound_that_resolves() {
     // THE PREDICATE THIS ROW IS ABOUT. Every other assertion here is about the
-    // config; this one is about the thirteen annotations the config forced into
-    // existence, and it is what stops the ban being satisfied by thirteen
-    // waivers.
+    // config; this one is about the annotations the config forced into
+    // existence.
+    //
+    // **AND IT IS NOT WHAT STOPS THE BAN BEING SATISFIED BY WAIVERS, WHICH IS
+    // WHAT THIS COMMENT USED TO CLAIM** (CLOUD-1148). Measured 2026-09-06: 11
+    // `#[expect(clippy::disallowed_methods, …)]` stand over 13
+    // `std::thread::sleep` sites, so the ban is waived at essentially every site
+    // it governs — the state the claim said this test prevents.
+    //
+    // The reason it cannot is structural rather than a gap to close here. Every
+    // clause below is a property of the SENTENCE: `expect` not `allow`, a reason
+    // present, a backticked token, that token resolving elsewhere in the file.
+    // None of them asks whether the delay was NECESSARY, because neither clippy
+    // nor a text scan can — so what this decides is whether an author pointed at
+    // something real, which is a proxy for having thought about it. Measured
+    // against the agent that wrote this amendment: it was satisfied in about
+    // thirty seconds by copying the shape of a neighbouring annotation, over a
+    // grace loop that was then found unnecessary and deleted outright. A gate
+    // that certifies a delay which should not exist is estimating, and
+    // non-negotiable rule 3 forbids that.
+    //
+    // What DOES stop a twelfth waiver is `delay-waivers-not-growing` in
+    // `batten.toml` — a ratchet over the COUNT, which is a real object with a
+    // real exit code and no judgement in it. This test keeps its narrower and
+    // honest job: the annotations that exist point at something that resolves.
     //
     // "Names a bound that resolves" is deliberately ONE span rather than all of
     // them: a reason names the exit condition, the interval and often the

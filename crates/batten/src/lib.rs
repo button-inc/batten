@@ -6723,6 +6723,153 @@ const LAPS: u32 = 2;
 /// is a verdict about this repository. `3` the laps ran out with no answer, which
 /// is not a verdict about anything: the branch may be perfectly landable and the
 /// bot merely slow.
+/// The lock and the registration a lap holds, released when it is dropped.
+///
+/// **`Drop` is the honest half of the contract and it is not the whole one.** It
+/// covers every ordinary exit — a landing, a refused gate, a `?` — which is what
+/// the shell's `trap on_exit EXIT` covered. It does NOT run on `SIGKILL`, and it
+/// does not run when the container is reclaimed mid-lap, which in this execution
+/// environment is the common case rather than the exotic one.
+///
+/// That is why the lock is not merely released but RECLAIMABLE: the successor's
+/// `singleton_acquire` decides by liveness — pid existence plus a cmdline that
+/// still names the task — rather than by finding the file gone. A crash leaves a
+/// lock on disk with no process behind it, and that state must resolve itself
+/// without a human. Crash-only means the recovery path is the only path, so this
+/// guard is an optimisation of tidiness, never the mechanism.
+struct LandSingleton {
+    git_dir: PathBuf,
+    pid: String,
+}
+
+impl Drop for LandSingleton {
+    fn drop(&mut self) {
+        task::unregister(&self.git_dir, &self.pid);
+        task::singleton_release(&self.git_dir, LAND_TASK);
+    }
+}
+
+/// The task name the lock and the registry agree on.
+///
+/// One constant rather than two literals: the acquire and the release naming
+/// different strings is a lock nothing ever frees, and it would look exactly like
+/// a lock working.
+const LAND_TASK: &str = "land";
+
+/// Reap what a dead lap left running, then take the lock, then register.
+///
+/// **In that order, and the order is the design.** Reaping first is what makes
+/// the lock's reclaim safe to act on: `singleton_acquire` will hand this process
+/// a lock whose previous holder is gone, and a holder that is gone may still have
+/// left a `verify` — with its cargo build and its test binaries — running under a
+/// group nothing is waiting on. Taking the lock without reaping means the new lap
+/// competes with the old lap's leaves for the same four CPUs, which is the
+/// measured failure this exists to end. The lock would be correct and the machine
+/// would still be wrong.
+///
+/// `Ok(None)` means a live lap holds the lock, or the registry could not be read.
+/// Both refuse, and the second one refuses for `Claim::CouldNotLook`'s own stated
+/// reason: treating unreadable as free is how two lands start.
+///
+/// # Errors
+///
+/// Only for a stream that will not accept output.
+fn run_land_singleton(
+    root: &Path,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Option<LandSingleton>> {
+    let Ok(git_dir) = crate::git::git_dir(root) else {
+        writeln!(
+            err,
+            "::error:: land: not a git repository, so there is no lock to take"
+        )?;
+        return Ok(None);
+    };
+    let pid = std::process::id().to_string();
+
+    // THE REAP. `program_root` is the consumer's fact and reaches the crate as
+    // one, never as a literal (non-negotiable rule 1) — it is what tells a live
+    // task from a recycled pid wearing its number.
+    let program_root =
+        std::env::var("BATTEN_TASK_PROGRAM_ROOT").unwrap_or_else(|_| String::from("mise-tasks"));
+    let abandoned = task::abandoned(&git_dir, &program_root);
+    // TWO PASSES OVER THE WHOLE SET, NEVER A GRACE PERIOD PER GROUP. Signalling
+    // every group before re-observing any of it is what gives each one its
+    // chance to act on the TERM — the walk itself, rather than a delay standing
+    // in for an exit condition (CLOUD-1177). `exec::terminate_group`'s header
+    // carries why a group here gets no grace at all: its leader is already dead,
+    // so a survivor is not a leaf mid-exit.
+    let mut reaped = 0_usize;
+    for entry in &abandoned {
+        if exec::terminate_group(&entry.pgid) {
+            reaped += 1;
+        }
+    }
+    // A GROUP TERM IS A REQUEST, NOT A FACT (CLOUD-434). This is the observation
+    // that tells the two apart, and it is the half `land.sh` had that the port
+    // dropped.
+    let mut escalated = 0_usize;
+    for entry in &abandoned {
+        if exec::escalate_group(&entry.pgid) {
+            escalated += 1;
+        }
+        // Unregistered only now, so a record survives long enough for both
+        // passes to read its group.
+        task::unregister(&git_dir, &entry.pid);
+    }
+    if reaped > 0 {
+        // COUNTS AND NOTHING ELSE (rule 4). What was reaped is somebody's command
+        // line; this reports how many groups went and how many had to be forced,
+        // never what they were running.
+        writeln!(
+            out,
+            "land: reaped {reaped} abandoned task group(s) left by a lap that did not exit; {escalated} ignored the term"
+        )?;
+    }
+
+    // THE LOCK. `recheck` is the pause a reclaim needs between two sightings;
+    // production takes the default, as `singleton_acquire`'s own doc states.
+    match task::singleton_acquire(&git_dir, LAND_TASK, &pid, SINGLETON_RECHECK) {
+        task::Claim::Taken => {}
+        task::Claim::Reclaimed(corpse) => {
+            writeln!(
+                out,
+                "land: reclaimed the landing lock from {corpse}, which is gone"
+            )?;
+        }
+        task::Claim::Held { holder, phase } => {
+            let doing = phase.unwrap_or_else(|| String::from("unknown"));
+            writeln!(
+                err,
+                "::error:: land: a landing already runs here (pid {holder}, {doing}). One lap at a time — `mise run alive` reports it."
+            )?;
+            return Ok(None);
+        }
+        task::Claim::CouldNotLook(path) => {
+            writeln!(
+                err,
+                "::error:: land: the landing lock is unreadable at {}, which is not the same as free",
+                path.display()
+            )?;
+            return Ok(None);
+        }
+    }
+
+    // THE REGISTRATION, so `alive` can answer. After the lock rather than before:
+    // a registration by a process that then loses the race is an entry naming a
+    // lap that never ran.
+    task::register(&git_dir, LAND_TASK, &pid, "lap", boundary_epoch());
+    Ok(Some(LandSingleton { git_dir, pid }))
+}
+
+/// The pause between the two sightings a singleton reclaim requires.
+///
+/// A constant here rather than in `task`, because it is this caller's tolerance
+/// for a holder that took the lock between two reads, and the only other caller
+/// is a test that needs a wider margin than production.
+const SINGLETON_RECHECK: std::time::Duration = std::time::Duration::from_millis(250);
+
 fn run_land_lap(
     root: &Path,
     url: &str,
@@ -6768,6 +6915,27 @@ fn run_land_lap(
     if let Some(code) = run_land_entry_gates(root, branch, out, err)? {
         return Ok(code);
     }
+
+    // THE SINGLETON AND THE REAPER, WHICH THE SENTENCE ABOVE NAMED AND THE PORT
+    // DID NOT CARRY (CLOUD-1148). `land.sh` opened by taking a lock and closed
+    // with `trap on_exit EXIT` / `trap 'exit 1' INT TERM`, and the retirement
+    // ported this driver's STEPS while dropping its LIFECYCLE. Measured on this
+    // branch, five laps deep: one `land lap` and four `land verify` alive at
+    // once, ages 3.7h/3.1h/2.5h/1.9h, four full test suites competing for four
+    // CPUs — a suite that runs in 174s took 6834s and reported a test failure
+    // that was a stopwatch rather than a defect. `mise run alive` said "nothing
+    // registered" throughout, because nothing had registered.
+    //
+    // Three mechanisms already existed and none was reachable from here:
+    // `task::singleton_acquire` (with a liveness-based reclaim),
+    // `task::register` (the reader `alive` answers from), and `exec`'s process
+    // group protocol. This is the wiring, not new machinery.
+    // `_guard`, never `_`: the binding is what holds the lock and the
+    // registration for the rest of this function. A bare `_` drops it here, which
+    // releases the lock at the moment it was taken and reads as working.
+    let Some(_guard) = run_land_singleton(root, out, err)? else {
+        return Ok(ExitCode::Violation);
+    };
 
     // ONE POLL FOR THE WHOLE LANDING, held outside the lap loop so lap 2 onward
     // send the validator lap 1 was given. Rebuilt per lap it was a fresh
