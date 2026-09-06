@@ -405,3 +405,60 @@ EOF
 	run head -20 "$seen"
 	[[ "$output" == *"proxy-placeholder"* ]]
 }
+
+# --- BATTEN_VERSION_FROM_REF: the pin trunk decides (CLOUD-420) ----------------
+#
+# `batten lease guard` runs as the FIRST step of every `pull_request` job, before
+# any checkout, so which batten it runs must be decided by TRUNK and not by the
+# head's own workflow file. `BATTEN_VERSION_FROM_REF` names the ref whose
+# `Cargo.toml` carries that version, and it is the whole of what replaced the
+# fetch-a-script-from-trunk design.
+#
+# UNTESTED FOR ITS WHOLE LIFE UNTIL HERE. Measured 2026-09-06: the variable
+# appeared in `install.sh` and five workflows and in no case anywhere, so the
+# mechanism deciding the version every step-0 guard runs was resting on nobody
+# having mistyped it. Found while composing a rebase conflict across it, which is
+# the wrong moment to discover a behaviour has no test.
+
+# The manifest `BATTEN_VERSION_FROM_REF` reads, at whatever version is asked for.
+manifest_at() {
+	mkdir -p "$FIX/repos/button-inc/batten/contents"
+	printf 'version = "%s"\n' "$1" >"$FIX/repos/button-inc/batten/contents/Cargo.toml"
+}
+
+@test "the version comes from the ref's manifest when one is named" {
+	release_json "$DIGEST"
+	manifest_at 9.9.9
+	BATTEN_VERSION_FROM_REF=main run "$INSTALL"
+	[ "$status" -eq 0 ]
+	# The pinned tag was the one fetched, not `latest` — and both exist in the
+	# fixture, so reaching the right one is a real discrimination.
+	[ "$("$DEST/batten")" = "fixture-batten" ]
+	[[ "$output" != *"has no published release yet"* ]]
+}
+
+@test "a ref naming an unreleased version falls back to the latest release" {
+	# THE ARM THE CI GUARD LIVES ON. release-plz bumps the manifest BEFORE
+	# publishing the tag, so trunk routinely names a version with no release —
+	# and the step-0 guard swallows a failure by design, so a hard stop here
+	# would be silent and every `pull_request` job would run unguarded.
+	release_json "$DIGEST"
+	manifest_at 7.7.7
+	BATTEN_VERSION_FROM_REF=main run "$INSTALL"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"v7.7.7 has no published release yet"* ]]
+	[ "$("$DEST/batten")" = "fixture-batten" ]
+}
+
+@test "an explicitly named version never falls back" {
+	# THE ANTI-VACUITY MIRROR, and it is what keeps the fallback narrow: a caller
+	# who named a version wants that version or an error, so only a ref-derived
+	# pin may retry. Without this the fallback is satisfied by one that retries
+	# for everybody, which would silently install a different binary than asked.
+	release_json "$DIGEST"
+	manifest_at 9.9.9
+	BATTEN_VERSION=v7.7.7 BATTEN_VERSION_FROM_REF=main run "$INSTALL"
+	[ "$status" -ne 0 ]
+	[[ "$output" != *"has no published release yet"* ]]
+	[ ! -e "$DEST/batten" ]
+}
