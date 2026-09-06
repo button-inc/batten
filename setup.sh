@@ -79,15 +79,44 @@ cat >"$MISE_BIN" <<'WRAP'
 #!/usr/bin/env bash
 # mise wrapper: guarantee GitHub reachability behind the agent proxy for EVERY
 # mise call, independent of shell init. See setup.sh for the full rationale.
-for _v in NO_PROXY no_proxy; do
-  _cur="${!_v-}"
-  case ",$_cur," in
-    *,api.github.com,*) ;;
-    *) export "$_v=api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com${_cur:+,$_cur}" ;;
-  esac
-done
-if [[ -n "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]] && [[ -z "${MISE_GITHUB_TOKEN:-}" ]]; then
-  export MISE_GITHUB_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN"
+# BOTH HALVES ARE REQUIRED, AND `NO_PROXY` IS NEITHER OF THEM (CLOUD-1474).
+# Measured 2026-09-06 over `mise ls-remote aqua:EmbarkStudios/cargo-deny`:
+#
+#   as this wrapper shipped (NO_PROXY prepended)       403
+#   + GITHUB_PERSONAL_ACCESS_TOKEN, proxy still on     403
+#   + MISE_GITHUB_TOKEN, proxy still on                403
+#   HTTPS_PROXY unset, no token                        401
+#   HTTPS_PROXY unset + MISE_GITHUB_TOKEN=<pat>        OK, 100 versions
+#
+# `mise` honours HTTPS_PROXY and IGNORES NO_PROXY, so the prepend this replaces
+# was inert for the one program it was written for: every call still went through
+# the proxy, which answers with its own scoped credential and 403s every
+# third-party tool repo. `curl` and `gh` DO read NO_PROXY, which is why testing
+# this by hand with curl looked fine and misled three readings of the failure.
+#
+# The 403 is not a repository-scope verdict and no token widens it, because on
+# that path no token is read at all: through the proxy, our PAT, the ambient
+# GITHUB_TOKEN, a made-up string and no Authorization header all return the same
+# identity and the same 15000/hr limit. Bypassed, our PAT returns 5000 and a 200.
+# 5000-vs-15000 is the discriminator if this ever has to be re-measured.
+#
+# `github.com` is untouched: unsetting here affects only the mise process this
+# wrapper execs, so git keeps its proxy auth to this repo and nothing else in the
+# session is unproxied.
+unset HTTPS_PROXY https_proxy ALL_PROXY all_proxy
+
+# THE TOKEN'S NAME IS THE OTHER HALF THAT WAS WRONG. This read only
+# GITHUB_PERSONAL_ACCESS_TOKEN; the container injects BATTEN_GITHUB_TOKEN. So
+# mise ran unauthenticated with a valid PAT sitting in the environment, and an
+# unproxied unauthenticated call is the plain 401 above. First-set wins, so an
+# explicit MISE_GITHUB_TOKEN — what mise-action sets in CI — is never overwritten.
+if [[ -z "${MISE_GITHUB_TOKEN:-}" ]]; then
+  for _t in GITHUB_PERSONAL_ACCESS_TOKEN BATTEN_GITHUB_TOKEN; do
+    if [[ -n "${!_t-}" ]]; then
+      export MISE_GITHUB_TOKEN="${!_t}"
+      break
+    fi
+  done
 fi
 exec "$HOME/.local/libexec/mise" "$@"
 WRAP
