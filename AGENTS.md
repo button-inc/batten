@@ -148,6 +148,30 @@ command, never on a launcher that returns at once. Gated by `verdict-not-discard
 **committed-and-pushed is the only state surviving a reclaim, and that is the TREE's
 half**: declared work dies too, so **"unsaved?" is `batten doctor session`**.
 
+## A degraded session start repairs itself, and says batten is broken
+
+**`batten startup` reporting a row you did not cause means the SessionStart chain
+did not run — REPAIR IT YOURSELF, FIRST, before any other work.** The handlers in
+`[[hook.handler]]` already do this autonomously (`session-wiring` reaps the
+launcher's hook registrations at the same cadence the launcher writes them), so
+needing to run a repair BY HAND is never the finding — it is evidence the chain
+was skipped, and the skip is the defect. `batten startup --repair` runs the
+declared `repair` for every failing row; a row whose repair the classifier
+refuses is the ONE ask to put to a human (CLOUD-680's shape), never a shrug.
+
+**AND SAY SO, because a manual recovery that goes unreported reads as routine.**
+The measured cause (CLOUD-1474's session, 2026-09-06): the container provisions
+the RELEASED binary, `main` had already landed `[[outcome]]`, and 0.0.144 exits 1
+on `unknown field` — so `session-batten` died, every handler after it silently
+did not run, and `session-wiring` never reaped. The chain is gated behind an
+engine the committed config can outrun, and CLOUD-877's forward-compatibility
+lives in the binary that cannot start. `mise run install:local` is the unblock;
+the report is not optional.
+
+**A gate that detects what it is wired to fix, and waits to be asked, is sensor
+only** — non-negotiable rule 2, one level up. Treat "I had to repair this by
+hand" as a bug report you owe, not a chore you did.
+
 ## Non-negotiable project rules
 
 1. **The core stays repo-agnostic.** No consumer-specific identifiers — account
