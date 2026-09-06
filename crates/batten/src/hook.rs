@@ -7300,6 +7300,194 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
     ))
 }
 
+/// One segment's words, split where the caller wrote a NEWLINE (CLOUD-1287).
+///
+/// # The defect
+///
+/// A newline is whitespace to [`segments`], so a script written across lines is
+/// one segment and `effective_program` resolves the FIRST line's program for the
+/// whole thing. Measured over the shipped binary, one protected path and two
+/// spellings of the same read: `stat -c %s batten.toml` allowed, and the
+/// identical `stat` written on line two after `cd /tmp` REFUSED, naming `cd` —
+/// so a declared `protected_readers` entry is unreachable from any script, which
+/// is the surface `protected_readers` exists for.
+///
+/// That also makes `.claude/rules/policy-modules.md`'s "it under-denies, which
+/// is the sanctioned direction" measurably backwards for this arm: it
+/// OVER-denies, on a read, which is the direction that gets a guard switched
+/// off. The prose is corrected in the same change.
+///
+/// # NARROW ON PURPOSE, and this is the whole of the narrowing
+///
+/// Segment identity is untouched: promoting a newline to a separator in
+/// [`segments`] would change every landed `pipeline` verdict, and `terminator`
+/// is what those rows are decided by. Only the two arms below — the mutation
+/// walk and the unknown-program walk — stop at a line, because both are asking
+/// "which program was handed this operand", a question a line answers and a
+/// segment does not.
+///
+/// # There is still ONE parser
+///
+/// Each line goes back through [`segments`] rather than through a `split` of any
+/// kind. A second tokenizer here is a second AUTHORITY (CLOUD-857), and it would
+/// disagree with the one `shape` and `pipeline` rows are decided by over exactly
+/// the quoting cases neither author had in mind. Re-entering is safe because a
+/// segment's `raw` carries no separator by construction — it is what the parser
+/// split ON — so each line yields at most one sub-segment.
+///
+/// Heredoc bodies are already gone from `raw`, which is what keeps a `rm` inside
+/// a commit message from becoming a line of its own here (CLOUD-723).
+fn line_bounded_words(segment: &Segment) -> Vec<Vec<String>> {
+    line_bounded_units(segment)
+        .into_iter()
+        .map(|(words, _)| words)
+        .collect()
+}
+
+/// The same split, with each line's OWN raw text beside its words.
+///
+/// **A reader that matches a literal needs this rather than
+/// [`line_bounded_words`], and the difference is a false DENY** — the direction
+/// that gets a guard switched off. `Rule::contains` is matched against the text
+/// as written, because what it looks for lives inside a quoted argument and so
+/// is not one of the words. Handed the whole SEGMENT's raw while the program is
+/// resolved per LINE, a row cross-contaminates: `echo origin/main` on line one
+/// and `git rebase --continue` on line two gives line two the program `git` and
+/// the operand `rebase` (flags are dropped), while `origin/main` is found on
+/// line one — so `rebase-not-hand-stepped` would refuse the conflict exit its
+/// own `contains` exists to protect.
+///
+/// The single-line case returns the segment's own raw unchanged, so nothing a
+/// one-line call decides moves. That is what bounds this to the multi-line
+/// shapes that were under-denying (CLOUD-1381, CLOUD-1287).
+fn line_bounded_units(segment: &Segment) -> Vec<(Vec<String>, String)> {
+    // The common case is one line, and it must cost nothing: `batten hook` runs
+    // on every mediated call under CLOUD-689's budget.
+    if !segment.raw.contains('\n') {
+        return vec![(segment.words.clone(), segment.raw.clone())];
+    }
+    joined_lines(&segment.raw)
+        .into_iter()
+        .flat_map(|line| {
+            segments(&line)
+                .into_iter()
+                .map(|parsed| (parsed.words, parsed.raw))
+        })
+        .filter(|(words, _)| !words.is_empty())
+        .collect()
+}
+
+/// `raw`'s lines, with a BACKSLASH CONTINUATION joined back to the line it
+/// continues.
+///
+/// **This is the one shape where a newline is not a boundary**, and getting it
+/// wrong is a bypass rather than a false refusal: `rm \` then the path on the
+/// next line is ONE command to bash, and splitting it hands line one an `rm`
+/// with no operands and line two an operand with no program — so the protected
+/// path is judged by nothing and the write is allowed. Caught in review of the
+/// change that introduced the split, before it could be measured in the field.
+///
+/// An ODD number of trailing backslashes continues; an even number is escaped
+/// backslashes and the line ends. `rm a\\` writes a literal backslash and is a
+/// complete command, so counting rather than testing the last character is what
+/// keeps that from continuing into the next line.
+///
+/// # A NEWLINE INSIDE A QUOTED SPAN IS NOT A BOUNDARY EITHER
+///
+/// **The second shape, and it was missing** (review of #848). A quoted argument
+/// may contain newlines, and they are DATA — the body of a commit message, a
+/// pull request comment, a heredoc-ish string. Splitting there hands the walk
+/// prose as argv, and it broke in both directions at once:
+///
+/// * a FALSE REFUSAL, which is CLOUD-1287's switch-it-off direction —
+///   `git commit -m "fix: thing\n\ngrep crates/batten/src/lib.rs was the check"`
+///   refused as a tool substitution, over a call that runs no `grep`; and
+/// * an EVASION — `gh pr comment 42 --body "please land\n/fast-forward"` was
+///   allowed while the same needle on line one denied, because `Rule::contains`
+///   matches a line's raw and line two's "program" was `/fast-forward"`.
+///
+/// Same fix for both: quoting is tracked across the split, so a newline inside
+/// an unclosed `'` or `"` span joins rather than breaks. That is the same
+/// quote-awareness [`segments`] already applies one level down — this function
+/// was the one place the module split text without it.
+fn joined_lines(raw: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut pending: Option<String> = None;
+    // Carried ACROSS lines, which is the whole of the second shape: a span
+    // opened on one line and closed three lines later joins all of them.
+    let mut quote: Option<char> = None;
+    for line in raw.lines() {
+        let trailing = line.chars().rev().take_while(|c| *c == '\\').count();
+        let opened_in_quote = quote.is_some();
+        quote = quote_after(line, quote);
+        // A line that ENDS inside a quoted span continues, whatever its
+        // backslashes say — the newline is part of the argument.
+        let continues = quote.is_some() || trailing % 2 == 1;
+        // The continuation backslash is shell syntax, not an operand, so it is
+        // dropped rather than carried into the token list where it would read as
+        // a word. A quote-continued line keeps every character, because the
+        // newline it ends on is part of the argument rather than syntax — and
+        // the newline itself is restored, so the reassembled word is what was
+        // written.
+        let body = if quote.is_none() && trailing % 2 == 1 {
+            &line[..line.len() - 1]
+        } else {
+            line
+        };
+        let mut current = pending.take().unwrap_or_default();
+        if opened_in_quote {
+            current.push('\n');
+        }
+        current.push_str(body);
+        if continues {
+            pending = Some(current);
+        } else {
+            out.push(current);
+        }
+    }
+    // A trailing continuation with nothing after it: keep what was collected
+    // rather than dropping the line, which would lose its operands entirely.
+    if let Some(last) = pending {
+        out.push(last);
+    }
+    out
+}
+
+/// The quote span open at the END of `line`, given the one open at its start.
+///
+/// A backslash escapes the next character outside a single-quoted span, which is
+/// where `'` differs from `\"` in every shell: inside `'…'` a backslash is a
+/// literal. Nothing else here needs to know shell grammar — the question is only
+/// *does this line end mid-argument*.
+fn quote_after(line: &str, opening: Option<char>) -> Option<char> {
+    let mut quote = opening;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some('\'') => {
+                if c == '\'' {
+                    quote = None;
+                }
+            }
+            Some(open) => {
+                if c == '\\' {
+                    chars.next();
+                } else if c == open {
+                    quote = None;
+                }
+            }
+            None => {
+                if c == '\\' {
+                    chars.next();
+                } else if c == '\'' || c == '"' {
+                    quote = Some(c);
+                }
+            }
+        }
+    }
+    quote
+}
+
 fn protected_mutation(policy: &Policy, command: &str) -> Decision {
     let crate::facts::Look::Is(parsed) = segments(command) else {
         return Decision::Allow;
@@ -9009,13 +9197,35 @@ fn is_shell_grammar(token: &str) -> bool {
 /// `VAR=value` env prefixes, then look through known wrapper programs so the
 /// wrapped program is judged, not the wrapper. Known wrappers only; anything
 /// unrecognised keeps the fail-open posture.
+///
+/// # EVERY COMPARISON IS ON THE NORMALISED TOKEN, and only the last one was
+///
+/// **CLOUD-1382's one-keystroke bypass survived on the prefix skips** (review of
+/// #848). [`program_token`] was applied to the FINAL program alone, while the
+/// env-assignment, look-through-wrapper and `mise exec` arms each compared the
+/// raw token — so a single leading `(` defeated all three. Measured over the
+/// compiled binary, each bare form denying and its grouped form allowed:
+///
+/// | command                                  | bare | grouped |
+/// | ---------------------------------------- | ---- | ------- |
+/// | `FOO=1 git push --force origin main`     | deny | allowed |
+/// | `nohup mise run ci &`                    | deny | allowed |
+/// | `mise exec -- rm batten.toml`            | deny | allowed |
+///
+/// `(git push --force origin main)` denied correctly the whole time, which is
+/// what hid this: the hole is only where a PREFIX token carries the paren, so
+/// every case anyone thought to try was the one that worked.
+///
+/// The index returned is still an index into the RAW `tokens`, because callers
+/// normalise what they read off it themselves — normalising here is about which
+/// arm is taken, never about what the answer points at.
 fn effective_program(tokens: &[&str]) -> Option<usize> {
     let mut i = 0;
-    while i < tokens.len() && is_env_assignment(tokens[i]) {
+    while i < tokens.len() && is_env_assignment(program_token(tokens[i])) {
         i += 1;
     }
     loop {
-        match *tokens.get(i)? {
+        match program_token(tokens.get(i)?) {
             // SHELL GRAMMAR BEFORE THE PROGRAM (CLOUD-1382), and the guard is
             // half the arm: stepping past requires a further token, so a
             // segment that is only grammar keeps the answer it already had.
@@ -9023,7 +9233,7 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
             // so the prefix skip is repeated rather than done once at the top.
             grammar if is_shell_grammar(grammar) && i + 1 < tokens.len() => {
                 i += 1;
-                while i < tokens.len() && is_env_assignment(tokens[i]) {
+                while i < tokens.len() && is_env_assignment(program_token(tokens[i])) {
                     i += 1;
                 }
             }
@@ -9039,9 +9249,9 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
                 // The wrapper's own flags, env assignments, and bare numeric
                 // arguments (timeout's duration) precede the wrapped program.
                 while i < tokens.len()
-                    && (tokens[i].starts_with('-')
-                        || is_env_assignment(tokens[i])
-                        || tokens[i].starts_with(|c: char| c.is_ascii_digit()))
+                    && (program_token(tokens[i]).starts_with('-')
+                        || is_env_assignment(program_token(tokens[i]))
+                        || program_token(tokens[i]).starts_with(|c: char| c.is_ascii_digit()))
                 {
                     i += 1;
                 }
@@ -9049,8 +9259,8 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
             "mise" => {
                 // Only `mise exec` / `mise x` run another program; `mise run`
                 // names a task, which is the sanctioned surface.
-                match tokens.get(i + 1) {
-                    Some(&("exec" | "x")) => {
+                match tokens.get(i + 1).map(|token| program_token(token)) {
+                    Some("exec" | "x") => {
                         i += 2;
                         // Tool pins (node@22), flags, and the `--` separator
                         // precede the program.
@@ -10611,6 +10821,66 @@ mod tests {
 
     /// The program-only row again, this time carrying the mediator requirement
     /// (CLOUD-271). Same row shape as `program_only_shape_policy`, one key more,
+    /// **A NEWLINE INSIDE A QUOTED SPAN IS NOT A LINE BOUNDARY** (review of
+    /// #848). `line_bounded_units` splits a segment at newlines so each line is
+    /// judged by its OWN program (CLOUD-1287), but a quoted argument may CONTAIN
+    /// newlines — a commit message body, a pull request comment — and splitting
+    /// there hands the walk prose as argv.
+    ///
+    /// Measured in both directions before the fix: a commit whose message body
+    /// had a line beginning `grep <tracked path>` was REFUSED as a tool
+    /// substitution over a call that runs no `grep`, and a `--body` whose
+    /// `/fast-forward` sat on line two was ALLOWED where the same needle on line
+    /// one denied.
+    #[test]
+    fn a_newline_inside_a_quoted_argument_does_not_split_the_line() {
+        let lines = joined_lines("git commit -m \"fix: thing\n\ngrep src/lib.rs\"");
+        assert_eq!(
+            lines.len(),
+            1,
+            "a quoted body is one argument, not three lines: {lines:?}"
+        );
+        assert!(
+            lines[0].contains("grep src/lib.rs"),
+            "and the newline is restored rather than eaten: {lines:?}"
+        );
+    }
+
+    /// THE MIRROR, because a split that never splits is not a split. An
+    /// UNQUOTED newline is still a boundary — that is the whole of CLOUD-1287,
+    /// and without this case the fix above is satisfied by returning the raw
+    /// unchanged.
+    #[test]
+    fn an_unquoted_newline_is_still_a_boundary() {
+        let lines = joined_lines("cd /tmp\nrm batten.toml");
+        assert_eq!(
+            lines,
+            vec!["cd /tmp".to_owned(), "rm batten.toml".to_owned()]
+        );
+    }
+
+    /// AND A SPAN CLOSED ON A LATER LINE ENDS THERE, so the shell that follows
+    /// a multi-line argument is judged rather than swallowed.
+    #[test]
+    fn a_quoted_span_stops_joining_once_it_closes() {
+        let lines = joined_lines("git commit -m \"one\ntwo\"\nrm batten.toml");
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[1], "rm batten.toml");
+    }
+
+    /// A SINGLE-QUOTED SPAN TAKES NO BACKSLASH ESCAPE, which is where `'` and
+    /// `"` differ in every shell — so a trailing backslash inside `'…'` is a
+    /// literal and must not swallow the closing quote.
+    #[test]
+    fn a_backslash_is_literal_inside_a_single_quoted_span() {
+        let lines = joined_lines("echo 'a\\'\nrm batten.toml");
+        assert_eq!(
+            lines.len(),
+            2,
+            "the span closed, so line two stands: {lines:?}"
+        );
+    }
+
     /// so the pair of policies isolates what the key changes.
     fn require_via_policy() -> Policy {
         let mut rule = shape("no-bare-cargo", "cargo", None);

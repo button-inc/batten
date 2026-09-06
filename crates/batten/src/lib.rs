@@ -5773,7 +5773,17 @@ fn admission_anchor(
             // over one subject to recover its fingerprint, which is the same
             // work `check` does and not the mediated boundary's.
             surface: facts::Surface::Check,
-            now: None,
+            // **THE CLOCK, because this is a BOUNDARY and the other three were
+            // given one** (review of #848). `rules::minted_facts` takes the
+            // instant from its caller now and reads `now.unwrap_or(0)`, so a
+            // `None` here makes every receipt look ancient and every
+            // `[[rule.minted]]` `max_age` bound refuse — and this scan is what
+            // resolves an admission's ANCHOR. The mint would then bind against a
+            // finding set `batten check` never produced, over the same tree.
+            // Latent only while no `[[rule.minted]]` row is declared, which is
+            // the same reason the sibling site was called latent and fixed
+            // anyway.
+            now: Some(now_unix()),
         },
     ) else {
         return head();
@@ -8771,7 +8781,18 @@ fn fired(
         err,
         "::error:: land: the ready did not fire, so no run was started; pushing now would wait out the whole count on a matrix that does not exist"
     )?;
-    Ok(ExitCode::Internal)
+    // **`Violation`, NOT `Internal`, because a MUTATION THAT DID NOT FIRE IS NOT
+    // A READ THAT DID NOT ANSWER** (review of #848). `(Step::Ready, Internal)`
+    // laps — that arm was opened for a transient forge READ — and routing a
+    // failed `markPullRequestReadyForReview` through it made a permanent failure
+    // lap instead of stop. A credential without pull-request write scope answers
+    // a GraphQL `errors` array on every attempt, so the driver would re-run the
+    // replay and the whole `verify` gate once per lap, spend `LAND_MAX_LAPS`,
+    // and exit `3` on the same unanswerable state.
+    //
+    // `land::mark_ready`'s own doc states the contract this restores: a failed
+    // ready "is NOT swallowed by its caller … stops before the push".
+    Ok(ExitCode::Violation)
 }
 
 /// Run `$LAND_ENTRY_GATES` over this landing's pull request, once.

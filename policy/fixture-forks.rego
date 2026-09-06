@@ -88,16 +88,31 @@ rules contains "fixture-fork-added"
 # Measured shape: a shallow clone, a detached CI checkout with the base
 # unfetched, or a fork with no `origin/main` — a branch adding a whole file of
 # forked fixtures passes.
-delta := input.tree["base-delta"]
+# **BOUND THROUGH AN OBJECT GUARD, because `null` IS NOT `undefined`** (review
+# of #848). This was a bare `delta := input.tree["base-delta"]` with a
+# could-not-look arm spelled `not input.tree["base-delta"]` — and in Rego only
+# `false` and undefined make `not` hold, so that arm was DEAD for exactly the
+# state it was written for. `spawn-widening.rego` states the rule verbatim for
+# the same fact, in this same branch, and this module was written beside it
+# without reading it.
+delta := d if {
+	d := input.tree["base-delta"]
+	is_object(d)
+}
 
 # THE COULD-NOT-LOOK ARM, which `spawn-widening.rego` carries for the same fact
 # and this did not. A base that will not resolve is reported rather than passed.
+#
+# `not delta` rather than `not input.tree["base-delta"]`: the rule above holds
+# only for an object, so this fires for `null` — the shallow clone, the detached
+# CI checkout with the base unfetched, the fork with no `origin/main` — and for
+# an absent key alike.
 violation contains {
 	"rule": "fixture-fork-added",
 	"verdict": "diff read absent",
 	"subjects": [{"path": "batten.toml"}],
 } if {
-	not input.tree["base-delta"]
+	not delta
 }
 
 # A `[[pattern]]` ROW RATHER THAN AN INLINE LITERAL, and not merely because an
@@ -133,10 +148,25 @@ forks_now(path) := count([index |
 
 # And as the base rev had it. `base-lines` carries the base side of every EDITED
 # path, which is what makes the edited arm a comparison rather than a snapshot.
+# **THE BASE IS BOUND BEFORE IT IS WALKED**, and that is a correctness clause
+# rather than a style (review of #848). A comprehension over an UNDEFINED
+# collection yields the EMPTY SET rather than undefined, so walking
+# `delta["base-lines"][path]` inline answered `0` for a path the engine
+# projected no base side for — an unreadable base blob, a rename the base read
+# did not resolve — and the edited arm below then read `forks_now(path) > 0` as
+# GROWTH and refused a fixture that merely already forked. A false deny on a
+# `deny`-severity row, which is the direction that gets a gate switched off.
+# `spawn-widening.rego` measured this class at 81 of 81 modules refusing.
 forks_at_base(path) := count([index |
-	some index, line in delta["base-lines"][path]
+	some index, line in base_lines(path)
 	regex.match(init_fork, line)
 ])
+
+# Undefined where the delta carries no base side for `path`, which is what makes
+# the arm above undefined too rather than vacuously zero.
+base_lines(path) := lines if {
+	lines := delta["base-lines"][path]
+}
 
 # AN ADDED FIXTURE THAT FORKS. Every matching line is new by construction — the
 # file is absent from base — so each one is a finding with its own pointer.
@@ -344,13 +374,19 @@ test_a_non_rust_path_in_the_suite_is_not_judged if {
 
 # COULD NOT LOOK. A null `base-delta` goes silent rather than reading as an empty
 # diff.
-test_an_unresolvable_base_refuses_nothing if {
-	count(violation) == 0 with input as {"tree": {
+# **COULD-NOT-LOOK IS NOT CLEAN, and this case asserted that it was** (review
+# of #848). It read `count(violation) == 0` over a `null` base — enshrining the
+# dead arm rather than catching it, which is why the module shipped with a
+# could-not-look channel that could not fire.
+test_an_unresolvable_base_reports_rather_than_passing if {
+	some v in violation with input as {"tree": {
 		"base-delta": null,
 		"lines": {},
 		"missing": {},
 	}}
 		with data.batten.patterns as patterns
+
+	v.verdict == "diff read absent"
 }
 
 # AND A SOURCE THAT WOULD NOT PARSE IS A FINDING RATHER THAN A CLEAN TREE.

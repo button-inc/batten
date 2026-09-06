@@ -1350,13 +1350,44 @@ pub fn terms_from_environment() -> Option<Terms> {
     if let Some(beat) = env_secs("LAND_LOCK_HEARTBEAT") {
         resolved.beat = beat;
     }
-    if resolved.beat.saturating_mul(BEATS_PER_TTL) > resolved.ttl {
-        resolved.beat = (resolved.ttl / BEATS_PER_TTL).max(1);
-    }
+    bound_the_relation(&mut resolved);
     if let Ok(reference) = std::env::var("LAND_LOCK_BRANCH") {
         resolved.reference = format!("refs/heads/{reference}");
     }
     Some(resolved)
+}
+
+/// Restore the TTL/beat relation `BEATS_PER_TTL` declares.
+///
+/// **ONE AUTHORITY, because it had two and they were already drifting** (review
+/// of #848). [`terms`] and [`terms_from_environment`] each carried a copy, so a
+/// correction to one silently left the other enforcing the older rule — which is
+/// exactly the shape the clamp itself exists to stop.
+///
+/// # Both halves move, and which one moves is the whole decision
+///
+/// The BEAT moves first: the TTL is the outer bound — how long a dead holder can
+/// wedge the fleet — so an operator who raised it wants it raised, and the beat
+/// is an implementation detail of staying alive inside it.
+///
+/// **But clamping the beat alone cannot restore the relation below
+/// `BEATS_PER_TTL`.** `(ttl / BEATS_PER_TTL).max(1)` is integer division, so
+/// `LAND_LOCK_TTL=1` clamped the beat to `1` and left `1 * 4 > 1` — still
+/// violated, and worse than the case the clamp was written for: the lease
+/// expires at the instant the heartbeat is due, [`Body::expired`] is
+/// `now >= expires`, and a waiter's `expired(now) && held_for >= beat` takes it
+/// from a live holder on every beat.
+///
+/// So the TTL is floored first. A TTL narrower than one beat asks for something
+/// the relation cannot express, and the narrowest that CAN express it is
+/// `BEATS_PER_TTL` seconds.
+fn bound_the_relation(resolved: &mut Terms) {
+    if resolved.ttl < BEATS_PER_TTL {
+        resolved.ttl = BEATS_PER_TTL;
+    }
+    if resolved.beat.saturating_mul(BEATS_PER_TTL) > resolved.ttl {
+        resolved.beat = (resolved.ttl / BEATS_PER_TTL).max(1);
+    }
 }
 
 /// The remote the lease lives on, by configured name.
@@ -1448,9 +1479,7 @@ pub fn terms(root: &Path) -> std::result::Result<Terms, TermsMissing> {
     // HTTP round trip, so a second of latency leaves the lease expired while its
     // holder is alive. That is the same two-landers outcome the measurement above
     // describes, reached by an env var rather than by two.
-    if resolved.beat.saturating_mul(BEATS_PER_TTL) > resolved.ttl {
-        resolved.beat = (resolved.ttl / BEATS_PER_TTL).max(1);
-    }
+    bound_the_relation(&mut resolved);
     if let Ok(reference) = std::env::var("LAND_LOCK_BRANCH") {
         resolved.reference = format!("refs/heads/{reference}");
     }

@@ -201,6 +201,24 @@ impl Answer {
     pub const fn is_reading(&self) -> bool {
         self.status == 200
     }
+
+    /// Did the server answer NORMALLY — a reading, or a not-modified?
+    ///
+    /// **The sibling of [`Answer::is_reading`], and the distinction is what a
+    /// RATE-LIMIT WINDOW turns on** (review of #848). A conditional poll's
+    /// ordinary success is `304`, which `is_reading` deliberately excludes
+    /// because it carries no body to read. But a `304` is still the forge
+    /// answering rather than refusing, so it retires a `Retry-After` the way a
+    /// `200` does — and a poll that retired the window only on `200` re-armed a
+    /// stale one on every unchanged answer and wedged itself for the rest of the
+    /// run.
+    ///
+    /// So: `is_reading` asks *did I get a body*, and this asks *did the server
+    /// serve me*. Two questions, and the same status separates them differently.
+    #[must_use]
+    pub const fn answered(&self) -> bool {
+        self.status == 200 || self.status == 304
+    }
 }
 
 /// One GET against the REST tier, or `None` where it could not be reached.

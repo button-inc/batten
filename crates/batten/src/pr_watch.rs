@@ -322,8 +322,16 @@ impl Poll {
             self.runs = runs_from_body(&answer.body);
             self.signature = signature(&answer.body);
         }
-        // A reading retires the window; anything else may extend it.
-        self.backoff = if answer.is_reading() {
+        // **A NORMAL ANSWER RETIRES THE WINDOW, AND `304` IS ONE** (review of
+        // #848). This read `is_reading()`, which is `200` alone — but the
+        // ordinary success of a CONDITIONAL poll is `304`, so every unchanged
+        // answer took the `else` arm and re-armed the window it was supposed to
+        // retire. Measured shape: a `403` with a 50-minute reset sets 3000s; the
+        // window then reopens, the runs have not changed, the forge answers
+        // `304`, and `None.or(Some(3000))` sleeps another 50 minutes — for the
+        // rest of an unbounded `watch()`, holding the landing lease throughout.
+        // That is strictly worse than the over-polling the retention fixed.
+        self.backoff = if answer.answered() {
             None
         } else {
             answer.backoff.or(self.backoff)

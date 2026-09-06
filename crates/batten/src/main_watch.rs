@@ -152,8 +152,10 @@ impl Poll {
         if answer.is_reading() {
             self.head = head_from_body(&answer.body);
         }
-        // A reading retires the window; anything else may extend it.
-        self.backoff = if answer.is_reading() {
+        // A NORMAL answer retires the window, and `304` is one —
+        // `crate::pr_watch::Poll::absorb` carries the measurement, and reading
+        // `is_reading()` here would wedge this poll the same way.
+        self.backoff = if answer.answered() {
             None
         } else {
             answer.backoff.or(self.backoff)
