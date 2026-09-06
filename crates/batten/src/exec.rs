@@ -1452,6 +1452,52 @@ pub(crate) fn piped(
     ))
 }
 
+/// Start `program` with `args` and **do not wait** (CLOUD-1480).
+///
+/// `piped`'s opposite number, and the pair is the whole of this module's
+/// contract: `piped` runs a child for its ANSWER, this one runs a child because
+/// the work must outlive the caller. A mediated boundary has a per-call budget
+/// the work cannot fit in, so it starts the child and returns; waiting is the
+/// defect the caller exists to remove, which is why nothing here is returned to
+/// wait on.
+///
+/// Placed HERE rather than at the caller for `spawn-adapters`' reason: `lib.rs`
+/// is not on that table and the table's own comment refuses to put it there,
+/// because placing the CLI dispatch would admit every future spawn in the
+/// crate's largest file at once. The caller composes the argv — which flags mean
+/// what is its business — and this module owns the process.
+///
+/// `env` is applied after the inherited environment, so a caller marks the child
+/// without reaching for a second mechanism.
+///
+/// Silent: no `Result`, because there is no caller that could act on the
+/// difference. A boundary that cannot start its own background work must not
+/// turn that into a verdict about the call it was mediating.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: the detached child IS the point (CLOUD-1480). `piped` above is the waiting path and is exactly what this must not be; both spawns are the placed adapter's"
+)]
+pub(crate) fn detached(program: &Path, args: &[String], env: &[(&str, &str)]) {
+    let mut builder = Command::new(program.as_os_str());
+    builder
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for (name, value) in env {
+        builder.env(name, value);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        // Its own group, so a harness reaping the caller's group does not take
+        // this child with it.
+        builder.process_group(0);
+    }
+    // SPAWNED AND DROPPED. No `wait`, no `status`, no handle kept.
+    drop(builder.spawn());
+}
+
 /// This process's next dispatch number, for the live-capture key.
 ///
 /// The key has to name a *run*, not just a command: through the CLI there is

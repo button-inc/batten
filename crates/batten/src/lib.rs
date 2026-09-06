@@ -1112,6 +1112,104 @@ const DRAIN_MARKER: &str = "BATTEN_STATE_DRAIN";
 /// store it guards.
 const DRAIN_LOCK: &str = "batten-state-record.lock";
 
+/// Take the store's write lock, answering whether this caller may write.
+///
+/// # Who may block, and getting it wrong cost 100s
+///
+/// The first version keyed only on [`DRAIN_MARKER`], so the SYNCHRONOUS
+/// in-process call took the blocking branch and waited for the drain the
+/// previous turn had spawned — the hook serialised behind the very scan
+/// detaching it was meant to escape. Measured at 99–124s, worse than before the
+/// fix.
+///
+/// The SURFACE is the predicate, because it is the one that already means
+/// "there is a per-call budget here": [`facts::Surface::Hook`] must never wait,
+/// and a drain must not either, since nobody reads its verdict. Only the VERB
+/// blocks, because a human ran it and a record it did not write must not be
+/// reported as one.
+///
+/// # And the caller takes it AFTER its reads, not before
+///
+/// Held across the tree scan — a pure read, and the ~118s one — the contended
+/// window is longer than a turn, so the mediated path loses `try_lock` on most
+/// turns and mints nothing, silencing the nudge
+/// `stop_posture::the_first_turn_on_a_fresh_claim_still_speaks` pins. Two
+/// readers racing settle nothing; only the writes need one writer, and scoping
+/// the lock to them is what makes losing it rare rather than usual.
+///
+/// # Errors
+///
+/// Propagates a blocking `lock` that fails outright. A contended `try_lock` is
+/// `Ok(false)`, never an error: losing a race is an answer.
+fn take_write_lock(lock: &std::fs::File, surface: facts::Surface) -> Result<bool> {
+    let may_block =
+        !matches!(surface, facts::Surface::Hook) && std::env::var_os(DRAIN_MARKER).is_none();
+    if may_block {
+        fs4::FileExt::lock(lock)?;
+        return Ok(true);
+    }
+    Ok(fs4::FileExt::try_lock(lock).is_ok())
+}
+
+/// Say which rules did not look, so a clean-looking record is not a false green.
+///
+/// Never silent: a rule that did not evaluate must say so. The COUNT carries
+/// that on the default rung and the ids ride [`Verbosity::Verbose`] — this fires
+/// at every turn end, and sixteen rule ids on every one is how a line stops
+/// being read (`stop-guard`'s own lesson about spending a channel). Ids are the
+/// config author's own tokens rather than content, so the higher rung is a noise
+/// decision, not a non-negotiable-rule-4 one.
+///
+/// # Errors
+///
+/// Propagates a failure to write to `err`.
+fn report_withheld(scan: &rules::Scan, mode: Mode, err: &mut dyn Write) -> Result<()> {
+    if scan.not_evaluated.is_empty() {
+        return Ok(());
+    }
+    let withheld: Vec<&str> = scan.not_evaluated.keys().map(String::as_str).collect();
+    output::message(
+        mode,
+        Verbosity::Normal,
+        err,
+        &format!(
+            "state record: {} rule(s) not evaluated, their findings held",
+            withheld.len()
+        ),
+    )?;
+    output::message(
+        mode,
+        Verbosity::Verbose,
+        err,
+        &format!("state record: not evaluated: {}", withheld.join(", ")),
+    )?;
+    Ok(())
+}
+
+/// Drop the instances of refs that no longer exist, and say how many.
+///
+/// Ref-death GC rides the record verb: the live set is what exists NOW, so a
+/// branch deleted since the last record loses its instances here.
+///
+/// When anything was dropped this also starts a new generation — GC's half of
+/// the cursor handshake, so every outstanding drain cursor resyncs instead of
+/// computing a delta against records that are gone.
+///
+/// # Errors
+///
+/// Propagates a failure to read the repository's refs or to write the store.
+fn collect_dead_refs(repo: &Path, store_dir: &Path) -> Result<usize> {
+    let live = git::refs(repo)?
+        .into_iter()
+        .map(findings::Context::new)
+        .collect();
+    let dropped = findings::gc(store_dir, &live)?;
+    if dropped > 0 {
+        journal::new_generation(store_dir)?;
+    }
+    Ok(dropped)
+}
+
 fn run_state_record(
     overrides: &Overrides,
     mode: Mode,
@@ -1221,61 +1319,16 @@ fn run_state_record(
             ..rules::Scan::default()
         }
     };
-    if !scan.not_evaluated.is_empty() {
-        // Never silent: a rule that did not look must say so, or a clean-looking
-        // record is the false green. The COUNT carries that on the default rung
-        // and the ids ride `Verbose` — this fires at every turn end, and sixteen
-        // rule ids on every one is how a line stops being read (`stop-guard`'s
-        // own lesson about spending a channel). Ids are the config author's own
-        // tokens rather than content, so the higher rung is a noise decision,
-        // not a rule-4 one.
-        let withheld: Vec<&str> = scan.not_evaluated.keys().map(String::as_str).collect();
-        output::message(
-            mode,
-            Verbosity::Normal,
-            err,
-            &format!(
-                "state record: {} rule(s) not evaluated, their findings held",
-                withheld.len()
-            ),
-        )?;
-        output::message(
-            mode,
-            Verbosity::Verbose,
-            err,
-            &format!("state record: not evaluated: {}", withheld.join(", ")),
-        )?;
-    }
+    report_withheld(&scan, mode, err)?;
 
-    // THE LOCK IS TAKEN HERE, NOT ABOVE THE SCAN, and the scope is the whole
-    // point. Everything between the top of this function and this line is a
-    // READ — git refs, config resolution, the rule scan — and the scan is what
-    // takes ~118s. Holding the lock across it made the contended window longer
-    // than a turn, so the mediated path lost `try_lock` on most turns and
-    // returned before minting anything, silencing the nudge that
-    // `stop_posture::the_first_turn_on_a_fresh_claim_still_speaks` pins. Two
-    // readers racing settle nothing; only the writes below need one writer, and
-    // scoping the lock to them is what makes losing it rare rather than usual.
-    //
-    // WHO MAY BLOCK, and getting it wrong cost 100s. The first version keyed
-    // only on the drain marker, so the SYNCHRONOUS in-process call took the
-    // blocking branch and waited for the drain the previous turn had spawned —
-    // the hook serialised behind the very scan detaching it was meant to escape.
-    // Measured at 99-124s, worse than before the fix. The surface is the
-    // predicate, because it is the one that already means "there is a per-call
-    // budget here": `Surface::Hook` must never wait, and the drain must not
-    // either, since nobody reads its verdict. Only the VERB blocks, because a
-    // human ran it and a record it did not write must not be reported as one.
-    let may_block =
-        !matches!(surface, facts::Surface::Hook) && std::env::var_os(DRAIN_MARKER).is_none();
-    if may_block {
-        fs4::FileExt::lock(&lock)?;
-    } else if fs4::FileExt::try_lock(&lock).is_err() {
-        // Someone else holds the write phase. REPORTED, never silent: this turn
-        // mints nothing, so the nudge ladder reads a store this call did not
-        // advance, and a reader owed an explanation for the silence gets one —
-        // the same `persisted:false` reading the degraded-store arm below gives
-        // for the other reason a record does not happen.
+    // THE WRITE PHASE STARTS HERE, and so does the lock. Everything above is a
+    // READ, so nothing above needs one writer.
+    if !take_write_lock(&lock, surface)? {
+        // Someone else holds it. REPORTED, never silent: this turn mints
+        // nothing, so the nudge ladder reads a store this call did not advance,
+        // and a reader owed an explanation for the silence gets one — the same
+        // `persisted:false` reading the degraded-store arm below gives for the
+        // other reason a record does not happen.
         writeln!(
             err,
             "batten: state record {context}: another writer holds the store; persisted:false"
@@ -1345,19 +1398,7 @@ fn run_state_record(
         )?;
     }
 
-    // Ref-death GC rides the same verb: the live set is what exists now, so a
-    // branch deleted since the last record loses its instances here.
-    let live = git::refs(&repo)?
-        .into_iter()
-        .map(findings::Context::new)
-        .collect();
-    let dropped = findings::gc(&bound.dir, &live)?;
-    if dropped > 0 {
-        // GC's half of the cursor handshake: a new generation, so every
-        // outstanding drain cursor resyncs instead of computing a delta against
-        // records that are gone.
-        journal::new_generation(&bound.dir)?;
-    }
+    let dropped = collect_dead_refs(&repo, &bound.dir)?;
 
     // The session's durable resume point (CLOUD-83), recorded LAST so the stored
     // cursor names the generation this run finished in — a GC above may have
@@ -10693,7 +10734,7 @@ const UNLANDED_BYPASS: &str = "BATTEN_UNLANDED_CHECK_BYPASS";
 /// on a large tree, so turns ending inside that window would otherwise overlap,
 /// and `findings::record` is an unlocked read/modify/write over a store whose
 /// journal shards declare exactly one writer. Two appenders interleave inside a
-/// single `writeln!` — O_APPEND is not one syscall for a multi-write format — so
+/// single `writeln!` — `O_APPEND` is not one syscall for a multi-write format — so
 /// the failure is malformed JSONL that `read_shards` silently drops, plus lost
 /// dispositions where a settled finding reopens. The lock lives in the CHILD
 /// because the parent must not wait to find out whether it won.
@@ -10728,50 +10769,41 @@ fn record_state(overrides: &Overrides) {
         // not turn that into a verdict about the turn.
         return;
     };
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: the drain IS the spawn (CLOUD-1480). The record cannot run inside a 100ms mediated budget, so the boundary starts it and returns; `exec::piped` is the waiting path and is exactly what must not happen here"
-    )]
-    let mut builder = std::process::Command::new(exe);
-    builder
-        .args(["state", "record"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
     // THE OVERRIDES THIS CALL WAS MADE UNDER, forwarded as the flags they came
     // from. Reconstructed rather than serialised: the child parses the same clap
     // surface, so a flag is the one spelling both ends already agree on.
+    let mut args = vec!["state".to_owned(), "record".to_owned()];
     if let Some(strictness) = overrides.strictness {
         // clap's own token for the variant, never a second spelling: the child
         // parses this back through the same `ValueEnum`, so the two ends cannot
         // disagree about what `strict` means.
         if let Some(value) = clap::ValueEnum::to_possible_value(&strictness) {
-            builder.args(["--strictness", value.get_name()]);
+            args.push("--strictness".to_owned());
+            args.push(value.get_name().to_owned());
         }
     }
     if overrides.fail_on_warning {
-        builder.arg("--fail-on-warning");
+        args.push("--fail-on-warning".to_owned());
     }
     if let Some(reference) = overrides.config_from.as_deref() {
-        builder.args(["--config-from", reference]);
+        args.push("--config-from".to_owned());
+        args.push(reference.to_owned());
     }
     if let Some(dir) = overrides.config_in.as_deref() {
-        builder.args(["--config-in", dir]);
+        args.push("--config-in".to_owned());
+        args.push(dir.to_owned());
     }
+    // THE SPAWN IS `exec`'s, NOT THIS FILE'S. `spawn-adapters` places the
+    // child-process boundary in `exec` and its table's own comment refuses to
+    // place `lib`, because admitting the CLI dispatch would admit every future
+    // spawn in the crate's largest file at once. This composes the argv — which
+    // flag means what is this module's business — and `exec::detached` owns the
+    // process, including the group it is put in.
+    //
     // The marker the child reads to know it is a drain rather than the verb: a
     // drain that loses the race exits quietly, where the verb a human ran must
     // wait its turn and do the work.
-    builder.env(DRAIN_MARKER, "1");
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-        // Its own group, so the harness reaping this hook's group does not take
-        // the drain with it.
-        builder.process_group(0);
-    }
-    // SPAWNED AND DROPPED. No `wait`, no `status`, no handle kept: waiting is
-    // the defect this function exists to remove.
-    drop(builder.spawn());
+    exec::detached(&exe, &args, &[(DRAIN_MARKER, "1")]);
 }
 
 /// The `completion.unlanded` verdict for this branch, or nothing (CLOUD-1163).

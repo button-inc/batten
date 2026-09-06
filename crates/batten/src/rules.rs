@@ -6461,29 +6461,7 @@ fn run(
     // The one acquisition of the `Cost::Effect` fact (CLOUD-760), beside the git
     // family and for the same reason: a projection must not spawn, so the spend
     // happens once here and only when a row declared it.
-    // THE TWO `Cost::Effect` FACTS, AND THE SURFACE IS THE OTHER HALF OF THE
-    // GUARD (CLOUD-1480). Declaration alone was never enough: `Fact::Symbols`
-    // is classed `Cost::Effect` x `Surface::Check`, and `Surface::Check` names
-    // the NARROWEST surface it may be resolved on — so resolving it from the
-    // read-effect surface contradicts the class the fact already carries.
-    //
-    // COULD-NOT-LOOK, AND NOT `IsNot`. The two are different claims and this
-    // comment endorsed the wrong one for a revision: `IsNot` says the question
-    // was asked and the answer is no, which about a crate nobody analysed is a
-    // measured nothing. The surface could not ask, so `CouldNotLook` is the arm.
-    // Both project `null` today, which is exactly why the distinction has to be
-    // right in the code rather than in whichever arm happens to render the same.
-    let effects_admitted = |class: crate::facts::Class| class.resolvable_on(surface);
-    let symbols = if effects_admitted(crate::facts::Fact::Symbols.class()) {
-        symbols_fact(rules, root)
-    } else {
-        crate::facts::Look::CouldNotLook
-    };
-    let review = if effects_admitted(crate::facts::Fact::Review.class()) {
-        review_fact(rules, root)
-    } else {
-        crate::facts::Look::CouldNotLook
-    };
+    let (symbols, review) = effect_facts(rules, root, surface);
     // THE OUT-OF-ROOT FILES (CLOUD-1167), acquired once for the whole run beside
     // the families above and, like every one of them, ONLY FOR WHAT A ROW
     // DECLARED. A ruleset naming no `[[rule.external]]` reads no environment
@@ -8604,6 +8582,48 @@ fn captured_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, serde_
 /// The `Look` is carried rather than unwrapped: a missing analyser is
 /// could-not-look, and a projection that turned it into an empty site list would
 /// report a crate with no spawns at all.
+/// The two `Cost::Effect` facts, resolved only where the SURFACE admits them.
+///
+/// # The surface is the other half of the guard (CLOUD-1480)
+///
+/// Declaration alone was never enough. [`crate::facts::Fact::Symbols`] is
+/// classed `Cost::Effect` × `Surface::Check`, and `Surface::Check` names the
+/// NARROWEST surface it may be resolved on — so resolving it from a narrower
+/// one contradicts the class the fact already carries. The predicate is
+/// [`crate::facts::Class::resolvable_on`], which already existed; an earlier
+/// revision of this guard read a private DISPATCH enum instead and disabled
+/// both facts on a read surface their own class admits.
+///
+/// # Could-not-look, and not `IsNot`
+///
+/// The two are different claims and this rationale endorsed the wrong one for a
+/// revision: `IsNot` says the question was asked and the answer is no, which
+/// about a crate nobody analysed is a measured nothing. The surface could not
+/// ask, so [`crate::facts::Look::CouldNotLook`] is the arm. Both project `null`
+/// today, which is exactly why the distinction has to be right here rather than
+/// in whichever arm happens to render the same.
+fn effect_facts(
+    rules: &[Rule],
+    root: &Path,
+    surface: crate::facts::Surface,
+) -> (
+    crate::facts::Look<crate::symbols::Resolved>,
+    crate::facts::Look<std::collections::BTreeMap<String, crate::review::Record>>,
+) {
+    let admitted = |class: crate::facts::Class| class.resolvable_on(surface);
+    let symbols = if admitted(crate::facts::Fact::Symbols.class()) {
+        symbols_fact(rules, root)
+    } else {
+        crate::facts::Look::CouldNotLook
+    };
+    let review = if admitted(crate::facts::Fact::Review.class()) {
+        review_fact(rules, root)
+    } else {
+        crate::facts::Look::CouldNotLook
+    };
+    (symbols, review)
+}
+
 fn symbols_fact(rules: &[Rule], root: &Path) -> crate::facts::Look<crate::symbols::Resolved> {
     if !rules.iter().any(|rule| rule.symbols) {
         // Nothing asked, so nothing is spent — and the projection below emits
