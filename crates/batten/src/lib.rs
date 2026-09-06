@@ -804,6 +804,10 @@ fn run_baseline(
         rules::RunOptions {
             checks: policy::ModuleChecks::Run,
             scope: &rules::Scope::Tree,
+            // A TREE walk, so the read surface — the same answer the sibling
+            // site upstream gives, and for its reason: this is what `check`
+            // does rather than the mediated boundary.
+            surface: facts::Surface::Check,
             now: Some(now_unix()),
         },
     )?;
@@ -8339,9 +8343,34 @@ fn run_land_verify(
         // exact failure. What this arm adds is not the output but the READING:
         // which of three refusals it was, because the advice differs and two of
         // the three were previously told the wrong thing.
+        // MAIN MOVED, WHICH IS THE LOOP WORKING (CLOUD-318). Reported and coded
+        // apart from every other refusal, because it is not one: the gate is
+        // saying the run raced trunk, `mise.toml` declares that `land` reads this
+        // as "lap", and the next replay is the whole remedy. `Internal` rather
+        // than `Violation` is what carries it — `progress`'s table already laps a
+        // could-not-look from `Verify`'s neighbours for the same reason, and a
+        // `2` here would land in the cell that stops.
+        //
+        // It writes no "refused by the configured gate" line either. That
+        // sentence is true of a verdict about this tree and false of this, and it
+        // is what an operator reads before deciding to go looking for a defect.
+        land::Verified::Refused {
+            sha,
+            cause: land::Refusal::Moved,
+        } => {
+            writeln!(
+                out,
+                "land: main moved under {}, so this lap's gate raced it; replaying onto the new trunk",
+                short(&sha)
+            )?;
+            Ok(ExitCode::Internal)
+        }
         land::Verified::Refused { sha, cause } => {
             writeln!(out, "land: {sha} was refused by the configured gate")?;
             match cause {
+                // Handled above: it is not a refusal about anything and never
+                // reaches this reader.
+                land::Refusal::Moved => {}
                 // NOT THIS BRANCH'S DOING, so none of the tree advice applies.
                 // The remedy is the consumer's own words from the row that
                 // matched; this engine knows there was a match and nothing about
@@ -13932,6 +13961,10 @@ fn filed_here_pointers(
         rules::RunOptions {
             checks: policy::ModuleChecks::Run,
             scope: &rules::Scope::Tree,
+            // A TREE walk, so the read surface — the same answer the sibling
+            // site upstream gives, and for its reason: this is what `check`
+            // does rather than the mediated boundary.
+            surface: facts::Surface::Check,
             now: Some(now_unix()),
         },
     )

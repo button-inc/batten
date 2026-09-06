@@ -833,6 +833,25 @@ pub enum Refusal {
     /// The gate refused about this tree. The ordinary case, and the one whose
     /// advice was always right.
     Tree,
+    /// **`main` MOVED UNDER THE RUN, WHICH LAPS RATHER THAN STOPPING**
+    /// (CLOUD-318, and the port did not carry it).
+    ///
+    /// `verify` reserves exit `2` for exactly this and says so on its own error
+    /// line — *"main moved under this branch — rebase and verify again, there is
+    /// nothing here to fix"* — and `mise.toml` states the other half of the
+    /// contract in as many words: *"`land` reads a 2 from `verify` as 'main moved
+    /// under the run, lap'"*. The engine read it as [`Self::Tree`], because every
+    /// non-zero fell through to the pattern scan and an empty scan is `Tree`.
+    ///
+    /// So the one refusal class the predecessor measured as SELF-HEALING became
+    /// the loop's hardest stop, and it stopped with the advice for a defect the
+    /// branch does not have. Measured on #240 before the port: run 1 died here,
+    /// run 2 landed in three laps with zero edits between them.
+    ///
+    /// It carries no remedy because there is nothing for an operator to do — the
+    /// next lap's replay IS the remedy, which is what makes this a lap rather
+    /// than a stop.
+    Moved,
     /// The gate died of something that is not this branch's doing, matching a
     /// declared `[[verify_environment_pattern]]`.
     Environment {
@@ -963,6 +982,17 @@ pub fn verify(
         // Everything else reaches the pattern scan exactly as before, so a
         // declared row still classifies a `1` or a `2` that names a
         // disk-full or a rate limit.
+        // EXIT 2 IS "MAIN MOVED", AND IT IS READ BEFORE THE PATTERNS FOR THE SAME
+        // REASON THE THREE BELOW ARE (CLOUD-318). `verify` reserves this code for
+        // that one verdict and `mise.toml` declares both halves of the contract;
+        // reaching the pattern scan meant an empty scan classified it `Tree`, so
+        // the self-healing class became the loop's hardest stop. A consumer
+        // cannot be asked to write a pattern for it either — the remedy is a lap,
+        // not a message.
+        Ok((2, _)) => Verified::Refused {
+            sha: head,
+            cause: Refusal::Moved,
+        },
         Ok((code, _)) if matches!(code, 3 | 126 | 127) => Verified::Refused {
             sha: head,
             cause: Refusal::Environment {
