@@ -2241,7 +2241,6 @@ mod tests {
     /// rename-over remedy is what both want, and asserting the Unix mechanism
     /// is honest about which one is being shown.
     ///
-
     /// `fs::write` truncates in place and the kernel refuses that for a file
     /// some process is EXECUTING — `ETXTBSY`. The thing on `PATH` is exactly
     /// what a session runs, so a busy target is the ORDINARY case here. It was
