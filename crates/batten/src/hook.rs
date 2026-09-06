@@ -8271,6 +8271,104 @@ fn flatten(node: &rable::Node, source: &str, after: Option<Separator>, out: &mut
     flatten_in(node, source, after, None, out);
 }
 
+/// One command's words AS WRITTEN, which is not what the parse files them under.
+///
+/// AN ENV ASSIGNMENT PREFIX IS A WORD HERE, and dropping it is an under-deny
+/// rather than a tidier shape. `effective_program` steps past `VAR=value` to find
+/// the program, and `hook_skip_local` reads the assignment itself —
+/// `HK_SKIP_STEPS=… git commit` is refused BECAUSE of the prefix. The parser
+/// files those under `assignments`, correctly for a grammar and wrongly for this
+/// consumer, so they go back at the front where they were written.
+///
+/// A REDIRECTION'S TOKENS ARE STILL WORDS, and restoring them is not cosmetic:
+/// `protected_mutation` reads a redirect TARGET as a mutation candidate with no
+/// program at all, so `rm > guarded.md` is judged on the target. The parser moves
+/// those tokens out of `words` and into `redirects`, which is again right for a
+/// grammar and wrong here — dropping them was an under-deny on a WRITE, measured
+/// by `a_redirect_target_is_a_mutation_even_with_no_program`.
+fn command_words(
+    assignments: &[rable::Node],
+    words: &[rable::Node],
+    redirects: &[rable::Node],
+    source: &str,
+) -> Vec<String> {
+    let mut spelled: Vec<String> = assignments
+        .iter()
+        .map(|word| unquote(&word_text(word)))
+        .chain(words.iter().map(|word| unquote(&word_text(word))))
+        .collect();
+    for redirect in redirects {
+        spelled.extend(redirect_words(redirect, source));
+    }
+    spelled
+}
+
+/// The commands nested INSIDE this one's words and redirect targets.
+///
+/// A word may CONTAIN commands: `rm $(cat list)` runs `cat`, and the character
+/// walk this replaces could not see them at all (CLOUD-1257). A redirect target
+/// may be a substitution too — `diff <(a) <(b)`.
+fn nested_commands(words: &[rable::Node], redirects: &[rable::Node], source: &str) -> Vec<Segment> {
+    let mut nested = Vec::new();
+    for word in words {
+        descend_word(word, source, &mut nested);
+    }
+    for redirect in redirects {
+        descend_redirect(redirect, source, &mut nested);
+    }
+    nested
+}
+
+/// One `Command` node as a [`Segment`], plus the commands nested in its words.
+///
+/// The node is taken whole rather than pre-destructured so this stays inside the
+/// argument ceiling; the caller has already matched the kind, so the `else` arm
+/// is unreachable and returns rather than inventing a segment.
+fn flatten_command(
+    node: &rable::Node,
+    source: &str,
+    after: Option<Separator>,
+    construct: Option<(&'static str, &'static str)>,
+    out: &mut Vec<Segment>,
+) {
+    let rable::NodeKind::Command {
+        assignments,
+        words,
+        redirects,
+    } = &node.kind
+    else {
+        return;
+    };
+    // THE SAME WORDS, AFTER the empty ones are dropped. Snapshotting the list
+    // before the retain put one in `lines` that `words` no longer matched, so the
+    // two readings of one command disagreed on token indices — and
+    // `protected_mutation` reads `lines` while everything else reads `words`.
+    let mut segment = Segment {
+        lines: Vec::new(),
+        words: command_words(assignments, words, redirects, source),
+        raw: node.source_text(source).to_owned(),
+        terminator: after,
+        input_redirect: redirects.iter().any(binds_stdin),
+        construct,
+        nested: false,
+    };
+    let mut nested = nested_commands(words, redirects, source);
+    if segment.words.iter().any(String::is_empty) {
+        segment.words.retain(|word| !word.is_empty());
+    }
+    segment.lines = vec![SegmentLine {
+        words: segment.words.clone(),
+        raw: segment.raw.clone(),
+    }];
+    // Everything the descent produced is nested, however deep: an inner `$(…)`
+    // inside an outer one is still not a line of the command that contains them.
+    for inner in &mut nested {
+        inner.nested = true;
+    }
+    out.push(segment);
+    out.append(&mut nested);
+}
+
 /// [`flatten`], carrying the control-flow node the walk is currently inside.
 fn flatten_in(
     node: &rable::Node,
@@ -8280,74 +8378,7 @@ fn flatten_in(
     out: &mut Vec<Segment>,
 ) {
     match &node.kind {
-        rable::NodeKind::Command {
-            assignments,
-            words,
-            redirects,
-        } => {
-            // AN ENV ASSIGNMENT PREFIX IS A WORD HERE, and dropping it is an
-            // under-deny rather than a tidier shape. `effective_program` steps
-            // past `VAR=value` to find the program, and `hook_skip_local` reads
-            // the assignment itself — `HK_SKIP_STEPS=… git commit` is refused
-            // BECAUSE of the prefix. The parser files those under `assignments`,
-            // correctly for a grammar and wrongly for this consumer, so they go
-            // back at the front where they were written.
-            let mut spelled: Vec<String> = assignments
-                .iter()
-                .map(|word| unquote(&word_text(word)))
-                .chain(words.iter().map(|word| unquote(&word_text(word))))
-                .collect();
-            // A REDIRECTION'S TOKENS ARE STILL WORDS, and restoring them is not
-            // cosmetic: `protected_mutation` reads a redirect TARGET as a
-            // mutation candidate with no program at all, so `rm > guarded.md`
-            // is judged on the target. The parser moves those tokens out of
-            // `words` and into `redirects`, which is the right shape for a
-            // grammar and the wrong one for this consumer — dropping them here
-            // would have been an under-deny on a write, measured by
-            // `a_redirect_target_is_a_mutation_even_with_no_program`.
-            for redirect in redirects {
-                spelled.extend(redirect_words(redirect, source));
-            }
-            // THE SAME WORDS, AFTER the empty ones are dropped. Snapshotting
-            // `spelled` here put a list in `lines` that `words` no longer
-            // matched, so the two readings of one command disagreed on token
-            // indices — and `protected_mutation` reads `lines` while everything
-            // else reads `words`. Built below, once the retain has run.
-            let mut segment = Segment {
-                lines: Vec::new(),
-                words: spelled,
-                raw: node.source_text(source).to_owned(),
-                terminator: after,
-                input_redirect: redirects.iter().any(binds_stdin),
-                construct,
-                nested: false,
-            };
-            // A word may CONTAIN commands: `rm $(cat list)` runs `cat`. The
-            // walk this replaces could not see them at all (CLOUD-1257).
-            let mut nested = Vec::new();
-            for word in words {
-                descend_word(word, source, &mut nested);
-            }
-            // The redirect TARGET may be a substitution too: `diff <(a) <(b)`.
-            for redirect in redirects {
-                descend_redirect(redirect, source, &mut nested);
-            }
-            if segment.words.iter().any(String::is_empty) {
-                segment.words.retain(|word| !word.is_empty());
-            }
-            segment.lines = vec![SegmentLine {
-                words: segment.words.clone(),
-                raw: segment.raw.clone(),
-            }];
-            // Everything the descent produced is nested, however deep: an inner
-            // `$(…)` inside an outer one is still not a line of the command that
-            // contains them.
-            for inner in &mut nested {
-                inner.nested = true;
-            }
-            out.push(segment);
-            out.append(&mut nested);
-        }
+        rable::NodeKind::Command { .. } => flatten_command(node, source, after, construct, out),
         rable::NodeKind::Pipeline { commands, .. } => {
             for (index, command) in commands.iter().enumerate() {
                 // A stage's terminator is the pipe that FOLLOWS it; the last
@@ -8485,8 +8516,9 @@ fn flatten_in(
 /// A word's source text, from the parts the lexer resolved.
 fn word_text(word: &rable::Node) -> String {
     match &word.kind {
-        rable::NodeKind::Word { value, .. } => value.clone(),
-        rable::NodeKind::WordLiteral { value } => value.clone(),
+        rable::NodeKind::Word { value, .. } | rable::NodeKind::WordLiteral { value } => {
+            value.clone()
+        }
         _ => String::new(),
     }
 }
