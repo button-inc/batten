@@ -27,19 +27,41 @@
 #   sees the call it is already mediating. A reader who takes CLOUD-1265 as
 #   refuting this design is reading past that difference.
 #
-#   THREE ANSWERS AND THE MODULE READS ALL THREE. `input.tree.minted` is `null`
-#   when no row declared a receipt or no store is readable — could-not-look, and
-#   silence is the honest answer on a fresh clone, which is every CI runner until
-#   CLOUD-877 gives the receipt a portable form. A declared id PRESENT with the
-#   current patch identity absent from it is the finding. Present WITH it is
-#   clean, whatever the review said.
+#   THREE ANSWERS AND THE MODULE READS ALL THREE, AND THE ARM IS PER-ID.
+#   `input.tree.minted` is `null` when no row declared a receipt, and a declared id
+#   is ABSENT from the map when the engine could not LIST its store — both are
+#   could-not-look, and silence is the honest answer on a fresh clone, which is
+#   every CI runner until CLOUD-877 gives the receipt a portable form. An id
+#   PRESENT with the current patch identity absent from it is the finding: the
+#   engine looked and there is no receipt. Present WITH it is clean, whatever the
+#   review said.
 #
-#   THE CLEAN-TREE CONDITION IS NOT HERE, AND THAT IS A DECISION. A receipt is
-#   keyed to COMMITTED bytes, so it must not be minted while the tree is dirty —
-#   but that belongs at the write, where `mint_receipts` refuses, rather than as a
-#   second opinion here about whether the tree is clean. `tree-clean` already owns
-#   that question for the landing path. A conjunct here would either duplicate it
-#   or, read the other way round, make a dirty tree silence this gate.
+#   READING THE OUTER MAP AS THE COULD-NOT-LOOK CHANNEL IS THE MISTAKE THIS
+#   MODULE ALREADY MADE ONCE. An unlistable store leaves that map EMPTY, not
+#   `null`, so a guard on the outer object refuses exactly the case it means to
+#   abstain on.
+#
+#   TWO WAYS THIS OVER-OWES, BOTH STATED RATHER THAN DISCOVERED. `owed` is read
+#   off a TIP diff over the working tree and `subject` is a MERGE-BASE diff over
+#   committed bytes, so the two do not answer about the same range. On a stale
+#   branch, code that landed on trunk reads as this branch's and a prose-only
+#   branch can owe a review until it rebases — `verify` asserts the branch is
+#   rebased on current `origin/main`, so on the path that matters they agree. And
+#   the identity covers the WHOLE change, so a prose commit added to a branch that
+#   also carries code moves the key and re-owes the review. Both err toward owing
+#   a review that is not strictly due, which is the direction a completion gate
+#   should fail in; neither can produce the other direction, which is a branch
+#   landing unread.
+#
+#   THE CLEAN-TREE CONDITION IS NOWHERE, AND THAT IS A DECISION TWICE OVER. A
+#   conjunct here would either duplicate `tree-clean` — which already owns tree
+#   cleanliness for the landing path, and which nothing reaches `main` without
+#   passing — or, read the other way round, let a dirty tree SILENCE this gate.
+#   The mint carried one instead and it has been withdrawn: `git::uncommitted`
+#   counts an uninitialised gitlink as changed, so `Ok(0)` was unsatisfiable in
+#   this repository and the receipt could never have been written (CLOUD-1500).
+#   A reviewer reads the working tree anyway, so refusing to record a dispatch
+#   taken over uncommitted work would attest less than happened, not more.
 #
 #   THE BRACKETS ARE NOT STYLE: the schema file carries a hyphen, so the dotted
 #   form is a parse error reported as `invalid schema reference`.
@@ -60,13 +82,28 @@ rules contains "code-review-dispatched"
 # refuse.
 required contains "code-review"
 
-# Whether the engine could look at the receipt store at all.
+# Whether the engine could look at the receipt store FOR THIS ID.
 #
-# GUARDED on `is_object`: the key is `null` when nobody declared a receipt or no
-# store is readable, and reaching into `null` is a hard evaluation FAULT in Rego
-# rather than a silent miss.
-looked if {
+# PER-ID, NOT ON THE OUTER MAP, and that distinction is the whole three-valued
+# read rather than a refinement of it. `minted::fields` inserts an entry for every
+# declared row whose store it could LIST, and skips the row entirely when it could
+# not — so an id ABSENT from the map is could-not-look, and an id PRESENT with no
+# matching subject is the engine having looked and found nothing.
+#
+# THE FIRST DRAFT GUARDED ON `is_object(input.tree.minted)` AND HAD THE ARM
+# EXACTLY BACKWARDS. An unlistable store leaves the map EMPTY rather than `null`,
+# `is_object({})` holds, and the refusal then fired on every fresh clone and every
+# CI runner — the arm this module's own METADATA says it abstains on, and the one
+# `batten.toml` promises is honestly silent until CLOUD-877 gives the receipt a
+# portable form. Caught by the code review this gate exists to demand, which is
+# the only reason it is not in the tree.
+#
+# BOTH `is_object` CALLS ARE LOAD-BEARING. The outer one is what keeps this from
+# indexing `null` — a hard evaluation FAULT in Rego rather than a silent miss —
+# when no row declares a receipt at all.
+looked_at(id) if {
 	is_object(input.tree.minted)
+	is_object(input.tree.minted[id])
 }
 
 delta := input.tree["base-delta"]
@@ -83,6 +120,24 @@ delta := input.tree["base-delta"]
 # `unreviewed` would refuse a checkout with nothing to review.
 subject := delta["patch-id"]
 
+# The path prefixes this repository treats as code for the purpose of owing a
+# review.
+#
+# DECLARED HERE BECAUSE THE ROW'S `delta_sources` DOES NOT NARROW WHAT THIS
+# MODULE SEES, which is the engine's shape rather than a mistake in the row.
+# `rules.rs` builds ONE `base_delta` from the UNION of every row's globs and hands
+# the same value to every module, so a row's own list only ever ADDS to what
+# everybody reads — and six rows in this config declare `["**"]`. Without the
+# narrowing below, a branch touching only `.github/workflows/*.yml` or
+# `schema/*.json` would owe a code review. Caught by the code review this gate
+# exists to demand.
+#
+# PREFIXES RATHER THAN A `[[pattern]]` ROW: this is a path SET, not a concept with
+# one spelling, and `.claude/rules/policy-modules.md`'s registry is for the
+# latter. A threshold or a path list spelled as a regex is the error that file
+# records twice.
+reviewable := {"crates/", "policy/", "mise-tasks/"}
+
 # Whether a review is owed at all.
 #
 # GATED ON CODE, not on any change. `code-changed` is the subset whose non-comment
@@ -90,7 +145,17 @@ subject := delta["patch-id"]
 # clone or a fixture, which is the narrowing `review-dispatched` had to add after
 # four `cli.rs` cases went red at once for wanting to exercise other rules.
 owed if {
-	count(delta["code-changed"]) > 0
+	some path in delta["code-changed"]
+	some prefix in reviewable
+	startswith(path, prefix)
+}
+
+# `batten.toml` is the policy authority every gate reads, so an edit to it is a
+# change to what this repository refuses. A separate arm rather than a fourth
+# prefix, because it is a FILE and the set above is a directory test — folding it
+# in would make `batten.toml.example` reviewable by accident.
+owed if {
+	"batten.toml" in delta["code-changed"]
 }
 
 # Every declared receipt with nothing filed under this change.
@@ -100,10 +165,10 @@ owed if {
 # means `not reviewed as this now stands`. A module re-deriving that would be the
 # second authority over an identity `git::branch_patch_id` already owns.
 unattested contains id if {
-	looked
 	owed
 	is_string(subject)
 	some id in required
+	looked_at(id)
 	not input.tree.minted[id][subject]
 }
 
@@ -177,6 +242,41 @@ test_could_not_look_does_not_fault if {
 # A PROSE-ONLY BRANCH OWES NO CODE REVIEW. Without this the gate refuses every
 # checkout that has never dispatched, which is every fixture and every fresh
 # clone.
+# A CHANGE OUTSIDE THE REVIEWABLE PREFIXES OWES NOTHING. The row's own
+# `delta_sources` cannot express this — the engine hands every module one delta
+# built from the union of every row's globs — so without the prefix set a
+# workflow-only or schema-only branch owes a code review.
+test_a_change_outside_the_reviewable_prefixes_is_not_refused if {
+	count(violation) == 0 with input as attested_over({
+		"added": [],
+		"edited": [".github/workflows/ci.yml"],
+		"deleted": [],
+		"code-changed": [".github/workflows/ci.yml"],
+		"patch-id": "abc",
+	})
+}
+
+# THE POLICY AUTHORITY IS REVIEWABLE ON ITS OWN ARM. An edit to `batten.toml` is a
+# change to what this repository refuses.
+test_an_edit_to_the_authority_is_refused if {
+	some v in violation with input as attested_over({
+		"added": [],
+		"edited": ["batten.toml"],
+		"deleted": [],
+		"code-changed": ["batten.toml"],
+		"patch-id": "abc",
+	})
+	v.verdict == "patch read never"
+}
+
+# AN UNLISTABLE STORE IS COULD-NOT-LOOK, and reading it as `looked` is the defect
+# the code review caught: `minted::fields` leaves the id ABSENT when it cannot
+# list, so the map is EMPTY rather than `null` and a guard on the outer object
+# refuses every fresh clone and every CI runner.
+test_an_unlistable_store_is_not_refused if {
+	count(violation) == 0 with input as {"tree": {"base-delta": changed, "minted": {}}}
+}
+
 test_a_prose_only_branch_is_not_refused if {
 	count(violation) == 0 with input as attested_over({
 		"added": [],
@@ -205,3 +305,4 @@ attested_over(d) := {"tree": {"base-delta": d, "minted": {"code-review": {}}}}
 #MUTANT absent-receipt-unread|s@^\tnot input.tree.minted\[id\]\[subject\]$@\tfalse@|an_absent_receipt_is_refused_over_the_engines_own_projection
 #MUTANT no-identity-priced|s@^\tis_string(subject)$@\ttrue@|a_change_with_no_identity_owes_no_review
 #MUTANT prose-only-priced|s@^\towed$@\ttrue@|a_prose_only_branch_owes_no_code_review
+#MUTANT store-unreadable-refused|s@^\tlooked_at(id)$@\ttrue@|an_unlistable_store_is_could_not_look_and_never_a_refusal
