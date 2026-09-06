@@ -729,8 +729,18 @@ pub(crate) fn safe_subject(subject: &str) -> bool {
 /// a path component and the writer refuses exactly what the reader refuses — the
 /// two halves disagreeing about which filenames exist is the confusion
 /// [`safe_subject`]'s own doc records.
-fn delta_subject(base: &str) -> Option<String> {
-    git::branch_patch_id(Path::new("."), base)
+/// **Resolved against the REPO ROOT the caller already holds, never `"."`.**
+/// `batten hook` is invoked with whatever cwd the harness had, which is routinely
+/// a subdirectory and can be outside the repository altogether. Opening `"."`
+/// there reaches a different repository or none, `branch_patch_id` answers `None`,
+/// and — because `None` is `Missing` at the call site rather than could-not-look —
+/// a `delta`-keyed row would refuse EVERY call whatever receipt is on disk. That
+/// is the direction that gets a guard switched off, and it is invisible from any
+/// fixture that happens to run at the root. Every other arm here already reads
+/// [`RepoFacts`]; this one now does too, so a single reading of "where is the
+/// repository" serves them all.
+fn delta_subject(repo_root: &str, base: &str) -> Option<String> {
+    git::branch_patch_id(Path::new(repo_root), base)
         .ok()
         .flatten()
         .filter(|identity| safe_subject(identity))
@@ -857,7 +867,7 @@ pub(crate) fn verdicts(
                     // clear, where the permissive direction is silent.
                     ReceiptKey::Delta => key_bases
                         .get(check)
-                        .and_then(|base| delta_subject(base))
+                        .and_then(|base| delta_subject(&facts.repo_root, base))
                         .map_or(Validity::Missing, |identity| {
                             named_validity(&facts.git_dir, check, &identity)
                         }),
@@ -877,7 +887,7 @@ pub(crate) fn verdicts(
                         named.as_deref(),
                         key_bases
                             .get(check)
-                            .and_then(|base| delta_subject(base))
+                            .and_then(|base| delta_subject(&facts.repo_root, base))
                             .as_deref(),
                     )
                     .filter(|path| older_than(path, max_age, now))
@@ -900,7 +910,7 @@ pub(crate) fn verdicts(
                         named.as_deref(),
                         key_bases
                             .get(check)
-                            .and_then(|base| delta_subject(base))
+                            .and_then(|base| delta_subject(&facts.repo_root, base))
                             .as_deref(),
                     )
                     .map_or(Validity::Valid, |path| {

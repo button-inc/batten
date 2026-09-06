@@ -296,6 +296,39 @@ fn a_push_carrying_an_unreviewed_change_is_refused() {
     denied(&push(&dir));
 }
 
+/// THE IDENTITY IS RESOLVED AGAINST THE REPO ROOT, NOT THE CWD.
+///
+/// `batten hook` runs with whatever cwd the harness had, which is routinely a
+/// subdirectory. Resolving the patch id from `"."` opens a different repository
+/// or none, yields no identity, and — because an absent identity is `Missing`
+/// rather than could-not-look here — refuses EVERY call whatever receipt is on
+/// disk. Every other case in this file runs at the root and so cannot see it;
+/// this one is the whole reason the read side takes `RepoFacts` like its
+/// siblings. Declared mutation: `subject-read-from-cwd`.
+#[test]
+fn the_identity_is_resolved_from_the_repo_root_and_not_the_cwd() {
+    let dir = fixture("review-delta-subdir", "delta");
+    change(&dir, "fn a() {}\n");
+    file_receipt(&dir, &identity(&dir));
+
+    // The receipt answers at the root, so the fixture is sound before the arm
+    // that matters runs — otherwise a refusal below would be unattributable.
+    allowed(&ready(&dir));
+
+    let nested = dir.join("crates/batten/src");
+    assert!(nested.is_dir(), "the change created the nested path");
+    let envelope = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "gh pr ready 999"},
+    });
+    allowed(&run_with_stdin(
+        &nested,
+        &["adjudicate", "--harness", "claude-code"],
+        &envelope.to_string(),
+    ));
+}
+
 // ---------------------------------------------------------------------------
 // COULD-NOT-LOOK IS A REFUSAL HERE, DELIBERATELY.
 // ---------------------------------------------------------------------------
