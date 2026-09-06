@@ -124,15 +124,92 @@ fn credential() -> Option<String> {
 /// **An absent credential is not an error.** A public remote needs none, and a
 /// private one answers `401`, which every caller here already reports as
 /// could-not-look rather than as an unheld lease.
+///
+/// # GIT-OVER-HTTP TAKES `Basic`, AND THIS SENT `Bearer`
+///
+/// These headers go to the SMART-HTTP endpoints — `info/refs`,
+/// `git-upload-pack`, `git-receive-pack` — which are not the REST API and do not
+/// share its auth scheme. Git's HTTP transport is specified on Basic
+/// authentication with the token as the password, and GitHub rejects a bearer
+/// token there outright. `crate::rest` is the other half and is correct as it
+/// stands: `Bearer` is what `api.github.com` wants.
+///
+/// Measured on this branch, one token, four arms:
+///
+/// | request                          | scheme   | status |
+/// | -------------------------------- | -------- | ------ |
+/// | `info/refs?service=git-upload-pack` | `Bearer` | `401`  |
+/// | `info/refs?service=git-upload-pack` | `Basic`  | `200`  |
+/// | `repos/{owner}/{repo}`              | `Bearer` | `200`  |
+/// | `repos/{owner}/{repo}` (none)       | —        | `403`  |
+///
+/// So a configured credential made the fetch FAIL where no credential at all
+/// would have succeeded against a public remote — and every caller reports that
+/// `401` as could-not-look, which is honest about the reading and silent about
+/// the cause. `land` stopped at `fetch main from the remote` with a credential
+/// that was valid the whole time.
+///
+/// The username is ignored by GitHub for a token — `x-access-token` is the
+/// convention its own documentation and tooling use, so it is what a reader
+/// grepping for this will recognise.
 fn headers(accept: &str, content_type: Option<&str>) -> Vec<(String, String)> {
+    headers_for(accept, content_type, credential().as_deref())
+}
+
+/// [`headers`]'s decision, over a credential the caller already resolved.
+///
+/// **Split from the environment read so the SCHEME is testable**, which is the
+/// same split `carries` takes over its two forge calls: reading `GH_TOKEN` is an
+/// effect and this is a pure function of what it returned. A case that had to
+/// set a process variable to reach the decision would need `unsafe` — which the
+/// workspace forbids — and would be asserting over whatever the runner's own
+/// environment happened to hold.
+fn headers_for(
+    accept: &str,
+    content_type: Option<&str>,
+    token: Option<&str>,
+) -> Vec<(String, String)> {
     let mut headers = vec![(String::from("Accept"), accept.to_owned())];
     if let Some(content_type) = content_type {
         headers.push((String::from("Content-Type"), content_type.to_owned()));
     }
-    if let Some(token) = credential() {
-        headers.push((String::from("Authorization"), format!("Bearer {token}")));
+    if let Some(token) = token {
+        headers.push((
+            String::from("Authorization"),
+            format!("Basic {}", base64_of(&format!("x-access-token:{token}"))),
+        ));
     }
     headers
+}
+
+/// Standard base64 of `raw`, which is what a `Basic` credential is carried as.
+///
+/// **Hand-rolled rather than vendored**, on the trade `query_value` states one
+/// screen down: the alphabet and the padding rule are eight lines of RFC 4648,
+/// and a dependency here would go through `deny.toml`, `macos-link-check`,
+/// `darwin-link`, the ambient-authority bound and the SBOM inventory to buy
+/// them.
+fn base64_of(raw: &str) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = raw.as_bytes();
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let triple = chunk.iter().enumerate().fold(0_u32, |acc, (index, byte)| {
+            acc | (u32::from(*byte) << (16 - 8 * index))
+        });
+        for index in 0..=chunk.len() {
+            let shift = 18 - 6 * u32::try_from(index).unwrap_or(0);
+            let sextet = usize::try_from((triple >> shift) & 0x3f).unwrap_or(0);
+            encoded.push(char::from(ALPHABET[sextet]));
+        }
+        // PADDED TO A FOUR-CHARACTER GROUP, because a decoder is entitled to
+        // require it and a credential is not the place to find out which one
+        // does not.
+        for _ in chunk.len()..3 {
+            encoded.push('=');
+        }
+    }
+    encoded
 }
 
 /// Ask the remote what it carries, over the service that will be used next.
@@ -3125,6 +3202,52 @@ mod tests {
             }
         }
         body
+    }
+
+    /// GIT-OVER-HTTP TAKES `Basic`, AND THIS SENT `Bearer` — so a configured
+    /// credential made the fetch fail where no credential would have succeeded.
+    ///
+    /// The scheme is the assertion. `headers` reaches the smart-HTTP endpoints,
+    /// which are not the REST API and do not share its auth: measured on this
+    /// branch, one token, `Bearer` answered `401` on `info/refs` and `Basic`
+    /// answered `200`. A case over the SCHEME rather than over a live request,
+    /// because the request is `Cost::Effect` and cannot run in a suite — which
+    /// is the same split `carries` takes one screen down.
+    #[test]
+    fn the_smart_http_credential_is_basic_rather_than_bearer() {
+        let auth = |token: Option<&str>| {
+            headers_for("application/x-git-upload-pack-advertisement", None, token)
+                .into_iter()
+                .find(|(name, _)| name == "Authorization")
+                .map(|(_, value)| value)
+        };
+
+        let sent = auth(Some("s3cr3t")).expect("a configured credential is attached");
+        assert!(
+            sent.starts_with("Basic "),
+            "git-over-HTTP rejects a bearer token outright: {sent}"
+        );
+        // `x-access-token:s3cr3t` encoded, so the case pins the ENCODING too — a
+        // base64 wrong by one character is a 401 nobody can read back.
+        assert_eq!(sent, "Basic eC1hY2Nlc3MtdG9rZW46czNjcjN0");
+
+        // AND AN ABSENT CREDENTIAL ATTACHES NOTHING, which is not a formality:
+        // a public remote answers a credential-free request, and this branch
+        // measured the inverted case — a configured token made the fetch FAIL
+        // where none would have succeeded.
+        assert!(auth(None).is_none());
+    }
+
+    /// The padding arm, which a credential's own length may never exercise.
+    #[test]
+    fn base64_pads_every_remainder() {
+        assert_eq!(base64_of(""), "");
+        assert_eq!(base64_of("f"), "Zg==");
+        assert_eq!(base64_of("fo"), "Zm8=");
+        assert_eq!(base64_of("foo"), "Zm9v");
+        assert_eq!(base64_of("foob"), "Zm9vYg==");
+        assert_eq!(base64_of("fooba"), "Zm9vYmE=");
+        assert_eq!(base64_of("foobar"), "Zm9vYmFy");
     }
 
     /// **A PREFIX ON THE BRANCH, NEVER A SUBSTRING ANYWHERE IN THE REF**, which
