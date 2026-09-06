@@ -16,7 +16,8 @@ Read on demand, never all of them.
 - `mem:workflow/agent-fanout` — spawning a subagent, or running more than one
   session against this repo.
 - `mem:workflow/landing-loop` — landing a branch; before "repairing" `land`, the
-  lease, the CI wait or their suites.
+  lease, the CI wait or their suites; porting a lifecycle (a trap, a lock, a
+  reaper) out of a retired program.
 - `mem:workflow/sonar-scope` — Sonar refuses your branch; reading or changing
   `sonar-gate`; a Sonar verdict looks wrong on a SHA; before treating a `final`
   failure as trunk's, or a check-run's annotations as the whole finding list.
