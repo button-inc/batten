@@ -108,8 +108,18 @@ jobs:
           # `cross-check` already type-checks), so Windows costs no 2x-billed
           # runner. msvc would be the more native choice for Windows users, but
           # it can only be linked on Windows — revisit if that trade stops paying.
+          #
+          # ZIGBUILD RATHER THAN CROSS, AND THE LINKER IS THE WHOLE REASON
+          # (CLOUD-1574). `cross`'s image carries mingw-w64 import libraries that
+          # predate `ws2_32`'s `GetHostNameW`, which current Rust `std` calls from
+          # `std::sys::net::hostname` — so the link step ends in `undefined
+          # reference to 'GetHostNameW'` and this leg failed on v0.0.145, v0.0.146
+          # and v0.0.147, each of which published every other asset and no Windows
+          # one. zig ships current mingw-w64 import libraries, and it is already
+          # the tool the two Darwin legs below link through, so this is one fewer
+          # cross-compilation mechanism rather than one more.
           - target: x86_64-pc-windows-gnu
-            build-tool: cross
+            build-tool: zigbuild
           # Darwin via zig. No macOS runner, no Apple SDK.
           - target: aarch64-apple-darwin
             build-tool: zigbuild
