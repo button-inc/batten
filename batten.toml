@@ -7679,7 +7679,7 @@ measured = "2026-09-08"
 mb = 21455
 worst_mb = 21455
 multiplier = 1
-measured = "2026-09-06"
+measured = "2026-09-07"
 
 # THE BASIS EACH FLOOR WAS MEASURED AGAINST (CLOUD-1158), because `measured` is a
 # pointer to a basis and not the basis itself.
@@ -7924,6 +7924,24 @@ measured = "2026-09-06"
 # from a pathological rebuild and printed it two lines above the refusal — so for
 # the first time the caller's fabricated explanation has a plausible-looking number
 # sitting next to it. It is still a stem count that refused. Read the callee.
+
+# AND A SIXTH, ON THIS BRANCH, WHICH IS THE FIRST ONE THE CALLER'S OWN NUMBERS
+# CONTRADICT IN THE SAME BREATH (CLOUD-1586). `verify` again rendered a stem-count
+# refusal as "not enough disk to run the gate, and pruning did not recover it".
+# Measured 2026-09-07 on `bcf1ec3e`: 16470 MB free against a LEARNED warm floor of
+# 15028 MB, printed by `target-prune` two lines above the refusal — so the caller
+# claimed the disk was short while the callee printed the margin it had. Nothing
+# was short. The basis was 230 against a live 241, tolerance 10.
+#
+# The entries above ask the reader to read the callee. This one asks something
+# narrower of whoever moves next: the misreport is now the FIFTH-most-likely
+# reading of that sentence and still the only one the caller emits, so the sentence
+# is the defect rather than the evidence. It is `land::Refusal`'s
+# `Environment` arm that fixes it — a declared `[[verify_environment_pattern]]`
+# matching the stem-count refusal would carry the consumer's own remedy instead of
+# "reproduce and fix locally", which is what this lap was told about a tree with
+# nothing wrong in it. That row is not written here because the pattern belongs
+# with the measurement that justifies it, and this entry is the measurement.
 
 # ONE READING WORTH LEAVING BEHIND, because it is the first time the derived cold
 # floor has exceeded what this container can offer: 21455 MB against 21065 MB free
