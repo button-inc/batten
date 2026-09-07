@@ -5626,12 +5626,80 @@ fn admission_anchor(
     // exact match widens to those rows and no further. Every typed kind keeps
     // the narrow fast path it was given, which is what the ~90s measurement
     // above is about.
+    //
+    // AND "TO THOSE ROWS" IS A STATEMENT ABOUT WHICH *KIND*, WHICH IS NOT THE
+    // SAME AS WHICH ROW — the difference cost 2m22s per mint (CLOUD-1571).
+    //
+    // Widening to every `policy` row ran every policy module over the whole
+    // tree, whether or not any of them *could* publish the predicate being
+    // minted against. Measured on `main` at `6eb08e14`: `override request
+    // --rule protected-mutation` took **2m22.121s**, against **0.123s** for a
+    // full adjudication of the same tree, and one test case paying it was 24%
+    // of the entire suite. `protected-mutation` is an engine-side rule name
+    // with zero hits under `policy/`, so no bundle could ever have published
+    // it: 58 modules were evaluated to produce findings the filter below
+    // discards one line later.
+    //
+    // `Bundle::declared` is the module's own published predicate set, so
+    // asking it is what turns "which kind" into "which row". It is the same
+    // authority `attribute` resolves a violation's id against and the one
+    // `lint.rs` reads for `waiver-names-no-rule` (CLOUD-1553), on identical
+    // reasoning: reading the published set adds no second authority over what a
+    // bundle declares, where re-deriving it from module source would.
+    //
+    // THE LOAD IS NOT THE COST, and that is why this is affordable rather than
+    // merely narrower. Compiling every bundle is **2.4s** measured here against
+    // the 2m22s above — the expense is acquiring the tree and evaluating over
+    // it, which is exactly what this now skips. The load is also the same work
+    // `run_over` does internally, so no module is compiled that would not have
+    // been.
+    //
+    // CLOUD-1087/CLOUD-1125's property is untouched: a predicate a bundle DOES
+    // publish still selects that bundle's row and still anchors on its finding.
+    // This narrows the widening; it does not restore the `declared.id == rule`
+    // filter that made every policy admission a silent no-op.
     let selected: Vec<_> = if exact.is_empty() {
-        config
+        let policy_rows: Vec<_> = config
             .rules
             .iter()
             .filter(|declared| declared.kind == rules::RuleKind::Policy)
             .cloned()
+            .collect();
+        // COULD-NOT-LOOK FALLS BACK rather than refusing, which is the posture
+        // the `run_over` call below already takes for its own `Err`: a bundle
+        // set that will not load leaves no honest way to ask who publishes the
+        // predicate, and `head()` is never weaker than what shipped.
+        let Ok(bundles) = policy::load(
+            root,
+            &policy_rows,
+            policy::Vocabulary {
+                patterns: &config.patterns,
+                verdicts: &config.verdicts,
+                recorders: &config.recorders,
+            },
+            // The same entitlement the run below is given. A mint answers about
+            // one rule over one subject, so registry equality's exhausted half —
+            // a property of the whole authority — is not this verb's to assert.
+            policy::ModuleChecks::RunOverSelection,
+            None,
+        ) else {
+            return head();
+        };
+        let publishers = policy::publishers_of(&bundles, rule);
+        // NOBODY PUBLISHES IT, so there is nothing to scan FOR and the scan is
+        // skipped entirely rather than run and discarded. This is the honest
+        // answer for an engine-side rule name, which is a legitimate thing to
+        // mint against — `protected-mutation` has a real override route.
+        //
+        // Silent, deliberately: reporting the rule as unknown here would decide
+        // CLOUD-1551's open question about an anchor that binds `call:` when
+        // nothing matches, and this row must not settle that by accident.
+        if publishers.is_empty() {
+            return head();
+        }
+        policy_rows
+            .into_iter()
+            .filter(|declared| publishers.contains(declared.id.as_str()))
             .collect()
     } else {
         exact

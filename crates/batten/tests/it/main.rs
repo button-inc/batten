@@ -46,6 +46,7 @@ mod acquisition_sweep;
 mod address_resolve;
 mod address_transport;
 mod admission;
+mod admission_narrowing;
 mod advisory_drain;
 mod agent_capabilities;
 mod agent_facts;

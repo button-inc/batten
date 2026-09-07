@@ -463,6 +463,36 @@ impl Bundle {
     }
 }
 
+/// The enabling-row ids of every bundle that publishes `predicate` (CLOUD-1571).
+///
+/// **The narrowing a mint needs, and the reason it is a function rather than a
+/// filter written at its one call site.** [`crate::admission`]'s anchor has to
+/// re-run the rule a refusal named in order to recover its fingerprint, and
+/// `--rule` carries a PREDICATE id — `filed-here` publishes `filed-over-own-diff`
+/// — so a row-id match selects nothing and the mint silently binds the head
+/// (CLOUD-1087, CLOUD-1125). Widening from there to every `policy` row fixed that
+/// and cost 2m22s per mint, because "which KIND of row" is not "which row":
+/// `protected-mutation` is an engine-side name no bundle can publish, and 58
+/// modules were evaluated over the whole tree to produce findings the caller
+/// discarded one line later.
+///
+/// Asking each bundle's own published set answers the question exactly. An EMPTY
+/// result is therefore a real answer — *nothing can raise this predicate, so
+/// there is nothing to scan for* — and never a could-not-look: a caller reads it
+/// as "skip the scan", which is only sound because [`Bundle::declared`] is the
+/// same authority [`Bundle::attribute`] resolves a violation's id against.
+///
+/// Borrowed rather than owned, so a caller filtering its own rows against the
+/// result allocates nothing per row.
+#[must_use]
+pub fn publishers_of<'a>(bundles: &'a [Bundle], predicate: &str) -> BTreeSet<&'a str> {
+    bundles
+        .iter()
+        .filter(|bundle| bundle.declared().contains(predicate))
+        .map(Bundle::id)
+        .collect()
+}
+
 impl std::fmt::Debug for Bundle {
     /// Names the row, its modules' paths and the ids they publish — and **never
     /// a source**, so a policy body cannot reach a log through a derived `Debug`
