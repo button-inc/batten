@@ -152,6 +152,118 @@ fn a_head_carrying_both_receipts_is_verified_and_one_missing_is_not() {
     );
 }
 
+/// A main checkout declaring `main_set`, plus a **linked worktree** whose own
+/// branch declares `worktree_set`.
+///
+/// Both roots carry a `batten.toml` and both declare a set, so no anchor can
+/// fail to find one — the only difference is WHICH, which is the difference a
+/// single-root fixture cannot express.
+fn repo_with_worktree(name: &str, main_set: &str, worktree_set: &str) -> std::path::PathBuf {
+    let main = Fixture::at(scratch(name).join("repo"))
+        .config(&format!(
+            "version = 1\n\n[receipt]\nverified_by = {main_set}\n"
+        ))
+        .file("src.rs", "fn main() {}\n")
+        .git()
+        .base_commit()
+        .build();
+    git_in(&main, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    // Branched before this branch's own set lands, so the worktree carries its
+    // own authority rather than inheriting one.
+    git_in(&main, &["branch", "sibling"]);
+
+    let linked = scratch(&format!("{name}-linked"));
+    let _ = fs::remove_dir_all(&linked);
+    git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            linked.to_str().unwrap_or_default(),
+            "sibling",
+        ],
+    );
+    common::write(
+        &linked,
+        "batten.toml",
+        &format!("version = 1\n\n[receipt]\nverified_by = {worktree_set}\n"),
+    );
+    git_in(&linked, &["add", "-A"]);
+    git_in(&linked, &["commit", "-q", "-m", "this branch's own set"]);
+    linked
+}
+
+/// **`verified_by` IS THE WORKING TREE'S, NOT THE MAIN CHECKOUT'S** (CLOUD-1586).
+///
+/// This is `git::worktree_root`'s own measured defect, verbatim: *"a worktree
+/// whose branch TIGHTENED the check set was judged against the main checkout's
+/// looser one and a head carrying half the receipts exited `0`."*
+///
+/// **The fix this replaces was a NO-OP and green, which is why the case is
+/// here.** `worktree_root` was being handed `facts.repo_root` — already
+/// `repo_root`'s answer, deliberately the main checkout because receipt STATE is
+/// repository-wide (CLOUD-164) — and walking up from the main checkout's root
+/// can only ever reach the main checkout. So the call named the right function,
+/// resolved the wrong root, and no case in this file could tell: every one of
+/// them runs from a single checkout where the two roots coincide.
+#[test]
+fn the_check_set_is_read_from_the_worktree_being_judged_not_the_main_checkout() {
+    // Main is LOOSER — one check. The branch demands two.
+    let linked = repo_with_worktree(
+        "receipt-verified-worktree-tightened",
+        "[\"verify\"]",
+        "[\"verify\", \"linear-check\"]",
+    );
+    // Only the check BOTH sets name is recorded, so the answer turns entirely on
+    // whether the second one was demanded.
+    record(&linked, "verify");
+
+    let (code, text) = verified(&linked);
+    // THE ASSERTION THAT WAS GREEN OVER THE NO-OP: reading main's looser set
+    // made this exit 0 with half the receipts.
+    assert_eq!(
+        code, 2,
+        "the branch demands linear-check and it was never recorded: {text}"
+    );
+    assert!(
+        text.contains("NOT verified"),
+        "a head missing a receipt its own branch requires is not verified: {text}"
+    );
+    assert!(
+        text.contains("linear-check"),
+        "the refusal names the check THIS branch added: {text}"
+    );
+}
+
+/// **ANTI-VACUITY: a branch that RETIRED a check is not held to it.**
+///
+/// The reverse direction, which `git::worktree_root`'s header names as *"as
+/// bad"*: a main config naming a check the branch retired makes the worktree
+/// permanently unverifiable. Without this case, an anchor that read the main
+/// checkout — or one that unioned both — would satisfy the case above by simply
+/// demanding more, and the union would be invisible.
+#[test]
+fn a_worktree_that_retired_a_check_is_not_judged_by_the_main_checkouts_set() {
+    // Main is TIGHTER this time; the branch narrowed the set to one.
+    let linked = repo_with_worktree(
+        "receipt-verified-worktree-retired",
+        "[\"verify\", \"linear-check\"]",
+        "[\"verify\"]",
+    );
+    record(&linked, "verify");
+
+    let (code, text) = verified(&linked);
+    assert_eq!(
+        code, 0,
+        "this branch requires only `verify`, and it is recorded: {text}"
+    );
+    assert!(
+        !text.contains("linear-check"),
+        "a check this branch retired must not be demanded of it: {text}"
+    );
+}
+
 /// A moved trunk expires the linear-check receipt, which is the whole reason
 /// that receipt records the trunk it was taken against.
 ///

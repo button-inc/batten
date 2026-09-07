@@ -49,6 +49,18 @@ fn failing_gate(dir: &std::path::Path, says: &str) -> String {
     gate.to_string_lossy().into_owned()
 }
 
+/// The classifier row every fixture here declares, in one place.
+///
+/// Extracted for the worktree case below rather than for brevity: that case
+/// turns on the SAME row being found or not found, decided only by which root
+/// the engine anchored on. Two copies could drift, and a drifted copy would make
+/// the case pass by declaring nothing rather than by resolving the wrong tree.
+const CLASSIFIER: &str = "\n[[verify_environment_pattern]]\n\
+     id = \"disk-full\"\n\
+     pattern = \"No space left on device\"\n\
+     stream = \"both\"\n\
+     reason = \"the disk filled. Reclaim something.\"\n";
+
 /// A repository whose committed authority declares the disk-full classifier.
 ///
 /// The row is written here rather than assumed from this repository's own
@@ -56,15 +68,7 @@ fn failing_gate(dir: &std::path::Path, says: &str) -> String {
 /// reason the day somebody edits it — and because the whole point of the table is
 /// that the literal is the CONSUMER's.
 fn repo(name: &str, declare_classifier: bool) -> std::path::PathBuf {
-    let classifier = if declare_classifier {
-        "\n[[verify_environment_pattern]]\n\
-         id = \"disk-full\"\n\
-         pattern = \"No space left on device\"\n\
-         stream = \"both\"\n\
-         reason = \"the disk filled. Reclaim something.\"\n"
-    } else {
-        ""
-    };
+    let classifier = if declare_classifier { CLASSIFIER } else { "" };
     // `Fixture … .git().base_commit()` rather than `init_repo`, which
     // initialises and does NOT commit: `land::verify` reads this clone's HEAD
     // before it runs anything, so an unborn HEAD refuses at the boundary and
@@ -92,6 +96,141 @@ fn verify(dir: &std::path::Path, gate: &str) -> (i32, String) {
         output.status.code().expect("the child exited normally"),
         both,
     )
+}
+
+/// A **linked worktree** whose own branch declares the classifier, off a main
+/// checkout that declares none.
+///
+/// The asymmetry is the instrument. Both roots exist and both carry a
+/// `batten.toml`, so neither anchor can fail to find a file — what differs is
+/// only WHICH file, which is the one thing a case anchored at a single root
+/// cannot see.
+fn repo_with_declaring_worktree(name: &str) -> std::path::PathBuf {
+    let main = repo(name, false);
+    // Branched BEFORE the row lands, so the worktree's tree genuinely carries
+    // its own authority rather than inheriting one and editing it.
+    common::git_in(&main, &["branch", "declares-it"]);
+
+    // `scratch` wipes and creates; `git worktree add` insists on creating the
+    // directory itself, so it is removed again immediately — going through the
+    // one helper is what keeps this under `target/tmp` with every other fixture.
+    let linked = common::scratch(&format!("{name}-linked"));
+    let _ = std::fs::remove_dir_all(&linked);
+    common::git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            linked.to_str().unwrap_or_default(),
+            "declares-it",
+        ],
+    );
+    common::write(
+        &linked,
+        "batten.toml",
+        &format!("version = 1\n{CLASSIFIER}"),
+    );
+    common::git_in(&linked, &["add", "-A"]);
+    common::git_in(&linked, &["commit", "-q", "-m", "declare the classifier"]);
+    linked
+}
+
+/// **THE CLASSIFIER IS THE WORKING TREE'S, NOT THE MAIN CHECKOUT'S** (CLOUD-1586).
+///
+/// Red before the anchor moved to [`batten::git::worktree_root`]. `repo_root`
+/// answers with the MAIN checkout by design — the common dir is shared, which is
+/// what keeps per-repository STATE one store (CLOUD-164) — so anchoring a
+/// committed config there read a `batten.toml` this branch does not own. Every
+/// `[[verify_environment_pattern]]` row then failed to load, and
+/// `verify_environment`'s own fail-safe turns an unreadable table into an EMPTY
+/// one at exit 0, so the refusal classified as `Refusal::Tree` and the operator
+/// was told to reproduce a defect the machine had caused.
+///
+/// `git::worktree_root`'s header states the rule this pins: *"committed config
+/// is the WORKING TREE's, state is the REPOSITORY's."* The mirror image is
+/// deliberately the other way one surface over — `hook_worktree_root.rs` asserts
+/// a mediated call IS judged by the repository's authority, because that is the
+/// repository binding the agent rather than a branch deciding its own toolchain
+/// vocabulary.
+///
+/// **And a linked worktree is where agents work**, which is why this is a live
+/// defect rather than a tidiness: the anchored-at-the-cwd fix that preceded it
+/// looked correct from the main checkout and was wrong everywhere else.
+#[test]
+fn the_classifier_is_read_from_the_worktree_being_judged_not_the_main_checkout() {
+    let linked = repo_with_declaring_worktree("verify-advice-worktree");
+    let gate = failing_gate(
+        &linked,
+        "'rustc-LLVM ERROR: IO failure: No space left on device'",
+    );
+    let (code, said) = verify(&linked, &gate);
+
+    assert_eq!(code, 2, "a gate that ran and refused is a verdict: {said}");
+    // THE ASSERTIONS THAT FAILED BEFORE THIS LANDED — both, because an empty
+    // table produces the ordinary advice rather than an error, so the tell is
+    // the environment line's ABSENCE and the tree line's presence.
+    assert!(
+        said.contains("environment rather than of this tree"),
+        "the worktree's own row should have classified this: {said}"
+    );
+    assert!(
+        said.contains("Reclaim something"),
+        "the row read back must be the worktree's, remedy and all: {said}"
+    );
+    assert!(
+        !said.contains("reproduce and fix locally"),
+        "the main checkout declares no row; reading it is what produced this \
+         advice for a failure the branch did not cause: {said}"
+    );
+}
+
+/// **ANTI-VACUITY: the worktree's SILENCE is respected too.**
+///
+/// Without this, an anchor that simply searched harder — or one that merged both
+/// roots — would satisfy the case above. Here the main checkout declares the row
+/// and the worktree does not, so the correct answer is the ordinary advice: a
+/// branch that retired a classifier must not have the main checkout's reinstated
+/// under it, which is the *"permanently unverifiable"* direction
+/// `git::worktree_root`'s header names as equally bad.
+#[test]
+fn a_worktree_declaring_nothing_is_not_handed_the_main_checkouts_classifier() {
+    // The classifier lands on the main checkout, and the branch the worktree
+    // sits on predates it.
+    let main = repo("verify-advice-worktree-silent", true);
+    common::git_in(&main, &["branch", "-f", "declares-nothing", "HEAD"]);
+    let linked = common::scratch("verify-advice-worktree-silent-linked");
+    let _ = std::fs::remove_dir_all(&linked);
+    common::git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            linked.to_str().unwrap_or_default(),
+            "declares-nothing",
+        ],
+    );
+    common::write(&linked, "batten.toml", "version = 1\n");
+    common::git_in(&linked, &["add", "-A"]);
+    common::git_in(&linked, &["commit", "-q", "-m", "retire the classifier"]);
+
+    let gate = failing_gate(
+        &linked,
+        "'rustc-LLVM ERROR: IO failure: No space left on device'",
+    );
+    let (code, said) = verify(&linked, &gate);
+
+    assert_eq!(code, 2, "{said}");
+    assert!(
+        said.contains("reproduce and fix locally"),
+        "this worktree declares no row, so nothing may be blamed on the \
+         machine: {said}"
+    );
+    assert!(
+        !said.contains("environment rather than of this tree"),
+        "the main checkout's row must not reach a branch that retired it: {said}"
+    );
 }
 
 /// **A REFUSAL MATCHING A DECLARED ROW IS THE ENVIRONMENT'S.**

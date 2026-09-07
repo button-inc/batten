@@ -8581,20 +8581,30 @@ fn run_land_verify(
 /// right in the common case. A config this cannot read must not turn a refused
 /// gate into a second failure on top of it.
 ///
-/// **ANCHORED AT THE REPOSITORY ROOT, never at the caller's directory** (review
-/// of #848). `root` is the cwd the verb was invoked from, so anchoring there
-/// looked for `batten.toml` beside wherever the operator happened to stand — and
-/// `authority_site` with no `config_in` is `required: false`, so a miss is an
-/// EMPTY TABLE at exit 0 rather than a refusal. Every `[[verify_environment_pattern]]`
-/// row then silently did not load and every refusal classified as
-/// `Refusal::Tree`, which is CLOUD-861's misattribution restored by the safe
-/// direction above. `land::verify` next door already resolves the root, and this
-/// PR fixed the same class for `receipt::run_verified`.
+/// **ANCHORED AT THE WORKING TREE'S ROOT, never at the caller's directory and
+/// never at the repository's** (review of #848, then CLOUD-1586). `root` is the
+/// cwd the verb was invoked from, so anchoring there looked for `batten.toml`
+/// beside wherever the operator happened to stand — and `authority_site` with no
+/// `config_in` is `required: false`, so a miss is an EMPTY TABLE at exit 0 rather
+/// than a refusal. Every `[[verify_environment_pattern]]` row then silently did
+/// not load and every refusal classified as `Refusal::Tree`, which is
+/// CLOUD-861's misattribution restored by the safe direction above.
+///
+/// **AND `repo_root` WAS STILL THE WRONG ROOT, WHICH IS THE HALF THE FIRST FIX
+/// MISSED.** From a linked worktree `repo_root` resolves the MAIN checkout — the
+/// common dir is shared — so the rows that loaded were the main tree's and this
+/// branch's were not read at all. `git::worktree_root`'s own header states the
+/// rule this call has to obey: *"committed config is the WORKING TREE's, state
+/// is the REPOSITORY's."* A `batten.toml` is a file this branch may change, so
+/// it is read from here; the receipt store next door stays on `repo_root`
+/// because it is shared. The failure mode is identical to the one above and
+/// therefore invisible in the same way: wrong tree, no rows, empty table, exit
+/// 0, every refusal reported as the branch's own defect.
 ///
 /// A root that will not resolve falls back to the anchor: this function's whole
 /// posture is that a reading it cannot take yields no rows rather than an error.
 fn verify_environment(root: &Path) -> Vec<outputs::OutputPattern> {
-    let anchor = git::repo_root(root).unwrap_or_else(|_| root.to_path_buf());
+    let anchor = git::worktree_root(root).unwrap_or_else(|_| root.to_path_buf());
     let site = config::authority_site(&anchor, None);
     config::load_site(&site)
         .ok()

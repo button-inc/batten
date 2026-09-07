@@ -1860,7 +1860,22 @@ pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
     // This read `Path::new(".")` before either, which found no `batten.toml` at
     // all from a subdirectory — `authority_site` performs no directory walk by
     // design. `worktree_root` walks up, so both defects close together.
-    let authority = crate::git::worktree_root(Path::new(&facts.repo_root))
+    //
+    // **AND IT MUST WALK FROM THE CWD, NOT FROM `facts.repo_root`** (CLOUD-1586,
+    // review of #848). Handing it the repo root made this a NO-OP in the one
+    // case it was written for: `facts.repo_root` is already `repo_root`'s answer
+    // (line 455, deliberately the main checkout, because receipt STATE is
+    // repository-wide), and walking up from the main checkout's root can only
+    // ever reach the main checkout. So the call resolved the very root the
+    // paragraph above rules out, while reading as though it had fixed it.
+    //
+    // The cwd is the anchor the walk needs and it reintroduces nothing: the
+    // subdirectory defect was `authority_site`'s missing walk, which
+    // `worktree_root` supplies, so starting inside the worktree being judged
+    // finds THAT worktree's root from any depth. The fallback stays
+    // `facts.repo_root` — the previous behaviour — because a root that will not
+    // resolve must not turn a judgement into a second failure.
+    let authority = crate::git::worktree_root(Path::new("."))
         .unwrap_or_else(|_| std::path::PathBuf::from(&facts.repo_root));
     let required = verified_by(&authority)?;
     let mut unverified = Vec::new();
