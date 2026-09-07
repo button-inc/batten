@@ -351,6 +351,25 @@ pub struct CredentialProbe {
     /// it cannot reach.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe_url: Option<String>,
+    /// The variables a session credential may arrive under, most specific first.
+    ///
+    /// **Declared here rather than listed in the engine, which is non-negotiable
+    /// rule 1.** It was two GitHub-shaped literals in `crates/batten` for one
+    /// commit, and a consumer on another forge — or on a host that injects under
+    /// a third name — has neither: every candidate is then absent,
+    /// [`credential_health`] answers [`Credential::Unusable`], and every removal
+    /// is silently skipped forever. That failure is INVISIBLE, because skipping
+    /// a removal is also the correct behaviour when a credential is genuinely
+    /// bad, so the dead path and the working path look identical from outside.
+    ///
+    /// Which names belong here is a judgement only the consumer can make. A host
+    /// may inject a substitutable placeholder under the forge's conventional
+    /// names, so probing those would measure the host's credential rather than
+    /// one we hold — the exact conflation this mechanism exists to undo, and the
+    /// reason this list is deliberately not "every variable that looks like a
+    /// token". Naming none is could-not-look, not health: it authorises nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
 }
 
 /// Whether the credential this container was given actually works.
@@ -1177,20 +1196,25 @@ fn attribute_text(value: &x509_cert::der::Any) -> Option<String> {
         .ok()
 }
 
-/// The endpoint a credential is proved against, from the consumer's config.
+/// What a credential is proved against and where one is looked for, from the
+/// consumer's config.
 ///
-/// **Config rather than an engine literal, which is non-negotiable rule 1.** The
+/// **Config rather than engine literals, which is non-negotiable rule 1.** The
 /// engine holds the MECHANISM — refuse a known-bad credential, then test the
-/// real one — and the forge whose credential this is belongs to the repository
-/// that holds it. A hostname baked in here would be a consumer identifier in
-/// `crates/batten`, and would be simply wrong for a consumer on another forge.
+/// real one — and both facts it needs belong to the repository that holds the
+/// credential: the endpoint, because a hostname here would be simply wrong for a
+/// consumer on another forge, and the variable NAMES, because a list here is
+/// silently dead everywhere the host spells them differently.
+/// **Read ONCE, for both.** It was two calls over the same file — one per
+/// candidate for the URL, none at all for the names — and a second reader of one
+/// config is a place two answers can disagree.
 /// **EVERY STEP REPORTS ITS OWN FAILURE.** Written first as one `?` chain over
 /// `.ok()`, which collapsed four different could-not-looks into `None` and made
 /// the launcher's report say "no probe declared" over a repository that declares
 /// one — the same conflation [`Look`] exists to refuse, reintroduced one
 /// function up. A caller cannot act on the answer without knowing which step
 /// gave it.
-fn credential_probe_url() -> std::result::Result<String, String> {
+fn credential_declaration() -> std::result::Result<CredentialProbe, String> {
     let cwd = std::env::current_dir().map_err(|err| format!("no working directory: {err}"))?;
     let root = crate::git::repo_root(&cwd)
         .map_err(|err| format!("{} is in no repository: {err}", cwd.display()))?;
@@ -1204,9 +1228,8 @@ fn credential_probe_url() -> std::result::Result<String, String> {
         crate::config::load(&at).map_err(|err| format!("{} will not load: {err}", at.display()))?;
     config
         .credential
-        .as_ref()
-        .and_then(|probe| probe.probe_url.clone())
-        .ok_or_else(|| "no `[credential] probe_url` is declared".to_owned())
+        .clone()
+        .ok_or_else(|| "no `[credential]` table is declared".to_owned())
 }
 
 /// Where a credential verdict is cached, keyed by the credential's DIGEST.
@@ -1242,7 +1265,7 @@ const CREDENTIAL_MAX_AGE: u64 = 300;
 /// Failure to look is `false`, and the direction is deliberate: an unprovable
 /// candidate is skipped rather than trusted, and if NO candidate proves usable
 /// the caller keeps the host's own wiring instead of stripping it.
-fn credential_usable(value: &Secret) -> bool {
+fn credential_usable(value: &Secret, probe: &str) -> bool {
     let Some(receipt) = credential_receipt_path(value) else {
         return false;
     };
@@ -1258,22 +1281,17 @@ fn credential_usable(value: &Secret) -> bool {
     // ORDER IS THE WHOLE DESIGN: establish the route can REFUSE before believing
     // that it accepted. Reversed, a substituting route reports every credential
     // live — including one that has been revoked.
-    let verdict = match credential_probe_url() {
-        // No declared endpoint is could-not-look, not health. Reading it as
-        // healthy would authorise stripping the host's wiring on a consumer that
-        // never said how to check.
-        Err(why) => Verdict::NoProbe(why),
-        Ok(probe) => match route_honours_credentials(&probe) {
-            // Nobody could reach it. The reason is already on stderr.
-            None => Verdict::Unreachable,
-            // The route answered for a token of zeroes, so it is answering with
-            // an identity of its own and nothing it says about ours is evidence.
-            Some(false) => Verdict::RouteSubstitutes,
-            Some(true) => match probe_credential(&probe, value) {
-                Look::Answered(true) => Verdict::Live,
-                Look::Answered(false) => Verdict::Refused,
-                Look::CouldNotLook(_) => Verdict::Unreachable,
-            },
+    let verdict = match route_honours_credentials(probe, value) {
+        // Nobody could reach it. The reason is already on stderr.
+        None => Verdict::Unreachable,
+        // The route answered for a token that cannot be this credential, so it
+        // is answering with an identity of its own and nothing it says about
+        // ours is evidence.
+        Some(false) => Verdict::RouteSubstitutes,
+        Some(true) => match probe_credential(probe, value) {
+            Look::Answered(true) => Verdict::Live,
+            Look::Answered(false) => Verdict::Refused,
+            Look::CouldNotLook(_) => Verdict::Unreachable,
         },
     };
     let live = verdict == Verdict::Live;
@@ -1299,29 +1317,54 @@ fn credential_usable(value: &Secret) -> bool {
     live
 }
 
-/// The names a session credential may arrive under, most specific first.
-///
-/// `GITHUB_TOKEN`/`GH_TOKEN` are deliberately absent: a host may inject a
-/// substitutable placeholder under those, so probing them would measure the
-/// host's own credential rather than one we hold — the exact conflation this
-/// whole mechanism exists to undo.
-const CREDENTIAL_NAMES: [&str; 2] = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN"];
-
 /// Whether ANY declared credential is usable, which is what gates every removal.
 ///
 /// Separate from per-candidate selection because the two ask different
 /// questions: selection asks "which value do I write", this asks "have I proved
 /// a replacement exists at all" — and only the second may authorise stripping
 /// the host's proxy wiring.
+///
+/// **Every could-not-look is [`Credential::Unusable`] AND IS SAID OUT LOUD.**
+/// An undeclared table, an undeclared endpoint and an undeclared name list all
+/// reach the same verdict as a revoked token, and they are not the same
+/// situation: one is the operator's credential to replace and the others are the
+/// consumer's config to write. Reporting the distinction is the only thing
+/// separating this from a mechanism that loads clean and decides nothing.
 fn credential_health() -> Credential {
-    if CREDENTIAL_NAMES
+    let declaration = match credential_declaration() {
+        Ok(declaration) => declaration,
+        // No declared table is could-not-look, not health. Reading it as healthy
+        // would authorise stripping the host's wiring on a consumer that never
+        // said how to check.
+        Err(why) => {
+            crate::config::report(&Verdict::NoProbe(why).why());
+            return Credential::Unusable;
+        }
+    };
+    let Some(probe) = declaration.probe_url.as_deref() else {
+        crate::config::report(
+            &Verdict::NoProbe("no `[credential] probe_url` is declared".to_owned()).why(),
+        );
+        return Credential::Unusable;
+    };
+    if declaration.names.is_empty() {
+        crate::config::report(
+            &Verdict::NoProbe(
+                "`[credential] names` is empty, so there is no variable to look in".to_owned(),
+            )
+            .why(),
+        );
+        return Credential::Unusable;
+    }
+    if declaration
+        .names
         .iter()
         // Into a `Secret` at the READ, which is the only place that keeps the
         // window shut: a value bound to a `String` first is a value some later
         // edit can print, and the whole class this fixes is later edits.
         .filter_map(|name| std::env::var(name).ok().map(Secret::new))
         .filter(|value| !value.is_empty())
-        .any(|value| credential_usable(&value))
+        .any(|value| credential_usable(&value, probe))
     {
         Credential::Live
     } else {
@@ -1348,12 +1391,13 @@ fn credential_health() -> Credential {
 /// collapsing them is what made this mechanism's first live reading unreadable:
 /// every candidate resolved unusable, and the report could not say whether the
 /// forge had refused the token or the connection had never been made.
-fn route_honours_credentials(probe: &str) -> Option<bool> {
-    // Syntactically plausible so the refusal is about the CREDENTIAL rather than
-    // about malformed input, which a route could reject without ever consulting
-    // an identity — and that would read as honesty it has not demonstrated.
-    const MUST_FAIL: &str = "ghp_0000000000000000000000000000000000";
-    match probe_credential(probe, &Secret::new(MUST_FAIL.to_owned())) {
+///
+/// It takes the REAL credential to derive a known-bad one shaped like it — see
+/// [`known_bad_like`] — and never to send it. The control arm must be spent per
+/// candidate rather than once, because "shaped like it" is only meaningful
+/// against a particular credential.
+fn route_honours_credentials(probe: &str, real: &Secret) -> Option<bool> {
+    match probe_credential(probe, &known_bad_like(real)) {
         Look::Answered(accepted) => Some(!accepted),
         Look::CouldNotLook(why) => {
             crate::config::report(&format!(
@@ -1362,6 +1406,84 @@ fn route_honours_credentials(probe: &str) -> Option<bool> {
             None
         }
     }
+}
+
+/// The character a derived body is filled with, and the one it falls back to.
+///
+/// Two, because the derivation is only known-bad if it DIFFERS from the value it
+/// was derived from — and a credential whose body is already all `0` would
+/// derive to itself, making a live route look like a substituting one. That
+/// direction is safe (removals are skipped) but it is still a wrong answer, and
+/// ruling it out costs one comparison.
+const FILL: [char; 2] = ['0', '1'];
+
+/// A credential the route must REFUSE, shaped like the one we are about to test.
+///
+/// # Why derived rather than a literal
+///
+/// This was one forge's token prefix followed by a run of zeroes, spelled out in
+/// `crates/batten`, for one commit — non-negotiable rule 1 twice over: a forge's
+/// token prefix is a consumer identifier, and the literal is simply WRONG off
+/// that forge. (The spelling is not repeated here; the gate that now enforces
+/// this, `the_engine_names_no_consumer_of_its_own`, reads THIS file, and a
+/// scanner whose own corpus carries the shape it hunts is one nobody can trust a
+/// negative from. It caught this paragraph's first draft.) The doc it sat under
+/// stated the criterion it broke — the token must be *"syntactically plausible
+/// so the refusal is about the CREDENTIAL rather than about malformed input,
+/// which a route could reject without ever consulting an identity"* — and that
+/// prefix **is** malformed input to a GitLab, Gitea or Bitbucket endpoint. There the control
+/// arm passes for exactly the reason the criterion rules out, so the route is
+/// declared to honour credentials on evidence it has not earned, and every
+/// verdict downstream of it rests on a rubber stamp.
+///
+/// Plausibility is a property of a FORGE, and an agnostic engine holds no
+/// forge's grammar. What it does hold is a real credential for that forge, and
+/// the shape of a well-formed token is the best available evidence of what a
+/// well-formed token looks like there. So the derivation keeps everything up to
+/// and including the last structural (non-alphanumeric) character — a prefix
+/// like `ghp_` or `glpat-`, whatever this forge spells — and refills the body,
+/// preserving length and character class.
+///
+/// # Why the consumer does not get to name it
+///
+/// Deliberately not a config field. A consumer that could name the known-bad
+/// could name one the route happens to ACCEPT, which turns the control arm into
+/// the rubber stamp it exists to prevent. The engine derives it, so the claim
+/// "this route refuses a bad credential" is one nothing outside can weaken.
+///
+/// # What it is not
+///
+/// Not a guarantee of invalidity. A forge could in principle have issued the
+/// derived value, at a probability no operator needs to reason about; if it had,
+/// the route would accept it, the verdict would read [`Verdict::RouteSubstitutes`],
+/// and removals would be SKIPPED — the safe direction, which is why this is
+/// stated rather than defended against.
+fn known_bad_like(real: &Secret) -> Secret {
+    // `expose` here and nowhere downstream: the derived value is what travels,
+    // and it is a `Secret` too, so a report that renders it says `<redacted>`
+    // rather than handing a reader a token-shaped string to mistake for ours.
+    let real = real.expose();
+    let body_from = real
+        .char_indices()
+        .rfind(|(_, char)| !char.is_alphanumeric())
+        .map_or(0, |(at, char)| at + char.len_utf8());
+    let mut derived = String::with_capacity(real.len());
+    for fill in FILL {
+        derived.clear();
+        derived.push_str(&real[..body_from]);
+        // Length AND class preserved: one filler char per body char, so a route
+        // that checks either sees a token it has to consult an identity about.
+        derived.extend(real[body_from..].chars().map(|_| fill));
+        if derived != real {
+            return Secret::new(derived);
+        }
+    }
+    // A value with NO alphanumeric body — every character structural — has
+    // nothing to refill, so both fills derive it back. Lengthening it is the one
+    // remaining way to differ, and a credential of that shape is not one any
+    // forge issued anyway.
+    derived.push(FILL[0]);
+    Secret::new(derived)
 }
 
 /// Why a credential did or did not prove usable.
@@ -1988,6 +2110,69 @@ pub fn binary_path(repo_root: &Path, entry: &Provision) -> Result<PathBuf> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // The control credential is DERIVED, never a forge's literal (CLOUD-1615).
+    //
+    // Shaped like the value it stands in for, on whatever forge that is, so the
+    // route has to consult an identity to refuse it. A case here asserts the
+    // three properties that makes checkable — prefix, length, difference —
+    // rather than a rendering, because the value never reaches a rendering.
+    // -----------------------------------------------------------------------
+
+    /// Distinctive, and DELIBERATELY NOT SHAPED LIKE A REAL CREDENTIAL: every
+    /// assertion below is over structure, so a well-formed fixture would buy
+    /// nothing and would put a token-shaped string in front of the scanner.
+    const CANARY: &str = "xyz_CANARYnotacredential99";
+
+    #[test]
+    fn the_control_credential_keeps_the_structural_prefix() {
+        let derived = known_bad_like(&Secret::new(CANARY.to_owned()));
+        assert!(
+            derived.starts_with("xyz_"),
+            "the forge's own prefix is what makes the token plausible THERE, and \
+             an engine that dropped it would be sending malformed input — which a \
+             route can refuse without ever consulting an identity"
+        );
+    }
+
+    /// The engine holds no forge's grammar, so the case proves the derivation
+    /// travels: a prefix it has never seen is carried exactly as `xyz_` is.
+    #[test]
+    fn it_carries_a_prefix_the_engine_has_never_seen() {
+        let derived = known_bad_like(&Secret::new("glpat-AbCdEfGhIjKlMnOp".to_owned()));
+        assert!(derived.starts_with("glpat-"), "another forge's prefix");
+        assert_eq!(derived.expose().len(), "glpat-AbCdEfGhIjKlMnOp".len());
+    }
+
+    #[test]
+    fn the_control_credential_preserves_length_and_differs() {
+        let real = Secret::new(CANARY.to_owned());
+        let derived = known_bad_like(&real);
+        assert_eq!(
+            derived.expose().len(),
+            CANARY.len(),
+            "a length check is the cheapest thing a route can reject on without \
+             consulting an identity"
+        );
+        assert_ne!(
+            derived.expose(),
+            real.expose(),
+            "A CONTROL THAT IS THE CREDENTIAL PROVES NOTHING: the route would \
+             accept it for the right reason and be read as substituting"
+        );
+    }
+
+    /// SHOWN ABLE TO FAIL in the degenerate direction (CLOUD-418). A body that
+    /// is already the first filler derives to itself unless the fallback fires,
+    /// which is the one input where the property above is not free.
+    #[test]
+    fn a_credential_already_made_of_the_filler_still_differs() {
+        for real in ["tok_000000", "0000", "----"] {
+            let derived = known_bad_like(&Secret::new(real.to_owned()));
+            assert_ne!(derived.expose(), real, "over {real}");
+        }
+    }
 
     /// A row that sets `name` from `from_first_set`, rejecting `proxy-`.
     fn credential_row(name: &str) -> ProvisionEnv {
