@@ -46,6 +46,13 @@ use std::path::{Path, PathBuf};
 
 use crate::Result;
 use crate::error::UsageError;
+// THE ONE SPELLING OF THE PULL-REQUEST SHAPE (non-negotiable rule 1,
+// CLOUD-1623). This module carried its own copy that additionally required the
+// literal `github.com/`, so on any other forge `live_pull_request` answered
+// `None` for every real pull request and the open-competitor check was dead — a
+// claim gate silently missing the one competitor it exists to find. The
+// host-free version in `landed` is the survivor; its doc carries the reasoning.
+use crate::landed::is_pull_request_url;
 
 /// A refusal: which issue, and which rule.
 ///
@@ -211,21 +218,6 @@ fn live_pull_request(value: &serde_json::Value) -> Option<String> {
     })
 }
 
-/// Whether a URL is a GitHub pull request.
-///
-/// Matched on the URL SHAPE rather than the attachment title, which is free text
-/// a human wrote.
-fn is_pull_request_url(url: &str) -> bool {
-    let Some(rest) = url.split_once("github.com/").map(|(_, rest)| rest) else {
-        return false;
-    };
-    let Some((_, tail)) = rest.split_once("/pull/") else {
-        return false;
-    };
-    let number: String = tail.chars().take_while(char::is_ascii_digit).collect();
-    !number.is_empty()
-}
-
 /// What the caller asked for, beyond the payloads.
 #[derive(Debug, Clone, Default)]
 pub struct Request {
@@ -276,19 +268,36 @@ impl Verdict {
 /// would send the reader to the wrong question.
 pub fn judge(
     grammar: &crate::ready::Grammar,
+    columns: &crate::board::Columns,
     issues: &[Issue],
     request: &Request,
     root: &Path,
     receipts: Option<&Path>,
 ) -> Result<Verdict> {
+    // THE READY QUEUE IS THE CONSUMER'S WORD (non-negotiable rule 1,
+    // CLOUD-1623). It was the literal `"Todo"` here, so on any board spelling
+    // its queue differently EVERY row read as not-pullable — a refusal that
+    // never lets anyone claim anything, which is the loud direction of this
+    // defect and the only reason it would have been noticed at all.
+    //
+    // Undeclared refuses the RUN rather than every row: a claim gate that
+    // cannot name the queue has not decided that nothing is pullable.
+    let ready_column = columns.ready().map_err(|undeclared| {
+        UsageError::raise(format!(
+            "claim: {undeclared}. Declare the column your board calls the ready \
+             queue, and this decides again."
+        ))
+    })?;
     let mut verdict = Verdict::default();
     for issue in issues {
         let before = verdict.refusals.len();
 
-        if issue.status != "Todo" {
+        if issue.status != ready_column {
             verdict.refusals.push(Refusal {
                 id: issue.id.clone(),
-                rule: format!("not-todo (in {})", issue.status),
+                // The token carries the consumer's word for the queue, so a
+                // reader is told which column their row failed to be in.
+                rule: format!("not-{} (in {})", ready_column.to_lowercase(), issue.status),
                 kind: Kind::Competitor,
             });
             continue;
@@ -1012,6 +1021,23 @@ pub fn adopt(
 mod tests {
     use super::*;
 
+    /// This repository's own ready-queue column, as `batten.toml` declares it.
+    ///
+    /// An INPUT to the predicate now rather than a constant inside it — which is
+    /// the whole of CLOUD-1623, made visible at every call site below.
+    fn test_columns() -> crate::board::Columns {
+        crate::board::Columns {
+            ready: Some("Todo".to_owned()),
+            in_progress: Some("In Progress".to_owned()),
+            review: Some("In Review".to_owned()),
+            started: vec![
+                "In Progress".to_owned(),
+                "In Review".to_owned(),
+                "Done".to_owned(),
+            ],
+        }
+    }
+
     /// A tracker row with just the two fields the sequence rules read.
     fn issue(id: &str, status: &str) -> Issue {
         Issue {
@@ -1345,8 +1371,14 @@ mod tests {
         // is CLOUD-526's projection: three of the four rules never look at it.
         let issues = [issue("CLOUD-1", "In Progress")];
         let grammar = crate::ready::Grammar::committed();
-        let Ok(verdict) = judge(&grammar, &issues, &Request::default(), Path::new("."), None)
-        else {
+        let Ok(verdict) = judge(
+            &grammar,
+            &test_columns(),
+            &issues,
+            &Request::default(),
+            Path::new("."),
+            None,
+        ) else {
             panic!("a non-Todo issue needs no body")
         };
         assert_eq!(verdict.refusals.len(), 1);
@@ -1359,7 +1391,14 @@ mod tests {
         // it is refused BY NAME so the reader is sent to the right question.
         let issues = [issue("CLOUD-1", "Todo")];
         let grammar = crate::ready::Grammar::committed();
-        let answer = judge(&grammar, &issues, &Request::default(), Path::new("."), None);
+        let answer = judge(
+            &grammar,
+            &test_columns(),
+            &issues,
+            &Request::default(),
+            Path::new("."),
+            None,
+        );
         assert!(
             answer.is_err(),
             "a bodyless payload must not read as pullable"

@@ -82,6 +82,19 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   `-J`?), and a flag carries `hidden` plus `Rung` — which §3 ladder rung it
   selects — so "is this a ladder flag" is a column rather than a naming
   convention, and the ladder's totality is a census test.
+- `board.rs` — the board's COLUMN VOCABULARY, resolved from the `[board]` table
+  rather than held as engine constants (CLOUD-1623, non-negotiable rule 1).
+  `landed` and `claim` decided over one tracker's words — Linear's
+  Todo/In Progress/In Review/Done — so on any other board every comparison was
+  false: `is_started` never fired, the landed-honesty sweep reported zero
+  findings over a board full of dishonest columns, and `claim` never refused.
+  `Columns::resolve` reads the table and `board_columns` in `lib.rs` is
+  `board_grammar`'s sibling. The load-bearing rule is that an undeclared column
+  refuses BY NAME and never falls back to this repository's words — a default
+  would restore the property that made the original defect unobservable, the
+  dead path and the working path answering identically. An EMPTY `started` set
+  is undeclared for the same reason: a set matching nothing reports every row as
+  not-advanced, which is the silent all-clear.
 - `bot.rs` — the bot lane, retired off `mise-tasks/bot-issue.sh` (CLOUD-1295).
   Two halves in one module: the PREDICATES — is this PR one of the lane's, which
   manifests it touched, what Conventional type its subject declares, whether a

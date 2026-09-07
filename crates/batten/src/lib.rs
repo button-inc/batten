@@ -14,6 +14,9 @@ pub mod advisory;
 pub mod agent;
 pub mod attribution;
 pub mod baseline;
+/// The board's column vocabulary, resolved from config rather than held as
+/// engine constants (non-negotiable rule 1, CLOUD-1623).
+pub mod board;
 pub mod bot;
 pub mod brief;
 pub mod budget;
@@ -324,7 +327,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // The board sweep (CLOUD-186, CLOUD-1127). Judges a payload rather than
         // a tree, so it takes no config chain and no root: the evidence is what
         // the caller supplies, and the verdict is the predicate's alone.
-        Some(Command::Landed { command }) => run_landed(command, mode, out, err),
+        Some(Command::Landed { command }) => run_landed(command, mode, &overrides, out, err),
         Some(Command::Claim { command }) => run_claim(command, mode, &overrides, out, err),
         // The adopted runner's surface contract (CLOUD-947). No config chain and
         // no rule set: the subject is the pinned binary's own answer about
@@ -2585,6 +2588,7 @@ fn evidence_file(path: &str, what: &str) -> Result<Vec<(String, Option<String>)>
 fn run_landed(
     command: LandedCommand,
     mode: Mode,
+    overrides: &Overrides,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -2600,6 +2604,7 @@ fn run_landed(
             landed_by.as_deref(),
             declined.as_deref(),
             mode,
+            overrides,
             err,
         ),
         LandedCommand::Abandoned {
@@ -2610,6 +2615,7 @@ fn run_landed(
             instant,
             max_idle_days,
         } => run_landed_abandoned(
+            overrides,
             &AbandonAsk {
                 claimed: claimed.as_deref(),
                 merged_prs: merged_prs.as_deref(),
@@ -2654,6 +2660,7 @@ fn run_landed_check(
     landed_by: Option<&str>,
     declined: Option<&str>,
     mode: Mode,
+    overrides: &Overrides,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     // ABSENT EVIDENCE IS COULD-NOT-LOOK, NEVER A SHORT SWEEP. Half the landed
@@ -2726,7 +2733,8 @@ fn run_landed_check(
         }
     }
 
-    let report = landed::decide(&rows, &evidence);
+    let columns = board_columns(overrides)?;
+    let report = landed::decide(&rows, &evidence, &columns);
 
     // Pointer-only per rule 4: a key, two column names and a reason class. Never
     // a line of any body — a PR body and an issue body both carry consumer
@@ -2740,15 +2748,24 @@ fn run_landed_check(
             .as_ref()
             .map(|reference| format!("  (asserted by --landed-by: {reference})"))
             .unwrap_or_default();
+        // THE REMEDY IS OMITTED RATHER THAN GUESSED when the consumer has not
+        // named the column it would send the reader to (CLOUD-1623). The finding
+        // — key, column held, reason class — needs no vocabulary and is always
+        // printed; only the arrow half does, so an undeclared column costs the
+        // suggestion and never the report.
+        let wants = finding
+            .reason
+            .wants(&columns)
+            .map(|column| format!(" -> {column}"))
+            .unwrap_or_default();
         output::message(
             mode,
             Verbosity::Normal,
             err,
             &format!(
-                "  {}  {} -> {}  {}{suffix}",
+                "  {}  {}{wants}  {}{suffix}",
                 finding.id,
                 finding.holds,
-                finding.reason.wants(),
                 finding.reason.token(),
             ),
         )?;
@@ -2780,6 +2797,7 @@ fn run_landed_check(
 /// or when a row whose verdict needs a key does not carry it. Every one is exit
 /// 2: a sweep that could not look must never render as a clean column.
 fn run_landed_abandoned(
+    overrides: &Overrides,
     ask: &AbandonAsk<'_>,
     mode: Mode,
     out: &mut dyn Write,
@@ -2873,6 +2891,7 @@ fn run_landed_abandoned(
         }
     }
 
+    let columns = board_columns(overrides)?;
     let report = landed::drain(
         &claims,
         &evidence,
@@ -2881,6 +2900,7 @@ fn run_landed_abandoned(
             max_idle_days,
             today,
         },
+        &columns,
     )?;
 
     render_drain(&report, max_idle_days, mode, out, err)?;
@@ -3908,6 +3928,23 @@ fn render_findings(findings: &[checks_green::Finding]) -> String {
         .join(", ")
 }
 
+/// This board's column vocabulary, resolved from the `[board]` table
+/// (CLOUD-1623).
+///
+/// [`board_grammar`]'s sibling, and deliberately a second function rather than a
+/// field on the grammar: a verb needing columns may need no patterns, and one
+/// resolver would make an unrelated table's gap look like this one's verdict —
+/// the reason `write_records` already resolves the grammar as `Option`.
+///
+/// **Absent is could-not-look, never a default.** [`crate::board::Columns`]
+/// refuses by naming the key, so a consumer who has not declared a column is
+/// told which one rather than being silently measured against this
+/// repository's own words.
+fn board_columns(overrides: &Overrides) -> Result<board::Columns> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    Ok(board::Columns::resolve(config.board.as_ref()))
+}
+
 /// The Ready grammar, resolved from this repository's own `[[pattern]]` table
 /// (CLOUD-1100).
 ///
@@ -3973,6 +4010,7 @@ fn run_claim(
             run_claim_check(
                 &board_root(),
                 &board_grammar(overrides)?,
+                &board_columns(overrides)?,
                 &ClaimAsk {
                     request: &request,
                     adopt,
@@ -4165,6 +4203,7 @@ const WRITE_TOOL: &str = "save_issue";
 fn run_claim_check(
     repo: &Path,
     grammar: &ready::Grammar,
+    columns: &board::Columns,
     ask: &ClaimAsk<'_>,
     mode: Mode,
     out: &mut dyn Write,
@@ -4187,7 +4226,14 @@ fn run_claim_check(
     }
 
     let issues = claim_payloads(repo, issue)?;
-    let verdict = claim::judge(grammar, &issues, request, repo, receipts.as_deref())?;
+    let verdict = claim::judge(
+        grammar,
+        columns,
+        &issues,
+        request,
+        repo,
+        receipts.as_deref(),
+    )?;
 
     if json {
         writeln!(

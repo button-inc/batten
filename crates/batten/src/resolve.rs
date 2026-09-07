@@ -506,6 +506,14 @@ pub struct Resolved {
     /// The refinement gate's thresholds (CLOUD-472), from the committed
     /// authority alone. `None` is could-not-look and asks for no ratchet.
     pub ready: Option<crate::config::Ready>,
+    /// This board's column vocabulary (CLOUD-1623), from the **committed
+    /// authority alone**.
+    ///
+    /// `None` is could-not-look, and every reader takes it as one: a verb needing
+    /// a column names the key it wanted and decides nothing. A local layer
+    /// cannot supply these for §8's reason — renaming the column a claim gate
+    /// admits is a weakening, and the chain admits raise-only overrides.
+    pub board: Option<crate::config::Board>,
     /// The accepted invocation-latency regressions (CLOUD-1163 unit 10), from the
     /// **committed authority alone**. `None` accepts nothing, which is the only
     /// safe reading: a local layer that could add an exemption would be a
@@ -1686,6 +1694,7 @@ fn assemble(
         // and house style §8 admits only raises. Lowering it is a change to the
         // committed file, where a reviewer sees it.
         ready: repo.ready.clone(),
+        board: repo.board.clone(),
         perf: repo.perf.clone(),
         unlanded: paths.unlanded,
         epoch: repo.epoch.clone(),
@@ -1782,6 +1791,7 @@ fn attribution(
         // LATER — exempting rows the committed authority refuses — which is a
         // weakening dressed as a setting, and §8 admits only raises.
         ("ready", authority_set(repo.ready.is_some())),
+        ("board", authority_set(repo.board.is_some())),
         // AUTHORITY-ONLY for the same reason, one table over: every row RAISES a
         // path's threshold, so a local layer that could add one would be the
         // weakening §8 refuses.
