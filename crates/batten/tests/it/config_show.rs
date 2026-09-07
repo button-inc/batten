@@ -480,9 +480,18 @@ fn config_show_reaches_a_policy_verdict_only_for_an_authority_violation() {
             expected: 1,
         },
         Case {
+            // THE ONE ROW THAT MOVED, AND THE TWO ABOVE ARE WHY IT IS SAFE
+            // (CLOUD-1572). An unknown key and an unsupported version still
+            // refuse, so this is not "an unreadable config is tolerated".
+            //
+            // A build below the floor is different in kind: it is the one state
+            // where batten KNOWS it is too old to be trusted, and refusing there
+            // meant exit 1 — a Batten FAILURE rather than a denial, so no
+            // failure path can block a call and every mediated gate went off.
+            // It boots, enforces what it can read, and names the floor.
             name: "a minimum above this build",
             config: Some("version = 1\nmin_batten_version = \"99.0.0\"\n"),
-            expected: 1,
+            expected: 0,
         },
         Case {
             name: "a config whose rule would fire",

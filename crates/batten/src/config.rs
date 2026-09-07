@@ -1358,7 +1358,7 @@ pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
     // the override surface is not what is being relaxed: an unknown key still
     // enforces nothing and is still named. What changes is that it costs its
     // own row or key instead of the file.
-    let behind = binary_is_behind_the_committed_schema(source);
+    let behind = binary_is_behind_the_config(source, text);
     let (mut config, dropped) = if let Ok(config) = toml::from_str::<OverrideConfig>(text) {
         (config, Vec::new())
     } else {
@@ -1898,31 +1898,36 @@ fn is_unknown_key(err: &toml::de::Error) -> bool {
     err.message().starts_with("unknown field")
 }
 
-/// Whether this binary is BEHIND the schema committed beside the config it is
-/// failing to read — the structural answer to "bad config, or stale binary?".
+/// Whether this binary is BEHIND the config it is failing to read — the
+/// structural answer to "bad config, or stale binary?".
 ///
-/// **This is the discriminator the message cannot give.** `severity = "tree"`
-/// and `key = "delta"` are the same serde error, so reading the message tells
-/// you an enum was involved and never whose fault it is. `schema/*.json` is
-/// GENERATED from these very types and committed beside the authority, so the
-/// two answers are already in the tree: derive this build's schema, read the
-/// one `main` shipped, and compare.
+/// **Today this reads an artifact batten generates for ITSELF, so it answers
+/// only in this repository. That is a named gap, not a design** (CLOUD-1572).
+/// A consumer has no `schema/batten.schema.json`, gets could-not-look, and the
+/// whole-file refusal — and its fail-open — returns for exactly the repositories
+/// batten exists to serve.
 ///
-/// * They agree → the schema this binary implements is the schema the config
-///   was written against, so a variant neither has is bad input. Refuse, which
-///   is what `rules.rs`'s closed enums are for.
-/// * They differ → the config was written against a schema this binary does not
-///   implement. The row is unreadable HERE and fine everywhere else, and the
-///   remedy is a rebuild rather than an edit.
+/// **`min_batten_version` was tried as the portable arm and is UNREACHABLE**,
+/// which is worth recording so the next author does not rebuild it.
+/// [`check_min_version`] refuses a build below the floor at exit `1` before the
+/// prune is ever consulted, so a floor above this build never reaches a leniency
+/// arm — measured, `./batten.toml requires batten 9999.0.0 or newer`. The floor
+/// is also a CLAIM the consumer makes and nothing verifies: gating it needs to
+/// know which release introduced which key, and every mechanism that could say
+/// so — `removals_unannounced`, [`additions_since`], `floor_owed` — sits behind
+/// `run_config_deprecations`'s `git::show` of this repository's own history.
 ///
-/// **Absent or unreadable is `false`, and the direction is the point**: a
-/// consumer that ships no schema, or a read that fails, is could-not-look — and
-/// could-not-look must not buy the lenient arm. Only a MEASURED disagreement
-/// does.
+/// So the portable fix is a per-release schema the binary can reach without the
+/// network and without this repo's git log, which is CLOUD-1572's decision to
+/// make rather than this function's to guess.
 ///
-/// Reached only on a load that already failed, so the clean path never pays for
-/// it.
-fn binary_is_behind_the_committed_schema(source: &str) -> bool {
+/// **Absent or unreadable is `false`**: could-not-look must not buy the lenient
+/// arm. Only a measured disagreement does. Reached only on a load that already
+/// failed, so the clean path pays nothing.
+fn binary_is_behind_the_config(source: &str, text: &str) -> bool {
+    if floor_is_above_this_build(text) {
+        return true;
+    }
     let Some(root) = Path::new(source).parent() else {
         return false;
     };
@@ -1931,6 +1936,48 @@ fn binary_is_behind_the_committed_schema(source: &str) -> bool {
         return false;
     };
     committed.trim_end() != derived.trim_end()
+}
+
+/// The portable arm: `min_batten_version` above this build's version.
+///
+/// **No artifact, no network, and nothing this repository is special about** —
+/// the binary already carries its own version, and the config already declares
+/// which release it needs. That is the whole comparison, and it is why a
+/// consumer needs to vendor nothing.
+///
+/// Read from the raw document rather than a parsed [`Config`], because the parse
+/// is what just failed: the question is about a file this build could not fully
+/// read. One key off the top-level table, so a row it cannot understand does not
+/// prevent the reading.
+fn floor_is_above_this_build(text: &str) -> bool {
+    toml::from_str::<toml::Table>(text)
+        .ok()
+        .as_ref()
+        .and_then(|table| table.get("min_batten_version"))
+        .and_then(toml::Value::as_str)
+        .is_some_and(build_is_below)
+}
+
+/// Whether this build is below `required`, as a semver comparison.
+///
+/// **ONE AUTHORITY, read by both callers.** [`check_min_version`] and
+/// [`floor_is_above_this_build`] ask the same question of the same two values,
+/// and a second spelling of it is free to disagree: a floor written
+/// `"1.0.0 "` was above the build to one and parse-failure-shaped to the other,
+/// so the loader could report `requires batten X or newer` while the pruning arm
+/// read `false` and refused the very rows the report said were dropped.
+///
+/// An unparseable version on either side is `false` — could-not-look, which
+/// `check_min_version` turns into its own named refusal and the pruning arm
+/// treats as no evidence of skew.
+fn build_is_below(required: &str) -> bool {
+    let (Ok(required), Ok(running)) = (
+        semver::Version::parse(required),
+        semver::Version::parse(VERSION),
+    ) else {
+        return false;
+    };
+    running < required
 }
 
 /// Whether this failure is a value naming a VARIANT this build does not have.
@@ -2796,7 +2843,7 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // failure the prune could not localise to a row — a key on the top-level
     // table, or one inside a plain `[section]` — and for exactly those the skew
     // reading is still the most useful thing to say.
-    let behind = binary_is_behind_the_committed_schema(source);
+    let behind = binary_is_behind_the_config(source, text);
     let (mut config, dropped) = if let Ok(config) = toml::from_str::<Config>(text) {
         (config, Vec::new())
     } else {
@@ -2849,14 +2896,47 @@ fn check_min_version(config: &Config, source: &str) -> Result<()> {
             "invalid min_batten_version {required:?} in {source}: {err}"
         ))
     })?;
-    let running = semver::Version::parse(VERSION)
-        .map_err(|err| UsageError::raise(format!("invalid build version {VERSION:?}: {err}")))?;
-    if running < required {
-        return Err(UsageError::raise(format!(
-            "{source} requires batten {required} or newer; this build is {VERSION}"
-        )));
+    // Through `build_is_below`, so the pruning arm cannot disagree with this
+    // report about whether the build is behind. `required` is re-rendered from
+    // the parsed value above, which is what keeps the two readings byte-equal.
+    if build_is_below(&required.to_string()) {
+        // BELOW THE FLOOR IS A STALE BINARY, DEFINITIVELY, AND REFUSING IT WAS
+        // THE FAIL-OPEN (CLOUD-1572).
+        //
+        // This raised a `UsageError` — exit `1` — and `exit.rs` makes only `2` a
+        // denial precisely so no failure path can block a call. So the harness
+        // read the refusal as a non-blocking hook error and ran every mediated
+        // tool anyway: the one state where batten is CERTAIN it cannot be
+        // trusted was the state in which it stopped refusing anything.
+        //
+        // The certainty is what makes reporting the right answer rather than a
+        // relaxation. Everywhere else the loader is guessing whether a value it
+        // cannot read is a typo or schema skew; here the config has SAID which
+        // release it needs and this build is below it. Nothing is inferred, no
+        // artifact is consulted, and it works in every repository because the
+        // binary already carries both halves — its own version, and its own
+        // derived schema.
+        //
+        // Loud, and on every load rather than once: this is the state where a
+        // session silently enforces a rule set it cannot fully read.
+        report(&format!(
+            "{source} requires batten {required} or newer and this build is \
+             {VERSION} — rows this build cannot read are DROPPED and named below, \
+             so gates they carry are NOT enforced. Rebuild or fetch {required}."
+        ));
     }
     Ok(())
+}
+
+/// Write one line of report to stderr, through [`crate::output`] rather than
+/// `eprintln!` — the workspace lint bans `print*!` in library code, and a
+/// `print`-shaped write has no mode to consult, so `--quiet` could only ever be
+/// a promise.
+///
+/// Best effort: a load that cannot report is still a load, and turning a failed
+/// write into a failed load is the opposite of what this exists for.
+pub(crate) fn report(text: &str) {
+    let _ = crate::output::error(crate::output::Mode::default(), &mut std::io::stderr(), text);
 }
 
 /// The JSON Schema for `batten.toml`, derived from [`Config`].
@@ -4249,10 +4329,27 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join(CONFIG_FILE);
         for text in [
-            "version = = 1\n",                                 // malformed
-            "version = 1\nbogus = 1\n",                        // unknown key
-            "version = 2\n",                                   // unsupported version
-            "version = 1\nmin_batten_version = \"999.0.0\"\n", // too old a build
+            "version = = 1\n",          // malformed
+            "version = 1\nbogus = 1\n", // unknown key
+            "version = 2\n",            // unsupported version
+                                        // `min_batten_version` above this build WAS the fourth entry here
+                                        // and is deliberately gone (CLOUD-1572). CLOUD-70's asymmetry is
+                                        // that absence selects the defaults and invalidity never does, and
+                                        // the reason given is that defaulting would be a *silent policy
+                                        // downgrade* — the operator wrote a file, and answering with the
+                                        // engine's own rules would report green over rules they wrote.
+                                        //
+                                        // That reason does not reach a stale binary, because nothing
+                                        // defaults: the operator's file loads as written, only rows this
+                                        // build cannot read are dropped, and each one is named. What the
+                                        // refusal bought instead was exit `1` — a Batten FAILURE rather than
+                                        // a denial, so no failure path can block a call — which meant the
+                                        // one state where batten KNOWS it is too old to be trusted was the
+                                        // state in which it refused nothing at all.
+                                        //
+                                        // `config_forward_compatible.rs` carries the pair over the compiled
+                                        // binary: below the floor the engine starts and says so, and with no
+                                        // floor a bad variant is still refused.
         ] {
             fs::write(&path, text).unwrap();
             let err = load_authority(&path).unwrap_err();

@@ -950,7 +950,7 @@ pub fn exec_launcher(
     )]
     let mut command = std::process::Command::new(&launch.exec);
     command.args(args);
-    for (name, action) in resolved_env(&launch.env, credential_health()) {
+    for (name, action) in resolved_env(&launch.env) {
         match action {
             // The one exposure on this path, and it is the wire: the value is
             // going into a child process's environment, which is the entire
@@ -1188,7 +1188,7 @@ fn credential_usable(value: &Secret) -> bool {
         // host's credential is used, and third-party reads 403. Saying so at the
         // boundary is the difference between that and an unexplained refusal
         // three tasks later. Pointer-only — no value, no digest, no identity.
-        report(&format!(
+        crate::config::report(&format!(
             "{} — keeping the host's proxy wiring, so third-party reads will 403. \
              Re-checked every {CREDENTIAL_MAX_AGE}s.",
             verdict.why()
@@ -1227,20 +1227,6 @@ fn credential_health() -> Credential {
     }
 }
 
-/// Write one line of report to stderr.
-///
-/// **Through [`crate::output`] rather than `eprintln!`**, which the workspace
-/// lint bans in library code for a reason this path needs rather than merely
-/// obeys: a `print`-shaped write has no mode to consult, so `--quiet` could only
-/// ever be a promise. `main.rs` states it at its own head.
-///
-/// The write is best-effort. A launcher that cannot report is still a launcher,
-/// and turning a failed write into a failed launch is the opposite of what this
-/// exists for.
-fn report(text: &str) {
-    let _ = crate::output::error(crate::output::Mode::default(), &mut std::io::stderr(), text);
-}
-
 /// Whether the route to `probe` honours the credential we send, at all.
 ///
 /// **THIS IS THE CONTROL ARM, AND WITHOUT IT EVERY VERDICT BELOW IS WORTHLESS.**
@@ -1268,7 +1254,7 @@ fn route_honours_credentials(probe: &str) -> Option<bool> {
     match probe_credential(probe, &Secret::new(MUST_FAIL.to_owned())) {
         Look::Answered(accepted) => Some(!accepted),
         Look::CouldNotLook(why) => {
-            report(&format!(
+            crate::config::report(&format!(
                 "the credential probe could not reach {probe}: {why}"
             ));
             None
@@ -1361,7 +1347,25 @@ fn probe_credential(probe: &str, token: &Secret) -> Look {
 ///
 /// A rule that resolves to nothing sets nothing, which is what keeps an absent
 /// credential absent rather than empty.
-fn resolved_env(rules: &[ProvisionEnv], credential: Credential) -> Vec<(String, EnvAction)> {
+fn resolved_env(rules: &[ProvisionEnv]) -> Vec<(String, EnvAction)> {
+    // ONLY A ROW THAT REMOVES SOMETHING READS THE VERDICT, so only such a row
+    // pays for it. `credential_health` costs a repo-root resolve, a config load
+    // and — on a cold or expired receipt — two direct HTTPS round trips, and it
+    // sat unconditionally in front of `become_process`. Every landed row
+    // declares only `prepend_list` or `from_first_set`, none of which consults
+    // `Credential`, so every launcher exec was blocking on the network for an
+    // answer nothing read, against a path this file budgets at ~100 ms.
+    //
+    // `Unusable` is the honest value where nothing asks: it authorises no
+    // removal, which is exactly the state a rule set with no removals is in.
+    let credential = if rules
+        .iter()
+        .any(|rule| rule.unset || rule.reject_prefix.is_some())
+    {
+        credential_health()
+    } else {
+        Credential::Unusable
+    };
     // Into a `Secret` at the READ. The launcher's environment is mostly
     // credentials, so the type starts at the boundary rather than being put on
     // afterwards — a value that is a `String` for three lines is a value three

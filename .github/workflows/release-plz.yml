@@ -312,6 +312,30 @@ jobs:
       - name: Resolve the release tag this push shipped
         id: release-tag
         run: echo "tag=$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -n1)" >>"$GITHUB_OUTPUT"
+      # THE SCHEMA IS A RELEASE ASSET, SO A STALE BINARY CAN REASON ABOUT THE
+      # WORLD IT IS BEHIND (CLOUD-1572).
+      #
+      # `config::schema()` is derived from the very types `parse` deserializes
+      # into, so each release's schema is the exact statement of what that
+      # release could read. Publishing it per tag is what turns
+      # `min_batten_version` from a claim into something checkable: a build below
+      # a config's floor knows it is stale from its own version alone, and the
+      # asset is where anything that needs to know WHAT it is missing can fetch
+      # the floor release's schema without cloning this repository.
+      #
+      # Uploaded rather than only committed: `schema/batten.schema.json` in the
+      # tree is HEAD's, which is the unreleased schema for most of a cycle. The
+      # asset is the released one, addressable by the version a consumer names.
+      #
+      # `--clobber` so a re-run is idempotent; a release that already carries the
+      # asset is not a failure.
+      - name: Publish the config schema as a release asset
+        if: steps.release-tag.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release-tag.outputs.tag }}
+        run: gh release upload "$TAG" schema/batten.schema.json --clobber
+
       # An empty secret must FAIL a tagged push, never skip tracking quietly. The
       # silent form is the one that costs a release: the job stays green, the
       # summary still prints its list, and nothing anywhere says the release was

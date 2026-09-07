@@ -750,3 +750,70 @@ fn the_same_variant_is_refused_when_the_schemas_agree() {
          be left configured, typed and off\n{stderr}"
     );
 }
+
+/// A CONSUMER, WITH NO VENDORED ARTIFACT OF ANY KIND.
+///
+/// The discriminator rested on `schema/batten.schema.json`, which batten
+/// generates for ITSELF — so it answered in this repository and nowhere else,
+/// and every other consumer got could-not-look and the whole-file refusal back.
+/// Vendoring that file into consumer repos was tried and is the wrong direction:
+/// the binary already carries both halves of the comparison, its own version and
+/// its own schema, so a consumer needs to ship nothing.
+///
+/// `min_batten_version` is the config's own statement of which release it needs.
+/// Below it, this build is stale by the consumer's declaration — nothing
+/// inferred, no artifact read, no network.
+///
+/// **The arm was unreachable until `check_min_version` stopped refusing.** It
+/// raised exit 1, which `exit.rs` makes a Batten FAILURE rather than a denial,
+/// so the harness ran every mediated tool anyway: the one state where batten is
+/// CERTAIN it cannot be trusted was the state in which it refused nothing.
+#[test]
+fn a_consumer_below_the_declared_floor_still_gets_a_running_engine() {
+    let dir = repo(
+        "config-forward-consumer",
+        &format!(
+            "min_batten_version = \"9999.0.0\"\n{GOOD}[[rule]]\nid = \"newer\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\nseverity = \"from-a-newer-schema\"\n"
+        ),
+    );
+    assert!(
+        !dir.join("schema").exists(),
+        "the premise: a consumer carries no vendored schema"
+    );
+
+    let (code, _stdout, stderr) = adjudicate(&dir);
+    assert_ne!(
+        code,
+        Some(1),
+        "below the floor is a stale binary, and refusing the file is how every \
+         mediated gate fails open\n{stderr}"
+    );
+
+    let shown = run_with_stdin(&dir, &["config", "show"], "");
+    let said = String::from_utf8_lossy(&shown.stderr);
+    assert!(
+        said.contains("9999.0.0") && said.contains("NOT enforced"),
+        "and it must say the build is behind AND that gates are off\n{said}"
+    );
+}
+
+/// THE OTHER DIRECTION, without which the case above passes over a build that
+/// simply stopped checking values.
+///
+/// No floor and no vendored schema is could-not-look on both arms, so the
+/// lenient path is unreachable and a bad variant is what it looks like.
+#[test]
+fn a_consumer_declaring_no_floor_still_refuses_a_bad_variant() {
+    let dir = repo(
+        "config-forward-consumer-nofloor",
+        &format!(
+            "{GOOD}[[rule]]\nid = \"typo\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\nseverity = \"from-a-newer-schema\"\n"
+        ),
+    );
+    let (code, _stdout, stderr) = adjudicate(&dir);
+    assert_eq!(
+        code,
+        Some(1),
+        "with nothing saying this build is behind, a bad variant is bad input\n{stderr}"
+    );
+}

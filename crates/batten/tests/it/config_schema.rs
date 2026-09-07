@@ -227,25 +227,37 @@ fn generate_schema_writes_no_file() {
 
 // --- the min_batten_version gate ---------------------------------------------
 
+/// THE ENGINE BOOTS AND BARFS RATHER THAN REFUSING (CLOUD-1572).
+///
+/// This asserted exit 1 — "a statement about the invocation, never a verdict
+/// about the repository". The reasoning about §7 was right and the OUTCOME was
+/// the fail-open: `exit.rs` makes `1` a Batten failure precisely so no failure
+/// path can block a call, so a harness reads it as a non-blocking hook error and
+/// runs the tool anyway. A binary too old to be trusted refused nothing at all.
+///
+/// So the two versions are still both named — that half was always right, and a
+/// report the agent cannot act on is the other way to fail — but the process now
+/// runs, enforces every row it CAN read, and says which it dropped.
 #[test]
-fn a_config_requiring_a_newer_binary_is_refused() {
-    // The gate. Exit 1, not 2: this is a statement about the *invocation*
-    // ("this binary is too old"), never a verdict about the repository. A
-    // harness reading 2 would report a policy denial that never happened (§7).
+fn a_config_requiring_a_newer_binary_boots_and_says_so() {
     let dir = repo_with_config(
         "min-version-too-new",
         "version = 1\nmin_batten_version = \"99.0.0\"\n",
     );
     let output = check_in(&dir);
-    assert_eq!(output.status.code(), Some(1));
+    assert_ne!(
+        output.status.code(),
+        Some(1),
+        "refusing here is how every mediated gate fails open"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("99.0.0") && stderr.contains(VERSION),
-        "the refusal must name both versions, got: {stderr}"
+        "the report must name both versions, got: {stderr}"
     );
     assert!(
-        output.stdout.is_empty(),
-        "stdout stays the answer channel; a refusal is not an answer"
+        stderr.contains("NOT enforced"),
+        "and say that gates it could not read are off, got: {stderr}"
     );
 }
 
@@ -293,32 +305,37 @@ fn an_unparseable_minimum_is_refused_rather_than_ignored() {
     );
 }
 
+/// EVERY VERB REPORTS IT, AND NONE OF THEM REFUSES (CLOUD-1572).
+///
+/// The property this pins is unchanged — the reading happens at parse time, so
+/// no verb can be picked to route around it. What changed is the outcome: exit 1
+/// is a Batten FAILURE rather than a denial, so refusing here was how a binary
+/// too old to be trusted stopped blocking anything at all.
+///
+/// Recovery is the engine's purpose, and an engine that will not run over an
+/// invalid config cannot recover one.
 #[test]
-fn the_gate_applies_to_every_verb_that_reads_config() {
-    // Enforced at parse time rather than in one verb, so a too-old binary
-    // cannot be routed around by picking a different command.
+fn every_verb_that_reads_config_reports_a_too_old_build() {
     let dir = repo_with_config(
         "min-version-all-verbs",
         "version = 1\nmin_batten_version = \"99.0.0\"\n",
     );
-    for args in [["check"], ["enforce"]] {
+    for args in [&["check"][..], &["enforce"][..], &["config", "show"][..]] {
         let output = batten()
             .args(args)
             .current_dir(&dir)
             .output()
             .expect("run batten");
-        assert_eq!(output.status.code(), Some(1), "{args:?} skipped the gate");
+        assert_ne!(
+            output.status.code(),
+            Some(1),
+            "{args:?} refused instead of running"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("99.0.0"),
+            "{args:?} ran without naming the floor it is below"
+        );
     }
-    let output = batten()
-        .args(["config", "show"])
-        .current_dir(&dir)
-        .output()
-        .expect("run batten config show");
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "config show skipped the gate"
-    );
 }
 
 #[test]
