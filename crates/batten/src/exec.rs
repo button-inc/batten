@@ -598,6 +598,54 @@ pub(crate) fn escalate_group(pgid: &str) -> bool {
     true
 }
 
+/// Cancel the group THIS process is currently supervising, if it owns one.
+///
+/// # Why a caller cannot simply pass a pgid
+///
+/// The child is behind a blocking [`classify_in_env`], so the thread that wants
+/// it stopped is not the thread that spawned it and never saw its pid. What both
+/// threads DO share is this process's own pid, and [`GroupRecord::write`] keys the
+/// note by exactly that — *"the reader's question is 'which supervisor died', and
+/// a second `exec` in the same checkout must not overwrite the first one's note."*
+/// The same key answers a second question it was not written for: which group am
+/// *I* supervising right now.
+///
+/// # The pair, not just the TERM
+///
+/// [`terminate_group`] then [`escalate_group`], because CLOUD-434 measured that a
+/// group TERM *"demonstrably missed grandchildren twice in one loaded gate run,
+/// and the survivors held bats' output fd and wedged the whole gate."* A gate is
+/// precisely that shape — `mise` running `hk` running `cargo` — so the arm that
+/// cancels one must not stop at asking.
+///
+/// **No grace period between them, and that is deliberate.** The caller is a
+/// watcher that has already established the gate's verdict is worthless, so there
+/// is nothing to wait for a clean exit to produce. `escalate_group` re-observes
+/// with `kill -0` before signalling, so a group that did leave on the TERM is not
+/// signalled twice.
+///
+/// Returns whether anything was still there to signal, which is a pointer-only
+/// answer (non-negotiable rule 4): a boolean, never what was running.
+#[must_use]
+pub(crate) fn cancel_owned_group(repo_root: &Path) -> bool {
+    let Ok(dir) = crate::state::repo_state_dir(repo_root) else {
+        return false;
+    };
+    let path = dir
+        .join("exec")
+        .join(format!("group.{}", std::process::id()));
+    // ABSENT IS THE COMMON CASE AND IT IS NOT A FAILURE: a gate run without the
+    // grouping opt-in records no note, so there is no group to cancel and the
+    // watcher simply loses whatever it was racing.
+    let Ok(body) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    let pgid = body.trim();
+    let asked = terminate_group(pgid);
+    let survived = escalate_group(pgid);
+    asked || survived
+}
+
 /// A recorded `pgid` as a group this process may signal.
 ///
 /// `0` is refused explicitly rather than by accident: `kill(0, …)` addresses the
@@ -2598,6 +2646,65 @@ mod tests {
         assert!(
             body.contains(".env(TASK_PGID_MANAGED_ENV"),
             "and it must tell a nested manager to stand down, in the same call"
+        );
+    }
+
+    /// THE CANCEL READS A RECORD, AND EVERY WAY IT CAN FAIL TO NAME A GROUP IS A
+    /// REFUSAL (CLOUD-1586).
+    ///
+    /// `cancel_owned_group` exists so a watcher thread can stop a gate whose pid
+    /// it never saw, and it gets there through a file. Three of the four arms
+    /// below are could-not-look — no state dir, no record, an unreadable one —
+    /// and all three must answer `false`: the caller records that answer as
+    /// *"the base moved and the gate was NOT reclaimed"*, which is the honest
+    /// reading and the one that says this mechanism did nothing.
+    ///
+    /// **The `0` arm is the one that matters**, and it is here rather than left
+    /// to `resolve_group`'s own cases because this function reaches `kill`
+    /// through a *different* route than [`terminate_group`]'s callers do. A
+    /// record carrying `0` names the CALLER's own group, so a cancel that
+    /// resolved it would signal the lap doing the cancelling — and on this path
+    /// that is the test runner. Pinned at this entry point, not only at the leaf.
+    #[cfg(unix)]
+    #[test]
+    fn a_cancel_that_cannot_resolve_its_record_signals_nothing() {
+        let root = crate::scratch::scratch("exec-cancel-record");
+
+        // No record at all: the common case, and not a failure. A gate run
+        // without the grouping opt-in writes none.
+        assert!(
+            !cancel_owned_group(&root),
+            "an absent record is could-not-look, never a reclaimed group"
+        );
+
+        let Ok(dir) = crate::state::repo_state_dir(&root) else {
+            return;
+        };
+        let exec_dir = dir.join("exec");
+        std::fs::create_dir_all(&exec_dir).expect("seed the record directory");
+        let path = exec_dir.join(format!("group.{}", std::process::id()));
+
+        // THE ARM THAT WOULD KILL THIS PROCESS. `kill(0, …)` addresses the
+        // caller's own group, so this is the one case where a missing guard is
+        // not a false report but a suicide.
+        std::fs::write(&path, "0\n").expect("seed a self-addressing record");
+        assert!(
+            !cancel_owned_group(&root),
+            "0 names this process's own group and must never be signalled"
+        );
+
+        std::fs::write(&path, "not-a-number\n").expect("seed an unparseable record");
+        assert!(
+            !cancel_owned_group(&root),
+            "a record that will not parse names no group"
+        );
+
+        // Above every assignable pid on Linux, so the group is provably empty
+        // rather than merely unlikely.
+        std::fs::write(&path, "4194305\n").expect("seed an empty group");
+        assert!(
+            !cancel_owned_group(&root),
+            "an empty group is nothing to cancel and must not be counted as one"
         );
     }
 

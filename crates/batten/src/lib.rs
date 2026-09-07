@@ -8394,7 +8394,29 @@ fn run_land_verify(
         .map(|base| vec![(speculation::PUBLISHED_AS.to_owned(), base.to_owned())])
         .unwrap_or_default();
     let environment = verify_environment(root);
-    match land::verify(root, branch, &command, &published, &environment)? {
+    // RACED AGAINST THE BASE, which is CLOUD-423's other half (CLOUD-1586).
+    // `land::stale` runs as a PRECHECK on the step after this one and saves the
+    // metered spend; it cannot save the gate's own minutes, because by the time
+    // it asks the gate has already finished. Measured on this container: a gate
+    // is ~25 minutes and ~45% of laps paid one to learn trunk had moved.
+    //
+    // FAIL OPEN TO THE UNRACED GATE, never to a refusal. A clone whose slug this
+    // engine cannot read has no forge to watch, so the honest answer is the gate
+    // alone — the same reading `base_moved` takes for the same missing fact.
+    let raced = repo_slug(root).map(|slug| trunk_watch(reference.unwrap_or("main"), "", &slug, 1));
+    let verified = match (raced, reference) {
+        (Some(trunk), Some(reference)) => land::verify_raced(
+            root,
+            branch,
+            &command,
+            &published,
+            &environment,
+            &trunk,
+            reference,
+        )?,
+        _ => land::verify(root, branch, &command, &published, &environment)?,
+    };
+    match verified {
         land::Verified::Clean(head) => {
             writeln!(out, "land: {head} passed the configured gate")?;
             Ok(ExitCode::Success)

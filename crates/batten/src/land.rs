@@ -1022,6 +1022,169 @@ pub fn verify(
     Ok(verified)
 }
 
+/// The gate, raced against the base it was asked about (CLOUD-423's other half).
+///
+/// # What this reclaims, and why it is not [`stale`]
+///
+/// [`stale`] saves the METERED half — the matrix and the fast-forward behind it —
+/// by discarding a gate's verdict after the fact. The gate's own minutes were
+/// still spent, and this repository measured that at **~45% of laps paying a full
+/// gate to discover trunk had moved**. Where a gate ran ~220s that was an
+/// annoyance; measured on this container it is ~25 minutes, and ten consecutive
+/// laps of it is a session that lands nothing. **The cost model that called local
+/// execution free is what made the partial port look complete**, and it is wrong
+/// here rather than wrong in principle.
+///
+/// # THE GATE IS A SPAWN, NOT A POLL, which is the sentence that kept this open
+///
+/// [`stale`]'s doc named the blocker exactly: *"applying it to the GATE is a
+/// different problem — the gate is a spawn, not a poll."* The missing piece was
+/// never the race, it was a handle on the child. [`crate::exec`] records the
+/// process group it owns under the state dir, keyed by THIS process's pid, so a
+/// sibling thread can read the pgid its own gate is running under and signal it.
+/// `terminate_group` then `escalate_group` is the pair `land.sh`'s
+/// `kill -- -$v_pid -$vm_pid` spelled with the grace period CLOUD-434 added.
+///
+/// # NO NEW TIMER, WHICH IS A CONSTRAINT RATHER THAN A CONVENIENCE
+///
+/// This is [`wait`]'s shape reused, deliberately: one `thread::scope`, one
+/// channel, `recv` taking whichever arm answers first, and one `stop` flag both
+/// arms read. The watcher's pause is [`crate::pr_watch::pause_until`] — *"there
+/// is one sleep in this crate and it carries the one `disallowed_methods`
+/// exemption, so a second arm cannot grow a timer of its own."* Growing one here
+/// would also trip `delay-waivers-not-growing`, whose own `no_fix_reason` states
+/// the alternative this takes: a delay with a bound it can exit on needs no
+/// waiver.
+///
+/// **The watcher's loop is bounded by the gate, not by an ask count**, and that
+/// is the difference from [`wait`]'s arms. A watcher outliving its gate would be
+/// the unbounded loop CLOUD-1338 refuses; here the sibling's completion sets
+/// `stop`, which is a real terminal state rather than a guess at one.
+///
+/// # Errors
+///
+/// The gate's own errors, unchanged — a boundary that could not start the program
+/// is still this lap's problem and a code that came back is still the gate
+/// speaking. A watcher that cannot reach the forge answers could-not-look and
+/// simply never wins, which leaves the gate's verdict standing: the fail-open
+/// direction, because a forge this lap cannot read is not evidence the base moved.
+pub fn verify_raced(
+    root: &Path,
+    branch: &str,
+    command: &[String],
+    published: &[(String, String)],
+    environment: &[crate::outputs::OutputPattern],
+    trunk: &crate::main_watch::Config,
+    reference: &str,
+) -> Result<Verified> {
+    /// Which arm answered. The gate's `Result` travels whole so a boundary
+    /// failure stays a boundary failure rather than becoming a refusal.
+    enum Raced {
+        Gate(Result<Verified>),
+        Moved(String),
+    }
+
+    let head = crate::git::head_commit(root).context("land: read this clone's HEAD")?;
+    let tracking = tracking_ref(reference);
+    let replayed_onto = crate::git::resolve_ref(root, &tracking)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| trunk.base.clone());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    // A SECOND CHANNEL FOR THE CANCEL'S OWN ANSWER, because it is a different
+    // fact from who won. The race says "the base moved"; this says whether the
+    // gate was actually stopped, and a lap that reclaimed nothing spent the
+    // minutes anyway. Reported rather than inferred from the verdict.
+    let (cancelled, reclaimed_rx) = std::sync::mpsc::channel();
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let stop = &stop;
+
+    let raced = std::thread::scope(|scope| {
+        let gate = tx.clone();
+        drop(scope.spawn(move || {
+            let answer = verify(root, branch, command, published, environment);
+            // SET BEFORE THE SEND, so the watcher's next flag read ends it even
+            // if the receive below has already taken this arm's answer.
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            drop(gate.send(Raced::Gate(answer)));
+        }));
+
+        let moved = tx.clone();
+        drop(scope.spawn(move || {
+            let mut poll = crate::main_watch::Poll::default();
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let answer = crate::main_watch::read(trunk, poll.etag());
+                let interval = poll.absorb(answer.as_ref(), trunk.interval);
+                if let Some(base) = poll.moved(&replayed_onto) {
+                    let base = base.to_owned();
+                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    // THE KILL IS THE POINT. Without it this arm wins the race
+                    // and the gate keeps running to completion anyway, which is
+                    // the state `stale` already reaches more cheaply.
+                    //
+                    // THE ANSWER IS RECORDED RATHER THAN DISCARDED, and the
+                    // distinction it draws is the one worth having: `false` means
+                    // there was no group to signal, so this arm won the race and
+                    // reclaimed nothing — the gate is still running and will
+                    // finish into a channel nobody reads. That is exactly the
+                    // pre-CLOUD-423 behaviour, and a lap that silently fell back
+                    // to it would report this half as working.
+                    let reclaimed = crate::exec::cancel_owned_group(root);
+                    // `let _` rather than `drop`: the send's own result is a
+                    // `Result<(), SendError<bool>>`, which is `Copy`, so dropping
+                    // it does nothing and clippy is right to say so. A receiver
+                    // gone before this lands is the race resolving without this
+                    // arm, which the verdict below already handles.
+                    let _ = cancelled.send(reclaimed);
+                    drop(moved.send(Raced::Moved(base)));
+                    return;
+                }
+                crate::pr_watch::pause_until(interval, stop);
+            }
+        }));
+
+        drop(tx);
+        rx.recv().ok()
+    });
+
+    match raced {
+        Some(Raced::Gate(answer)) => answer,
+        // RECORDED LIKE ANY OTHER REFUSAL, through the one arm that already maps
+        // to a LAP rather than a stop (CLOUD-318). The lap does not need to learn
+        // a new outcome to act on this — it needs the one it already laps on, and
+        // `progress` maps `Refusal::Moved` there.
+        Some(Raced::Moved(base)) => {
+            let verified = Verified::Refused {
+                sha: head,
+                cause: Refusal::Moved,
+            };
+            // TWO LINES, BOTH ARMS, for the reason `record_wait`'s signature
+            // exists: a lap that raced and reclaimed the gate and a lap that
+            // raced and reclaimed nothing produce identical records otherwise,
+            // so a module over them has nothing to decide. The base it moved to
+            // is the pointer; whether the kill landed is the half that says this
+            // mechanism is live rather than merely present.
+            let reclaimed = reclaimed_rx.try_recv().unwrap_or(false);
+            append(
+                root,
+                branch,
+                &[
+                    verified.line(),
+                    format!("{LAP_RECORD} gate-cancelled {base} {reclaimed}"),
+                ],
+            )?;
+            Ok(verified)
+        }
+        // BOTH ARMS CLOSED WITHOUT ANSWERING is could-not-look about the RACE,
+        // never a clean tree: the gate is the arm that cannot abstain, so this is
+        // reachable only if its thread died without sending.
+        None => Err(crate::error::UsageError::raise(String::from(
+            "land: the raced gate answered nothing — neither the gate nor the base watcher reported, so this lap has no verdict to act on",
+        ))),
+    }
+}
+
 /// Has the base moved since this lap replayed onto it?
 ///
 /// # Why this exists between the gate and the push
