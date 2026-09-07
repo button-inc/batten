@@ -199,8 +199,12 @@ mod tests {
         let columns = Columns::resolve(Some(&board));
         assert_eq!(columns.ready().unwrap(), "To Do");
         assert_eq!(columns.in_progress().unwrap(), "In Development");
-        assert!(
-            !columns.started().unwrap().iter().any(|c| c == "Done"),
+        // THE WHOLE SET, not "does it lack ours". An exact comparison says the
+        // resolution is a function of the declaration and nothing else, where a
+        // negative assertion would pass for a resolver that dropped every column.
+        assert_eq!(
+            columns.started().unwrap(),
+            ["In Development".to_owned(), "Shipped".to_owned()],
             "resolution must not smuggle this repository's vocabulary into another board's set"
         );
     }
