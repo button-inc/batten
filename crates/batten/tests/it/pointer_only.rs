@@ -1928,6 +1928,22 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
         // A census whose corpus depends on the shell it was launched from is not
         // one.
         .env_remove("LAND_WORKFLOW")
+        // AND THE GATE ITSELF, which is the same class one turn worse. `land
+        // verify` runs `$LAND_VERIFY` as argv, and this repository's `mise.toml`
+        // declares `LAND_VERIFY = "mise run verify"` in `[env]` — inherited by
+        // every process the suite spawns. So the corpus ran the WHOLE verify
+        // pipeline recursively: provisioning the toolchain (`rust`, `hk`, `gh`,
+        // `jq`) and then running the gate suite, from inside one test case.
+        //
+        // MEASURED: 3445s for this case in isolation, and it still ended in
+        // exit 3 — a test that spent 57 minutes proving nothing about output.
+        // The verb's own entry in the roster below asserts the opposite premise
+        // in prose — "on this corpus `$LAND_VERIFY` names nothing, so the verb
+        // refuses before running anything" — and that was true until the
+        // variable moved into `[env]`. Cleared here, the premise is true again
+        // and the refusal is `Usage`, which is why the verb needs no entry in
+        // `MAY_ANSWER_COULD_NOT_LOOK`.
+        .env_remove("LAND_VERIFY")
         // AND THE ROSTER, for the reason the `pr watch` entry states about its
         // own: that verb is driven to its REFUSAL because the loop is unbounded
         // by design, so an entry that reached the network would not be a slow
