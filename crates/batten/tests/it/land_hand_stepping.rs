@@ -34,29 +34,32 @@
 //! passes it while breaking conflict resolution, which is this defect pointed
 //! the other way. The pair is the assertion.
 //!
-//! # THE ROW IS `warn`, SO EVERY CASE HERE JUDGES THE PROMOTED ARM
+//! # THE ROW IS `deny`, AND EVERY CASE HERE JUDGES THE DEFAULT ARM
 //!
-//! The row landed as a `deny` and deadlocked the first conflict it met, because
+//! Lowering it to `warn` was tried and withdrawn, and the reason is worth
+//! keeping because the instinct recurs. The row deadlocks a rebase conflict:
 //! `gitwrite.rs` moves nothing on a conflict and so leaves no rebase to
-//! `--continue`: the one command that produces the resolvable state was the one
-//! the row refused, and a `shape` row declares no `[[verdict]]` class, so there
-//! was no override route either. It is `warn` now, and `batten.toml` carries the
-//! measurement.
+//! `--continue`, the one command that produces the resolvable state is the one
+//! the row refuses, and a `shape` row declares no `[[verdict]]` class, so there
+//! is no override route either.
 //!
-//! **A `warn` shape row is SILENT on the mediated surface, not advisory.**
-//! `hook::blocks` is false, `adjudicate` returns `Decision::Allow`, and the
-//! decision document is EMPTY — no verdict, no row id, nothing reaching the
-//! agent at the call. Measured over the compiled binary rather than read:
-//! `a_warn_row_is_silent_until_promotion` is that arm, and it is here because
-//! the config comment this file pairs with once claimed the opposite.
+//! **But `warn` does not soften that, it deletes it.** A `warn` shape row is
+//! SILENT on the mediated surface, not advisory: `hook::blocks` is false,
+//! `adjudicate` returns `Decision::Allow`, and the decision document is EMPTY —
+//! no verdict, no row id, nothing reaching the agent at the call. So the trade
+//! was a refusal that is wrong on one path for a row that decides nothing on
+//! every path. `the_row_is_live_at_default_strictness` is the arm pinning which
+//! of the two this file is testing, and it is here because the config comment
+//! this file pairs with once claimed `warn` still reached the agent.
 //!
-//! So the predicate is exercised where it is live — under `--fail-on-warning`,
-//! which `blocks` promotes to a real `deny`. That keeps every discriminating
-//! case at full strength (the env prefix, the `&&` chain, the second line, the
-//! backslash continuation) and keeps the allow half non-vacuous, while the
-//! default path stays unable to deadlock a conflicted branch. Asserting these
-//! at the default strictness instead would pass over a DELETED row, since
-//! silence and absence are the same document there.
+//! The conflict cost is real and is a NAMED LIMIT rather than one this branch
+//! pays: on a conflict the stop is a human's, which `AGENTS.md` already
+//! sanctions. Narrowing the predicate to see the lap record — the fact that
+//! separates the race from the resolution — is what would remove it.
+//!
+//! Judging at default strictness is what makes a DELETED row redden here: with
+//! the row live, silence is a finding rather than the same document an absent
+//! row emits.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -85,9 +88,9 @@ fn bash_payload(command: &str) -> String {
 
 /// The decision document this harness emits, as text.
 ///
-/// `promoted` selects the arm. The row is `warn`, so its predicate is only
-/// reachable with `--fail-on-warning` on — see this file's header for why every
-/// predicate case takes that arm and what the other one is for.
+/// `promoted` selects the arm. The row is `deny`, so its predicate is live
+/// without the flag; the promoted arm is retained for the one case that pins
+/// the severity itself — see this file's header.
 fn decision_with(command: &str, promoted: bool) -> String {
     // `adjudicate`, not `hook`. The rename ships no alias and an unknown
     // subcommand is clap exit 1 — which every host reads as ALLOW — so this
@@ -114,9 +117,10 @@ fn decision_with(command: &str, promoted: bool) -> String {
     ))
 }
 
-/// The document under promotion, which is where this row's predicate is live.
+/// The document at DEFAULT strictness, which is where this row's predicate is
+/// live and where a consumer meets it.
 fn decision(command: &str) -> String {
-    decision_with(command, true)
+    decision_with(command, false)
 }
 
 fn denied_by_the_row(command: &str) {
@@ -144,30 +148,28 @@ fn not_refused_by_the_row(command: &str) {
     );
 }
 
-// --- the default arm, and what the severity actually bought -------------------
+// --- the severity itself, pinned as a case rather than as a comment ----------
 
-/// WHAT `warn` COSTS, stated as a case rather than as a comment.
+/// THE SEVERITY IS THE ASSERTION HERE, not the predicate.
 ///
-/// The severity drop was landed with a config comment claiming the row "still
-/// fires, still names the loop, and still reaches the agent at the call". It
-/// does none of those: `hook::blocks` is false for a warn row at default
-/// strictness, so `adjudicate` returns `Decision::Allow` and emits an EMPTY
-/// document — the same bytes a repository with no such row emits.
+/// A `warn` shape row emits an EMPTY decision document at default strictness —
+/// `hook::blocks` is false, `adjudicate` returns `Decision::Allow`, and the
+/// bytes are the ones a repository with no such row emits. So a silent lowering
+/// of this column would leave every other case in this file green while the row
+/// reached no agent at any call.
 ///
-/// Pinned because that claim was false in committed config, and because a
-/// reader who believes it will read the silence below as coverage. If some later
-/// change gives a warn shape row an advisory channel at the call, this case
-/// reddens and is the right place to record it.
+/// This is the arm that reddens on that. It asserts the refusal is present
+/// WITHOUT `--fail-on-warning`, which is exactly what `deny` buys and `warn`
+/// does not, and it is here because the config comment this file pairs with
+/// once claimed a warn row "still reaches the agent at the call".
 #[test]
-fn a_warn_row_is_silent_until_promotion() {
+fn the_row_is_live_at_default_strictness() {
     let out = decision_with("git rebase origin/main", false);
     assert!(
-        out.trim().is_empty(),
-        "a warn shape row emits nothing at default strictness, got: {out}"
+        out.contains("\"deny\"") && out.contains(ROW),
+        "`{ROW}` must refuse without --fail-on-warning; a warn row would emit \
+         nothing here, got: {out}"
     );
-    // And the same call under promotion is a real refusal by this row, which is
-    // what makes the emptiness above a severity rather than a deleted row.
-    assert!(decision("git rebase origin/main").contains(ROW));
 }
 
 // --- refused: a lap the task owns ---------------------------------------------

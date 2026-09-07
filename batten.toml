@@ -727,10 +727,11 @@ it rather than holding a foreground poll open."""
 # container reclaim, so denying it outright would make the reclaim advice
 # unfollowable. Named as a known limit so the silence is not read as coverage.
 #
-# WARN RATHER THAN DENY, AND THE DENY'S OWN REMEDY IS WHY (measured 2026-09-06,
-# one lap after this row landed). The reason below used to end "resolve it and
+# THE DENY'S REMEDY IS UNREACHABLE ON THE CONFLICT PATH, AND THAT IS A NAMED
+# LIMIT RATHER THAN A REASON TO LOWER THIS COLUMN (measured 2026-09-06, one lap
+# after this row landed). The reason below used to end "resolve it and
 # `git rebase --continue`, which this row does not touch" — and that remedy is
-# UNREACHABLE against this engine, so the deny had no route at all.
+# UNREACHABLE against this engine, so on a conflict the deny has no route left.
 #
 # `gitwrite.rs`'s header states the design it collides with, and states it as a
 # deliberate one: "**Nothing moves on a conflict.** The ref is written and the
