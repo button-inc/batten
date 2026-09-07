@@ -186,6 +186,110 @@ jobs:
           fi
           echo "#$PR's head is a fork, and $approvals trusted approval(s) have read the diff."
 
+      # THE ONE CONTEXT THE RULESET REQUIRES IS A FAN-IN OVER 4 OF 20 REQUIRED
+      # CHECKS, so "branch protection passed" is not "the roster is green"
+      # (CLOUD-1570). Third instance of this file's own class, on the reasoning
+      # the two steps above already state: the ruleset is precisely the thing
+      # measured not to hold.
+      #
+      # MEASURED on PR #880 head `6eb08e14`: `final` (ci.yml) concluded at
+      # 02:57:30 and `windows` (rust.yml) at 03:01:50 — 4m20s in which the one
+      # required context was green while a required check was still running. A
+      # `/fast-forward` posted in that window is admitted by the host and moves
+      # `main` to a head whose roster had not answered. Not hypothetical: that is
+      # how the row was found.
+      #
+      # `needs:` CANNOT CLOSE IT, AND THREE SHAPES ARE REFUTED. It does not reach
+      # another workflow, and the four Rust jobs live in `rust.yml` on purpose: a
+      # `paths:`-filtered workflow that does not trigger mints NOTHING, which
+      # `CI_ABSENT_OK_CHECKS` accepts, where a job skipped by an `if:` mints
+      # `skipped`, which `CI_ANSWERED_CONCLUSIONS` excludes and which wedges
+      # `land` at exit 3. So calling those jobs from `ci.yml` — by
+      # `workflow_call` or by moving them back — reintroduces the defect the
+      # split fixed. And `final` reading the siblings by name is CLOUD-897,
+      # already walked and refused: it concluded before the analyzer started on
+      # every recent merged PR, so "a step that cannot decide should not be in
+      # the one job branch protection requires".
+      #
+      # A path-filtered check must be ABSENT to avoid wedging the loop, and a
+      # ruleset cannot require an absent context. The host therefore cannot
+      # enforce this roster BY CONSTRUCTION, so the enforcement point is here.
+      #
+      # THE PREDICATE IS THE ENGINE'S, REUSED WHOLE. `mise run checks-green` is
+      # the adapter `land` itself decides on: it fetches the runs with `gh api`
+      # and hands them to `batten checks green`, a pure function of that TSV.
+      # Re-deriving "green" here would be a second authority over one word, which
+      # is CLOUD-363 exactly — `land` counted `cancelled` as an answer,
+      # `checks-green` read it as red, and the two composed into a branch wedge
+      # that took a hand-minted SHA to escape.
+      #
+      # UNREACHABLE FROM `land`, like the draft step above: `land` runs this same
+      # predicate before it comments. What this catches is a comment from any
+      # other OWNER/MEMBER/COLLABORATOR — a maintainer typing `/fast-forward`
+      # from the web UI while the matrix is still running, which is the measured
+      # case.
+      #
+      # EXIT 3 IS A REFUSAL, and that is the adapter's own contract rather than a
+      # reading of it: 0 green, 1 red, 2 could-not-look, 3 no answer yet. Only 0
+      # may land. Could-not-look is refused too — "a reading this gate cannot
+      # take is not a pass" is the posture `checks-green` states for its own
+      # `gh api` failure, and honouring it anywhere else would be a second one.
+      #
+      # THE SETUP IS PAID LAST ON PURPOSE. The two refusals above are one
+      # `gh api` call each, so a draft or an unreviewed fork head is turned away
+      # before this job installs anything.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
+        with:
+          # The roster lives in `mise.toml`'s `[env]`, read from there by
+          # `checks-green` and by `land`'s `graded_runs` alike (CLOUD-327). No
+          # `[tools]` entry is needed to evaluate it, so none is installed.
+          install: false
+      # BUILDING IS NOT AFFORDABLE HERE: `batten-check` is the CI workflow's pole
+      # at 683s against this job's 5-minute budget. `install.sh` is the route the
+      # single-binary claim already owes — POSIX sh, no toolchain, no clone,
+      # every asset verified against its published SHA-256 digest with no flag to
+      # skip it (CLOUD-65). `release-artifacts.yml` publishes
+      # `x86_64-unknown-linux-gnu`, and releases here are cut per merge.
+      - name: install the released engine
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sh ./install.sh
+          batten --version
+      - name: refuse a head whose required checks have not all answered
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          # The head as it is NOW, not as the comment event snapshotted it — the
+          # same reason the draft step re-reads the draft bit through `gh api`.
+          head_sha=$(gh api "repos/$REPO/pulls/$PR" --jq .head.sha)
+          rc=0
+          SHA="$head_sha" mise run checks-green || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "#$PR at $head_sha is green over the whole required roster."
+            exit 0
+          fi
+          case "$rc" in
+            1) why="a required check is RED" ;;
+            3) why="a required check has not answered yet" ;;
+            *) why="the check runs could not be read, and a reading this gate cannot take is not a pass" ;;
+          esac
+          # Pointer-only: the PR, the head, and which arm refused — never a run's
+          # log, and never the comment body, which is how a substring trigger
+          # re-arms itself (CLOUD-853).
+          gh api "repos/$REPO/issues/$PR/comments" -f body="$(
+            printf '%s' "Refusing to fast-forward #$PR at \`$head_sha\`: $why. Branch protection requires only \`final\`, which fans in over 4 of the 20 names in \`CI_REQUIRED_CHECKS\` — so a green \`final\` is not a green roster (CLOUD-1570). Wait for the matrix, or let \`mise run land\` drive it."
+          )" >/dev/null
+          echo "::error:: refusing #$PR at $head_sha: $why (CLOUD-1570)"
+          exit 1
+
       # `# v1.0.0`, NOT `# v1`, and the difference is load-bearing rather than
       # pedantic (CLOUD-676). Upstream publishes exactly one tag — `v1.0.0` —
       # with no floating major, unlike `actions/checkout` and

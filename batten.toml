@@ -4823,6 +4823,29 @@ line_sources = ["crates/batten/tests/it/**/*.rs"]
 module = "policy/fixture-forks.rego"
 severity = "deny"
 
+# The landing path consults the required-check roster before it moves `main`
+# (CLOUD-1570).
+#
+# NO `base` AND NO `delta_sources`, unlike its neighbour above. `fixture-forks`
+# asks whether a change ADDED a fork, so it needs the branch's own diff; this
+# asks whether the landing workflow guards the roster AT ALL, which is a
+# property of the committed tree rather than of the change. A delta-scoped
+# spelling would go silent on every branch that does not touch the workflow —
+# including the branch that deletes the guard from a file it is not otherwise
+# editing.
+#
+# `line_sources` IS THE ONE PATH, not `.github/workflows/**`. The module is
+# anchored on the landing workflow, and handing it every workflow in the tree
+# would make it read `ci.yml` to answer a question about `fast-forward.yml` —
+# `fixture-forks`' own reason for narrowing, one surface over.
+[[rule]]
+id = "landing-roster-guarded"
+kind = "policy"
+scope = "tree"
+line_sources = [".github/workflows/fast-forward.yml"]
+module = "policy/landing-roster-guarded.rego"
+severity = "deny"
+
 # Advisory rather than blocking: assertions thinning out while the `#[test]`
 # count holds is the gutting shape, and it is worth saying without blocking —
 # a refactor legitimately merges assertions. `--fail-on-warning` and
@@ -10099,6 +10122,35 @@ target = "build the repository with Fixture::git, which copies the template inst
 id = "source read first"
 kind = "document"
 target = "crates/batten/tests/it/common/mod.rs"
+
+# CLOUD-1570. `check` is the declared subject — "one named CI check, or a
+# `batten check` run" — and `read never` is the pair `patch read never` already
+# spends, so this name costs the vocabulary nothing.
+[[verdict]]
+id = "check read never"
+gloss = "the landing workflow can move `main` without consulting the required-check roster"
+class = """
+`protect-main` requires exactly one context, `final`, and `final` declares \
+`needs: [ci, batten-check, bats, perf]` — four of the twenty names in \
+`CI_REQUIRED_CHECKS`. So branch protection passing is not the roster \
+answering. Measured on PR #880 head `6eb08e14`: `final` concluded 02:57:30 and \
+`windows` 03:01:50, and for that 4m20s a `/fast-forward` comment would have \
+moved `main` to a head fifteen of whose required checks the host cannot see. \
+The host cannot close this by construction — a `paths:`-filtered check must be \
+ABSENT rather than `skipped` to avoid wedging `land`, and a ruleset cannot \
+require an absent context — so the landing workflow is where the roster is \
+enforced, and this class fires when it stops asking.
+"""
+
+[[verdict.route]]
+id = "patch run first"
+kind = "command"
+target = "restore the step running `mise run checks-green` against the PR head, before the fast-forward action"
+
+[[verdict.route]]
+id = "source read first"
+kind = "document"
+target = ".github/workflows/fast-forward.yml"
 
 [[verdict]]
 id = "source read unread"
