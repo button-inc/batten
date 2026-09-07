@@ -483,6 +483,14 @@ pub enum LandCommand {
     Replay {
         /// The remote reference to replay onto, e.g. `refs/heads/main`.
         reference: String,
+        /// Paths whose conflict is resolved in the WORKTREE (CLOUD-1586).
+        ///
+        /// **On this verb and never on `lap`.** A lap runs unattended, so a
+        /// resolution it could apply would be one nobody looked at — the
+        /// auto-resolution `gitwrite`'s header refuses. Naming a path here is a
+        /// person saying *I merged this by hand*, which is the loop's one human
+        /// stop being taken rather than skipped.
+        resolve: Vec<String>,
     },
     /// Ask whether this head is green and whether its base still holds, and act
     /// on whichever answers first.
@@ -1829,6 +1837,10 @@ fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
     match matches.subcommand()? {
         ("replay", matches) => Some(LandCommand::Replay {
             reference: reference_of(matches),
+            resolve: matches
+                .get_many::<String>("resolve")
+                .map(|found| found.cloned().collect())
+                .unwrap_or_default(),
         }),
         ("wait", matches) => Some(LandCommand::Wait {
             reference: reference_of(matches),

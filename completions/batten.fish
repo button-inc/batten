@@ -3405,6 +3405,7 @@ complete -c batten -n "__fish_batten_using_subcommand land; and not __fish_seen_
 complete -c batten -n "__fish_batten_using_subcommand land; and not __fish_seen_subcommand_from replay wait push verify fast-forward lap help" -f -a "fast-forward" -d 'Ask this head\'s pull request to fast-forward, and read the answer that request got'
 complete -c batten -n "__fish_batten_using_subcommand land; and not __fish_seen_subcommand_from replay wait push verify fast-forward lap help" -f -a "lap" -d 'Drive the whole lap and lap again on any refusal a rebase would clear'
 complete -c batten -n "__fish_batten_using_subcommand land; and not __fish_seen_subcommand_from replay wait push verify fast-forward lap help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from replay" -l resolve -d 'A path whose conflict is resolved in the worktree (repeatable)' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from replay" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"

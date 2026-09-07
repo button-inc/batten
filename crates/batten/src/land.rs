@@ -266,12 +266,26 @@ pub fn stale_tracking(local: &[String], advertised: &[String], prefix: &str) -> 
 /// a replay that could not be attempted. **A conflict is not an error** — it is
 /// [`Replay::Conflicted`], and reporting it as a failure is what would let a
 /// caller's `?` turn the loop's one human stop into a stack trace.
-pub fn replay(root: &Path, remote: &str, reference: &str, branch: &str) -> Result<Replay> {
+/// `resolutions` names the paths a PERSON merged in the worktree, and is empty
+/// for every lap: the driver passes `&[]` so an unattended loop can never apply
+/// one, which is [`crate::gitwrite::rebase_resolving`]'s whole precondition.
+pub fn replay(
+    root: &Path,
+    remote: &str,
+    reference: &str,
+    branch: &str,
+    resolutions: &[String],
+) -> Result<Replay> {
     let tracking = tracking_ref(reference);
     advance(root, remote, reference, &tracking)?;
 
-    let outcome = gitwrite::rebase(root, &format!("refs/heads/{branch}"), &tracking)
-        .with_context(|| format!("land: replay {branch} onto {tracking}"))?;
+    let outcome = gitwrite::rebase_resolving(
+        root,
+        &format!("refs/heads/{branch}"),
+        &tracking,
+        resolutions,
+    )
+    .with_context(|| format!("land: replay {branch} onto {tracking}"))?;
     let replayed = match outcome {
         Rebase::Conflicted { commit, paths } => Replay::Conflicted { commit, paths },
         Rebase::Current => Replay::Current,

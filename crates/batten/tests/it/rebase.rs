@@ -296,6 +296,121 @@ fn a_commit_whose_change_is_already_on_the_base_is_dropped_rather_than_conflicti
     );
 }
 
+/// **The loop's one human stop, given a route to take it** (CLOUD-1586).
+///
+/// The caller edits the conflicting path in the worktree and names it; the
+/// replay uses those bytes for that path and carries on. Nothing is persisted
+/// and no half-replayed branch is left behind, so the module header's "nothing
+/// moves on a conflict" survives — a run that resolves either completes or
+/// refuses, exactly as before.
+#[test]
+fn a_named_path_takes_its_resolution_from_the_worktree() {
+    let (dir, repo) = init("rebase-resolve");
+    let root: Files<'_> = &[("shared.txt", "base\n")];
+    let base = commit(&repo, &[], root);
+
+    let trunk: Files<'_> = &[("shared.txt", "the trunk's line\n")];
+    let moved = commit(&repo, &[base], trunk);
+
+    let side: Files<'_> = &[("shared.txt", "the branch's line\n")];
+    let tip = commit(&repo, &[base], side);
+
+    point(&dir, "refs/heads/main", moved);
+    point(&dir, "refs/heads/work", tip);
+
+    // The human's work: a merge of both sides, written where they did it.
+    materialise(&dir, &[("shared.txt", "both lines, reconciled\n")]);
+
+    let outcome = gitwrite::rebase_resolving(
+        &dir,
+        "refs/heads/work",
+        "refs/heads/main",
+        &["shared.txt".to_owned()],
+    )
+    .expect("rebase resolving");
+    let Rebase::Replayed { head, commits } = outcome else {
+        panic!("a named resolution must let the replay finish, got {outcome:?}");
+    };
+    assert_eq!(
+        commits, 1,
+        "the conflicting commit was replayed, not dropped"
+    );
+
+    let landed = repo
+        .rev_parse_single("refs/heads/work")
+        .expect("resolve work")
+        .detach();
+    assert_eq!(landed.to_hex().to_string(), head);
+    assert_eq!(
+        repo.find_commit(landed)
+            .expect("find replayed")
+            .parent_ids()
+            .map(gix::Id::detach)
+            .collect::<Vec<_>>(),
+        vec![moved],
+        "the replayed commit sits on the trunk"
+    );
+
+    // THE RESOLUTION IS WHAT LANDED, not either side. A test asserting only that
+    // the replay finished would pass over an engine that picked `ours`.
+    assert_eq!(
+        std::fs::read_to_string(dir.join("shared.txt")).expect("read worktree"),
+        "both lines, reconciled\n",
+        "the caller's bytes are the ones that landed"
+    );
+}
+
+/// **A conflict at a path the caller did not name still refuses.**
+///
+/// The vacuity twin, and the one that matters: resolving SOME paths would write
+/// a tree carrying the engine's own pick for the rest, which is the
+/// auto-resolution the module refuses — reached by omission rather than by a
+/// flag, so nothing in the call site would look wrong.
+#[test]
+fn an_unnamed_conflicting_path_still_refuses_the_whole_replay() {
+    let (dir, repo) = init("rebase-resolve-partial");
+    let root: Files<'_> = &[("named.txt", "base\n"), ("unnamed.txt", "base\n")];
+    let base = commit(&repo, &[], root);
+
+    let trunk: Files<'_> = &[("named.txt", "trunk\n"), ("unnamed.txt", "trunk\n")];
+    let moved = commit(&repo, &[base], trunk);
+
+    let side: Files<'_> = &[("named.txt", "branch\n"), ("unnamed.txt", "branch\n")];
+    let tip = commit(&repo, &[base], side);
+
+    point(&dir, "refs/heads/main", moved);
+    point(&dir, "refs/heads/work", tip);
+    materialise(
+        &dir,
+        &[("named.txt", "reconciled\n"), ("unnamed.txt", "branch\n")],
+    );
+
+    let outcome = gitwrite::rebase_resolving(
+        &dir,
+        "refs/heads/work",
+        "refs/heads/main",
+        &["named.txt".to_owned()],
+    )
+    .expect("rebase resolving");
+    let Rebase::Conflicted { paths, .. } = outcome else {
+        panic!("a partial resolution must still refuse, got {outcome:?}");
+    };
+    assert_eq!(
+        paths,
+        vec!["named.txt".to_owned(), "unnamed.txt".to_owned()],
+        "the refusal names every conflicting path, including the resolved one"
+    );
+
+    let still = repo
+        .rev_parse_single("refs/heads/work")
+        .expect("resolve work")
+        .detach();
+    assert_eq!(
+        still, tip,
+        "the branch is untouched after a partial refusal"
+    );
+}
+
 /// A branch that already descends from the base mints nothing.
 ///
 /// The receipts the landing loop runs on are keyed to the commit they validated,

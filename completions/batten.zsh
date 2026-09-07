@@ -5732,6 +5732,7 @@ trace\:"Add everything"))' \
         case $line[1] in
             (replay)
 _arguments "${_arguments_options[@]}" : \
+'*--resolve=[A path whose conflict is resolved in the worktree (repeatable)]: :_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \

@@ -1186,6 +1186,36 @@ const LEASE_RUN: FlagDecl = FlagDecl::positional("run", "The run to cancel on a 
 const LAND_REFERENCE: FlagDecl =
     FlagDecl::positional("reference", "The remote reference to replay onto");
 
+/// `--resolve <path>`: a path whose conflict the caller merged in the worktree.
+///
+/// **Repeatable, and every conflicting path must be named** (CLOUD-1586).
+/// `gitwrite`'s header refuses auto-resolution because it deletes the loop's one
+/// human stop; this does not reinstate it. There is no `--ours`/`--theirs` — a
+/// side-picking flag IS that strategy — and a partial naming refuses, because a
+/// tree written for the paths nobody mentioned would carry the engine's own pick
+/// arrived at by omission.
+///
+/// On `land replay` and never on `land lap`: a lap runs unattended, so any
+/// resolution it could apply is one nobody looked at.
+const LAND_RESOLVE: FlagDecl = FlagDecl {
+    id: "resolve",
+    long: Some("resolve"),
+    short: None,
+    help: "A path whose conflict is resolved in the worktree (repeatable)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    // `StrMany` for its own header's reason, and it is load-bearing here rather
+    // than tidy: `Str` keeps only the LAST occurrence, so naming two conflicting
+    // paths would silently drop the first — and a partial naming is exactly what
+    // this verb refuses. The failure would be a refusal the caller cannot
+    // explain, having named every path.
+    value: ValueDecl::StrMany,
+};
+
 /// `<field>`: which advisory field `lease peek` prints.
 ///
 /// A closed set, because the whole value of `peek` over reading the status prose
@@ -4664,7 +4694,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Advance the base and replay this branch onto it, recording the outcome",
         data_channel: false,
         effect: Effect::Write,
-        flags: &[LAND_REFERENCE],
+        flags: &[LAND_REFERENCE, LAND_RESOLVE],
     },
     // `write`, and the write is the RECORD rather than the wait: asking two
     // questions is a read, and what this leaves behind is both arms' answers for

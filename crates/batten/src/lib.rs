@@ -6569,11 +6569,11 @@ fn run_land(
             run_land_verify(root, &standing, &branch, None, out, err)
         }
         cli::LandCommand::FastForward => run_land_fast_forward(root, &branch, out, err),
-        cli::LandCommand::Replay { reference } => {
+        cli::LandCommand::Replay { reference, resolve } => {
             let Some(url) = land_remote(root, err)? else {
                 return Ok(ExitCode::Internal);
             };
-            run_land_replay(root, &url, reference, &branch, out)
+            run_land_replay(root, &url, reference, &branch, resolve, out)
         }
         // NO REMOTE RESOLVED HERE ANY MORE. The staleness arm asks the FORGE
         // through its conditional endpoint rather than the git remote, so this
@@ -7134,7 +7134,11 @@ fn run_land_lap(
             // being true. `land.sh` pushed at the transition for the same reason.
             guard.phase(step.as_str(), lap);
             let code = match step {
-                land::Step::Replay => run_land_replay(root, url, reference, branch, out)?,
+                // NO RESOLUTIONS ON THE LAP, ever. A lap runs unattended, so a
+                // resolution it could apply would be one nobody looked at —
+                // `gitwrite`'s auto-resolution refusal, reached through the
+                // driver instead of through a flag.
+                land::Step::Replay => run_land_replay(root, url, reference, branch, &[], out)?,
                 land::Step::Verify => {
                     run_land_verify(root, &bet, branch, Some(reference), out, err)?
                 }
@@ -8375,9 +8379,10 @@ fn run_land_replay(
     url: &str,
     reference: &str,
     branch: &str,
+    resolve: &[String],
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
-    match land::replay(root, url, reference, branch)? {
+    match land::replay(root, url, reference, branch, resolve)? {
         land::Replay::Conflicted { commit, paths } => {
             writeln!(
                 out,

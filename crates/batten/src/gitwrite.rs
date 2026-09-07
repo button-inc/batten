@@ -279,6 +279,60 @@ pub fn rebase(dir: &Path, branch: &str, onto: &str) -> Result<Rebase> {
     replay_onto(dir, branch, onto, onto)
 }
 
+/// [`rebase`], with the conflict at named paths taken from the WORKTREE.
+///
+/// # The loop's one human stop had no route to take it (CLOUD-1586)
+///
+/// `mem:workflow/landing-loop` gives the loop exactly one human stop — a rebase
+/// that conflicts — and the module header above states the design that makes the
+/// stop safe: **nothing moves on a conflict**, so there is no detached HEAD and
+/// no half-replayed state for the next lap to find. That is right, and it left
+/// the human nothing to resolve. The predecessor shell lander left an ordinary
+/// rebase in progress, where `git add` and `git rebase --continue` are the route;
+/// this engine leaves a clean tree and a refusal, and the only way back to a
+/// resolvable state is re-creating the rebase by hand — which this repository's
+/// own `rebase-not-hand-stepped` denies, with no `bypass_env` and a general hatch
+/// that is only readable in the adjudicating process's environment. Measured on
+/// #848 twice: the loop stopped, and no route it named was open.
+///
+/// # Why the resolution comes from the worktree, and why that needs no state
+///
+/// The alternative is `git rebase`'s: materialise the conflict, remember where
+/// the replay got to, and continue. That needs the remainder of the range
+/// persisted across invocations, and a half-replayed branch on disk — the exact
+/// state the header refuses.
+///
+/// This is stateless instead. The whole replay re-runs from its base on every
+/// invocation, so the caller supplies the merged content UP FRONT: edit the file
+/// in the worktree, name it here, and the replay uses those bytes for that path
+/// instead of refusing. Nothing is remembered, nothing is left half-done, and a
+/// run with no `resolutions` is byte-identical to [`rebase`].
+///
+/// **It resolves a PATH, never a side.** There is no `--ours`/`--theirs`: those
+/// would be the auto-resolution the module header refuses, one strategy pick
+/// wearing a flag. What the caller supplies is content they wrote, which is a
+/// decision a person made rather than one the engine took for them.
+///
+/// **Only the FIRST conflicting commit may be resolved.** One worktree file
+/// carries one version of its content, so applying it to a second conflicting
+/// commit in the same range would be replaying a resolution for a merge nobody
+/// looked at. A later conflict is returned as [`Rebase::Conflicted`] exactly as
+/// before, and the caller resolves it on the next run.
+///
+/// # Errors
+///
+/// As [`rebase`], plus a named path that cannot be read from the worktree — that
+/// is a usage error rather than a conflict, because the caller asserted a
+/// resolution exists there.
+pub fn rebase_resolving(
+    dir: &Path,
+    branch: &str,
+    onto: &str,
+    resolutions: &[String],
+) -> Result<Rebase> {
+    replay_range(dir, branch, onto, onto, resolutions)
+}
+
 /// Replay `upstream..branch` onto `onto`, and update the worktree to match.
 ///
 /// **`git rebase --onto`, and the third argument is the whole of it.** [`rebase`]
@@ -297,6 +351,21 @@ pub fn rebase(dir: &Path, branch: &str, onto: &str) -> Result<Rebase> {
 ///
 /// As [`rebase`].
 pub fn replay_onto(dir: &Path, branch: &str, upstream: &str, onto: &str) -> Result<Rebase> {
+    replay_range(dir, branch, upstream, onto, &[])
+}
+
+/// The replay every entry point above funnels into.
+///
+/// `resolutions` is [`rebase_resolving`]'s and is empty for every other caller,
+/// which is what makes the added parameter behaviour-preserving rather than a
+/// second replay to keep in step.
+fn replay_range(
+    dir: &Path,
+    branch: &str,
+    upstream: &str,
+    onto: &str,
+    resolutions: &[String],
+) -> Result<Rebase> {
     let repo = crate::git::open_for_write(dir)?;
     let resolve = |rev: &str| {
         repo.rev_parse_single(rev)
@@ -394,8 +463,15 @@ pub fn replay_onto(dir: &Path, branch: &str, upstream: &str, onto: &str) -> Resu
     .unwrap_or_default();
 
     let empty = gix::ObjectId::empty_tree(repo.object_hash());
+    let context = Replay {
+        dir,
+        options: &options,
+        committer: &committer,
+        empty,
+    };
     let mut cursor = base;
     let mut replayed = 0usize;
+    let mut spent = false;
     for original in &range {
         // `commit_identity` is `None` for a commit that changes nothing, and an
         // absent identity must not match another absent one — so an empty commit
@@ -405,10 +481,21 @@ pub fn replay_onto(dir: &Path, branch: &str, upstream: &str, onto: &str) -> Resu
         {
             continue;
         }
-        match replay(&repo, cursor, *original, &options, &committer, empty)? {
+        // The resolutions are spent on the FIRST commit that conflicts and are
+        // empty for every one after it, so a second conflicting commit in the
+        // same range refuses as it always did. `rebase_resolving`'s header says
+        // why: one worktree file holds one version of its content, and reusing
+        // it for a merge nobody looked at would be inventing a resolution.
+        let offered = if spent { &[][..] } else { resolutions };
+        match replay(&context, &repo, cursor, *original, offered)? {
             Step::Landed(id) => {
                 cursor = id;
                 replayed += 1;
+            }
+            Step::Resolved(id) => {
+                cursor = id;
+                replayed += 1;
+                spent = true;
             }
             Step::Conflicted(paths) => {
                 return Ok(Rebase::Conflicted {
@@ -467,6 +554,13 @@ pub fn reset_hard(dir: &Path, branch: &str, to: &str) -> Result<String> {
 enum Step {
     /// The rewritten commit's id.
     Landed(gix::ObjectId),
+    /// The rewritten commit's id, where a caller-supplied resolution was used.
+    ///
+    /// A separate arm rather than a flag on [`Step::Landed`] because the caller
+    /// must know a resolution was SPENT: the offer is withdrawn for every later
+    /// commit in the range, and a walk that could not tell the two apart would
+    /// hand the same worktree bytes to a second merge nobody inspected.
+    Resolved(gix::ObjectId),
     /// The paths it conflicts at.
     Conflicted(Vec<String>),
 }
@@ -476,14 +570,35 @@ enum Step {
 /// Split out of [`rebase`] because the loop and the merge fail for entirely
 /// different reasons, and because a lap's whole decision — take the conflict or
 /// resolve it — lives in six lines here rather than buried in a walk.
+/// What every commit in one replay shares.
+///
+/// A struct rather than six parameters because the walk computes all of it once
+/// and hands the same values to each commit — and because the alternative is a
+/// signature clippy refuses at seven.
+struct Replay<'a> {
+    /// The worktree root, read only to pick up a caller's resolution.
+    dir: &'a Path,
+    /// The merge options the whole range is judged by.
+    options: &'a gix::merge::tree::Options,
+    /// The committer every rewritten commit takes.
+    committer: &'a gix::actor::Signature,
+    /// The empty tree, for a root commit's absent parent.
+    empty: gix::ObjectId,
+}
+
 fn replay(
+    ctx: &Replay<'_>,
     repo: &gix::Repository,
     cursor: gix::ObjectId,
     original: gix::ObjectId,
-    options: &gix::merge::tree::Options,
-    committer: &gix::actor::Signature,
-    empty: gix::ObjectId,
+    resolutions: &[String],
 ) -> Result<Step> {
+    let Replay {
+        dir,
+        options,
+        committer,
+        empty,
+    } = *ctx;
     let commit = repo
         .find_commit(original)
         .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not read: {err}"))?;
@@ -512,6 +627,7 @@ fn replay(
     // let a resolution strategy quietly pick a side, which deletes the loop's
     // only human stop.
     let strict = gix::merge::tree::TreatAsUnresolved::forced_resolution();
+    let mut resolved = false;
     if outcome.has_unresolved_conflicts(strict) {
         let mut paths: Vec<String> = outcome
             .conflicts
@@ -521,7 +637,39 @@ fn replay(
             .collect();
         paths.sort_unstable();
         paths.dedup();
-        return Ok(Step::Conflicted(paths));
+
+        // EVERY conflicting path must be named, never some of them. A partial
+        // resolution would write a tree carrying the engine's own pick for the
+        // paths the caller did not mention — the auto-resolution this module
+        // exists to refuse, arrived at by omission rather than by a flag.
+        let offered: std::collections::BTreeSet<&str> =
+            resolutions.iter().map(String::as_str).collect();
+        if paths.is_empty() || !paths.iter().all(|path| offered.contains(path.as_str())) {
+            return Ok(Step::Conflicted(paths));
+        }
+
+        for path in &paths {
+            // Read the WORKTREE, which is where the caller did the work. A path
+            // that will not read is an error rather than a conflict: the caller
+            // asserted a resolution is there, and replaying their assertion as
+            // "still conflicted" would hide the typo in a verdict.
+            let bytes = std::fs::read(dir.join(path)).map_err(|err| {
+                anyhow::anyhow!("gitwrite: {path} carries no resolution to read: {err}")
+            })?;
+            let blob = repo
+                .write_blob(bytes)
+                .map_err(|err| {
+                    anyhow::anyhow!("gitwrite: {path}'s resolution will not write: {err}")
+                })?
+                .detach();
+            outcome
+                .tree
+                .upsert(path.as_str(), gix::objs::tree::EntryKind::Blob, blob)
+                .map_err(|err| {
+                    anyhow::anyhow!("gitwrite: {path}'s resolution will not place: {err}")
+                })?;
+        }
+        resolved = true;
     }
 
     let tree = outcome
@@ -540,11 +688,15 @@ fn replay(
     replayed
         .extra_headers
         .retain(|(name, _)| name.as_slice() != b"gpgsig");
-    Ok(Step::Landed(
-        repo.write_object(&replayed)
-            .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not rewrite: {err}"))?
-            .detach(),
-    ))
+    let minted = repo
+        .write_object(&replayed)
+        .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not rewrite: {err}"))?
+        .detach();
+    Ok(if resolved {
+        Step::Resolved(minted)
+    } else {
+        Step::Landed(minted)
+    })
 }
 
 /// Bring the worktree from the tree of `was` to the tree of `now`.
