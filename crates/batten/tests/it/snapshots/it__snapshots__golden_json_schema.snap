@@ -1249,6 +1249,14 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": true,
               "help": "The remote reference to replay onto"
+            },
+            {
+              "name": "resolve",
+              "short": null,
+              "long": "resolve",
+              "takes_value": true,
+              "positional": false,
+              "help": "A path whose conflict is resolved in the worktree (repeatable)"
             }
           ],
           "subcommands": []
