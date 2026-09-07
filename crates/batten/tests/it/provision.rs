@@ -233,6 +233,10 @@ fn apply_installs_out_of_tree_and_leaves_the_repository_untouched() {
 fn a_reinstall_replaces_the_cached_binary_rather_than_writing_through_it() {
     use std::io::Read as _;
 
+    // A different artifact at the same version, so `apply` reinstalls over it.
+    // Declared before the statements: `items_after_statements` is denied here.
+    const SECOND: &[u8] = b"#!/bin/sh\necho second\n";
+
     let env = Env::new("provision-reinstall");
     let (url, sha) = env.artifact("demo", BINARY);
     env.config(&manifest(&url, &sha));
@@ -241,8 +245,6 @@ fn a_reinstall_replaces_the_cached_binary_rather_than_writing_through_it() {
     let installed = env.state_dir().join("provision/demo/1.2.3/bin/demo");
     let mut held = fs::File::open(&installed).expect("hold the installed binary open");
 
-    // A different artifact at the same version, so `apply` reinstalls over it.
-    const SECOND: &[u8] = b"#!/bin/sh\necho second\n";
     let (next_url, next_sha) = env.artifact("demo2", SECOND);
     env.config(&manifest(&next_url, &next_sha));
     let output = env.run(&["provision", "apply"]);
