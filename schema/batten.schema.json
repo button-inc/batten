@@ -26,6 +26,17 @@
         }
       ]
     },
+    "board": {
+      "description": "This consumer's board column vocabulary. Absent means this file does not\nspeak to it, which every reader takes as could-not-look rather than as a\ndefault — see [`Board`] for why a default would be the violation again.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Board"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "bot_lane": {
       "description": "The bot lane this repository files rows for (CLOUD-1295). Absent means it\nruns none, and the `pr` verbs say so rather than filing against defaults —\na lane assembled from engine literals would be a row asserting a bump\nnobody configured.\n\nConsumer-specific by nature, and the reason it lives here rather than in\nthe crate: which repository, which bot logins and which manifests a lane\nowns are that repository's business (non-negotiable rule 1), so the core\ncarries the matcher and this table carries the answers. The type and the\npredicates are [`crate::bot`].",
       "anyOf": [
@@ -677,6 +688,41 @@
           "const": "temp"
         }
       ]
+    },
+    "Board": {
+      "description": "The `[board]` table: this consumer's column vocabulary.\n\n# Why this table exists (non-negotiable rule 1)\n\n[`crate::landed`] and [`crate::claim`] decide over a board's COLUMN NAMES —\nwhich column is the ready queue, which means \"pulled\", which mean \"somebody\nhas this, or it landed, or it shipped\". Those are one tracker's words. Linear\nships `Todo`/`In Progress`/`In Review`/`Done`; Jira ships `To Do`/`In\nDevelopment`; a GitHub Project ships whatever the owner typed.\n\nCarried as engine constants they were rule 1's violation in its worst form.\nOff this board every comparison is false, so `is_started` never fires, the\nlanded-honesty sweep reports **zero findings over a board full of dishonest\ncolumns**, and `claim` never refuses. A gate that cannot fire is\nindistinguishable from a gate that found nothing, which is the one failure\nthis whole module family exists to avoid.\n\n# Absent is could-not-look, never a default\n\nAn undeclared table does **not** fall back to this repository's own words.\nA default would reinstate the violation with an extra step and make the dead\npath byte-identical to the working one again — the exact shape that let the\nconstants survive. A verb needing a column this table does not declare says\nso, by name, and decides nothing.\n\n# Why values and not `[[pattern]]` rows\n\n[`Ready`]'s reason below, and one more directly: a column is matched by\nEQUALITY against the string the tracker echoes back, never by a regex over\nit. The pattern registry exists so one CONCEPT has one spelling; a literal\nthe round trip returns verbatim is a value.",
+      "type": "object",
+      "properties": {
+        "in_progress": {
+          "description": "The column meaning \"pulled\": somebody is on this now.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ready": {
+          "description": "The column a row must sit in to be pullable — the ready queue.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "review": {
+          "description": "The column a row whose branch is behind git is asked to move back to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started": {
+          "description": "Every column meaning \"somebody has this, or it has landed, or it has\nshipped\".\n\n**The released column belongs in this set, and leaving it out was a\nmeasured defect** (CLOUD-1458). The engine constant this replaces read\n`[\"In Progress\", \"In Review\"]`, so a declined key that reached the\nreleased column escaped the sweep entirely — and released is where the\nclaim is strongest and the lie therefore costs most. Measured on that\ngate's own two rows: CLOUD-186 and CLOUD-1127 were declined with\n`DO-NOT-CLOSE` in the body of the pull request that landed the module,\nadvanced by the merge, moved back by hand, and advanced to the released\ncolumn by a release 2026-09-05T02:52:56Z — past the far edge of a\npredicate written the day before.\n\nThe ready-queue columns stay OUT: a declined key sitting there is\n`DO-NOT-CLOSE` working, and refusing it would make the marker unwritable.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "BotLane": {
       "description": "The `[bot_lane]` table: which proposals this repository will file a row for.\n\nAbsent means the repository runs no bot lane, and the verbs say so rather than\nfiling against defaults — a lane assembled from engine literals would be a row\nasserting a bump nobody configured, which is the CLOUD-198 class with a new\nauthor.",

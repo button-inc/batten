@@ -8961,6 +8961,48 @@ verified_by = ["verify", "linear-check"]
 [ready]
 prose_dialect_required_from = "2026-09-02T00:00:00.000Z"
 
+# THIS BOARD'S COLUMN VOCABULARY (CLOUD-1623). These four words were `const`s in
+# `crates/batten/src/landed.rs` and `claim.rs` — non-negotiable rule 1's worst
+# violation in the tree, because the failure is silent in the direction that
+# matters. Off a board spelling its columns this way every comparison is false:
+# `is_started` never fires, so the landed-honesty sweep reports ZERO FINDINGS
+# over a board full of dishonest columns, and `claim` never refuses. A gate that
+# cannot fire and a gate that found nothing emit the same bytes.
+#
+# THE ENGINE HOLDS NO DEFAULT FOR THESE, deliberately. An undeclared column is
+# could-not-look named by key, never a fallback to these values — a fallback
+# would put this repository's vocabulary back in the engine with one more step in
+# front of it, and restore exactly the property that made the original defect
+# unobservable. `crates/batten/src/board.rs` carries that reasoning.
+#
+# VALUES RATHER THAN `[[pattern]]` ROWS, per CLOUD-472's precedent one table up: a
+# column is matched by EQUALITY against the string the tracker echoes back, not by
+# a regex over it. The registry exists so one CONCEPT has one spelling; a literal
+# the round trip returns verbatim is a value.
+[board]
+# The ready queue: `claim check` refuses a row that is not sitting here.
+ready = "Todo"
+# Pulled. Both `landed check`'s behind-git direction and the abandonment drain
+# select on this one.
+in_progress = "In Progress"
+# Where a row whose work is already on `main` is asked to move.
+review = "In Review"
+# Every column meaning "somebody has this, or it landed, or it shipped".
+#
+# `Done` IS IN THE SET, AND LEAVING IT OUT WAS A MEASURED DEFECT (CLOUD-1458).
+# The engine constant read `["In Progress", "In Review"]`, so a declined key that
+# reached Done escaped the sweep entirely — and Done is RELEASED, where the claim
+# is strongest and the lie therefore costs most. Measured on that gate's own two
+# rows: CLOUD-186 and CLOUD-1127 were declined with `DO-NOT-CLOSE` in the body of
+# the pull request that landed the module, advanced to In Review by the merge,
+# moved back by hand, and advanced to Done by a release 2026-09-05T02:52:56Z —
+# past the far edge of a predicate written the day before.
+#
+# `Backlog` and `Todo` stay OUT, because they are the ready queue: a declined key
+# sitting there is `DO-NOT-CLOSE` working, and refusing it would make the marker
+# unwritable.
+started = ["In Progress", "In Review", "Done"]
+
 # ACCEPTED INVOCATION-LATENCY REGRESSIONS (CLOUD-1163 unit 10), transcribed
 # verbatim off the `EXEMPT` heredoc of the retired `mise-tasks/perf-compare.sh`.
 #
