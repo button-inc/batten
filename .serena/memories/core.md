@@ -2158,6 +2158,22 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   dual-HMAC). Behavioural churn fixtures live in
   `crates/batten/tests/identity_churn.rs` (CLOUD-169); they compose the matcher
   with this module because a `Finding` carries no fingerprint yet (CLOUD-164).
+- `scratch.rs` — out-of-tree TEST scratch, owned in one place and reaped by
+  liveness (CLOUD-1148). Test support rather than product surface, and `pub`
+  only because the call sites live in three scopes that cannot share a
+  `#[cfg(test)]` helper. **The defect it closes is the pid's POSITION**: ~76
+  sites spelled `temp_dir().join(format!("batten-x-{pid}-{name}"))`, and
+  nextest gives every case its own process, so each case in each run minted a
+  path no successor ever computes again — 269 leaked directories, and the
+  `remove_dir_all` those sites opened with was wiping a path already empty. The
+  control group is why that is the cause and not a correlate: the sites that
+  leave the pid out sit at a fixed 12 and 2 forever. So the pid stays, as a
+  path SEGMENT (`/tmp/batten-scratch/<pid>/<name>`) — something a reaper can
+  decide about, where a pid spliced into a leaf name is recoverable only by
+  guessing at 76 name shapes. Reaped on ACQUIRE by liveness, never mtime: a run
+  here is killed constantly so a `Drop` is tidiness rather than the mechanism,
+  which is `task::singleton_acquire`'s reasoning, and an age bound would collect
+  a long-running suite's own corpora. EPERM is life; only ESRCH is death.
 - `secret.rs` — the credential type, and the PUREST LEAF in the layer table: it
   reaches nothing in this crate, not even `error`. One newtype, a hand-written
   `Debug` that renders a fixed marker, no `Display`/`Serialize`/`AsRef`, and one

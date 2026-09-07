@@ -106,6 +106,7 @@ pub mod resolve;
 pub mod rest;
 pub mod review;
 pub mod rules;
+pub mod scratch;
 pub mod secret;
 pub mod secrets;
 pub mod selfwrite;
