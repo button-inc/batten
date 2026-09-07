@@ -751,34 +751,40 @@ it rather than holding a foreground poll open."""
 # row cannot tell the race it measured from the resolution it blocks, and a deny
 # that cannot tell them apart must not be the one that stops the resolution.
 #
-# WHAT `warn` COSTS, MEASURED, BECAUSE THIS PARAGRAPH FIRST CLAIMED THE OPPOSITE.
-# It read "the nudge still fires, still names the loop, and still reaches the
-# agent at the call". Every clause of that is false. A warn row makes
-# `hook::blocks` false, `adjudicate` returns `Decision::Allow`, and the decision
-# document is EMPTY — the same bytes a repository with no such row emits. Over
-# the compiled binary at this HEAD, `adjudicate --harness claude-code` on
+# AND `warn` IS NOT THE ANSWER TO THAT, WHICH IS MEASURED RATHER THAN ARGUED.
+# Lowering this column was tried on this branch and is withdrawn. A warn row
+# makes `hook::blocks` false, `adjudicate` returns `Decision::Allow`, and the
+# decision document is EMPTY — the same bytes a repository with no such row
+# emits. Over the compiled binary, `adjudicate --harness claude-code` on
 # `git rebase origin/main`: no output, exit 0. Under `--fail-on-warning`, the
 # same call: `"permissionDecision":"deny"`, reason `call name refused
 # rebase-not-hand-stepped`.
 #
-# So this row is SILENT on the surface it acts on, and live only under
-# promotion. That is the honest reading of the trade: the deadlock is gone
-# because the refusal is gone with it, not because it softened into advice. It
-# is the `git push` paragraph's "named as a known limit so the silence is not
-# read as coverage" applied to this row — and the correction is recorded rather
-# than quietly rewritten, because a comment overstating its own gate is the one
-# direction a severity column must never fail in, and it shipped here once.
+# So `warn` here is silence, not advice, and the trade it offered was a refusal
+# that is wrong on ONE path for a row that decides nothing on EVERY path. The
+# paragraph that argued for it claimed "the nudge still fires, still names the
+# loop, and still reaches the agent at the call"; every clause of that is false,
+# and the correction is recorded rather than quietly deleted, because a comment
+# overstating its own gate is the one direction a severity column must never
+# fail in, and it shipped here once.
 #
-# `crates/batten/tests/it/land_hand_stepping.rs` carries the whole predicate
-# under `--fail-on-warning`, plus an arm pinning the silence itself, so a
-# DELETED row still reddens. Narrowing this to a predicate that can see the lap
-# record — the fact that separates the race from the resolution — is the
-# follow-up that would let it deny again.
+# THE CONFLICT COST IS NAMED RATHER THAN PAID. On a conflict the stop is a
+# human's, which `AGENTS.md` already sanctions ("a rebase conflict needs a human
+# decision"). That is the `git push` paragraph's "named as a known limit so the
+# silence is not read as coverage", applied to a refusal rather than to a gap.
+#
+# Narrowing this to a predicate that can see the lap record — the fact that
+# separates the race from the resolution — is what would remove the cost, and it
+# is a follow-up rather than this branch's work.
+#
+# `crates/batten/tests/it/land_hand_stepping.rs` carries the whole predicate at
+# DEFAULT strictness, including an arm asserting this row refuses without
+# `--fail-on-warning`, so both a deleted row and a silently lowered one redden.
 [[rule]]
 id = "rebase-not-hand-stepped"
 kind = "shape"
 scope = "mediated_call"
-severity = "warn"
+severity = "deny"
 pattern = "git rebase"
 contains = "origin/main"
 reason = """
