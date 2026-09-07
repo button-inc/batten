@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.150](https://github.com/button-inc/batten/compare/v0.0.149...v0.0.150) - 2026-09-07
+
+### Fixed
+
+- *(landing)* anchor the guard on the invocation, not the mention
+- *(landing)* declare the directory, so deleting the guard is not invisible
+- *(landing)* consult the required-check roster before moving main
+
+### Other
+
+- *(test)* drop the needless hashes from the unguarded fixture
+
 ## [0.0.149](https://github.com/button-inc/batten/compare/v0.0.148...v0.0.149) - 2026-09-07
 
 ### Added
