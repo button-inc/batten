@@ -189,7 +189,8 @@ fn the_fixture_bundles_actually_publish_their_predicates() {
 fn the_committed_bundles_publish_no_engine_side_rule_name() {
     let root = common::at_root("batten.toml");
     let root = root.parent().expect("the committed config has a parent");
-    let config = batten::resolve::resolve(root, None).expect("the committed config resolves");
+    let config = batten::resolve::resolve(root, &batten::resolve::Overrides::default())
+        .expect("the committed config resolves");
     let policy_rows: Vec<_> = config
         .rules
         .iter()
