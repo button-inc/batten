@@ -2226,7 +2226,14 @@ fn binary_is_behind_the_config(source: &str, text: &str) -> bool {
     let Some(root) = Path::new(source).parent() else {
         return false;
     };
-    let at = root.join("schema").join("batten.schema.json");
+    // [`SCHEMA_PATH`], never a second spelling of it. It was hand-joined here
+    // for one commit, which is the two-authorities shape: the constant exists
+    // precisely because more than one reader needs the location, and a reader
+    // that spells its own is the one that keeps working after the constant
+    // moves. It is batten's own convention rather than a consumer identifier —
+    // the same class as [`CONFIG_FILE`] — so the fix is the constant, not
+    // config.
+    let at = root.join(SCHEMA_PATH);
     let (Ok(committed), Ok(derived)) = (fs::read_to_string(&at), schema()) else {
         return false;
     };
