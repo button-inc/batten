@@ -117,6 +117,19 @@ declared_modules := {
 	# it sits below `rules` and reaches `exec` for its one spawn, which is the
 	# placed adapter `policy/spawn-adapters.rego` requires.
 	"recorder",
+	# `scratch` arrived with CLOUD-1148 and this rule named it once more — module
+	# written, its three cases green, and nobody had placed it. It is the LEAF of
+	# the crate and the only member of the table that is test support rather than
+	# product: out-of-tree scratch for the suites, reaped by liveness.
+	#
+	# It sits at the bottom because it reads NOTHING in this crate — not `error`,
+	# not `exit` — and so has no edge to forbid in that direction. The direction
+	# worth naming is the other one: nothing in the library may read it either,
+	# and a `src/*.rs` module that did would be shipping a test fixture path into
+	# a decision. Its callers are the suites, which is why it is `pub` at all —
+	# `#[cfg(test)]` cannot be shared across the three scopes that need it (this
+	# crate's unit tests, the `it` binary, and the standalone `tests/*.rs`).
+	"scratch",
 	# `secret` arrived with CLOUD-1569 and this rule named it once more, on the
 	# gate before landing. It is the PUREST LEAF in the table: it reaches nothing
 	# in this crate at all — not even `error` — because its whole surface is one
@@ -133,7 +146,6 @@ declared_modules := {
 	# It has no back-edge to forbid for the reason `agent` has none, arrived at
 	# from the opposite direction: `agent` reaches everything and is read by
 	# nothing, this is read by everything and reaches nothing.
-
 	# `deferral` and `source` arrived with this bundle, and this rule named BOTH
 	# on the last gate before landing — module written, both suites green,
 	# `mise run fix` clean, `module-map-check` satisfied, and nobody had placed
