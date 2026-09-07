@@ -9764,6 +9764,48 @@ word = "wrong"
 gloss = "does not match the declared shape"
 
 [[verdict]]
+id = "provision declare dropped"
+gloss = "no [[provision.env]] row carries a no-proxy key, so the provisioned mise wrapper fences nothing"
+class = """
+The surface that actually runs. `mise.toml`'s `[env]` reaches what mise SPAWNS,
+never mise's own resolver (CLOUD-1455) — the wrapper generated from these rows
+is what fences the resolver, so deleting the fence here restores the 403 while
+the `[env]` arms stay green. Measured on #889.
+"""
+
+[[verdict.route]]
+id = "provision read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "provision declare partial"
+gloss = "a [[provision.env]] no-proxy row no longer prepends the host mise's release resolver calls"
+class = """
+A fence that does not name the host it exists for fences nothing. The row
+survives, so a predicate asking only whether it exists would pass this.
+"""
+
+[[verdict.route]]
+id = "provision read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "provision read unread"
+gloss = "batten.toml would not parse, so the provisioned wrapper's fence could not be read"
+class = """
+Could-not-look, refused rather than reported clean: a module that iterates only
+`documents` reports green over a file it never read, and a dead gate and a clean
+tree are byte-identical on the decision surface.
+"""
+
+[[verdict.route]]
+id = "provision read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
 id = "task declare dropped"
 gloss = "mise.toml's [env] carries no no-proxy key, so nothing is fenced out of the agent proxy"
 class = """
