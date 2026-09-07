@@ -154,6 +154,42 @@ fn a_landing_workflow_that_does_not_consult_the_roster_is_refused() {
     assert_eq!(rules_fired(&root), vec![UNGUARDED.to_owned()]);
 }
 
+/// THE DEFECT A CODE REVIEW FOUND, and it is the sharpest of the three because
+/// the module's own DOCUMENTATION was what defeated it.
+///
+/// `guarded` first matched any line containing `checks-green`. The committed
+/// `fast-forward.yml` carries that substring on FOUR comment lines — the block
+/// explaining why the predicate is the engine's and reused whole — against ONE
+/// real invocation. So deleting the step while leaving its comment block, which
+/// is the ordinary shape of a "this step was flaky, dropping it" edit, left the
+/// gate green over a landing path that no longer consults the roster.
+///
+/// The more the guard was explained, the deader it got. Anchoring on
+/// `mise run checks-green` and excluding comment lines is what discriminates the
+/// invocation from every mention of it.
+///
+/// The module's other anti-vacuity case rules out another FILE satisfying the
+/// rule; this one rules out another LINE in the same file.
+#[test]
+fn a_comment_naming_the_roster_check_does_not_satisfy_the_guard() {
+    let commentary = "\
+jobs:
+  fast-forward:
+    steps:
+      # THE PREDICATE IS THE ENGINE'S, REUSED WHOLE. `mise run checks-green` is
+      # the adapter `land` itself decides on, and re-deriving it here would be a
+      # second authority — `checks-green` read `cancelled` as red (CLOUD-363).
+      - uses: sequoia-pgp/fast-forward@ea7628b # v1.0.0
+";
+    let root = repo("landing-roster-comment-only", Some(commentary));
+    assert_eq!(
+        rules_fired(&root),
+        vec![UNGUARDED.to_owned()],
+        "a comment that NAMES the roster check is not an invocation of it; \
+         the step was deleted and only its rationale remains"
+    );
+}
+
 /// AND THE PASS SIDE OVER A FIXTURE, so the refusal above is shown to turn on
 /// the guard's presence rather than on the fixture being a fixture.
 #[test]

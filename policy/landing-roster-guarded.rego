@@ -32,6 +32,17 @@
 # exactly as it does on an unguarded one. The module still reads one key, so the
 # narrowing that matters — which file answers the question — is unchanged.
 #
+# AND IT ANCHORS ON THE INVOCATION, NOT THE MENTION — the third defect a review
+# found in this module, and the sharpest, because the module's own DOCUMENTATION
+# was what defeated it. `guarded` first matched any line containing
+# `checks-green`, and the committed landing workflow carries that substring on
+# FOUR comment lines against ONE real invocation: the block above explaining why
+# the predicate is the engine's. So deleting the step while leaving its rationale
+# — the ordinary shape of a "this was flaky, dropping it" edit — left the gate
+# green over a landing path that no longer consults the roster. The more the
+# guard was explained, the deader it got. `mise run checks-green` plus the
+# comment exclusion is what tells an invocation from every mention of one.
+#
 # WHY A `contains` AND NOT A `[[pattern]]` ROW. The registry exists so one
 # CONCEPT has one spelling, and this is not a concept with variants — it is one
 # literal invocation of one task in one declared file. `fixture-forks.rego` takes
@@ -47,7 +58,8 @@
 # own behaviour is `tests/checks-green.bats`'s and is not restated here.
 #MUTANT-SUITE crates/batten/tests/it/landing_roster.rs
 #MUTANT guard-unread|s@^\tsome line in input.tree.lines\[landing_workflow\]$@\tsome line in []@|the_committed_landing_workflow_is_guarded
-#MUTANT guard-matches-anything|s@^\tcontains(line, "checks-green")$@\ttrue@|a_landing_workflow_that_does_not_consult_the_roster_is_refused
+#MUTANT guard-matches-anything|s@^\tcontains(line, "mise run checks-green")$@\ttrue@|a_landing_workflow_that_does_not_consult_the_roster_is_refused
+#MUTANT comment-counts-as-invocation|s@^\tnot startswith(trim_space(line), "#")$@\ttrue@|a_comment_naming_the_roster_check_does_not_satisfy_the_guard
 #
 # THE FIRST MUTATION EMPTIES THE LINE WALK rather than negating `contains`.
 # Negating the match would make `guarded` hold over any file at all, so the
@@ -84,7 +96,8 @@ landing_workflow := ".github/workflows/fast-forward.yml"
 # green" being consulted rather than a second one being written.
 guarded if {
 	some line in input.tree.lines[landing_workflow]
-	contains(line, "checks-green")
+	contains(line, "mise run checks-green")
+	not startswith(trim_space(line), "#")
 }
 
 # THE REFUSAL, AND ITS BODY IS `not guarded` WITH NO PRESENCE CONJUNCT — which
@@ -145,6 +158,20 @@ unguarded_file := [
 	"        with:",
 	"          merge: true",
 ]
+
+comment_only := [
+	"      # THE PREDICATE IS THE ENGINE'S, REUSED WHOLE. `mise run checks-green`",
+	"      - uses: sequoia-pgp/fast-forward@ea7628b # v1.0.0",
+]
+
+# A COMMENT THAT NAMES THE CHECK IS NOT AN INVOCATION OF IT.
+# `#MUTANT comment-counts-as-invocation` reddens exactly here.
+test_a_comment_naming_the_roster_check_does_not_satisfy_the_guard if {
+	count(violation) == 1 with input as tree(
+		{".github/workflows/fast-forward.yml": comment_only},
+		{},
+	)
+}
 
 # THE PASS SIDE FIRST: without it every refusal below is satisfied by a module
 # that refuses everything. `#MUTANT guard-unread` reddens exactly here.
