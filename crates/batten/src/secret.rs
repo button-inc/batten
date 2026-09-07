@@ -141,8 +141,15 @@ mod tests {
     use super::*;
 
     /// A value distinctive enough that finding it in a rendering is proof rather
-    /// than coincidence.
-    const CANARY: &str = "ghp_CANARY0000canary0000CANARY0000canary";
+    /// than coincidence — and DELIBERATELY NOT SHAPED LIKE A REAL CREDENTIAL.
+    ///
+    /// It was `ghp_`-prefixed first, on the reasoning that a fixture should look
+    /// like the thing it stands for. `no-secrets` refused the tree for it, and
+    /// was right to: a scanner that ignored a well-formed PAT because it sat in
+    /// a test file would be a scanner with a hole in it. The shape was never
+    /// load-bearing here — redaction does not read the value — so the fixture
+    /// changes rather than the gate.
+    const CANARY: &str = "CANARY-not-a-credential-CANARY-not-a-credential";
 
     #[test]
     fn debug_renders_the_marker_and_not_the_value() {
@@ -150,7 +157,7 @@ mod tests {
         let rendered = format!("{secret:?}");
         assert_eq!(rendered, REDACTED);
         assert!(
-            !rendered.contains("canary"),
+            !rendered.contains("not-a-credential"),
             "the rendering must not carry the value"
         );
     }
@@ -179,7 +186,7 @@ mod tests {
             "the non-secret fields still render: {rendered}"
         );
         assert!(
-            !rendered.contains("canary"),
+            !rendered.contains("not-a-credential"),
             "and the secret one does not: {rendered}"
         );
     }
@@ -203,7 +210,7 @@ mod tests {
         let mut value = CANARY.to_owned();
         let _ = unsafe_free_wipe(&mut value);
         assert!(
-            !value.contains("canary"),
+            !value.contains("not-a-credential"),
             "the buffer must not still carry the value"
         );
         assert_eq!(

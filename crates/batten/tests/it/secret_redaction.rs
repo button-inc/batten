@@ -37,15 +37,22 @@
 use batten::secret::{REDACTED, Secret};
 
 /// Distinctive enough that finding it is proof rather than coincidence, and
-/// shaped like the credential that actually leaked.
-const CANARY: &str = "ghp_CANARY0000canary0000CANARY0000canary";
+/// DELIBERATELY NOT SHAPED LIKE A REAL CREDENTIAL.
+///
+/// It was `ghp_`-prefixed first, because a fixture standing in for a leaked PAT
+/// reads better if it looks like one. `no-secrets` refused the tree for it and
+/// was right to — a scanner that skipped a well-formed token because it sat in a
+/// test file would have a hole in exactly the place this suite is about. The
+/// shape buys nothing here: every assertion is over a rendering, and redaction
+/// never reads the value. So the fixture changed and the gate did not.
+const CANARY: &str = "CANARY-not-a-credential-CANARY-not-a-credential";
 
 /// The substring every assertion looks for.
 ///
 /// Deliberately a FRAGMENT rather than the whole canary: a rendering that
 /// truncated, escaped or line-wrapped the value would still be a leak, and a
 /// whole-string search would call it clean.
-const FRAGMENT: &str = "canary";
+const FRAGMENT: &str = "not-a-credential";
 
 /// THE PREMISE (CLOUD-249's shape). Every case below asserts an ABSENCE, and an
 /// absence passes vacuously if the canary could never have appeared — a
