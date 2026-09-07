@@ -16,6 +16,7 @@
       ]
     },
     "attribution": {
+      "description": "What produced commits may carry about the tooling that made them\n(CLOUD-274), enforcing the attribution decision record (CLOUD-268).\nAbsent means this repository declares no attribution policy and the gate\nis simply not active — not that everything is permitted, which is why an\nabsent table is a usage error at the gate rather than a silent pass.\n\nConsumer-specific by nature, and the reason it lives here: the engine\ncarries the matcher, this file carries the vendor literals. That extends\nnon-negotiable rule 1 from consumers to vendors — a grep of `crates/` for\nthe configured patterns returns nothing. The type and the predicate are\n[`crate::attribution`].",
       "anyOf": [
         {
           "$ref": "#/$defs/Attribution"
@@ -92,7 +93,7 @@
       ]
     },
     "credential": {
-      "description": "What produced commits may carry about the tooling that made them\n(CLOUD-274), enforcing the attribution decision record (CLOUD-268).\nAbsent means this repository declares no attribution policy and the gate\nis simply not active — not that everything is permitted, which is why an\nabsent table is a usage error at the gate rather than a silent pass.\n\nConsumer-specific by nature, and the reason it lives here: the engine\ncarries the matcher, this file carries the vendor literals. That extends\nnon-negotiable rule 1 from consumers to vendors — a grep of `crates/` for\nthe configured patterns returns nothing. The type and the predicate are\n[`crate::attribution`].\nHow a session credential is PROVED usable before anything is stripped on\nthe strength of it (CLOUD-1569).\n\nConsumer config because the forge is the consumer's, which is\nnon-negotiable rule 1: the engine holds the mechanism — refuse a known-bad\ncredential first, then test the real one — and the endpoint that\nmechanism speaks to is a fact about this repository, not about batten.\n\nAbsent means the capability is not declared, which reads as\ncould-not-look rather than as healthy: no removal is authorised.",
+      "description": "How a session credential is PROVED usable before anything is stripped on\nthe strength of it (CLOUD-1569).\n\nConsumer config because the forge is the consumer's, which is\nnon-negotiable rule 1: the engine holds the mechanism — refuse a known-bad\ncredential first, then test the real one — and the endpoint that\nmechanism speaks to is a fact about this repository, not about batten.\n\nAbsent means the capability is not declared, which reads as\ncould-not-look rather than as healthy: no removal is authorised.",
       "anyOf": [
         {
           "$ref": "#/$defs/CredentialProbe"

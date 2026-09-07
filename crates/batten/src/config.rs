@@ -571,6 +571,8 @@ pub struct Config {
     /// non-negotiable rule 1 from consumers to vendors — a grep of `crates/` for
     /// the configured patterns returns nothing. The type and the predicate are
     /// [`crate::attribution`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<crate::attribution::Attribution>,
     /// How a session credential is PROVED usable before anything is stripped on
     /// the strength of it (CLOUD-1569).
     ///
@@ -583,8 +585,6 @@ pub struct Config {
     /// could-not-look rather than as healthy: no removal is authorised.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential: Option<crate::provision::CredentialProbe>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attribution: Option<crate::attribution::Attribution>,
     /// The commit-subject convention this repository holds itself to
     /// (CLOUD-701). Absent means no convention is declared and the gate is not
     /// active — which the gate reports as exit 1, never as a clean pass over
@@ -1358,10 +1358,11 @@ pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
     // the override surface is not what is being relaxed: an unknown key still
     // enforces nothing and is still named. What changes is that it costs its
     // own row or key instead of the file.
+    let behind = binary_is_behind_the_committed_schema(source);
     let (mut config, dropped) = if let Ok(config) = toml::from_str::<OverrideConfig>(text) {
         (config, Vec::new())
     } else {
-        let pruned = prune_unresolvable::<OverrideConfig>(text);
+        let pruned = prune_unresolvable::<OverrideConfig>(text, behind);
         let config = match pruned.config {
             Some(config) => config,
             None => toml::from_str(&pruned.text).map_err(|err| config_error(source, &err))?,
@@ -1895,6 +1896,73 @@ const UNRESOLVABLE_CEILING: usize = 32;
 /// `a_scope_token_in_the_severity_key_is_a_usage_error` requires refused.
 fn is_unknown_key(err: &toml::de::Error) -> bool {
     err.message().starts_with("unknown field")
+}
+
+/// Whether this binary is BEHIND the schema committed beside the config it is
+/// failing to read — the structural answer to "bad config, or stale binary?".
+///
+/// **This is the discriminator the message cannot give.** `severity = "tree"`
+/// and `key = "delta"` are the same serde error, so reading the message tells
+/// you an enum was involved and never whose fault it is. `schema/*.json` is
+/// GENERATED from these very types and committed beside the authority, so the
+/// two answers are already in the tree: derive this build's schema, read the
+/// one `main` shipped, and compare.
+///
+/// * They agree → the schema this binary implements is the schema the config
+///   was written against, so a variant neither has is bad input. Refuse, which
+///   is what `rules.rs`'s closed enums are for.
+/// * They differ → the config was written against a schema this binary does not
+///   implement. The row is unreadable HERE and fine everywhere else, and the
+///   remedy is a rebuild rather than an edit.
+///
+/// **Absent or unreadable is `false`, and the direction is the point**: a
+/// consumer that ships no schema, or a read that fails, is could-not-look — and
+/// could-not-look must not buy the lenient arm. Only a MEASURED disagreement
+/// does.
+///
+/// Reached only on a load that already failed, so the clean path never pays for
+/// it.
+fn binary_is_behind_the_committed_schema(source: &str) -> bool {
+    let Some(root) = Path::new(source).parent() else {
+        return false;
+    };
+    let at = root.join("schema").join("batten.schema.json");
+    let (Ok(committed), Ok(derived)) = (fs::read_to_string(&at), schema()) else {
+        return false;
+    };
+    committed.trim_end() != derived.trim_end()
+}
+
+/// Whether this failure is a value naming a VARIANT this build does not have.
+///
+/// **The forward-compatible half of the same problem, and it was left out of
+/// CLOUD-1428's fix because the enum argument reads as settled**: a closed enum
+/// is how `rules.rs` refuses a rule that is configured, typed and off, so
+/// pruning a bad value looks like throwing that away. Measured twice, the
+/// posture it produces is worse than the disease. 2026-09-06 `[[outcome]]`;
+/// 2026-09-07 `key = "delta"` on a `[[mint]]` row — each time a NEWER `main`
+/// named a variant the provisioned release predates, `deny_unknown_fields`
+/// refused the whole document, and the engine did not start. Exit 1 is a Batten
+/// FAILURE rather than a denial, so every mediated gate then failed open for the
+/// session.
+///
+/// So the trade is not "one rule off" against "one rule enforced". It is ONE row
+/// off and named against EVERY row off and silent, and only the first of those
+/// is a posture a reader can act on.
+///
+/// **It is admitted on a `[[row]]` alone**, which is what keeps the enum
+/// argument intact where it bites. A row is one gate: dropping it stops that
+/// gate and [`crate::report_unresolvable`] says which. A plain `[section]` is a
+/// settings table, and a variant this build cannot read there would silently
+/// substitute a default — the caller's arm below never reaches this predicate
+/// for that reason.
+///
+/// Reads serde's message, so it is a second authority for
+/// [`is_unknown_key`]'s reason and carries the same guard: a reworded
+/// `unknown_variant` makes this return `false` for every input and the file
+/// fails closed again, which is the direction a miss must take.
+fn is_unknown_variant(err: &toml::de::Error) -> bool {
+    err.message().starts_with("unknown variant")
 }
 
 /// A TOML table header line, as one of the two spellings.
@@ -2555,7 +2623,7 @@ fn drop_key(
 /// trusting the scan, which `headers`' own doc refuses and which cost 646
 /// silently vanished sections the one time it was tried. Bring a number over
 /// the budget and this moves.
-fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str) -> Prune<T> {
+fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str, behind: bool) -> Prune<T> {
     // The parser's own reading of the document, carried across the loop so each
     // blank can be checked against what removing the row SHOULD produce.
     let Ok(mut current) = toml::from_str::<toml::Table>(source) else {
@@ -2576,15 +2644,28 @@ fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str) -> Prune<T> 
             }
             Err(err) => err,
         };
-        // THE ONLY FAULT THIS DROPS A ROW FOR. Anything else — a bad variant, a
-        // missing required key, a wrong type — is a value this build's schema
-        // has an opinion about, and that opinion is the refusal.
-        if !is_unknown_key(&err) {
+        // THE TWO FAULTS THIS DROPS FOR. A missing required key or a wrong type
+        // is still a value this build's schema has an opinion about, and that
+        // opinion is the refusal.
+        //
+        // An unknown VARIANT is admitted on a `[[row]]` ALONE — see
+        // [`is_unknown_variant`] for the measurement, and note the ordering
+        // below: the `[section]` arm is reached only through `is_unknown_key`,
+        // so a variant in a settings table still refuses the file rather than
+        // silently running on a default this build happens to have.
+        // A VARIANT IS ADMITTED ONLY WHERE THE SCHEMAS DISAGREE. `behind` is
+        // what separates a typo from schema skew; without it this arm would
+        // drop a mistyped `severity` and leave a rule configured, typed and off.
+        let variant = behind && is_unknown_variant(&err);
+        if !is_unknown_key(&err) && !variant {
             break;
         }
         let Some(span) = err.span() else {
             break;
         };
+        if variant && owning_row(source, span.start).is_none() {
+            break;
+        }
 
         // A KEY IN A PLAIN `[section]` COSTS THE KEY, and this arm is what the
         // row arm below could not reach. Measured 2026-09-06: `[capture]` on
@@ -2600,7 +2681,7 @@ fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str) -> Prune<T> 
         // not have, so the honest move is to run on the build's own default and
         // say so. Dropping the whole `[capture]` table instead would switch off
         // a feature the file plainly wants, which is worse than the disease.
-        if owning_row(source, span.start).is_none() {
+        if !variant && owning_row(source, span.start).is_none() {
             match drop_key(source, &text, &current, span) {
                 KeyDrop::Declined => break,
                 KeyDrop::Abandoned => return Prune::refused(source),
@@ -2715,10 +2796,11 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // failure the prune could not localise to a row — a key on the top-level
     // table, or one inside a plain `[section]` — and for exactly those the skew
     // reading is still the most useful thing to say.
+    let behind = binary_is_behind_the_committed_schema(source);
     let (mut config, dropped) = if let Ok(config) = toml::from_str::<Config>(text) {
         (config, Vec::new())
     } else {
-        let pruned = prune_unresolvable::<Config>(text);
+        let pruned = prune_unresolvable::<Config>(text, behind);
         let config = match pruned.config {
             Some(config) => config,
             None => toml::from_str(&pruned.text).map_err(|err| config_error(source, &err))?,
@@ -4320,6 +4402,15 @@ mod tests {
         }
     }
 
+    /// A TYPO STILL COSTS THE FILE, and the schema comparison is why that
+    /// survived the forward-compatibility fix.
+    ///
+    /// `tree` is a `scope`, never a `severity`, and this fixture ships no
+    /// `schema/batten.schema.json` — so `binary_is_behind_the_committed_schema`
+    /// reads could-not-look, returns `false`, and the lenient arm is never
+    /// reached. That is the direction a miss must take: only a MEASURED
+    /// disagreement between this build's derived schema and the committed one
+    /// buys a dropped row.
     #[test]
     fn a_scope_token_in_the_severity_key_is_a_usage_error() {
         let err = parse(&rule_config("severity = \"tree\"\n", ""), "test").unwrap_err();

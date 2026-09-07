@@ -189,6 +189,31 @@ violation contains {
 	not fences_resolver(key)
 }
 
+# E: THE WHOLE TABLE IS GONE, WHICH IS NOT WHAT C AND D DECIDE.
+#
+# Both arms above are guarded on `provision_rows`, and that rule is UNDEFINED
+# when `batten.toml` parses and carries no `provision` array — so Rego reads
+# their bodies as not holding, `input.tree.missing` stays empty because the file
+# read perfectly well, and the module reports zero violations over a tree whose
+# fence has been deleted outright. That is the exact case the second surface was
+# added for, arriving through the one shape its own cases did not fabricate:
+# `test_a_deleted_provision_fence_is_refused` deletes the `NO_PROXY` ENV ROW and
+# leaves the table standing.
+#
+# It carries no `artifact` subject on purpose. C and D name a spelling because a
+# spelling is what went missing; here nothing is left to name one against, and
+# inventing one would point a reader at a key the file never had.
+violation contains {
+	"rule": "egress-fencing",
+	"verdict": "provision declare dropped",
+	"subjects": [{"path": "batten.toml"}],
+} if {
+	# The document was READ — this is a statement about its content, and the
+	# arm below owns the case where nobody could look at all.
+	input.tree.documents["batten.toml"]
+	not provision_rows
+}
+
 # Could not look, for the second surface.
 violation contains {
 	"rule": "egress-fencing",
@@ -342,6 +367,39 @@ test_a_deleted_provision_fence_is_refused if {
 	count(found) == 2
 	every finding in found {
 		finding.verdict == "provision declare dropped"
+	}
+}
+
+# THE ARM C AND D CANNOT REACH. `ptree` always builds a `provision` key, so no
+# case above can produce the shape where the table is absent entirely — which is
+# why the defect survived the suite. This one builds `batten.toml` WITHOUT it.
+test_a_provision_table_deleted_outright_is_refused if {
+	found := violation with input as {"tree": {
+		"documents": {
+			"mise.toml": {"env": {"NO_PROXY": fenced_value, "no_proxy": fenced_value}},
+			"batten.toml": {"exec": []},
+		},
+		"missing": {},
+	}}
+		with data.batten.patterns as patterns
+	count(found) == 1
+	every finding in found {
+		finding.verdict == "provision declare dropped"
+	}
+}
+
+# THE OTHER DIRECTION, and it is what keeps the arm above from firing on a tree
+# nobody could read: an unparseable `batten.toml` is `missing`'s to report, and
+# the content arm must stay silent because there is no content to judge.
+test_an_unreadable_batten_toml_reports_could_not_look_and_not_a_dropped_table if {
+	found := violation with input as {"tree": {
+		"documents": {"mise.toml": {"env": {"NO_PROXY": fenced_value, "no_proxy": fenced_value}}},
+		"missing": {"batten.toml": "unparsed"},
+	}}
+		with data.batten.patterns as patterns
+	count(found) == 1
+	every finding in found {
+		finding.verdict == "provision read unread"
 	}
 }
 

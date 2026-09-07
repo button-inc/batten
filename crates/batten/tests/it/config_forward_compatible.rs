@@ -668,3 +668,85 @@ fn a_file_that_is_not_toml_is_still_refused() {
         "the refusal says the file is not TOML: {stderr}"
     );
 }
+
+/// A VARIANT this build does not have, in a `[[rule]]` row, WITH the committed
+/// schema disagreeing — so the engine starts.
+///
+/// This is the arm CLOUD-1428's fix left open. `prune_unresolvable` dropped an
+/// unknown KEY and refused an unknown VARIANT, and a newer `main` produces both:
+/// 2026-09-06 `[[outcome]]` (a key), 2026-09-07 `key = "delta"` on a `[[mint]]`
+/// row (a variant). The second still took the whole file down, so every mediated
+/// gate failed open exactly as this module's header describes.
+///
+/// **The discriminator is the committed schema, not the error message.**
+/// `severity = "tree"` and `key = "delta"` are the same serde error, so reading
+/// the message says an enum was involved and never whose fault it is.
+/// `schema/batten.schema.json` is GENERATED from the config types and committed
+/// beside the authority, so the tree already holds the answer: derive this
+/// build's schema and compare. Here the fixture ships a schema this build did
+/// not derive, which is precisely the stale-binary shape.
+#[test]
+fn a_variant_from_a_newer_schema_costs_its_row_when_the_schemas_disagree() {
+    let dir = repo(
+        "config-forward-variant",
+        &format!(
+            "{GOOD}[[rule]]\nid = \"newer\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\nseverity = \"from-a-newer-schema\"\n"
+        ),
+    );
+    // A schema this build demonstrably did not derive. Its CONTENT does not
+    // matter — only that it differs, which is what "this binary is behind the
+    // config it is enforcing" means.
+    fs::create_dir_all(dir.join("schema")).unwrap();
+    fs::write(
+        dir.join("schema/batten.schema.json"),
+        "{\"from\": \"a newer main\"}\n",
+    )
+    .unwrap();
+
+    let (code, _stdout, stderr) = adjudicate(&dir);
+    assert_ne!(
+        code,
+        Some(1),
+        "the engine must start: exit 1 is a Batten FAILURE, so the harness runs \
+         the tool anyway and every gate is off\n{stderr}"
+    );
+    // NAMED ON THE REPORTING PATH, NOT THE MEDIATED ONE. `adjudicate` is
+    // budgeted at ~100 ms per call and prints no per-row report — a line per
+    // dropped row on every tool call is how a channel stops being read. The
+    // engine starting is what this call proves; `config show` is where the
+    // reader is told what it could not read.
+    let shown = run_with_stdin(&dir, &["config", "show"], "");
+    let said = String::from_utf8_lossy(&shown.stderr);
+    assert!(
+        said.contains("unresolved") && said.contains("newer"),
+        "and the row it could not read must be named\n{said}"
+    );
+}
+
+/// THE OTHER ARM, and without it the case above passes over a build that simply
+/// stopped refusing bad values.
+///
+/// Same fixture, same variant, and a committed schema this build DOES derive —
+/// so the two agree, the value is a typo rather than schema skew, and refusing
+/// is right. `rules.rs`'s closed-enum argument is intact here: what changed is
+/// that it now applies where it holds instead of at whole-file granularity.
+#[test]
+fn the_same_variant_is_refused_when_the_schemas_agree() {
+    let dir = repo(
+        "config-forward-variant-agreeing",
+        &format!(
+            "{GOOD}[[rule]]\nid = \"typo\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\nseverity = \"from-a-newer-schema\"\n"
+        ),
+    );
+    let derived = run_with_stdin(&dir, &["generate", "schema"], "");
+    fs::create_dir_all(dir.join("schema")).unwrap();
+    fs::write(dir.join("schema/batten.schema.json"), &derived.stdout).unwrap();
+
+    let (code, _stdout, stderr) = adjudicate(&dir);
+    assert_eq!(
+        code,
+        Some(1),
+        "with the schemas agreeing the value is bad input, and a rule must never \
+         be left configured, typed and off\n{stderr}"
+    );
+}
