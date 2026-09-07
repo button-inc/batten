@@ -363,6 +363,12 @@ fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>) -> Option<Answe
         url: &url,
         headers: &headers,
         body,
+        // PROXIED, which is the ordinary path. `direct` exists so a credential
+        // can be proved against the forge with the proxy out of the way
+        // (`fetch::get_direct`); a forge REST call is not that question, and
+        // taking the direct route here would bypass the egress fence for every
+        // read this module makes.
+        direct: false,
     }])
     .ok()?;
     // ONE call in, one answer out. `spend` returns them in the order given and

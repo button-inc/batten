@@ -313,11 +313,19 @@ pub fn rebase(dir: &Path, branch: &str, onto: &str) -> Result<Rebase> {
 /// wearing a flag. What the caller supplies is content they wrote, which is a
 /// decision a person made rather than one the engine took for them.
 ///
-/// **Only the FIRST conflicting commit may be resolved.** One worktree file
-/// carries one version of its content, so applying it to a second conflicting
-/// commit in the same range would be replaying a resolution for a merge nobody
-/// looked at. A later conflict is returned as [`Rebase::Conflicted`] exactly as
-/// before, and the caller resolves it on the next run.
+/// **EACH PATH IS SPENT ONCE, and the rule is about the path rather than the
+/// commit.** One worktree file carries one version of its content, so using it
+/// for a second merge OF THAT PATH would be replaying a resolution for a merge
+/// nobody looked at. A different path later in the range is a different
+/// question and may be named in the same run.
+///
+/// Spending the whole offer at the first conflicting commit enforced the same
+/// rule and made a CHAIN unresolvable, which is worse than the case it guarded:
+/// nothing moves on a conflict, so a range conflicting at two paths could never
+/// complete — every run resolved the first, refused at the second, moved
+/// nothing, and the next run re-derived the identical range. That is the
+/// permanent-stop shape [`rebase`]'s patch-identity drop exists to remove,
+/// reintroduced by its own remedy.
 ///
 /// # Errors
 ///
@@ -471,7 +479,7 @@ fn replay_range(
     };
     let mut cursor = base;
     let mut replayed = 0usize;
-    let mut spent = false;
+    let mut spent: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for original in &range {
         // `commit_identity` is `None` for a commit that changes nothing, and an
         // absent identity must not match another absent one — so an empty commit
@@ -481,21 +489,35 @@ fn replay_range(
         {
             continue;
         }
-        // The resolutions are spent on the FIRST commit that conflicts and are
-        // empty for every one after it, so a second conflicting commit in the
-        // same range refuses as it always did. `rebase_resolving`'s header says
-        // why: one worktree file holds one version of its content, and reusing
-        // it for a merge nobody looked at would be inventing a resolution.
-        let offered = if spent { &[][..] } else { resolutions };
-        match replay(&context, &repo, cursor, *original, offered)? {
+        // **EACH PATH IS SPENT ONCE, rather than the whole offer at the first
+        // conflicting commit.** One worktree file holds one version of its
+        // content, so reusing it for a SECOND merge of the same path would be
+        // inventing a resolution nobody looked at — that is the rule, and it is
+        // about the path rather than about the commit.
+        //
+        // Spending the whole offer at the first conflict enforced the same rule
+        // and made a CHAIN unresolvable, which is worse than the case it
+        // guarded. Nothing moves on a conflict, so a range whose commits
+        // conflict at two different paths could never complete: every run
+        // resolved the first, refused at the second, moved nothing, and the next
+        // run re-derived the identical range. Measured on #848 — `fetch.rs` at
+        // one commit and `egress-fencing.rego` at another — where it is the
+        // permanent-stop shape the patch-identity drop above exists to remove,
+        // reintroduced by its own remedy.
+        let offered: Vec<String> = resolutions
+            .iter()
+            .filter(|path| !spent.contains(*path))
+            .cloned()
+            .collect();
+        match replay(&context, &repo, cursor, *original, &offered)? {
             Step::Landed(id) => {
                 cursor = id;
                 replayed += 1;
             }
-            Step::Resolved(id) => {
+            Step::Resolved(id, used) => {
                 cursor = id;
                 replayed += 1;
-                spent = true;
+                spent.extend(used);
             }
             Step::Conflicted(paths) => {
                 return Ok(Rebase::Conflicted {
@@ -554,13 +576,13 @@ pub fn reset_hard(dir: &Path, branch: &str, to: &str) -> Result<String> {
 enum Step {
     /// The rewritten commit's id.
     Landed(gix::ObjectId),
-    /// The rewritten commit's id, where a caller-supplied resolution was used.
+    /// The rewritten commit's id, and the paths whose resolution was spent on it.
     ///
     /// A separate arm rather than a flag on [`Step::Landed`] because the caller
-    /// must know a resolution was SPENT: the offer is withdrawn for every later
-    /// commit in the range, and a walk that could not tell the two apart would
-    /// hand the same worktree bytes to a second merge nobody inspected.
-    Resolved(gix::ObjectId),
+    /// must know WHICH paths were spent: each is withdrawn from the offer for
+    /// every later commit in the range, and a walk that could not tell would hand
+    /// the same worktree bytes to a second merge of that path nobody inspected.
+    Resolved(gix::ObjectId, Vec<String>),
     /// The paths it conflicts at.
     Conflicted(Vec<String>),
 }
@@ -627,7 +649,7 @@ fn replay(
     // let a resolution strategy quietly pick a side, which deletes the loop's
     // only human stop.
     let strict = gix::merge::tree::TreatAsUnresolved::forced_resolution();
-    let mut resolved = false;
+    let mut resolved: Vec<String> = Vec::new();
     if outcome.has_unresolved_conflicts(strict) {
         let mut paths: Vec<String> = outcome
             .conflicts
@@ -669,7 +691,7 @@ fn replay(
                     anyhow::anyhow!("gitwrite: {path}'s resolution will not place: {err}")
                 })?;
         }
-        resolved = true;
+        resolved = paths;
     }
 
     let tree = outcome
@@ -692,10 +714,10 @@ fn replay(
         .write_object(&replayed)
         .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not rewrite: {err}"))?
         .detach();
-    Ok(if resolved {
-        Step::Resolved(minted)
-    } else {
+    Ok(if resolved.is_empty() {
         Step::Landed(minted)
+    } else {
+        Step::Resolved(minted, resolved)
     })
 }
 

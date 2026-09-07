@@ -2199,6 +2199,8 @@ mod tests {
             prepend_list: Vec::new(),
             from_first_set: vec![String::from("SOURCE")],
             when_trust_names: None,
+            reject_prefix: None,
+            unset: false,
         };
         let mut declared = entry("tool", &"a".repeat(64));
         declared.env = vec![rule("TOKEN")];
@@ -2263,6 +2265,8 @@ mod tests {
             prepend_list: Vec::new(),
             from_first_set: vec![String::from("SOURCE")],
             when_trust_names: None,
+            reject_prefix: None,
+            unset: false,
         };
         let mut declared = entry("tool", &"a".repeat(64));
         declared.env = vec![rule("TOKEN")];

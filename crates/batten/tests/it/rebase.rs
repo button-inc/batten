@@ -360,6 +360,67 @@ fn a_named_path_takes_its_resolution_from_the_worktree() {
     );
 }
 
+/// **A CHAIN resolves: two commits conflicting at two different paths.**
+///
+/// The case that drove the rule from "spend the offer at the first conflicting
+/// commit" to "spend each PATH once". The first spelling enforced the same
+/// no-reuse property and made this unresolvable: nothing moves on a conflict, so
+/// every run resolved the first commit, refused at the second, moved nothing,
+/// and the next run re-derived the identical range — the permanent-stop shape
+/// [`a_commit_whose_change_is_already_on_the_base_is_dropped_rather_than_conflicting`]
+/// exists to remove, reintroduced by its own remedy. Measured on #848, where a
+/// real branch conflicted at `fetch.rs` on one commit and `egress-fencing.rego`
+/// on another.
+#[test]
+fn a_chain_of_conflicts_at_different_paths_resolves_in_one_run() {
+    let (dir, repo) = init("rebase-resolve-chain");
+    let root: Files<'_> = &[("first.txt", "base\n"), ("second.txt", "base\n")];
+    let base = commit(&repo, &[], root);
+
+    // The trunk edits BOTH paths, so each branch commit below meets a changed side.
+    let trunk: Files<'_> = &[("first.txt", "trunk\n"), ("second.txt", "trunk\n")];
+    let moved = commit(&repo, &[base], trunk);
+
+    // Two branch commits, each conflicting at a DIFFERENT path.
+    let one: Files<'_> = &[("first.txt", "branch\n"), ("second.txt", "base\n")];
+    let first = commit(&repo, &[base], one);
+    let two: Files<'_> = &[("first.txt", "branch\n"), ("second.txt", "branch\n")];
+    let tip = commit(&repo, &[first], two);
+
+    point(&dir, "refs/heads/main", moved);
+    point(&dir, "refs/heads/work", tip);
+    materialise(
+        &dir,
+        &[
+            ("first.txt", "first reconciled\n"),
+            ("second.txt", "second reconciled\n"),
+        ],
+    );
+
+    let outcome = gitwrite::rebase_resolving(
+        &dir,
+        "refs/heads/work",
+        "refs/heads/main",
+        &["first.txt".to_owned(), "second.txt".to_owned()],
+    )
+    .expect("rebase resolving");
+    let Rebase::Replayed { commits, .. } = outcome else {
+        panic!("a chain at two paths must resolve in one run, got {outcome:?}");
+    };
+    assert_eq!(commits, 2, "both commits replayed");
+
+    // Each path kept ITS OWN resolution — a run that reused one set of bytes for
+    // both merges would still land two files, so the content is the assertion.
+    assert_eq!(
+        std::fs::read_to_string(dir.join("first.txt")).expect("read first"),
+        "first reconciled\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("second.txt")).expect("read second"),
+        "second reconciled\n"
+    );
+}
+
 /// **A conflict at a path the caller did not name still refuses.**
 ///
 /// The vacuity twin, and the one that matters: resolving SOME paths would write
