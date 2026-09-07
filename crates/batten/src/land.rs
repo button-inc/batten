@@ -950,8 +950,22 @@ pub fn verify(
     // addressable and the caller can go and read them. It is wrong here: the lap
     // is interactive, it has just stopped, and the reason is the next thing its
     // caller needs.
+    // AND THE GROUP IS MANAGED, WITHOUT WHICH THE RACE CANNOT CANCEL ANYTHING
+    // (CLOUD-1586). `ExecConfig::DEFAULT` leaves `manage_process_group` false, so
+    // `GroupDecision::observe` answered false, `GroupRecord::write` wrote no
+    // `group.<pid>` note, and `exec::cancel_owned_group` therefore returned
+    // `false` on every call — `verify_raced`'s watcher won its race and reclaimed
+    // NOTHING, which is the pre-CLOUD-423 behaviour wearing the new mechanism's
+    // name. The second lap-record line was there to make that visible and would
+    // have read `false` forever.
+    //
+    // A gate is `mise` running `hk` running `cargo`, so the group is exactly the
+    // right unit to cancel: the whole tree or none of it. This is the one caller
+    // that asks for it, which is why the flag is set here rather than moved into
+    // `DEFAULT` — every other `exec` caller's topology is unchanged.
     let settings = crate::exec::ExecConfig {
         tee: true,
+        manage_process_group: true,
         ..crate::exec::ExecConfig::DEFAULT
     };
     // CLASSIFIED, NEVER PROMOTED. `run_in_with_env` scans patterns only on a
@@ -1440,8 +1454,26 @@ pub const fn progress(step: Step, code: crate::exit::ExitCode) -> Progress {
         // and a branch with no pull request are all `Violation` (the tree or the
         // forge state is wrong and no lap changes it), and `Internal` is reserved
         // for a forge read that did not answer.
+        // AND THE GATE'S COULD-NOT-LOOK, WHICH IS "MAIN MOVED" AND NOTHING ELSE
+        // (CLOUD-1586). `run_land_verify` codes `Refusal::Moved` `Internal` and
+        // every other refusal — `Environment`, `Tree` — `Violation`, so this cell
+        // is reached by exactly one cause and lapping it cannot swallow a real
+        // failure. `verify` reserves exit 2 for that one verdict, whose own text
+        // is "there is nothing here to fix".
+        //
+        // IT STOPPED, AND THREE COMMENTS SAID IT LAPPED. This cell read
+        // `Progress::Stop` while `run_land_verify` asserted "`land` reads this as
+        // lap, and the next replay is the whole remedy", `verify_raced`'s header
+        // claimed the same, and `land.rs`'s own `Refusal::Moved` doc said "WHICH
+        // LAPS RATHER THAN STOPPING". So the one self-healing refusal class was
+        // the loop's hardest stop: exit 3 on lap 1, after printing that a replay
+        // was coming. `charge_the_lap`'s reclaim arm, `Ledger::reclaimed`,
+        // `Bound::GateReclaims` and `$LAND_MAX_GATE_RECLAIMS` were all
+        // unreachable behind it — a mechanism whose every part existed and whose
+        // entry cell voided it, which is the dead-gate class this repository
+        // gates for elsewhere and shipped here.
         (Step::Push | Step::Lease, Violation)
-        | (Step::Ready, Internal)
+        | (Step::Ready | Step::Verify, Internal)
         | (Step::Wait | Step::FastForward, Violation | Internal) => Progress::Lap,
 
         // STOPS. The replay and the gate both answer about THIS tree, so a
@@ -1462,8 +1494,11 @@ pub const fn progress(step: Step, code: crate::exit::ExitCode) -> Progress {
         // rather than `Wait`'s.
         // A READY REFUSAL IS THE AUTHOR'S, which is why it stays here while
         // `Ready`'s could-not-look moved to the lap above.
-        (Step::Replay | Step::Verify, Violation | Internal)
-        | (Step::Ready, Violation)
+        // `Verify`'s VIOLATION stops and its could-not-look laps, which is the
+        // split the arm above explains: a refused tree is a decision no rebase
+        // clears, and a raced base is one a replay fixes.
+        (Step::Replay, Violation | Internal)
+        | (Step::Verify | Step::Ready, Violation)
         | (Step::Push | Step::Lease, Internal)
         | (_, Usage) => Progress::Stop,
     }
@@ -2545,16 +2580,37 @@ mod lap_tests {
     /// Could-not-look means two different things, and which step said it decides.
     ///
     /// From `wait` and `fast-forward` it is the loop's ordinary state — exit `3`
-    /// is first-class on those two. From the other three it is a clone or a
+    /// is first-class on those two. From `replay` and `push` it is a clone or a
     /// remote this lap cannot read, and there is nothing to lap toward.
+    ///
+    /// **`Verify` MOVED SIDES, AND THIS CASE IS WHY THE BUG SURVIVED**
+    /// (CLOUD-1586). It asserted `Stop`, so the table and the suite agreed with
+    /// each other and disagreed with three doc comments and the whole
+    /// `GateReclaims` budget. A case can pin a defect as firmly as it pins a
+    /// property; what tells them apart is whether anything else in the tree
+    /// claims otherwise, and here `run_land_verify`, `verify_raced` and
+    /// `Refusal::Moved`'s own doc all did.
     #[test]
     fn could_not_look_laps_only_where_it_means_nobody_has_answered_yet() {
         assert_eq!(progress(Step::Wait, Internal), Progress::Lap);
         assert_eq!(progress(Step::FastForward, Internal), Progress::Lap);
+        // `run_land_verify` codes ONLY `Refusal::Moved` `Internal`, so this cell
+        // is "the base moved under the gate" and a replay is the whole remedy.
+        assert_eq!(progress(Step::Verify, Internal), Progress::Lap);
 
         assert_eq!(progress(Step::Replay, Internal), Progress::Stop);
-        assert_eq!(progress(Step::Verify, Internal), Progress::Stop);
         assert_eq!(progress(Step::Push, Internal), Progress::Stop);
+    }
+
+    /// AND THE GATE'S OWN VERDICT STILL STOPS, which is the anti-vacuity half.
+    ///
+    /// Without it, "`Verify` laps on `Internal`" could be satisfied by a table
+    /// that lapped on everything from `Verify` — and a refused tree lapping is
+    /// the loop spending its budget re-proving a defect.
+    #[test]
+    fn a_refused_tree_still_stops_the_lap() {
+        assert_eq!(progress(Step::Verify, Violation), Progress::Stop);
+        assert_ne!(progress(Step::Verify, Violation), Progress::Lap);
     }
 
     /// **The freshness probe fails OPEN, which is the opposite of every gate in
