@@ -1815,6 +1815,12 @@ pub enum Bound {
     /// a flake any more: the provisioning path is broken, and re-running would
     /// spend jobs to learn the same thing.
     Transients,
+    /// The base kept moving out from under the gate. Like [`Bound::LeaseWaits`]
+    /// this has spent NO CI — the gate was reclaimed before it finished, so a
+    /// caller reports it as a trunk moving faster than a gate takes rather than
+    /// as anything wrong with the branch. The remedy is a shorter gate or a
+    /// quieter trunk, never a re-run.
+    GateReclaims,
 }
 
 /// What a charge decided.
@@ -1864,6 +1870,8 @@ pub struct Ledger {
     pub unknowns: u32,
     /// Runs that failed before reaching a verdict.
     pub transients: u32,
+    /// Passes whose gate was reclaimed because the base moved under it.
+    pub gate_reclaims: u32,
 }
 
 impl Ledger {
@@ -1905,6 +1913,36 @@ impl Ledger {
         self.unknowns = self.unknowns.saturating_add(1);
         if self.unknowns > max {
             Charge::Stop(Bound::Unknowns)
+        } else {
+            Charge::Lap
+        }
+    }
+
+    /// A pass whose gate was reclaimed because the base moved under it.
+    ///
+    /// **[`Ledger::waited`]'s shape, and now for the same reason it was written**
+    /// (CLOUD-1586). This module's own header named the gap: *"they still miss
+    /// the ordinary case: a lap where `main` moves while the gate runs aborts
+    /// before the ready, buys nothing, and is charged anyway."*
+    ///
+    /// It was survivable while nothing aborted the gate, because the condition
+    /// was discovered only after `verify` had finished and the lap was rare.
+    /// [`verify_raced`] makes it deliberate, and this repository measured the
+    /// condition holding on **~45% of laps** — so the runaway backstop, which
+    /// defaults to TWO, now exhausts on a busy trunk having bought nothing. The
+    /// diagnosis it printed would be "main moves faster than a lap takes", which
+    /// is true and useless: the lap was not the thing that was slow.
+    ///
+    /// **Generous for [`lease_wait_bound`]'s reason, stated in its own words:**
+    /// the pass spent nothing — no matrix, no gate to completion, no push — and
+    /// the thing being waited out is other branches landing. The cost of too many
+    /// is conditional requests against a ref; the cost of too few is giving up on
+    /// a trunk that was moving, which is the queue working.
+    pub const fn reclaimed(&mut self, max: u32) -> Charge {
+        self.laps = self.laps.saturating_sub(1);
+        self.gate_reclaims = self.gate_reclaims.saturating_add(1);
+        if self.gate_reclaims > max {
+            Charge::Stop(Bound::GateReclaims)
         } else {
             Charge::Lap
         }
@@ -3049,6 +3087,50 @@ mod tests {
         assert_eq!(ledger.waited(3), Charge::Lap);
         assert_eq!(ledger.laps, 0, "the attempt was refunded");
         assert_eq!(ledger.lease_waits, 1, "and charged to its own bound");
+    }
+
+    /// **A RECLAIMED GATE IS THE SAME CLASS, AND THE RACE MADE IT COMMON**
+    /// (CLOUD-1586).
+    ///
+    /// This module's header named the gap before [`verify_raced`] existed: *"a
+    /// lap where `main` moves while the gate runs aborts before the ready, buys
+    /// nothing, and is charged anyway."* It was survivable while the condition
+    /// was only discovered AFTER the gate finished. Racing the gate makes the
+    /// abort deliberate, and this repository measured the condition holding on
+    /// ~45% of laps — so without the refund the runaway backstop, which defaults
+    /// to TWO, exhausts on a busy trunk having bought nothing.
+    ///
+    /// Fails by: dropping the `saturating_sub` in [`Ledger::reclaimed`], which
+    /// leaves the attempt charged and reproduces the exhaustion.
+    #[test]
+    fn a_reclaimed_gate_refunds_its_lap_and_charges_its_own_bound() {
+        let mut ledger = Ledger::default();
+        ledger.attempt();
+        assert_eq!(ledger.reclaimed(3), Charge::Lap);
+        assert_eq!(ledger.laps, 0, "the attempt was refunded");
+        assert_eq!(ledger.gate_reclaims, 1, "and charged to its own bound");
+        assert_eq!(
+            ledger.spent(),
+            0,
+            "a reclaimed gate buys no matrix, which is what makes the refund honest"
+        );
+    }
+
+    /// THE BOUND STILL STOPS, or the refund would be an unbounded loop wearing
+    /// an accounting change.
+    ///
+    /// The generous default is a separate decision from whether the bound binds
+    /// at all: past it, a trunk moving faster than this gate takes is a real
+    /// answer and re-lapping cannot change it.
+    #[test]
+    fn enough_reclaimed_gates_stop_the_lap_under_their_own_bound() {
+        let mut ledger = Ledger::default();
+        assert_eq!(ledger.reclaimed(1), Charge::Lap);
+        assert_eq!(
+            ledger.reclaimed(1),
+            Charge::Stop(Bound::GateReclaims),
+            "past the bound the lap stops, and says which bound it was"
+        );
     }
 
     /// The three bounds are separate, and exhausting one names it.

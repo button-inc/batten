@@ -6657,7 +6657,24 @@ fn base_moved(
 /// poll absorbs it now — and the transient re-run has no producer in this engine
 /// yet. A call site for a condition nothing raises is the dead code this finding
 /// was about, one layer over.
-fn charge_the_lap(step: land::Step, ledger: &mut land::Ledger) -> Option<land::Bound> {
+fn charge_the_lap(
+    step: land::Step,
+    code: ExitCode,
+    ledger: &mut land::Ledger,
+) -> Option<land::Bound> {
+    // THE RECLAIMED GATE, and it is charged to its own bound for `waited`'s
+    // reason (CLOUD-1586). `verify_raced` aborts the gate when the base moves,
+    // so this lap bought nothing — no matrix, no completed gate, no push — and
+    // charging it against a runaway backstop that defaults to TWO exhausts the
+    // loop on a busy trunk. `Refusal::Moved` is the one verify refusal that
+    // codes `Internal` rather than `Violation`, which is what makes it a lap
+    // rather than a stop, so the pair identifies it without a second channel.
+    if step == land::Step::Verify && code == ExitCode::Internal {
+        return match ledger.reclaimed(gate_reclaim_bound()) {
+            land::Charge::Lap => None,
+            land::Charge::Stop(bound) => Some(bound),
+        };
+    }
     if step != land::Step::Lease {
         return None;
     }
@@ -6665,6 +6682,20 @@ fn charge_the_lap(step: land::Step, ledger: &mut land::Ledger) -> Option<land::B
         land::Charge::Lap => None,
         land::Charge::Stop(bound) => Some(bound),
     }
+}
+
+/// How many reclaimed gates a landing absorbs before it stops.
+///
+/// **`lease_wait_bound`'s default, on `lease_wait_bound`'s reasoning.** A lap
+/// whose gate was reclaimed has spent nothing, and what it is waiting out is
+/// other branches landing — so too few gives up on a trunk that was moving,
+/// which is the queue working rather than a fault.
+fn gate_reclaim_bound() -> u32 {
+    std::env::var("LAND_MAX_GATE_RECLAIMS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .filter(|reclaims| *reclaims > 0)
+        .unwrap_or(60)
 }
 
 /// How many lease waits a landing absorbs before it stops.
@@ -7160,9 +7191,12 @@ fn run_land_lap(
                     Landing::Unconfirmed => continue 'laps,
                 },
                 land::Progress::Lap => {
-                    if let Some(code) = charge_or_refuse(step, &mut ledger, err)? {
+                    // `refusal` rather than shadowing `code`: the STEP's code is
+                    // what tells a reclaimed gate from a lease wait, so the
+                    // charge needs it and a shadow would hide it (CLOUD-1586).
+                    if let Some(refusal) = charge_or_refuse(step, code, &mut ledger, err)? {
                         unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
-                        return Ok(code);
+                        return Ok(refusal);
                     }
                     writeln!(
                         out,
@@ -7572,24 +7606,50 @@ fn bet_liveness(root: &Path, branch: &str, base: &str) -> speculation::Live {
 /// [`land::Bound::LeaseWaits`] exists to prevent and which CLOUD-413 measured
 /// being wrong twice across 24 laps.
 ///
-/// Only the lease arm is wired. The bot's unreadable answer no longer reaches
-/// this point — the poll absorbs it — and the transient re-run has no producer
-/// yet, so wiring either would be a call site for a condition nothing raises.
+/// Two arms are wired now — the lease wait and the reclaimed gate (CLOUD-1586).
+/// The bot's unreadable answer no longer reaches this point — the poll absorbs
+/// it — and the transient re-run has no producer yet, so wiring either would be a
+/// call site for a condition nothing raises.
+///
+/// **THE MESSAGE IS PER BOUND, and it was one sentence for all of them.** This
+/// function's own header names the mis-diagnosis class it exists to prevent, and
+/// a hardcoded "the fleet is saturated" printed over a `GateReclaims` bound would
+/// BE that class: nothing about the fleet is saturated, the trunk is simply
+/// moving faster than this gate takes. Both arms have spent no CI, which is the
+/// half they share and the half worth repeating in either sentence.
 ///
 /// `Some(code)` is the refusal and the caller still owes its unwind: the undos
 /// are the driver's, and performing them here would put the compensation cluster
 /// behind two call sites instead of one.
 fn charge_or_refuse(
     step: land::Step,
+    code: ExitCode,
     ledger: &mut land::Ledger,
     err: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {
-    let Some(bound) = charge_the_lap(step, ledger) else {
+    let Some(bound) = charge_the_lap(step, code, ledger) else {
         return Ok(None);
+    };
+    // NO CATCH-ALL, and clippy is what insisted: the match is total inside this
+    // crate, so a new `Bound` breaks the build here rather than falling into a
+    // generic sentence. That coupling is the whole point — an exhaustion whose
+    // diagnosis nobody wrote is the mis-diagnosis class this function's header
+    // names, arriving by omission instead of by a hardcoded sentence.
+    let diagnosis = match bound {
+        land::Bound::GateReclaims => {
+            "the base kept moving out from under the gate, so every lap's gate was reclaimed before it finished — the trunk is moving faster than this gate takes, and a re-run will not change that"
+        }
+        land::Bound::LeaseWaits => {
+            "the fleet is saturated: this branch never won the landing lease"
+        }
+        land::Bound::Unknowns => "the fast-forward bot never gave a readable answer",
+        land::Bound::Transients => {
+            "CI kept failing before reaching a verdict, so the provisioning path is broken rather than flaky"
+        }
     };
     writeln!(
         err,
-        "::error:: land: gave up waiting for the landing lease ({bound:?}); the fleet is saturated and this branch has spent no CI at all"
+        "::error:: land: gave up after {bound:?} — {diagnosis}; this branch has spent no CI at all"
     )?;
     Ok(Some(ExitCode::Internal))
 }
