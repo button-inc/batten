@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.147](https://github.com/button-inc/batten/compare/v0.0.146...v0.0.147) - 2026-09-07
+
+### Added
+
+- *(policy)* price the code review at the ready transition, not per commit
+- *(receipt)* key a receipt to the branch's change, so a review can be owed at a transition
+- *(mint)* [**breaking**] key a receipt to the branch's change, so a code review can be owed
+
+### Fixed
+
+- *(receipt)* resolve the delta identity from the repo root, not the cwd
+- *(lint)* a waiver may name a predicate id, which is the spelling that suppresses
+- *(mint)* the guard added last round was unreachable, so it deleted the filter
+- *(mint)* the null-result guard made the gate unclearable, and the tier could not see it
+- *(mint)* repair the four correctness defects the third review found
+- *(gate)* repair the five defects the gate's second review found
+- *(gate)* repair the four defects the gate's own code review found
+
+### Other
+
+- *(trust)* the outcome census rationale carried collapsed-line whitespace
+- *(lint)* extract the waiver diagnostics, which put smells over the line ceiling
+- *(receipt)* the delta arm's comment described the code before the hoist
+- *(receipt)* resolve the delta identity once per check, not three times
+- *(receipt)* build the delta-keying fixture through the builder, not a git init chain
+- *(mint)* let the test module use expect, as its siblings do
+- *(mint)* wrap the selector binding as rustfmt wants it
+
 ## [0.0.146](https://github.com/button-inc/batten/compare/v0.0.145...v0.0.146) - 2026-09-06
 
 ### Fixed
