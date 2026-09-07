@@ -48,14 +48,14 @@ jobs:
 "#;
 
 /// And one that does not: it goes straight to the push.
-const UNGUARDED_BODY: &str = r#"
+const UNGUARDED_BODY: &str = r"
 jobs:
   fast-forward:
     steps:
       - uses: sequoia-pgp/fast-forward@ea7628b # v1.0.0
         with:
           merge: true
-"#;
+";
 
 /// A fixture tree carrying a landing workflow with `body`, or none at all when
 /// `body` is `None` — which is what makes the declared glob match nothing, so
