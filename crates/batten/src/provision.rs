@@ -760,8 +760,37 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8]) -> Result<()> {
         Unpack::TarGz => extract(bytes, &entry.binary)?,
     };
     let cached = bin_dir.join(&entry.binary);
-    fs::write(&cached, &binary).context("write the provisioned binary")?;
-    make_executable(&cached)?;
+    // **STAGED AND RENAMED, NEVER WRITTEN IN PLACE** (CLOUD-1586), which is
+    // [`link_onto_path`]'s discipline applied to the site that needed it just as
+    // much. Writing over this path returns `ETXTBSY` — "Text file busy" — the
+    // moment anything is executing it, and something usually is: the launcher's
+    // `#!` line names this exact file, so every `provision-exec` holds it open,
+    // and in this repository the adjudicating hook runs on every tool call.
+    //
+    // A rename does not have that problem, and the reason is worth stating
+    // because it looks like luck: the running process holds the old INODE, and
+    // rename only moves the name. The old bytes stay valid for whoever is
+    // mid-execution, the next execution finds the new ones, and no reader ever
+    // observes a half-written binary.
+    //
+    // Measured on this branch: `batten-check` and two `land` laps died here with
+    // `write the provisioned binary / Text file busy`, which reads as a
+    // filesystem fault and is really a self-collision.
+    //
+    // Keyed on the pid and dot-prefixed for `link_onto_path`'s reasons exactly —
+    // two provisions running at once must not write each other's staging file.
+    let staged = bin_dir.join(format!(".{}.{}.tmp", entry.binary, std::process::id()));
+    let written = fs::write(&staged, &binary)
+        .context("write the provisioned binary")
+        .and_then(|()| make_executable(&staged));
+    if let Err(err) = written {
+        let _ = fs::remove_file(&staged);
+        return Err(err);
+    }
+    if let Err(err) = fs::rename(&staged, &cached) {
+        let _ = fs::remove_file(&staged);
+        return Err(err).context("move the provisioned binary into place");
+    }
     // BEFORE the artifact, so the same crash window that leaves the entry
     // reading `missing` also leaves the link unmade. A fresh entry whose link
     // never landed would be the silent half-install this ordering exists to

@@ -205,6 +205,73 @@ fn apply_installs_out_of_tree_and_leaves_the_repository_untouched() {
     );
 }
 
+/// **A re-install REPLACES the cached binary rather than writing over it**
+/// (CLOUD-1586).
+///
+/// Writing in place returns `ETXTBSY` — "Text file busy" — the moment anything is
+/// executing that path, and something usually is: the launcher's `#!` line names
+/// this exact file, so every `provision-exec` holds it open, and in this
+/// repository the adjudicating hook runs on every tool call. Measured on this
+/// branch, `batten-check` and two `land` laps died with
+/// `write the provisioned binary / Text file busy`, which reads as a filesystem
+/// fault and is really a self-collision.
+///
+/// # The assertion is the INODE, because that is what distinguishes the two
+///
+/// A second `apply` over new bytes leaves the path holding the new ones either
+/// way, so reading the path proves nothing. What separates a rename from an
+/// in-place write is that a rename moves the NAME and leaves the old inode
+/// alone: a handle opened before the install still reads the OLD bytes
+/// afterwards. An in-place write mutates the very bytes that handle is reading,
+/// which is the property a running process depends on and the one `ETXTBSY`
+/// exists to defend.
+///
+/// So this holds a handle open across the install and reads it after — hermetic,
+/// and it fails on the implementation this replaced without needing to get a
+/// process executing inside a test.
+#[test]
+fn a_reinstall_replaces_the_cached_binary_rather_than_writing_through_it() {
+    use std::io::Read as _;
+
+    let env = Env::new("provision-reinstall");
+    let (url, sha) = env.artifact("demo", BINARY);
+    env.config(&manifest(&url, &sha));
+    assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
+
+    let installed = env.state_dir().join("provision/demo/1.2.3/bin/demo");
+    let mut held = fs::File::open(&installed).expect("hold the installed binary open");
+
+    // A different artifact at the same version, so `apply` reinstalls over it.
+    const SECOND: &[u8] = b"#!/bin/sh\necho second\n";
+    let (next_url, next_sha) = env.artifact("demo2", SECOND);
+    env.config(&manifest(&next_url, &next_sha));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the reinstall must not fail: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_eq!(
+        fs::read(&installed).unwrap(),
+        SECOND,
+        "the path carries the new bytes"
+    );
+
+    // THE LOAD-BEARING HALF. The handle predates the install; under a rename it
+    // still reads the bytes it was opened on, and under an in-place write it
+    // would read the new ones or a torn mixture.
+    let mut carried = Vec::new();
+    held.read_to_end(&mut carried)
+        .expect("read the held handle");
+    assert_eq!(
+        carried, BINARY,
+        "a handle opened before the install must still read the ORIGINAL bytes, \
+         which is what makes replacing safe for a binary that is executing"
+    );
+}
+
 // --- (c) a wrong checksum installs nothing -------------------------------------
 
 #[test]
