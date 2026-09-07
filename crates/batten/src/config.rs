@@ -1358,11 +1358,16 @@ pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
     // the override surface is not what is being relaxed: an unknown key still
     // enforces nothing and is still named. What changes is that it costs its
     // own row or key instead of the file.
-    let behind = binary_is_behind_the_config(source, text);
     let (mut config, dropped) = if let Ok(config) = toml::from_str::<OverrideConfig>(text) {
         (config, Vec::new())
     } else {
-        let pruned = prune_unresolvable::<OverrideConfig>(text, behind);
+        // COMPUTED HERE, NOT ABOVE. This is the failure arm; the clean path
+        // must never reach it. Bound eagerly it cost a second full
+        // `toml::Table` parse of the authority AND a whole schemars
+        // derivation on EVERY invocation — measured at 1.77x on
+        // `passthrough`, the path that does the least work of any.
+        let pruned =
+            prune_unresolvable::<OverrideConfig>(text, binary_is_behind_the_config(source, text));
         let config = match pruned.config {
             Some(config) => config,
             None => toml::from_str(&pruned.text).map_err(|err| config_error(source, &err))?,
@@ -2843,11 +2848,13 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // failure the prune could not localise to a row — a key on the top-level
     // table, or one inside a plain `[section]` — and for exactly those the skew
     // reading is still the most useful thing to say.
-    let behind = binary_is_behind_the_config(source, text);
     let (mut config, dropped) = if let Ok(config) = toml::from_str::<Config>(text) {
         (config, Vec::new())
     } else {
-        let pruned = prune_unresolvable::<Config>(text, behind);
+        // Lazy for the reason the override arm above records: the clean
+        // path pays nothing, which is what this function's own doc claims
+        // and what binding it eagerly made false.
+        let pruned = prune_unresolvable::<Config>(text, binary_is_behind_the_config(source, text));
         let config = match pruned.config {
             Some(config) => config,
             None => toml::from_str(&pruned.text).map_err(|err| config_error(source, &err))?,
