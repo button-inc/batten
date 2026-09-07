@@ -121,11 +121,26 @@ mcp-timeout-budget`, which carries the floor, the measurement behind it, and the
    for this**, and nothing should be: the repository's file is already correct,
    and a second copy of a correct grant is a second authority that drifts.
 
-   The durable question this leaves open is whether the client re-reads
-   permissions when a server attaches late. If it does, this was something else;
-   if it does not, the fix belongs upstream and every cold container that loses
-   the serena race pays a session of hand-approvals. Unmeasured — do not assume
-   either.
+   **THE DURABLE QUESTION IS ANSWERED: THE CLIENT DOES RE-READ PERMISSIONS
+   MID-SESSION** (2026-09-07). Measured here. The session started with the
+   committed `.claude/settings.json` already enumerating all 21 correctly and
+   `"ToolSearch"` granted, and the serena tools listed as **deferred**;
+   `read_memory` and `list_memories` prompted anyway. A settings write MID-SESSION
+   — `~/.claude/settings.json` and `.claude/settings.local.json`, same 21 entries
+   plus `ToolSearch` and `mcp__serena` — then let `get_symbols_overview`, a tool
+   never called and never approved in that session, run with **no prompt**.
+
+   So a startup-present grant is not sufficient and a mid-session one is, which
+   inverts what the paragraph above assumed. The two files were written together
+   and the two variables cannot be separated from this run: whether what mattered
+   was the LOCATION (user-level or `settings.local.json`) or the TIMING (a write
+   the watcher observed) is still open. Separate them by writing one file only,
+   and test with a tool that has no prior approval — approval is remembered per
+   session, so re-calling an approved tool proves nothing here either.
+
+   Either way the one-session repair above is confirmed working, and nothing is
+   committed for it: `.claude/settings.local.json` is gitignored
+   (`.gitignore:22`) and `$HOME` is disposable.
 
    **AND A FOURTH GATE SITS ABOVE ALL THREE: THE TOOLS MAY BE DEFERRED, AND THE
    ONE CALL THAT LOADS THEM IS A SEPARATE GRANT** (2026-09-07). In some sessions
