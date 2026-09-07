@@ -286,6 +286,36 @@ const HOOK_HANDLERS: &str = "hook-handlers";
 /// and is not obviously sound, since a rebase touches files cargo would not
 /// rebuild from, so it trades this false negative for a false positive. That is a
 /// separate predicate with its own design, not a tightening of this one.
+///
+/// # The separate predicate, now built (CLOUD-1630)
+///
+/// [`build_is_behind_source`] is that predicate, and it is a SECOND question
+/// asked alongside this one rather than a widening of it —
+/// [`Mediator::BuildBehindSource`] is its own verdict so the two repairs stay
+/// distinguishable, the split CLOUD-1324 made between `pin-record` and
+/// `command-programs` for the same reason.
+///
+/// **The paragraph above is why it is scoped, and the scoping is the whole
+/// design.** Measured 2026-09-07 on a checkout one branch switch old: 5 source
+/// files of 342 were newer than the artifact, and THREE of the five were under
+/// `tests/`, which the release binary does not contain. An unscoped mtime
+/// predicate would have reported stale over a current binary — exactly the false
+/// positive the paragraph above predicts. Comparing only what feeds the artifact
+/// removes it.
+///
+/// **A residual false positive is accepted, on an asymmetry that paragraph does
+/// not weigh.** A source file can still take a fresh mtime with unchanged
+/// content on an A→B→A branch round trip. The cost of that is one unnecessary
+/// `mise run install:local`, which is idempotent and cheap. The cost of the
+/// false NEGATIVE it replaces is an entire unenforced session — `config.rs`'s
+/// own record has three mediated gates permitting for a whole session and six
+/// commits carrying a denied trailer reaching the remote. Those are not
+/// symmetric, and treating them as symmetric is what kept this green.
+///
+/// The content-based form — a digest of the sources embedded at build time —
+/// has neither false direction and is the right long-term predicate. It needs a
+/// build script and a changed build graph, so it is filed rather than bundled
+/// into an urgent fix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case", tag = "state")]
 pub enum Mediator {
@@ -293,6 +323,14 @@ pub enum Mediator {
     Current,
     /// Both were read and they differ.
     Stale,
+    /// The install matches the build, and the BUILD is behind the source
+    /// (CLOUD-1630).
+    ///
+    /// Its own variant rather than a mode of [`Mediator::Stale`], because the
+    /// repair differs: `Stale` means reinstall what is already built, this means
+    /// rebuild first. Reporting either as the other sends a reader to a command
+    /// that cannot fix what they have.
+    BuildBehindSource,
     /// This tree does not build a mediator, so there is nothing to compare.
     ///
     /// Distinct from the two below: a consumer checkout is not a failed lookup,
@@ -311,6 +349,7 @@ impl Mediator {
         match self {
             Mediator::Current => "mediator ok",
             Mediator::Stale => "mediator failed mediator-stale",
+            Mediator::BuildBehindSource => "mediator failed mediator-build-behind-source",
             Mediator::NotApplicable => "mediator ok not-applicable",
             Mediator::Unresolvable => "mediator failed mediator-unresolvable",
             Mediator::Unbuilt => "mediator failed mediator-unbuilt",
@@ -326,7 +365,10 @@ impl Mediator {
     pub const fn code(&self) -> ExitCode {
         match self {
             Mediator::Current | Mediator::NotApplicable => ExitCode::Success,
-            Mediator::Stale | Mediator::Unresolvable | Mediator::Unbuilt => ExitCode::Usage,
+            Mediator::Stale
+            | Mediator::BuildBehindSource
+            | Mediator::Unresolvable
+            | Mediator::Unbuilt => ExitCode::Usage,
         }
     }
 }
@@ -500,11 +542,85 @@ pub fn diagnose_mediator(dir: &Path) -> Mediator {
     if left.len() != right.len() {
         return Mediator::Stale;
     }
-    if crate::receipt::hex_sha256(&left) == crate::receipt::hex_sha256(&right) {
-        Mediator::Current
-    } else {
-        Mediator::Stale
+    if crate::receipt::hex_sha256(&left) != crate::receipt::hex_sha256(&right) {
+        return Mediator::Stale;
     }
+    // THE INSTALL MATCHES THE BUILD — WHICH SAYS NOTHING ABOUT THE SOURCE
+    // (CLOUD-1630). Asked only here, on the arm where the two copies agree,
+    // because that is the only arm where this question is still open: where they
+    // differ, `Stale` already names a repair that subsumes a rebuild.
+    if build_is_behind_source(dir, &built) {
+        return Mediator::BuildBehindSource;
+    }
+    Mediator::Current
+}
+
+/// Whether the built artifact predates a source that feeds it (CLOUD-1630).
+///
+/// **Scoped to what the RELEASE binary contains, and that is what makes it
+/// sound.** `crates/**/src` and the workspace manifests only — never `tests/`,
+/// whose contents reach no release build. Measured 2026-09-07 on a checkout one
+/// branch switch old, three of the five files newer than the artifact were test
+/// files; an unscoped predicate would have called a current binary stale.
+///
+/// **Could-not-look is `false`, per this module's posture.** An unreadable mtime
+/// answers "no evidence of staleness" rather than manufacturing one, which keeps
+/// a filesystem that cannot answer from turning into a refusal.
+///
+/// A read, with no spawn: `metadata` only, so it stays inside `Effect::Read` for
+/// [`diagnose_mediator`]'s own stated reason.
+fn build_is_behind_source(dir: &Path, built: &Path) -> bool {
+    let Ok(artifact) = built.metadata().and_then(|meta| meta.modified()) else {
+        return false;
+    };
+    // The manifests are sources too: a dependency bump or a version change
+    // rebuilds the binary without touching a single `.rs`.
+    let manifests = [
+        dir.join("Cargo.toml"),
+        dir.join("Cargo.lock"),
+        dir.join("crates/batten/Cargo.toml"),
+    ];
+    if manifests
+        .iter()
+        .filter_map(|at| at.metadata().and_then(|meta| meta.modified()).ok())
+        .any(|stamp| stamp > artifact)
+    {
+        return true;
+    }
+    newest_source_under(&dir.join("crates")).is_some_and(|newest| newest > artifact)
+}
+
+/// The newest mtime under any `src` directory below `root`, or `None`.
+///
+/// Walks to find `src` rather than assuming one crate, so a workspace that grows
+/// a second member is covered without an edit here. Anything outside a `src`
+/// directory is skipped, which is the `tests/` exclusion the caller's doc
+/// explains.
+fn newest_source_under(root: &Path) -> Option<std::time::SystemTime> {
+    fn walk(at: &Path, in_src: bool, newest: &mut Option<std::time::SystemTime>) {
+        let Ok(entries) = std::fs::read_dir(at) else {
+            return;
+        };
+        for path in entries.flatten().map(|entry| entry.path()) {
+            if path.is_dir() {
+                // `target/` holds build output, not source, and walking it would
+                // compare the artifact against itself.
+                let name = path.file_name().and_then(|name| name.to_str());
+                if name == Some("target") {
+                    continue;
+                }
+                walk(&path, in_src || name == Some("src"), newest);
+            } else if in_src
+                && let Ok(stamp) = path.metadata().and_then(|meta| meta.modified())
+                && newest.is_none_or(|current| stamp > current)
+            {
+                *newest = Some(stamp);
+            }
+        }
+    }
+    let mut newest = None;
+    walk(root, false, &mut newest);
+    newest
 }
 
 /// Whether `program` resolves to an existing file on `PATH`.

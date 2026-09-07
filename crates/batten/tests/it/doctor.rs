@@ -130,6 +130,120 @@ fn equal_length_binaries_that_differ_are_still_refused() {
     assert_eq!(stdout(&output), "mediator failed mediator-stale\n");
 }
 
+// --- doctor mediator: the build against the SOURCE (CLOUD-1630) --------------
+//
+// The arm above answers "does the install match the build". These answer the
+// question it cannot: whether that build is itself behind the tree. Measured in
+// the field, `session:batten` builds and installs once at session start and a
+// later rebase, `reset` or `land` speculative linearization moves the checkout
+// underneath BOTH copies — they agree, and the check read `ok` over an engine
+// old enough to leave three mediated gates permitting for a whole session.
+
+/// Write `path` with an mtime strictly after `after`, so a case decides on
+/// ordering rather than on whichever write happened to land in the same
+/// filesystem tick.
+fn write_newer_than(path: &Path, body: &[u8], after: &Path) {
+    let stamp = after.metadata().unwrap().modified().unwrap() + std::time::Duration::from_secs(2);
+    write_stamped(path, body, stamp);
+}
+
+/// Write `path` and set its mtime to `stamp`.
+///
+/// `std::fs::File::set_times` rather than a sleep: the predicate is over an
+/// ordering, so a case should STATE the ordering rather than race a filesystem
+/// tick into producing it. It also keeps these cases instant.
+fn write_stamped(path: &Path, body: &[u8], stamp: std::time::SystemTime) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, body).unwrap();
+    let handle = fs::File::options().write(true).open(path).unwrap();
+    handle
+        .set_times(fs::FileTimes::new().set_modified(stamp))
+        .unwrap();
+}
+
+#[test]
+fn a_build_behind_its_own_source_is_refused_even_when_the_install_matches() {
+    // THE CASE THE CHECK MISSED, and the one this row exists for. Both copies
+    // are byte-identical, so every comparison the original made agrees — and the
+    // source is newer than the artifact they both came from.
+    let dir = mediator_fixture("mediator-behind-source", b"same bytes", b"same bytes");
+    write_newer_than(
+        &dir.join("crates/batten/src/lib.rs"),
+        b"fn changed() {}\n",
+        &dir.join("target/release/batten"),
+    );
+    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        stdout(&output),
+        "mediator failed mediator-build-behind-source\n",
+        "its own verdict rather than `mediator-stale`: that one says reinstall \
+         what is built, this one says rebuild first"
+    );
+}
+
+#[test]
+fn a_build_newer_than_its_source_passes() {
+    // THE ANTI-VACUITY MIRROR. Same fixture, same file, written BEFORE the
+    // artifact — so a predicate that refused on the mere existence of a source
+    // tree, or that compared the wrong direction, fails here.
+    let dir = mediator_fixture("mediator-source-older", b"same bytes", b"same bytes");
+    let stamp = dir
+        .join("target/release/batten")
+        .metadata()
+        .unwrap()
+        .modified()
+        .unwrap()
+        - std::time::Duration::from_secs(2);
+    write_stamped(
+        &dir.join("crates/batten/src/lib.rs"),
+        b"fn unchanged() {}\n",
+        stamp,
+    );
+
+    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output), "mediator ok\n");
+}
+
+#[test]
+fn a_newer_test_file_does_not_make_the_build_stale() {
+    // THE SCOPING, AND IT IS THE WHOLE REASON THIS PREDICATE IS SOUND. The
+    // release binary contains no tests, so a newer test file says nothing about
+    // it. Measured 2026-09-07 on a real checkout one branch switch old: five
+    // source files were newer than the artifact and THREE were under `tests/` —
+    // an unscoped predicate would have called a current binary stale, which is
+    // the false positive `Mediator`'s own doc predicted and refused to accept.
+    let dir = mediator_fixture("mediator-tests-excluded", b"same bytes", b"same bytes");
+    write_newer_than(
+        &dir.join("crates/batten/tests/it/whatever.rs"),
+        b"fn a_new_case() {}\n",
+        &dir.join("target/release/batten"),
+    );
+    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output), "mediator ok\n");
+}
+
+#[test]
+fn a_newer_manifest_makes_the_build_stale() {
+    // A manifest is a source too: a dependency bump or a version change rebuilds
+    // the binary without touching one `.rs`, and the version bump is exactly the
+    // shape that produced the measured 0.0.148-against-0.0.149 skew.
+    let dir = mediator_fixture("mediator-manifest-newer", b"same bytes", b"same bytes");
+    write_newer_than(
+        &dir.join("Cargo.toml"),
+        b"[workspace.package]\nversion = \"9.9.9\"\n",
+        &dir.join("target/release/batten"),
+    );
+    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        stdout(&output),
+        "mediator failed mediator-build-behind-source\n"
+    );
+}
+
 #[test]
 fn a_tree_that_builds_no_mediator_abstains_rather_than_refusing() {
     // A consumer checkout never builds one, so "was this built from this tree"
@@ -175,26 +289,44 @@ fn a_tree_that_builds_one_with_no_mediator_on_path_is_could_not_look() {
 }
 
 #[test]
-fn two_equally_stale_binaries_agree_and_this_reports_current() {
-    // THE BOUND, ASSERTED RATHER THAN ONLY DESCRIBED. The comparison is
-    // install-against-build, so when the BUILD is itself behind the source both
-    // sides agree and the verdict is `ok`. Measured 2026-09-02 while this row was
-    // in flight: `land` rebased onto a `main` carrying a new `[[rule.review]]`
-    // key, the engine refused the tree's own batten.toml, and this verb answered
-    // `mediator ok` one command later.
+fn two_equally_stale_binaries_no_longer_agree_into_a_clean_verdict() {
+    // THE BOUND THIS CASE PINNED HAS BEEN LIFTED, DELIBERATELY (CLOUD-1630).
     //
-    // Pinned as a case because a bound stated only in prose is one a later change
-    // can quietly widen or narrow with nothing going red. If a build-freshness
-    // predicate ever lands, this case is what must be revisited — deliberately,
-    // and not by discovering the comment was already false.
+    // It read `two_equally_stale_binaries_agree_and_this_reports_current` and
+    // asserted exit 0: the comparison was install-against-build, so when the
+    // BUILD was itself behind the source both sides agreed and the verdict was
+    // `ok`. Measured 2026-09-02: `land` rebased onto a `main` carrying a new
+    // `[[rule.review]]` key, the engine refused the tree's own batten.toml, and
+    // this verb answered `mediator ok` one command later. That measurement is
+    // kept here because it is the reason the predicate exists.
+    //
+    // Its own instruction was to revisit it "deliberately, and not by
+    // discovering the comment was already false" — so the assertion is inverted
+    // rather than the case deleted. The manifest is still rewritten after both
+    // binaries are planted, which is still the source moving underneath a
+    // matched pair. Only the verdict changes.
+    //
+    // THE STAMP IS STATED, NOT RACED, and that correction is worth recording.
+    // Written as a bare `fs::write`, this case decided differently on two
+    // consecutive runs of unchanged code — exit 1 once and exit 0 the next —
+    // because whether the manifest lands with a STRICTLY greater mtime than the
+    // artifact is a matter of microseconds. It read as a Linux-versus-Windows
+    // difference and was nothing of the kind. A predicate over an ordering must
+    // be given an ordering.
     let dir = mediator_fixture("mediator-both-stale", b"old build", b"old build");
-    // The source moving is what the pair cannot see: the fixture's own manifest
-    // is rewritten after both binaries were planted, and nothing in the verdict
-    // changes.
-    fs::write(dir.join("crates/batten/Cargo.toml"), "# moved on\n").unwrap();
+    write_newer_than(
+        &dir.join("crates/batten/Cargo.toml"),
+        b"# moved on\n",
+        &dir.join("target/release/batten"),
+    );
     let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(stdout(&output), "mediator ok\n");
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        stdout(&output),
+        "mediator failed mediator-build-behind-source\n",
+        "the pair still agrees with itself — what changed is that agreeing with \
+         itself is no longer sufficient to report ok"
+    );
 }
 
 #[test]
