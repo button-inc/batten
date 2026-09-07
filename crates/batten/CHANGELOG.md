@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.148](https://github.com/button-inc/batten/compare/v0.0.147...v0.0.148) - 2026-09-07
+
+### Added
+
+- *(bench)* declare the agentic trials, and gate the records that carry them
+- *(tests)* score a rule's cases as reported / validated / noisy / missing
+- *(decision)* answer `sha -> {model, harness, session}` over the decision log
+
+### Fixed
+
+- *(policy)* ask the presence question of every backend, not only the locked ones
+
+### Other
+
+- *(rules)* move the doctrine to a neutral home five more harnesses can read
+- *(facts)* hold every consumer to one conformance set for an issue key
+
 ## [0.0.147](https://github.com/button-inc/batten/compare/v0.0.146...v0.0.147) - 2026-09-07
 
 ### Added
