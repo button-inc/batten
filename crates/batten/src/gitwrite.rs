@@ -360,11 +360,56 @@ pub fn replay_onto(dir: &Path, branch: &str, upstream: &str, onto: &str) -> Resu
             anyhow::anyhow!("gitwrite: the configured committer will not parse: {err}")
         })?;
 
+    // **A COMMIT WHOSE CHANGE IS ALREADY ON THE BASE IS DROPPED, NOT REPLAYED**
+    // (CLOUD-1586). This is `git rebase`'s own behaviour — it builds the list
+    // through `git cherry`, which compares patch identities and omits the
+    // commits the upstream already carries — and its absence here was a
+    // PERMANENT stop rather than a slow path: a change that reached `main` by
+    // any route other than this branch's own merge (a cherry-pick, an
+    // independent re-implementation, a fix ported ahead of the PR) stays in
+    // `upstream..branch` because it is not REACHABLE from the base, gets
+    // three-way merged against a base that already contains it, and conflicts.
+    // Every later lap re-derives the same range and conflicts identically, so
+    // the loop cannot make progress no matter how many times it runs.
+    //
+    // Measured on this branch: `3f308039` and `main`'s `a7935a7b` share patch
+    // identity `f185159e…`, and the replay stopped on it every lap. The
+    // resolution needed a hand rebase, which `rebase-not-hand-stepped` denies —
+    // so the engine's missing drop presented as a policy deadlock and cost a
+    // human override to get past.
+    //
+    // ANCHORED ON `branch..onto`, which is `git cherry`'s comparison side: the
+    // commits the base has and this branch does not. `upstream..onto` is the
+    // wrong set and is empty in the common case where the graft point IS the
+    // bound, which would make this whole guard a no-op.
+    //
+    // A range that will not read is an EMPTY set, never a refusal: could-not-look
+    // here means replay everything, which is the behaviour that existed before
+    // and can only conflict, never silently drop work.
+    let already = crate::git::patch_identities(
+        dir,
+        crate::git::Window::DEFAULT,
+        &format!("{branch}..{onto}"),
+    )
+    .unwrap_or_default();
+
     let empty = gix::ObjectId::empty_tree(repo.object_hash());
     let mut cursor = base;
+    let mut replayed = 0usize;
     for original in &range {
+        // `commit_identity` is `None` for a commit that changes nothing, and an
+        // absent identity must not match another absent one — so an empty commit
+        // is replayed rather than dropped, and stays the caller's to reason about.
+        if crate::git::commit_identity(&repo, original)
+            .is_some_and(|identity| already.contains(&identity))
+        {
+            continue;
+        }
         match replay(&repo, cursor, *original, &options, &committer, empty)? {
-            Step::Landed(id) => cursor = id,
+            Step::Landed(id) => {
+                cursor = id;
+                replayed += 1;
+            }
             Step::Conflicted(paths) => {
                 return Ok(Rebase::Conflicted {
                     commit: original.to_hex().to_string(),
@@ -377,9 +422,12 @@ pub fn replay_onto(dir: &Path, branch: &str, upstream: &str, onto: &str) -> Resu
     let now = cursor.to_hex().to_string();
     set_ref(dir, branch, &now)?;
     update_worktree(&repo, tip, cursor)?;
+    // The count is what was REPLAYED, not what was walked: a dropped commit
+    // contributes no commit to the new head, and reporting the range's length
+    // would claim a head carries commits it does not.
     Ok(Rebase::Replayed {
         head: now,
-        commits: range.len(),
+        commits: replayed,
     })
 }
 

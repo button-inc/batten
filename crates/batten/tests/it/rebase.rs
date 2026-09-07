@@ -214,6 +214,88 @@ fn a_conflicting_replay_refuses() {
     );
 }
 
+/// **A commit whose change is ALREADY ON THE BASE is dropped, not replayed**
+/// (CLOUD-1586).
+///
+/// This is `git rebase`'s own behaviour — it builds its list through
+/// `git cherry`, which compares patch identities and omits what the upstream
+/// already carries — and the port did not carry it. The consequence was not a
+/// slow path but a PERMANENT one: the commit is not reachable from the base, so
+/// it stays in the range, gets three-way merged against a base that already
+/// contains its change, and conflicts. Every later lap re-derives the same range
+/// and conflicts identically, so the loop can never make progress.
+///
+/// Measured on #848: `3f308039` and `main`'s `a7935a7b` share patch identity
+/// `f185159e…`, and the lap stopped on it every time. Resolving it needed a hand
+/// rebase, which `rebase-not-hand-stepped` denies — so this engine gap presented
+/// as a policy deadlock and cost a human override to get past.
+///
+/// # The fixture is shaped by what makes the bug visible
+///
+/// The two commits must share a patch identity while being different objects, so
+/// they make the same single-file change from DIFFERENT parents — the fixture's
+/// committer and instant are fixed, so same-parent-same-tree would collide into
+/// one object and prove nothing.
+///
+/// And the trunk MOVES ON past its copy, which is the half that makes this
+/// conflict at all. While the trunk's post-state still equals the branch
+/// commit's, the three-way merge resolves cleanly and nothing is refused; it is
+/// the later trunk commit that makes the two sides disagree about `shared.txt`.
+/// That also rules out the cheaper predicate: comparing final trees reads this
+/// as unrelated work, because by now they genuinely differ. Only the CHANGE is
+/// the same.
+#[test]
+fn a_commit_whose_change_is_already_on_the_base_is_dropped_rather_than_conflicting() {
+    let (dir, repo) = init("rebase-already-upstream");
+    let root: Files<'_> = &[("shared.txt", "base\n")];
+    let base = commit(&repo, &[], root);
+
+    // An unrelated trunk commit, present only so the ported copy below has a
+    // different parent from the branch's and therefore a different sha.
+    let widened: Files<'_> = &[("shared.txt", "base\n"), ("unrelated.txt", "trunk\n")];
+    let widen = commit(&repo, &[base], widened);
+
+    // The trunk's copy of the change, and then the trunk moving past it.
+    let ported_files: Files<'_> = &[("shared.txt", "changed\n"), ("unrelated.txt", "trunk\n")];
+    let ported = commit(&repo, &[widen], ported_files);
+    let later: Files<'_> = &[
+        ("shared.txt", "changed\nand then more\n"),
+        ("unrelated.txt", "trunk\n"),
+    ];
+    let moved = commit(&repo, &[ported], later);
+
+    // The branch makes the IDENTICAL change to `shared.txt`, from the same base.
+    let mine: Files<'_> = &[("shared.txt", "changed\n")];
+    let tip = commit(&repo, &[base], mine);
+    assert_ne!(tip, ported, "the fixture needs two distinct commits");
+
+    point(&dir, "refs/heads/main", moved);
+    point(&dir, "refs/heads/work", tip);
+    materialise(&dir, mine);
+
+    let outcome = gitwrite::rebase(&dir, "refs/heads/work", "refs/heads/main").expect("rebase");
+    let Rebase::Replayed { head, commits } = outcome else {
+        panic!("an already-upstream commit must be dropped, got {outcome:?}");
+    };
+    assert_eq!(
+        commits, 0,
+        "the one commit in the range was already on the base, so nothing replayed"
+    );
+    assert_eq!(
+        head,
+        moved.to_hex().to_string(),
+        "with every commit dropped the branch IS the base"
+    );
+
+    // The trunk's own later work survives: a drop must not take the base's
+    // content with it.
+    assert_eq!(
+        std::fs::read_to_string(dir.join("shared.txt")).expect("read worktree"),
+        "changed\nand then more\n",
+        "the worktree carries the base's content, not the dropped commit's"
+    );
+}
+
 /// A branch that already descends from the base mints nothing.
 ///
 /// The receipts the landing loop runs on are keyed to the commit they validated,

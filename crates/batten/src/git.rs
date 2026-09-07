@@ -3318,6 +3318,52 @@ fn patch_id_index(dir: &Path, window: Window, range: &str) -> Result<BTreeMap<Pa
     Ok(index)
 }
 
+/// One commit's patch identity, or `None` where it changes nothing.
+///
+/// The single-commit half of [`patch_id_index`], exposed because
+/// [`crate::gitwrite::replay_onto`] asks the question one commit at a time as it
+/// walks — building the whole index for the head side would compute an identity
+/// for every commit in the range when the replay may stop at the second.
+///
+/// `None` for a commit whose diff is empty, which is [`crate::patch::identity`]'s
+/// own answer and must never be matched against another absent identity: two
+/// commits that change nothing are not the same change.
+///
+/// Swallows a read failure as `None` rather than raising. The one caller is
+/// deciding whether to SKIP a commit, so the fail-closed direction is to replay
+/// it — a commit whose identity could not be computed gets the ordinary
+/// three-way merge, which is exactly the behaviour that existed before this.
+pub(crate) fn commit_identity(repo: &gix::Repository, id: &gix::ObjectId) -> Option<String> {
+    let mut changes = commit_changes(repo, id).ok()?;
+    crate::patch::identity(&mut changes)
+}
+
+/// The patch identities present on `range`, as a set.
+///
+/// [`patch_id_index`] without the commit it came from: the replay asks only
+/// whether a change is ALREADY THERE, and carrying which commit carries it would
+/// be an answer nothing reads.
+///
+/// # Errors
+///
+/// As [`rev_list`]: a range that will not resolve or a commit that will not read.
+pub(crate) fn patch_identities(
+    dir: &Path,
+    window: Window,
+    range: &str,
+) -> Result<std::collections::BTreeSet<String>> {
+    let repo = open(dir)?;
+    let mut found = std::collections::BTreeSet::new();
+    for commit in rev_list(dir, window, range)? {
+        let id = gix::ObjectId::from_hex(commit.as_bytes())
+            .map_err(|_| UsageError::raise(format!("cannot read commits for {range:?}")))?;
+        if let Some(hex) = commit_identity(&repo, &id) {
+            found.insert(hex);
+        }
+    }
+    Ok(found)
+}
+
 /// Where this branch and `base_ref` diverged, for RANGE SELECTION.
 ///
 /// The same line [`cumulative_patch_id`] draws, and the reason this is here at
