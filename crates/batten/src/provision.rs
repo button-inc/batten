@@ -69,6 +69,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::UsageError;
+use crate::secret::Secret;
 
 /// The subdirectory of the repository's out-of-tree state that holds provisioned
 /// tools.
@@ -374,10 +375,22 @@ pub enum Credential {
 /// that resolved to nothing and must leave the variable ALONE — is not the same
 /// as one that resolved to a removal, and collapsing them would make a missing
 /// credential clear an inherited one.
+/// **`Set` CARRIES A [`Secret`], NOT A `String`, AND THAT IS THE WHOLE OF THE
+/// FIX.** It carried a `String` for one commit, in a `pub` type deriving
+/// `Debug`, so every rendering of a launcher's resolved environment printed the
+/// credential it had just resolved — and the environment this resolves is
+/// mostly credentials, which is what makes this the worst possible place for
+/// that. The derive stays: a struct holding a `Secret` may derive `Debug`
+/// freely, which is why the fix is a type rather than a rule about renderings.
+///
+/// Not every variable here is a credential — `NO_PROXY` is a host list — and
+/// they are not split into two arms. Redacting a proxy exemption list costs a
+/// reader almost nothing; deciding per-row which values are secret is a
+/// judgement, and getting it wrong once is a credential in a log.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnvAction {
     /// Set the variable to this value.
-    Set(String),
+    Set(Secret),
     /// Remove the variable from the child's environment.
     Unset,
 }
@@ -939,7 +952,10 @@ pub fn exec_launcher(
     command.args(args);
     for (name, action) in resolved_env(&launch.env, credential_health()) {
         match action {
-            EnvAction::Set(value) => command.env(name, value),
+            // The one exposure on this path, and it is the wire: the value is
+            // going into a child process's environment, which is the entire
+            // purpose of the verb.
+            EnvAction::Set(value) => command.env(name, value.expose()),
             // `env_remove` rather than `env("", …)`: the child must not see the
             // name at all. A cleared-to-empty proxy variable is read as "no
             // proxy" by some clients and as a malformed URL by others, which is
@@ -1103,11 +1119,11 @@ fn credential_probe_url() -> std::result::Result<String, String> {
 ///
 /// Under the COMMON git dir, beside every other receipt, so it dies with the
 /// checkout and a linked worktree reads what the main one wrote.
-fn credential_receipt_path(value: &str) -> Option<std::path::PathBuf> {
+fn credential_receipt_path(value: &Secret) -> Option<std::path::PathBuf> {
     let cwd = std::env::current_dir().ok()?;
     let common = crate::git::common_dir(&cwd).ok()?;
     let dir = std::path::Path::new(&common).join("batten-receipts");
-    Some(dir.join(format!("credential.{}", digest(value.as_bytes()))))
+    Some(dir.join(format!("credential.{}", digest(value.expose().as_bytes()))))
 }
 
 /// How long a credential verdict is trusted before it is re-proved.
@@ -1124,7 +1140,7 @@ const CREDENTIAL_MAX_AGE: u64 = 300;
 /// Failure to look is `false`, and the direction is deliberate: an unprovable
 /// candidate is skipped rather than trusted, and if NO candidate proves usable
 /// the caller keeps the host's own wiring instead of stripping it.
-fn credential_usable(value: &str) -> bool {
+fn credential_usable(value: &Secret) -> bool {
     let Some(receipt) = credential_receipt_path(value) else {
         return false;
     };
@@ -1172,10 +1188,11 @@ fn credential_usable(value: &str) -> bool {
         // host's credential is used, and third-party reads 403. Saying so at the
         // boundary is the difference between that and an unexplained refusal
         // three tasks later. Pointer-only — no value, no digest, no identity.
-        eprintln!(
-            "::error:: batten: {} — keeping the host's proxy wiring, so third-party reads will 403. Re-checked every {CREDENTIAL_MAX_AGE}s.",
+        report(&format!(
+            "{} — keeping the host's proxy wiring, so third-party reads will 403. \
+             Re-checked every {CREDENTIAL_MAX_AGE}s.",
             verdict.why()
-        );
+        ));
     }
     live
 }
@@ -1197,7 +1214,10 @@ const CREDENTIAL_NAMES: [&str; 2] = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GIT
 fn credential_health() -> Credential {
     if CREDENTIAL_NAMES
         .iter()
-        .filter_map(|name| std::env::var(name).ok())
+        // Into a `Secret` at the READ, which is the only place that keeps the
+        // window shut: a value bound to a `String` first is a value some later
+        // edit can print, and the whole class this fixes is later edits.
+        .filter_map(|name| std::env::var(name).ok().map(Secret::new))
         .filter(|value| !value.is_empty())
         .any(|value| credential_usable(&value))
     {
@@ -1205,6 +1225,20 @@ fn credential_health() -> Credential {
     } else {
         Credential::Unusable
     }
+}
+
+/// Write one line of report to stderr.
+///
+/// **Through [`crate::output`] rather than `eprintln!`**, which the workspace
+/// lint bans in library code for a reason this path needs rather than merely
+/// obeys: a `print`-shaped write has no mode to consult, so `--quiet` could only
+/// ever be a promise. `main.rs` states it at its own head.
+///
+/// The write is best-effort. A launcher that cannot report is still a launcher,
+/// and turning a failed write into a failed launch is the opposite of what this
+/// exists for.
+fn report(text: &str) {
+    let _ = crate::output::error(crate::output::Mode::default(), &mut std::io::stderr(), text);
 }
 
 /// Whether the route to `probe` honours the credential we send, at all.
@@ -1231,10 +1265,12 @@ fn route_honours_credentials(probe: &str) -> Option<bool> {
     // about malformed input, which a route could reject without ever consulting
     // an identity — and that would read as honesty it has not demonstrated.
     const MUST_FAIL: &str = "ghp_0000000000000000000000000000000000";
-    match probe_credential(probe, MUST_FAIL) {
+    match probe_credential(probe, &Secret::new(MUST_FAIL.to_owned())) {
         Look::Answered(accepted) => Some(!accepted),
         Look::CouldNotLook(why) => {
-            eprintln!("::error:: batten: the credential probe could not reach {probe}: {why}");
+            report(&format!(
+                "the credential probe could not reach {probe}: {why}"
+            ));
             None
         }
     }
@@ -1306,8 +1342,14 @@ enum Look {
 /// exactly the dead-gate shape the policy-module rules record one layer up.
 ///
 /// Pointer-only: the verdict is a boolean over a status and no body is read.
-fn probe_credential(probe: &str, token: &str) -> Look {
-    let headers = [("Authorization".to_owned(), format!("Bearer {token}"))];
+fn probe_credential(probe: &str, token: &Secret) -> Look {
+    // `expose` at the LAST possible moment and into a value that goes straight
+    // to the wire. `Call`'s own `Debug` redacts this header, so the credential
+    // is out of the type for exactly the length of one request build.
+    let headers = [(
+        "Authorization".to_owned(),
+        format!("Bearer {}", token.expose()),
+    )];
     match crate::fetch::get_direct(probe, &headers) {
         Ok(response) => Look::Answered((200..300).contains(&response.status)),
         Err(why) => Look::CouldNotLook(why.to_string()),
@@ -1320,7 +1362,13 @@ fn probe_credential(probe: &str, token: &str) -> Look {
 /// A rule that resolves to nothing sets nothing, which is what keeps an absent
 /// credential absent rather than empty.
 fn resolved_env(rules: &[ProvisionEnv], credential: Credential) -> Vec<(String, EnvAction)> {
-    resolved_env_from(rules, credential, &|name| std::env::var(name).ok())
+    // Into a `Secret` at the READ. The launcher's environment is mostly
+    // credentials, so the type starts at the boundary rather than being put on
+    // afterwards — a value that is a `String` for three lines is a value three
+    // lines can print.
+    resolved_env_from(rules, credential, &|name| {
+        std::env::var(name).ok().map(Secret::new)
+    })
 }
 
 /// [`resolved_env`] over a supplied lookup.
@@ -1333,7 +1381,7 @@ fn resolved_env(rules: &[ProvisionEnv], credential: Credential) -> Vec<(String, 
 fn resolved_env_from(
     rules: &[ProvisionEnv],
     credential: Credential,
-    lookup: &dyn Fn(&str) -> Option<String>,
+    lookup: &dyn Fn(&str) -> Option<Secret>,
 ) -> Vec<(String, EnvAction)> {
     // EVERY REMOVAL IS CONDITIONAL ON A PROVEN REPLACEMENT. With an unusable
     // credential the rows below degrade to the host's own wiring rather than to
@@ -1377,25 +1425,34 @@ fn resolved_env_from(
                 let real = rule.from_first_set.iter().find_map(|from| {
                     lookup(from)
                         .filter(|got| !got.is_empty())
+                        // The predicate travels to the value: `Secret` answers
+                        // `starts_with` without ever handing the bytes out.
                         .filter(|got| reject.is_none_or(|bad| !got.starts_with(bad)))
                 });
-                match real {
-                    Some(value) => value,
-                    // NO REAL CANDIDATE. With a `reject_prefix` declared, that
-                    // is not the same as "nothing to do": the variable may still
-                    // be carrying the very marker the row rejected, and leaving
-                    // it is how a fenced request goes out with a placeholder and
-                    // comes back `Bad credentials`. Clear it instead, so the
-                    // tool sees an absent credential and says so.
-                    None => {
-                        let carries_marker = reject.is_some_and(|bad| {
-                            lookup(&rule.name).is_some_and(|got| got.starts_with(bad))
-                        });
-                        return carries_marker.then(|| (rule.name.clone(), EnvAction::Unset));
-                    }
-                }
+                // NO REAL CANDIDATE. With a `reject_prefix` declared, that is
+                // not the same as "nothing to do": the variable may still be
+                // carrying the very marker the row rejected, and leaving it is
+                // how a fenced request goes out with a placeholder and comes
+                // back `Bad credentials`. Clear it instead, so the tool sees an
+                // absent credential and says so.
+                let Some(value) = real else {
+                    let carries_marker = reject.is_some_and(|bad| {
+                        lookup(&rule.name).is_some_and(|got| got.starts_with(bad))
+                    });
+                    return carries_marker.then(|| (rule.name.clone(), EnvAction::Unset));
+                };
+                value
             } else {
-                prepended(&lookup(&rule.name).unwrap_or_default(), &rule.prepend_list)
+                // A prepend row is a LIST row — `NO_PROXY` and `PATH` — and its
+                // current value has to be read to be extended. `expose` here is
+                // over a host list rather than a credential, and it goes
+                // straight back into a `Secret`, so nothing widens.
+                Secret::new(prepended(
+                    lookup(&rule.name)
+                        .as_ref()
+                        .map_or("", |current| current.expose()),
+                    &rule.prepend_list,
+                ))
             };
             Some((rule.name.clone(), EnvAction::Set(value)))
         })
@@ -1856,7 +1913,7 @@ mod tests {
     /// case that wrote it would race every other test in this binary — and the
     /// three-way distinction below (set / absent / removed) is exactly what a
     /// racing reader would blur.
-    fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
+    fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<Secret> + use<> {
         let owned: Vec<(String, String)> = pairs
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
@@ -1865,7 +1922,7 @@ mod tests {
             owned
                 .iter()
                 .find(|(key, _)| key == name)
-                .map(|(_, value)| value.clone())
+                .map(|(_, value)| Secret::new(value.clone()))
         }
     }
 
@@ -1883,7 +1940,7 @@ mod tests {
             got,
             vec![(
                 "PROBE_TOKEN".to_owned(),
-                EnvAction::Set("ghp_real".to_owned())
+                EnvAction::Set(Secret::new("ghp_real".to_owned()))
             )]
         );
     }
@@ -1902,7 +1959,7 @@ mod tests {
             got,
             vec![(
                 "PROBE_TOKEN".to_owned(),
-                EnvAction::Set("ghp_real".to_owned())
+                EnvAction::Set(Secret::new("ghp_real".to_owned()))
             )],
             "the `proxy-` value must not win the first-set race"
         );
@@ -1934,7 +1991,7 @@ mod tests {
             got,
             vec![(
                 "PROBE_TOKEN".to_owned(),
-                EnvAction::Set("ghp_somebody_elses".to_owned())
+                EnvAction::Set(Secret::new("ghp_somebody_elses".to_owned()))
             )]
         );
     }
@@ -1953,7 +2010,7 @@ mod tests {
             got,
             vec![(
                 "PROBE_TOKEN".to_owned(),
-                EnvAction::Set("proxy-injected".to_owned())
+                EnvAction::Set(Secret::new("proxy-injected".to_owned()))
             )],
             "a marker beats an empty variable when nothing replaces it"
         );

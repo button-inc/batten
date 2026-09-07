@@ -100,6 +100,7 @@ pub mod render;
 pub mod resolve;
 pub mod review;
 pub mod rules;
+pub mod secret;
 pub mod secrets;
 pub mod selfwrite;
 /// The API-compatibility gate as a delegated-analyser adapter (CLOUD-1050),

@@ -220,6 +220,7 @@ mod run_shape_guard_door;
 mod runner_verdict;
 mod sbom_inventory;
 mod scanner_taxonomy;
+mod secret_redaction;
 mod secrets_kind;
 mod semver_gate;
 mod session_drain;

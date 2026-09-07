@@ -127,6 +127,40 @@ mcp-timeout-budget`, which carries the floor, the measurement behind it, and the
    the serena race pays a session of hand-approvals. Unmeasured — do not assume
    either.
 
+   **AND A FOURTH GATE SITS ABOVE ALL THREE: THE TOOLS MAY BE DEFERRED, AND THE
+   ONE CALL THAT LOADS THEM IS A SEPARATE GRANT** (2026-09-07). In some sessions
+   the host does not put the serena tools in the prompt at all — it lists them as
+   **deferred**, names only, no parameter schema — and a deferred tool cannot be
+   invoked until `ToolSearch` fetches its schema. `ToolSearch` is an ordinary
+   tool with an ordinary permission, and it is **not** in `permissions.allow`.
+
+   So the twenty-one enumerated entries the section above fought for grant
+   nothing here: the call that prompts is `ToolSearch`, and it prompts on the
+   FIRST use of any serena tool in the session, before `read_memory` is ever
+   reached. The owner sees a prompt to read a memory and reasonably concludes the
+   grant is broken; the grant is fine, and the file they would check is right.
+
+   **This is the third distinct route to the same outcome, and the outcome is the
+   one that matters most:** an agent that reads a prompt as "Serena is not
+   available", stops reaching for it, and substitutes the shell utilities —
+   exactly what `.claude/rules/scanning.md` and `no-tool-substitution` exist to
+   refuse. That substitution has now been arrived at as a workaround for a
+   wildcard spelling, for a late attach, and for an ungranted `ToolSearch`.
+   **Serena is critical path**: `mem:core` routes every on-demand memory through
+   it, `rust.md` routes the spawn census to name resolution, and `scanning.md`'s
+   row three has no other instrument. Treat a prompt as a config finding to
+   report, never as a reason to reach for `grep`.
+
+   The mechanism is one line — `"ToolSearch"` in `permissions.allow` — and it is
+   NOT the same class as the `$HOME` one-session repair above: this one belongs
+   in the committed file, because the deferral is a property of the host rather
+   than of a lost race, and every session on such a host pays it.
+
+   **Distinguishing it from the late-attach case takes one look**: if the
+   session's tool listing carries a `mcp__serena__*` name with no schema under a
+   "deferred tools" notice, this is the deferral case. If the tools are absent
+   entirely, read the attach time as above.
+
 3. **A scoped launch (CLOUD-316).** The one that actually cost a whole session.
    `.mcp.json` ran a bare `mise exec`, which provisions **every** tool in the
    active config before it execs anything — so Serena waited on twenty tools and

@@ -68,7 +68,7 @@ declared_modules := {
 	"exit", "facts", "findings", "git", "handler", "hook", "identity", "init",
 	"invocation", "journal", "judge", "landed", "lib", "lint", "markers", "mint", "minted", "outputs",
 	"output", "pattern", "policy", "provision", "receipt", "redirect", "refusal",
-	"render", "resolve", "rules", "secrets", "session", "severity", "sink",
+	"render", "resolve", "rules", "secret", "secrets", "session", "severity", "sink",
 	"spec", "state", "stop", "store", "surface", "transcript", "trust", "uses",
 	"verbs", "verdict", "waiver", "worktree",
 	# `brief`, `main` and `selfwrite` were absent from the first draft of this
@@ -117,6 +117,23 @@ declared_modules := {
 	# it sits below `rules` and reaches `exec` for its one spawn, which is the
 	# placed adapter `policy/spawn-adapters.rego` requires.
 	"recorder",
+	# `secret` arrived with CLOUD-1569 and this rule named it once more, on the
+	# gate before landing. It is the PUREST LEAF in the table: it reaches nothing
+	# in this crate at all — not even `error` — because its whole surface is one
+	# newtype, a hand-written `Debug` that redacts, and three predicates that let
+	# a caller ask about a credential without holding one.
+	#
+	# That is the placement rather than an accident of its size. The type exists
+	# so that `provision`, `fetch` and `lease` can each carry a credential without
+	# any of them being able to print it, and a module every layer may depend on
+	# must depend on nothing — an edge from here to a decider would make the
+	# containment of a secret conditional on that decider's own layer, which is
+	# exactly the property it must not have.
+	#
+	# It has no back-edge to forbid for the reason `agent` has none, arrived at
+	# from the opposite direction: `agent` reaches everything and is read by
+	# nothing, this is read by everything and reaches nothing.
+
 	# `deferral` and `source` arrived with this bundle, and this rule named BOTH
 	# on the last gate before landing — module written, both suites green,
 	# `mise run fix` clean, `module-map-check` satisfied, and nobody had placed

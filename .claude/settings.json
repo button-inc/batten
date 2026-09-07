@@ -97,6 +97,7 @@
       "Read",
       "Glob",
       "Grep",
+      "ToolSearch",
       "Bash(git:*)",
       "Bash(gh:*)",
       "Bash(mise:*)",

@@ -277,7 +277,7 @@ pub fn get_direct(url: &str, headers: &[(String, String)]) -> Result<Response> {
 /// deliberately not two functions: a session-bearing protocol above this
 /// transport sends several requests that should share one connection pool and one
 /// runtime, and a per-request `get`/`post` would build both per hop (CLOUD-1260).
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct Call<'a> {
     /// Where to send it. HTTPS only, enforced by the connector.
     pub url: &'a str,
@@ -299,6 +299,67 @@ pub struct Call<'a> {
     /// ordering that terminates: the fence is the thing being proven, so it
     /// cannot also be its own precondition.
     pub direct: bool,
+}
+
+/// **HAND-WRITTEN, BECAUSE THE DERIVE PRINTED CREDENTIALS.** `headers` carries
+/// whatever a caller attached, and both callers in this crate attach
+/// `Authorization: Bearer <token>` — `lease::headers` for the landing lease and
+/// `provision::probe_credential` for the credential probe. So `{call:?}` was a
+/// credential in a log, and `lease.rs`'s own comment — "a token in a struct is a
+/// token in that struct's `Debug`" — was describing a rule this type broke.
+///
+/// The VALUE is redacted and the NAME is kept, which is what leaves the shape
+/// debuggable: a report still says the request carried an `Authorization`
+/// header, which is the fact a reader needs, and never what it carried. That is
+/// non-negotiable rule 4 in the type rather than at each call site.
+///
+/// The body is a count for the same reason: a POST body here is a git-protocol
+/// pack or an MCP payload, neither of which belongs in a report.
+impl std::fmt::Debug for Call<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Call")
+            .field("url", &self.url)
+            .field(
+                "headers",
+                &self
+                    .headers
+                    .iter()
+                    .map(|(name, value)| {
+                        (
+                            name.as_str(),
+                            if is_sensitive(name) {
+                                crate::secret::REDACTED
+                            } else {
+                                value.as_str()
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .field("body-bytes", &self.body.map(<[u8]>::len))
+            .field("direct", &self.direct)
+            .finish()
+    }
+}
+
+/// Whether a header's VALUE is a credential.
+///
+/// A denylist, and the direction is deliberate: a header nobody thought about
+/// renders, because an over-redacted report is unreadable and gets switched off,
+/// while these four names cover every credential-bearing header this crate
+/// sends or is likely to. Matched case-insensitively, since HTTP field names
+/// are.
+fn is_sensitive(name: &str) -> bool {
+    const SENSITIVE: [&str; 4] = [
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+    ];
+    SENSITIVE
+        .iter()
+        .any(|candidate| name.eq_ignore_ascii_case(candidate))
 }
 
 /// Run a sequence of calls on **one** runtime and one connection pool.

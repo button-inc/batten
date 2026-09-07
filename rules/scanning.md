@@ -109,6 +109,24 @@ pattern across the tree, paths by glob, or what a name resolves to — and the
 shell utility is what that is preferred _over_. Which instrument provides it is
 whatever this session has.
 
+**"WHATEVER THIS SESSION HAS" IS NOT A LICENCE TO CONCLUDE IT HAS NOTHING, AND
+ROW THREE HAS NO SUBSTITUTE** (2026-09-07). Serena is critical path here — it is
+the only instrument for name resolution, `mem:core` routes every on-demand memory
+through it, and `rust.md` sends the spawn census to it by name. A session that
+decides it is unavailable does not fall back to a lesser instrument for row
+three; it falls back to `grep`, which is the substitution the gate below refuses
+and which this file's own worked example measures as wrong.
+
+**A PERMISSION PROMPT IS NOT ABSENCE.** Three different config faults have now
+been read as "Serena is not available" and answered by reaching for the shell:
+a wildcard grant that matched nothing, a server that attached after permissions
+were read, and — the current one — the tools arriving **deferred**, so that the
+first use of any of them needs `ToolSearch` to fetch a schema, and `ToolSearch`
+carries its own grant. In all three the tools worked and the prompt was the only
+symptom. `mem:serena-setup` carries the four gates and how to tell them apart;
+the rule here is the disposition: **report the prompt as a config finding and
+keep using the instrument, never quietly downgrade the instrument.**
+
 `no-tool-substitution` in `batten.toml` is the authority on which utility over
 which path is refused, and on what it deliberately does not catch. Read it there;
 a second copy of that corpus here is the drift this file exists to avoid.

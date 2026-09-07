@@ -2058,6 +2058,27 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   dual-HMAC). Behavioural churn fixtures live in
   `crates/batten/tests/identity_churn.rs` (CLOUD-169); they compose the matcher
   with this module because a `Finding` carries no fingerprint yet (CLOUD-164).
+- `secret.rs` — the credential type, and the PUREST LEAF in the layer table: it
+  reaches nothing in this crate, not even `error`. One newtype, a hand-written
+  `Debug` that renders a fixed marker, no `Display`/`Serialize`/`AsRef`, and one
+  deliberately verbose route to the bytes (`expose`) so auditing where a
+  credential reaches the wire is a single search. The predicates travel to the
+  value instead — `starts_with` is what lets `provision`'s `reject_prefix` drop a
+  host's placeholder without the credential leaving the type.
+  **Not the same module as `secrets.rs`, and the names are one letter apart on
+  purpose-adjacent concerns**: that one is about bytes found in the TREE by an
+  adopted scanner, this one about a credential the ENGINE itself holds and must
+  not print.
+  It exists because `lease.rs` already stated the rule — _"a token in a struct is
+  a token in that struct's `Debug`"_ — and held it by convention, and the
+  convention had failed three times by three routes (CLOUD-1569): a `pub`
+  `EnvAction::Set(String)`, `fetch::Call`'s derived `Debug` over an
+  `Authorization` header, and a test that interpolated a launcher's whole
+  inherited environment and printed a live PAT on panic. A type is the fix
+  because it is COMPOSITIONAL: a struct holding a `Secret` may derive `Debug`
+  freely and still cannot leak, so the property survives an author who never
+  reads the module. `crates/batten/tests/it/secret_redaction.rs` is the gate,
+  canary-based and shown able to fail by restoring the derive.
 - `secrets.rs` — secret-class scanning: key custody and the scanner adapter
   (CLOUD-59). Detection is adopted (a pinned ripsecrets, run as a child); the
   module exists for CONTAINMENT, because the scanner prints the byte it matched
