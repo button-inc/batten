@@ -22,6 +22,16 @@
 # "and the exception is what rots". What is checkable, and what actually
 # regresses silently, is whether the landing path asks the question at all.
 #
+# WHY THE ROW DECLARES THE WHOLE WORKFLOW DIRECTORY AND THE MODULE READS ONE KEY.
+# The narrow spelling — `line_sources` naming only the landing workflow — was
+# tried and is WRONG, measured by the compiled tier: a rule whose declared
+# sources match no file is SKIPPED rather than evaluated over an empty document,
+# so deleting the landing workflow made this gate not run at all and the branch
+# passed clean. Declaring the directory guarantees the rule always has a source
+# (there are 28 workflows), so `not guarded` fires on a DELETED landing workflow
+# exactly as it does on an unguarded one. The module still reads one key, so the
+# narrowing that matters — which file answers the question — is unchanged.
+#
 # WHY A `contains` AND NOT A `[[pattern]]` ROW. The registry exists so one
 # CONCEPT has one spelling, and this is not a concept with variants — it is one
 # literal invocation of one task in one declared file. `fixture-forks.rego` takes
@@ -37,7 +47,7 @@
 # own behaviour is `tests/checks-green.bats`'s and is not restated here.
 #MUTANT-SUITE crates/batten/tests/it/landing_roster.rs
 #MUTANT guard-unread|s@^\tsome line in input.tree.lines\[landing_workflow\]$@\tsome line in []@|the_committed_landing_workflow_is_guarded
-#MUTANT missing-arm-silent|s@^\tsome path, _cause in input.tree.missing$@\tsome path, _cause in {}@|an_unreadable_landing_workflow_is_reported_rather_than_skipped
+#MUTANT guard-matches-anything|s@^\tcontains(line, "checks-green")$@\ttrue@|a_landing_workflow_that_does_not_consult_the_roster_is_refused
 #
 # THE FIRST MUTATION EMPTIES THE LINE WALK rather than negating `contains`.
 # Negating the match would make `guarded` hold over any file at all, so the
@@ -46,8 +56,10 @@
 # asserting the committed file is guarded. A gate that refuses its own mechanism
 # is the shape that gets switched off, and that case is what says it does not.
 #
-# THE SECOND NEUTERS THE COULD-NOT-LOOK ARM, whose case is the only one that can
-# redden for it: every other case supplies a readable file.
+# THE SECOND MAKES THE GUARD MATCH ANY LINE, so `guarded` holds over a workflow
+# that consults nothing and the REFUSAL case is the one that reddens. The two
+# mutations therefore redden different cases — the pass side and the refuse side
+# — which is what makes neither of them shadowed by the other.
 
 # METADATA
 # description: |
@@ -75,28 +87,37 @@ guarded if {
 	contains(line, "checks-green")
 }
 
-# THE REFUSAL. The file was read and does not consult the roster, so branch
-# protection is the only thing between a `/fast-forward` comment and `main` —
-# and branch protection sees 4 of 20.
+# THE REFUSAL, AND ITS BODY IS `not guarded` WITH NO PRESENCE CONJUNCT — which
+# is a MEASURED shape rather than a shortcut, and the first draft got it wrong.
+#
+# That draft guarded this arm on `input.tree.lines[landing_workflow]` and carried
+# a second arm over `input.tree.missing` for the could-not-look case, on the
+# reading that a declared source which cannot be read lands there. It does not.
+# `line_sources` is a GLOB LIST, and a glob matching zero files is not an
+# unreadable source — it is no source at all, so nothing enters `documents`,
+# `lines` OR `missing`. Measured by the compiled tier
+# (`an_absent_landing_workflow_is_reported_rather_than_read_as_clean`), which
+# returned `[]` where a finding was owed: a branch DELETING the landing workflow
+# passed the gate silently, which is the exact dead-gate shape this module exists
+# to refuse, reached through this module's own could-not-look clause.
+#
+# THE UNCONDITIONAL-ARM PROBE COULD NOT HAVE CAUGHT IT, and that is worth writing
+# down beside the rule that prescribes the probe. A `violation` whose body is
+# `true` confirms the MODULE evaluates; it says nothing about whether a
+# particular arm is reachable. Only the tier that drives the engine over a tree
+# with the file removed can tell, which is `.claude/rules/policy-modules.md`'s
+# own reason for the second tier stated one level down.
+#
+# So absence and presence-without-the-guard are ONE class here, and they should
+# be: both mean the landing path does not consult the roster before it moves
+# `main`. Refusing on a whole-tree acquisition failure too is the safe direction
+# — a landing workflow that cannot be read is not one that has been checked.
 violation contains {
 	"rule": "landing-roster-unguarded",
 	"verdict": "check read never",
 	"subjects": [{"path": landing_workflow}],
 } if {
-	input.tree.lines[landing_workflow]
 	not guarded
-}
-
-# COULD NOT LOOK IS A FINDING, NOT A PASS. A declared source that will not parse
-# or is not there belongs in `missing` rather than being silently absent, and a
-# module that iterates only `lines` reports green over a file it never read.
-violation contains {
-	"rule": "landing-roster-unguarded",
-	"verdict": "source read unread",
-	"subjects": [{"path": path}],
-} if {
-	some path, _cause in input.tree.missing
-	path == landing_workflow
 }
 
 deny contains finding if {
@@ -152,32 +173,24 @@ test_the_refusal_points_at_the_landing_workflow if {
 	v.verdict == "check read never"
 }
 
-# ANTI-VACUITY ON THE ANCHOR. Another workflow with the same content is not this
-# rule's business — without the anchor the rule would refuse every workflow in
-# the tree, and with a WRONG anchor it would refuse nothing at all while still
-# passing the refusal case above.
-test_another_workflow_is_not_this_rules_business if {
-	count(violation) == 0 with input as tree(
-		{".github/workflows/ci.yml": unguarded_file},
-		{},
-	)
+# ABSENCE IS THE SAME CLASS. A branch that DELETES the landing workflow has
+# removed the guard just as surely as one that edits it, and the compiled tier is
+# what proved this arm was unreachable in the first draft.
+test_an_absent_landing_workflow_is_refused if {
+	count(violation) == 1 with input as tree({}, {})
 }
 
-# AND A SOURCE THAT COULD NOT BE READ IS A FINDING RATHER THAN A CLEAN TREE.
-# `#MUTANT missing-arm-silent` reddens exactly here.
-test_an_unreadable_landing_workflow_is_reported_rather_than_skipped if {
-	some v in violation with input as tree(
+# ANTI-VACUITY ON THE ANCHOR, and it is the STRONG form: another workflow
+# carrying the guard's own text does not satisfy this rule. With a wrong anchor —
+# or with the walk reading every path rather than the declared one — this passes
+# while every case above still passes, which is exactly how an anchored rule goes
+# quietly wrong.
+test_the_guard_is_not_satisfied_from_another_file if {
+	count(violation) == 1 with input as tree(
+		{
+			".github/workflows/ci.yml": guarded_file,
+			".github/workflows/fast-forward.yml": unguarded_file,
+		},
 		{},
-		{".github/workflows/fast-forward.yml": "Unparsed"},
-	)
-	v.verdict == "source read unread"
-}
-
-# A DIFFERENT PATH IN `missing` IS SOMEBODY ELSE'S COULD-NOT-LOOK, so the arm is
-# anchored too rather than firing on any unreadable file in the tree.
-test_another_unreadable_path_is_not_this_rules_could_not_look if {
-	count(violation) == 0 with input as tree(
-		{},
-		{".github/workflows/ci.yml": "Unparsed"},
 	)
 }

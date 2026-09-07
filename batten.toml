@@ -4834,15 +4834,23 @@ severity = "deny"
 # including the branch that deletes the guard from a file it is not otherwise
 # editing.
 #
-# `line_sources` IS THE ONE PATH, not `.github/workflows/**`. The module is
-# anchored on the landing workflow, and handing it every workflow in the tree
-# would make it read `ci.yml` to answer a question about `fast-forward.yml` —
-# `fixture-forks`' own reason for narrowing, one surface over.
+# `line_sources` DECLARES THE DIRECTORY AND THE MODULE READS ONE KEY, and the
+# narrow spelling was tried here first and is wrong. It named only
+# `.github/workflows/fast-forward.yml`, on `fixture-forks`' reasoning that a
+# module should not be handed files it does not judge. Measured by the compiled
+# tier: a rule whose declared sources match NO file is SKIPPED rather than
+# evaluated over an empty document, so deleting the landing workflow made this
+# gate not run at all and the branch passed clean — the dead-gate shape the
+# module exists to refuse, reached through its own declaration. The directory
+# guarantees a source exists (28 workflows), so the predicate fires on a DELETED
+# landing workflow exactly as on an unguarded one. The narrowing that matters —
+# which file answers the question — is the module's and is unchanged.
+# Recorded on CLOUD-1320, which owns the general form.
 [[rule]]
 id = "landing-roster-guarded"
 kind = "policy"
 scope = "tree"
-line_sources = [".github/workflows/fast-forward.yml"]
+line_sources = [".github/workflows/*.yml"]
 module = "policy/landing-roster-guarded.rego"
 severity = "deny"
 

@@ -7,14 +7,13 @@
 //! the very shape the engine may be unable to produce, so a module reading a key
 //! nothing fills passes its own suite green and enforces nothing.
 //!
-//! This module reads two things the engine has to resolve rather than a harness
-//! hand over — `input.tree.lines` for one declared path, and
-//! `input.tree.missing` when that path cannot be read. The second is the one
-//! that has gone dead before: `.claude/rules/policy-modules.md` records that
-//! `missing` was silently unfillable for its whole early life, that two
-//! measurements reported it as an unfilled channel, and that the only thing
-//! which distinguishes a live channel from a dead one is an arm that does not
-//! itself read the channel.
+//! What the engine has to resolve here is `input.tree.lines` for one declared
+//! path — and, decisively, what it does NOT resolve when that path is absent.
+//! The first draft assumed a missing declared source lands in
+//! `input.tree.missing`; `an_absent_landing_workflow_is_refused` measured that it
+//! does not, because `line_sources` is a glob list and a glob matching nothing is
+//! no source rather than an unreadable one. That arm was dead, and a branch
+//! deleting the landing workflow passed the gate.
 //!
 //! # The case that matters most drives the REAL committed workflow
 //!
@@ -59,15 +58,19 @@ jobs:
 "#;
 
 /// A fixture tree carrying a landing workflow with `body`, or none at all when
-/// `body` is `None` — which is what puts the declared path in `missing` rather
-/// than in `lines`.
+/// `body` is `None` — which is what makes the declared glob match nothing, so
+/// the path reaches neither `lines` nor `missing`.
 fn repo(name: &str, body: Option<&str>) -> PathBuf {
     let root = common::scratch(name);
+    let dir = root.join(".github/workflows");
+    fs::create_dir_all(&dir).expect("scratch workflow dir");
+    // A SIBLING WORKFLOW IS ALWAYS PRESENT, because the real tree always has 27
+    // of them and because the declared glob must match something for the rule to
+    // run at all. A fixture with no workflows would exercise the skipped path
+    // rather than the predicate.
+    fs::write(dir.join("ci.yml"), "jobs:\n  ci:\n").expect("write the sibling");
     if let Some(body) = body {
-        let full = root.join(LANDING);
-        fs::create_dir_all(full.parent().expect("the landing path has a parent"))
-            .expect("scratch workflow dir");
-        fs::write(full, body).expect("write the landing workflow");
+        fs::write(dir.join("fast-forward.yml"), body).expect("write the landing workflow");
     }
     install_module(&root);
     root
@@ -92,7 +95,7 @@ fn row() -> Rule {
         "id": "landing-roster-guarded",
         "kind": "policy",
         "scope": "tree",
-        "line_sources": [".github/workflows/fast-forward.yml"],
+        "line_sources": [".github/workflows/*.yml"],
         "module": "policy/landing-roster-guarded.rego",
         "severity": "deny",
     }))
@@ -125,16 +128,19 @@ fn rules_fired(root: &Path) -> Vec<String> {
         .collect()
 }
 
-/// THE FIDELITY CASE. This repository's own tree, scanned by the engine, against
-/// the workflow that actually lands every PR here. `#MUTANT guard-unread`
+/// THE FIDELITY CASE. The COMMITTED bytes of the workflow that actually lands
+/// every PR here, scanned by the engine in a fixture — the repo root itself
+/// cannot be scanned with a one-rule subset, because `check_registry_is_exhausted`
+/// then reports every class the other rules would have raised. `#MUTANT guard-unread`
 /// reddens exactly here, and a fixture-only suite could not see the regression
 /// this refuses.
 #[test]
 fn the_committed_landing_workflow_is_guarded() {
-    let root = common::at_root("batten.toml");
-    let root = root.parent().expect("the committed config has a parent");
+    let committed = fs::read_to_string(common::at_root(LANDING))
+        .expect("the committed landing workflow is where the row says it is");
+    let root = repo("landing-roster-committed", Some(&committed));
     assert!(
-        !rules_fired(root).contains(&UNGUARDED.to_owned()),
+        rules_fired(&root).is_empty(),
         "the committed {LANDING} must consult the roster; \
          if this fails the landing path has lost its guard (CLOUD-1570)"
     );
@@ -156,17 +162,38 @@ fn a_fixture_landing_workflow_that_consults_the_roster_is_clean() {
     assert!(rules_fired(&root).is_empty());
 }
 
-/// THE COULD-NOT-LOOK CHANNEL, DRIVEN BY THE ENGINE. A declared `line_sources`
-/// path that is not there must reach `input.tree.missing` and be reported —
-/// never read as a clean tree. Asserted here rather than with `with input as`
-/// for the reason `.claude/rules/policy-modules.md` gives: fabricating the
-/// shape is exactly how a dead `missing` channel survived two measurements.
+/// THE CASE THAT CORRECTED THE PREDICATE, kept with its history because the
+/// history is the point.
+///
+/// The first draft guarded the refusal on the file being present and carried a
+/// second arm over `input.tree.missing` for absence. This case returned `[]`
+/// where a finding was owed: `line_sources` is a GLOB LIST, and a glob matching
+/// zero files is not an unreadable source but no source at all, so nothing
+/// enters `documents`, `lines` or `missing`. A branch DELETING the landing
+/// workflow passed the gate silently.
+///
+/// The unconditional-arm probe `.claude/rules/policy-modules.md` prescribes had
+/// already been run and had spoken — it confirms the MODULE evaluates, and says
+/// nothing about whether a particular arm is reachable. Only driving the engine
+/// over a tree with the file removed can tell.
 #[test]
-fn an_absent_landing_workflow_is_reported_rather_than_read_as_clean() {
+fn an_absent_landing_workflow_is_refused() {
     let root = repo("landing-roster-absent", None);
     assert_eq!(
         rules_fired(&root),
         vec![UNGUARDED.to_owned()],
-        "an absent declared source is could-not-look, and could-not-look is a finding"
+        "deleting the landing workflow removes the guard, and must refuse rather than read clean"
     );
+}
+
+/// ANTI-VACUITY ON THE ANCHOR, over the engine's own projection. Another
+/// workflow carrying the guard's text must not satisfy this rule — the failure
+/// mode of an anchored rule whose walk quietly reads every path.
+#[test]
+fn the_guard_is_not_satisfied_from_another_workflow() {
+    let root = repo("landing-roster-other-file", Some(UNGUARDED_BODY));
+    // The decoy carries the guard's own text, in a workflow that is not the
+    // landing one.
+    fs::write(root.join(".github/workflows/ci.yml"), GUARDED).expect("write the decoy");
+    assert_eq!(rules_fired(&root), vec![UNGUARDED.to_owned()]);
 }
