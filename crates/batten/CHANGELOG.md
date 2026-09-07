@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.149](https://github.com/button-inc/batten/compare/v0.0.148...v0.0.149) - 2026-09-07
+
+### Added
+
+- *(secret)* [**breaking**] a credential that cannot be printed by accident
+- *(provision)* prove a credential before stripping the host's wiring on its strength
+
+### Fixed
+
+- *(config)* a stale binary starts and says so, and each release publishes its schema
+- *(config)* tell a stale binary apart from a bad config, and start
+- *(fetch)* send a User-Agent, and stop collapsing could-not-look into refused
+- *(policy)* gate the egress fence on the surface that actually runs
+
+### Other
+
+- *(config)* the skew check is the failure arm's, not every invocation's
+- *(secret)* a canary that is not itself a credential
+- *(config)* the additions window disarms the hook, it does not only blur it
+- *(policy)* add the compiled tier the gate commit claimed and did not carry
+
 ## [0.0.148](https://github.com/button-inc/batten/compare/v0.0.147...v0.0.148) - 2026-09-07
 
 ### Added
