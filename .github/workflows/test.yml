@@ -399,14 +399,14 @@ jobs:
           working-directory: clean
           fail: "false"
 
-      # A mediated call is adjudicated by `hook`, which reads its PreToolUse
+      # A mediated call is adjudicated by `adjudicate`, which reads its PreToolUse
       # payload on stdin — so this is also the job that proves the `stdin` input
       # reaches the process at all. The fixture's shape rule denies `gh pr merge`.
       - uses: ./action
         id: denied
         with:
           working-directory: case
-          command: hook
+          command: adjudicate
           args: --harness exit-code
           stdin: '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"gh pr merge 42"}}'
           fail: "false"
@@ -418,7 +418,7 @@ jobs:
         id: allowed
         with:
           working-directory: case
-          command: hook
+          command: adjudicate
           args: --harness exit-code
           stdin: '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls -la"}}'
           fail: "false"

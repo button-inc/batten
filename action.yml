@@ -51,7 +51,7 @@ inputs:
     required: false
     default: "."
   stdin:
-    description: "Text piped to the verb on standard input. Required by `hook`, which reads its mediated-call payload there and is otherwise unreachable from a workflow; empty for every tree verb."
+    description: "Text piped to the verb on standard input. Required by `adjudicate`, which reads its mediated-call payload there and is otherwise unreachable from a workflow; empty for every tree verb."
     required: false
     default: ""
   version:
@@ -289,7 +289,7 @@ runs:
         # zero-config invocation this action exists to serve.
         read -ra extra <<<"$ARGS"
 
-        # `hook` reads its mediated-call payload on stdin, so without this branch
+        # `adjudicate` reads its mediated-call payload on stdin, so without this branch
         # half of Batten's surface is unreachable from a workflow.
         #
         # THE `</dev/null` IS NOT SYMMETRY. A step's stdin on a runner is not
