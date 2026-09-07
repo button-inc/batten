@@ -3723,6 +3723,49 @@ exclude = "^// (carried|subsumed|changed|withdrawn): "
 severity = "deny"
 scope = "tree"
 
+# The rule-2 half of CLOUD-1623: the board's column names left the engine, and
+# this is what refuses the next one. They arrived in the first place because
+# nothing refused them, and this file already carries the measured cost of that
+# shape one row up — twenty issue-key derivations accumulated because nothing
+# refused the twenty-first before it was typed.
+#
+# WHY THIS MATCHES THE COMPARISON AND NOT THE VOCABULARY, which is the whole
+# design and the reason the obvious row is unlandable. Measured over `crates/**`
+# at 32f9876: the four column literals occur 126 TIMES across 18 files, nearly
+# all of them legitimate — integration fixtures building board payloads
+# (`landed_check.rs` 19, `claim.rs` 25, `board_receipts.rs` 12), unit-test
+# vocabulary, and prose recording why a column is in the started set. A row
+# banning the WORDS would fire on every one of them, so it would either never
+# land or land with an exemption list longer than the rule.
+#
+# The violation was never the word. It was COMPARING A STATUS AGAINST A LITERAL
+# — `self.status == "In Progress"` — because that is the line that decides, and
+# the line that answers false on every other board while reading as a clean
+# sweep. So the regex is the comparison shape, in both operand orders, and it
+# reaches exactly the construct `board::Columns` exists to replace.
+#
+# IT LANDS AT ZERO, and that is a measurement rather than a hope: after the seam
+# commit the only match in the tree was `board.rs`'s own anti-vacuity test
+# asserting that a foreign board's set does not contain this one's word, and
+# that assertion was rewritten to compare the whole set — a stronger claim,
+# since a negative assertion also passes for a resolver that dropped every
+# column. So the row needs no `exclude`, which is the shape to prefer: an
+# exemption is where the next violation hides.
+#
+# `checks_green.rs`'s `status != "completed"` and `hk.rs`'s `!= "included"` are
+# deliberately NOT reached. They compare a check run's state and a plan's state,
+# which are a forge's and this engine's own vocabularies rather than a
+# tracker's — a row keyed on the bare word `status` would have caught both and
+# taught the next reader that the ban is about the field name.
+[[rule]]
+id = "no-board-column-in-core"
+kind = "forbid"
+glob = "crates/**"
+regex = '(==|!=)\s*"(Todo|Backlog|In Progress|In Review|Done)"|"(Todo|Backlog|In Progress|In Review|Done)"\s*(==|!=)'
+severity = "deny"
+scope = "tree"
+no_fix_reason = "read the column from the `[board]` table through `board::Columns` and compare against that; a board's column name in the core is rule 1's violation, and an undeclared column is could-not-look rather than a default"
+
 # The fixture corpus must stay repo-agnostic (CLOUD-63). The corpus exists so
 # coverage stops implicitly depending on *this* repository, which a fixture
 # naming this repository's origin would quietly undo.
