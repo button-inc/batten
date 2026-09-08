@@ -144,6 +144,17 @@ fn a_compact_warm_repeat_is_exactly_the_refusal_line() {
     // The renderer's own claim, and the case the `current-warm-first-sighting`
     // mutation must redden: with warm `Current` projected to a first sighting,
     // the command-route class renders its routes and stops equalling `line()`.
+    //
+    // **THE UNBOUNDED HALF IS WHAT MAKES THAT TRUE, and it was measured rather
+    // than assumed.** Asserted over the emitted line alone, this case SURVIVES
+    // the mutation — measured, `mutate sweep` reported exactly that — because
+    // the emitted line is `Refusal::line()` on BOTH sides of `first_sighting`
+    // here: the ceiling withholds the routes for `branch write unsafe` and the
+    // renderer appends none for `tool run loose`. So a projection defect is
+    // invisible in what this repository emits, which is a fact about the
+    // repository and not a reason to assert less. The unbounded rendering is
+    // where `first_sighting` is observable at all, and asserting the claim there
+    // is what makes the row's declared mutation catchable.
     let records = records();
     for (class, rule) in MEASURED_CLASSES {
         let expected = compact_line(class, rule);
@@ -153,6 +164,14 @@ fn a_compact_warm_repeat_is_exactly_the_refusal_line() {
                 record.line,
                 expected,
                 "{class} under {} on a warm repeat is exactly Refusal::line()",
+                strategy.as_str()
+            );
+            assert_eq!(
+                record.unbounded_characters,
+                expected.chars().count(),
+                "{class} under {} on a warm repeat is the compact line with no ceiling to \
+                 thank for it — a repeat that carries routes when the budget permits them is \
+                 not a repeat",
                 strategy.as_str()
             );
         }

@@ -718,6 +718,17 @@ impl Staged {
     /// Identity is passed per command rather than written into a config, so a
     /// contributor with no global `user.email` gets the same throwaway commit as
     /// CI.
+    ///
+    /// **`--allow-empty`, AND IT IS THE FLAG THAT MAKES THIS RUNNABLE TWICE.**
+    /// The staged tree PERSISTS between runs by design — that is what keeps an
+    /// unchanged source's timestamp and a compiled tier affordable — so on every
+    /// run after the first, `add -A` stages nothing and a plain `commit` exits 1
+    /// with "nothing to commit, working tree clean". This step then bailed, and
+    /// the message it bailed with named the wrong thing entirely: it reports a
+    /// tree that cannot be made a repository, over a tree that already is one.
+    /// Measured here — the first sweep in a fresh checkout worked and every
+    /// subsequent one was could-not-look at exit 3, which reads as a broken
+    /// harness rather than as a stale commit.
     fn make_a_repository(&self) -> Result<()> {
         let steps: [&[&str]; 3] = [
             &["init", "-q"],
@@ -728,7 +739,9 @@ impl Staged {
                 "-c",
                 "user.name=mutate",
                 "commit",
-                "-qm",
+                "-q",
+                "--allow-empty",
+                "-m",
                 "mutate: the tree under judgement",
             ],
         ];

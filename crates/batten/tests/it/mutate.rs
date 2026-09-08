@@ -300,6 +300,31 @@ fn a_mutation_its_suite_catches_is_a_pass() {
 
 #[cfg(unix)]
 #[test]
+fn a_second_sweep_over_the_same_staged_tree_still_runs() {
+    // THE STAGED TREE PERSISTS BETWEEN RUNS, which is what keeps an unchanged
+    // source's timestamp and a compiled tier affordable — so the second run is
+    // the ordinary case rather than an edge one. It stages nothing new, and a
+    // plain `git commit` over a clean tree exits 1: the harness then bailed with
+    // "could not make the staged tree a repository" over a tree that already was
+    // one, and every sweep after the first in a checkout was could-not-look at
+    // exit 3. Measured on CLOUD-1606, whose own mutation could not be run at all
+    // until this was repaired.
+    //
+    // Twice over the SAME root, because the defect is in the second run and a
+    // fresh root each time is precisely what hides it.
+    let root = toy_repo("twice", &[CAUGHT]);
+    let (first, out, err) = sweep(&root, "toy");
+    assert_eq!(first, 0, "the first sweep is the control: {out}{err}");
+    let (second, out, err) = sweep(&root, "toy");
+    assert_eq!(
+        second, 0,
+        "a second sweep over the persisted staged tree still runs: {out}{err}"
+    );
+    assert!(out.contains("every one caught"), "{out}");
+}
+
+#[cfg(unix)]
+#[test]
 fn the_defect_a_mutation_the_suite_does_not_catch_fails() {
     // The mutation moves a line no case exercises, so the suite stays green.
     let root = toy_repo(
