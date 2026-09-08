@@ -2733,7 +2733,34 @@ fn run_landed_check(
         }
     }
 
+    // THE COLUMNS THIS SWEEP DECIDES OVER, DEMANDED BEFORE IT DECIDES.
+    //
+    // **Refusing here is the whole point, and reporting would be the defect.**
+    // `decide` compares a row's status against these; undeclared, every
+    // comparison is false, so it returns ZERO FINDINGS and this verb exits 0
+    // over a board it never looked at. That is byte-identical to a clean sweep
+    // and is exactly the failure CLOUD-1623 exists to remove — reintroducing it
+    // one layer up would be the same defect wearing the seam's clothes.
+    //
+    // Both directions are demanded, not just the one a given payload happens to
+    // exercise: a run that could only answer half the disjunction and said
+    // nothing about the other half is the silently-halved sweep CLOUD-1458
+    // already paid for.
     let columns = board_columns(overrides)?;
+    columns.in_progress().map_err(|undeclared| {
+        UsageError::raise(format!(
+            "landed: {undeclared}. The behind-git direction compares a row's column \
+             against it, so without it this sweep would report a clean board it never \
+             read."
+        ))
+    })?;
+    columns.started().map_err(|undeclared| {
+        UsageError::raise(format!(
+            "landed: {undeclared}. The declined-but-advanced direction asks whether a \
+             row has left the queue, and an undeclared set matches nothing — every row \
+             would read as not-advanced."
+        ))
+    })?;
     let report = landed::decide(&rows, &evidence, &columns);
 
     // Pointer-only per rule 4: a key, two column names and a reason class. Never
@@ -2891,7 +2918,18 @@ fn run_landed_abandoned(
         }
     }
 
+    // THE COLUMN THE DRAIN SELECTS ON, demanded for `run_landed_check`'s reason
+    // and with a sharper edge here: every candidate is chosen BY this column, so
+    // undeclared yields an empty candidate set and the drain reports "no
+    // abandoned claims" over a board full of them. An over-reporting drain gets
+    // switched off; a silently empty one is never noticed at all.
     let columns = board_columns(overrides)?;
+    columns.in_progress().map_err(|undeclared| {
+        UsageError::raise(format!(
+            "landed abandoned: {undeclared}. Every candidate is selected by that \
+             column, so without it this drain would report a clean board it never read."
+        ))
+    })?;
     let report = landed::drain(
         &claims,
         &evidence,
