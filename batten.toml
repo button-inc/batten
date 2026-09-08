@@ -7579,6 +7579,41 @@ rule = "filed-over-own-diff"
 reason = "CLOUD-1547 is implemented and closed by this PR, so `closes` is the exemption that applies; it cannot fire because `pr-closes` is minted from a `gh pr view` call and there is no `gh` on this host (CLOUD-1126, residual on CLOUD-1481). The class's own `path admit first` override route does not consume — eight admissions were spent and the findings did not move, because the anchor resolver falls back to a `call:` anchor on zero stored-finding matches and nothing queries one for a tree finding (CLOUD-1551). Remove this with CLOUD-1551."
 expires = "2026-10-11"
 
+# THE SIBLING ARM OF THE SAME DEFECT, and the arm above was scoped to half of it.
+# `filed-over-own-diff` and `filed-and-left-open` are two predicates in one module
+# (`policy/filed-here.rego`) and CLOUD-1551 defeats the override route for both;
+# only the first was waived, because only the first had fired yet.
+#
+# MEASURED HERE, and it is a sharper mechanism than "the override suppresses
+# nothing". It suppresses until HEAD moves. Two consecutive laps of `mise run
+# land` over one tree, one finding, one spent admission (`06b322be`, anchored
+# `call:550939ab`): lap 1 replayed nothing and reported 0; lap 2 replayed onto a
+# trunk that had moved and reported 1. The rebase rewrote `550939ab` as
+# `7b705e64` — `git cat-file` still finds the object and
+# `git merge-base --is-ancestor` exits 1 — so the anchor addressed a commit the
+# branch no longer contains.
+#
+# WHICH MAKES THE NARROW ROUTE STRUCTURALLY UNAVAILABLE RATHER THAN FRAGILE, and
+# that is why this is a waiver rather than another admission. `override request`
+# anchors at the current HEAD, and the commit carrying the resulting `Admits:`
+# block BECOMES a new HEAD, so a re-mint is stale the moment it lands; a commit
+# on top has the same shape. And this waiver cannot be narrowed by `path` either:
+# `Waiver::path` is a path glob and this rule's subject is `{"artifact": id}` with
+# no path in it. Rule-wide is the only shape available, which is exactly the cost
+# CLOUD-1551 imposes and exactly why it should be paid down rather than lived in.
+#
+# The articulation the admission was meant to carry is not lost — it is in
+# `13c0dd5e`'s message, hash-bound, where a reviewer reads it. What CLOUD-1635 is
+# and why it is deferred: `mcp-allow-check.sh` is a governed shell gate, the fix
+# was attempted as an edit, `shell-rule-retired` refused it correctly, and the row
+# is re-scoped to the retirement `rules/toolchain.md` says it always was.
+#
+# Remove this with CLOUD-1551, alongside its sibling above.
+[[waiver]]
+rule = "filed-and-left-open"
+reason = "CLOUD-1551 defeats this rule's override route the same way it defeats `filed-over-own-diff` above, and measurably worse: an admission binds `call:<head>`, so the replay every landing lap performs when trunk moves orphans the anchor and the spent admission stops suppressing. Measured on two consecutive laps of one tree — lap 1 replayed nothing and reported 0, lap 2 replayed and reported 1, with `06b322be` spent throughout. Re-minting cannot escape it, since the commit carrying the `Admits:` block becomes the new HEAD; and `Waiver::path` cannot narrow this rule, whose subject is an artifact id rather than a path. The deferral's articulation is hash-bound in `13c0dd5e` regardless. Remove this with CLOUD-1551."
+expires = "2026-10-11"
+
 [[waiver]]
 rule = "claim-before-code"
 reason = "CLOUD-1387: `captured::reduce` selects the first capture whose bytes MENTION the key rather than the one it is the subject of, so a response quoting the row shadows its real payload and `present` answers false over a row that is on a project. Fix is open in PR #842; remove this waiver with it."
