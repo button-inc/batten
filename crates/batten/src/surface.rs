@@ -2787,6 +2787,35 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[JSON],
     },
+    // THE ONE SUB-VERB THAT IS ALSO A ROW IN THE BARE REPORT (CLOUD-1398), and
+    // the asymmetry with the two rows above it is the decision rather than an
+    // oversight. `doctor mediator` and `doctor egress` are outside the report
+    // because they answer properties of the WORLD; whether this clone's commit
+    // path runs the gate is a property of the CHECKOUT, the same class as
+    // `git-repo`, so it is reported where a reader is already looking.
+    //
+    // It exists as a verb ANYWAY because a `[[startup]]` row decides on an exit
+    // status and has no way to select one row out of a report. `check = ["batten",
+    // "doctor"]` would fail the commit-gate row whenever an unrelated declared
+    // program was unreachable — measured in this container, where `hk` resolves
+    // only under `mise exec` — and then run a repair that installs git hooks,
+    // which cannot fix that, reporting `repair-failed` over a gate that is
+    // installed. One predicate answers both callers; this row is what lets the
+    // narrow caller ask it.
+    //
+    // `read`, and structurally so: it resolves a directory and stats two files.
+    // Nothing is executed — running a hook to see whether it works is what
+    // `mise-tasks/doctor.sh` does behind a probe variable, and reaching
+    // user-supplied code from the `filter(effect == read)` allowlist is
+    // CLOUD-170's actual invariant.
+    CommandDecl {
+        path: "doctor commit-gate",
+        id: "doctor.commit-gate",
+        about: "Diagnose whether this checkout's commit path runs the gate",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
     CommandDecl {
         path: "doctor hooks",
         id: "doctor.hooks",

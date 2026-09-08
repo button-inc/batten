@@ -120,6 +120,221 @@ fn repair_fixes_and_says_so_while_the_bare_verb_changes_nothing() {
     assert_eq!(stdout(&again), "makes-it ok\nstartup: 1 row(s), 0 failed\n");
 }
 
+/// The commit gate as a declared precondition, end to end (CLOUD-1398).
+///
+/// **The one case in this file whose check is a REAL precondition**, which the
+/// module header says the others deliberately avoid — and the exception is the
+/// point rather than a lapse. Every other fixture uses `true`/`false`/`test -f`
+/// because a real check would be testing the container; this row exists because
+/// nothing was testing the container, and a fixture that stubbed the predicate
+/// out would reproduce exactly the defect it is here to catch. `doctor
+/// commit-gate` is batten's own verb over a scratch repository, so what is under
+/// test is still this tree and not the host.
+///
+/// The repair sets `core.hooksPath`, which is argv-only — no shell between the
+/// declaration and what runs (`batten.toml`'s own bound on `check`/`repair`) —
+/// and it exercises the branch of [`doctor::hooks_dir`] that a repository
+/// redirecting its hooks takes. A `git init` leaves `.git/hooks` carrying only
+/// `*.sample` files, so the fixture starts genuinely bypassed rather than being
+/// made so.
+///
+/// The third run is what the row's §7 asks for and is not decoration: `ok`
+/// WITHOUT `repaired` is the only thing separating a repair that worked from one
+/// that exits zero having fixed nothing.
+#[test]
+fn a_clone_with_no_commit_hooks_fails_the_row_and_repair_installs_them() {
+    let dir = scratch("startup-commit-gate");
+    write(&dir, "batten.toml", "version = 1\n\n");
+    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+
+    // The hooks the repair will point git at. Written before the row, so the
+    // repair is a redirection and never a creation — it is `session:git-hooks`'s
+    // shape (an existing body, linked into place) rather than a second author of
+    // the hook.
+    let hooks = dir.join("committed-hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    for name in ["pre-commit", "commit-msg"] {
+        let at = hooks.join(name);
+        std::fs::write(&at, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&at, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    let rows = row(
+        "commit-gate-installed",
+        "[\"batten\", \"doctor\", \"commit-gate\"]",
+        Some(&format!(
+            "[\"git\", \"config\", \"core.hooksPath\", {}]",
+            json(hooks.to_str().unwrap())
+        )),
+    );
+    write(&dir, "batten.toml", &format!("version = 1\n\n{rows}"));
+
+    // A fresh clone: `.git/hooks` holds samples and nothing git will run, so a
+    // commit here bypasses the gate. This is the state the row was filed over.
+    let bare = startup(&dir, &[]);
+    assert_eq!(out_code(&bare), 1);
+    assert_eq!(
+        stdout(&bare),
+        "commit-gate-installed failed not-provisioned\nstartup: 1 row(s), 1 failed\n",
+        "a clone whose commit path does not run the gate must say so"
+    );
+
+    let repaired = startup(&dir, &["--repair"]);
+    assert_eq!(out_code(&repaired), 0);
+    assert_eq!(
+        stdout(&repaired),
+        "commit-gate-installed ok repaired\nstartup: 1 row(s), 0 failed\n"
+    );
+
+    let again = startup(&dir, &["--repair"]);
+    assert_eq!(
+        stdout(&again),
+        "commit-gate-installed ok\nstartup: 1 row(s), 0 failed\n",
+        "a repair that runs every time is a repair whose check is wrong"
+    );
+}
+
+/// The sub-verb answers alone, and answers the same thing the row does.
+///
+/// **This is the property the `[[startup]]` row depends on and nothing else
+/// asserts.** A row decides on an exit status, so `doctor commit-gate` has to
+/// carry the commit-gate verdict and NO other check's — if it ever started
+/// folding in a sibling row, the committed row would fail for an unrelated
+/// unreachable program and fire a git-hook repair that cannot fix it.
+#[test]
+fn the_commit_gate_sub_verb_answers_only_its_own_question() {
+    let dir = scratch("startup-commit-gate-verb");
+    write(&dir, "batten.toml", "version = 1\n\n");
+    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+
+    let bare = batten()
+        .current_dir(&dir)
+        .args(["doctor", "commit-gate"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(out_code(&bare), 1, "doctor never renders a policy verdict");
+    assert_eq!(
+        stdout(&bare),
+        "commit-gate failed commit-hook-missing commit-msg pre-commit\n",
+        "the hook NAMES are the actionable subjects; the directory is a path and never emitted"
+    );
+
+    let hooks = dir.join(".git").join("hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    for name in ["pre-commit", "commit-msg"] {
+        let at = hooks.join(name);
+        std::fs::write(&at, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&at, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    let healthy = batten()
+        .current_dir(&dir)
+        .args(["doctor", "commit-gate"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(out_code(&healthy), 0);
+    assert_eq!(stdout(&healthy), "commit-gate ok\n");
+}
+
+/// A non-executable hook is not a hook, which is git's own reading.
+///
+/// The arm that separates this check from a file-existence one — and the
+/// distinction `mise-tasks/doctor.sh` already draws for the same subject, since
+/// "present but git will not run it" is indistinguishable from healthy to a
+/// probe that only stats for existence.
+#[test]
+fn a_present_but_unrunnable_hook_reads_as_missing() {
+    let dir = scratch("startup-commit-gate-mode");
+    write(&dir, "batten.toml", "version = 1\n\n");
+    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    let hooks = dir.join(".git").join("hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    std::fs::write(hooks.join("commit-msg"), "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            hooks.join("commit-msg"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    // Present, and mode 0644: git skips it silently.
+    std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            hooks.join("pre-commit"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+    }
+
+    let out = batten()
+        .current_dir(&dir)
+        .args(["doctor", "commit-gate"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(
+        stdout(&out),
+        "commit-gate failed commit-hook-missing pre-commit\n",
+        "only the unrunnable one is named — a subject list is what a reader acts on"
+    );
+}
+
+/// The remedy this row was filed about names a path that exists.
+///
+/// **The assertion that stops CLOUD-1398 recurring, and it is the whole reason
+/// the row exists at all.** `doctor.sh` told an agent to run
+/// `.claude/hooks/session-start.sh` for its entire life after `7d188580` deleted
+/// that program: the refusal was correct and its instruction could not be
+/// followed. Prose cannot hold that; a case over the tracked file can.
+///
+/// It asserts the SUCCESSOR resolves rather than that the old name is absent,
+/// because those are different claims — a remedy could name a second dead path
+/// and pass the weaker one.
+#[test]
+fn every_remedy_the_hook_check_prints_names_something_that_resolves() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("the workspace root is two levels above the crate");
+    let task = root.join("mise-tasks").join("doctor.sh");
+    let body = std::fs::read_to_string(&task).expect("the task is tracked");
+
+    assert!(
+        !body.contains(".claude/hooks/session-start.sh"),
+        "the remedy named a retired program; naming one again is this row's own defect"
+    );
+    // The successor the remedies now name, asserted where it is DECLARED rather
+    // than by running it: a task that exists is what makes the instruction
+    // followable, and running it would install hooks into the test's own clone.
+    assert!(
+        body.contains("mise run session:git-hooks"),
+        "the hook remedies must name the installer that exists"
+    );
+    let manifest =
+        std::fs::read_to_string(root.join("mise.toml")).expect("the manifest is tracked");
+    assert!(
+        manifest.contains("[tasks.\"session:git-hooks\"]"),
+        "the remedy names a task the manifest must declare"
+    );
+    assert!(
+        root.join(".claude")
+            .join("hooks")
+            .join("git-hook.sh")
+            .is_file(),
+        "the hook body both remedies point at must be present in the tree"
+    );
+}
+
 /// A repository declaring nothing says so, rather than saying nothing.
 ///
 /// The count line is what makes silence legible: without it, "no rows" and

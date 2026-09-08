@@ -18007,7 +18007,40 @@ fn run_doctor(command: &cli::DoctorCommand, out: &mut dyn Write) -> Result<ExitC
         cli::DoctorCommand::Mediator { json } => run_doctor_mediator(json, out),
         cli::DoctorCommand::Session { json } => run_doctor_session(json, out),
         cli::DoctorCommand::Egress { json } => run_doctor_egress(json, out),
+        cli::DoctorCommand::CommitGate { json } => run_doctor_commit_gate(json, out),
     }
+}
+
+/// Does a commit in this clone run the gate (CLOUD-1398)?
+///
+/// **The same [`doctor::Check`] the bare report pushes, asked alone.** It is not
+/// a second reading and must never become one: a `[[startup]]` row decides on an
+/// exit status, so it needs a command that answers THIS question and no other —
+/// bare `doctor` would fail it for an unrelated unreachable program and then run
+/// a git-hook repair that cannot fix that. Rationale on
+/// [`doctor::diagnose_commit_gate`] and on [`cli::DoctorCommand::CommitGate`].
+///
+/// One pointer line — the row's name, and on a failure the HOOK NAMES it is
+/// missing. Never the directory they were looked for in: that path is absolute
+/// and per-machine, which would defeat §6 byte-stability and put the layout of
+/// somebody's disk in a diagnostic that promises not to carry one (rule 4).
+fn run_doctor_commit_gate(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
+    let check = doctor::diagnose_commit_gate(&std::env::current_dir()?);
+    if json {
+        // A data channel emits its document unconditionally, including on the
+        // healthy path: JSON that is sometimes absent is unparseable.
+        writeln!(out, "{}", serde_json::to_string_pretty(&check)?)?;
+    } else {
+        output::line(out, &check)?;
+    }
+    // The parent's promise, inherited rather than re-decided: `ExitCode::Violation`
+    // is unreachable here, because a mediating harness reads `2` as a deny and
+    // "this clone has no commit hooks" is not "policy says no".
+    Ok(if check.ok {
+        ExitCode::Success
+    } else {
+        ExitCode::Usage
+    })
 }
 
 /// Was the engine the registrations reach built from this tree (CLOUD-1349)?
