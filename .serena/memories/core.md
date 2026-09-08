@@ -11,6 +11,22 @@ This memory is the graph root: every other memory is reached from here, and the
 trigger for each is stated here rather than inside it (`mem:memory_maintenance`).
 Read on demand, never all of them.
 
+**What is a memory, and what is a session's weather.** A memory records what is
+RE-DERIVABLE — a path, a file format, an argv, a measured flip, an upstream issue
+number, a divergence between what a schema documents and what it does. **If a
+claim would change depending on which permission mode the session is in, it is
+not a memory.** A permission or auto-mode verdict is scoped to one session and
+moves within one; written down as a durable capability boundary it becomes a
+standing instruction not to try, and the next session obeys it against an
+environment where the claim is simply false. Measured twice: a bullet in
+`mem:connector-allowlist-recovery` was quoted to refuse a design it did not
+describe, and one in `mem:prior-art-and-issue-hygiene` contradicted the standing
+instruction to call `add_repo` rather than pre-judge it. Both are excised; the
+durable half of each — what the credential IS, what the route IS — is what
+stayed. The tell is an imperative with no re-derivable object behind it
+("do not route around it", "is declined by"), where the honest form is the
+attempt and the tool's own answer.
+
 - `mem:workflow/board-states` — starting or finishing a `CLOUD-*` issue;
   reasoning about what is in flight.
 - `mem:workflow/agent-fanout` — spawning a subagent, or running more than one

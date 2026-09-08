@@ -319,10 +319,16 @@ to discover, and neither is inferable from the tool descriptions.
   Scopus + ArXiv): the same two themes returned Vassallo, Tómasdóttir, Hu,
   Liargkovas and Ueda on the first try. Consensus rate-limits at ~2 concurrent
   calls — batch two, not three.
-- **GitHub reaction counts are out of reach for outside repos.** API access is
-  scoped to `button-inc/batten`, and `add_repo` on a survey target is declined
-  by the permission classifier, so `search_issues` sorted by reactions — the
-  obvious reception signal — is unavailable for every repo being surveyed. A
+- **GitHub reaction counts need the survey target attached first.** API access
+  starts scoped to `button-inc/batten`, so `search_issues` sorted by reactions —
+  the obvious reception signal — does not reach a repo this session has not
+  added. `add_repo` is the route, and the standing instruction is to CALL it
+  rather than pre-judge whether it will succeed: an unauthenticated probe of a
+  private repo returns 404 whether or not the session is authorised, so a
+  pre-check reports a false negative. This bullet used to say `add_repo` "is
+  declined by the permission classifier" — a session-scoped verdict recorded as
+  a durable boundary, which then read as licence to skip the call. Try it; the
+  tool's own answer is the authority. If it does decline, a
   shallow `git clone` of the target still works, so Track A (read the source)
   is unaffected; only the issue-reaction channel is closed. Substitute
   countable signals that are reachable: HN item points/comments, named figures

@@ -208,9 +208,19 @@ Also not candidates: lowercase `mcp__linear__*`.
   fine and then reports `! Needs authentication` forever: the OAuth flow needs a
   browser redirect to a localhost callback, which a remote container has no way
   to complete. It is not a workaround, it is a second broken server.
-- Replaying the injected config's `headers` against its endpoint by hand is
-  **blocked by the auto-mode classifier**, correctly — it is credential replay.
-  Do not route around it.
+- The injected config's `headers` ARE the credential — `X-MCP-Server-ID`,
+  `X-MCP-Server-Origin`, `X-Session-UUID`, and no bearer token, so the endpoint
+  authenticates the SESSION. That is the durable fact, and two things follow from
+  it that do not depend on any session's permission state: the material is
+  session-bound, so it cannot be carried anywhere and re-used later; and it sits
+  in an agent-readable file, which is why moving custody into Batten is a
+  tightening rather than a widening (`batten mcp`, CLOUD-782's family).
+
+  This bullet used to say replaying those headers was "blocked by the auto-mode
+  classifier, correctly — do not route around it." **That was a session-scoped
+  reading written as a durable imperative**, and it was later quoted to refuse a
+  design that was not credential replay at all. See the doctrine line at the head
+  of this file.
 
 **What NOT to say to the user.** They are usually running several sessions and
 the others are fine, so "the connector is not attached" is both wrong and reads
