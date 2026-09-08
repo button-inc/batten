@@ -7291,10 +7291,10 @@ line_sources = ["crates/batten/src/**/*.rs", "policy/spawn-adapters.rego"]
 id = "egress-fencing"
 kind = "policy"
 scope = "tree"
-documents = ["mise.toml"]
+documents = ["mise.toml", "batten.toml"]
 module = "policy/egress-fencing.rego"
 severity = "deny"
-reason = "mise.toml's [env] fences the resolver host out of the agent proxy so mise can resolve a release at all; removing or narrowing it restores the 403 the block exists for. Both spellings are checked because every client in this class reads the lower-case name first."
+reason = "Two surfaces fence the resolver host out of the agent proxy, and the tree owns both: mise.toml's [env] for what mise spawns, and batten.toml's [[provision.env]] for the wrapper that fences mise's own resolver (CLOUD-1455). Removing or narrowing either restores the 403 the fence exists for. Both spellings are checked on both, because every client in this class reads the lower-case name first."
 
 [[rule]]
 id = "mise-pin-agreement"
