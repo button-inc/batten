@@ -156,7 +156,7 @@ impl Row {
     /// The columns were `const`s here until they were measured as rule 1's worst
     /// violation: off this board every comparison is false, so this predicate
     /// never fires and the sweep reports zero findings over a board full of
-    /// dishonest columns. See [`crate::config::Board`].
+    /// dishonest columns. See [`crate::board::Board`].
     ///
     /// An undeclared column answers `false` **because there is nothing to
     /// compare against, not because the row is elsewhere** — which is why every
@@ -175,7 +175,7 @@ impl Row {
     /// Read as a set rather than tested inline so the two directions cannot
     /// drift about what "advanced" means. The set's membership doctrine — why
     /// the released column is in it and the ready queue is not — moved to
-    /// [`crate::config::Board::started`] with the vocabulary it describes.
+    /// [`crate::board::Board::started`] with the vocabulary it describes.
     fn is_started(&self, columns: &Columns) -> bool {
         columns.started.contains(&self.status)
     }

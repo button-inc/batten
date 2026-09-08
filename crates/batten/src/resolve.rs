@@ -513,7 +513,7 @@ pub struct Resolved {
     /// a column names the key it wanted and decides nothing. A local layer
     /// cannot supply these for §8's reason — renaming the column a claim gate
     /// admits is a weakening, and the chain admits raise-only overrides.
-    pub board: Option<crate::config::Board>,
+    pub board: Option<crate::board::Board>,
     /// The accepted invocation-latency regressions (CLOUD-1163 unit 10), from the
     /// **committed authority alone**. `None` accepts nothing, which is the only
     /// safe reading: a local layer that could add an exemption would be a
