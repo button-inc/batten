@@ -1468,6 +1468,26 @@ pub enum DoctorCommand {
         /// Emit the classification as byte-stable JSON.
         json: bool,
     },
+    /// Whether this checkout's commit path runs the gate (CLOUD-1398).
+    ///
+    /// APPENDED LAST, for the reason [`DoctorCommand::Egress`] above it records:
+    /// this enum carries no `repr`, so a variant placed beside its neighbours
+    /// shifts every later discriminant and `mise run semver` reads that as a
+    /// break the crate has to declare.
+    ///
+    /// **A sub-verb AND a row in the bare report, which its two neighbours are
+    /// not** — and the difference is what it is for. `mediator` and `egress` sit
+    /// outside the report because they answer properties of the WORLD; this
+    /// answers a property of the CHECKOUT, so it belongs in the report too. The
+    /// sub-verb exists so a `[[startup]]` row can ask this question ALONE: a
+    /// startup row decides on an exit status, and bare `doctor` would fail it for
+    /// an unrelated unreachable program and then run a repair that cannot fix
+    /// that — `repair-failed`, forever, over a gate that is installed.
+    /// [`crate::doctor::diagnose_commit_gate`] is the one predicate both reach.
+    CommitGate {
+        /// Emit the diagnosis as byte-stable JSON.
+        json: bool,
+    },
 }
 
 /// Subcommands of `generate`.
@@ -1799,6 +1819,9 @@ fn doctor_of(matches: &ArgMatches) -> DoctorCommand {
             json: flag(matches, "json"),
         },
         Some(("egress", matches)) => DoctorCommand::Egress {
+            json: flag(matches, "json"),
+        },
+        Some(("commit-gate", matches)) => DoctorCommand::CommitGate {
             json: flag(matches, "json"),
         },
         // The bare verb reads `-J` from its OWN matches, which is where clap put

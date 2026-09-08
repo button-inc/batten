@@ -158,7 +158,7 @@ fi
 # `hk install` is the per-clone step nothing performed and nothing asserted, so
 # every commit in a cloud container bypassed the gate — measured at 24 of them,
 # one carrying a ShellCheck failure that rode all the way to `verify`.
-# `session-start.sh` performs it now; this decides it, in the same
+# `mise run session:git-hooks` performs it now; this decides it, in the same
 # perform-then-assert split the bats submodule already uses.
 #
 # IT MUST BE ABLE TO RUN, NOT MERELY EXIST: "present but cannot resolve `hk`" is
@@ -188,11 +188,11 @@ else
 		if [[ ! -x "$hook" ]]; then
 			# printf, not echo: the remedy is a path and a command, and pointer-only
 			# either way — never a byte of the hook body.
-			printf '::error:: no executable %s hook at %s — commits in this clone bypass the gate. Do: run .claude/hooks/session-start.sh, or symlink it to .claude/hooks/git-hook.sh\n' \
+			printf '::error:: no executable %s hook at %s — commits in this clone bypass the gate. Do: mise run session:git-hooks\n' \
 				"$hook_name" "$hook" >&2
 			status=1
 		elif ! grep -q BATTEN_HOOK_PROBE "$hook" 2>/dev/null; then
-			printf '::error:: the %s hook at %s does not honour BATTEN_HOOK_PROBE, so it cannot be checked from inside the gate without recursing. It was NOT run. Replace it with .claude/hooks/git-hook.sh (run .claude/hooks/session-start.sh)\n' \
+			printf '::error:: the %s hook at %s does not honour BATTEN_HOOK_PROBE, so it cannot be checked from inside the gate without recursing. It was NOT run. Replace it with .claude/hooks/git-hook.sh (mise run session:git-hooks)\n' \
 				"$hook_name" "$hook" >&2
 			status=1
 		elif ! BATTEN_HOOK_PROBE=1 "$hook" </dev/null >/dev/null 2>&1; then
