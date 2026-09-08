@@ -4384,6 +4384,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Is HEAD verified — every declared check's receipt valid against this commit?",
         data_channel: false,
         effect: Effect::Read,
+        exits: EXITS_VERDICT,
         flags: &[],
     },
     // The noun only dispatches; its subtree carries a write verb, so the parent
@@ -4846,6 +4847,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Gate: this head carries the landing mechanism trunk has, so it can be serialised",
         data_channel: false,
         effect: Effect::Read,
+        exits: EXITS_VERDICT,
         flags: &[LEASE_HEAD],
     },
     // `write`, and it is the ONLY reason this is not a read: on a stop it cancels
@@ -4867,6 +4869,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "The runner's step-0 guard: may this branch spend a matrix right now?",
         data_channel: false,
         effect: Effect::Write,
+        exits: EXITS_VERDICT,
         flags: &[LEASE_HEAD, LEASE_BRANCH, LEASE_RUN],
     },
     CommandDecl {
@@ -5073,6 +5076,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Ask this head's pull request to fast-forward, and read the answer that request got",
         data_channel: false,
         effect: Effect::Write,
+        exits: EXITS_VERDICT,
         flags: &[],
     },
     // THE UNION OF EVERY STEP'S EFFECT, which is `write` because the widest of
@@ -5093,6 +5097,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Drive the whole lap and lap again on any refusal a rebase would clear",
         data_channel: false,
         effect: Effect::Write,
+        exits: EXITS_VERDICT,
         flags: &[LAND_REFERENCE],
     },
 ];
