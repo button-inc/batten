@@ -185,6 +185,31 @@ const GIT_REPO: &str = "git-repo";
 /// This harness's plan/todo surface has been SURVEYED — which is a different
 /// question from whether it has one (CLOUD-472).
 const PLAN_SURFACE: &str = "plan-surface";
+/// This checkout's commit path runs the gate (CLOUD-1398).
+///
+/// **A row in the bare report rather than a world-fact sub-verb, and the
+/// placement is a decision the two sub-verbs above force us to defend.**
+/// [`Mediator`] and [`Egress`] sit outside because whether an install is current
+/// or a proxy is fronting the network are properties of the WORLD. This is
+/// neither: it is a property of THIS CHECKOUT, minted when the clone was made
+/// and unchanged by anything outside it, which is the same class as
+/// [`GIT_REPO`]. So it belongs where a reader of `batten doctor` already looks.
+///
+/// It is ALSO a sub-verb, and that is not a contradiction — `doctor commit-gate`
+/// exists so a [`crate::startup`] row can ask THIS question and no other. A
+/// `[[startup]]` row decides on an exit status, so a `check` of bare `batten
+/// doctor` would fail the commit-gate row for an unrelated unreachable program
+/// and then run a repair that cannot fix it, reporting `repair-failed` forever.
+/// One predicate, [`diagnose_commit_gate`], answers both callers.
+///
+/// # What it is NOT
+///
+/// Not a claim that the gate PASSES — only that a commit in this clone runs it.
+/// `mise-tasks/doctor.sh` asks the stronger question (can the hook resolve its
+/// runner) by executing the hook under a probe, which a `read` verb may not do
+/// (§5, CLOUD-170). This stats, exactly as [`on_path`] does and for the same
+/// reason.
+const COMMIT_GATE: &str = "commit-gate";
 /// Every `command`-kind rule names a program the spawn can reach — on `PATH`, or
 /// through the project's pin.
 ///
@@ -643,6 +668,133 @@ fn on_path(program: &str) -> bool {
     crate::rules::on_path_verbatim(program).is_some()
 }
 
+/// The two hooks a commit in this clone must run for the gate to be on its path.
+///
+/// `pre-commit` runs the gate; `commit-msg` carries the Conventional Commits
+/// check release-plz's semver bump depends on, so leaving it out would assert the
+/// expensive half and not the deciding one — `mise.toml`'s own installer makes
+/// the same pair for the same reason.
+const COMMIT_HOOKS: [&str; 2] = ["pre-commit", "commit-msg"];
+
+/// The stable reason id for a commit path that does not run the gate.
+const COMMIT_HOOK_MISSING: &str = "commit-hook-missing";
+
+/// Where git would look for this checkout's hooks.
+///
+/// **The COMMON directory, never the per-worktree one**, which is the trap this
+/// helper exists to hold. [`crate::git::git_dir`] is per-worktree and is right
+/// for receipts and for `HEAD`; hooks are not per-worktree, and git resolves
+/// `hooks/<name>` against the common dir — so a linked worktree checked against
+/// `git_dir()` would report the gate missing while every commit in it runs the
+/// gate correctly.
+///
+/// **And `core.hooksPath` outranks both.** A repository that redirects its hooks
+/// has hooks; a probe that ignored the key would call it bare and send its owner
+/// to install a second copy somewhere git will never read. Resolved through
+/// [`crate::git::config_value`], which reads the value across every scope,
+/// exactly as git does. A relative value resolves against the worktree root,
+/// which is git's own reading of it.
+///
+/// `None` is could-not-look and never an empty answer: a directory that is not a
+/// repository has already been reported by [`GIT_REPO`], and manufacturing a
+/// second failure from it would double-count one fault.
+fn hooks_dir(dir: &Path) -> Option<std::path::PathBuf> {
+    if let Ok(Some(configured)) = crate::git::config_value(dir, "core.hooksPath")
+        && !configured.trim().is_empty()
+    {
+        let at = Path::new(configured.trim());
+        return Some(if at.is_absolute() {
+            at.to_path_buf()
+        } else {
+            crate::git::repo_root(dir).ok()?.join(at)
+        });
+    }
+    Some(Path::new(&crate::git::common_dir(dir).ok()?).join("hooks"))
+}
+
+/// Whether `at` is a file this checkout's git would actually run.
+///
+/// **Stats and follows, never executes** — [`on_path`]'s rule, one subject over:
+/// running the hook to see whether it works is what `mise-tasks/doctor.sh` does
+/// behind a probe variable, and a `read` verb may not reach user-supplied code
+/// (§5, CLOUD-170). `metadata` follows the symlink deliberately: this
+/// repository's own installer makes the hooks symlinks into the tree precisely
+/// so the checked-in body stays the one authority, and a check that refused to
+/// follow one would fail the shape it is meant to certify.
+///
+/// The executable bit is what git itself requires, so it is what is asked. On a
+/// platform without one, existence is the whole of the question git asks too.
+fn is_runnable_hook(at: &Path) -> bool {
+    let Ok(meta) = at.metadata() else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+/// Whether this checkout's commit path runs the gate (CLOUD-1398).
+///
+/// **One predicate, two callers** — the row [`diagnose`] pushes and the
+/// `doctor commit-gate` sub-verb a `[[startup]]` row asks. A second
+/// implementation of this is the defect the row it repairs was filed about, one
+/// layer along: `mise-tasks/doctor.sh` and the committed authority disagreeing
+/// about what an installed gate is.
+///
+/// **Pointer-only, and here that costs something worth naming.** The subjects are
+/// the HOOK NAMES — `pre-commit`, `commit-msg` — and never the directory they
+/// were looked for in, because that path is absolute, differs per machine, and
+/// would defeat §6 byte-stability while leaking the layout of someone's disk
+/// (rule 4). The names are git's own vocabulary rather than anything read out of
+/// a file, which is the same line [`Check::subjects`] already draws for a
+/// declared program.
+///
+/// Could-not-look PASSES, which is this module's posture and not a softening: a
+/// directory whose hooks path cannot be resolved is one [`GIT_REPO`] has already
+/// failed on, and reading "I cannot tell" as "the gate is bypassed" would redden
+/// every checkout on a machine where the read failed for an unrelated reason.
+#[must_use]
+pub fn diagnose_commit_gate(dir: &Path) -> Check {
+    let Some(hooks) = hooks_dir(dir) else {
+        return Check::passed(COMMIT_GATE);
+    };
+    let missing: Vec<String> = COMMIT_HOOKS
+        .iter()
+        .filter(|name| !is_runnable_hook(&hooks.join(name)))
+        .map(|name| (*name).to_owned())
+        .collect();
+    if missing.is_empty() {
+        Check::passed(COMMIT_GATE)
+    } else {
+        Check::failed_naming(COMMIT_GATE, COMMIT_HOOK_MISSING, missing)
+    }
+}
+
+// THE OBLIGATION THIS ROW OWES, BOUND TO THE LINE THAT DECIDES (CLOUD-1398).
+//
+// The mutation is the row's own defect expressed as a patch: a check that looks
+// at the hooks and reports `ok` whatever it finds. That is precisely what this
+// repository shipped — `mise-tasks/doctor.sh` SAW the missing hooks and decided
+// nothing, and the container went on bypassing the gate — so a survivor here is
+// the original defect back, not a hypothetical one.
+//
+// The suite is the `[[startup]]` one rather than `doctor`'s, because the arm
+// that actually discriminates is the repair loop: a check stuck on `ok` reports
+// the row provisioned, `--repair` never runs `session:git-hooks`, and the
+// fixture's hooks stay absent. `doctor`'s own case would go red too; the startup
+// case is the one that proves the DECLARED precondition is load-bearing.
+//MUTANT-SUITE crates/batten/tests/it/startup.rs
+//MUTANT hooks-check-reports-without-deciding|s@^        Check::failed_naming(COMMIT_GATE, COMMIT_HOOK_MISSING, missing)$@        Check::passed(COMMIT_GATE)@|a_clone_with_no_commit_hooks_fails_the_row_and_repair_installs_them
+
 /// The check the declared transcript earns, or `None` where none is declared
 /// (CLOUD-1035).
 ///
@@ -956,6 +1108,24 @@ pub fn diagnose(dir: &Path) -> Report {
             Check::passed(PLAN_SURFACE)
         },
     );
+
+    // THE COMMIT PATH, WHICH NOTHING IN THIS REPORT ASKED ABOUT FOR ITS WHOLE
+    // LIFE (CLOUD-1398).
+    //
+    // The five rows above ask whether the engine can run. This asks whether the
+    // engine is on the path a COMMIT takes — and the two came apart in exactly
+    // the container this repository provisions for itself: `batten doctor`
+    // reported six checks and none was this, while `git commit` ran neither
+    // `pre-commit` nor `commit-msg`, so every commit bypassed the gate and every
+    // declared repair still reported green.
+    //
+    // That is the CLOUD-1454 shape read one level up. A reporter existed —
+    // `mise-tasks/doctor.sh` emits two `::error::` lines about it — but a
+    // reporter is not a gate, and its remedy named `.claude/hooks/session-start.sh`,
+    // a program `7d188580` deleted. The refusal was right and its instruction
+    // could not be followed, which is the defect this row was filed for; making
+    // the precondition DECLARED is the half that stops it recurring.
+    checks.push(diagnose_commit_gate(dir));
 
     // The working-tree authority: `doctor` diagnoses the checkout in front of
     // it, so it does not take a base ref.
@@ -2634,6 +2804,32 @@ mod tests {
         // resolved config too, and whether it can still answer decides whether
         // `COMMAND_PROGRAMS` above is reading the pin or guessing. Its own row
         // rather than a mode of that one, because the repairs differ.
+        //
+        // `COMMIT_GATE` IS THE HARDEST OF THE THREE TO ADMIT, AND IT IS ADMITTED
+        // ON THE AXIS THIS CASE IS ACTUALLY DEFENDING (CLOUD-1398). It has a
+        // sub-verb, which is the shape the case's own title warns about — so the
+        // test is not "does it have a sub-verb" but the one `Mediator`'s doc
+        // states: **bare `doctor` answers a property of the COMMIT, a sub-verb
+        // answers a property of the WORLD.** `doctor mediator` is excluded
+        // because whether an install is current is a fact about this container
+        // and would make a commit gate answer on install recency — measured,
+        // `this_repository_is_healthy` went red when `land` rebuilt while the
+        // installed copy was an hour old. `doctor egress` is excluded for the
+        // same reason one layer over.
+        //
+        // Whether THIS clone's commit path runs the gate is neither: it is a
+        // property of the checkout, minted when the clone was made and unmoved by
+        // anything outside it — the same class as `GIT_REPO`, which has sat in
+        // this list since the beginning. It is byte-stable across machines, which
+        // is the mechanical form of that claim and the property `doctor mediator`
+        // cannot offer. So it belongs in the report, and its sub-verb exists for a
+        // reason that has nothing to do with the report: a `[[startup]]` row
+        // decides on an exit status and needs a command answering this question
+        // ALONE.
+        //
+        // The list stays EXPLICIT rather than becoming a count, which is what
+        // keeps this case load-bearing after three additions: a sub-verb leaking
+        // in is still a diff on this line, and still has to be argued for here.
         let names: Vec<&str> = diagnose(&scratch("bare-unchanged"))
             .checks
             .iter()
@@ -2647,7 +2843,8 @@ mod tests {
                 COMMAND_PROGRAMS,
                 PIN_RECORD,
                 HOOK_HANDLERS,
-                PLAN_SURFACE
+                PLAN_SURFACE,
+                COMMIT_GATE
             ]
         );
     }
