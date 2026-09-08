@@ -17,6 +17,13 @@
 # guarded. The runner's timeout has neither problem, so the honest division is:
 # nextest measures and decides, batten guards the declaration.
 #
+# IT GATES THE KILL THRESHOLD, NOT THE PERIOD, AND THE FIRST VERSION GOT THAT
+# WRONG. That version bounded `period` alone — which is only when a case is
+# MARKED slow. `terminate-after` is the multiplier that decides when it is
+# actually killed, so `period = "10s"` with `terminate-after = 10000` passed the
+# gate while banning nothing at all. The bound has to be on the product, because
+# the product is what refuses a test.
+#
 # THE CEILING IS A LITERAL HERE, exactly as `perf-assert.rego` holds its budgets.
 # A `policy/*.rego` module IS consumer config, so a number is at home in it;
 # non-negotiable rule 1 scopes to `crates/batten`. `rules/policy-modules.md`
@@ -24,34 +31,52 @@
 # arithmetic is not a concept with one spelling — and this is not that.
 #
 # THE RATCHET IS "NEVER ABOVE", NOT "ALWAYS EXACTLY". `ceiling_seconds` is the
-# committed maximum. Lowering the period below it is free, which is the whole
-# point: a branch that makes the suite faster tightens the bound without
-# negotiating with this gate. Raising it above the ceiling is refused, and
-# lowering the CEILING is a reviewed edit to this file that a reader sees in the
-# diff. That asymmetry is what a ratchet is.
+# committed maximum kill threshold. Lowering it in `.config/nextest.toml` is free,
+# which is the whole point: a branch that makes the suite faster tightens the
+# bound without negotiating with this gate. Raising it above the ceiling is
+# refused, and lowering the CEILING is a reviewed edit to this file that a reader
+# sees in the diff. That asymmetry is what a ratchet is.
+#
+# AND THE DAY-ONE CEILING IS A RUNAWAY GUARD RATHER THAN A PER-CASE SLOW BAN,
+# which is a measured retreat rather than a preference. Three calibration attempts
+# were each refused by CI: a 90s kill, then a 240s override, then 1200s, and the
+# last refusal was the three `symbols` cases at exactly 90s. CLOUD-1439 documents
+# why those three: they share one cold `cargo clippy` build, so under parallelism
+# one builds and two WAIT, and nextest bills all three the build. On the Windows
+# runner that build is far slower than on any box this repository can measure
+# from. A fourth guess at a number nobody here can observe is the same mistake a
+# fourth time.
+#
+# So the ceiling starts above the whole known band — Windows reports 8 cases over
+# 10s and 3 over 90s — and the VISIBILITY period stays at 10s, so every one of
+# those cases is named on every run. The ban today is on runaway and hung tests;
+# tightening it toward the per-case target is exactly what this ratchet exists to
+# do, one reviewed step at a time, on cross-platform data nobody had when it was
+# armed.
 #
 # NO INLINE REGEX, AND THE PARSE IS STRING BUILTINS ONLY. An inline pattern is
 # refused at load and this is not a concept the `[[pattern]]` registry should
-# carry, so the period is read by splitting the line on the quote character.
-# `slow-timeout = { period = "10s", ... }` splits into three parts and part 1 is
-# `10s`; trimming the `s` and converting is the whole parse.
+# carry, so both halves are read by splitting the line.
 #
-# AND AN UNREADABLE PERIOD REFUSES RATHER THAN PASSING, which is the direction
-# that matters. nextest accepts `2m` and `500ms` as well as `10s`; both would
-# leave `to_number` undefined, the comparison unreachable, and the gate silently
-# green over a bound nobody is enforcing. So the absent, the unterminated and the
-# unreadable are ONE class — `slow bound missing` — and every one of them means
-# the same thing: no ban is in force that this gate can vouch for.
+# AND AN UNREADABLE DECLARATION REFUSES RATHER THAN PASSING, which is the
+# direction that matters. nextest accepts `2m` and `500ms` as well as `10s`; both
+# would leave `to_number` undefined, the comparison unreachable, and the gate
+# silently green over a bound nobody is enforcing. So the absent, the
+# unterminated and the unreadable are ONE class — every one of them means no ban
+# is in force that this gate can vouch for.
 #MUTANT-SUITE crates/batten/tests/it/nextest_slow.rs
-#MUTANT terminator-unread|s@^\tcontains(line, "terminate-after")$@\ttrue@|a_period_without_terminate_after_is_refused
-#MUTANT ceiling-may-rise|s@^\tperiod > ceiling_seconds$@\tfalse@|a_period_above_the_ceiling_is_refused
+#MUTANT terminator-unread|s@^\tcontains(line, "terminate-after")$@\ttrue@|a_declaration_without_terminate_after_is_refused
+#MUTANT ceiling-may-rise|s@^\tkill > ceiling_seconds$@\tfalse@|a_kill_threshold_above_the_ceiling_is_refused
 #MUTANT declaration-unread|s@^\tsome line in input.tree.lines\[config\]$@\tsome line in []@|the_committed_config_declares_a_terminating_slow_timeout
+#MUTANT multiplier-ignored|s@^\tkill := period \* multiplier$@\tkill := period@|a_kill_threshold_above_the_ceiling_is_refused
 #
 # THE THIRD MUTATION EMPTIES THE LINE WALK rather than negating a conjunct, for
 # `landing-roster-guarded`'s reason: emptying it makes the declaration
 # unreachable, which reddens the PASS case over the real committed file. The
-# first two redden refusal cases. So the three reach different cases and none of
-# them is shadowed by another.
+# fourth is the one the first version of this module could not have: dropping the
+# multiplier restores the period-only bound, which is precisely the hole that
+# shipped, and it reddens the case where a large `terminate-after` carries the
+# kill past the ceiling while the period stays small.
 
 # METADATA
 # description: |
@@ -72,14 +97,15 @@ rules contains "nextest-slow-raised"
 # which is where non-negotiable rule 1 puts it.
 config := ".config/nextest.toml"
 
-# The ceiling, in seconds: the largest `period` this repository will accept.
+# The ceiling, in seconds: the largest KILL THRESHOLD this repository accepts,
+# where the threshold is `period x terminate-after` and not the period alone.
 #
-# Walked down as the suite gets faster, one reviewed step at a time. It sits at
-# today's declared value, so the gate is exactly as tight as the tree already is
-# and its first firing can only be on a change that loosens the bound — never on
-# the tree it inherits, which is the shape `fixture-forks.rego` records as the one
-# that gets an exception written for it "and the exception is what rots".
-ceiling_seconds := 10
+# Walked down as the suite gets faster, one reviewed step at a time. It sits above
+# today's whole known band on the slowest runner, so the gate's first firing can
+# only be on a change that loosens the bound — never on the tree it inherits,
+# which is the shape `fixture-forks.rego` records as the one that gets an
+# exception written for it "and the exception is what rots".
+ceiling_seconds := 300
 
 # Every non-comment line of the committed runner config.
 declaration contains line if {
@@ -97,19 +123,29 @@ terminating contains line if {
 	contains(line, "terminate-after")
 }
 
-# The declared period in whole seconds, read with string builtins alone.
+# The kill threshold in seconds: `period x terminate-after`, read with string
+# builtins alone.
 #
-# Undefined where the value is not `<digits>s` — which is deliberate and is what
-# the `nextest-slow-unbounded` arm below turns into a refusal, rather than
-# letting `2m` or `500ms` leave the comparison unreachable and the gate green.
-period_seconds contains seconds if {
+# Undefined where either half is not readable — a period that is not `<digits>s`,
+# or a multiplier that is not an integer — which is deliberate and is what the
+# `nextest-slow-unbounded` arm below turns into a refusal, rather than letting
+# `2m` or `500ms` leave the comparison unreachable and the gate green.
+kill_seconds contains kill if {
 	some line in terminating
-	parts := split(line, "\"")
-	count(parts) > 1
-	value := parts[1]
+	quoted := split(line, "\"")
+	count(quoted) > 1
+	value := quoted[1]
 	endswith(value, "s")
 	not endswith(value, "ms")
-	seconds := to_number(trim_suffix(value, "s"))
+	period := to_number(trim_suffix(value, "s"))
+
+	after := split(line, "terminate-after")
+	count(after) > 1
+	assigned := split(after[1], "=")
+	count(assigned) > 1
+	multiplier := to_number(trim_space(trim_suffix(trim_space(assigned[1]), "}")))
+
+	kill := period * multiplier
 }
 
 # NO TERMINATING DECLARATION THIS GATE CAN READ.
@@ -123,18 +159,18 @@ violation contains {
 	"verdict": "suite bind missing",
 	"subjects": [{"path": config}],
 } if {
-	count(period_seconds) == 0
+	count(kill_seconds) == 0
 }
 
-# THE RATCHET. A declared period above the committed ceiling is refused; below it
+# THE RATCHET. A kill threshold above the committed ceiling is refused; below it
 # is free, so making the suite faster never has to negotiate with this gate.
 violation contains {
 	"rule": "nextest-slow-raised",
 	"verdict": "bound edit refused",
 	"subjects": [{"path": config}],
 } if {
-	some period in period_seconds
-	period > ceiling_seconds
+	some kill in kill_seconds
+	kill > ceiling_seconds
 }
 
 deny contains finding if {
@@ -151,15 +187,15 @@ deny contains finding if {
 
 tree(lines) := {"tree": {"lines": lines}}
 
-armed := ["[profile.default]", "slow-timeout = { period = \"10s\", terminate-after = 9 }"]
+armed := ["[profile.default]", "slow-timeout = { period = \"10s\", terminate-after = 30 }"]
 
 report_only := ["[profile.default]", "slow-timeout = \"10s\""]
 
-raised := ["[profile.default]", "slow-timeout = { period = \"30s\", terminate-after = 3 }"]
+raised := ["[profile.default]", "slow-timeout = { period = \"30s\", terminate-after = 30 }"]
 
 minutes := ["[profile.default]", "slow-timeout = { period = \"2m\", terminate-after = 3 }"]
 
-commented := ["[profile.default]", "# slow-timeout = { period = \"10s\", terminate-after = 9 }"]
+commented := ["[profile.default]", "# slow-timeout = { period = \"10s\", terminate-after = 30 }"]
 
 # THE PASS SIDE FIRST: without it every refusal below is satisfied by a module
 # that refuses everything.
@@ -168,10 +204,10 @@ test_an_armed_declaration_at_the_ceiling_is_clean if {
 }
 
 # LOWERING IS FREE, which is the ratchet's whole asymmetry.
-test_a_period_below_the_ceiling_is_clean if {
+test_a_kill_threshold_below_the_ceiling_is_clean if {
 	count(violation) == 0 with input as tree({".config/nextest.toml": [
 		"[profile.default]",
-		"slow-timeout = { period = \"5s\", terminate-after = 9 }",
+		"slow-timeout = { period = \"5s\", terminate-after = 4 }",
 	]})
 }
 
@@ -181,7 +217,17 @@ test_a_period_without_terminate_after_is_refused if {
 	count(violation) == 1 with input as tree({".config/nextest.toml": report_only})
 }
 
-test_a_period_above_the_ceiling_is_refused if {
+# THE HOLE THE FIRST VERSION SHIPPED WITH. A small period and a large multiplier
+# carries the kill past the ceiling while the period alone stays well inside it —
+# `10 x 100` is 1000s. A gate bounding the period would pass this and ban nothing.
+test_a_small_period_with_a_large_multiplier_is_refused if {
+	count(violation) == 1 with input as tree({".config/nextest.toml": [
+		"[profile.default]",
+		"slow-timeout = { period = \"10s\", terminate-after = 100 }",
+	]})
+}
+
+test_a_kill_threshold_above_the_ceiling_is_refused if {
 	count(violation) == 1 with input as tree({".config/nextest.toml": raised})
 }
 

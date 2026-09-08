@@ -55,20 +55,35 @@
 #   p50 42ms | p95 671ms | p99 2.53s | max 64.85s
 #   over 10s: 11 cases | over 20s: 5 | over 30s: 2 | over 60s: 1
 #
-# `period = "10s"` therefore names 11 cases on every run — the visibility half,
-# and the number the ratchet walks down. `terminate-after = 9` kills at 90s,
-# ~1.4x today's worst (64.85s, `agentic_record::a_replay_over_the_committed_
-# records_fires_on_every_required_key`).
+# `period = "10s"` names 11 cases here and 8 on Windows on every run — the
+# VISIBILITY half, and the number a reader scans for. `terminate-after = 30` kills
+# at 300s.
 #
-# THE KILL THRESHOLD IS DELIBERATELY NOT SET AT TODAY'S WORST, and that is why
-# this first step does not redden the tree. These are wall times under
-# parallelism, and nextest bills a case for time spent BLOCKED as well as running
-# (CLOUD-1439) — so a case near the threshold on a quiet box crosses it on a
-# loaded one. A bound a green tree fails on a slower runner is measuring the
-# runner. Each ratchet step down is its own reviewed change, and a step that
-# strands a case gets that case fixed or an override naming why.
+# THE DAY-ONE KILL IS A RUNAWAY GUARD RATHER THAN A PER-CASE SLOW BAN, and that
+# is a measured retreat rather than a preference. Three calibration attempts were
+# each refused by CI:
+#
+#   90s default   -> `agentic_record::a_replay_...` TIMEOUT at 90.022s under
+#                    `verify` load, where it is 64.849s on a quiet box
+#   240s override -> the same case TIMEOUT at 240.210s on the `windows` runner
+#   90s default   -> the three `symbols` cases TIMEOUT at ~90.2s on `windows`
+#
+# The last one is the instructive one and it was already written down. CLOUD-1439
+# records that those three share ONE cold `cargo clippy` build, so under
+# parallelism one builds and two WAIT, and nextest bills all three the build —
+# which is the same effect this file already names, at the scale of a build rather
+# than a lock. On the Windows runner that build is far slower than on any box this
+# repository can measure from.
+#
+# So a fourth guess at a number nobody here can observe would be the same mistake
+# a fourth time. The kill starts above the whole known band — Windows shows 8
+# cases over 10s and 3 over 90s — and tightening it toward the per-case target is
+# what the ratchet is for, one reviewed step at a time, on cross-platform data
+# nobody had when it was armed. `policy/nextest-slow.rego` gates the PRODUCT,
+# `period x terminate-after`, so the bound cannot be weakened by raising either
+# half alone.
 [profile.default]
-slow-timeout = { period = "10s", terminate-after = 9 }
+slow-timeout = { period = "10s", terminate-after = 30 }
 
 [[profile.default.overrides]]
 filter = 'test(deleting_six_governed_paths_costs_a_flat_multiple_of_the_floor)'
@@ -96,19 +111,19 @@ threads-required = "num-test-threads"
 # block — and until it lands, this case is the binding constraint on every step of
 # the ratchet, because the ceiling cannot go below what the worst case needs.
 #
-# THIS IS AN EXEMPTION, NOT A CALIBRATED BOUND, and the second reading is why it
-# says so out loud. The first attempt set 240s at ~3.7x the 64.849s Linux figure
-# and CI refused it anyway: on the `windows` runner the same case reported
-# `TIMEOUT [ 240.210s]`. It is under 65s here and over 240s there — a spread of
-# more than 3.7x on ONE case, where the 90s default held on Windows for every
-# other case in the run.
+# THIS IS AN EXEMPTION, NOT A CALIBRATED BOUND, and it says so out loud because
+# two attempts to calibrate it were both refused. The first set 240s at ~3.7x the
+# 64.849s Linux figure; the `windows` runner reported `TIMEOUT [ 240.210s]`
+# anyway. It is under 65s here and over 240s there, and 240s is a floor rather
+# than a measurement, because the case was killed at the threshold and nobody yet
+# knows what it actually costs on the slowest runner.
 #
-# So the default's calibration is sound across platforms and this case's is not
-# calibratable at all: nobody has an upper bound for it on the slowest runner, and
-# guessing a third number would be the same mistake a third time. 1200s is chosen
-# to be above any plausible runner rather than to describe this case, which makes
-# it an exemption in effect and is stated here so no reader mistakes it for a
-# measurement. Deleting it is CLOUD-1641's acceptance; widening it again is not.
+# 1200s is therefore chosen to sit above any plausible runner rather than to
+# describe this case. It survives even though the default kill is now 300s and
+# would otherwise cover it: the point of keeping the row is that this case is
+# KNOWN to exceed a bound the ratchet intends to walk down, so it is the first
+# thing the next step trips over. Deleting it is CLOUD-1641's acceptance; widening
+# it again is that row failing rather than progressing.
 [[profile.default.overrides]]
 filter = 'test(a_replay_over_the_committed_records_fires_on_every_required_key)'
 slow-timeout = { period = "10s", terminate-after = 120 }

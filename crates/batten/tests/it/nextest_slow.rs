@@ -48,9 +48,9 @@ const CONFIG: &str = ".config/nextest.toml";
 /// `period` with no `terminate-after` only REPORTS. Not a ban.
 const REPORT_ONLY: &str = "[profile.default]\nslow-timeout = \"10s\"\n";
 
-/// Above the ceiling the module commits to.
+/// Above the ceiling the module commits to: 30s x 30 is 900s against 300s.
 const RAISED_BODY: &str =
-    "[profile.default]\nslow-timeout = { period = \"30s\", terminate-after = 3 }\n";
+    "[profile.default]\nslow-timeout = { period = \"30s\", terminate-after = 30 }\n";
 
 /// A fixture tree carrying a runner config with `body`, or none at all when
 /// `body` is `None`.
@@ -164,6 +164,28 @@ fn a_declaration_without_terminate_after_is_refused() {
 fn a_period_above_the_ceiling_is_refused() {
     let root = repo("nextest-slow-raised", Some(RAISED_BODY));
     assert_eq!(rules_fired(&root), vec![RAISED.to_owned()]);
+}
+
+/// THE HOLE THE FIRST VERSION OF THIS MODULE SHIPPED WITH, over the engine.
+///
+/// That version bounded `period` alone. `period` is only when a case is MARKED
+/// slow; `terminate-after` is the multiplier that decides when it is actually
+/// killed, so a small period with a large multiplier passed the gate while
+/// banning nothing — 10s x 100 is a 1000s kill behind a period well inside any
+/// ceiling. The bound has to be on the product, because the product is what
+/// refuses a test.
+#[test]
+fn a_small_period_with_a_large_multiplier_is_refused() {
+    let root = repo(
+        "nextest-slow-large-multiplier",
+        Some("[profile.default]\nslow-timeout = { period = \"10s\", terminate-after = 100 }\n"),
+    );
+    assert_eq!(
+        rules_fired(&root),
+        vec![RAISED.to_owned()],
+        "the kill threshold is period x terminate-after; a gate reading the period alone \
+         passes this and bans nothing"
+    );
 }
 
 /// AND LOWERING IS FREE — the asymmetry that makes this a ratchet rather than an
