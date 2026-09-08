@@ -1,7 +1,7 @@
 # A migration that touches an authored shell rule retires it, or it does not land.
 #
 # CLOUD-1059, and it is a PREREQUISITE rather than a cleanup: CLOUD-843's campaign
-# is retiring this tree's shell programs and bats suites onto the policy engine, and
+# is retiring 144 shell programs and 161 bats suites onto the policy engine, and
 # the failure that campaign cannot survive is a wave that EDITS a shell gate
 # instead of replacing it. That reads as progress in every sensor the tree has —
 # `bash-surface-not-growing` counts programs and an edit changes none, and
@@ -13,14 +13,7 @@
 # says where they live (`crates/batten/tests/*.rs`). This module reads that same
 # declaration one level up: 908 conserves the CASES inside a dying suite, and this
 # conserves the FILE. A second inventory of which shell programs exist is exactly
-# the hand-maintained census CLOUD-929 measured going stale, so there is none —
-# AND NO COUNT OF ONE IS WRITTEN ABOVE, for the same reason. This header used to
-# open with "144 shell programs and 161 bats suites"; by v0.0.153 the tree carried
-# 88 and 99, so the sentence naming the drift had itself drifted. The live numbers
-# belong to `bash-surface-not-growing`'s ratchet (`batten.toml`, glob
-# `mise-tasks/**`) and to `bats-tests-not-deleted` — the same repair `batten.toml`'s
-# `shell-hygiene` preamble already applied to a prose count that was wrong by
-# eleven within two days of being written.
+# the hand-maintained census CLOUD-929 measured going stale, so there is none.
 #
 # ─── WHAT A RETIREMENT ROW LOOKS LIKE ────────────────────────────────────────
 #
