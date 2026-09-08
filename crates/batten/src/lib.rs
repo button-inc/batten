@@ -13024,10 +13024,18 @@ fn dispatch_handlers(
     if !handler::selects(&hook_config.handlers, envelope.event, &envelope.raw_tool) {
         return Ok(None);
     }
+    // EMPTY IS ABSENT HERE, and the conversion happens once, at the boundary
+    // (CLOUD-1650). `Envelope::command` is `String` and spells "this tool has no
+    // command" as `""`; `Handler::selects_command` decides over `Option`, because
+    // a row declaring `command_matcher` must be able to tell a call with no
+    // command from one whose command is empty — and an expression like `^$` would
+    // otherwise match every `Read` in the session.
+    let command = Some(envelope.command.as_str()).filter(|text| !text.is_empty());
     let dispatched = handler::dispatch(
         &hook_config.handlers,
         envelope.event,
         &envelope.raw_tool,
+        command,
         raw,
     );
     // TIERED AT THE PUSH SITE (CLOUD-896), because "how soon must this be

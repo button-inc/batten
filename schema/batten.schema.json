@@ -1890,6 +1890,13 @@
       "description": "One declared handler.",
       "type": "object",
       "properties": {
+        "command_matcher": {
+          "description": "Which COMMANDS this handler runs for, as a regular expression over the\nmediated call's command string (CLOUD-1650).\n\n**Absent means every call [`Handler::matcher`] already selected**, so no\nlanded row changes behaviour by this column's arrival — the same promise\n`matcher` itself made when it was added.\n\n# Why the sibling column cannot express this\n\n[`Handler::matcher`] is a regex over the TOOL NAME. That is the whole of\nwhat it can say, and for a shell tool the tool name is `Bash` on every\ncall the agent makes — so a handler that wants *some* shell commands and\nnot others has, without this, exactly two options: fire on all of them, or\non none. Firing on all of them is not a neutral default. Measured\n2026-08-25 on the sibling column's own row, an unnarrowed `pre-tool`\nhandler cost 19.6ms p50 on a `Bash` call against a `wired` path whose\nwhole p50 is 21ms — so \"narrow by tool name only\" prices a handler about a\ndozen commands as if it were about every one.\n\n# It names a SHAPE, never a program's own vocabulary\n\nThe engine holds the matcher and the consumer's `batten.toml` holds the\nexpression, which is `protected`'s split and non-negotiable rule 1's: a\nlist of git subcommands in `crates/batten` would be one consumer's\nvocabulary shipped to every adopter. What is generic here is \"select on\nwhat the call is going to RUN, not on what the host called the tool\".\n\n# A command that cannot be read does NOT select\n\nThe opposite reading from [`Handler::selects_tool`]'s unparseable-matcher\narm, and the asymmetry is deliberate. There, running is the safe direction\nbecause the row was validated at load and reaching the fallback means a\ncaller skipped validation. Here, could-not-look means the ENVELOPE carried\nno command — every non-command tool call in the session — and selecting on\nthose would fire the handler on every `Read` and every `Edit`, which is the\nunnarrowed cost this column exists to avoid. A row declaring this column\nhas said its subject is a command; an envelope with no command is not its\nsubject.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "expires": {
           "description": "The date past which this handler is overdue, `YYYY-MM-DD`.\n\nNot an expiry that switches the handler OFF: a dispatched program that\nsilently stopped running is the fail-open this whole surface exists to\nclose. It is a date past which the DIAGNOSIS says so, which is the only\nform of pressure that cannot itself become an outage.",
           "type": [

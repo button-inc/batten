@@ -132,6 +132,7 @@ mod gh_guard;
 mod git_facts;
 mod glob_exclusion;
 mod guardrail_bypass;
+mod handler_dispatch;
 mod harness_grant;
 mod harness_wiring;
 mod history_drop;

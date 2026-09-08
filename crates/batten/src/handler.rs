@@ -229,6 +229,46 @@ pub struct Handler {
     /// re-opening the defect the sibling column's shape exists to prevent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matcher: Option<String>,
+    /// Which COMMANDS this handler runs for, as a regular expression over the
+    /// mediated call's command string (CLOUD-1650).
+    ///
+    /// **Absent means every call [`Handler::matcher`] already selected**, so no
+    /// landed row changes behaviour by this column's arrival — the same promise
+    /// `matcher` itself made when it was added.
+    ///
+    /// # Why the sibling column cannot express this
+    ///
+    /// [`Handler::matcher`] is a regex over the TOOL NAME. That is the whole of
+    /// what it can say, and for a shell tool the tool name is `Bash` on every
+    /// call the agent makes — so a handler that wants *some* shell commands and
+    /// not others has, without this, exactly two options: fire on all of them, or
+    /// on none. Firing on all of them is not a neutral default. Measured
+    /// 2026-08-25 on the sibling column's own row, an unnarrowed `pre-tool`
+    /// handler cost 19.6ms p50 on a `Bash` call against a `wired` path whose
+    /// whole p50 is 21ms — so "narrow by tool name only" prices a handler about a
+    /// dozen commands as if it were about every one.
+    ///
+    /// # It names a SHAPE, never a program's own vocabulary
+    ///
+    /// The engine holds the matcher and the consumer's `batten.toml` holds the
+    /// expression, which is `protected`'s split and non-negotiable rule 1's: a
+    /// list of git subcommands in `crates/batten` would be one consumer's
+    /// vocabulary shipped to every adopter. What is generic here is "select on
+    /// what the call is going to RUN, not on what the host called the tool".
+    ///
+    /// # A command that cannot be read does NOT select
+    ///
+    /// The opposite reading from [`Handler::selects_tool`]'s unparseable-matcher
+    /// arm, and the asymmetry is deliberate. There, running is the safe direction
+    /// because the row was validated at load and reaching the fallback means a
+    /// caller skipped validation. Here, could-not-look means the ENVELOPE carried
+    /// no command — every non-command tool call in the session — and selecting on
+    /// those would fire the handler on every `Read` and every `Edit`, which is the
+    /// unnarrowed cost this column exists to avoid. A row declaring this column
+    /// has said its subject is a command; an envelope with no command is not its
+    /// subject.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_matcher: Option<String>,
     /// The issue that owns retiring this handler (CLOUD-984).
     ///
     /// **A handler is an antipattern with a ratchet, never a destination.** The
@@ -298,6 +338,35 @@ impl Handler {
         };
         match Regex::new(matcher) {
             Ok(regex) => regex.is_match(raw_tool),
+            Err(_) => true,
+        }
+    }
+
+    /// Whether this handler runs for `command` (CLOUD-1650).
+    ///
+    /// `true` for a row carrying no `command_matcher`, so the column's absence is
+    /// the behaviour every row had before it existed.
+    ///
+    /// **`None` — the envelope carried no command — does NOT select**, which is
+    /// the opposite of [`Handler::selects_tool`]'s could-not-look arm and is
+    /// argued on the field's own doc: a row declaring this column has said its
+    /// subject is a command, and firing it on every `Read` in the session is the
+    /// unnarrowed cost the column exists to remove.
+    ///
+    /// An UNPARSEABLE expression selects, matching the sibling: it is refused at
+    /// load, so reaching that arm means a caller skipped validation, and the safe
+    /// reading for a participant in a fail-open contract is to run — a handler
+    /// that silently stopped being dispatched is the absence the door closes.
+    #[must_use]
+    pub fn selects_command(&self, command: Option<&str>) -> bool {
+        let Some(matcher) = self.command_matcher.as_deref() else {
+            return true;
+        };
+        let Some(command) = command else {
+            return false;
+        };
+        match Regex::new(matcher) {
+            Ok(regex) => regex.is_match(command),
             Err(_) => true,
         }
     }
@@ -463,6 +532,29 @@ impl Handler {
                 }
             }
         }
+        // THE COMMAND SELECTOR COMPILES (CLOUD-1650).
+        //
+        // Refused at load for the sibling's reason and one of its own. An
+        // expression discarded per call leaves the row it qualifies quietly dead,
+        // and here the direction of that failure is the worse one: an
+        // uncompilable `command_matcher` falls through to `selects_command`'s
+        // fail-open arm and runs the handler on EVERY call the tool matcher
+        // admitted — which for a `^Bash$` row is every shell command in the
+        // session, spawning a program per call to decide nothing.
+        //
+        // No server-segment probe here, and its absence is not an omission:
+        // CLOUD-178's trap is about a name the HOST rotates per registration
+        // episode, and a command string is written by the agent rather than
+        // minted by the host. There is no rotating label for an expression over
+        // it to be pinned to.
+        if let Some(matcher) = self.command_matcher.as_deref() {
+            Regex::new(matcher).map_err(|err| {
+                UsageError::raise(format!(
+                    "hook.handler {}: `command_matcher` is not valid: {err}",
+                    self.id
+                ))
+            })?;
+        }
         // A GRANT NEEDS A MOMENT THAT DECIDES PERMISSION, and this is the one half
         // of that question a config load can answer.
         //
@@ -524,6 +616,21 @@ fn event_of(token: &str) -> Option<Event> {
         .copied()
         .find(|event| event.as_str() == token)
 }
+
+// THE OBLIGATION CLOUD-1650 OWES, BOUND TO THE LINE THAT SELECTS.
+//
+// Dropping the git-subcommand selector is the row's own §7, and the mutation is
+// the defect it names rather than a hypothetical: a handler that fires on every
+// call its tool matcher admitted. For the row this column exists for that is
+// every shell command in the session, each paying a `doctor mediator` spawn to
+// decide nothing — and the advisory then arrives on calls that moved no HEAD,
+// which is how a channel stops being read.
+//
+// The survivor is what makes it a finding: a suite that only asserted the
+// advisory FIRES would stay green under this patch, because an over-firing
+// handler fires. The case has to assert the calls it does NOT select.
+//MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
+//MUTANT head-move-unwatched|s@^        let Some(matcher) = self.command_matcher.as_deref() else {$@        let Some(matcher) = None::<\&str> else {@|a_git_call_that_moves_no_head_is_not_selected
 
 /// Reject a handler set that cannot honestly run.
 ///
@@ -758,7 +865,13 @@ fn impersonates_host(stdout: &str) -> bool {
 /// here can fail the call: a handler that cannot run, hangs, or answers outside
 /// the contract yields [`Outcome::Broke`], which allows.
 #[must_use]
-pub fn dispatch(handlers: &[Handler], event: Event, raw_tool: &str, payload: &str) -> Dispatched {
+pub fn dispatch(
+    handlers: &[Handler],
+    event: Event,
+    raw_tool: &str,
+    command: Option<&str>,
+    payload: &str,
+) -> Dispatched {
     let mut ran = Vec::new();
     for handler in handlers {
         if handler.event() != Some(event) {
@@ -768,6 +881,15 @@ pub fn dispatch(handlers: &[Handler], event: Event, raw_tool: &str, payload: &st
         // ANY handler runs; this decides per row, so a narrowed handler costs a
         // regex rather than a process on every call it does not select.
         if !handler.selects_tool(raw_tool) {
+            continue;
+        }
+        // AND THE SECOND NARROWING, WHICH THE FIRST STRUCTURALLY CANNOT DO
+        // (CLOUD-1650). For a shell tool the tool name is `Bash` on every call, so
+        // a row about a dozen commands and a row about all of them are
+        // indistinguishable to `selects_tool` — this is what makes the difference
+        // a regex rather than a process. Ordered after it because a tool-name
+        // mismatch is the cheaper rejection and the commoner one.
+        if !handler.selects_command(command) {
             continue;
         }
         let started = Instant::now();
@@ -1039,6 +1161,58 @@ fn reason(stderr: &str, stdout: &str) -> String {
 mod tests {
     use super::*;
 
+    /// The command selector's four readings, decided directly (CLOUD-1650).
+    ///
+    /// A unit case because the decision is a pure function and this is where it
+    /// can be driven exhaustively; `handler_dispatch.rs` carries the half this
+    /// cannot reach — that the column parses, resolves and reaches the dispatch
+    /// at all.
+    #[test]
+    fn the_command_selector_reads_absent_and_unreadable_in_opposite_directions() {
+        let mut row = handler("h", Event::PostTool.as_str(), &["true"]);
+
+        // No column: every call the tool matcher admitted, which is what every
+        // row did before this existed.
+        assert!(row.selects_command(Some("git checkout -")));
+        assert!(row.selects_command(None));
+
+        row.command_matcher = Some(r"\bgit\b.*\b(merge|rebase|checkout)\b".to_owned());
+        assert!(row.selects_command(Some("git checkout -")));
+        assert!(
+            !row.selects_command(Some("git status --short")),
+            "a git call that moves no HEAD is not this row's subject"
+        );
+        // THE ASYMMETRY THIS CASE EXISTS FOR. An envelope with no command is not
+        // a command this row failed to match — it is not a command at all, and
+        // selecting on it would fire the handler on every `Read` in the session.
+        assert!(
+            !row.selects_command(None),
+            "could-not-look does NOT select here, unlike the tool matcher's arm"
+        );
+
+        // An unparseable expression selects, matching `selects_tool`: it is
+        // refused at load, so reaching this arm means validation was skipped, and
+        // a participant in a fail-open contract runs rather than goes silent.
+        row.command_matcher = Some("(".to_owned());
+        assert!(row.selects_command(Some("anything")));
+    }
+
+    /// An uncompilable command selector is refused at LOAD.
+    ///
+    /// The direction of the failure is why: the fallback above runs the handler
+    /// on every call its tool matcher admitted, which for a `^Bash$` row is every
+    /// shell command in the session — a process per call, deciding nothing.
+    #[test]
+    fn an_uncompilable_command_selector_is_refused_before_it_can_over_fire() {
+        let mut row = handler("h", Event::PostTool.as_str(), &["true"]);
+        row.command_matcher = Some("(".to_owned());
+        let err = row.validate().expect_err("an invalid regex is refused");
+        assert!(
+            err.to_string().contains("command_matcher"),
+            "the refusal must name the column a reader has to fix: {err}"
+        );
+    }
+
     fn handler(id: &str, on: &str, run: &[&str]) -> Handler {
         Handler {
             id: id.to_owned(),
@@ -1046,6 +1220,11 @@ mod tests {
             run: run.iter().map(|word| (*word).to_owned()).collect(),
             timeout_ms: None,
             matcher: None,
+            // Absent, so every existing case keeps the behaviour it was written
+            // against: `selects_command` answers `true` for a row without one,
+            // which is the promise the column made on arrival. The cases about
+            // the selector set it explicitly.
+            command_matcher: None,
             // Absent, so the existing cases keep exercising what they were
             // written for: `validate` deliberately does NOT read these, and a
             // helper that populated them would hide that separation rather than
@@ -1409,6 +1588,7 @@ mod tests {
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
+            None,
             payload,
         );
         assert_eq!(
@@ -1427,6 +1607,7 @@ mod tests {
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
+            None,
             payload,
         );
         assert_eq!(
@@ -1457,6 +1638,7 @@ mod tests {
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
+            None,
             "{}",
         );
         assert_eq!(dispatched.refusal(), Some(("g", "no")));
@@ -1527,7 +1709,7 @@ mod tests {
         let mut second = handler("b", Event::PreTool.as_str(), &["sh", "-c", "echo two"]);
         second.preapproves = true;
         let rows = vec![first, second.clone()];
-        let dispatched = dispatch(&rows, Event::PreTool, "mcp__x__y", "{}");
+        let dispatched = dispatch(&rows, Event::PreTool, "mcp__x__y", None, "{}");
         assert_eq!(dispatched.preapproval(), Some(("a", "one")));
 
         let denier = handler(
@@ -1536,7 +1718,7 @@ mod tests {
             &["sh", "-c", "echo nope >&2; exit 2"],
         );
         let rows = vec![second, denier];
-        let dispatched = dispatch(&rows, Event::PreTool, "mcp__x__y", "{}");
+        let dispatched = dispatch(&rows, Event::PreTool, "mcp__x__y", None, "{}");
         assert_eq!(dispatched.refusal(), Some(("d", "nope")));
         assert_eq!(
             dispatched.preapproval(),
@@ -1566,6 +1748,7 @@ mod tests {
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
+            None,
             "{}",
         );
         assert_eq!(dispatched.preapproval(), None);
