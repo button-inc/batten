@@ -67,6 +67,7 @@ mod call_background_flag;
 mod call_ceiling;
 mod capture_fidelity;
 mod captured_facts;
+mod cfg_gated_test;
 mod checks_green;
 mod ci_cache_declared;
 mod ci_hygiene;
