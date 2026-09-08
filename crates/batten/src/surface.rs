@@ -426,9 +426,82 @@ pub struct CommandDecl {
     /// only output *is* the artifact — there is no human rendering to switch away
     /// from.
     pub data_channel: bool,
+    /// The exit codes this row may produce (§7).
+    ///
+    /// # Why a declaration exists at all
+    ///
+    /// §7 is stated as total — [`crate::exit`]'s first line, "one table, total,
+    /// with no per-verb exception" — and until CLOUD-1646 **nothing checked it
+    /// per verb**. The contract was gated in three places and none asked which
+    /// codes a verb may produce: [`crate::exit`]'s own tests pin the four
+    /// NUMBERS, `cli.rs`'s `exit_code_contract` was a fixed corpus of
+    /// hand-written invocations, and `pointer_only.rs`'s census governs
+    /// EMISSION. So no machine-checkable statement existed that a verb's
+    /// behaviour could contradict, and the law was broken twice — CLOUD-292 in
+    /// `exec`, CLOUD-1645 in `mcp call` — with nothing in between that would
+    /// have failed. Rule 2: a rule without a runnable gate is half a change.
+    ///
+    /// # The empty slice is "undeclared", not "declares nothing"
+    ///
+    /// A struct literal must name every field, so a new row cannot OMIT this —
+    /// but it can write `&[]`, and an empty slice that passed would be the
+    /// dead-gate class this field exists to close. So `&[]` is reserved for a
+    /// NOUN, which dispatches to a subtree and returns nothing of its own, and
+    /// `tests::every_leaf_verb_declares_its_exit_set` refuses it on a leaf. Both
+    /// directions are checked, so a leaf cannot hide as a noun either.
+    ///
+    /// # The fill rule
+    ///
+    /// [`EXITS_STANDARD`] unless there is a reason otherwise, and the reason is
+    /// [`ExitCode::Violation`]: only a verb that renders a POLICY VERDICT may
+    /// declare it. An over-wide declaration is a gate that decides nothing, so
+    /// `2` is the code an author has to justify rather than the one they get for
+    /// free.
+    ///
+    /// This is not a second authority over the codes or their meanings. Those
+    /// stay [`crate::exit::ExitCode`]'s alone, which is what keeps the published
+    /// table in `--help`, `man/batten.1` and `README.md` rendering from
+    /// [`crate::exit::table`] with nothing to drift against.
+    pub exits: &'static [crate::exit::ExitCode],
     /// The command's own arguments.
     pub flags: &'static [FlagDecl],
 }
+
+//MUTANT-SUITE crates/batten/tests/it/cli.rs
+//MUTANT exit-declaration-optional|s@^pub const EXITS_STANDARD: &\[crate::exit::ExitCode\] = &\[$@pub const EXITS_STANDARD: \&[crate::exit::ExitCode] = \&[]; const _UNUSED: \&[crate::exit::ExitCode] = \&[@|every_leaf_verb_declares_its_exit_set
+
+/// What a verb declares when it renders no policy verdict.
+///
+/// `1` and `3` are on every row that runs at all: clap rejects a malformed
+/// invocation before the verb is reached, and any verb can fail to look. `0` is
+/// the ordinary completion. What is absent is [`ExitCode::Violation`], and its
+/// absence is the whole content of this constant.
+pub const EXITS_STANDARD: &[crate::exit::ExitCode] = &[
+    crate::exit::ExitCode::Success,
+    crate::exit::ExitCode::Usage,
+    crate::exit::ExitCode::Internal,
+];
+
+/// What a verb declares when it renders a policy verdict.
+///
+/// [`EXITS_STANDARD`] plus [`ExitCode::Violation`] — a rule finding, a denied
+/// mediated call, or any other answer ABOUT the repository rather than about the
+/// invocation. A verb reaching this through [`crate::exit::ExitCode::verdict`]
+/// or by raising [`crate::Denial`] is one of these; nothing else is.
+pub const EXITS_VERDICT: &[crate::exit::ExitCode] = &[
+    crate::exit::ExitCode::Success,
+    crate::exit::ExitCode::Usage,
+    crate::exit::ExitCode::Violation,
+    crate::exit::ExitCode::Internal,
+];
+
+/// What a NOUN declares: nothing, because it decides nothing.
+///
+/// A noun dispatches to its subtree and prints help when invoked bare, so every
+/// code a caller sees under it belongs to a leaf or to clap. Declaring a set
+/// here would be a claim about the subtree, which is exactly the inheritance
+/// [`CommandDecl::effect`] refuses one field up.
+pub const EXITS_DISPATCHES: &[crate::exit::ExitCode] = &[];
 
 /// `--strictness`, the one global flag.
 ///
@@ -2160,6 +2233,12 @@ pub const ROOT: CommandDecl = CommandDecl {
     // A bare invocation performs no default action, so there is no answer to
     // encode and `-J` would be a flag that looks applied and isn't.
     data_channel: false,
+    // THE ROOT DISPATCHES AND DECIDES NOTHING, which is a noun's answer and is
+    // this row's for a noun's reason. A bare invocation performs no action, so
+    // every code a caller sees under `batten` belongs to a leaf or to clap —
+    // including the `1` a bare invocation itself returns, which is clap's
+    // "subcommand required" and not a verdict of the root's.
+    exits: EXITS_DISPATCHES,
     flags: ROOT_FLAGS,
 };
 
@@ -2353,6 +2432,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "check",
         about: "Run the applicable read-only gates against the repository",
         data_channel: true,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[CHECK_RULE, CHECK_STAGED, CHECK_SINCE, JSON],
     },
@@ -2365,6 +2445,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "enforce",
         about: "Run every configured rule, including kinds that execute a configured command",
         data_channel: true,
+        exits: EXITS_VERDICT,
         effect: Effect::Unclassified,
         flags: &[ENFORCE_RULE, JSON],
     },
@@ -2382,6 +2463,7 @@ pub const SURFACE: &[CommandDecl] = &[
         // own with the child's bytes. The pointer surface over captured output is
         // CLOUD-162's, on stderr.
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Unclassified,
         flags: &[
             // Declared BEFORE the trailing argv: `trailing_var_arg` swallows
@@ -2425,6 +2507,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "capture",
         about: "Captured command output: navigate what `exec` already ran, without running it again",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -2449,6 +2532,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "capture.show",
         about: "Print a capture's pointer, or the lines a selection asks for, with no second run",
         data_channel: true,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[
             FlagDecl::positional("handle", "The `<stream>:<digest>` handle to read"),
@@ -2474,6 +2558,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "capture.find",
         about: "Resolve a stored tool response by the key it carries, with no handle to look up first",
         data_channel: true,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[
             FlagDecl::positional("key", "The key the response must carry, e.g. an issue id"),
@@ -2489,6 +2574,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "capture.list",
         about: "List this repository's captures as handles, in a fixed order",
         data_channel: true,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[STREAM, CALLS, JSON],
     },
@@ -2502,6 +2588,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "capture.prune",
         about: "Remove this repository's captures — the one removal path; captures never expire on their own",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Destructive,
         // `-y` comes from the globals (CLOUD-46 landed it there), and this row
         // requires it UNCONDITIONALLY rather than only when unattended — stricter
@@ -2521,6 +2608,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "mcp",
         about: "Dispatch a declared MCP call and hand back a reduction instead of the payload",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -2559,6 +2647,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "mcp.call",
         about: "Dispatch one declared method, store the response, and print the declared reduction",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Unclassified,
         flags: &[
             FlagDecl::positional(
@@ -2584,6 +2673,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "target",
         about: "Inspect and reclaim this repository's build tree",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -2600,6 +2690,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "target.prune",
         about: "Reclaim superseded build artifacts, and refuse below the measured disk floor for the build the next lap will run",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Destructive,
         flags: &[DRY_RUN, PRUNE_ROOT],
     },
@@ -2608,6 +2699,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "config",
         about: "Inspect configuration",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Read,
         flags: &[],
     },
@@ -2616,6 +2708,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "config.show",
         about: "Print the effective configuration",
         data_channel: true,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         // The same per-command declaration `check` carries, not a second flag:
         // selecting an encoding reaches no user-supplied code, so it raises
@@ -2631,6 +2724,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "config.epoch",
         about: "Print the content hash of the governing config surface",
         data_channel: true,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         // The value alone is already machine-readable, so `-J` is not a second
         // rendering of it: it names *which surface* the hash covers, which a
@@ -2646,6 +2740,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "config.deprecations",
         about: "Report schema keys removed since a published release with no deprecation window",
         data_channel: true,
+        exits: EXITS_VERDICT,
         // Reads committed bytes at a ref and the schema this binary derives.
         // Nothing is written and no process is spawned.
         effect: Effect::Read,
@@ -2656,6 +2751,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "config.lint",
         about: "Report policy smells in batten.toml (any smell is a violation)",
         data_channel: true,
+        exits: EXITS_VERDICT,
         // Still `read` with `--host-rules`: the flag names a file or `-` the
         // CALLER supplies. Agents fetch, gates decide — nothing here reaches the
         // network, so the verb stays on the derived read-only allowlist.
@@ -2672,6 +2768,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "lint",
         about: "Lint an artifact against a declared schema",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Read,
         flags: &[],
     },
@@ -2683,6 +2780,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "lint.brief",
         about: "Check a delegation brief against the handoff schema (any missing section is a violation)",
         data_channel: true,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[
             JSON,
@@ -2697,6 +2795,7 @@ pub const SURFACE: &[CommandDecl] = &[
         // channel toggle. `tests::spec_switches_format_rather_than_declaring_json`
         // pins the distinction so a future row cannot acquire both.
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[FlagDecl::defaulted_enum(
             "format",
@@ -2721,6 +2820,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "doctor",
         about: "Diagnose whether Batten can run in this repository",
         data_channel: true,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Read,
         flags: &[JSON],
     },
@@ -2760,6 +2860,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "doctor.mediator",
         about: "Diagnose whether the engine the registrations reach was built from this tree",
         data_channel: true,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[JSON],
     },
@@ -2784,6 +2885,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "doctor.egress",
         about: "Diagnose whether the agent proxy would carry this container's requests",
         data_channel: true,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[JSON],
     },
@@ -2832,6 +2934,7 @@ pub const SURFACE: &[CommandDecl] = &[
         // Per-harness detail is the whole reason this is a sub-verb rather than a
         // line in `doctor`'s summary, and `-J` is where that detail goes.
         data_channel: true,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[JSON],
     },
@@ -2859,6 +2962,7 @@ pub const SURFACE: &[CommandDecl] = &[
         // The open ids are the pointer set a reader acts on, and `-J` is where
         // they go — never a task's subject line (rule 4).
         data_channel: true,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[JSON],
     },
@@ -2875,6 +2979,7 @@ pub const SURFACE: &[CommandDecl] = &[
         // The pointer it emits is one path; a JSON document of one field would
         // be a second shape for the same answer.
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[DRY_RUN],
     },
@@ -2900,6 +3005,7 @@ pub const SURFACE: &[CommandDecl] = &[
         // over one set, and byte-stability is not a claim a mutating verb can
         // make about two consecutive runs.
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[PRUNE, DRY_RUN],
     },
@@ -2908,6 +3014,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "generate",
         about: "Emit artifacts derived from the command spec, on stdout",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Read,
         flags: &[],
     },
@@ -2918,6 +3025,7 @@ pub const SURFACE: &[CommandDecl] = &[
         // The artifact *is* the output; there is no human rendering to switch
         // away from, and a shell script is not JSON.
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[FlagDecl::required_enum(
             "shell",
@@ -2942,6 +3050,7 @@ pub const SURFACE: &[CommandDecl] = &[
         // config files are — not because this is a batten document with a human
         // rendering to switch away from.
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[FlagDecl::required_enum(
             "harness",
@@ -2956,6 +3065,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Emit the roff man page for one command, on stdout",
         // The page IS the output, and roff is not JSON.
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         // A positional rather than a flag: the page selector is the command's
         // one argument, and `batten generate man 'config show'` reads as the
@@ -2973,6 +3083,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Emit the whole command surface as one markdown reference, on stdout",
         // One document, no human/machine split to toggle between.
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         // No selector: the reference is the whole surface by definition, and a
         // subtree flag would invite a partial reference to be published as a
@@ -2989,6 +3100,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "generate.schema",
         about: "Emit the JSON Schema for a config or policy-input surface, derived from the types that define it",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         // `--surface`, not a `generate override-schema` sub-verb: the override
         // layer is a second SURFACE of the same artifact, and §2 and the landed
@@ -3013,6 +3125,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "perf",
         about: "Measure this repository's own invocation cost",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Write,
         flags: &[],
     },
@@ -3036,6 +3149,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "perf.pair",
         about: "Measure this branch and its merge base back to back on one machine, and print both arms as paired records",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[FlagDecl {
             id: "null",
@@ -3071,6 +3185,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "perf.compare",
         about: "Decide whether a paired measurement read on stdin regressed past the threshold",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[],
     },
@@ -3081,6 +3196,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "perf.gate",
         about: "Measure this branch against its merge base and refuse a regression",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[FlagDecl {
             id: "null",
@@ -3106,6 +3222,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "mutate",
         about: "Decide whether this repository's gates discriminate, rather than merely parse",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Write,
         flags: &[],
     },
@@ -3128,6 +3245,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "mutate.sweep",
         about: "Apply every declared mutation to its source and report the ones its declared suite did not catch",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[],
     },
@@ -3147,6 +3265,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "mutate.census",
         about: "Report every gate in the tree that is neither mutation-enforced nor carrying a filed exemption",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[],
     },
@@ -3161,6 +3280,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "policy",
         about: "Inspect the thresholds and path sets this repository holds itself to",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Read,
         flags: &[],
     },
@@ -3172,6 +3292,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "policy.budget",
         about: "Judge the always-loaded instruction set against its declared token budget",
         data_channel: true,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[JSON],
     },
@@ -3195,6 +3316,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "policy.hooks",
         about: "Judge this session's hook output against its declared per-session budget",
         data_channel: true,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[JSON],
     },
@@ -3211,6 +3333,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "policy.test",
         about: "Run each registered module's own `test_` rules and report the predicates none exercised",
         data_channel: true,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[JSON],
     },
@@ -3230,6 +3353,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "policy.tools",
         about: "Print the tool names the mediated-call rows decide, one per line",
         data_channel: true,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[JSON],
     },
@@ -3252,6 +3376,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "policy.explain",
         about: "Resolve a verdict token to its class definition and the routes out of it",
         data_channel: true,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[VERDICT_TOKEN, JSON],
     },
@@ -3309,6 +3434,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "commit",
         about: "The shape a commit must take here: what its subject may say",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Read,
         flags: &[],
     },
@@ -3321,6 +3447,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "commit.check",
         about: "Refuse a commit subject that does not follow the configured convention",
         data_channel: true,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[JSON, RANGE, MESSAGE],
     },
@@ -3339,6 +3466,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "ready",
         about: "Whether an issue's Ready block satisfies the checkable clauses of the gate",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -3357,6 +3485,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "landed",
         about: "Whether a board column is honest about what git and the forge already did",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -3375,6 +3504,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "hk",
         about: "The adopted gate runner's surface contract",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         // UNCLASSIFIED, for `claim`'s and `record`'s reason: the subtree carries
         // one `write` arm and one `read` arm, and a consumer treating an entry as
         // a prefix must not pick the generator up off the read-only allowlist
@@ -3390,6 +3520,7 @@ pub const SURFACE: &[CommandDecl] = &[
         // be a second shape for the same answer, and byte-stability is not a
         // claim a mutating verb can make about two consecutive runs.
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[],
     },
@@ -3401,6 +3532,7 @@ pub const SURFACE: &[CommandDecl] = &[
         // would be a second shape for the same answer, and byte-stability is not
         // a claim a mutating verb can make about two consecutive runs.
         data_channel: false,
+        exits: EXITS_STANDARD,
         // WRITE, declared rather than smuggled into a read verb: it records a
         // receipt. It is the only write — nothing about the tree, the contract or
         // the plan is modified.
@@ -3416,6 +3548,7 @@ pub const SURFACE: &[CommandDecl] = &[
         // absent runner, an empty plan, another pin — have no document to emit.
         // The answer is one pointer line per drifted step.
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[],
     },
@@ -3446,6 +3579,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "landed.check",
         about: "Refuse a board column that contradicts main's history or a declined key",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[CLAIMED, MERGED_PRS, LANDED_BY, DECLINED],
     },
@@ -3466,6 +3600,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "landed.abandoned",
         about: "Refuse an In Progress claim with no landing, no pull request, no branch and no recent touch",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[CLAIMED, MERGED_PRS, LANDED_BY, REFS, INSTANT, MAX_IDLE_DAYS],
     },
@@ -3474,6 +3609,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "ready.lint",
         about: "Refuse an issue whose Ready block fails a checkable clause of the Definition of Ready",
         data_channel: true,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[ISSUE, JSON],
     },
@@ -3483,6 +3619,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "checks",
         about: "Whether a commit's check runs answer the question a landing depends on",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -3511,6 +3648,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "checks.green",
         about: "Refuse a head whose required checks are red, still running, or not yet registered",
         data_channel: true,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[
             REQUIRED_CHECKS,
@@ -3536,6 +3674,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "pr",
         about: "The pull request a landing drives, and the answers it waits on",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -3557,6 +3696,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "pr.watch",
         about: "Poll a head's check runs until the required set answers, then report the verdict",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Unclassified,
         flags: &[
             WAIT_SHA,
@@ -3595,6 +3735,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "pr.derive",
         about: "The tracker row a bot's pull request implies, as a payload the refinement gate reads",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Unclassified,
         flags: &[PR_NUMBER],
     },
@@ -3606,6 +3747,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "pr.file",
         about: "Open the mirror issue a bot's pull request implies, and report its number",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[PR_NUMBER],
     },
@@ -3615,6 +3757,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "pr.link",
         about: "Write the closing key into a bot pull request's body, so its merge moves the row",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[PR_NUMBER, ISSUE_KEY],
     },
@@ -3625,6 +3768,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "pr.ensure",
         about: "File the row and link it, doing whatever this tick can and saying what it did",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[PR_NUMBER],
     },
@@ -3637,6 +3781,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "pr.closes",
         about: "Whether a pull request's body still closes a tracker key, asked at the last moment",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Unclassified,
         flags: &[PR_NUMBER],
     },
@@ -3648,6 +3793,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "task",
         about: "What long-running tasks are doing, recorded where it can be read without a log",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -3659,6 +3805,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "task.register",
         about: "Record that a task has started, under its pid",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[TASK_NAME, TASK_PID, TASK_PHASE],
     },
@@ -3667,6 +3814,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "task.phase",
         about: "Record what a registered task is now doing",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[TASK_PID, TASK_VALUE],
     },
@@ -3681,6 +3829,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "task.tick",
         about: "Record that a task's loop went round",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[TASK_PID, TASK_VALUE],
     },
@@ -3689,6 +3838,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "task.sig",
         about: "Record that the world a task is watching moved",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[TASK_PID, TASK_VALUE],
     },
@@ -3697,6 +3847,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "task.unregister",
         about: "Drop a task's record, which its exit path does and a kill cannot",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[TASK_PID],
     },
@@ -3706,6 +3857,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "task.read",
         about: "One field of one task's record, so a prober composes rather than parsing the layout",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[TASK_PID, TASK_FIELD],
     },
@@ -3719,6 +3871,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "task.alive",
         about: "What tasks are running right now and what phase each is in — one call, no log reading",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[TASK_PROGRAM_ROOT, HOOK_INSTANT],
     },
@@ -3733,6 +3886,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "singleton",
         about: "Whether a second copy of a task may start in this clone",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -3744,6 +3898,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "singleton.acquire",
         about: "Take a task's lock for a pid, or refuse naming the process that holds it",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[SINGLETON_TASK, TASK_PID, SINGLETON_RECHECK],
     },
@@ -3752,6 +3907,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "singleton.release",
         about: "Drop a task's lock, which its exit trap does and a kill cannot",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[SINGLETON_TASK],
     },
@@ -3762,6 +3918,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "claim",
         about: "Whether the issue you are about to pull is actually unclaimed",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -3775,6 +3932,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "claim.check",
         about: "Refuse a pull of an issue somebody is already on, and mint the receipt when it is free",
         data_channel: true,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[TAKEOVER, BYPASS_SEQUENCE, ADOPT, ADOPT_FROM, ISSUE, JSON],
     },
@@ -3800,6 +3958,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "claim.bot",
         about: "Attest a bot branch from the lane's public facts, and mint the receipt when they hold",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[],
     },
@@ -3819,6 +3978,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "claim.race",
         about: "Refuse a claim a different open pull request already carries, judged by head SHA",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[],
     },
@@ -3827,6 +3987,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "claim.carry",
         about: "Attest that this branch only carries licence rows forward, and mint the receipt when it does",
         data_channel: true,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[JSON],
     },
@@ -3835,6 +3996,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "semver",
         about: "Whether this branch's API delta is compatible with the bump it claims",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -3848,6 +4010,7 @@ pub const SURFACE: &[CommandDecl] = &[
         // `every_data_emitting_verb_declares_the_json_flag` exists to catch — it
         // caught this.
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[SEMVER_BASELINE, SEMVER_RELEASE_TYPE, SEMVER_PACKAGE],
     },
@@ -3856,6 +4019,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "attribution",
         about: "What produced commits may carry about the tooling that made them",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -3867,6 +4031,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "attribution.check",
         about: "Refuse vendor authorship, branding or session links in commit metadata",
         data_channel: true,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[JSON, RANGE, MESSAGE, ATTRIBUTION_HARNESS],
     },
@@ -3878,6 +4043,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "attribution.identity",
         about: "Set this clone's repo-local git identity when it is unset or denied",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[],
     },
@@ -3892,6 +4058,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "worktree",
         about: "Worktrees and the work in them: what is at risk",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -3903,6 +4070,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "worktree.status",
         about: "Report work that is uncommitted, unpushed, or not landed on the configured target",
         data_channel: true,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[JSON],
     },
@@ -3915,6 +4083,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "override",
         about: "Issued admissions: an override is a record, never a variable somebody knows",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -3940,6 +4109,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "override.request",
         about: "Answer a class's declared precondition and receive an admission for one situation",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[OVERRIDE_RULE, OVERRIDE_VERDICT, OVERRIDE_SUBJECT],
     },
@@ -3967,6 +4137,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "override.spend",
         about: "Spend an issued admission against the situation it was issued for",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[
             OVERRIDE_ADMISSION,
@@ -3984,6 +4155,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "provision",
         about: "Pinned tools this repository provisions, cached out of tree",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -3997,6 +4169,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "provision.status",
         about: "Report which provisioned tools do not match the manifest",
         data_channel: true,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[JSON],
     },
@@ -4008,6 +4181,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "provision.apply",
         about: "Fetch, verify against the pinned checksum, and install into the out-of-tree cache",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[DRY_RUN],
     },
@@ -4044,6 +4218,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "startup",
         about: "Report whether this container matches what the repository declares",
         data_channel: true,
+        exits: EXITS_STANDARD,
         effect: Effect::Unclassified,
         flags: &[REPAIR, JSON],
     },
@@ -4069,6 +4244,7 @@ pub const SURFACE: &[CommandDecl] = &[
         // ever be an ambiguity — and it would break the per-harness decision
         // channel CLOUD-40 pinned.
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Unclassified,
         flags: &[
             HOOK_INSTANT,
@@ -4092,6 +4268,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "payload",
         about: "Read a hook payload from stdin",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Read,
         flags: &[],
     },
@@ -4116,6 +4293,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "payload.field",
         about: "Print one field of a hook payload read from stdin, for a shell hook that must not depend on jq",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[
             FlagDecl::required_enum(
@@ -4142,6 +4320,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "receipt",
         about: "Verification receipts: SHA-keyed claims a named check passed, invalidated by git facts",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -4152,6 +4331,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Record that the named check concluded pass against the current HEAD",
         // Records state and reports nothing; there is no document to emit.
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[FlagDecl::positional(
             "check",
@@ -4176,6 +4356,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "receipt.status",
         about: "Judge the named check's recorded receipt against HEAD and origin/main",
         data_channel: true,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[
             FlagDecl::positional("check", "The check whose receipt is judged"),
@@ -4214,6 +4395,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "defects",
         about: "The append-only defect ledger: the lessons this repository has already paid for",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -4224,6 +4406,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "defects.query",
         about: "List recorded defects, as pointers",
         data_channel: true,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[JSON, CLASS, RECORD_ID, UNGATED],
     },
@@ -4236,6 +4419,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Append defect records read as JSONL on stdin",
         // Reports counts on stderr under -n; there is no document to emit.
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[DRY_RUN],
     },
@@ -4249,6 +4433,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "design",
         about: "Design-evidence claims: the integrity of the record behind a decision",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -4260,6 +4445,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "design.audit",
         about: "Audit a JSONL design-evidence claim stream on stdin for record integrity",
         data_channel: true,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[JSON],
     },
@@ -4271,6 +4457,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "state",
         about: "The out-of-tree findings store: which store belongs to this checkout",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -4284,6 +4471,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Bind this checkout to its findings store, minting one only if none exists",
         // Reports what it bound on stderr; there is no document to emit.
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[FlagDecl::positional_optional(
             "store",
@@ -4299,6 +4487,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "state.record",
         about: "Record this ref's findings into the store, and GC instances whose ref is gone",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[],
     },
@@ -4313,6 +4502,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Upgrade the findings store to this binary's record version",
         // Reports counts on stderr; there is no document to emit.
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[],
     },
@@ -4341,6 +4531,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Record what was decided about a stored finding",
         // Reports the identity and the token on stderr; there is no document.
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         // Both REQUIRED, unlike `adopt`'s optional store: there is no defensible
         // default for either. An omitted identity would have to mean "every
@@ -4366,6 +4557,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "state.list",
         about: "List stored findings and the refs they were observed in",
         data_channel: true,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[JSON],
     },
@@ -4401,6 +4593,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "record",
         about: "Out-of-tree verdict stores: what something else judged, keyed so a stale answer cannot answer",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -4429,6 +4622,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "show",
         about: "Report what something is, without changing it",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Read,
         flags: &[],
     },
@@ -4445,6 +4639,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "show.agent",
         about: "What an agent may do in this repository: the read-only verbs, the exit contract, and the declared gates",
         data_channel: true,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[JSON],
     },
@@ -4473,6 +4668,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Record a declared tool row's verdict, read as `<name> <token>` lines on stdin",
         // Records state and reports nothing; there is no document to emit.
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[FlagDecl::positional(
             "id",
@@ -4488,6 +4684,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "record.forge",
         about: "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[FlagDecl::positional(
             "ref",
@@ -4508,6 +4705,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "record.plan",
         about: "Record this branch's plan, read as `<id> <status>` lines on stdin",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[],
     },
@@ -4528,6 +4726,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "record.closes",
         about: "Record which rows this branch's pull request body closes, read on stdin",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[],
     },
@@ -4550,6 +4749,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "wiring",
         about: "Repair a host's hook registrations",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -4571,6 +4771,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "wiring.reclaim",
         about: "Remove non-batten hook registrations from this host's merged surfaces",
         data_channel: false,
+        exits: EXITS_STANDARD,
         // `Destructive` is the VERB's classification and stays so, even though
         // `--check` and `--dry-run` write nothing: §5 classifies a command by
         // what it may do, not by what a particular invocation chose. A reader
@@ -4588,6 +4789,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "lease",
         about: "The landing lease: one branch spends a matrix at a time",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -4610,6 +4812,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "lease.authorises",
         about: "May this branch spend a matrix right now?",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[LEASE_BRANCH],
     },
@@ -4671,6 +4874,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "lease.check",
         about: "Gate: the lease is free or a live, well-formed hold — never a wedge and never garbage",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[],
     },
@@ -4682,6 +4886,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "lease.status",
         about: "Report who holds the lease, for how much longer, and who is admitted behind them",
         data_channel: true,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[JSON],
     },
@@ -4695,6 +4900,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "lease.peek",
         about: "Print one advisory field of the held lease, or nothing",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[LEASE_FIELD],
     },
@@ -4710,6 +4916,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "lease.held",
         about: "Is this clone's lease still held, with a beat of margin to act on?",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[],
     },
@@ -4719,6 +4926,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "lease.acquire",
         about: "Take the lease, waiting out a live holder and reaping a dead one",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[LEASE_BRANCH],
     },
@@ -4728,6 +4936,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "lease.renew",
         about: "Extend this clone's lease by one term",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[],
     },
@@ -4738,6 +4947,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "lease.hold",
         about: "Renew this clone's lease every beat until it is lost or the hold ends",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[],
     },
@@ -4751,6 +4961,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "lease.release",
         about: "Hand the lease back, leaving a tombstone rather than deleting the ref",
         data_channel: false,
+        exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[],
     },
@@ -4762,6 +4973,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "lease.reserve",
         about: "Take the one slot behind the current holder",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[LEASE_BRANCH],
     },
@@ -4775,6 +4987,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "land",
         about: "The landing lap: replay this branch onto a base that moved",
         data_channel: false,
+        exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -4788,6 +5001,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "land.replay",
         about: "Advance the base and replay this branch onto it, recording the outcome",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[LAND_REFERENCE, LAND_RESOLVE],
     },
@@ -4801,6 +5015,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "land.wait",
         about: "Ask whether this head is green and whether its base still holds; the first answer decides",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[LAND_REFERENCE],
     },
@@ -4818,6 +5033,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "land.push",
         about: "Push this branch to its own ref, under receive-pack's compare-and-swap",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[],
     },
@@ -4836,6 +5052,7 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "land.verify",
         about: "Run the configured gate over this head and record what it answered",
         data_channel: false,
+        exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[],
     },

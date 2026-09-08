@@ -558,6 +558,149 @@ fn exit_code_contract() {
         },
     ];
     assert_exit_codes("contract", &cases);
+    // THE CORPUS IS ALSO EVIDENCE ABOUT THE DECLARATIONS, not just about the
+    // codes (CLOUD-1646). Every case above names an invocation and the code it
+    // must return; `SURFACE` now names, per verb, the codes it MAY return. So
+    // each case is one observation to check against its verb's declaration, and
+    // checking it here is what keeps the declaration from becoming prose beside
+    // a table that already knew the answer.
+    assert_observations_are_declared(&cases);
+}
+
+/// Resolve the `SURFACE` row an invocation reaches, longest path first.
+///
+/// Longest-first because `config show` and `config` are both rows and the
+/// argument vector matches the prefix of either; the leaf is the one that ran.
+fn declaring_row(args: &[&str]) -> Option<&'static batten::surface::CommandDecl> {
+    let joined = args.join(" ");
+    batten::surface::SURFACE
+        .iter()
+        .filter(|row| joined == row.path || joined.starts_with(&format!("{} ", row.path)))
+        .max_by_key(|row| row.path.len())
+}
+
+/// Every observed code sits inside its verb's declared set.
+///
+/// The runtime half of the census. The declaration half below asserts a set was
+/// WRITTEN DOWN; this asserts it is not a fiction — a verb whose declaration
+/// omits a code it demonstrably returns fails here.
+fn assert_observations_are_declared(cases: &[Case]) {
+    let mut wrong = Vec::new();
+    for case in cases {
+        // An invocation that reaches no row is a flag error or the bare binary,
+        // and clap owns those codes rather than any verb. Skipped rather than
+        // failed: this census is over verbs, and asserting over a row that does
+        // not exist would be asserting a premise nothing created.
+        let Some(row) = declaring_row(case.args) else {
+            continue;
+        };
+        if row.exits.is_empty() {
+            continue;
+        }
+        let observed = batten::exit::ExitCode::ALL
+            .iter()
+            .find(|code| code.code() == case.expected);
+        if let Some(observed) = observed
+            && !row.exits.contains(observed)
+        {
+            wrong.push(format!(
+                "  {} returned {} ({:?}) and declares {:?}",
+                row.path, case.expected, observed, row.exits
+            ));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "these verbs returned a code their `exits` declaration does not permit — either the \
+         behaviour is wrong or the declaration is:\n{}",
+        wrong.join("\n")
+    );
+}
+
+/// CLOUD-1646: every leaf verb declares which exit codes it may produce.
+///
+/// # The gap this closes
+///
+/// §7 is stated as total — `exit.rs`'s first line, "one table, total, with no
+/// per-verb exception" — and nothing checked it per verb. `exit.rs`'s own tests
+/// pin the four NUMBERS; `exit_code_contract` above was a fixed corpus of
+/// hand-written invocations with no `mcp` case; `every_disposition_maps_to_a_
+/// declared_exit_code` buckets the checks pipeline's `Outcome`, not verbs. So no
+/// machine-checkable statement existed that a verb's behaviour could contradict,
+/// and the law was broken twice — CLOUD-292 in `exec`, CLOUD-1645 in `mcp call`
+/// — with nothing in between that would have failed.
+///
+/// # Bucket-or-fail, in both directions
+///
+/// `pointer_only.rs`'s `every_leaf_verb_is_classified` is the shape, not a second
+/// classifier beside it. A leaf with an empty `exits` fails; a noun with a
+/// populated one fails too, so a leaf cannot hide as a noun and a noun cannot
+/// acquire a claim about its subtree.
+///
+/// # One message, every offender
+///
+/// Collected rather than asserted row by row. A census that panics on the first
+/// offender makes filling `SURFACE` an N-run loop, and the row asks for all of
+/// them at once.
+#[test]
+fn every_leaf_verb_declares_its_exit_set() {
+    let paths: Vec<&str> = batten::surface::SURFACE
+        .iter()
+        .map(|row| row.path)
+        .collect();
+    let is_leaf = |path: &str| {
+        !paths
+            .iter()
+            .any(|other| *other != path && other.starts_with(&format!("{path} ")))
+    };
+
+    let mut undeclared = Vec::new();
+    let mut overdeclared = Vec::new();
+    for row in batten::surface::SURFACE {
+        match (is_leaf(row.path), row.exits.is_empty()) {
+            (true, true) => undeclared.push(row.path),
+            (false, false) => overdeclared.push(row.path),
+            _ => {}
+        }
+    }
+
+    assert!(
+        undeclared.is_empty(),
+        "every leaf verb must declare the exit codes it may produce (§7). These declare none — \
+         `EXITS_STANDARD` unless the verb renders a policy verdict, in which case \
+         `EXITS_VERDICT`:\n  {}",
+        undeclared.join("\n  ")
+    );
+    assert!(
+        overdeclared.is_empty(),
+        "a noun dispatches to its subtree and decides nothing, so its `exits` must be \
+         `EXITS_DISPATCHES`. These declare a set they cannot answer for:\n  {}",
+        overdeclared.join("\n  ")
+    );
+}
+
+#[test]
+fn a_declared_exit_set_is_never_a_code_outside_the_contract() {
+    // THE BOUND. `exits` is typed over `ExitCode`, so an undefined code cannot
+    // be spelled — but a row could still declare a set that is empty of the one
+    // code every verb reaches, and a set nobody can satisfy is a gate that
+    // decides nothing. Every leaf can complete, and every leaf can be invoked
+    // wrongly, so `Success` and `Usage` are on every leaf by construction.
+    for row in batten::surface::SURFACE
+        .iter()
+        .filter(|row| !row.exits.is_empty())
+    {
+        assert!(
+            row.exits.contains(&ExitCode::Success),
+            "{} declares no clean exit",
+            row.path
+        );
+        assert!(
+            row.exits.contains(&ExitCode::Usage),
+            "{} declares no usage exit, but clap can refuse any invocation",
+            row.path
+        );
+    }
 }
 
 /// CLOUD-330: the disposition -> exit mapping is TOTAL, asserted by enumeration.
