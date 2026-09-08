@@ -49,16 +49,39 @@ fn fixture(name: &str) -> std::path::PathBuf {
 }
 
 /// Write an executable gate that records its argv and exits with `code`.
+///
+/// **PER-PLATFORM, BECAUSE `run_land_entry_gates` SPAWNS THE ARGV DIRECTLY** and
+/// the shebang script this wrote unconditionally is not a program Windows can
+/// execute. Measured on the `windows` leg: both cases below read `asked` as `""`
+/// and failed at their first assertion, because the gate had never run.
+///
+/// That is `rules/rust.md`'s "shown able to fail" rule inverted — a case
+/// asserting a conclusion over a premise the environment never created — and it
+/// is worth naming that `cfg-gated-test` does NOT see this shape: the `#[cfg]`
+/// was on a block inside this helper rather than on a `#[test]`, so the cases
+/// compiled and ran on Windows and only their fixture was missing. The remedy is
+/// to make the premise real on both platforms rather than to narrow the cases.
 fn gate(dir: &std::path::Path, name: &str, code: i32) -> String {
-    let path = dir.join(name);
-    std::fs::write(
-        &path,
+    let asked = dir.join("asked");
+    // `.cmd` is what `CreateProcess` will run without an interpreter, so the
+    // extension is part of the fixture rather than cosmetic.
+    let path = if cfg!(windows) {
+        dir.join(std::path::Path::new(name).with_extension("cmd"))
+    } else {
+        dir.join(name)
+    };
+    let body = if cfg!(windows) {
         format!(
-            "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>'{}/asked'\necho 'the gate spoke'\nexit {code}\n",
-            dir.display()
-        ),
-    )
-    .expect("write the gate");
+            "@echo off\r\necho %* >>\"{}\"\r\necho the gate spoke\r\nexit /b {code}\r\n",
+            asked.display()
+        )
+    } else {
+        format!(
+            "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>'{}'\necho 'the gate spoke'\nexit {code}\n",
+            asked.display()
+        )
+    };
+    std::fs::write(&path, body).expect("write the gate");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
