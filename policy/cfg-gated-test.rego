@@ -44,7 +44,15 @@
 # `ci-cache-declared.rego` already uses for the same reason.
 #
 #MUTANT-SUITE crates/batten/tests/it/cfg_gated_test.rs
-#MUTANT block-may-span-code|s@\tattribute_or_doc(lines\[start + 1\])@\ttrue@|a_cfg_far_from_the_test_with_code_between_is_not_a_gated_test
+# `[12]` RATHER THAN `1`, AND THE FIRST SPELLING SURVIVED. Naming only
+# `start + 1` neuters the two-hop body and the three-hop body's FIRST conjunct;
+# its second, `attribute_or_doc(lines[start + 2])`, still reads the blank line in
+# the named case's fixture and refutes the join, so the case stayed green and the
+# sweep reported `SURVIVED` with no owner. A declared mutation whose named case
+# cannot observe the change is a defect in the DECLARATION — `test-targets.rego`
+# records the same lesson for `extension-may-widen` — so the expression has to
+# reach every conjunct of the predicate it claims to neuter.
+#MUTANT block-may-span-code|s@^\tattribute_or_doc(lines\[start + [12]\])$@\ttrue@|a_cfg_far_from_the_test_with_code_between_is_not_a_gated_test
 #MUTANT reach-may-be-empty|s@^reach := \[1, 2, 3\]$@reach := []@|a_branch_that_adds_a_platform_gated_test_is_refused
 #MUTANT direction-may-invert|s@\tafter > base@\tafter < base@|a_branch_that_adds_a_platform_gated_test_is_refused
 #MUTANT base-may-read-as-empty|s@\tbase := gated_tests(base_lines_of(path))@\tbase := 0@|a_pre_existing_platform_gated_test_survives_an_edit
