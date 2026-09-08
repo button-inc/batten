@@ -165,6 +165,10 @@ jobs:
           submodules: true
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
+          # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). The
+          # digest above pins the ACTION; this pins the MISE it installs, which
+          # is a separate resolution the digest does not reach.
+          version: 2026.9.1
           # cross-check is `rustup target add` + `cargo check`; rust is the only
           # tool it touches. See the ci job for why these lists are narrow.
           install_args: rust
@@ -288,6 +292,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
+          # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). The
+          # digest above pins the ACTION; this pins the MISE it installs, which
+          # is a separate resolution the digest does not reach.
+          version: 2026.9.1
           # zig supplies the Darwin linker and cargo-zigbuild drives cargo
           # through it; rust is the compiler. Nothing else is invoked here —
           # and this is the ONLY job that needs zig, the 17.3s pole the other
@@ -407,6 +415,10 @@ jobs:
           fetch-depth: 0
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
+          # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). The
+          # digest above pins the ACTION; this pins the MISE it installs, which
+          # is a separate resolution the digest does not reach.
+          version: 2026.9.1
           # cargo-semver-checks does the comparison; rust supplies the cargo and
           # the rustup that fetches the newer toolchain the tool requires — see
           # the note beside `[tools]` in mise.toml for why that is the tool's
@@ -567,6 +579,10 @@ jobs:
           submodules: true
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
+          # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). The
+          # digest above pins the ACTION; this pins the MISE it installs, which
+          # is a separate resolution the digest does not reach.
+          version: 2026.9.1
           # NOT rust alone, which is what this job shipped with and what the
           # sixth Windows run disproved. `cargo test` is the command, but the
           # suite SPAWNS: `tests/cli.rs` materializes fixtures carrying this

@@ -144,6 +144,10 @@ jobs:
           fetch-depth: 0
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
+          # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). The
+          # digest above pins the ACTION; this pins the MISE it installs, which
+          # is a separate resolution the digest does not reach.
+          version: 2026.9.1
           # `rust`, and nothing else. `commit-lint` depends on `commit-check` and
           # `commit-attribution`, both of which are `cargo run --quiet -p batten`,
           # and on `signing-posture`, which uses only git, gpg and ssh-keygen —
