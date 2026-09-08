@@ -476,6 +476,21 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # exactly when upstream is the thing that moved, and never otherwise. Reading the
 # README from a gate instead would answer "what does upstream claim right now",
 # which is a property of the world and belongs on a clock (`lock-complete`).
+# THE SHELL SUITE'S SLOW-TEST BAN, mirroring the nextest one (CLOUD-1571).
+#
+# `.config/nextest.toml` bans a slow RUST case with `slow-timeout`. bats had no
+# equivalent, so a hung shell case had nothing to stop it — measured on this
+# branch: `land.bats`'s "main moving mid-wait starts the next lap" sat at 0% CPU
+# for 40 MINUTES inside `verify`, holding the landing lease, with no output and
+# no diagnostic. The case is a stubbed race between `ci-wait` and `main-watch`,
+# and under a loaded box the race did not resolve.
+#
+# A hang is the worst shape a test failure takes: it produces no verdict, spends
+# unbounded wall clock, and on the landing path it holds a singleton the whole
+# time. 300s matches the nextest kill, so both suites answer "too slow" with one
+# number, and it is far above the whole suite's per-case cost — bats finishes all
+# of its cases in ~228s together.
+BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
 MUTANT_GATES = "mise,attestation-check,engine-config,engine-doctor,engine-landed,engine-pinned,engine-ready,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,ci-cache-declared,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared,worktree-registration,nextest-slow"
