@@ -12612,6 +12612,18 @@ kind = "document"
 target = "policy/nextest-slow.rego"
 
 [[verdict]]
+id = "waiver file missing"
+gloss = "a per-test slow-timeout override cites no tracker row, so the exception is written but not filed"
+class = """
+A per-test override is how a legitimately slow case keeps the ban in force for every other case, so the mechanism is sanctioned and the ceiling deliberately does not reach it. What it owes instead is a reason a reader can follow: an override with no row behind it is the ban switched off for whichever test was inconvenient, and an unexplained exception is the thing that rots while looking like policy.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/nextest-slow.rego"
+
+[[verdict]]
 id = "bound edit refused"
 gloss = "the declared slow-test period is above the ceiling policy/nextest-slow.rego commits to"
 class = """

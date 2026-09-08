@@ -67,7 +67,8 @@
 #MUTANT-SUITE crates/batten/tests/it/nextest_slow.rs
 #MUTANT terminator-unread|s@^\tcontains(line, "terminate-after")$@\ttrue@|a_declaration_without_terminate_after_is_refused
 #MUTANT ceiling-may-rise|s@^\tkill > ceiling_seconds$@\tfalse@|a_kill_threshold_above_the_ceiling_is_refused
-#MUTANT declaration-unread|s@^\tsome line in input.tree.lines\[config\]$@\tsome line in []@|the_committed_config_declares_a_terminating_slow_timeout
+#MUTANT declaration-unread|s@^lines := input.tree.lines\[config\]$@lines := []@|the_committed_config_declares_a_terminating_slow_timeout
+#MUTANT override-reason-unread|s@^\tnot filed(i)$@\ttrue@|an_override_that_cites_a_row_is_clean
 #MUTANT multiplier-ignored|s@^\tkill := period \* multiplier$@\tkill := period@|a_kill_threshold_above_the_ceiling_is_refused
 #
 # THE THIRD MUTATION EMPTIES THE LINE WALK rather than negating a conjunct, for
@@ -93,6 +94,8 @@ rules contains "nextest-slow-unbounded"
 
 rules contains "nextest-slow-raised"
 
+rules contains "nextest-slow-override-unfiled"
+
 # The runner's committed configuration. A consumer path in a consumer module,
 # which is where non-negotiable rule 1 puts it.
 config := ".config/nextest.toml"
@@ -107,20 +110,60 @@ config := ".config/nextest.toml"
 # exception written for it "and the exception is what rots".
 ceiling_seconds := 300
 
-# Every non-comment line of the committed runner config.
-declaration contains line if {
-	some line in input.tree.lines[config]
-	not startswith(trim_space(line), "#")
+# The committed runner config, by line index — the index is load-bearing, because
+# which SECTION a `slow-timeout` sits under is what says whether it is the default
+# bound or a named exception.
+lines := input.tree.lines[config]
+
+# The nearest section header at or before `i`. A TOML file is ordered, so the last
+# header before a line is the table that line belongs to; there is no other way to
+# tell a `[profile.default]` value from a `[[profile.default.overrides]]` one when
+# reading lines.
+section(i) := header if {
+	before := [j |
+		some j, line in lines
+		j < i
+		startswith(trim_space(line), "[")
+	]
+	count(before) > 0
+	header := trim_space(lines[max(before)])
 }
 
-# A line that declares BOTH halves of the ban. `period` alone only reports; it is
-# `terminate-after` that kills, so a declaration carrying one and not the other
-# is not a ban and must not read as one.
-terminating contains line if {
-	some line in declaration
+# A non-comment line declaring BOTH halves of the ban. `period` alone only
+# reports; it is `terminate-after` that kills, so a declaration carrying one and
+# not the other is not a ban and must not read as one.
+terminating_at contains i if {
+	some i, line in lines
+	not startswith(trim_space(line), "#")
 	contains(line, "slow-timeout")
 	contains(line, "period")
 	contains(line, "terminate-after")
+}
+
+# THE DEFAULT BOUND: what every case is held to, and the only thing the ceiling
+# speaks about.
+terminating contains lines[i] if {
+	some i in terminating_at
+	section(i) == "[profile.default]"
+}
+
+# AN EXCEPTION: a per-test override. The ceiling deliberately does NOT reach these
+# — bounding them by the default's number would make the exception mechanism
+# unusable, and a gate that forbids the sanctioned escape is the shape that gets
+# switched off. What they owe instead is a filed reason, below.
+override_at contains i if {
+	some i in terminating_at
+	startswith(section(i), "[[profile.default.overrides]]")
+}
+
+# An override whose preceding comment block cites a tracker row. The window is
+# generous because the rationale for an exception is prose, and prose is the point
+# — an exception nobody explained is the thing this refuses.
+filed(i) if {
+	some j, line in lines
+	j < i
+	i - j <= 30
+	contains(line, "CLOUD-")
 }
 
 # The kill threshold in seconds: `period x terminate-after`, read with string
@@ -171,6 +214,19 @@ violation contains {
 } if {
 	some kill in kill_seconds
 	kill > ceiling_seconds
+}
+
+# AN EXCEPTION NOBODY EXPLAINED. A per-test override is how a legitimately slow
+# case keeps the ban in force everywhere else — but an override with no filed row
+# behind it is just the ban switched off for whichever test was inconvenient, and
+# it is the thing that rots.
+violation contains {
+	"rule": "nextest-slow-override-unfiled",
+	"verdict": "waiver file missing",
+	"subjects": [{"path": config}],
+} if {
+	some i in override_at
+	not filed(i)
 }
 
 deny contains finding if {
@@ -253,4 +309,49 @@ test_the_refusal_points_at_the_runner_config if {
 	some v in violation with input as tree({".config/nextest.toml": raised})
 	v.subjects[0].path == ".config/nextest.toml"
 	v.verdict == "bound edit refused"
+}
+
+# --- the exception mechanism -------------------------------------------------
+
+unfiled_override := [
+	"[profile.default]",
+	"slow-timeout = { period = \"10s\", terminate-after = 30 }",
+	"",
+	"[[profile.default.overrides]]",
+	"filter = 'test(something_slow)'",
+	"slow-timeout = { period = \"10s\", terminate-after = 120 }",
+]
+
+filed_override := [
+	"[profile.default]",
+	"slow-timeout = { period = \"10s\", terminate-after = 30 }",
+	"",
+	"# CLOUD-1641 owns making this case fast; deleting this row is its acceptance.",
+	"[[profile.default.overrides]]",
+	"filter = 'test(something_slow)'",
+	"slow-timeout = { period = \"10s\", terminate-after = 120 }",
+]
+
+# AN EXCEPTION NOBODY EXPLAINED. The override is above the ceiling and that is
+# FINE — the ceiling does not reach an override, deliberately. What is refused is
+# that no row was cited for it.
+test_an_override_citing_no_row_is_refused if {
+	count(violation) == 1 with input as tree({".config/nextest.toml": unfiled_override})
+}
+
+# AND THE SAME OVERRIDE WITH A ROW IS CLEAN, which is what shows the refusal turns
+# on the missing reason rather than on the override existing at all. Without this
+# case the rule above is satisfied by a module that refuses every override.
+test_an_override_that_cites_a_row_is_clean if {
+	count(violation) == 0 with input as tree({".config/nextest.toml": filed_override})
+}
+
+# THE CEILING DOES NOT REACH AN OVERRIDE, stated as its own case because the first
+# version conflated the two and refused the committed config: it bounded every
+# `slow-timeout` line by the default's number, which makes the sanctioned
+# exception mechanism unusable — the shape that gets a gate switched off.
+test_an_override_above_the_ceiling_is_not_a_raise if {
+	every v in violation {
+		v.rule != "nextest-slow-raised"
+	} with input as tree({".config/nextest.toml": filed_override})
 }
