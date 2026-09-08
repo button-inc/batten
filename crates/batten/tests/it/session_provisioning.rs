@@ -257,6 +257,9 @@ struct Row {
     id: String,
     on: String,
     bounded: bool,
+    /// The `run` argv exactly as the row spells it, so a case can ask WHAT a
+    /// handler dispatches and not only that it is declared (CLOUD-1620).
+    run: String,
 }
 
 /// The committed `[[hook.handler]]` rows, in declaration order, read as TEXT.
@@ -290,6 +293,7 @@ fn handler_rows() -> Vec<Row> {
             id: field("id").unwrap_or_default(),
             on: field("on").unwrap_or_default(),
             bounded: field("timeout_ms").is_some(),
+            run: field("run").unwrap_or_default(),
         });
     }
     rows
@@ -480,6 +484,197 @@ fn the_committed_provisioning_declares_every_step_in_order() {
         ids, DECLARED,
         "the provisioning steps are declared, in the order they must run"
     );
+}
+
+/// The two entry points that compile the engine, named once.
+///
+/// `install:local` declares `depends = ["build:release"]`, so either spelling
+/// reaching a session-start task is the same four-minute compile.
+const COMPILE_ENTRY_POINTS: [&str; 2] = ["install:local", "build:release"];
+
+/// The task each `session-start` row dispatches, plus every task those bodies
+/// reach through `mise run`.
+///
+/// Bounded rather than fully transitive: the delegation in this manifest is one
+/// hop (`session:doctor` → `doctor`, `session:identity` → `attribution-identity`)
+/// and a fixed depth cannot loop on a manifest that gains a cycle. Depth is
+/// asserted to have found something by `the_reachable_set_is_not_empty`.
+fn reachable_session_task_bodies() -> Vec<(String, String)> {
+    let manifest =
+        std::fs::read_to_string(at_root("mise.toml")).expect("the task manifest is readable");
+
+    // THE EXECUTABLE SURFACE, NEVER THE WHOLE BLOCK, and the distinction is not
+    // pedantry — it is what makes this a gate rather than a prose scanner. The
+    // first draft returned everything under the header, and both cases below went
+    // red against a manifest that was already correct: `session:batten`'s comment
+    // NAMES `install:local` while explaining why it no longer runs it, and
+    // `session:install`'s names `cargo-zigbuild`. A comment is the one place a
+    // retired mechanism is supposed to still be written down.
+    //
+    // So this reads `run` and `depends` — what mise will actually execute —
+    // discarding the commentary around them. `depends` is here because
+    // `install:local` carries `depends = ["build:release"]`: a task can compile
+    // without its own body naming a compiler.
+    //
+    // `[tasks."name"]` and `[tasks.name]` are both spelled in this file.
+    let body_of = |name: &str| -> Option<String> {
+        let headers = [
+            format!("\n[tasks.\"{name}\"]\n"),
+            format!("\n[tasks.{name}]\n"),
+        ];
+        let block = headers
+            .iter()
+            .find_map(|header| manifest.split(header.as_str()).nth(1))?;
+        let block = block.split("\n[").next().unwrap_or(block);
+
+        let value = |key: &str| -> String {
+            let Some(rest) = block.split(&format!("\n{key} = ")).nth(1) else {
+                return String::new();
+            };
+            rest.strip_prefix("\"\"\"").map_or_else(
+                || rest.lines().next().unwrap_or_default().to_owned(),
+                |triple| triple.split("\"\"\"").next().unwrap_or(triple).to_owned(),
+            )
+        };
+        Some(format!("{}\n{}", value("run"), value("depends")))
+    };
+
+    let mut queue: Vec<String> = session_rows()
+        .iter()
+        .filter_map(|row| {
+            // `run = ["mise", "run", "<task>"]` — the task is the word after the
+            // `run` verb. A row dispatching something that is not `mise run` has
+            // no task body to read and drops out here.
+            let argv: Vec<&str> = row
+                .run
+                .split(['[', ']', ',', '"'])
+                .map(str::trim)
+                .filter(|word| !word.is_empty())
+                .collect();
+            match argv.as_slice() {
+                ["mise", "run", task, ..] => Some((*task).to_owned()),
+                _ => None,
+            }
+        })
+        .collect();
+
+    let mut seen = Vec::new();
+    let mut found = Vec::new();
+    for _ in 0..4 {
+        let mut next = Vec::new();
+        for name in std::mem::take(&mut queue) {
+            if seen.contains(&name) {
+                continue;
+            }
+            seen.push(name.clone());
+            let Some(body) = body_of(&name) else {
+                continue;
+            };
+            for word in body.split_whitespace().collect::<Vec<_>>().windows(3) {
+                if word[0].ends_with("mise") && word[1] == "run" {
+                    next.push(word[2].trim_matches(['"', '\'']).to_owned());
+                }
+            }
+            found.push((name, body));
+        }
+        queue = next;
+    }
+    found
+}
+
+#[test]
+fn the_reachable_set_is_not_empty() {
+    // THE ANTI-VACUITY CASE FOR THE SCAN BELOW, and it is the same class as
+    // `every_handler_row_is_read` one case down: a header this manifest
+    // re-spells, or a `run` argv shape the parser stops recognising, returns an
+    // empty set and the compiler scan then passes over nothing at all.
+    let bodies = reachable_session_task_bodies();
+    assert!(
+        bodies.len() >= session_rows().len(),
+        "every session-start row's task body resolves, found {} for {} rows",
+        bodies.len(),
+        session_rows().len()
+    );
+    assert!(
+        bodies.iter().any(|(name, _)| name == "session:batten"),
+        "the row that used to carry the compile is in the scanned set"
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|(name, _)| name == "attribution-identity"),
+        "delegation is followed: `session:identity` reaches `attribution-identity`"
+    );
+}
+
+/// No session-start handler compiles the engine (CLOUD-1620).
+///
+/// # Why this is a case and not a comment
+///
+/// The premise that put a compile here was that consumer #1 must judge the
+/// engine it ships, and it is a premise a reader can re-derive at any time —
+/// which is how it arrived. What it cost is not re-derivable from reading the
+/// manifest: measured 2026-09-08, `session:batten` at 224.87s and
+/// `session:identity` at ~215s, ~440s of a ~450s session start, to produce a
+/// binary byte-identical to the release already on PATH.
+///
+/// So the property is asserted rather than explained. `install.sh` cannot
+/// compile — `install-does-one-thing` in `batten.toml` bans `cargo` from it
+/// outright — and this is that same ban one layer up, over the tasks a session
+/// start actually dispatches.
+///
+/// # Skew is not what this weakens
+///
+/// A release binary older than the tree's config is a real failure (CLOUD-1326,
+/// measured at ~15 hours of silently permitting gates). It is `batten doctor
+/// mediator`'s to detect (CLOUD-1630) and this case takes no position on it: a
+/// branch that needs the tree's engine runs `mise run install:local`, which stays
+/// reachable and is what `verify` and `batten-check` already do.
+// THE MUTATION TARGETS VACUITY, NOT THE ASSERTION, and the first draft got this
+// backwards. It emptied `COMPILE_ENTRY_POINTS`, which makes the scan below loop
+// over nothing and PASS — a survivor, so the mutation would have reported the
+// suite as non-discriminating while the real defect it names went unmodelled.
+//
+// The way this gate dies quietly is the reachable set going empty: a `run` argv
+// spelled differently, a task header re-spelled, and every case here passes over
+// zero bodies. So the mutation makes the extraction yield nothing, and the case
+// it must redden is the anti-vacuity one — which is the only case that can tell
+// "nothing compiles" from "nothing was read".
+//MUTANT-SUITE crates/batten/tests/it/session_provisioning.rs
+//MUTANT session-start-compiles|s@^                \["mise", "run", task, \.\.\] => Some((\*task).to_owned()),$@                ["mise", "run", _task, ..] => None,@|the_reachable_set_is_not_empty
+#[test]
+fn no_session_start_step_compiles_the_engine() {
+    for (name, body) in reachable_session_task_bodies() {
+        for entry in COMPILE_ENTRY_POINTS {
+            assert!(
+                !body.contains(entry),
+                "the session-start task `{name}` reaches `{entry}`, which compiles \
+                 the engine on the one path that may not assume a toolchain — \
+                 install the release and let `doctor mediator` decide staleness"
+            );
+        }
+    }
+}
+
+/// A `cargo` fallback is allowed, and only behind a resolution guard.
+///
+/// `attribution-identity` keeps `cargo run` for the clone whose provisioning has
+/// not happened yet — it has to set an identity before it writes a commit. That
+/// is a fallback, not a path: the guard is what keeps it off the session-start
+/// path, and without this case the guard could be dropped and the case above
+/// would still pass, since `cargo run -p batten` names neither entry point.
+#[test]
+fn a_cargo_fallback_in_a_session_task_is_guarded() {
+    for (name, body) in reachable_session_task_bodies() {
+        if !body.contains("cargo") {
+            continue;
+        }
+        assert!(
+            body.contains("command -v batten"),
+            "the session-start task `{name}` spawns `cargo` with nothing \
+             establishing that the installed binary is absent first"
+        );
+    }
 }
 
 #[test]
