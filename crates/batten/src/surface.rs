@@ -2822,11 +2822,6 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "doctor.gate",
         about: "Diagnose whether this checkout's commit path runs the gate",
         data_channel: true,
-        // `EXITS_STANDARD`, and the absent code is the content: `Violation` is
-        // unreachable here, inheriting the promise bare `doctor` makes. A
-        // mediating harness reads `2` as a deny, and "this clone has no commit
-        // hooks" is not "policy says no".
-        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[JSON],
     },
