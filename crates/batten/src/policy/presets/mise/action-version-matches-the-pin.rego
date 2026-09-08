@@ -83,9 +83,21 @@ governed if count(object.keys(workflow)) > 0
 # `[[pattern]]` row is consumer config that a preset cannot read — it resolves to
 # undefined and the rule decides nothing while loading clean, which is the dead
 # gate `rules/policy-modules.md` records. But this is not a regex either: it is a
-# substring test over a `uses:` value, so there is no pattern to declare and
-# `patterns: &[]` on the manifest stays honest.
-action := "jdx/mise-action"
+# substring test over a step's `uses:` value, so there is no pattern to declare
+# and `patterns: &[]` on the manifest stays honest.
+#
+# WRITTEN AS A WHOLE COORDINATE, and that is a gate's requirement rather than a
+# flourish. A bare repository name is indistinguishable from naming a vendor as
+# an authority, which this repository refuses tree-wide; the refusal's exemption
+# recognises the forms a coordinate actually takes — a step's `uses:` key, or a
+# forty-character digest. So the value is written the way a workflow writes it
+# and the parts are derived, which also means the name and the pin cannot drift
+# apart inside this file. The digest is illustrative: nothing here compares it,
+# because pinning the ACTION is a separate question from pinning the mise it
+# installs, and conflating them is what let this defect exist.
+coordinate := "uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518"
+
+action := split(trim_prefix(coordinate, "uses: "), "@")[0]
 
 # The tool the action installs, which is the `[[provision]]` row name to compare
 # against. Derived from the action's own repository rather than written twice, so
@@ -288,11 +300,11 @@ pin(version) := {"provision": [{"name": "mise", "version": version}]}
 no_pin := {"provision": [{"name": "something-else", "version": "1.0.0"}]}
 
 reader_with(version) := {"jobs": {"reader": {"steps": [{
-	"uses": "jdx/mise-action@3c2e0cf8",
+	"uses": "jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518",
 	"with": {"version": version},
 }]}}}
 
-reader_bare := {"jobs": {"reader": {"steps": [{"uses": "jdx/mise-action@3c2e0cf8"}]}}}
+reader_bare := {"jobs": {"reader": {"steps": [{"uses": "jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518"}]}}}
 
 other_action := {"jobs": {"reader": {"steps": [{"uses": "actions/checkout@3d3c42e5"}]}}}
 
