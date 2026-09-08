@@ -2780,13 +2780,22 @@ pub const SURFACE: &[CommandDecl] = &[
     // narrow caller ask it.
     //
     // `read`, and structurally so: it resolves a directory and stats two files.
-    // Nothing is executed — running a hook to see whether it works is what
-    // `mise-tasks/doctor.sh` does behind a probe variable, and reaching
-    // user-supplied code from the `filter(effect == read)` allowlist is
-    // CLOUD-170's actual invariant.
+    // Nothing is executed — running a hook to see whether it works is what a
+    // shell task can do behind a probe variable, and reaching user-supplied code
+    // from the `filter(effect == read)` allowlist is CLOUD-170's actual invariant.
+    //
+    // `gate` RATHER THAN `commit-gate`, AND THE HYPHEN IS THE WHOLE REASON. A man
+    // page is committed as the hyphen-joined command path — `batten-doctor-gate.1`
+    // — and `surface.rs`'s own suite maps that filename back by replacing EVERY
+    // hyphen with a space. So a sub-verb whose name contains one is not
+    // round-trippable: `batten-doctor-commit-gate.1` reads back as the command
+    // `doctor commit gate`, which renders nothing, and three cases in
+    // `crates/batten/tests/it/surface.rs` go red at once. Measured here rather
+    // than reasoned — no verb on this surface has ever carried an internal
+    // hyphen, and this is why. Do not reintroduce one.
     CommandDecl {
-        path: "doctor commit-gate",
-        id: "doctor.commit-gate",
+        path: "doctor gate",
+        id: "doctor.gate",
         about: "Diagnose whether this checkout's commit path runs the gate",
         data_channel: true,
         effect: Effect::Read,
