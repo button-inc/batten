@@ -201,6 +201,7 @@ for nothing. Measured: two cache entries carrying the same key across five merge
 compiling for ~145s and saving nothing, because the restore skips saving when the key already \
 exists. One condition reading the restore's hit flag is the whole fix.",
                 routes: &[read("source read first", "the compile step")],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "cache name unknown",
@@ -212,6 +213,7 @@ the guard keeps naming it, the expression is ALSO empty and the build silently r
 compiling every time. So the class names both halves: the guard must be present, and the step it \
 reads must exist.",
                 routes: &[read("source read first", "the restore step")],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "event bind loose",
@@ -221,6 +223,7 @@ a quoted block. That makes the repository's own writing ABOUT a trigger an invoc
 every artifact that has to name the token in order to be about it a live round. The class is the \
 unanchored read of a body anyone can write, not the one token read that way.",
                 routes: &[read("source read first", "the job condition")],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "event reach dead",
@@ -231,6 +234,7 @@ could be exercised without waiting on a late cron, and every job's condition sti
 the two original events. Judged only where a condition MENTIONS the event name at all, since a \
 workflow that does not discriminate by event answers for every trigger it declares.",
                 routes: &[read("source read first", "the job conditions")],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "input render dropped",
@@ -242,6 +246,7 @@ workflow name, so a caller keying on the interpolated value could never match. L
 the line because a comment is legal YAML, and review reads it as the thing it was meant to be. \
 Read pre-parse, because the parse is what destroys the evidence. Quoting the value is the fix.",
                 routes: &[read("source read first", "the truncated line")],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "job require unseen",
@@ -251,6 +256,7 @@ a ruleset change — which only holds if that job's assertion follows its depend
 itself. Measured: a fan-in enumerated three of its four dependencies, so a red fourth left green \
 the one check the host requires. A set-wide predicate cannot go stale, because it names nothing.",
                 routes: &[read("source read first", "the fan-in job")],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "job run early",
@@ -261,6 +267,7 @@ single job missing the guard defeats both, and the run it buys is one nobody rea
 one repository: a workflow triggered by any pull request touching a workflow file spent a runner \
 on every push to a draft for its whole life, and re-drafting did not close the tap.",
                 routes: &[read("source read first", "the job's condition")],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "job start same",
@@ -271,6 +278,7 @@ was found. Compared as LITERAL expressions rather than firing times: an every-30
 schedule genuinely overlaps every hourly slot, and flagging that would make the class fire \
 forever on a workflow doing nothing wrong.",
                 routes: &[read("source read first", "the schedule trigger")],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "merge run early",
@@ -280,6 +288,7 @@ and a branch ruleset admits that empty set as satisfying required-checks-green. 
 that never reads the draft state has no draft check at all, and can advance the trunk to a commit \
 CI never ran on. Deciding not to ask is not the same as asking.",
                 routes: &[read("source read first", "the merge job")],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "review watch missing",
@@ -293,6 +302,7 @@ once, both fully green but for one such name.",
                     "source read first",
                     "the pull_request trigger's types",
                 )],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "workflow declare missing",
@@ -304,6 +314,7 @@ concurrent comment invocations ran N concurrent attempts to advance a trunk bran
 refusals against 6 merges in half an hour. A scheduled workflow must NOT cancel its own previous \
 tick, so declaring a group is all this asks.",
                 routes: &[read("source read first", "the workflow")],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "workflow run loose",
@@ -314,6 +325,7 @@ in 25 hours — no runner minutes, which is why it survived, but 46% of every ru
 repository, enough that paginating the run list stops being stable. The filter belongs on the \
 trigger, where it is free.",
                 routes: &[read("source read first", "the workflow_run trigger")],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "workflow run twice",
@@ -326,6 +338,7 @@ value is what does the work, and it is a boolean rather than the string `true`."
                     "source read first",
                     "the workflow's concurrency block",
                 )],
+                applicability: crate::verdict::Applicability::Advice,
             },
         ],
         patterns: &[],
@@ -346,6 +359,7 @@ pipeline, which spends a run to re-ask a question the previous run already answe
 leaves a commit in the history no reader can act on. If the goal is a fresh run, re-run \
 the pipeline.",
             routes: &[run("task run first", "re-run the pipeline")],
+            applicability: crate::verdict::Applicability::Advice,
         }],
         patterns: &[],
     },
@@ -409,6 +423,7 @@ judge different work, the commit is what has to change.",
                         "the recorded verdict is about a runner fault rather than about this commit",
                     ),
                 ],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "lease grant other",
@@ -436,6 +451,7 @@ through costs one matrix.",
                         "the holder is wedged rather than slow — it is beating without advancing, so waiting for a lapse it keeps renewing starves the fleet indefinitely",
                     ),
                 ],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "patch ship twice",
@@ -459,6 +475,7 @@ lands. Close the branch, or rebase onto the target and see what is genuinely lef
                         "the change is being deliberately re-applied after the target reverted it, so identical content is the intent rather than a duplicate",
                     ),
                 ],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "replay halt conflict",
@@ -483,6 +500,7 @@ succeed. Resolve the conflict, then lap again.",
                         "the conflict was resolved outside this lap's record, so the head being pushed is a completed replay rather than a half-applied one",
                     ),
                 ],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "wait read both",
@@ -507,6 +525,7 @@ abandon the other unread.",
                         "the second answer belongs to an earlier attempt this lap resumed rather than to a second arm of the same race",
                     ),
                 ],
+                applicability: crate::verdict::Applicability::Advice,
             },
         ],
         patterns: &[],
@@ -563,6 +582,7 @@ remedy is in the finding rather than a file the reader has to go and search.",
                     "task run first",
                     "run the task the refusal names, through the task runner",
                 )],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "job pin other",
@@ -577,6 +597,7 @@ eleven seconds; the release that followed published its schema and none of its b
 pin was committed and correct throughout and simply did not reach that layer. The remedy is to \
 declare the version at the step so the install is the pin rather than a resolution.",
                 routes: &[read("pin read first", "the row that pins the tool")],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "job pin missing",
@@ -589,6 +610,7 @@ the run that breaks is the one that happened to start after an upstream release.
 the tool being pinned somewhere in the tree: a project that pins nothing is not asked to match \
 something that does not exist.",
                 routes: &[read("pin read first", "the row that pins the tool")],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "workflow parse unread",
@@ -601,6 +623,7 @@ could not, which is a gate reporting on a surface it never saw.",
                     "source read first",
                     "the workflow that would not parse",
                 )],
+                applicability: crate::verdict::Applicability::Advice,
             },
         ],
         patterns: &[],
@@ -639,6 +662,7 @@ as three claims about the tree, all false.",
                     "task run first",
                     "run the declared task, or invoke the program through the pin",
                 )],
+                applicability: crate::verdict::Applicability::Advice,
             },
             // THE PROBE HALF, AND A SEPARATE CLASS ON PURPOSE (CLOUD-1256).
             //
@@ -663,6 +687,7 @@ than a refusal — a deny here would refuse a correct shell habit.",
                     "ask the pin instead — its own `which` answers about the toolchain the project \
 declares, and a probe inside the pin's environment is already correct",
                 )],
+                applicability: crate::verdict::Applicability::Advice,
             },
         ],
         patterns: &[],
@@ -693,6 +718,7 @@ CI path filter — covers this file silently and exits 0. A green run over it th
 means nothing was looked at rather than nothing was found, which is worse than a red \
 one. Name the language in the filename, or declare the file's coverage another way.",
                 routes: &[run("patch run first", "git mv")],
+                applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
                 id: "program resolve missing",
@@ -702,6 +728,7 @@ with a test that exits 0, so the reference does not fail — it goes silent, and
 behaviour it was reaching for simply never happens. A path that must exist should be \
 asserted rather than tested.",
                 routes: &[read("source read first", "the computed path")],
+                applicability: crate::verdict::Applicability::Advice,
             },
         ],
         patterns: &[],
@@ -722,6 +749,7 @@ already exists, and the holder finds out by having their next pull fail in a way
 looks like their own mistake. `--force-with-lease` refuses when the remote moved, which \
 is the same operation with the one check that makes it safe.",
             routes: &[run("patch run first", "git push --force-with-lease")],
+            applicability: crate::verdict::Applicability::Advice,
         }],
         patterns: &[],
     },

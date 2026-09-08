@@ -543,6 +543,26 @@
         }
       ]
     },
+    "Applicability": {
+      "description": "What the boundary may DO about a class, beyond naming it (CLOUD-1639).\n\n**Every refusal in this tree is advice**: a class, its pointers, and routes\nthe agent must walk itself. Two outcomes the field treats as first-class are\nunrepresentable — *repaired, re-run* and *repaired, proceed* — and\n[`crate::rules::Rule::fix`] has existed for them since CLOUD-81, executed by\nnothing.\n\n# THE DEFAULT IS `advice`, AND THAT IS WHAT MAKES THIS ADDITIVE\n\nAbsent means today's behaviour, so 200-odd declared classes keep it without\nrestating it and no consumer config changes meaning under an engine that\ngained this column. `Retry` and `Silent` are opt-in per class and each owes\nsomething extra at load — see [`validate`].\n\n# WHY `retry` IS THE DEFAULT POSTURE FOR A REPAIR AND `silent` THE EXCEPTION\n\nNot a preference. pre-commit's hook that modifies files FAILS the run and the\ncaller re-runs over the new bytes — there is no silent path (SRC-041); Ruff\nmakes the caller choose with `--exit-non-zero-on-fix` (SRC-047); Kubernetes\nmutating webhooks apply silently but write `auditAnnotations` (SRC-042). **No\nsurveyed system applies silently and leaves no record.** Measured on agents:\nfeedback-then-retry converged 86.6% against 79.8% for block-and-retry at no\nutility loss, while silent server-side rewrite converged 96.9% and cost 22.3%\nutility (SRC-059). So `Silent` owes a stated reason and a record, and\n[`validate`] refuses one that declares neither.",
+      "oneOf": [
+        {
+          "description": "Name the class and its routes; the agent acts. Every class's behaviour\nbefore CLOUD-1639, and the default.",
+          "type": "string",
+          "const": "advice"
+        },
+        {
+          "description": "The boundary repaired what it refused; the identical call should be\nre-issued. Still a refusal — exit `2` — because the call as made did not\nhappen, and reporting it as an allow would be the silent-rewrite posture\nwearing a retry's name.",
+          "type": "string",
+          "const": "retry"
+        },
+        {
+          "description": "The boundary repaired it and let the call through, owing a record.\n\nThe exception, and it owes `no_retry_reason` on the row that declares it:\na repair the caller never learns about is the 22.3% utility cost SRC-059\nmeasured, so the reason a retry was rejected has to be somebody's stated\ndecision rather than a default.",
+          "type": "string",
+          "const": "silent"
+        }
+      ]
+    },
     "Artifact": {
       "description": "One platform's artifact: where it comes from, and what it must hash to.",
       "type": "object",
@@ -1320,6 +1340,10 @@
       "description": "One declared refusal class.",
       "type": "object",
       "properties": {
+        "applicability": {
+          "description": "What the boundary may DO about this class, beyond naming it (CLOUD-1639).\n\nAbsent is [`Applicability::Advice`], which is every class's behaviour\ntoday and the reason the column defaults rather than being required: a\nrefusal that names a remedy the agent follows itself is the shape 200 of\nthis tree's classes already have, and making them all restate it would be\na column that carries no information 99% of the time.",
+          "$ref": "#/$defs/Applicability"
+        },
         "class": {
           "description": "What the class means, at length. `batten policy explain`'s payload, and\nthe **deliberate exception** to pointer-only output (house style §6):\n`explain` is local documentation rather than a finding, and carrying the\ntext the hot path no longer does is its entire purpose.",
           "type": "string"

@@ -234,12 +234,97 @@ const SLOT_NAMES: [&str; SLOTS] = ["subject", "action", "condition"];
 /// namespace this grammar replaced, wearing a delimiter.
 const SLOTS: usize = 3;
 
+/// What the boundary may DO about a class, beyond naming it (CLOUD-1639).
+///
+/// **Every refusal in this tree is advice**: a class, its pointers, and routes
+/// the agent must walk itself. Two outcomes the field treats as first-class are
+/// unrepresentable — *repaired, re-run* and *repaired, proceed* — and
+/// [`crate::rules::Rule::fix`] has existed for them since CLOUD-81, executed by
+/// nothing.
+///
+/// # THE DEFAULT IS `advice`, AND THAT IS WHAT MAKES THIS ADDITIVE
+///
+/// Absent means today's behaviour, so 200-odd declared classes keep it without
+/// restating it and no consumer config changes meaning under an engine that
+/// gained this column. `Retry` and `Silent` are opt-in per class and each owes
+/// something extra at load — see [`validate`].
+///
+/// # WHY `retry` IS THE DEFAULT POSTURE FOR A REPAIR AND `silent` THE EXCEPTION
+///
+/// Not a preference. pre-commit's hook that modifies files FAILS the run and the
+/// caller re-runs over the new bytes — there is no silent path (SRC-041); Ruff
+/// makes the caller choose with `--exit-non-zero-on-fix` (SRC-047); Kubernetes
+/// mutating webhooks apply silently but write `auditAnnotations` (SRC-042). **No
+/// surveyed system applies silently and leaves no record.** Measured on agents:
+/// feedback-then-retry converged 86.6% against 79.8% for block-and-retry at no
+/// utility loss, while silent server-side rewrite converged 96.9% and cost 22.3%
+/// utility (SRC-059). So `Silent` owes a stated reason and a record, and
+/// [`validate`] refuses one that declares neither.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Applicability {
+    /// Name the class and its routes; the agent acts. Every class's behaviour
+    /// before CLOUD-1639, and the default.
+    #[default]
+    Advice,
+    /// The boundary repaired what it refused; the identical call should be
+    /// re-issued. Still a refusal — exit `2` — because the call as made did not
+    /// happen, and reporting it as an allow would be the silent-rewrite posture
+    /// wearing a retry's name.
+    Retry,
+    /// The boundary repaired it and let the call through, owing a record.
+    ///
+    /// The exception, and it owes `no_retry_reason` on the row that declares it:
+    /// a repair the caller never learns about is the 22.3% utility cost SRC-059
+    /// measured, so the reason a retry was rejected has to be somebody's stated
+    /// decision rather than a default.
+    Silent,
+}
+
+impl Applicability {
+    /// Whether this is the default, for `skip_serializing_if`.
+    ///
+    /// Keeps `-J` byte-identical for the 200-odd classes that declare nothing,
+    /// which is what makes the column additive on the machine surface too.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        matches!(self, Applicability::Advice)
+    }
+
+    /// Whether the boundary may run a repair for this class.
+    #[must_use]
+    pub fn repairs(&self) -> bool {
+        !self.is_default()
+    }
+
+    /// The stable lowercase spelling, for machine output (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Applicability::Advice => "advice",
+            Applicability::Retry => "retry",
+            Applicability::Silent => "silent",
+        }
+    }
+}
+
 /// One declared refusal class.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DeclaredVerdict {
     /// The token, e.g. `task name undefined`.
     pub id: String,
+    /// What the boundary may DO about this class, beyond naming it (CLOUD-1639).
+    ///
+    /// Absent is [`Applicability::Advice`], which is every class's behaviour
+    /// today and the reason the column defaults rather than being required: a
+    /// refusal that names a remedy the agent follows itself is the shape 200 of
+    /// this tree's classes already have, and making them all restate it would be
+    /// a column that carries no information 99% of the time.
+    #[serde(default, skip_serializing_if = "Applicability::is_default")]
+    pub applicability: Applicability,
     /// One line, the hot path's whole payload.
     pub gloss: String,
     /// What the class means, at length. `batten policy explain`'s payload, and
@@ -819,6 +904,30 @@ fn validate_one(
              fixes the thing as well"
         )));
     }
+    // A REPAIRING CLASS OWES A ROUTE THAT IS NOT A REPAIR (CLOUD-1639).
+    //
+    // `retry` and `silent` say the boundary will act, and the whole point of the
+    // pair is that the action can FAIL — a `fix` that did not run falls back to
+    // this class's ordinary refusal, and at that moment the reader needs the way
+    // out every other class owes. The clause above already refuses an empty
+    // route list; this refuses the subtler shape, a class whose only route is
+    // the repair the boundary was going to run anyway, which leaves the fallback
+    // arm pointing at the thing that just failed.
+    if verdict.applicability.repairs()
+        && verdict
+            .routes
+            .iter()
+            .all(|route| route.kind == RouteKind::Command)
+        && verdict.routes.len() == 1
+    {
+        return Err(UsageError::raise(format!(
+            "verdict `{id}` declares `applicability = \"{}\"` and exactly one \
+             `command` route — a repair that fails falls back to this class's \
+             ordinary refusal, so it owes a way out that is not the repair itself",
+            verdict.applicability.as_str()
+        )));
+    }
+
     // The two retirement arms, refused at load in both directions (CLOUD-1114).
     //
     // BOTH is refused because a row asserting two different accounts of where a
@@ -1070,6 +1179,17 @@ pub enum Native {
     CeilingExceeded,
     /// The call matches a refused command shape.
     ShapeRefused,
+    /// The boundary repaired what it refused; re-issue the identical call.
+    ///
+    /// Raised in place of the original class when a row's `fix` ran and the
+    /// class declares [`Applicability::Retry`] (CLOUD-1639). Still a refusal:
+    /// the call as made did not happen.
+    CallRetryNow,
+    /// The boundary repaired it and let the call through, owing a record.
+    ///
+    /// The `silent` posture's class. It rides `additionalContext` rather than a
+    /// refusal, because the call was allowed — the record is the point.
+    CallFixSilent,
     /// The content this call would write matches a refused shape.
     ContentRefused,
     /// The work this call publishes names no tracker key.
@@ -1167,6 +1287,8 @@ impl Native {
         Native::RunOrphaned,
         Native::CeilingExceeded,
         Native::ShapeRefused,
+        Native::CallRetryNow,
+        Native::CallFixSilent,
         Native::ContentRefused,
         Native::KeyMissing,
         Native::VerbTableRefused,
@@ -1247,6 +1369,8 @@ impl Native {
             Native::RunOrphaned => "turn watch dropped",
             Native::CeilingExceeded => "call count over",
             Native::ShapeRefused => "call name refused",
+            Native::CallRetryNow => "call retry now",
+            Native::CallFixSilent => "call fix silent",
             Native::ContentRefused => "input write refused",
             Native::KeyMissing => "issue name missing",
             Native::VerbTableRefused => "verb declare refused",
@@ -1295,6 +1419,13 @@ pub struct VendoredVerdict {
     pub class: &'static str,
     /// The declared remedies.
     pub routes: &'static [VendoredRoute],
+    /// What the boundary may do about it (CLOUD-1639).
+    ///
+    /// A plain field with no default, unlike the consumer table's: a `const`
+    /// initialiser cannot omit one, and spelling `Applicability::Advice` on each
+    /// of the 39 vendored rows is what makes the two that are NOT advice visible
+    /// in a diff rather than inferred from an absence.
+    pub applicability: Applicability,
 }
 
 /// One vendored route. See [`VendoredVerdict`].
@@ -1405,6 +1536,7 @@ protected path directly is the only route left, and the write is one a reviewer 
 in the diff it lands in",
             ),
         ],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "task run twice",
@@ -1418,6 +1550,7 @@ READABLE is this class: a holder caught between its create and its write is a ho
 which is the reading the acquiring path already takes, and a gate disagreeing with it \
 would allow a start that path then refuses.",
         routes: &[read("holder inspected", "batten task alive")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "history drop unpushed",
@@ -1468,6 +1601,7 @@ reachability is.",
 you can name what they contained without consulting them",
             ),
         ],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "config write refused",
@@ -1477,6 +1611,7 @@ writes it. Overwriting an existing one would replace a reviewed policy with a de
 set, silently, in a verb whose whole purpose is that there was nothing there before. \
 Edit the file that exists, or move it aside deliberately.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "outcome table refused",
@@ -1487,6 +1622,7 @@ a family nobody surveyed, or a code a second row already claims is an arm that f
 nothing — and a declared-but-dead arm is worse than an absent one, because it reads as \
 coverage while its route has never been walked. The refusal names the row and the key.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "plan read stale",
@@ -1497,6 +1633,7 @@ answer to that. A live plan that differs means the gate now enforces something n
 read a diff of. Regenerate the projection and review the diff — the difference is the \
 decision, and absorbing it silently is what this refuses.",
         routes: &[run("contract run first", "batten hk contract")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "handler answer denied",
@@ -1506,6 +1643,7 @@ names a program, the program answered deny, and this carries that answer through
 handler's own reason is free text the consumer configured, so no remedy is invented here \
 — the handler is where a remedy would have to be declared.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "scanner pin missing",
@@ -1518,6 +1656,7 @@ a pinned toolchain. Declare the scanner as a `[[provision]]` entry.",
             run("check run first", "batten provision"),
             read("config read first", "batten.toml"),
         ],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "scanner install missing",
@@ -1527,6 +1666,7 @@ clean tree, and it is reported as a refusal precisely so the two are not spelled
 same way: a secrets rule that scanned no file and reported nothing is the vacuous pass \
 this engine argues against everywhere.",
         routes: &[run("check run first", "batten provision")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "spawn run refused",
@@ -1536,6 +1676,7 @@ it there. A rule kind that spawns is `Effect`, and `check` is `Read`, so reachin
 through the other would make the read-only allowlist a claim nobody could rely on. The \
 rule is not wrong; the verb is.",
         routes: &[run("check run first", "batten enforce")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "turn finish unmet",
@@ -1548,6 +1689,7 @@ the thing rather than to re-declare that it is finished.",
             run("task run first", "mise run land"),
             read("config read first", "batten.toml"),
         ],
+        applicability: Applicability::Advice,
     },
     // ── the mediated composers' classes (CLOUD-1285) ────────────────────────
     //
@@ -1565,6 +1707,7 @@ against a different head, or records something the row does not accept -- and th
 names which, because the four call for different repairs. Re-running the check is the \
 remedy for a missing one and useless for a refuted one.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "receipt read late",
@@ -1574,6 +1717,7 @@ That is a different repair from a missing receipt and is why it is a different c
 re-run the check. A row declaring a `max_age` is saying the world can move underneath the \
 answer, so an old verdict is could-not-look rather than a pass.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "receipt carry other",
@@ -1583,6 +1727,7 @@ one receipt class that is a statement about what was READ rather than about the 
 re-running the check changes nothing until the thing it reports is fixed. An ABSENT field \
 is could-not-look and is not this class.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "receipt read other",
@@ -1593,6 +1738,7 @@ the check against what is here now. Kept apart from the trunk case because the t
 different things that moved, and a refusal that says the wrong one sends the reader after \
 the wrong repair.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "receipt read stale",
@@ -1607,6 +1753,7 @@ keeps its receipt, because the receipt is then more current than the branch and 
 of re-taking it can help -- this text said the opposite for its whole life and prescribed \
 the one action guaranteed not to work.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "tool run loose",
@@ -1623,6 +1770,7 @@ a `git ls-files` per mediated call is a spawn `RuleKind::scopes` forbids on this
 `perf-assert` prices out. This text said 'tracks' for its whole life and nothing ever \
 checked it -- a class a reader believes is worse than one they cannot look up.",
         routes: &[read("rule read first", "rules/scanning.md")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "verdict read dropped",
@@ -1632,6 +1780,7 @@ passed or failed. A verdict is read from the harness, never inferred from output
 to a file and read the file in a separate call; a pager over a FILE is fine, a pager over a \
 live task is not.",
         routes: &[read("rule read first", "rules/toolchain.md")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "verdict carry other",
@@ -1641,6 +1790,7 @@ command's verdict. This is the laundered shape: it reads as correct, and backgro
 worse than a misread, because the completion notification then carries the compound's \
 status. `&&` is fine -- it short-circuits, so a failure still propagates.",
         routes: &[read("rule read first", "rules/toolchain.md")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "turn watch dropped",
@@ -1650,6 +1800,7 @@ complete, and the session loses the wake-up it would get when the work actually 
 Backgrounding the tool call is the supported shape and keeps the notification; detaching \
 inside the call throws it away.",
         routes: &[read("rule read first", "rules/toolchain.md")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "call count over",
@@ -1659,6 +1810,7 @@ maximum. The count and the maximum are the whole finding -- what was counted is 
 subject, and the refusal carries neither the measured content nor the call text, which is \
 non-negotiable rule 4 decided at the composer rather than at the report.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "call name refused",
@@ -1667,6 +1819,44 @@ non-negotiable rule 4 decided at the composer rather than at the report.",
 refusal names the row rather than echoing the command, because the command is the caller's \
 own text and could carry anything. What to run instead is the row's declared remedy.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    // ─── the repaired arms (CLOUD-1639) ──────────────────────────────────────
+    //
+    // The two classes that say the boundary ACTED rather than advised. Both are
+    // vendored rather than consumer-declared for the reason every `Native` class
+    // is: the engine raises them from its own code, so a consumer could not
+    // decline to declare one without making a refusal site unable to speak.
+    //
+    // THEIR OWN `applicability` IS `advice`, WHICH IS NOT A CONTRADICTION. The
+    // column says what the boundary may do about THIS class, and there is
+    // nothing left to repair — the repair already happened and these are how it
+    // is reported. A `retry` here would mean "repair the report", which is not
+    // a thing.
+    VendoredVerdict {
+        id: "call retry now",
+        gloss: "the boundary repaired what it refused; re-issue the identical call",
+        class: "A rule declared a repair for the shape it refuses, the boundary ran it, and it \
+succeeded. The call as made did not happen, so this is a refusal rather than an allow — but the \
+condition that caused it is gone, and the same call issued again is expected to pass. Nothing \
+needs deciding: the token IS the instruction. Re-issuing a call the boundary has just repaired \
+for is the one retry that is not a guess, which is why this is its own class rather than the \
+original refusal read a second time and puzzled over.",
+        routes: &[run("call issue again", "the identical call, unchanged")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "call fix silent",
+        gloss: "the boundary repaired the call and let it through, and this is the record",
+        class: "A rule declared a repair, the boundary ran it, and the class it raises declares \
+that the call proceeds rather than being re-issued. The call was ALLOWED; this is the record that \
+something changed underneath it, which is the half no surveyed system omits — a mutating \
+admission controller applies silently and still writes an audit annotation. A repair nobody is \
+told about leaves a tree that no longer matches what its author last read, and that cost is \
+measured rather than assumed. The row owes `no_retry_reason`, so proceeding without a re-issue is \
+somebody's stated decision.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "input write refused",
@@ -1676,6 +1866,7 @@ path it targets, so it fires before the bytes land. The refusal names the row an
 destination and never the matched content -- this rule reads exactly the text somebody \
 wanted checked, which is the likeliest place in the surface for a secret to appear.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "issue name missing",
@@ -1686,6 +1877,7 @@ one of them allows: the command itself, the branch name, and the commit subjects
 range the row declares. None carried a key, so nothing on the published work says which row \
 it serves.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     // ── the config loader's classes (CLOUD-1313) ────────────────────────────
     //
@@ -1705,6 +1897,7 @@ what effect each carries. A row that is inert -- declared twice, or read-effect 
 named for mutation -- reads as covered while matching nothing, so the table is proven at \
 load rather than at the call it would have decided.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "pattern declare refused",
@@ -1714,6 +1907,7 @@ regex and duplication becomes unwritable rather than merely detectable. A malfor
 expression here is a config fault, and refusing it at load is what stops a mediated call \
 discovering it at adjudication -- the worst moment and the wrong exit class.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "verdict declare refused",
@@ -1723,6 +1917,7 @@ token's arity, a gloss that is one line, a route list that is not an override al
 tombstone chain that terminates. Each clause is a property of the table, so it is knowable \
 without a tree and belongs where a config fault is reported.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "redirect declare refused",
@@ -1732,6 +1927,7 @@ whether it fires -- which is why it needs no raise-only clamp and why a redefini
 refused for coherence with the other append-only tables rather than because it lowers a \
 bar.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "deferral declare refused",
@@ -1741,6 +1937,7 @@ compared, so it would read as a watched condition while nothing watched it -- wh
 defect the table exists to close, arriving through the table itself. Refused at load rather \
 than at evaluation, because a row that can never fire is a config fault and not a finding.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "remedy resolve missing",
@@ -1751,6 +1948,7 @@ needing a THIRD table -- the rule ids -- so it lives at the load rather than ins
 remedy table's own validator, where a checker reaching past its argument would quietly \
 become the config's.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "marker declare refused",
@@ -1759,6 +1957,7 @@ become the config's.",
 `token` matches every line of every file, which loads clean and reads as coverage, so the \
 table is proven at load.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "rule declare refused",
@@ -1769,6 +1968,7 @@ engine and a mediation boundary, a malformed mediated-call row validated only by
 engine is a row that loads, matches nothing at the mediation channel, and reads as \
 coverage.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "output declare refused",
@@ -1777,6 +1977,7 @@ coverage.",
 object rather than something a reader skims. A duplicate id makes two predicates \
 indistinguishable in the record they write.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "environment declare refused",
@@ -1788,6 +1989,7 @@ to being reported as a defect to reproduce. A SECOND class over the same type as
 `output declare refused` rather than a shared one, because a refusal has to name which of the \
 two tables to edit.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "waiver declare refused",
@@ -1797,6 +1999,7 @@ to gate, but a malformed WAIVER is a hatch whose expiry nobody could read. Refus
 is what makes \"every waiver carries an expiry\" true of the resolved config rather than \
 aspirational.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "fact declare refused",
@@ -1805,6 +2008,7 @@ aspirational.",
 reads it. A row naming a fact the engine cannot produce is a gate that evaluates, reads \
 undefined, and refuses nothing -- the silent dead gate, decided at load instead.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "mint declare refused",
@@ -1813,6 +2017,7 @@ undefined, and refuses nothing -- the silent dead gate, decided at load instead.
 malformed row is a receipt nothing can satisfy or one that answers forever, and both are \
 decidable from the table alone.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "recorder declare refused",
@@ -1821,6 +2026,7 @@ decidable from the table alone.",
 AFTER the pattern registry, because a refusal for a missing pattern id is only honest once \
 the ids are known to be well formed themselves.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "provision declare refused",
@@ -1829,12 +2035,14 @@ the ids are known to be well formed themselves.",
 it in. A row that cannot resolve is a rule that will report a missing scanner at the moment \
 it was supposed to decide something.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
     VendoredVerdict {
         id: "startup declare refused",
         gloss: "the startup table would not load",
         class: "`[[startup]]` is how a repository states what its container must be and how that is repaired. A row that could never decide -- an empty check, a repair that runs nothing, an id declared twice -- is a precondition reported as broken every session with no repair reachable, so it is refused here rather than once per session, where the failure would read as a broken container instead of a typo in this file.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
     },
 ];
 
@@ -1867,6 +2075,11 @@ pub fn declared_from(entry: &VendoredVerdict) -> DeclaredVerdict {
         id: entry.id.to_owned(),
         gloss: entry.gloss.to_owned(),
         class: entry.class.to_owned(),
+        // Carried rather than defaulted (CLOUD-1639): this is the one projection
+        // between the two tables, so a vendored class that declares a repairing
+        // posture would silently become `advice` here if the field were dropped
+        // — and the arm that reads it is at the boundary, far from this line.
+        applicability: entry.applicability,
         routes: entry
             .routes
             .iter()
@@ -1904,6 +2117,7 @@ mod tests {
             routes: vec![route("do the thing")],
             successor: None,
             withdrawn: None,
+            applicability: Applicability::Advice,
         }
     }
 
@@ -2152,6 +2366,8 @@ mod tests {
                 | Native::RunOrphaned
                 | Native::CeilingExceeded
                 | Native::ShapeRefused
+                | Native::CallRetryNow
+                | Native::CallFixSilent
                 | Native::ContentRefused
                 | Native::PlanReadStale
                 | Native::OutcomeTableRefused

@@ -9739,6 +9739,10 @@ word = "file"
 gloss = "opened a tracker row"
 
 [[vocabulary.action]]
+word = "fix"
+gloss = "repaired it rather than reporting it"
+
+[[vocabulary.action]]
 word = "grade"
 gloss = "assigned a verdict"
 
@@ -9825,6 +9829,10 @@ gloss = "looked up"
 [[vocabulary.action]]
 word = "retire"
 gloss = "removed with a successor"
+
+[[vocabulary.action]]
+word = "retry"
+gloss = "issue the same call again"
 
 [[vocabulary.action]]
 word = "run"
@@ -9936,6 +9944,10 @@ word = "never"
 gloss = "does not happen at all"
 
 [[vocabulary.condition]]
+word = "now"
+gloss = "and nothing needs deciding first"
+
+[[vocabulary.condition]]
 word = "other"
 gloss = "disagrees with its counterpart"
 
@@ -9954,6 +9966,10 @@ gloss = "the gate says no"
 [[vocabulary.condition]]
 word = "same"
 gloss = "identical where it should differ"
+
+[[vocabulary.condition]]
+word = "silent"
+gloss = "done without telling anyone"
 
 [[vocabulary.condition]]
 word = "spent"

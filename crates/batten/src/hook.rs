@@ -9728,6 +9728,7 @@ mod tests {
             ],
             successor: None,
             withdrawn: None,
+            applicability: crate::verdict::Applicability::Advice,
         }]
     }
 
@@ -11817,6 +11818,7 @@ mod tests {
                 }],
                 successor: None,
                 withdrawn: None,
+                applicability: crate::verdict::Applicability::Advice,
             })
             .collect::<Vec<crate::verdict::DeclaredVerdict>>();
         Policy {

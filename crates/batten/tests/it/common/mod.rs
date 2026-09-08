@@ -1096,6 +1096,10 @@ pub(crate) fn verdicts(ids: &[&str]) -> Vec<batten::verdict::DeclaredVerdict> {
             id: (*id).to_owned(),
             gloss: format!("the fixture class {id}"),
             class: format!("What {id} means, at the length `batten policy explain` answers with."),
+            // Advice, which is the default and what every fixture class wants:
+            // a repairing class would make the boundary spawn this row's `fix`
+            // in suites whose subject is something else entirely (CLOUD-1639).
+            applicability: batten::verdict::Applicability::Advice,
             routes: vec![batten::verdict::Route {
                 id: "read the authority".to_owned(),
                 kind: batten::verdict::RouteKind::Document,
