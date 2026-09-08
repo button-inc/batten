@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.154](https://github.com/button-inc/batten/compare/v0.0.153...v0.0.154) - 2026-09-08
+
+### Fixed
+
+- *(hook)* [**breaking**] deliver the class definition on a first sighting
+
 ## [0.0.153](https://github.com/button-inc/batten/compare/v0.0.152...v0.0.153) - 2026-09-08
 
 ### Added
