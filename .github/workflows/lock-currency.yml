@@ -46,6 +46,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+        with:
+          # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). This
+          # is the clock that bumps pins, so leaving it resolving latest means
+          # the job that MOVES a pin is the one a bad upstream release stops.
+          version: 2026.9.1
       # The lockfile rewrite this performs is fine here and only here: the
       # checkout is disposable, and no commit is being judged by it.
       - run: mise run lock-check
