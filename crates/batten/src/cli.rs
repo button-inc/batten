@@ -1836,7 +1836,7 @@ fn doctor_of(matches: &ArgMatches) -> DoctorCommand {
         Some(("egress", matches)) => DoctorCommand::Egress {
             json: flag(matches, "json"),
         },
-        Some(("commit-gate", matches)) => DoctorCommand::CommitGate {
+        Some(("gate", matches)) => DoctorCommand::CommitGate {
             json: flag(matches, "json"),
         },
         // The bare verb reads `-J` from its OWN matches, which is where clap put
