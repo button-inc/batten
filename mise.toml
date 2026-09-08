@@ -4031,11 +4031,22 @@ description = "Write: set this clone's repo-local git identity when it is unset 
 # the binary already installed at `/root/.local/bin/batten` answers in
 # milliseconds. The two compiles together were ~440s of a ~450s session start.
 #
-# The shape is `target-prune`'s, above: prefer the installed binary, fall back to
-# a build only where the name does not resolve. That fallback is not decoration —
-# a clone whose provisioning has not run still has to be able to set its identity
-# before it writes a commit, which is the whole reason this task exists in the
+# The shape is `target-prune`'s, above: try the installed binary and fall back to
+# a build when it cannot do the job. That fallback is not decoration — a clone
+# whose provisioning has not run still has to be able to set its identity before
+# it writes a commit, which is the whole reason this task exists in the
 # provisioning window at all.
+#
+# THE GUARD IS TRY-AND-SUCCEED, NEVER MERELY `command -v`, and the difference is
+# the whole correctness of the change. A presence test asks whether a binary is
+# on PATH; the failure that matters here is a binary that IS on PATH and CANNOT
+# READ THIS TREE — the release predating a `batten.toml` key, which is CLOUD-1326
+# and which this repository reaches constantly, because config keys land between
+# releases. Measured 2026-09-08 on this very lap: the installed 0.0.151 refused
+# `[lease]` with "the config declares a key this build predates". A presence-only
+# guard sends the task to that binary and fails; `&&` sends it to the build, which
+# is what `target-prune` has always done and what the unconditional `cargo run`
+# here used to do for free.
 #
 # It also narrows `task-substitution`, whose subject is whichever declared task
 # leads with `cargo`: a reader running `cargo test` was being told to run
@@ -4059,7 +4070,7 @@ description = "Write: set this clone's repo-local git identity when it is unset 
 # `if`/`else` rather than `&&`/`||`: with `a && b || c`, a FAILING `attribution
 # identity` falls through to `c` and spends the four-minute build this row exists
 # to remove — the error path would cost more than the thing being avoided.
-run = "if command -v batten >/dev/null 2>&1; then batten attribution identity; else cargo run --quiet -p batten -- attribution identity; fi"
+run = "if command -v batten >/dev/null 2>&1 && batten attribution identity; then :; else cargo run --quiet -p batten -- attribution identity; fi"
 
 [tasks.commit-check]
 description = "Gate: every commit subject in BASE_SHA..HEAD_SHA follows the convention (policy: [commit] in batten.toml)"
