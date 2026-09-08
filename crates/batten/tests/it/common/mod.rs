@@ -80,6 +80,46 @@ pub(crate) fn declared_patterns() -> String {
     ROWS.clone()
 }
 
+/// The committed `[board]` table, for a fixture that must be judged against a
+/// declared board (CLOUD-1623).
+///
+/// [`declared_patterns`]'s sibling and for its reason: the columns are the
+/// consumer's, so a fixture re-spelling them here would be a second authority on
+/// this repository's own vocabulary — and one that drifts the first time the
+/// board is renamed. Reading the committed table keeps the fixture in step by
+/// construction.
+pub(crate) fn declared_board() -> String {
+    static TABLE: std::sync::LazyLock<String> = std::sync::LazyLock::new(scan_declared_board);
+    TABLE.clone()
+}
+
+fn scan_declared_board() -> String {
+    let text = std::fs::read_to_string(at_root("batten.toml")).expect("the committed config");
+    let mut rows = String::new();
+    let mut inside = false;
+    for line in text.lines() {
+        // The close is tested before the open for `scan_declared_patterns`'
+        // reason: a table closes at the NEXT header of any kind.
+        if inside && line.starts_with('[') {
+            inside = false;
+        }
+        if line.starts_with("[board]") {
+            inside = true;
+            rows.push('\n');
+        }
+        if inside {
+            rows.push_str(line);
+            rows.push('\n');
+        }
+    }
+    assert!(
+        rows.contains("ready"),
+        "the committed config declares no board, so every fixture built on it \
+         would assert about a missing column rather than about a claim"
+    );
+    rows
+}
+
 fn scan_declared_patterns() -> String {
     let text = std::fs::read_to_string(at_root("batten.toml")).expect("the committed config");
     let mut rows = String::new();

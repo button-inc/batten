@@ -141,7 +141,7 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, declared_patterns, git_in, run_with_stdin, stderr, stdout};
+use common::{Fixture, declared_board, declared_patterns, git_in, run_with_stdin, stderr, stdout};
 
 /// A checkout on a feature branch, with the workspace version the §6 arrows read.
 fn repo(name: &str) -> PathBuf {
@@ -158,8 +158,8 @@ fn repo(name: &str) -> PathBuf {
         // The two comments are the same sentence about two tables, which is the
         // point: neither the grammar nor the columns are the engine's to assume.
         .config(&format!(
-            "version = 1\n\n[board]\nready = \"Todo\"\nin_progress = \"In Progress\"\n\
-             review = \"In Review\"\nstarted = [\"In Progress\", \"In Review\", \"Done\"]\n\n{}",
+            "version = 1\n{}\n{}",
+            declared_board(),
             declared_patterns()
         ))
         .file(
@@ -628,7 +628,7 @@ fn outside_a_checkout_the_question_is_not_applicable_and_the_verdict_still_stand
     common::write(
         &dir,
         "batten.toml",
-        &format!("version = 1\n\n{}", declared_patterns()),
+        &format!("version = 1\n{}\n{}", declared_board(), declared_patterns()),
     );
     // NO §6 CLAUSE, and that is the shape rather than a convenience: the version
     // the arrows depend on is a property of a TREE, read lazily inside the clause
