@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.151](https://github.com/button-inc/batten/compare/v0.0.150...v0.0.151) - 2026-09-08
+
+### Fixed
+
+- *(doctor)* [**breaking**] the mediator check asks whether the build is behind the source
+
 ## [0.0.150](https://github.com/button-inc/batten/compare/v0.0.149...v0.0.150) - 2026-09-07
 
 ### Fixed
