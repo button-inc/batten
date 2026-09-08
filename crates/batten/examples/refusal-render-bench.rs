@@ -40,8 +40,7 @@ fn main() -> anyhow::Result<()> {
     // line over it falls back to the compact form, and a bench that passed `None`
     // would report a rendering the harness never emits.
     let records = refusal_render(&registry, config.refusal.as_ref())?;
-    let report =
-        refusal_render_report(&records, env!("CARGO_PKG_VERSION"), config.refusal.as_ref());
+    let report = refusal_render_report(&records, config.refusal.as_ref());
 
     let dir = Path::new("bench/refusal-render");
     std::fs::create_dir_all(dir)?;

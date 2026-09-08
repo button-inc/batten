@@ -32,6 +32,17 @@
 //!
 //! # The drift check is here rather than in the task
 //!
+//! **AND IT IS WHY THE REPORT CARRIES NO CRATE VERSION.** CLOUD-1606 §4 asked
+//! for the version as the baseline's identity, and a byte-exact drift check over
+//! a body containing it would redden on every RELEASE: release-plz bumps the
+//! version in a commit that renders nothing differently, so the check would fail
+//! on a tree whose measurement had not moved and the report would be regenerated
+//! to say a number nobody measured against. That is the row's own argument
+//! against recording the commit SHA, one release later. Measured here twice
+//! while landing: 0.0.151 → 0.0.152 → 0.0.153, three regenerations, no numbers
+//! changed. The baseline is the declared classes and the declared ceiling, which
+//! are what the rendering reads.
+//!
 //! `refusal_render_report` is re-rendered in this process and diffed against the
 //! committed `bench/refusal-render/RESULTS.md`, so the report cannot go stale
 //! without `test:cargo` reddening. That is what lets the benchmark task stay off
@@ -374,11 +385,7 @@ fn the_committed_report_is_what_this_tree_renders() {
         )
     });
     let config = batten::config::load(&root().join("batten.toml")).expect("the config loads");
-    let rendered = refusal_render_report(
-        &records(),
-        env!("CARGO_PKG_VERSION"),
-        config.refusal.as_ref(),
-    );
+    let rendered = refusal_render_report(&records(), config.refusal.as_ref());
     assert_eq!(
         committed, rendered,
         "bench/refusal-render/RESULTS.md is stale — run `mise run refusal-render-bench`"
