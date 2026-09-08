@@ -2435,19 +2435,59 @@ description = "Session start: provision what mise does not own — the rustup cr
 run = "mise run doctor >/tmp/session-start-doctor.log 2>&1 || { echo '::error:: session-start: doctor failed — see /tmp/session-start-doctor.log' >&2; tail -5 /tmp/session-start-doctor.log >&2; exit 1; }"
 
 [tasks."session:batten"]
-description = "Session start: build and install this checkout's own engine over the released one `deps-install` provisioned"
+description = "Session start: install the latest RELEASE over whatever `deps-install` provisioned — a verified download, never a compile"
 # THE RELEASED BINARY IS ALREADY ON PATH BY THE TIME THIS RUNS, and that is what
 # makes this row possible at all. `deps-install` puts it there at provisioning
 # (CLOUD-1085, #798) — before Claude launches, so before any hook fires — which
-# is what dispatches the handler this task is registered as. This step then
-# REPLACES it with the working tree's build, because consumer #1 must judge the
-# engine it ships rather than the last release.
+# is what dispatches the handler this task is registered as.
 #
-# The ordering consequence, stated because it inverts the old script's: a session
-# whose `deps-install` did not run has no binary to dispatch handlers with, so
-# nothing here runs and the advisory `contract::unmediated_session` reports it.
-# `mise run install:local` stays reachable by hand, which is the manual repair.
-run = "mise run install:local >/tmp/session-start-batten.log 2>&1 || { echo '::error:: session-start: install:local failed — see /tmp/session-start-batten.log' >&2; tail -5 /tmp/session-start-batten.log >&2; exit 1; }"
+# THIS STEP USED TO SPELL `install:local`, AND THAT WAS A COMPILE ON THE ONE PATH
+# THAT MAY NOT HAVE ONE (CLOUD-1620). The premise was that consumer #1 must judge
+# the engine it ships rather than the last release, which is true and is not a
+# reason to build HERE. Measured 2026-09-08 on a container already warm for
+# tools: this step took 224.87s, and the binary it produced was 0.0.151 — byte
+# for byte the release `deps-install` had already fetched. A session paid a
+# four-minute compile to arrive where it started.
+#
+# THE INVERSION IS THE ROW'S OWN, and this file already argued it two thousand
+# lines up. `deps-install`'s comment reads "`install.sh`, NEVER `install:local` …
+# A provisioning path cannot assume a Rust toolchain, a 141-second compile, or
+# that the checkout builds at all" — and `install-does-one-thing` in batten.toml
+# ENFORCES it, banning `cargo` from `install.sh` outright. This task was the one
+# caller routing around a rule the repository had already committed to.
+#
+# SKEW IS NOW DETECTED, NOT PRE-EMPTED. The risk the compile hedged against is
+# real — CLOUD-1326 measured an installed batten older than a config key
+# disarming every mediated gate in silence — but an unconditional build is the
+# wrong instrument for it, because it spends four minutes on every session to
+# insure against a skew most sessions do not have. `batten doctor mediator`
+# (CLOUD-1630) is the detector, and it answers `mediator-build-behind-source` on
+# exactly the branches that need a build.
+#
+# SO COMPILING IS OPT-IN, AND THE BAR IS STATED: you are changing
+# `crates/batten/**` and need the tree's engine to mediate your own calls.
+# `mise run install:local` is that route, and `verify` and `batten-check` already
+# build on that path anyway — so the case needs no session-start step to serve it.
+#
+# `./install.sh` AND NOT `mise run deps-install`, WHICH IS THE OBVIOUS SPELLING
+# AND IS WRONG HERE. That task is `./install.sh && batten wiring reclaim -y`, and
+# the reclaim half is ALREADY a session-start handler: `session-wiring`, row 9,
+# placed after this one precisely so it observes repaired wiring rather than the
+# launcher's. Routing through it would fire the reclaim twice in one batch, and
+# `batten hook` expires the at-load record on this same event — so a second
+# reclaim here is the unordered write-and-clear that row warns about, for work
+# row 9 has already done.
+#
+# The proxy seam survives the narrowing, which is the thing worth checking before
+# calling the installer by path: `deps-install`'s own header records that a bare
+# `./install.sh` is unreachable FROM THE SETUP SCRIPT, because the release API
+# needs `NO_PROXY` and `MISE_GITHUB_TOKEN` in mise's own process — and that "a
+# task body inherits that environment". This is a task body.
+#
+# The ordering consequence, unchanged: a session whose `deps-install` did not run
+# has no binary to dispatch handlers with, so nothing here runs and the advisory
+# `contract::unmediated_session` reports it.
+run = "./install.sh >/tmp/session-start-batten.log 2>&1 || { echo '::error:: session-start: release install failed — see /tmp/session-start-batten.log' >&2; tail -5 /tmp/session-start-batten.log >&2; exit 1; }"
 
 [tasks."session:git-hooks"]
 description = "Session start: install the repo-owned git hooks, the per-clone step nothing performed for 24 commits (CLOUD-476)"
@@ -3951,7 +3991,31 @@ run = 'cargo run --quiet -p batten -- attribution check --message "{{arg(name="f
 
 [tasks.attribution-identity]
 description = "Write: set this clone's repo-local git identity when it is unset or carries a denied vendor identity"
-run = "cargo run --quiet -p batten -- attribution identity"
+# THE BINARY ON PATH FIRST, AND `cargo run` ONLY WHERE THERE IS NONE (CLOUD-1620).
+#
+# This task ran as `session:identity`, the seventh session-start handler, and it
+# spelled `cargo run` — the DEBUG profile, which shares no artifacts with the
+# release build the fifth handler had just finished. Measured 2026-09-08: ~215s,
+# a second full compile of the same crate, to perform a `git config` write that
+# the binary already installed at `/root/.local/bin/batten` answers in
+# milliseconds. The two compiles together were ~440s of a ~450s session start.
+#
+# The shape is `target-prune`'s, above: prefer the installed binary, fall back to
+# a build only where the name does not resolve. That fallback is not decoration —
+# a clone whose provisioning has not run still has to be able to set its identity
+# before it writes a commit, which is the whole reason this task exists in the
+# provisioning window at all.
+#
+# It also narrows `task-substitution`, whose subject is whichever declared task
+# leads with `cargo`: a reader running `cargo test` was being told to run
+# `attribution-identity`, a task with nothing to do with running tests.
+run = """
+if command -v batten >/dev/null 2>&1; then
+  batten attribution identity
+else
+  cargo run --quiet -p batten -- attribution identity
+fi
+"""
 
 [tasks.commit-check]
 description = "Gate: every commit subject in BASE_SHA..HEAD_SHA follows the convention (policy: [commit] in batten.toml)"
