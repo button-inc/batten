@@ -5440,6 +5440,44 @@ scope = "mediated_call"
 preset = "mise"
 severity = "warn"
 
+# THE SAME PRESET AT THE OTHER SURFACE (CLOUD-1672), and two rows rather than one
+# because a rule row carries ONE scope. The `mise` manifest declares a scope per
+# module since that row, so this enables its tree half while the row above
+# enables its mediated half; each compiles only the modules at its own scope.
+#
+# `severity = "deny"` where the mediated row warns, and the asymmetry is the
+# point rather than an inconsistency. That row nudges an agent toward a task it
+# could have run; this one is a disagreement between two committed statements
+# about which toolchain this commit runs, and it has already cost a release: on
+# 2026-09-08 the action resolved a mise whose asset 404ed, every job of every
+# workflow died in the install step inside eleven seconds, and v0.0.152 published
+# carrying its schema and none of its seven binaries.
+#
+# `sources` MUST CARRY BOTH SIDES OF THE COMPARISON, which is the one way this
+# row can be wrong while looking right. The predicate reads a workflow's declared
+# version AND the `[[provision]]` row it must equal; drop `batten.toml` from this
+# glob and the pin document is simply absent, the module abstains by design, and
+# the gate reports clean forever. The module finds both by SHAPE rather than by
+# name — a document carrying `jobs`, a document carrying `provision` — because a
+# preset ships to every consumer and rule 1 forbids naming their paths; this glob
+# is where this consumer says which of its files those are.
+#
+# `line_sources` for the pointers only. Every clause decides over the parsed
+# document; the lines are read to place a finding at a job, and a pointer that
+# cannot be placed costs the line rather than the finding.
+[[rule]]
+id = "mise-preset-tree"
+kind = "policy"
+scope = "tree"
+preset = "mise"
+sources = [
+  "batten.toml",
+  ".github/workflows/*.yml",
+  ".github/workflows/*.yaml",
+]
+line_sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+severity = "deny"
+
 [[rule]]
 id = "pinned-toolchain-preset"
 kind = "policy"

@@ -706,7 +706,10 @@ pub fn load(
     let registry = registry_for(verdicts)?;
     let mut emitted: BTreeSet<String> = BTreeSet::new();
     let mut bundles = Vec::new();
-    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    // Keyed on the scope's WORD rather than the enum, so this set does not oblige
+    // `RuleScope` to carry `Ord` for one local lookup — the derive would be a
+    // public-surface change made to satisfy a private detail.
+    let mut seen: BTreeSet<(&str, &'static str)> = BTreeSet::new();
     // Every predicate id published so far, and the module that published it —
     // the value is what lets the collision refusal name BOTH sides, which is the
     // difference between a pointer and a complaint.
@@ -727,13 +730,24 @@ pub fn load(
                     rule.id
                 ))
             })?;
-        // Two rows naming one source is dead config: the second enablement
-        // decides nothing the first did not, and "which one denied me" is not a
-        // question a reviewer should have to answer.
-        if !seen.insert(source_key) {
+        // Two rows naming one source AT ONE SCOPE is dead config: the second
+        // enablement decides nothing the first did not, and "which one denied
+        // me" is not a question a reviewer should have to answer.
+        //
+        // THE KEY IS THE PAIR SINCE CLOUD-1672, and the scope half is what makes
+        // a preset spanning two surfaces enableable at all. A rule row carries
+        // one scope, so a preset deciding both is enabled by two rows — and
+        // keyed on the name alone the second reads as the duplicate this refuses.
+        // It is not: each row compiles the modules at its own scope, so they
+        // share a name and decide disjoint surfaces. Narrower rather than looser
+        // for a module or a bundle, where the pair still collapses to the name
+        // in practice because those decide exactly one surface.
+        if !seen.insert((source_key, rule.scope.as_str())) {
             return Err(UsageError::raise(format!(
-                "rule `{}` registers `{source_key}`, which another rule already registers",
-                rule.id
+                "rule `{}` registers `{source_key}` at scope `{}`, which another rule already \
+                 registers at that scope",
+                rule.id,
+                rule.scope.as_str()
             )));
         }
 
@@ -800,21 +814,30 @@ pub fn load(
             // silent dead gate" would have been a claim about a channel nobody
             // measured, which is the defect `rules/policy-modules.md`
             // records against its own earlier revisions.
-            if manifest.scope != rule.scope {
+            //
+            // SINCE CLOUD-1672 THE MANIFEST DECLARES A SCOPE PER MODULE, so the
+            // question is no longer "does the preset's one scope equal this
+            // row's" but "does ANY module here decide it". A preset spanning
+            // both surfaces is enabled by two rows, one per scope, and each row
+            // compiles only the modules at its own — which is what keeps a tree
+            // module from being compiled onto the call surface, where it would
+            // read keys the engine never builds there.
+            if !manifest.decides(rule.scope) {
+                let decided: Vec<&str> = manifest
+                    .scopes()
+                    .into_iter()
+                    .map(crate::rules::RuleScope::as_str)
+                    .collect();
                 return Err(UsageError::raise(format!(
                     "rule `{}` enables the preset `{name}` at scope `{}`, but its modules \
-                     decide `{}` — at the wrong scope they read keys the engine never builds, \
+                     decide {} — at the wrong scope they read keys the engine never builds, \
                      so the rule would evaluate and refuse nothing",
                     rule.id,
                     rule.scope.as_str(),
-                    manifest.scope.as_str()
+                    decided.join(" and ")
                 )));
             }
-            let modules = manifest.modules;
-            let sources: Vec<(String, String)> = modules
-                .iter()
-                .map(|(path, source)| ((*path).to_owned(), (*source).to_owned()))
-                .collect();
+            let sources: Vec<(String, String)> = manifest.modules_at(rule.scope);
             let bundle = compile(&rule.id, &sources, &pattern_data)?;
             let declared = bundle.declared.clone();
             check_predicate_severity(rule, &declared, source_key)?;

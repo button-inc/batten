@@ -47,6 +47,23 @@
 use crate::rules::RuleScope;
 use crate::verdict::{DeclaredVerdict, VendoredVerdict, admit, read, run};
 
+/// One module inside a preset, with the surface it decides.
+///
+/// A struct rather than a `(RuleScope, &str, &str)` tuple because the two string
+/// fields are not interchangeable and a tuple lets them be swapped silently: a
+/// pointer in the source position compiles, loads, and produces a bundle whose
+/// every rule body is a comment. Named fields make that unwritable.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct PresetModule {
+    /// The surface this module reads — `input.tree.*` or `input.call`/`facts`.
+    pub scope: RuleScope,
+    /// `<preset:name>/….rego`, the pointer a refusal prints.
+    pub pointer: &'static str,
+    /// The module source, `include_str!`d at build time.
+    pub source: &'static str,
+}
+
 /// One vendored preset, declared once.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -60,16 +77,32 @@ pub struct Manifest {
     /// "the binary changed", which the release tag already says. This moves when
     /// what the preset DECIDES changes.
     pub version: u32,
-    /// The surface these modules decide.
+    /// The modules, each declaring the surface IT decides.
     ///
-    /// The field the absence of which was the silent dead gate. A rule enabling
-    /// this preset at the other scope is refused at LOAD rather than evaluating
-    /// to an empty violation set — see `policy::load`.
-    pub scope: RuleScope,
-    /// The modules, as `(pointer, source)`. The pointer is `<preset:name>/…`
-    /// rather than a filesystem path: a preset has no path in the consumer's
-    /// tree, and printing one sends a reader looking for a file that is not there.
-    pub modules: &'static [(&'static str, &'static str)],
+    /// **The scope is per module rather than per manifest, and that is the whole
+    /// of CLOUD-1672's engine half.** It used to be one `scope` on the manifest,
+    /// which said a preset decides exactly one surface — true of every preset
+    /// that existed when it was written, and false the moment a subject has
+    /// something to say about both. `mise` is that subject: whether an agent
+    /// reproduces a task's argv is a question about a CALL, and whether the
+    /// toolchain a workflow installs matches the version the tree pins is a
+    /// question about the TREE. They are one preset because they are one
+    /// concern, and a consumer enabling `mise` should not have to know that the
+    /// engine once could not express that.
+    ///
+    /// What the manifest-level field bought is preserved rather than dropped:
+    /// enabling a preset at a scope none of its modules decide is still refused
+    /// at LOAD, by `decides` below, and the refusal now names the scopes the
+    /// preset DOES decide instead of a single one. A row selects the modules at
+    /// its own scope, so a tree module never loads under a mediated row —
+    /// without that selection it would read `input.tree` on the call surface and
+    /// trip `check_tree_paths_are_emittable`, which is the guard working and not
+    /// a shape to rely on.
+    ///
+    /// The pointer is `<preset:name>/…` rather than a filesystem path: a preset
+    /// has no path in the consumer's tree, and printing one sends a reader
+    /// looking for a file that is not there.
+    pub modules: &'static [PresetModule],
     /// The refusal classes these modules raise, with their glosses and remedies.
     ///
     /// Declared HERE rather than in `verdict.rs`'s native table, which is the
@@ -89,6 +122,51 @@ pub struct Manifest {
     pub patterns: &'static [&'static str],
 }
 
+impl Manifest {
+    /// Whether any module here decides `scope`.
+    ///
+    /// The load-time question `policy::load` asks. It replaces an equality
+    /// against one manifest-level scope, and the difference is that a preset
+    /// spanning two surfaces answers yes to both rather than having to pick.
+    #[must_use]
+    pub fn decides(&self, scope: RuleScope) -> bool {
+        self.modules.iter().any(|module| module.scope == scope)
+    }
+
+    /// The surfaces this preset decides, in manifest order, without repeats.
+    ///
+    /// Used to NAME the alternatives in a refusal. A consumer who enabled the
+    /// wrong scope is told which ones exist rather than being left to read a
+    /// table inside the binary they cannot open — the gap CLOUD-1181 recorded
+    /// and which a single scope could only half answer.
+    #[must_use]
+    pub fn scopes(&self) -> Vec<RuleScope> {
+        let mut seen: Vec<RuleScope> = Vec::new();
+        for module in self.modules {
+            if !seen.contains(&module.scope) {
+                seen.push(module.scope);
+            }
+        }
+        seen
+    }
+
+    /// The modules deciding `scope`, as `(pointer, source)` for the compiler.
+    ///
+    /// **Selection, not filtering for tidiness.** A module compiled at the wrong
+    /// surface reads keys the engine never builds there, and Rego reads undefined
+    /// as "this body does not hold" — a dead gate byte-identical to a clean tree.
+    /// `check_tree_paths_are_emittable` catches that today, and this keeps the
+    /// case from arising rather than relying on a downstream guard to notice.
+    #[must_use]
+    pub fn modules_at(&self, scope: RuleScope) -> Vec<(String, String)> {
+        self.modules
+            .iter()
+            .filter(|module| module.scope == scope)
+            .map(|module| (module.pointer.to_owned(), module.source.to_owned()))
+            .collect()
+    }
+}
+
 /// Every vendored preset, in a stable order.
 ///
 /// The ONE authority. `preset_names`, the modules a preset ships, and the
@@ -99,16 +177,17 @@ pub const MANIFESTS: &[Manifest] = &[
     Manifest {
         name: "ci-hygiene",
         version: 1,
-        scope: RuleScope::Tree,
         modules: &[
-            (
-                "<preset:ci-hygiene>/spend-is-authorised.rego",
-                include_str!("policy/presets/ci-hygiene/spend-is-authorised.rego"),
-            ),
-            (
-                "<preset:ci-hygiene>/wiring-can-be-reached.rego",
-                include_str!("policy/presets/ci-hygiene/wiring-can-be-reached.rego"),
-            ),
+            PresetModule {
+                scope: RuleScope::Tree,
+                pointer: "<preset:ci-hygiene>/spend-is-authorised.rego",
+                source: include_str!("policy/presets/ci-hygiene/spend-is-authorised.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                pointer: "<preset:ci-hygiene>/wiring-can-be-reached.rego",
+                source: include_str!("policy/presets/ci-hygiene/wiring-can-be-reached.rego"),
+            },
         ],
         verdicts: &[
             VendoredVerdict {
@@ -252,11 +331,11 @@ value is what does the work, and it is a boolean rather than the string `true`."
     Manifest {
         name: "commit-hygiene",
         version: 1,
-        scope: RuleScope::MediatedCall,
-        modules: &[(
-            "<preset:commit-hygiene>/no-empty-commit.rego",
-            include_str!("policy/presets/commit-hygiene/no-empty-commit.rego"),
-        )],
+        modules: &[PresetModule {
+            scope: RuleScope::MediatedCall,
+            pointer: "<preset:commit-hygiene>/no-empty-commit.rego",
+            source: include_str!("policy/presets/commit-hygiene/no-empty-commit.rego"),
+        }],
         verdicts: &[VendoredVerdict {
             id: "commit ship empty",
             gloss: "an empty commit records that somebody wanted a new SHA",
@@ -271,30 +350,40 @@ the pipeline.",
     Manifest {
         name: "landing-loop",
         version: 1,
-        scope: RuleScope::Tree,
         modules: &[
-            (
-                "<preset:landing-loop>/graded-head-is-not-regraded.rego",
-                include_str!("policy/presets/landing-loop/graded-head-is-not-regraded.rego"),
-            ),
-            (
-                "<preset:landing-loop>/already-landed-work-is-not-relanded.rego",
-                include_str!(
+            PresetModule {
+                scope: RuleScope::Tree,
+                pointer: "<preset:landing-loop>/graded-head-is-not-regraded.rego",
+                source: include_str!(
+                    "policy/presets/landing-loop/graded-head-is-not-regraded.rego"
+                ),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                pointer: "<preset:landing-loop>/already-landed-work-is-not-relanded.rego",
+                source: include_str!(
                     "policy/presets/landing-loop/already-landed-work-is-not-relanded.rego"
                 ),
-            ),
-            (
-                "<preset:landing-loop>/lease-authorises-the-branch.rego",
-                include_str!("policy/presets/landing-loop/lease-authorises-the-branch.rego"),
-            ),
-            (
-                "<preset:landing-loop>/rebase-conflict-stops-the-lap.rego",
-                include_str!("policy/presets/landing-loop/rebase-conflict-stops-the-lap.rego"),
-            ),
-            (
-                "<preset:landing-loop>/lap-waits-on-one-answer.rego",
-                include_str!("policy/presets/landing-loop/lap-waits-on-one-answer.rego"),
-            ),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                pointer: "<preset:landing-loop>/lease-authorises-the-branch.rego",
+                source: include_str!(
+                    "policy/presets/landing-loop/lease-authorises-the-branch.rego"
+                ),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                pointer: "<preset:landing-loop>/rebase-conflict-stops-the-lap.rego",
+                source: include_str!(
+                    "policy/presets/landing-loop/rebase-conflict-stops-the-lap.rego"
+                ),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                pointer: "<preset:landing-loop>/lap-waits-on-one-answer.rego",
+                source: include_str!("policy/presets/landing-loop/lap-waits-on-one-answer.rego"),
+            },
         ],
         verdicts: &[
             VendoredVerdict {
@@ -437,41 +526,101 @@ abandon the other unread.",
     // a regex.
     Manifest {
         name: "mise",
-        version: 1,
-        scope: RuleScope::MediatedCall,
-        modules: &[(
-            "<preset:mise>/task-over-executable.rego",
-            include_str!("policy/presets/mise/task-over-executable.rego"),
-        )],
-        verdicts: &[VendoredVerdict {
-            id: "task reach loose",
-            gloss: "a task's own program was reached directly rather than through the task",
-            class: "A project that defines a task has already decided how that work is \
+        version: 2,
+        // TWO SURFACES, ONE CONCERN (CLOUD-1672). This is the manifest that made
+        // the per-module scope necessary, and the reason is that "mise" is a
+        // subject rather than a surface. Whether an agent reproduces a task's
+        // argv instead of running the task is a question about a CALL. Whether
+        // the toolchain a workflow installs is the one the tree pins is a
+        // question about the TREE. Splitting them into two presets would make a
+        // consumer enable two things to get one concern, and would put the split
+        // where the engine's old limit was rather than where the subject's is.
+        modules: &[
+            PresetModule {
+                scope: RuleScope::MediatedCall,
+                pointer: "<preset:mise>/task-over-executable.rego",
+                source: include_str!("policy/presets/mise/task-over-executable.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                pointer: "<preset:mise>/action-version-matches-the-pin.rego",
+                source: include_str!("policy/presets/mise/action-version-matches-the-pin.rego"),
+            },
+        ],
+        verdicts: &[
+            VendoredVerdict {
+                id: "task reach loose",
+                gloss: "a task's own program was reached directly rather than through the task",
+                class: "A project that defines a task has already decided how that work is \
 invoked — which program, which arguments, and which environment composes around it. \
 Running the task's program directly reproduces the argv and drops the rest, and the \
 failure that produces looks like the failure being investigated rather than like a wrong \
 invocation. The refusal names the task because the mapping it reads is task to argv: the \
 remedy is in the finding rather than a file the reader has to go and search.",
-            routes: &[run(
-                "task run first",
-                "run the task the refusal names, through the task runner",
-            )],
-        }],
+                routes: &[run(
+                    "task run first",
+                    "run the task the refusal names, through the task runner",
+                )],
+            },
+            VendoredVerdict {
+                id: "job pin other",
+                gloss: "a job installs a toolchain version that disagrees with the one the tree pins",
+                class: "A pinned toolchain is pinned so that every machine running this commit runs the \
+same one. The action that installs it in CI resolves its own version independently, so a \
+repository can declare one toolchain and run another with nothing comparing them — two \
+authorities on one number, which is the disagreement pinning exists to remove. Measured: a \
+consumer pinned its toolchain by version and digest, the action resolved a newer release whose \
+asset could not be fetched, and every job of every workflow died in the install step inside \
+eleven seconds; the release that followed published its schema and none of its binaries. The \
+pin was committed and correct throughout and simply did not reach that layer. The remedy is to \
+declare the version at the step so the install is the pin rather than a resolution.",
+                routes: &[read("pin read first", "the row that pins the tool")],
+            },
+            VendoredVerdict {
+                id: "job pin missing",
+                gloss: "a job installs a pinned toolchain without saying which version",
+                class: "The other direction of the same defect, and the one that actually fires, because \
+an absent version reads as a default rather than as a decision. It is not a milder form of a \
+wrong version: it hands the choice to the installer, which makes the toolchain a property of \
+WHEN the job ran instead of what the commit says — so two runs of one commit can differ, and \
+the run that breaks is the one that happened to start after an upstream release. Conditioned on \
+the tool being pinned somewhere in the tree: a project that pins nothing is not asked to match \
+something that does not exist.",
+                routes: &[read("pin read first", "the row that pins the tool")],
+            },
+            VendoredVerdict {
+                id: "workflow parse unread",
+                gloss: "a declared workflow would not parse, so nothing could be compared over it",
+                class: "Could-not-look, and it is deliberately not spelled the same way as absent. Absent \
+is not-applicable — there is no such workflow — while unparsed means the boundary tried and \
+failed. A module that iterates only the documents it could read reports green over the file it \
+could not, which is a gate reporting on a surface it never saw.",
+                routes: &[read(
+                    "source read first",
+                    "the workflow that would not parse",
+                )],
+            },
+        ],
         patterns: &[],
     },
     Manifest {
         name: "pinned-toolchain",
         version: 1,
-        scope: RuleScope::MediatedCall,
         modules: &[
-            (
-                "<preset:pinned-toolchain>/pinned-program-via-the-pin.rego",
-                include_str!("policy/presets/pinned-toolchain/pinned-program-via-the-pin.rego"),
-            ),
-            (
-                "<preset:pinned-toolchain>/pinned-program-probed-bare.rego",
-                include_str!("policy/presets/pinned-toolchain/pinned-program-probed-bare.rego"),
-            ),
+            PresetModule {
+                scope: RuleScope::MediatedCall,
+                pointer: "<preset:pinned-toolchain>/pinned-program-via-the-pin.rego",
+                source: include_str!(
+                    "policy/presets/pinned-toolchain/pinned-program-via-the-pin.rego"
+                ),
+            },
+            PresetModule {
+                scope: RuleScope::MediatedCall,
+                pointer: "<preset:pinned-toolchain>/pinned-program-probed-bare.rego",
+                source: include_str!(
+                    "policy/presets/pinned-toolchain/pinned-program-probed-bare.rego"
+                ),
+            },
         ],
         verdicts: &[
             VendoredVerdict {
@@ -519,16 +668,19 @@ declares, and a probe inside the pin's environment is already correct",
     Manifest {
         name: "shell-hygiene",
         version: 1,
-        scope: RuleScope::Tree,
         modules: &[
-            (
-                "<preset:shell-hygiene>/shebang-names-its-language.rego",
-                include_str!("policy/presets/shell-hygiene/shebang-names-its-language.rego"),
-            ),
-            (
-                "<preset:shell-hygiene>/sibling-resolves.rego",
-                include_str!("policy/presets/shell-hygiene/sibling-resolves.rego"),
-            ),
+            PresetModule {
+                scope: RuleScope::Tree,
+                pointer: "<preset:shell-hygiene>/shebang-names-its-language.rego",
+                source: include_str!(
+                    "policy/presets/shell-hygiene/shebang-names-its-language.rego"
+                ),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                pointer: "<preset:shell-hygiene>/sibling-resolves.rego",
+                source: include_str!("policy/presets/shell-hygiene/sibling-resolves.rego"),
+            },
         ],
         verdicts: &[
             VendoredVerdict {
@@ -555,11 +707,11 @@ asserted rather than tested.",
     Manifest {
         name: "trunk-based",
         version: 1,
-        scope: RuleScope::MediatedCall,
-        modules: &[(
-            "<preset:trunk-based>/no-force-push.rego",
-            include_str!("policy/presets/trunk-based/no-force-push.rego"),
-        )],
+        modules: &[PresetModule {
+            scope: RuleScope::MediatedCall,
+            pointer: "<preset:trunk-based>/no-force-push.rego",
+            source: include_str!("policy/presets/trunk-based/no-force-push.rego"),
+        }],
         verdicts: &[VendoredVerdict {
             id: "trunk push forced",
             gloss: "a force push rewrites a shared branch under whoever already fetched it",

@@ -87,8 +87,18 @@ fn the_same_preset_at_its_declared_scope_loads() {
 /// that fails at load.
 #[test]
 fn every_declared_preset_can_be_enabled_at_its_own_scope() {
+    // EVERY SCOPE, NOT THE MANIFEST'S ONE SCOPE (CLOUD-1672). A manifest declares
+    // a scope per module now, so a preset spanning two surfaces has two ways to be
+    // enabled and both must resolve. Looping the pair rather than a single value
+    // is what keeps the reachability claim honest for such a preset: enabling the
+    // half a consumer happens not to want must not be the half that fails.
     for manifest in batten::preset::MANIFESTS {
-        let root = Fixture::new(&format!("preset-enable-{}", manifest.name))
+        for scope in manifest.scopes() {
+            let root = Fixture::new(&format!(
+                "preset-enable-{}-{}",
+                manifest.name,
+                scope.as_str()
+            ))
             .config(&format!(
                 "version = 1\n\n\
                  [[rule]]\n\
@@ -98,8 +108,8 @@ fn every_declared_preset_can_be_enabled_at_its_own_scope() {
                  {}\
                  preset = \"{}\"\n\
                  severity = \"deny\"\n",
-                manifest.scope.as_str(),
-                if manifest.scope == batten::rules::RuleScope::Tree {
+                scope.as_str(),
+                if scope == batten::rules::RuleScope::Tree {
                     "sources = [\"**/*.md\"]\n"
                 } else {
                     ""
@@ -107,13 +117,15 @@ fn every_declared_preset_can_be_enabled_at_its_own_scope() {
                 manifest.name,
             ))
             .build();
-        let output = common::run(&root, &["check"]);
-        assert_ne!(
-            output.status.code(),
-            Some(batten::exit::ExitCode::Usage.code()),
-            "`{}` is declared but cannot be enabled: {}",
-            manifest.name,
-            String::from_utf8_lossy(&output.stderr)
-        );
+            let output = common::run(&root, &["check"]);
+            assert_ne!(
+                output.status.code(),
+                Some(batten::exit::ExitCode::Usage.code()),
+                "`{}` is declared but cannot be enabled at `{}`: {}",
+                manifest.name,
+                scope.as_str(),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 }

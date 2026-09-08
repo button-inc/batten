@@ -174,6 +174,7 @@ mod memories;
 mod memory_injection;
 mod minted_facts;
 mod mise_pin_agreement;
+mod mise_preset;
 mod mutate;
 mod mutation_declared_case;
 mod narrow_adoption;
