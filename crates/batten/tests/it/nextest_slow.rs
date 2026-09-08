@@ -45,9 +45,6 @@ const RAISED: &str = "nextest-slow-raised";
 /// The one path the module is anchored on.
 const CONFIG: &str = ".config/nextest.toml";
 
-/// The committed shape: marks at 10s, kills at 90s.
-const ARMED: &str = "[profile.default]\nslow-timeout = { period = \"10s\", terminate-after = 9 }\n";
-
 /// `period` with no `terminate-after` only REPORTS. Not a ban.
 const REPORT_ONLY: &str = "[profile.default]\nslow-timeout = \"10s\"\n";
 
