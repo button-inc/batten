@@ -70,6 +70,21 @@ use crate::error::UsageError;
 /// a token and a pointer. A bound here is what keeps "one line" a property of
 /// the data rather than of the author's restraint — the class definition is
 /// where a paragraph goes, and `batten policy explain` is what fetches it.
+///
+/// **THIS NUMBER IS CHOSEN, NOT MEASURED, and saying so is the point** (CLOUD-1637).
+/// Its neighbours carry provenance — `[refusal] max_tokens = 24` is read off a
+/// live refusal, and the token-prefix figures above are a `tiktoken` run over all
+/// 130 classes — so a reader is entitled to assume this one is too, and it is
+/// not. 120 characters is a round number picked as "about one line" and nothing
+/// was measured against it. It is recorded the way `[hook_output]` records that
+/// its own figure is deliberately not the measured one, rather than left to look
+/// like evidence.
+///
+/// What would settle it is a comparison nobody has run: whether a first-sighting
+/// gloss beats the refusing row's `reason` for an agent's next attempt.
+/// CLOUD-1117 is that trial. Until it reports, this bound is a guard against the
+/// gloss growing back into a paragraph, which is a job a chosen number does
+/// perfectly well.
 const GLOSS_MAX: usize = 120;
 
 /// What a route offers the reader.
@@ -472,6 +487,77 @@ pub fn first_command_route<'a>(registry: &'a [DeclaredVerdict], token: &str) -> 
         .iter()
         .find(|route| route.kind == RouteKind::Command)
         .map(|route| route.target.as_str())
+}
+
+/// How a route renders on a first sighting, or `None` where it does not render.
+///
+/// **An exhaustive match with no wildcard arm, and that is the point** (CLOUD-1637).
+/// The mapping is from a remedy SHAPE to the verb that names who acts: `command`
+/// is something the agent runs, `document` something it reads, `issue` something
+/// it takes to the tracker. A shape whose actor is not the agent must not render
+/// as something the agent runs, so a variant added later — CLOUD-1639's repaired
+/// arms are the next two — is a COMPILE ERROR here rather than a route silently
+/// omitted from every refusal that declares one.
+///
+/// [`RouteKind::Override`] renders nowhere, for the reason it is already excluded
+/// from the `Fix:` slot: a way through that begins by asking to be excused is not
+/// an alternative to the action, and `override request` is its own surface. That
+/// is an omission this function STATES rather than one a wildcard would hide.
+///
+/// **The mutation below is CLOUD-1637's declared one**, and it is anchored here
+/// rather than in `hook.rs` where §7 named it: the kind mapping is what the row
+/// is about, and it lives in this function. Dropping the `document` arm restores
+/// the exact defect — a class whose only route is a document renders no way out —
+/// so `refusal_ceiling`'s first-sighting case is what must redden.
+//MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
+//MUTANT document-route-dropped|s@        RouteKind::Document => "read",@        RouteKind::Document => return None,@|a_first_sighting_carries_the_gloss_and_its_route_by_kind
+#[must_use]
+fn render_route(route: &Route) -> Option<String> {
+    let verb = match route.kind {
+        RouteKind::Command => "run",
+        RouteKind::Document => "read",
+        RouteKind::Issue => "see",
+        RouteKind::Override => return None,
+    };
+    Some(format!("{verb} {}", route.target))
+}
+
+/// Every non-override route a class declares, rendered by kind (CLOUD-1637).
+///
+/// **This replaces [`command_routes`] as the first-sighting projection, and the
+/// replacement is the whole row.** That function filters [`RouteKind::Command`],
+/// so a class whose routes are all `document` or `issue` resolved to an empty
+/// list and `deny_text` fell through to the bare line — on the FIRST sighting as
+/// much as on a repeat. Counted over `batten.toml` and this file at the time:
+/// 112 of 162 consumer classes and 32 of 39 vendored ones declare no `command`
+/// route at all, so 144 of 201 classes never rendered a way out and the gloss
+/// rendered on no arm.
+///
+/// The four classes a session measured on 2026-09-08 are the shape of it — `tool
+/// run loose`, `verdict read dropped`, `verdict carry other` and `call name
+/// refused` each declare exactly one `document` route, each fired at least once
+/// with nothing but its token, and two fired twice because the first firing
+/// delivered no definition.
+///
+/// Overrides are excluded by [`render_route`], which says so in one place rather
+/// than at each caller.
+#[must_use]
+pub fn sighting_routes(registry: &[DeclaredVerdict], token: &str) -> Vec<String> {
+    let Some((entry, _)) = resolve(registry, token) else {
+        return Vec::new();
+    };
+    entry.routes.iter().filter_map(render_route).collect()
+}
+
+/// The one-line gloss a class declares, for the arm that carries it.
+///
+/// `None` where the token does not resolve, which is the same answer
+/// [`command_routes`] gives and for the same reason: a registry that does not
+/// declare the token cannot be made to say what it means.
+#[must_use]
+pub fn gloss_of<'a>(registry: &'a [DeclaredVerdict], token: &str) -> Option<&'a str> {
+    let (entry, _) = resolve(registry, token)?;
+    Some(entry.gloss.as_str())
 }
 
 /// Refuse a malformed registry, at load.
@@ -1354,8 +1440,23 @@ reachability is.",
             // concept is a remedy nobody here can follow. `--soft` is the better
             // answer anyway — it moves the same ref and leaves both the tree and the
             // index where they were.
-            read("ref moved, work kept", "git reset --soft"),
-            read("file reverted", "git checkout -- <path>"),
+            // THE RECOVERY LEADS, per the row's §5: a caller who reads this has
+            // not lost anything yet, and what they need first is that the commit
+            // is still reachable. It was a `Fix::Run` string at the deny site
+            // (`hook::history_drop_refusal`) for its whole life, which rendered
+            // only while `Fix` led the routes clause; CLOUD-1637 stopped
+            // rendering `Fix`, so the recovery is declared here — on the class,
+            // once, beside the other ways out — rather than smuggled through one
+            // call site.
+            run("commits still reachable", "git reflog"),
+            // `run` RATHER THAN `read`, AND THE KIND WAS WRONG BEFORE
+            // (CLOUD-1637). Both targets are commands and both were declared
+            // `read`, which was inert while `command_routes` filtered the clause:
+            // a `document` route rendered nowhere, so nothing read the kind and
+            // nothing caught it. Now the kind decides the verb a reader is given,
+            // and "read `git reset --soft`" is an instruction nobody can follow.
+            run("ref moved, work kept", "git reset --soft"),
+            run("file reverted", "git checkout -- <path>"),
             // The way through that leaves a record, which is what keeps this a
             // gate rather than a wall. Its precondition also makes the class
             // non-suppressible by `BATTEN_HOOK_BYPASS` (CLOUD-1357), which is

@@ -2195,15 +2195,9 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         working.budget.as_ref(),
     ));
 
-    // The same direction one table over (CLOUD-1286). `ceiling_raised` already
-    // reads an absent working value as a raise, which is the right reading here
-    // too: an undeclared ceiling is unenforced, so deleting the table buys
-    // exactly what raising it to infinity would.
-    found.extend(ceiling_raised(
-        WeakeningKind::RefusalCeilingRaised,
-        "refusal.max_tokens",
-        base.refusal.as_ref().map(|ceiling| ceiling.max_tokens),
-        working.refusal.as_ref().map(|ceiling| ceiling.max_tokens),
+    found.extend(refusal_weakenings(
+        base.refusal.as_ref(),
+        working.refusal.as_ref(),
     ));
 
     // One table over, one direction (CLOUD-896).
@@ -2617,6 +2611,42 @@ fn waiver_expiry_weakenings(base: &[waiver::Waiver], working: &[waiver::Waiver])
             })
         })
         .collect()
+}
+
+/// The `[refusal]` ceilings, one comparison per rendering arm (CLOUD-1637).
+///
+/// **TWO comparisons over one table**, for the reason the session ceiling is two:
+/// `[refusal]` carries a threshold per arm — `max_tokens` for the repeat and
+/// `first_sighting_max_tokens` for the firing that carries the class definition —
+/// and a ratchet over only the first would let an override raise the longer arm
+/// with nothing reported. One kind for both, since what happened either way is
+/// that the `[refusal]` ceiling rose; the `key` is what says which one moved.
+///
+/// `ceiling_raised` reads an absent working value as a raise, which is right for
+/// both: an undeclared ceiling is unenforced, so deleting the table buys exactly
+/// what raising it to infinity would.
+///
+/// A sibling rather than eight more lines in [`scalar_weakenings`], which
+/// `too_many_lines` refused — and the shape [`budget_weakenings`] below already
+/// sets for a table whose weakenings are more than one comparison.
+fn refusal_weakenings(
+    base: Option<&crate::refusal::Ceiling>,
+    working: Option<&crate::refusal::Ceiling>,
+) -> Vec<Weakening> {
+    let mut found: Vec<Weakening> = Vec::new();
+    found.extend(ceiling_raised(
+        WeakeningKind::RefusalCeilingRaised,
+        "refusal.max_tokens",
+        base.map(|ceiling| ceiling.max_tokens),
+        working.map(|ceiling| ceiling.max_tokens),
+    ));
+    found.extend(ceiling_raised(
+        WeakeningKind::RefusalCeilingRaised,
+        "refusal.first_sighting_max_tokens",
+        base.and_then(|ceiling| ceiling.first_sighting_max_tokens),
+        working.and_then(|ceiling| ceiling.first_sighting_max_tokens),
+    ));
+    found
 }
 
 /// Budget sets removed, files or embedded declarations dropped, ceilings raised.
@@ -5043,10 +5073,16 @@ mod tests {
         // table. Both are one kind, because `ceiling_raised` already treats an
         // absent working value as the widest raise there is.
         let mut base = Config::declaring_nothing();
-        base.refusal = Some(crate::refusal::Ceiling { max_tokens: 24 });
+        base.refusal = Some(crate::refusal::Ceiling {
+            max_tokens: 24,
+            first_sighting_max_tokens: None,
+        });
 
         let mut raised = Config::declaring_nothing();
-        raised.refusal = Some(crate::refusal::Ceiling { max_tokens: 200 });
+        raised.refusal = Some(crate::refusal::Ceiling {
+            max_tokens: 200,
+            first_sighting_max_tokens: None,
+        });
         assert_eq!(
             only(&base, &raised),
             Weakening::new(
@@ -5074,9 +5110,15 @@ mod tests {
         // it exists to protect: tightening a ceiling is the ratchet turning the
         // way it is supposed to.
         let mut base = Config::declaring_nothing();
-        base.refusal = Some(crate::refusal::Ceiling { max_tokens: 24 });
+        base.refusal = Some(crate::refusal::Ceiling {
+            max_tokens: 24,
+            first_sighting_max_tokens: None,
+        });
         let mut working = Config::declaring_nothing();
-        working.refusal = Some(crate::refusal::Ceiling { max_tokens: 12 });
+        working.refusal = Some(crate::refusal::Ceiling {
+            max_tokens: 12,
+            first_sighting_max_tokens: None,
+        });
 
         let found = weakenings(&base, &working);
         assert!(

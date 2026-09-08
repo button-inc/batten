@@ -175,7 +175,7 @@ half**: declared work dies too, so **"unsaved?" is `batten doctor session`**.
 ## Where the rest lives
 
 Content that need not bind every turn is indexed, loaded at the trigger below.
-Use mise for everything; never a bare `cargo`/`export`/one-off install.
+A refusal is a pointer: `batten policy explain <token>` gives the class, `batten policy rule <id>` the row's own remedy.
 `.serena/memories/` is the other half: checked in, read **on demand**, never
 auto-loaded. **Start at `mem:core`** — the graph root carrying every memory's trigger,
 so the routing table lives there, not in this budgeted file (CLOUD-683's own cap).

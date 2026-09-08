@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-policy-rule 1  batten 
+.SH NAME
+batten\-policy\-rule \- Resolve a rule id to the remedy its row declares
+.SH SYNOPSIS
+\fBbatten policy rule\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIid\fR> 
+.SH DESCRIPTION
+Resolve a rule id to the remedy its row declares
+.SH OPTIONS
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIid\fR>
+The rule id to resolve, e.g. no\-raw\-issue\-read

@@ -70,14 +70,51 @@ pub struct Ceiling {
     /// The boundary is `<=`: exactly at budget passes, matching
     /// [`crate::budget::Report::over_budget`] so the two thresholds in this tree
     /// do not disagree about their own edge.
+    ///
+    /// **Bounds the REPEAT arm** — the compact `<token> <pointers> <rule-id>`
+    /// every firing after the first emits. The first sighting is a different
+    /// quantity and has its own key below.
     pub max_tokens: usize,
+    /// The ceiling on the FIRST sighting of a rule, which carries the class
+    /// definition (CLOUD-1637).
+    ///
+    /// **A second key rather than a second meaning for the first**, because the
+    /// two arms are different quantities: `max_tokens` prices prose a reader has
+    /// already read, and this prices the one firing where they have not. Folding
+    /// them would force a consumer to choose between bounding the repeat usefully
+    /// and letting the definition arrive at all.
+    ///
+    /// Absent means unbounded, which is the answer every other budget in this
+    /// tree gives an undeclared row: the ceiling is the consumer's statement
+    /// about their own line, and inventing one here would be this crate deciding
+    /// a consumer fact.
+    ///
+    /// What it bounds is the ROUTE LIST, never the line. Over budget, routes are
+    /// dropped from the end and the gloss never is; when `<token> <pointers>
+    /// <rule-id> — <gloss>; <first route>` is itself over, it is emitted anyway.
+    /// See [`crate::hook::deny_text`] for why that irreducible case is a decision
+    /// rather than an oversight.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_sighting_max_tokens: Option<usize>,
 }
 
 impl Ceiling {
-    /// Whether one emitted line is over the declared ceiling.
+    /// Whether one emitted REPEAT line is over the declared ceiling.
     #[must_use]
     pub fn over(&self, line: &str) -> bool {
         crate::budget::estimate_tokens(line) > self.max_tokens
+    }
+
+    /// Whether one emitted FIRST-SIGHTING line is over the declared ceiling.
+    ///
+    /// `false` when no first-sighting ceiling is declared — unbounded, per the
+    /// field's own contract, rather than falling back to [`Ceiling::max_tokens`].
+    /// A fallback would bound the long arm by the short arm's number, which is a
+    /// ceiling nothing can satisfy wearing a default.
+    #[must_use]
+    pub fn over_first_sighting(&self, line: &str) -> bool {
+        self.first_sighting_max_tokens
+            .is_some_and(|max| crate::budget::estimate_tokens(line) > max)
     }
 }
 
@@ -92,15 +129,42 @@ impl Ceiling {
 ///
 /// When the declared ceiling is zero.
 pub fn validate(ceiling: Option<&Ceiling>) -> Result<(), String> {
-    match ceiling {
-        Some(declared) if declared.max_tokens == 0 => Err(
+    let Some(declared) = ceiling else {
+        return Ok(());
+    };
+    if declared.max_tokens == 0 {
+        return Err(
             "`[refusal] max_tokens = 0` refuses every line a refusal could emit, including the \
              shortest one the grammar can spell — a ceiling nothing can satisfy is a gate that \
              gets switched off rather than one that holds"
                 .to_owned(),
-        ),
-        _ => Ok(()),
+        );
     }
+    if declared.first_sighting_max_tokens == Some(0) {
+        return Err(
+            "`[refusal] first_sighting_max_tokens = 0` refuses every first sighting a refusal \
+             could emit, including the irreducible one — and the first sighting is the only \
+             firing that carries the class definition, so a zero there withholds the remedy \
+             from the one reader who has not read it"
+                .to_owned(),
+        );
+    }
+    // The first sighting carries strictly more than the repeat — the same line
+    // plus a gloss and at least one route — so a first-sighting ceiling at or
+    // below the repeat's cannot be met by any line that arm can compose. Refused
+    // here rather than discovered as an arm that silently never renders its
+    // definition, which is the defect this row exists to remove.
+    if let Some(first) = declared.first_sighting_max_tokens
+        && first <= declared.max_tokens
+    {
+        return Err(format!(
+            "`[refusal] first_sighting_max_tokens = {first}` is not above `max_tokens = {}`, and \
+             a first sighting is the repeat line plus a gloss and a route — so no line this arm \
+             can compose would fit, and the definition would never render",
+            declared.max_tokens
+        ));
+    }
+    Ok(())
 }
 
 /// What to run instead — the half of a refusal that makes it actionable.
@@ -169,8 +233,8 @@ pub struct Refusal {
     /// The id that refused: a `[[rule]]` row's id, or a derived gate's declared
     /// constant. What a reviewer greps for in `batten.toml`.
     rule: String,
-    /// Every `command` route the class declares, for the once-per-session
-    /// sighting (CLOUD-1386).
+    /// Every non-override route the class declares, rendered by kind, for the
+    /// once-per-session sighting (CLOUD-1386, CLOUD-1637).
     ///
     /// **Skipped in serialization**, because it is a RENDERING input rather than
     /// part of the refusal payload: a consumer of `{rule, verdict, reason, fix}`
@@ -179,6 +243,19 @@ pub struct Refusal {
     /// the boundary free of a second registry lookup.
     #[serde(skip)]
     routes: Vec<String>,
+    /// The one-line gloss of the declared class, for the first-sighting arm
+    /// (CLOUD-1637).
+    ///
+    /// **Skipped in serialization for the same reason `routes` is**: it is a
+    /// rendering input resolved where the registry is already in hand, not part
+    /// of the `{rule, verdict, reason, fix}` payload a consumer asked for. That
+    /// also keeps `-J` byte-identical and leaves `schema/*.json` unmoved by this
+    /// change — the schemas follow `Ceiling`, which does gain a key.
+    ///
+    /// Empty for a refusal composed from consumer prose, which declares no class
+    /// and so has no gloss to carry.
+    #[serde(skip)]
+    gloss: String,
     /// The declared class this refusal belongs to, when it has one (CLOUD-1050).
     ///
     /// `Some` for every one of Batten's OWN refusal sites, which name a
@@ -226,8 +303,43 @@ pub struct Refusal {
 const NO_DECLARED_FIX: &str =
     "none declared — change it through the surface that owns it, or restore it with git";
 
-/// Whether this class has already explained itself this session, marking it if
-/// not (CLOUD-1386).
+/// Whether this RULE has already explained itself this session, marking it if
+/// not (CLOUD-1386, re-keyed by CLOUD-1637).
+///
+/// **KEYED ON THE PAIR — the rule AND the class — because each alone is wrong in
+/// one direction, and both directions were measured.**
+///
+/// It digested the CLASS TOKEN for its whole life, on the premise that the class
+/// is what gets explained. That holds only where a class has one raiser, and it
+/// does not for the native-kind population: `[[rule]]` rows of kind `shape`,
+/// `receipt`, `forbid`, `pipeline`, `command`, `ratchet` and `secrets` declare no
+/// class of their own and raise the kind's native one, so fourteen `shape` rows
+/// all raise `call name refused` and ten `receipt` rows share four classes. Under
+/// a token key the first `shape` row to fire consumed the sighting for all
+/// fourteen, and the next row's FIRST firing rendered as a repeat with its
+/// rule-specific remedy never pointed at. CLOUD-1637's second amendment is where
+/// that was corrected, and it prescribed the rule id.
+///
+/// **The rule id alone is wrong the other way, which the amendment did not
+/// count.** A rule can raise SEVERAL classes: `verdict-not-discarded` is one row
+/// and raises `verdict read dropped`, `verdict carry other` and `turn watch
+/// dropped`. Measured on a fixture whose store started empty, firing the three in
+/// order: the first carried its definition and the second and third came back
+/// compact on their own FIRST firing — the same silent withholding, one axis over.
+///
+/// So the key is what the line actually delivers, which is neither name by
+/// itself: the class's gloss AND the row's remedy, and a reader who has seen one
+/// pairing has not seen the other. Recorded on CLOUD-1637 so the prescribed
+/// single key is not reinstated as a simplification.
+///
+/// The key space does not grow for the population that was already 1:1: where a
+/// rule is its class's sole raiser the pair has one member per name, and after
+/// CLOUD-1638 collapses the two names there it is one string repeated.
+///
+/// It also makes the store reachable for an UNDECLARED refusal, which has a rule
+/// id and no token — the pair degenerates to the id. That is what lets the
+/// undeclared arm below be bounded at all rather than repeating its long form
+/// identically forever.
 ///
 /// **The repeat cost and the first-sighting value are different quantities**, and
 /// a refusal renderer that cannot tell them apart has to pick one and be wrong
@@ -237,7 +349,7 @@ const NO_DECLARED_FIX: &str =
 /// actionable, and reported a working gate as a design defect. Neither "always"
 /// nor "never" is right. "Once" is.
 ///
-/// KEYED BY TOKEN AND SCOPED TO THE SESSION. The store lives under `$GIT_DIR`,
+/// SCOPED TO THE SESSION. The store lives under `$GIT_DIR`,
 /// so it dies with the container and is cleared at `SessionStart` beside the
 /// wiring record — which is the same identity `expire_wiring_record` uses, and
 /// for the reason stated there: the event IS the session.
@@ -251,22 +363,22 @@ const NO_DECLARED_FIX: &str =
 /// approximation of "per reader" — and it errs toward repeating rather than
 /// assuming what a reader retained.
 #[must_use]
-pub fn first_sighting(root: &Path, token: &str) -> bool {
+pub fn first_sighting(root: &Path, key: &str) -> bool {
     let Some(dir) = crate::git::git_dir(root).ok().map(|dir| dir.join(STORE)) else {
         return true;
     };
-    // One file per token rather than a list: two refusals firing concurrently
+    // One file per key rather than a list: two refusals firing concurrently
     // would otherwise read-modify-write the same document and one would lose its
-    // mark, which shows up as a class explaining itself twice — cheap, but the
+    // mark, which shows up as a rule explaining itself twice — cheap, but the
     // kind of race that is easier to not have.
-    let path = dir.join(crate::provision::digest(token.as_bytes()));
+    let path = dir.join(crate::provision::digest(key.as_bytes()));
     if path.exists() {
         return false;
     }
     let _ = std::fs::create_dir_all(&dir);
     // Discarded deliberately: an unwritable store means the next firing explains
     // itself again, which is the safe direction.
-    let _ = std::fs::write(&path, token);
+    let _ = std::fs::write(&path, key);
     true
 }
 
@@ -299,6 +411,9 @@ impl Refusal {
             // rendering arm asks whether there is anything to say, not whether a
             // class exists.
             routes: Vec::new(),
+            // Likewise: no class, so no gloss. The undeclared arm's payload is
+            // the consumer's own `reason`, which `render` already carries.
+            gloss: String::new(),
             verdict: None,
             reason: reason.into(),
             fix,
@@ -361,10 +476,10 @@ impl Refusal {
             // Resolved here rather than at the boundary because the registry is
             // already in hand — a second lookup downstream would be a second
             // authority over which routes the class declares.
-            routes: crate::verdict::command_routes(registry, token)
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
+            routes: crate::verdict::sighting_routes(registry, token),
+            gloss: crate::verdict::gloss_of(registry, token)
+                .unwrap_or_default()
+                .to_owned(),
             verdict: Some(token.to_owned()),
             reason: crate::verdict::render_line(registry, token, subjects),
             fix,
@@ -410,16 +525,52 @@ impl Refusal {
         &self.fix
     }
 
-    /// Every `command` route the class declares (CLOUD-1386).
+    /// Every non-override route the class declares, rendered by kind
+    /// (CLOUD-1386, CLOUD-1637).
     ///
     /// **All of them, not the first**, and that distinction is the row: `fix`
     /// carries one route because it renders on every firing and a list there is
     /// the per-firing cost CLOUD-1286 measured. This renders once per session,
     /// where picking by declaration order withholds the route a reader needs —
     /// measured on `leased-push`, whose second route is the one that works.
+    ///
+    /// **And every KIND, not only `command`.** Filtering to what the agent runs
+    /// left 144 of 201 classes with an empty list and therefore a bare line on
+    /// the first sighting too; a `document` route is a way out, and saying `read
+    /// rules/scanning.md` is what the reader of a refused `grep` needed.
+    /// [`crate::verdict::sighting_routes`] carries the mapping and the exhaustive
+    /// match that keeps a future kind from being dropped silently.
     #[must_use]
     pub fn routes(&self) -> &[String] {
         &self.routes
+    }
+
+    /// What the sightings store keys this refusal by: the rule and the class.
+    ///
+    /// Composed here rather than at the boundary because it is a fact about the
+    /// refusal, and because the two halves are private. The separator is a unit
+    /// separator, which neither a rule id nor a three-word class can contain, so
+    /// no two distinct pairs can collide on one key.
+    ///
+    /// Degenerates to the rule id for an undeclared refusal, which has no class —
+    /// the honest key there, since the rule's own prose is the whole payload.
+    #[must_use]
+    pub fn sighting_key(&self) -> String {
+        match self.verdict() {
+            Some(token) => format!("{}\u{1f}{token}", self.rule),
+            None => self.rule.clone(),
+        }
+    }
+
+    /// The class's one-line gloss, or empty for a refusal with no class.
+    ///
+    /// The first-sighting arm's payload. Undroppable by contract there: routes
+    /// are what a ceiling sheds, the gloss is what it never does, because a
+    /// reader who cannot act on a bare token is exactly the case the arm exists
+    /// for.
+    #[must_use]
+    pub fn gloss(&self) -> &str {
+        &self.gloss
     }
 
     /// The text projection every channel carries.
@@ -471,6 +622,21 @@ impl Refusal {
     /// refused them. It varies per firing, which is exactly the test this row
     /// applies — the prose that repeats is what moves behind the dereference,
     /// and the pointers that change stay inline.
+    ///
+    /// **CLOUD-1637 counted that argument and it holds for more rows than it
+    /// claimed.** "Two rows can raise the same class" reads as an edge case; it
+    /// is 66 of the 128 `[[rule]]` rows in this repository's own config. Rows of
+    /// kind `shape`, `receipt`, `forbid`, `pipeline`, `command`, `ratchet` and
+    /// `secrets` declare no class of their own and raise their kind's native one
+    /// — fourteen `shape` rows all raise `call name refused`, ten `receipt` rows
+    /// share four classes. So the id is not a tie-breaker for a rare collision,
+    /// it is the only discriminator for half the population, and it renders on
+    /// BOTH arms rather than on the first sighting alone.
+    ///
+    /// The second half of the argument is now true in a way it was not when it
+    /// was written: `explain` still cannot say which row fired, and
+    /// `batten policy rule <id>` is the verb that can. The id is a live pointer
+    /// rather than a string to grep for.
     ///
     /// **An UNDECLARED refusal keeps the long form**, and that is not a hole. A
     /// refusal composed from consumer prose carries no token, so a bare line

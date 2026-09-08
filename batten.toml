@@ -4551,6 +4551,43 @@ key = "initial_prompt"
 # a number compiled into the engine.
 [refusal]
 max_tokens = 24
+# What ONE FIRST SIGHTING may cost (CLOUD-1637).
+#
+# The key above prices prose a reader has already met. This prices the one firing
+# where they have not: the same line plus the class gloss and every non-override
+# route, which is what turns a three-word pointer into something actionable. Two
+# keys rather than one number doing both jobs, because the quantities differ by
+# design — and bounding the long arm by the short arm's 24 would be a ceiling no
+# line that arm can compose could ever meet, which `refusal::validate` now refuses
+# outright rather than leaving as an arm that silently never renders.
+#
+# 64 IS READ OFF A MEASUREMENT PLUS THE DECLARED MAXIMA, not chosen. Fired in a
+# fixture whose sightings store started empty, 2026-09-08, one command per
+# distinct refusing row (estimated tokens, `budget.rs`'s len/4):
+#
+#   36  verdict read dropped  verdict-not-discarded  ... read rules/toolchain.md
+#   35  tool run loose        no-tool-substitution   ... read rules/scanning.md
+#   34  trunk push forced     no-force-push          ... run git push --force-with-lease
+#   28  call name refused     no-bare-cargo          ... read batten.toml
+#
+# So the tree emits 36 at its widest today. The headroom above that is not slack:
+# `GLOSS_MAX` admits a 120-character gloss, which is ~30 estimated tokens on its
+# own, and a class may declare several routes. 64 clears every line this tree can
+# spell while still catching a route list that has run away — the only thing this
+# ceiling sheds, since the gloss is undroppable and the first route is the floor.
+# A ceiling that fired on correct output would be switched off by the first person
+# it fired on (CLOUD-418), and `refusal_ceiling.rs` asserts the corpus stays under
+# it in the same direction the repeat arm's anti-vacuity case does.
+#
+# NOT AN `[epoch]` FLOOR BUMP, and that is a decision rather than an omission.
+# `min_batten_version` is compared against the RUNNING build, which in this
+# repository is the one built from this tree, so naming the next release makes the
+# repository refuse its own config for the whole life of the PR (measured
+# 2026-08-11: floor 0.0.62 against a 0.0.61 build, exit 1). The floor can only
+# name a version that already exists, so the raise belongs at the release. What
+# `[epoch]` actually wants — an older binary REFUSING this key rather than
+# ignoring it — `deny_unknown_fields` on `[refusal]` already delivers.
+first_sighting_max_tokens = 64
 
 # What the whole advisory CHANNEL may cost on one boundary (CLOUD-896).
 #

@@ -815,8 +815,17 @@
       "description": "The `[refusal]` table: what one emitted mediated line may cost.\n\n**Declared, never a literal in the crate** (non-negotiable rule 2, and the\nsame reasoning `[budget.instructions]` is built on): a ceiling written into\n`crates/batten` is this repository's judgement compiled into every consumer's\nengine, and a consumer whose harness renders differently could not move it\nwithout a release. [`crate::budget::BudgetSet`] is the landed shape this\ncopies — a ceiling and nothing else, absent meaning unenforced, because a\nthreshold nobody declared is not a threshold of zero.\n\nThe unit is **estimated tokens**, on `budget.rs`'s own bytes-per-token\nconvention rather than a tokenizer: this is a ceiling on a line, checked off\nthe hot path, and a real BPE pass here would be the dependency CLOUD-1284\ndeliberately kept to `[dev-dependencies]`.\n\nIt is not [`crate::verdict`]'s `GLOSS_MAX`, which stays. That bounds one\nFIELD — the gloss `explain` prints — and this bounds the emitted LINE. Both\nexist for the same reason and neither substitutes for the other: with the\ngloss off the hot path, `GLOSS_MAX` is what stops it growing back into a\nparagraph where nothing measures it.",
       "type": "object",
       "properties": {
+        "first_sighting_max_tokens": {
+          "description": "The ceiling on the FIRST sighting of a rule, which carries the class\ndefinition (CLOUD-1637).\n\n**A second key rather than a second meaning for the first**, because the\ntwo arms are different quantities: `max_tokens` prices prose a reader has\nalready read, and this prices the one firing where they have not. Folding\nthem would force a consumer to choose between bounding the repeat usefully\nand letting the definition arrive at all.\n\nAbsent means unbounded, which is the answer every other budget in this\ntree gives an undeclared row: the ceiling is the consumer's statement\nabout their own line, and inventing one here would be this crate deciding\na consumer fact.\n\nWhat it bounds is the ROUTE LIST, never the line. Over budget, routes are\ndropped from the end and the gloss never is; when `<token> <pointers>\n<rule-id> — <gloss>; <first route>` is itself over, it is emitted anyway.\nSee [`crate::hook::deny_text`] for why that irreducible case is a decision\nrather than an oversight.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
         "max_tokens": {
-          "description": "The ceiling on estimated tokens for ONE emitted mediated refusal line.\nThe boundary is `<=`: exactly at budget passes, matching\n[`crate::budget::Report::over_budget`] so the two thresholds in this tree\ndo not disagree about their own edge.",
+          "description": "The ceiling on estimated tokens for ONE emitted mediated refusal line.\nThe boundary is `<=`: exactly at budget passes, matching\n[`crate::budget::Report::over_budget`] so the two thresholds in this tree\ndo not disagree about their own edge.\n\n**Bounds the REPEAT arm** — the compact `<token> <pointers> <rule-id>`\nevery firing after the first emits. The first sighting is a different\nquantity and has its own key below.",
           "type": "integer",
           "format": "uint",
           "minimum": 0

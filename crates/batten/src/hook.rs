@@ -4391,36 +4391,108 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
 ///
 /// # EVERY route, because "the first one" is a choice nobody made
 ///
-/// The first-sighting arm renders all of the class's `command` routes rather than
-/// the one `Fix:` carries. `Fix:` takes the first because it renders on every
-/// firing and a list there is the repeat cost above. Once per session that budget
-/// is not in force, and picking by declaration order is not a summary — it is one
+/// The first-sighting arm renders all of the class's routes rather than the one
+/// `Fix:` carries. `Fix:` takes the first because it renders on every firing and
+/// a list there is the repeat cost above. Once per session that budget is not in
+/// force, and picking by declaration order is not a summary — it is one
 /// alternative selected arbitrarily. `leased-push` is the measurement: it declares
 /// the rebase first and `--force-with-lease=<ref>:<sha>` second, and the second is
 /// the one that answers the reader who just hit it. Rendering the first alone is
 /// what produced the defect report this row exists for.
 ///
-/// The caller's own narrower alternative still leads when it has one, because a
-/// consumer's `redirect` for a protected path knows something the class does not.
+/// # AND EVERY KIND, WHICH IS WHERE THE ARM WAS STILL SILENT (CLOUD-1637)
 ///
-/// # AND THE CEILING GOVERNS THIS ARM TOO, WHICH IS THE HALF THAT SHIPPED WRONG
+/// "Every route" meant every `command` route, because `Refusal::from_class`
+/// filled `routes` from `verdict::command_routes`. A class whose routes are all
+/// `document` or `issue` therefore resolved to an empty list, this function took
+/// the empty-routes early return, and the FIRST sighting emitted the same bare
+/// line as a repeat. The gloss rendered on no arm at all.
+///
+/// It is not an edge: 112 of 162 consumer classes and 32 of 39 vendored ones
+/// declare no `command` route, so 144 of 201 classes were bare on every firing.
+/// Measured live on 2026-09-08 — `tool run loose`, `verdict read dropped`,
+/// `verdict carry other` and `call name refused` each fired with nothing but a
+/// token, and two of them fired twice because the first firing taught nothing.
+/// A three-word token is a POINTER TO A DEFINITION, and the definition was never
+/// delivered; the research this row cites is unanimous that a fail signal with no
+/// explanation adds nothing over baseline, and that an opaque refusal is the
+/// condition under which an agent fabricates a rationale instead.
+///
+/// So the arm renders `<token> <pointers> <rule-id> — <gloss>; <routes>`, and the
+/// routes are every non-override route rendered by kind — `run` what the agent
+/// executes, `read` what it opens, `see` what it takes to the tracker.
+/// [`crate::verdict::sighting_routes`] owns that mapping as an exhaustive match
+/// with no wildcard arm, so a kind added later cannot be dropped silently.
+///
+/// # THE RULE ID IS ON BOTH ARMS, AND `Fix::Run` IS ON NEITHER
+///
+/// Two ids exist and they dereference through different verbs: the class token
+/// through `batten policy explain <token>`, and the rule id through
+/// `batten policy rule <id>`. The id is not redundant with the class — 66
+/// `[[rule]]` rows declare no class of their own and raise their kind's native
+/// one, so fourteen `shape` rows all raise `call name refused` and the id is the
+/// only thing that says which fired. It stays on the repeat arm too, which is
+/// also what keeps the repeat a byte prefix of the first sighting.
+///
+/// **What goes is the consumer `reason` reaching the line as [`Fix::Run`].** It
+/// used to lead the routes clause, on the argument that a consumer's `redirect`
+/// knows something the class does not. That argument does not survive what a
+/// `reason` actually is: prose, written as "what to do instead" for a reader with
+/// no budget pressure. `an-update-owes-a-recent-read`'s is ~700 characters and
+/// ENDS by naming a different rule, so the emitted line grew a second row's id —
+/// exactly what CLOUD-1286 removed the prefix to prevent, and
+/// `board_receipts::an_update_is_not_row_ones_business` is what said so.
+///
+/// The `reason` has a destination and this is not it: `batten policy rule <id>`
+/// prints the refusing row's own remedy, which is where the specific answer lives
+/// when the class gloss is generic. `call name refused`'s gloss says only "the
+/// mediated call matches a command shape the config refuses"; that a board row is
+/// read through `batten mcp call Linear get_issue` is `no-raw-issue-read`'s
+/// `reason`, reachable only through the id. So [`Fix::Run`] stays a dedup key and
+/// a member of `render`'s long form, and is never a rendered member of this
+/// clause.
+///
+/// # THE CEILING GOVERNS BOTH ARMS, EACH BY ITS OWN KEY
 ///
 /// The once-per-session change re-pointed `refusal_ceiling` at the SECOND firing,
 /// on the sound argument that `[refusal] max_tokens` was always about repeat cost.
 /// The consequence was not sound: it left the FIRST sighting bounded by nothing at
-/// all, in the same commit that made the first sighting the long one.
+/// all, in the same commit that made the first sighting the long one. Bounding it
+/// by `max_tokens` is not the repair either — the first sighting is the repeat
+/// line plus a gloss and a route, so the short arm's number is a ceiling the long
+/// arm can never meet. `[refusal] first_sighting_max_tokens` is the second key,
+/// and [`crate::refusal::validate`] refuses one at or below its sibling.
 ///
-/// Measured, and by a case rather than by reading. A consumer `[[rule]]` row's
-/// `reason` reaches here as the narrower [`Fix::Run`], and a `reason` is prose —
-/// `an-update-owes-a-recent-read`'s is ~700 characters and ENDS by naming a
-/// different rule. So the emitted line grew a second row's id, which is exactly
-/// what CLOUD-1286 removed it to prevent, and
-/// `board_receipts::an_update_is_not_row_ones_business` is what said so.
+/// Over budget, ROUTES ARE DROPPED FROM THE END and the gloss never is. A whole
+/// route goes rather than a truncated one: half a command is not a way out, and
+/// no truncator exists in this tree — `budget.rs` offers `estimate_tokens` and
+/// `estimate_tokens_over` and nothing that shortens.
 ///
-/// So the declared ceiling decides both arms and stays the ONE authority over an
-/// emitted mediated line. Over budget, the routes clause is dropped whole rather
-/// than truncated: half a command is not a way out, and a reader who can see the
-/// class token can still run `batten policy explain`. Under it, nothing changes.
+/// **THE IRREDUCIBLE LINE IS EMITTED, NOT TRUNCATED, AND THAT IS A DECISION.**
+/// When `<token> <pointers> <rule-id> — <gloss>; <first route>` is itself over
+/// budget, it goes out over budget. The gloss is undroppable by contract and the
+/// first route is the floor by contract, so there is nothing left to shed; the
+/// threshold bounds the route LIST, not the line, exactly as `budget::Report`
+/// reports over-budget rather than rewriting a file. Emitting a bare token
+/// instead would spend the one firing that could have taught the class on saying
+/// nothing.
+///
+/// # THE UNDECLARED ARM IS BOUNDED TOO, BECAUSE ITS SIBLING IS
+///
+/// A refusal composed from consumer prose carries no class, so it keeps the long
+/// form — there is no token to buy concision with, and a bare line there would be
+/// the bare "no" CLOUD-122 forbids. What it was NOT was bounded: it returned
+/// before any ceiling was consulted and repeated identically on every firing,
+/// forever. Same function, same authority boundary, same defect class as the arm
+/// above, and bounding one while leaving its sibling unbounded is half a change
+/// (non-negotiable rule 2).
+///
+/// So it takes the same shape. The hatch sentence is the constant part — CLOUD-437
+/// established that it is identical on every deny and therefore pure per-firing
+/// cost carrying no per-firing information — so it renders on the first sighting
+/// and is what the ceiling sheds. `render()` itself is never shed: reason and fix
+/// are what CLOUD-122 requires, and the fix clause is the one thing nothing may
+/// drop.
 ///
 /// **A consumer that declares no ceiling gets no bound**, which is the same answer
 /// every other budget gives an undeclared row — the ceiling is the consumer's
@@ -4437,31 +4509,109 @@ pub fn deny_text(
         if !first_sighting {
             return refusal.line();
         }
-        let mut routes: Vec<&str> = Vec::new();
-        for route in refusal
-            .fix()
-            .declared_alternative()
-            .into_iter()
-            .chain(refusal.routes().iter().map(String::as_str))
-        {
-            // The narrower fix is very often the class's own first route, and a
-            // reader met with the same clause twice learns that the renderer
-            // cannot count.
-            if !routes.contains(&route) {
-                routes.push(route);
-            }
-        }
-        if routes.is_empty() {
-            return refusal.line();
-        }
-        let carried = format!("{} — {}", refusal.line(), routes.join("; "));
-        return if ceiling.is_some_and(|declared| declared.over(&carried)) {
+        return first_sighting_line(refusal, ceiling);
+    }
+    let long = refusal.render();
+    if !first_sighting {
+        return long;
+    }
+    // The hatch is the droppable member on this arm, for the reason the module
+    // header already gives: it is identical on every deny. `render()` is what
+    // stays, because reason-and-fix is the contract.
+    let carried = format!("{long} Bypass with {hatch}=1.");
+    if ceiling.is_some_and(|declared| declared.over_first_sighting(&carried)) {
+        long
+    } else {
+        carried
+    }
+}
+
+/// What an ESCALATION carries, which is not what a refusal carries.
+///
+/// **A different reader, so a different projection** (CLOUD-1637). Everything
+/// [`deny_text`] does is priced against an agent's context: the class is a token
+/// it can dereference with `batten policy explain`, the row's remedy one it can
+/// reach with `batten policy rule <id>`, and the whole point of the compact arm
+/// is that ~300 firings a session must not each carry a paragraph.
+///
+/// A person answering an escalation has none of that. They have not read an
+/// earlier firing, they are not going to run a lookup to decide the question in
+/// front of them, and they see this string once. So the budget that justifies the
+/// dereference is not in force and the dereference costs rather than saves.
+///
+/// This is [`crate::refusal::Refusal::render`]'s stated purpose rather than a new
+/// projection: its own doc calls it "the projection for a surface with no budget
+/// pressure — `check`'s findings, a report, anything a human reads once", against
+/// [`crate::refusal::Refusal::line`] for "a surface that pays for every byte on
+/// every subsequent turn". The two were already written; the ask arm was reading
+/// the wrong one.
+///
+/// **This is what the row's `reason` is FOR on this arm.** `deny_text` stopped
+/// rendering it because a `[[rule]]` `reason` is prose and the agent has a verb
+/// that fetches it. Here it is the whole of what the person reads —
+/// `land-through-the-loop`'s class gloss says only that the call matches a shape
+/// the config refuses, and "land through `mise run land` so `main` stays
+/// fast-forward" is the sentence that lets someone answer. `ask_disposition` is
+/// the suite that says so.
+///
+/// The hatch is not appended: an escalation is a question put to someone who can
+/// answer it, and handing them an environment variable that skips the question is
+/// offering a way past the gate instead of through it.
+#[must_use]
+pub fn ask_text(refusal: &Refusal) -> String {
+    refusal.render()
+}
+
+/// The first-sighting projection: the class definition, bounded by its own key.
+///
+/// Split out of [`deny_text`] so the shedding loop is one named thing rather than
+/// a block inside a four-exit function — and so the irreducible case below is a
+/// `break` a reader can see rather than a condition they have to reconstruct.
+///
+/// Shedding is from the END: the routes are declared "in the order a reader
+/// should consider them", so the last is the one whose loss costs least. The loop
+/// stops at one route rather than at zero, which is what makes the floor a floor.
+fn first_sighting_line(refusal: &Refusal, ceiling: Option<&crate::refusal::Ceiling>) -> String {
+    let gloss = refusal.gloss();
+    if gloss.is_empty() && refusal.routes().is_empty() {
+        // A declared class with neither is not reachable through `verdict::validate`,
+        // which refuses a class with no route and refuses an empty gloss. Answering
+        // with the compact line rather than composing an empty clause keeps that
+        // unreachability from rendering as a dangling em-dash if it ever is.
+        return refusal.line();
+    }
+    let compose = |routes: &[String]| {
+        let head = if gloss.is_empty() {
             refusal.line()
         } else {
-            carried
+            format!("{} — {gloss}", refusal.line())
         };
+        if routes.is_empty() {
+            head
+        } else {
+            format!("{head}; {}", routes.join("; "))
+        }
+    };
+    let mut routes: Vec<String> = Vec::new();
+    for route in refusal.routes() {
+        // A class can declare the same target under two ids, and a reader met
+        // with the same clause twice learns that the renderer cannot count.
+        if !routes.contains(route) {
+            routes.push(route.clone());
+        }
     }
-    format!("{} Bypass with {hatch}=1.", refusal.render())
+    loop {
+        let candidate = compose(&routes);
+        // At one route there is nothing left to shed: the gloss is undroppable by
+        // contract and the first route is the floor by contract, so an over-budget
+        // line here is emitted over budget rather than made useless.
+        if routes.len() <= 1
+            || !ceiling.is_some_and(|declared| declared.over_first_sighting(&candidate))
+        {
+            return candidate;
+        }
+        routes.pop();
+    }
 }
 
 /// The first shape row that matches the mediated command, in declaration order.
@@ -9650,22 +9800,75 @@ mod tests {
             &[],
             crate::refusal::Fix::Run(PROSE_FIX.to_owned()),
         );
-        let ceiling = crate::refusal::Ceiling { max_tokens: 24 };
-        let bounded = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, Some(&ceiling));
         let unbounded = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, None);
+        // THE PREMISE HAS MOVED, and the move is CLOUD-1637's (see `deny_text`).
+        // The prose no longer reaches the line on ANY arm — `Fix::Run` is a dedup
+        // key and never a rendered member — so what the ceiling sheds is the
+        // class's own routes, from the end, and never the gloss.
         assert!(
-            unbounded.contains("Re-read the row"),
-            "the premise: unbounded, this arm carries the prose — {unbounded}"
+            !unbounded.contains("Re-read the row"),
+            "a consumer `reason` never reaches the emitted line: {unbounded}"
         );
         assert!(
-            ceiling.over(&unbounded),
-            "the premise: the unbounded line is over the ceiling — {unbounded}"
+            unbounded.contains("git pull --rebase")
+                && unbounded.contains("git push --force-with-lease=<ref>:<sha>"),
+            "the premise: unbounded, this arm carries both routes — {unbounded}"
+        );
+        // Admits the head and the first route, refuses the second.
+        let one_route = crate::refusal::Ceiling {
+            max_tokens: 24,
+            first_sighting_max_tokens: Some(
+                crate::budget::estimate_tokens(&unbounded).saturating_sub(2),
+            ),
+        };
+        let bounded = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, Some(&one_route));
+        assert!(
+            bounded.contains("git pull --rebase"),
+            "the first route is the floor: {bounded}"
         );
         assert!(
-            !ceiling.over(&bounded),
-            "the emitted line is over the declared ceiling: {bounded}"
+            !bounded.contains("git push --force-with-lease=<ref>:<sha>"),
+            "the last route is what sheds: {bounded}"
         );
-        assert_eq!(bounded, refusal.line(), "{bounded}");
+        assert!(
+            bounded.contains(" — branch write unsafe"),
+            "and the gloss is never what sheds: {bounded}"
+        );
+    }
+
+    /// The irreducible line goes out OVER budget rather than losing its meaning.
+    ///
+    /// The threshold bounds the route LIST, not the line. With the gloss
+    /// undroppable by contract and the first route the floor by contract, there is
+    /// nothing left to shed — and no truncator exists in this tree. Pinned here so
+    /// the decision is visible rather than emergent.
+    #[test]
+    fn an_irreducible_first_sighting_is_emitted_over_budget() {
+        let registry = two_route_class();
+        let refusal = Refusal::from_class(
+            "leased-push",
+            &registry,
+            "branch write unsafe",
+            &[],
+            crate::refusal::Fix::None,
+        );
+        let ceiling = crate::refusal::Ceiling {
+            max_tokens: 24,
+            first_sighting_max_tokens: Some(1),
+        };
+        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, Some(&ceiling));
+        assert!(
+            ceiling.over_first_sighting(&text),
+            "the premise: nothing this arm can compose fits a ceiling of 1 — {text}"
+        );
+        assert!(
+            text.contains(" — branch write unsafe"),
+            "the gloss is undroppable: {text}"
+        );
+        assert!(
+            text.contains("git pull --rebase"),
+            "and the first route is the floor: {text}"
+        );
     }
 
     /// And a SHORT route still travels, or the bound above is just the old
@@ -9684,7 +9887,10 @@ mod tests {
             &[],
             crate::refusal::Fix::None,
         );
-        let ceiling = crate::refusal::Ceiling { max_tokens: 24 };
+        let ceiling = crate::refusal::Ceiling {
+            max_tokens: 24,
+            first_sighting_max_tokens: None,
+        };
         let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, Some(&ceiling));
         assert!(
             text.contains("git push --force-with-lease=<ref>:<sha>"),
@@ -9692,29 +9898,67 @@ mod tests {
         );
     }
 
-    /// The caller's narrower alternative leads and is not said twice.
+    /// The caller's narrower alternative is a dedup key and is never rendered.
     ///
-    /// A consumer's `redirect` for a protected path knows something the class does
-    /// not, and it is very often the class's own first route — so a renderer that
-    /// concatenates rather than merges emits the same clause twice.
+    /// **This case reverses, and CLOUD-1637 is where** (see `deny_text`). It used
+    /// to assert that a consumer's `redirect` LED the routes clause, on the
+    /// argument that it knows something the class does not. What actually arrives
+    /// through `Fix::Run` is a `[[rule]]` row's `reason` — prose written as "what
+    /// to do instead" for a reader with no budget pressure, one of which is ~700
+    /// characters and ends by naming a DIFFERENT rule. So the emitted line grew a
+    /// second row's id, which is what CLOUD-1286 removed the prefix to prevent.
+    ///
+    /// The `reason` has its own destination: `batten policy rule <id>`, reached
+    /// through the rule id this line still carries. What is asserted now is that
+    /// it reaches the line through neither.
     #[test]
-    fn a_narrower_fix_leads_and_is_never_repeated() {
+    fn a_narrower_fix_is_never_a_rendered_member() {
         let registry = two_route_class();
         let refusal = Refusal::from_class(
             "leased-push",
             &registry,
             "branch write unsafe",
             &[],
-            crate::refusal::Fix::Run("git pull --rebase".to_owned()),
+            crate::refusal::Fix::Run(PROSE_FIX.to_owned()),
         );
         let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, None);
-        assert_eq!(text.matches("git pull --rebase").count(), 1, "{text}");
-        let routes = text.split(" — ").nth(1).expect("the routes clause");
-        assert!(routes.starts_with("git pull --rebase"), "{text}");
         assert!(
-            routes.contains("git push --force-with-lease=<ref>:<sha>"),
+            !text.contains("Re-read the row"),
+            "a consumer `reason` is not a rendered member: {text}"
+        );
+        let routes = text.split("; ").skip(1).collect::<Vec<&str>>().join("; ");
+        assert!(
+            routes.starts_with("run git pull --rebase"),
+            "the class's own first route leads instead: {text}"
+        );
+        assert!(
+            routes.contains("run git push --force-with-lease=<ref>:<sha>"),
             "{text}"
         );
+    }
+
+    /// A route the class declares twice is said once.
+    ///
+    /// The dedup the case above used to cover incidentally. Two ids may point at
+    /// one target, and a reader met with the same clause twice learns that the
+    /// renderer cannot count.
+    #[test]
+    fn a_repeated_route_target_is_rendered_once() {
+        let mut registry = two_route_class();
+        let first = registry[0].routes[0].clone();
+        registry[0].routes.push(crate::verdict::Route {
+            id: "branch read again".to_owned(),
+            ..first
+        });
+        let refusal = Refusal::from_class(
+            "leased-push",
+            &registry,
+            "branch write unsafe",
+            &[],
+            crate::refusal::Fix::None,
+        );
+        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, None);
+        assert_eq!(text.matches("run git pull --rebase").count(), 1, "{text}");
     }
 
     /// [`super::adjudicate`] with **no waiver declared** — the shape every case
@@ -11941,15 +12185,27 @@ deny contains "refused by themodule" if {
                     rendered.contains("refused by themodule"),
                     "the class the module raised travels: {rendered}"
                 );
-                // THE GLOSS DOES NOT (CLOUD-1286). It was inlined on every
-                // firing and it is the class's own definition, which the
-                // registry declares once and `batten policy explain` prints on
-                // request. Asserted in the negative rather than dropped, because
-                // a silent re-inlining is the exact regression this row exists
-                // to stop and nothing else in this test would see it.
+                // THE GLOSS IS NOT ON EVERY FIRING (CLOUD-1286). It was inlined
+                // on all of them; it is the class's own definition, declared once
+                // by the registry. Asserted in the negative rather than dropped,
+                // because a silent re-inlining is the exact regression this row
+                // exists to stop and nothing else in this test would see it.
+                //
+                // OVER THE EMITTED LINE, NOT THE STRUCT (CLOUD-1637). The
+                // `Refusal` now CARRIES the gloss — resolved where the registry is
+                // in hand, so `deny_text` stays pure — and reading a `{:?}` of the
+                // struct would fail on a field whose presence is the design. What
+                // the row is about is which ARM renders it: the repeat never does,
+                // and the first sighting is the one firing that must.
+                let repeat = deny_text(&refusal, "BATTEN_HOOK_BYPASS", false, None);
                 assert!(
-                    !rendered.contains("the fixture class"),
-                    "and the gloss is dereferenced rather than carried: {rendered}"
+                    !repeat.contains("the fixture class"),
+                    "a repeat dereferences the gloss rather than carrying it: {repeat}"
+                );
+                let first = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, None);
+                assert!(
+                    first.contains("the fixture class"),
+                    "and the first sighting is where it does travel: {first}"
                 );
                 assert!(
                     !rendered.contains("deny contains"),

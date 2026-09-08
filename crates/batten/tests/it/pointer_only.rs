@@ -1389,6 +1389,26 @@ const CENSUS: &[Verb] = &[
              refusal became a token plus a pointer",
         ),
     },
+    // `explain`'s sibling and `Echoes` for the same reason (CLOUD-1637): the
+    // answer IS the `[[rule]]` row the caller named — its `reason`, or its
+    // `no_fix_reason` where the kind renders the cause itself — which is the
+    // config author's own declaration rather than content read out of a subject
+    // file.
+    //
+    // It is the OTHER half of the dereference the emitted line points at:
+    // `explain` answers about the class and this answers about the row, and the
+    // two are different questions wherever a class has more than one raiser —
+    // which is 66 of this config's 128 rows.
+    Verb {
+        path: "policy rule",
+        args: &["no-bare-cargo"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Echoes(
+            "the answer IS a `[[rule]]` row's declared remedy, echoed back to the caller who \
+             named its id. CLOUD-1286 moved that prose off the hot path and named this verb as \
+             where it went; carrying it here is the whole reason the verb exists",
+        ),
+    },
     // CLOUD-1051, and it is POINTER-ONLY on the channel this census reads, which
     // is worth stating because the row it serves is the one place rule 4 is
     // deliberately inverted.

@@ -579,6 +579,10 @@ mod tests {
                 "policy budget".to_owned(),
                 "policy explain".to_owned(),
                 "policy hooks".to_owned(),
+                // `explain`'s sibling and read on the same terms (CLOUD-1637):
+                // the committed authority is loaded and one field of a row it
+                // already holds is printed. No spawn, no network, no tree walk.
+                "policy rule".to_owned(),
                 "policy test".to_owned(),
                 "policy tools".to_owned(),
                 // The freshness verb, never the `provision` noun or `apply`:
@@ -923,6 +927,11 @@ mod tests {
             "policy budget".to_owned(),
             "policy explain".to_owned(),
             "policy hooks".to_owned(),
+            // The rule-id dereference (CLOUD-1637). CLOUD-1286 moved a row's
+            // `reason` off the hot path naming this verb as where it went, and
+            // the verb did not exist — so the id the emitted line carries
+            // pointed at nothing until this row.
+            "policy rule".to_owned(),
             "policy test".to_owned(),
             "policy tools".to_owned(),
             // The poll around `checks green`'s verdict (CLOUD-1143), ported

@@ -1148,6 +1148,15 @@ pub enum PolicyCommand {
         /// Emit the measurement as byte-stable JSON instead of the one line.
         json: bool,
     },
+    /// Resolve a rule id to the remedy its row declares (CLOUD-1637).
+    ///
+    /// Appended for [`PolicyCommand::Test`]'s reason.
+    Rule {
+        /// The rule id to resolve, e.g. `no-raw-issue-read`.
+        id: String,
+        /// Emit the row as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
 }
 
 /// Subcommands of `attribution`.
@@ -1674,6 +1683,12 @@ fn policy_of(matches: &ArgMatches) -> Option<PolicyCommand> {
                 .get_one::<String>("token")
                 .cloned()
                 .unwrap_or_default(),
+            json: flag(matches, "json"),
+        }),
+        ("rule", matches) => Some(PolicyCommand::Rule {
+            // Unreachable for the reason `explain`'s own default is: the
+            // declaration is `required`, so `clap` refuses the absent case first.
+            id: matches.get_one::<String>("id").cloned().unwrap_or_default(),
             json: flag(matches, "json"),
         }),
         _ => None,

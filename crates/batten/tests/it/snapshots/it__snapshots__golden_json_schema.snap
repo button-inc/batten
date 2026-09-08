@@ -1953,6 +1953,32 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "policy rule",
+          "id": "policy.rule",
+          "about": "Resolve a rule id to the remedy its row declares",
+          "effect": "read",
+          "data_channel": true,
+          "flags": [
+            {
+              "name": "id",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The rule id to resolve, e.g. no-raw-issue-read"
+            },
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "positional": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "policy test",
           "id": "policy.test",
           "about": "Run each registered module's own `test_` rules and report the predicates none exercised",
@@ -3142,6 +3168,10 @@ expression: stdout_of(&output)
     {
       "id": "policy.hooks",
       "path": "policy hooks"
+    },
+    {
+      "id": "policy.rule",
+      "path": "policy rule"
     },
     {
       "id": "policy.test",

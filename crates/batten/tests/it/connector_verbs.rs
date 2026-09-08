@@ -139,10 +139,15 @@ fn every_spelling_of_a_decided_verb_is_refused() {
             );
             let text = stderr(&refusal);
             // CLOUD-1286 took the `Refused by` framing off the line; the rule id
-            // is still the engine's attribution and now ends it, which is the
+            // is still the engine's attribution and ends the HEAD, which is the
             // stricter read of the same question.
+            //
+            // The head rather than the whole line since CLOUD-1637: a first
+            // sighting appends `— <gloss>; <routes>`, so the line ends with a
+            // route target. On a repeat the head IS the line.
+            let head = text.split(" — ").next().unwrap_or(&text);
             assert!(
-                text.trim().ends_with(rule),
+                head.trim().ends_with(rule),
                 "{tool} must be refused by {rule}, got: {text}"
             );
         }

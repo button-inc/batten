@@ -5272,14 +5272,6 @@ fn run_policy_explain(
     Ok(ExitCode::Success)
 }
 
-/// Resolve a `[[rule]]` id to the remedy its row declares (CLOUD-1286).
-///
-/// The consumer half of `explain`. A row's `reason` is documented as "what to do
-/// instead", so it is the remedy a reader wants after a deny — and since the
-/// emitted line stopped carrying it, this is where it went. Same shape as the
-/// class half above and the same exception to pointer-only output, for the same
-/// stated reason: the text is the config author's own declaration, echoed back,
-/// never content read out of a subject file.
 /// Resolve the derived protected gate to the table that answers it (CLOUD-1286).
 ///
 /// Both tiers, in the order the boundary applies them: a `[[redirect]]` row's
@@ -5325,6 +5317,22 @@ fn explain_redirects(
     Ok(ExitCode::Success)
 }
 
+/// Resolve a `[[rule]]` id to the remedy its row declares (CLOUD-1286).
+///
+/// The consumer half of `explain`. A row's `reason` is documented as "what to do
+/// instead", so it is the remedy a reader wants after a deny — and since the
+/// emitted line stopped carrying it, this is where it went. Same shape as the
+/// class half above and the same exception to pointer-only output, for the same
+/// stated reason: the text is the config author's own declaration, echoed back,
+/// never content read out of a subject file.
+///
+/// **This doc block was orphaned and CLOUD-1637 reattached it.** A second `///`
+/// block began directly beneath it, so the whole thing documented
+/// `explain_redirects` — two functions down from the one it describes — and the
+/// prose above `explain_rule` was a fragment starting mid-argument. Worth stating
+/// because the same run-together pattern sits at `verdict.rs`'s
+/// `first_command_route`, and a reader who finds one should look for the other.
+///
 /// THE DECLARED COMMANDS ARE PART OF THE ANSWER, not decoration. Where a
 /// `receipt` row's checks name agent-sourced facts, the remedy is the exact
 /// command whose output will be accepted (CLOUD-776) — byte-identical to what
@@ -5390,7 +5398,54 @@ fn run_policy(
         PolicyCommand::Tools { json } => run_policy_tools(json, overrides, out),
         PolicyCommand::Explain { token, json } => run_policy_explain(&token, json, overrides, out),
         PolicyCommand::Hooks { json } => run_policy_hooks(json, overrides, out),
+        PolicyCommand::Rule { id, json } => run_policy_rule(&id, json, overrides, out),
     }
+}
+
+/// Resolve a rule id to the remedy its row declares (CLOUD-1637).
+///
+/// **The hop the emitted line names, finally built.** CLOUD-1286 moved a row's
+/// `reason` off the hot path saying `batten policy rule <id>` is where it went;
+/// the verb did not exist, so for a row whose class gloss is generic the remedy
+/// was unreachable from the refusal that named it. `call name refused` says only
+/// that the call matches a shape the config refuses — that a board row is read
+/// through `batten mcp call Linear get_issue` is `no-raw-issue-read`'s `reason`,
+/// and nothing dereferenced it.
+///
+/// **A thin wrapper over [`explain_rule`] and deliberately not a second
+/// renderer.** `policy explain` already falls back to a rule id when the argument
+/// resolves to no class, so the projection exists and is exercised; what was
+/// missing is a verb a reader can be POINTED AT. Reusing the projection is what
+/// keeps the two routes to it byte-identical — a second formatter here would be a
+/// second authority over one row's remedy.
+///
+/// Unlike `explain`'s fallback this needs a config that loaded, and says so
+/// rather than reporting the row as undeclared: a `[[rule]]` row is the
+/// consumer's, so "no config could be read" and "no such row" are different
+/// answers and collapsing them sends a reader looking for a missing row when the
+/// fault is the file.
+///
+/// # Errors
+///
+/// When the config cannot be read, or no `[[rule]]` row declares the id.
+fn run_policy_rule(
+    id: &str,
+    json: bool,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let Some(rule) = config.rules.iter().find(|rule| rule.id == id) else {
+        // Named, and the id is the caller's own argument rather than anything
+        // read out of the tree. A list of what IS declared would be every row on
+        // stderr; the count plus the sibling verb is the pointer-shaped answer.
+        return Err(error::UsageError::raise(format!(
+            "no `[[rule]]` row declares `{id}`; this config declares {} rule(s). A three-word \
+             name is a CLASS rather than a row — resolve it with `batten policy explain`",
+            config.rules.len(),
+        )));
+    };
+    explain_rule(rule, &config.facts, json, out)
 }
 
 /// Judge this session's hook output against its declared budget (CLOUD-417).
@@ -15047,9 +15102,15 @@ fn render(
             // consulting-and-marking a store is a write, and a write belongs at
             // the boundary with every other one. A renderer that touched the disk
             // would also be one no test could drive twice.
-            let first_sighting = refusal
-                .verdict()
-                .is_none_or(|token| refusal::first_sighting(hook_authority_root(), token));
+            // KEYED ON THE RULE AND THE CLASS (CLOUD-1637). It was keyed on the
+            // class token alone, which meant an UNDECLARED refusal — no token —
+            // skipped the store and always read as a first sighting, so its long
+            // form repeated forever. Every refusal has a key now, so both arms
+            // consult the store and both are bounded;
+            // `refusal::first_sighting` carries why neither name alone is the
+            // right key and what was measured in each direction.
+            let first_sighting =
+                refusal::first_sighting(hook_authority_root(), &refusal.sighting_key());
             let reason = hook::deny_text(&refusal, hatch, first_sighting, ceiling);
             match hook::encode_deny(harness, &envelope.raw_event, &reason)? {
                 Some(body) => {
@@ -15069,12 +15130,19 @@ fn render(
         // degrading to "go ahead" is the one direction that inverts the policy,
         // and it is why `encode_ask`'s `None` means refuse rather than proceed.
         hook::Decision::Ask(refusal) => {
-            // AN ASK IS ALWAYS A FIRST SIGHTING, and it is not an oversight that
-            // it does not consult the store. This escalates to a HUMAN, who has
-            // read no earlier firing in this session and has no `explain` to run —
-            // so withholding the route to save a clause would be spending their
+            // AN ASK IS NOT A SIGHTING AT ALL, and it is not an oversight that it
+            // does not consult the store. This escalates to a HUMAN, who has read
+            // no earlier firing in this session and has no `explain` to run — so
+            // withholding the remedy to save a clause would be spending their
             // attention rather than the model's.
-            let reason = hook::deny_text(&refusal, hatch, true, ceiling);
+            //
+            // IT ALSO DOES NOT TAKE THE REFUSAL'S PROJECTION (CLOUD-1637). It used
+            // to call `deny_text` with `first_sighting = true`, which was the right
+            // answer to the wrong question: the arms of `deny_text` differ in how
+            // much an AGENT has already read, and a person has read none of it and
+            // will not run a lookup to answer the question in front of them.
+            // `ask_text` carries why the long form is theirs.
+            let reason = hook::ask_text(&refusal);
             match hook::encode_ask(harness, &envelope.raw_event, &reason)? {
                 Some(body) => {
                     writeln!(out, "{body}")?;

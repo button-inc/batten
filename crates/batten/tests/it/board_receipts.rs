@@ -700,6 +700,13 @@ fn a_supplied_instant_decides_recency_rather_than_the_clock() {
 /// byte-identical to itself, so this passes over a build that ignores the flag
 /// entirely. The pair is what says the answer depends on the instant AND on
 /// nothing else (CLOUD-418).
+/// **MEASURED ON TWO REPEATS, NOT ON THE FIRST FIRING** (CLOUD-1637). A class
+/// explains itself once per session — the first sighting carries the gloss and
+/// the routes, every firing after it is the compact line — so the first two runs
+/// of anything differ by construction and comparing them would measure the
+/// sightings store rather than the instant. That difference is session-scoped and
+/// deliberate; byte-stability is a claim about the CLOCK, and it is still exactly
+/// true of any two firings on the same arm.
 #[test]
 fn the_same_instant_yields_the_same_verdict() {
     let repo = repo("instant-stable");
@@ -707,6 +714,7 @@ fn the_same_instant_yields_the_same_verdict() {
     mint_read_receipt(&repo, "CLOUD-1", 5);
     let at = later(1000);
     let args = ["adjudicate", "--harness", "exit-code", "--instant", &at];
+    let sighting = run_with_stdin(&repo, &args, &payload("mcp__Linear__save_issue", update));
     let first = run_with_stdin(&repo, &args, &payload("mcp__Linear__save_issue", update));
     let second = run_with_stdin(&repo, &args, &payload("mcp__Linear__save_issue", update));
     assert_eq!(
@@ -718,6 +726,14 @@ fn the_same_instant_yields_the_same_verdict() {
         stderr(&first),
         stderr(&second),
         "and say the same thing about it, byte for byte"
+    );
+    // The premise of the split, asserted rather than assumed: if the first firing
+    // did NOT differ, this case would be comparing two of the same arm by
+    // accident and the once-per-session contract would have gone silently.
+    assert_ne!(
+        stderr(&sighting),
+        stderr(&first),
+        "the first sighting carries the definition and the repeat does not"
     );
 }
 

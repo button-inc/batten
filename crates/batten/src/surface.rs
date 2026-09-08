@@ -827,6 +827,30 @@ const NO_CACHE: FlagDecl = FlagDecl {
 /// the whole registry — a payload nobody asked for, on a surface whose payload
 /// exception is narrow and deliberate — or exit 0 having answered nothing, which
 /// is the vacuous pass in a documentation verb.
+/// The rule id `policy rule` resolves (CLOUD-1637).
+///
+/// Positional and REQUIRED, for the reason [`VERDICT_TOKEN`] is: with no id the
+/// verb would print every row — a payload nobody asked for — or exit 0 having
+/// answered nothing.
+///
+/// A distinct declaration from `check`'s `--rule` rather than a reuse of it.
+/// That one SELECTS a row to run and is optional; this one NAMES a row to print
+/// and is required, so sharing a `FlagDecl` would make one row's `required` a
+/// lie about the other.
+const RULE_ID_ARG: FlagDecl = FlagDecl {
+    id: "id",
+    long: None,
+    short: None,
+    help: "The rule id to resolve, e.g. no-raw-issue-read",
+    env: EnvDecl::None,
+    global: false,
+    positional: true,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const VERDICT_TOKEN: FlagDecl = FlagDecl {
     id: "token",
     long: None,
@@ -3192,6 +3216,39 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         effect: Effect::Read,
         flags: &[VERDICT_TOKEN, JSON],
+    },
+    // The OTHER dereference, and the emitted line carries pointers to both
+    // (CLOUD-1637). `explain` answers about the CLASS; this answers about the
+    // ROW that raised it, and the two are different questions wherever a class
+    // has more than one raiser — which is 66 of this config's 128 rows, since a
+    // `shape` or `receipt` row declares no class and raises its kind's native
+    // one.
+    //
+    // WHY IT HAD TO EXIST BEFORE THE LINE COULD POINT AT IT. CLOUD-1286 moved a
+    // row's `reason` off the hot path on the stated ground that `batten policy
+    // rule <id>` is where it went. It had not gone anywhere: the verb was never
+    // built, so for every row whose class gloss is generic the specific remedy
+    // was unreachable from the refusal. `call name refused`'s gloss says only
+    // that the call matches a shape the config refuses; that a board row is read
+    // through `batten mcp call Linear get_issue` is `no-raw-issue-read`'s own
+    // `reason`. Non-negotiable rule 2 — a rule ships with its mechanism — is why
+    // this lands in the same change as the line that names it.
+    //
+    // `read` structurally, and on the same terms as its sibling: the committed
+    // authority is loaded and one field of a row it already holds is printed. No
+    // spawn, no network, no tree walk.
+    //
+    // Its payload is the same DELIBERATE, STATED exception to pointer-only
+    // output that `explain` records above, and for the same reason: the text is
+    // the config author's own declaration, not content read out of a subject
+    // file.
+    CommandDecl {
+        path: "policy rule",
+        id: "policy.rule",
+        about: "Resolve a rule id to the remedy its row declares",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[RULE_ID_ARG, JSON],
     },
     // The `attribution` noun only dispatches, and like `worktree` it cannot be
     // `read`: its subtree carries `identity`, which writes `.git/config`. It is

@@ -605,10 +605,19 @@ fn vacuity_zero_threads_and_no_review_reads_as_unreviewed_not_as_all_addressed()
     record_reviews(&dir, &declared, &reviews(0));
     let decision = ready(&dir);
     denied(&decision);
-    // CLOUD-1286: the class is what says nobody has reviewed, and the gloss
-    // that used to spell it out is one `batten policy explain` away.
+    // CLOUD-1286: the class is what says nobody has reviewed.
     assert!(decision.contains("review read absent"), "{decision}");
-    assert!(!decision.contains("nobody has reviewed"), "{decision}");
+    // THE GLOSS TRAVELS ONCE, NOT NEVER (CLOUD-1637). This asserted that the
+    // gloss never reaches the line, which was CLOUD-1286's rule and the defect
+    // CLOUD-1637 was filed on: a three-word token is a pointer to a definition,
+    // and a reader who has never met the class cannot act on the pointer alone.
+    // The fixture's sightings store starts empty, so this IS a first sighting —
+    // the one firing that must carry it. What must not carry it is the repeat,
+    // and `refusal_ceiling` is where both arms are held to that.
+    assert!(
+        decision.contains("nobody has reviewed"),
+        "a first sighting carries the class definition: {decision}"
+    );
 }
 
 #[test]

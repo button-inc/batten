@@ -1866,15 +1866,28 @@ fn every_hook_policy_table_deny_names_its_fix() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // CLOUD-1286: the sanctioned command is ONE HOP away rather than
         // inline, and this case is what proves the hop actually lands. The
-        // emitted line carries the rule id; `batten policy explain <rule>`
-        // resolves that id to the row's own remedy. Asserting only the absence
-        // would pass over a refusal that points nowhere, which is worse than
-        // the repetition it replaced.
-        let row = stderr
+        // emitted line carries the rule id; `batten policy rule <id>` resolves
+        // that id to the row's own remedy. Asserting only the absence would pass
+        // over a refusal that points nowhere, which is worse than the repetition
+        // it replaced.
+        //
+        // THE ID IS THE LAST TOKEN OF THE HEAD, NOT OF THE LINE (CLOUD-1637). A
+        // first sighting is `<token> <pointers> <rule-id> — <gloss>; <routes>`,
+        // so the last token of the whole line is now the final route's target
+        // and taking it grabbed `batten.toml`. Splitting on the em-dash reads the
+        // id on both arms: the repeat has no such clause and the head IS the
+        // line, which is the byte-prefix property doing useful work.
+        //
+        // `policy rule` rather than `policy explain`, which is the verb this hop
+        // was always named after: `explain` answers about the CLASS and resolves
+        // a rule id only as a fallback, and the two are different questions
+        // wherever a class has more than one raiser.
+        let head = stderr.split(" — ").next().unwrap_or(&stderr);
+        let row = head
             .split_whitespace()
             .next_back()
             .expect("a deny names the rule that fired");
-        let explained = batten_with(&dir, &["policy", "explain", row], &[]);
+        let explained = batten_with(&dir, &["policy", "rule", row], &[]);
         assert_eq!(
             explained.status.code(),
             Some(0),
@@ -3235,11 +3248,18 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // The rule id is still the engine's own attribution and is still what
         // this census reads; CLOUD-1286 took the `Refused by` framing off it,
-        // and the id now ENDS the line, which is why this is an `ends_with`
-        // rather than a bare `contains` — the stricter read, and the one that
-        // still tells a row that spoke from a row it merely mentioned.
+        // and the id ENDS the head, which is why this is an `ends_with` rather
+        // than a bare `contains` — the stricter read, and the one that still
+        // tells a row that spoke from a row it merely mentioned.
+        //
+        // THE HEAD, NOT THE WHOLE LINE (CLOUD-1637). A first sighting appends
+        // `— <gloss>; <routes>`, so the line ends with a route target and only
+        // the head ends with the id. The strictness this case wants is preserved
+        // exactly by reading the head: on a repeat the head IS the line, which is
+        // the byte-prefix property the two arms are built to have.
+        let head = stderr.split(" — ").next().unwrap_or(&stderr);
         assert!(
-            stderr.trim().ends_with(&case.rule),
+            head.trim().ends_with(&case.rule),
             "{:?} must be refused by {}, got: {stderr}",
             case.call.describe(),
             case.rule
@@ -5084,6 +5104,27 @@ const CENSUS_CONFIG: &str = concat!(
     // behind it is could-not-look, which is that same error.
     "[transcript]\n",
     "path = \".session.jsonl\"\n",
+    // `policy rule`'s minimum input, and the sixth verb to need one
+    // (CLOUD-1637). Unlike its sibling `policy explain`, which resolves a
+    // class this BINARY vendors and so needs no consumer authority at all,
+    // this verb answers about a CONSUMER's row — so a repository declaring
+    // no `[[rule]]` is a usage error rather than an empty answer, exactly
+    // as `defects` and `commit` above are.
+    //
+    // The pattern is deliberately one no file in the fixture contains, so
+    // the row is inert: the census is about the OUTPUT CONTRACT, and a row
+    // that actually fired would make every other verb's document depend on
+    // a finding this suite is not about.
+    "[[rule]]\n",
+    "id = \"census-row\"\n",
+    "kind = \"forbid\"\n",
+    "glob = \"**/*.md\"\n",
+    "pattern = \"a-string-no-census-file-contains\"\n",
+    "severity = \"deny\"\n",
+    // `no_fix_reason` rather than `reason`, which `forbid` does not permit: the
+    // engine renders the cause for this kind, so the row carries only the
+    // remediation half. That is also what `policy rule` prints for it.
+    "no_fix_reason = \"the row is inert by construction; nothing matches it\"\n",
 );
 
 /// The session the census points `policy hooks` at.
@@ -5319,6 +5360,12 @@ const CENSUS_POSITIONALS: &[(&str, &[&str])] = &[
     // this census depend on the fixture's authority carrying a row, and the
     // fixture's authority is `batten init`'s output.
     ("policy explain", &["path write refused"]),
+    // The row `CENSUS_CONFIG` declares for exactly this (CLOUD-1637). A
+    // consumer id rather than a vendored class, because that is the half this
+    // verb answers about: `explain` resolves the class and this resolves the
+    // ROW, and the two are different questions wherever a class has more than
+    // one raiser.
+    ("policy rule", &["census-row"]),
     // The key the fixture's seeded RESPONSE capture carries. `capture find` is
     // the first verb whose clean run needs a capture of a kind `exec` cannot
     // make: a `Stream::Response`, which only the post-tool event writes.
