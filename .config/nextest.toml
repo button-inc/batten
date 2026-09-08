@@ -95,6 +95,20 @@ threads-required = "num-test-threads"
 # see it. CLOUD-1641 is the row that makes the case fast enough to delete this
 # block — and until it lands, this case is the binding constraint on every step of
 # the ratchet, because the ceiling cannot go below what the worst case needs.
+#
+# THIS IS AN EXEMPTION, NOT A CALIBRATED BOUND, and the second reading is why it
+# says so out loud. The first attempt set 240s at ~3.7x the 64.849s Linux figure
+# and CI refused it anyway: on the `windows` runner the same case reported
+# `TIMEOUT [ 240.210s]`. It is under 65s here and over 240s there — a spread of
+# more than 3.7x on ONE case, where the 90s default held on Windows for every
+# other case in the run.
+#
+# So the default's calibration is sound across platforms and this case's is not
+# calibratable at all: nobody has an upper bound for it on the slowest runner, and
+# guessing a third number would be the same mistake a third time. 1200s is chosen
+# to be above any plausible runner rather than to describe this case, which makes
+# it an exemption in effect and is stated here so no reader mistakes it for a
+# measurement. Deleting it is CLOUD-1641's acceptance; widening it again is not.
 [[profile.default.overrides]]
 filter = 'test(a_replay_over_the_committed_records_fires_on_every_required_key)'
-slow-timeout = { period = "10s", terminate-after = 24 }
+slow-timeout = { period = "10s", terminate-after = 120 }
