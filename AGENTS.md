@@ -110,9 +110,9 @@ run in the web sandbox — read `mem:github-access` before doubting.)
    branch is rebased on current `origin/main`. "Green but stale" is not green.
 3. **`mise run linear-check`.** Don't ready by hand: `land` readies, after its
    push, and a ready spent before that buys only draft-era skips (CLOUD-247).
-4. **`mise run land`, backgrounded.** It drives the whole loop — **no timeout, no
-   cap, never the PR webhook** — and stops for three things only: a rebase
-   conflict, a failed `verify`, or red CI, re-drafting the PR. `mem:workflow/landing-loop`.
+4. **`mise run land`, backgrounded.** Drives the loop — no wall clock, only
+   counts, never the PR webhook. Stops on a conflict, a failed `verify`, red CI,
+   or a spent count: **exit 4 spent nothing, RE-RUN IT**; 5 bought CI, look.
 5. **Never re-run CI on an already-tested SHA.** Fast-forward means `main` takes
    the PR's exact, already-passed commits. Don't add push-to-`main` triggers.
 
