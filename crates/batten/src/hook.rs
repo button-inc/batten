@@ -10116,6 +10116,7 @@ mod tests {
             verdict: None,
             filters: None,
             substitutes: None,
+            no_retry_reason: None,
         }
     }
 

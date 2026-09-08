@@ -75,6 +75,14 @@ const PIPELINE_PERMITS: &[&str] = &[
     "policy_url",
     "bypass_env",
     "severity",
+    // CLOUD-1639. `fix` was `RuleKind::Command`-only, which is a TREE-scope
+    // check kind — so the column existed on the one kind that never reaches the
+    // mediated boundary, and the two repaired postures had nowhere to live. It
+    // is admitted here and on the other mediated kinds, gated not by the kind
+    // but by the CLASS the row raises: `validate_repair` refuses a `fix` whose
+    // class is `advice`, which is where the real predicate belongs.
+    "fix",
+    "no_retry_reason",
 ];
 
 /// One reference-to-path rewrite for a [`CeilingUnit::TrackedArtifacts`] ceiling
@@ -172,6 +180,10 @@ const SHAPE_PERMITS: &[&str] = &[
     "policy_url",
     "bypass_env",
     "severity",
+    // CLOUD-1639; see `PIPELINE_PERMITS` for why the gate is the class rather
+    // than the kind.
+    "fix",
+    "no_retry_reason",
 ];
 
 /// The columns a [`RuleKind::Receipt`] row may carry.
@@ -208,6 +220,13 @@ const RECEIPT_PERMITS: &[&str] = &[
     "policy_url",
     "bypass_env",
     "severity",
+    // CLOUD-1639; see `PIPELINE_PERMITS` for why the gate is the class rather
+    // than the kind. This is the kind the row's first candidate belongs to:
+    // `an-update-owes-a-recent-read` refuses a write whose read receipt is
+    // stale, and the repair — perform the read it is asking for — is exactly
+    // the shape a `retry` class describes.
+    "fix",
+    "no_retry_reason",
 ];
 
 /// The kind of predicate a [`Rule`] applies to its matched files.
@@ -768,6 +787,33 @@ impl RuleKind {
     /// `glob` on a shape rule selects files a shape rule never reads, so
     /// accepting it would let a reviewer believe a rule is scoped when it is not.
     #[must_use]
+    /// Whether a `fix` on this kind is executed at the mediated boundary
+    /// (CLOUD-1639).
+    ///
+    /// **The kinds that reach `crate::hook`.** `fix` lived on `Command` alone,
+    /// which is a TREE-scope check kind — so the repair column sat on the one
+    /// kind that never sees a call, and `run_all` refused it outright because
+    /// nothing there could run it. These three DO see a call, and the boundary
+    /// runs their repair under the raised class's
+    /// [`crate::verdict::Applicability`].
+    ///
+    /// A match with no wildcard: a kind added later is a compile error here
+    /// rather than one silently answered `false`, which would be a repair a
+    /// consumer declared and nothing ran — the exact false green `run_all`'s
+    /// refusal exists to prevent.
+    pub const fn repairs_at_the_boundary(self) -> bool {
+        match self {
+            RuleKind::Receipt | RuleKind::Shape | RuleKind::Pipeline => true,
+            RuleKind::Forbid
+            | RuleKind::Command
+            | RuleKind::Ratchet
+            | RuleKind::Judge
+            | RuleKind::Secrets
+            | RuleKind::Document
+            | RuleKind::Policy => false,
+        }
+    }
+
     pub const fn permits(self) -> &'static [&'static str] {
         match self {
             // `verbatim` narrows a hashed span, so only the kind that hashes one
@@ -2488,6 +2534,24 @@ pub struct Rule {
     /// this does not disturb `run_all`'s refusal of a rule that declares it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_fix_reason: Option<String>,
+    /// Why a declared repair does NOT hand the call back to be re-issued
+    /// (CLOUD-1639).
+    ///
+    /// Required on a row whose class declares
+    /// [`crate::verdict::Applicability::Silent`], and rejected on every other
+    /// row — the same both-directions shape [`Rule::no_fix_reason`] has, and for
+    /// a sharper reason. `retry` is the posture the field supports: pre-commit
+    /// fails the run when a hook modifies files, Ruff makes the caller opt in,
+    /// and the one measurement of silent server-side rewrite put it 22.3% down
+    /// on utility. So proceeding without telling the caller to re-issue is the
+    /// exception, and an exception with no stated reason is a default wearing
+    /// one.
+    ///
+    /// It is NOT [`Rule::no_fix_reason`]'s sibling in meaning: that one says why
+    /// a row declares no repair at all, this says why a repair that RAN does not
+    /// owe a re-issue. A row can honestly carry both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_retry_reason: Option<String>,
     /// The receipts a [`RuleKind::Receipt`] row requires, all of which must be
     /// valid before the matched call is allowed. Required by that kind,
     /// rejected by every other.
@@ -4428,6 +4492,7 @@ impl Rule {
             ("criteria", self.criteria.is_some()),
             ("tier", self.tier.is_some()),
             ("no_fix_reason", self.no_fix_reason.is_some()),
+            ("no_retry_reason", self.no_retry_reason.is_some()),
             ("glob", self.glob.is_some()),
             ("pattern", self.pattern.is_some()),
             ("regex", self.regex.is_some()),
@@ -5183,6 +5248,19 @@ impl Rule {
             return Err(UsageError::raise(format!(
                 "rule {}: `fix` and `no_fix_reason` are alternatives; a row carries exactly one, \
                  never both",
+                self.id
+            )));
+        }
+        // `no_retry_reason` WITHOUT a repair says why something that never runs
+        // does not hand back — a sentence about nothing (CLOUD-1639). The
+        // converse (a `fix` with no `no_retry_reason`) is legal and is the
+        // ordinary `retry` row; what makes it owed is the CLASS declaring
+        // `silent`, which is a cross-table question and lives in
+        // `crate::policy::check_repairs_are_applicable`.
+        if self.no_retry_reason.is_some() && self.fix.is_none() {
+            return Err(UsageError::raise(format!(
+                "rule {}: `no_retry_reason` says why a repair does not hand the call back, and \
+                 this row declares no `fix` to repair with",
                 self.id
             )));
         }
@@ -6486,8 +6564,19 @@ fn run_all_inner(
     // alternative is running the check side, exiting on its verdict, and having
     // silently ignored a repair the config declared. A key that parses and does
     // nothing is indistinguishable from one the engine honoured.
+    // NARROWED TO THE TREE PATH, NOT LIFTED (CLOUD-1639). The refusal stands for
+    // every kind this function actually runs: `run_all` walks the TREE, and a
+    // `fix` on a `command` row is still a repair nothing here executes, so
+    // honouring the key silently would be the same false green.
+    //
+    // What changed is that `fix` is no longer `command`-only. The mediated kinds
+    // may now carry one, and theirs is executed at the boundary rather than here
+    // — `crate::hook` is where that happens, under the class's `applicability`.
+    // Refusing those rows here would refuse a `batten check` run over a config
+    // whose repairs are perfectly reachable from the hook, which is a tree-side
+    // gate deciding a boundary-side question.
     for rule in rules {
-        if rule.fix.is_some() {
+        if rule.fix.is_some() && !rule.kind.repairs_at_the_boundary() {
             return Err(UsageError::raise(format!(
                 "rule {}: `fix` declares a repair, and serialised fix execution is not a \
                  capability this build has; remove the key or run the repair yourself",
@@ -13731,6 +13820,7 @@ mod tests {
             verdict: None,
             filters: None,
             substitutes: None,
+            no_retry_reason: None,
         }
     }
 

@@ -3424,6 +3424,7 @@ fn default_rules() -> Vec<Rule> {
         external: Vec::new(),
         predicate_severity: None,
         no_fix_reason: None,
+        no_retry_reason: None,
         checks: None,
         checks_any: None,
         key: None,

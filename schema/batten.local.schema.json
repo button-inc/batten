@@ -1155,6 +1155,13 @@
             "null"
           ]
         },
+        "no_retry_reason": {
+          "description": "Why a declared repair does NOT hand the call back to be re-issued\n(CLOUD-1639).\n\nRequired on a row whose class declares\n[`crate::verdict::Applicability::Silent`], and rejected on every other\nrow — the same both-directions shape [`Rule::no_fix_reason`] has, and for\na sharper reason. `retry` is the posture the field supports: pre-commit\nfails the run when a hook modifies files, Ruff makes the caller opt in,\nand the one measurement of silent server-side rewrite put it 22.3% down\non utility. So proceeding without telling the caller to re-issue is the\nexception, and an exception with no stated reason is a default wearing\none.\n\nIt is NOT [`Rule::no_fix_reason`]'s sibling in meaning: that one says why\na row declares no repair at all, this says why a repair that RAN does not\nowe a re-issue. A row can honestly carry both.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "node": {
           "description": "The dotted node path a [`RuleKind::Document`] row addresses — `a.b.0.c`,\nwalking maps by key and lists by index. Required by that kind, rejected\nby every other.\n\nThe path is the consumer's, like every other artifact-shaped value here:\n`crates/batten` knows how to walk a document and nothing about what any\nparticular one contains (non-negotiable rule 1).",
           "type": [
