@@ -2052,6 +2052,10 @@ impl Residency {
 /// it, a table that collapsed every arm to one value would satisfy four of the
 /// five and report a matrix it never measured.
 #[must_use]
+#[expect(
+    clippy::match_same_arms,
+    reason = "each arm is one declared row of the strategy table and stays its own line: the `Current`/`Warm` arm is the anchor a declared mutation rewrites, and collapsing two rows because today they agree would put the table beyond both the sweep's reach and a reader's"
+)]
 //MUTANT-SUITE crates/batten/tests/it/refusal_render_bench.rs
 //MUTANT current-warm-first-sighting|s@        (Strategy::Current, Residency::Warm) => false,@        (Strategy::Current, Residency::Warm) => true,@|a_compact_warm_repeat_is_exactly_the_refusal_line
 pub const fn first_sighting(strategy: Strategy, residency: Residency) -> bool {
@@ -2196,43 +2200,38 @@ fn markdown_table(rows: &[Vec<String>]) -> String {
         })
         .collect();
 
-    let render = |row: &[String]| {
-        let cells: Vec<String> = row
-            .iter()
+    let line = |cells: &[String], out: &mut String| {
+        out.push_str("| ");
+        out.push_str(&cells.join(" | "));
+        out.push_str(" |\n");
+    };
+    let padded = |row: &[String]| -> Vec<String> {
+        row.iter()
             .zip(&widths)
             .map(|(cell, width)| format!("{cell:<width$}"))
-            .collect();
-        format!("| {} |\n", cells.join(" | "))
+            .collect()
     };
 
     let mut out = String::new();
     if let Some(header) = rows.first() {
-        out.push_str(&render(header));
+        line(&padded(header), &mut out);
         let rule: Vec<String> = widths.iter().map(|width| "-".repeat(*width)).collect();
-        out.push_str(&format!("| {} |\n", rule.join(" | ")));
+        line(&rule, &mut out);
     }
     for row in rows.iter().skip(1) {
-        out.push_str(&render(row));
+        line(&padded(row), &mut out);
     }
     out
 }
 
-/// Render the committed report from a set of records.
+/// The report's prose header: what it is, what the two axes mean, and which
+/// declared inputs the numbers below were taken under.
 ///
-/// **THE BYTES ARE THE CONTRACT.** The tier re-renders this in-process and
-/// compares it to the committed file, which is what stops the report going stale
-/// without anything reddening — so this function, not the example that calls it,
-/// is where the report's shape lives.
-///
-/// No commit SHA appears: a file recording the SHA of the commit that contains
-/// it is byte-stable under no commit. The baseline is the crate version and the
-/// declared class ids.
-#[must_use]
-pub fn refusal_render_report(
-    records: &[RenderRecord],
-    version: &str,
-    ceiling: Option<&crate::refusal::Ceiling>,
-) -> String {
+/// Split out of [`refusal_render_report`] because the two halves are read by
+/// different people — this one is the reader's orientation, the other is the
+/// measurement — and because one function carrying both exceeds the line budget
+/// the workspace lints hold every function to.
+fn refusal_render_preamble(version: &str, ceiling: Option<&crate::refusal::Ceiling>) -> String {
     use std::fmt::Write as _;
 
     let mut out = String::new();
@@ -2273,6 +2272,28 @@ pub fn refusal_render_report(
             );
         }
     }
+    out
+}
+
+/// Render the committed report from a set of records.
+///
+/// **THE BYTES ARE THE CONTRACT.** The tier re-renders this in-process and
+/// compares it to the committed file, which is what stops the report going stale
+/// without anything reddening — so this function, not the example that calls it,
+/// is where the report's shape lives.
+///
+/// No commit SHA appears: a file recording the SHA of the commit that contains
+/// it is byte-stable under no commit. The baseline is the crate version and the
+/// declared class ids.
+#[must_use]
+pub fn refusal_render_report(
+    records: &[RenderRecord],
+    version: &str,
+    ceiling: Option<&crate::refusal::Ceiling>,
+) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = refusal_render_preamble(version, ceiling);
 
     for (class, rule) in MEASURED_CLASSES {
         let _ = writeln!(out, "## `{class}` (rule `{rule}`)\n");
