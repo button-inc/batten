@@ -250,26 +250,28 @@ fn the_commit_gate_sub_verb_answers_only_its_own_question() {
     assert_eq!(stdout(&healthy), "commit-gate ok\n");
 }
 
-/// A non-executable hook is not a hook, which is git's own reading — ON UNIX.
+/// A non-executable hook is not a hook — which is git's reading on unix, and
+/// deliberately not its reading everywhere.
 ///
 /// The arm that separates this check from a file-existence one: "present but git
-/// will not run it" is indistinguishable from healthy to a probe that only stats
-/// for existence.
+/// will not run it" is indistinguishable from healthy to a probe that only stats.
 ///
-/// **`#[cfg(unix)]`, and the gate is about the SUBJECT rather than about the
-/// test being awkward to run elsewhere.** Git on Windows has no executable bit to
-/// consult and runs any hook file it finds, so `is_runnable_hook` answering
-/// `true` for a present file there is CORRECT rather than a gap — the predicate
-/// tracks what git will actually do on each platform. Asserting the unix reading
-/// everywhere is what is wrong, and it was: measured on the `windows` job at
-/// 9891539c, this case alone reddened CI with
-/// `left: "commit-gate ok"` against `right: "… failed commit-hook-missing
-/// pre-commit"`.
+/// **`cfg!` IN THE BODY RATHER THAN `#[cfg(unix)]` ON THE CASE**, which is
+/// `platform-gated-test-added`'s own remedy and the reason it exists. Narrowing
+/// the case to unix would turn a red leg green while leaving the Windows
+/// contract unstated and one arm never compiled on the host that authors it.
+/// Both arms compile on every target here, and the Windows expectation is
+/// written down rather than skipped.
 ///
-/// The sibling cases are deliberately NOT gated, because their premise holds on
-/// both platforms: a `git init` leaves no `pre-commit` at all, so they turn on
-/// existence rather than on a mode bit.
-#[cfg(unix)]
+/// The two readings are both correct, which is the substance: git on Windows has
+/// no executable bit to consult and runs any hook file it finds, so a present
+/// file IS a live hook there. `is_runnable_hook` tracks what git will actually do
+/// on each platform. Measured on the `windows` job at 9891539c, where asserting
+/// the unix reading everywhere gave `left: "commit-gate ok"` against
+/// `right: "… failed commit-hook-missing pre-commit"`.
+///
+/// The sibling cases need no such split: a `git init` leaves no `pre-commit` at
+/// all, so they turn on existence, which reads the same on both platforms.
 #[test]
 fn a_present_but_unrunnable_hook_reads_as_missing() {
     let dir = scratch("startup-commit-gate-mode");
@@ -304,9 +306,17 @@ fn a_present_but_unrunnable_hook_reads_as_missing() {
         .args(["doctor", "gate"])
         .output()
         .expect("the binary runs");
+    let expected = if cfg!(unix) {
+        // The mode bit is real here, so a 0644 hook is one git will skip.
+        "commit-gate failed commit-hook-missing pre-commit\n"
+    } else {
+        // No executable bit exists for git to consult, so a present file is a
+        // live hook and the row is honestly satisfied.
+        "commit-gate ok\n"
+    };
     assert_eq!(
         stdout(&out),
-        "commit-gate failed commit-hook-missing pre-commit\n",
+        expected,
         "only the unrunnable one is named — a subject list is what a reader acts on"
     );
 }
