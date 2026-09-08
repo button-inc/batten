@@ -151,18 +151,30 @@ mod tests {
     /// subtree owned by a pid that cannot exist is collected, and this process's
     /// own is not.
     ///
-    /// **UNIX ONLY, AND THE TWIN BELOW IS WHY THAT IS NOT A COVERAGE HOLE.**
-    /// `pid_is_live` is two functions, not one: `rustix` is declared under
-    /// `[target.'cfg(unix)'.dependencies]`, so off unix there is no `kill -0` in
-    /// this closure at all and the module abstains by construction. This case
-    /// asserted collection unconditionally and therefore demanded, on Windows,
-    /// behaviour the module deliberately does not have — it failed at this
-    /// assertion on the `windows` leg while every other leg was green, which is
-    /// the shape a `cfg`-split predicate produces when only one arm is asserted.
+    /// **A CORPSE IS UNREACHABLE OFF UNIX, AND BOTH ARMS ARE ASSERTED**
+    /// (CLOUD-1148). `pid_is_live` is two functions, not one: `rustix` is
+    /// declared under `[target.'cfg(unix)'.dependencies]`, so off unix there is
+    /// no `kill -0` in this closure at all and the module abstains by
+    /// construction — which is the safe direction, since a platform that cannot
+    /// tell life from death must not delete a live run's corpora. This case
+    /// asserted collection unconditionally and so demanded, on Windows,
+    /// behaviour the module deliberately does not have; the `windows` job found
+    /// it while every other leg was green.
+    ///
+    /// `cfg!` RATHER THAN AN ATTRIBUTE, for the reason
+    /// `crates/batten/tests/it/task_registry.rs` records beside the same
+    /// asymmetry: it keeps BOTH arms compiled on every target, so `cross-check`
+    /// type-checks the off-unix branch instead of skipping over it unparsed.
+    /// A `#[cfg(unix)]` over the whole case — which this fix first used — leaves
+    /// the Windows contract unstated and one arm never compiled locally, which is
+    /// how the class stayed invisible.
+    ///
+    /// The second assertion is the one both arms share: whatever the platform
+    /// decides about corpses, this process's own scratch survives its own reap,
+    /// so neither arm can pass by reaping everything.
     ///
     /// Fails by: dropping the `pid_is_live` guard in [`reap_the_dead`], which
     /// takes the live directory with it.
-    #[cfg(unix)]
     #[test]
     fn a_dead_processes_scratch_is_collected_and_a_live_ones_is_not() {
         let mine = scratch("still-here");
@@ -172,51 +184,22 @@ mod tests {
         // on, so the probe answers ESRCH rather than depending on a pid that
         // happens to be free right now.
         let parent = std::env::temp_dir().join(SCRATCH_ROOT);
-        let corpse = parent.join(i32::MAX.to_string()).join("left-behind");
-        std::fs::create_dir_all(&corpse).expect("seed the dead subtree");
-
-        let _ = root();
-
-        assert!(
-            !parent.join(i32::MAX.to_string()).exists(),
-            "a subtree whose pid is gone must be collected"
-        );
-        assert!(
-            mine.join("corpus").exists(),
-            "this process's own scratch must survive its own reap"
-        );
-    }
-
-    /// The other arm of the same `cfg` split, ASSERTED rather than skipped.
-    ///
-    /// Off unix the module has no liveness probe and reaps nothing, which is the
-    /// could-not-look direction and the safe one: it can never delete a live
-    /// run's corpora. That is a decision the module states in as many words, so
-    /// it earns an assertion — a bare `#[cfg(unix)]` on the case above would
-    /// leave this platform asserting NOTHING about the reaper, which is the
-    /// vacuity this repository refuses everywhere else.
-    ///
-    /// The second assertion is the one both arms share: whatever the platform
-    /// decides about corpses, this process's own scratch survives its own reap.
-    ///
-    /// Fails by: giving the non-unix `pid_is_live` a `false` arm, which would
-    /// start collecting on a platform that cannot tell life from death.
-    #[cfg(not(unix))]
-    #[test]
-    fn off_unix_nothing_is_reaped_because_liveness_cannot_be_read() {
-        let mine = scratch("still-here");
-        std::fs::write(mine.join("corpus"), "bytes").expect("seed the live subtree");
-
-        let parent = std::env::temp_dir().join(SCRATCH_ROOT);
         let dead = parent.join(i32::MAX.to_string());
         std::fs::create_dir_all(dead.join("left-behind")).expect("seed the dead subtree");
 
         let _ = root();
 
-        assert!(
-            dead.exists(),
-            "with no liveness probe the reaper must abstain, never guess"
-        );
+        if cfg!(unix) {
+            assert!(
+                !dead.exists(),
+                "a subtree whose pid is gone must be collected"
+            );
+        } else {
+            assert!(
+                dead.exists(),
+                "with no liveness probe the reaper must abstain, never guess"
+            );
+        }
         assert!(
             mine.join("corpus").exists(),
             "this process's own scratch must survive its own reap"

@@ -939,18 +939,44 @@ mod tests {
     /// and `alive` deletes the record — so the machine has four test suites on it
     /// and the registry answers "nothing registered". `abandoned` is what hands a
     /// caller the group to signal.
+    /// **A CORPSE IS UNREACHABLE OFF UNIX, AND THIS ROW HAS TO SAY SO**
+    /// (CLOUD-1148). `pid_exists`'s `#[cfg(not(unix))]` arm answers `true` for
+    /// every parseable pid, deliberately, so nothing is ever reported dead and
+    /// nothing is ever reaped there — which makes `abandoned` empty by
+    /// construction and this case's premise unreachable. It asserted the unix
+    /// outcome unconditionally and the `windows` job found it: `found.len()` was
+    /// 0 where the assertion wanted 1.
+    ///
+    /// `cfg!` RATHER THAN AN ATTRIBUTE, for the reason
+    /// `crates/batten/tests/it/task_registry.rs` already records beside the same
+    /// asymmetry: it keeps BOTH arms compiled on every target, so `cross-check`
+    /// type-checks the off-unix branch instead of skipping over it unparsed. That
+    /// matters here more than usual, since this whole class was discovered by CI
+    /// compiling and RUNNING what no local gate can.
+    ///
+    /// `#[cfg(unix)]` over the whole test would have left the Windows contract
+    /// unstated, which is the mistake `a_reclaim_needs_two_sightings_of_one_dead_pid`
+    /// below already calls out in as many words.
     #[test]
     fn a_dead_registrant_is_abandoned_and_carries_its_group() {
         let dir = registry("abandoned-reports-the-dead");
         register(&dir, "land", NO_SUCH_PID, "lap", 100);
         let found = abandoned(&dir, "mise-tasks");
-        assert_eq!(found.len(), 1, "the dead registrant is reported: {found:?}");
-        assert_eq!(found[0].pid, NO_SUCH_PID);
-        assert!(
-            !found[0].pgid.is_empty(),
-            "the group is what the caller signals, so it must be there: {:?}",
-            found[0]
-        );
+        if cfg!(unix) {
+            assert_eq!(found.len(), 1, "the dead registrant is reported: {found:?}");
+            assert_eq!(found[0].pid, NO_SUCH_PID);
+            assert!(
+                !found[0].pgid.is_empty(),
+                "the group is what the caller signals, so it must be there: {:?}",
+                found[0]
+            );
+        } else {
+            assert!(
+                found.is_empty(),
+                "off unix no pid reads as dead, so the reaper must find nothing \
+                 rather than guess: {found:?}"
+            );
+        }
     }
 
     /// THE OTHER DIRECTION, AND THE ONE THAT WOULD DO THE DAMAGE.
