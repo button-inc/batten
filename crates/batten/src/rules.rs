@@ -3288,6 +3288,12 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         declares: Declares::NotFactBearing("a condition over a fact another column declared"),
     },
     ColumnCensus {
+        field: "unless_contains",
+        declares: Declares::NotFactBearing(
+            "a condition over a fact another column declared, in the exempting polarity",
+        ),
+    },
+    ColumnCensus {
         field: "require_via",
         declares: Declares::NotFactBearing("narrows how a requirement may be met"),
     },
