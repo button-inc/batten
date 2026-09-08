@@ -136,7 +136,14 @@ attribute_or_doc(line) if {
 # refuse.
 #
 # THE RESIDUE IS NAMED RATHER THAN SILENT: four or more attribute lines between
-# the `cfg` and the `#[test]` reach no offset and are not refused. CLOUD-1667.
+# the `cfg` and the `#[test]` reach no offset and are not refused. CLOUD-1669.
+#
+# THIS LINE SAID CLOUD-1667 AND THAT KEY IS SOMEBODY ELSE'S ROW — `perf` is CI's
+# second pole at 574s. The key was predicted from the last one filed rather than
+# read back from the row that was created, which is a misattribution wearing a
+# filed row's clothes: a reader following it lands on unrelated work and reads it
+# as an answer. `7426f8c6`'s `Refs:` trailer carries the same wrong key and is
+# corrected here rather than by rewriting the record.
 reach := [1, 2, 3]
 
 # A platform `cfg` at `index` gates a `#[test]` standing BELOW it.
