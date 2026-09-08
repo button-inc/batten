@@ -7,11 +7,24 @@
 #
 # Three predicates, all pure functions of the settings file:
 #
-#   unanchored-allow-glob     an allow rule whose glob reaches the server
-#                             segment. The CLI accepts a tool-name glob only
-#                             after a literal `mcp__<server>__` prefix; anything
-#                             broader is skipped with a warning, so it reads as
-#                             a grant and is not one.
+#   unanchored-allow-glob     an allow rule carrying a glob in EITHER segment.
+#                             The CLI's two MCP forms are `mcp__<server>` for a
+#                             whole server and `mcp__<server>__<tool>` for one
+#                             tool; a glob is not among them anywhere, so such a
+#                             rule reads as a grant and is not one.
+#
+#                             THIS SENTENCE USED TO SAY THE OPPOSITE about the
+#                             tool half — "the CLI accepts a tool-name glob only
+#                             after a literal `mcp__<server>__` prefix" — and the
+#                             clause below matched the sentence, so the file
+#                             passed every `mcp__<server>__*` it ever saw. It was
+#                             false: measured 2026-09-05 against a tool with no
+#                             prior approval in the session, `mcp__serena__*`
+#                             prompted on every call and the enumeration did not
+#                             (`mem:serena-setup`). Replaying the corrected
+#                             clause over this file's history fires on 63 of the
+#                             76 commits that touched it, none of them a false
+#                             positive. CLOUD-1635.
 #
 #   ungranted-enabled-server  a server this repo turns on in
 #                             `enabledMcpjsonServers` that no allow rule names.
@@ -103,12 +116,47 @@ while IFS= read -r rule; do
 	mcp__*) ;;
 	*) continue ;;
 	esac
-	# Legal only after a literal `mcp__<server>__` prefix: the server segment
-	# must be glob-free so the rule names a server that was actually configured.
-	server=${rule#mcp__}
-	server=${server%%__*}
+	# The server segment must be glob-free so the rule names a server that was
+	# actually configured.
+	rest=${rule#mcp__}
+	server=${rest%%__*}
 	case "$server" in
-	*'*'*) report "$rule — the server segment cannot be a glob; the CLI skips this rule with a warning and it grants nothing" ;;
+	*'*'*)
+		report "$rule — the server segment cannot be a glob; the CLI skips this rule with a warning and it grants nothing"
+		continue
+		;;
+	esac
+	# NEITHER MAY THE TOOL SEGMENT, and this clause is the correction of a premise
+	# this file used to assert (CLOUD-1635). The header said "the CLI accepts a
+	# tool-name glob only after a literal `mcp__<server>__` prefix", and every
+	# reader of that sentence — including the agent that wrote `90261809` — took it
+	# as a licence. It is false. The two MCP forms are `mcp__<server>` for every
+	# tool of a server and `mcp__<server>__<tool>` for one; a trailing `__*` is
+	# neither, so the rule reads as a grant and matches nothing.
+	#
+	# MEASURED with the approval-memoisation confound controlled for — a tool with
+	# no prior approval in the session, since approval is remembered per session
+	# and re-calling an approved tool proves nothing. `mem:serena-setup` carries
+	# the run and its date.
+	#
+	# ALLOW ONLY, which is the same asymmetry the deny predicate below is scoped by
+	# and not a symmetry argument against it: `mcp__*` as a DENY is a broad
+	# prohibition rather than a misspelled narrow one, and a deny that over-matches
+	# fails closed. An allow of this shape enforces nothing in either direction.
+	#
+	# NOT the neighbouring "under-matching ALLOW is deliberately not failed" case
+	# either. That one is about a well-FORMED rule naming a tool no live server
+	# happens to expose — a property of the world, unanswerable from the commit.
+	# This is a property of the string.
+	#
+	# REPLAYED over `git rev-list origin/main -- .claude/settings.json` before the
+	# severity was chosen: 76 commits examined, 63 fired, 0 false positives. The
+	# form has been in the committed allow list for most of the file's life.
+	#MUTANT allow-glob-ignores-tool-segment|s@^\t\[\[ "\$rest" == \*"__"\* \]\] || continue$@\tcontinue@|a glob in the tool segment matches no tool and is reported
+	[[ "$rest" == *"__"* ]] || continue
+	tool=${rest#*__}
+	case "$tool" in
+	*'*'*) report "$rule — the tool segment cannot be a glob; the MCP forms are \`mcp__<server>\` for a whole server and \`mcp__<server>__<tool>\` for one tool, and a trailing \`__*\` is neither, so this rule grants nothing (CLOUD-1635)" ;;
 	esac
 done < <(jq -r '.[]' <<<"$allows")
 

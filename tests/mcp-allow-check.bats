@@ -65,7 +65,10 @@ enabled() {
 }
 
 @test "both spellings present is also fine" {
-	allow '["mcp__Linear", "mcp__claude_ai_Linear__*"]'
+	# The companion is spelled tool-by-tool rather than `mcp__claude_ai_Linear__*`
+	# — that form is the glob the clause above now reports (CLOUD-1635), and it
+	# was only ever scaffolding here for the companion question this case asks.
+	allow '["mcp__Linear", "mcp__claude_ai_Linear__list_issues"]'
 	run "$GATE" "$FIXTURE"
 	[ "$status" -eq 0 ]
 }
@@ -118,10 +121,26 @@ enabled() {
 	[[ "$output" == *"serena"* ]]
 }
 
-@test "an enabled server granted by a tool-name glob passes" {
+@test "a glob in the tool segment matches no tool and is reported" {
+	# CLOUD-1635. This case asserted the opposite until the premise behind it was
+	# measured false: a server named in `enabledMcpjsonServers` and "granted" by
+	# `mcp__serena__*` used to pass, because the ungranted-enabled-server
+	# predicate reads only the rule's server segment and the glob predicate read
+	# only the server segment too. Both halves saw a grant; the CLI saw none.
 	enabled '["serena"]' '["mcp__serena__*"]'
 	run "$GATE" "$FIXTURE"
-	[ "$status" -eq 0 ]
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"tool segment cannot be a glob"* ]]
+}
+
+@test "a server-level rule beside a tool glob still reports the glob" {
+	# The shape `90261809` landed: the bare grant covers the server for the
+	# enablement predicate, so nothing else complains, and the dead rule sits
+	# beside it looking like the specific one.
+	enabled '["serena"]' '["mcp__serena", "mcp__serena__*"]'
+	run "$GATE" "$FIXTURE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"tool segment cannot be a glob"* ]]
 }
 
 @test "an enabled server granted tool by tool passes" {
@@ -219,7 +238,10 @@ denies() {
 	# `.mcp.json` and enabledMcpjsonServers are the repo's own declarations, so
 	# those names cannot drift under it — the predicate must not demand coverage
 	# it has no reason to want.
-	printf '{"enabledMcpjsonServers":["serena"],"permissions":{"allow":["mcp__serena__*"],"deny":["mcp__serena__delete_memory"]}}\n' >"$FIXTURE"
+	# The allow entry is the server-level form, not `mcp__serena__*`: this case is
+	# about the DENY predicate, and the glob was incidental scaffolding the clause
+	# above now reports in its own right (CLOUD-1635).
+	printf '{"enabledMcpjsonServers":["serena"],"permissions":{"allow":["mcp__serena"],"deny":["mcp__serena__delete_memory"]}}\n' >"$FIXTURE"
 	run "$GATE" "$FIXTURE"
 	[ "$status" -eq 0 ]
 }
