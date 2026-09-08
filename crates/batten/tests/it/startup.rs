@@ -250,12 +250,26 @@ fn the_commit_gate_sub_verb_answers_only_its_own_question() {
     assert_eq!(stdout(&healthy), "commit-gate ok\n");
 }
 
-/// A non-executable hook is not a hook, which is git's own reading.
+/// A non-executable hook is not a hook, which is git's own reading — ON UNIX.
 ///
-/// The arm that separates this check from a file-existence one — and the
-/// distinction `mise-tasks/doctor.sh` already draws for the same subject, since
-/// "present but git will not run it" is indistinguishable from healthy to a
-/// probe that only stats for existence.
+/// The arm that separates this check from a file-existence one: "present but git
+/// will not run it" is indistinguishable from healthy to a probe that only stats
+/// for existence.
+///
+/// **`#[cfg(unix)]`, and the gate is about the SUBJECT rather than about the
+/// test being awkward to run elsewhere.** Git on Windows has no executable bit to
+/// consult and runs any hook file it finds, so `is_runnable_hook` answering
+/// `true` for a present file there is CORRECT rather than a gap — the predicate
+/// tracks what git will actually do on each platform. Asserting the unix reading
+/// everywhere is what is wrong, and it was: measured on the `windows` job at
+/// 9891539c, this case alone reddened CI with
+/// `left: "commit-gate ok"` against `right: "… failed commit-hook-missing
+/// pre-commit"`.
+///
+/// The sibling cases are deliberately NOT gated, because their premise holds on
+/// both platforms: a `git init` leaves no `pre-commit` at all, so they turn on
+/// existence rather than on a mode bit.
+#[cfg(unix)]
 #[test]
 fn a_present_but_unrunnable_hook_reads_as_missing() {
     let dir = scratch("startup-commit-gate-mode");
