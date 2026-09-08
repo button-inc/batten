@@ -3411,6 +3411,11 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Resolve a rule id to the remedy its row declares",
         data_channel: true,
         effect: Effect::Read,
+        // A LOOKUP, NOT A VERDICT. It resolves an id to the row's own remedy and
+        // decides nothing about the tree, so it cannot mint a `2` — an id that
+        // resolves to nothing is the caller's malformed invocation (`1`), and a
+        // config it cannot read is could-not-look (`3`).
+        exits: EXITS_STANDARD,
         flags: &[RULE_ID_ARG, JSON],
     },
     // The `attribution` noun only dispatches, and like `worktree` it cannot be
