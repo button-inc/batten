@@ -151,8 +151,18 @@ mod tests {
     /// subtree owned by a pid that cannot exist is collected, and this process's
     /// own is not.
     ///
+    /// **UNIX ONLY, AND THE TWIN BELOW IS WHY THAT IS NOT A COVERAGE HOLE.**
+    /// `pid_is_live` is two functions, not one: `rustix` is declared under
+    /// `[target.'cfg(unix)'.dependencies]`, so off unix there is no `kill -0` in
+    /// this closure at all and the module abstains by construction. This case
+    /// asserted collection unconditionally and therefore demanded, on Windows,
+    /// behaviour the module deliberately does not have — it failed at this
+    /// assertion on the `windows` leg while every other leg was green, which is
+    /// the shape a `cfg`-split predicate produces when only one arm is asserted.
+    ///
     /// Fails by: dropping the `pid_is_live` guard in [`reap_the_dead`], which
     /// takes the live directory with it.
+    #[cfg(unix)]
     #[test]
     fn a_dead_processes_scratch_is_collected_and_a_live_ones_is_not() {
         let mine = scratch("still-here");
@@ -175,6 +185,43 @@ mod tests {
             mine.join("corpus").exists(),
             "this process's own scratch must survive its own reap"
         );
+    }
+
+    /// The other arm of the same `cfg` split, ASSERTED rather than skipped.
+    ///
+    /// Off unix the module has no liveness probe and reaps nothing, which is the
+    /// could-not-look direction and the safe one: it can never delete a live
+    /// run's corpora. That is a decision the module states in as many words, so
+    /// it earns an assertion — a bare `#[cfg(unix)]` on the case above would
+    /// leave this platform asserting NOTHING about the reaper, which is the
+    /// vacuity this repository refuses everywhere else.
+    ///
+    /// The second assertion is the one both arms share: whatever the platform
+    /// decides about corpses, this process's own scratch survives its own reap.
+    ///
+    /// Fails by: giving the non-unix `pid_is_live` a `false` arm, which would
+    /// start collecting on a platform that cannot tell life from death.
+    #[cfg(not(unix))]
+    #[test]
+    fn off_unix_nothing_is_reaped_because_liveness_cannot_be_read() {
+        let mine = scratch("still-here");
+        std::fs::write(mine.join("corpus"), "bytes").expect("seed the live subtree");
+
+        let parent = std::env::temp_dir().join(SCRATCH_ROOT);
+        let dead = parent.join(i32::MAX.to_string());
+        std::fs::create_dir_all(dead.join("left-behind")).expect("seed the dead subtree");
+
+        let _ = root();
+
+        assert!(
+            dead.exists(),
+            "with no liveness probe the reaper must abstain, never guess"
+        );
+        assert!(
+            mine.join("corpus").exists(),
+            "this process's own scratch must survive its own reap"
+        );
+        let _ = std::fs::remove_dir_all(&dead);
     }
 
     /// A name that is not a pid is not a corpse. Deleting one would make this
