@@ -293,6 +293,20 @@ jobs:
           fi
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
+          # PINNED TO `batten.toml`'s `[[provision]]` ROW, NOT LEFT TO RESOLVE
+          # (CLOUD-1672). The action digest above pins the ACTION; this pins the
+          # MISE it installs, which is a separate resolution the digest does not
+          # reach. Unset, it takes whatever is newest when the job starts —
+          # measured 2026-09-08, that was v2026.9.3, whose linux-x64 asset 404s,
+          # and every job in every workflow died at this step inside 11 seconds.
+          # v0.0.152 published with zero binaries as a result.
+          #
+          # The provision row's own comment already names this harm one layer
+          # down: a runner that updates itself under a container makes two
+          # sessions on one commit run different toolchains. The pin existed and
+          # this layer could not see it, so the tree declared one version and CI
+          # ran another. `ci-tools-check` now refuses any drift between the two.
+          version: 2026.9.1
           # Install only what this job's gates actually invoke, not the whole
           # 18-tool dev set. Every job used to install everything, and `zig`
           # (17.3s) finished last, so zig alone set the install wall clock in
@@ -745,6 +759,20 @@ jobs:
       # is recorded there rather than papered over with a step that never fixed it.
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
+          # PINNED TO `batten.toml`'s `[[provision]]` ROW, NOT LEFT TO RESOLVE
+          # (CLOUD-1672). The action digest above pins the ACTION; this pins the
+          # MISE it installs, which is a separate resolution the digest does not
+          # reach. Unset, it takes whatever is newest when the job starts —
+          # measured 2026-09-08, that was v2026.9.3, whose linux-x64 asset 404s,
+          # and every job in every workflow died at this step inside 11 seconds.
+          # v0.0.152 published with zero binaries as a result.
+          #
+          # The provision row's own comment already names this harm one layer
+          # down: a runner that updates itself under a container makes two
+          # sessions on one commit run different toolchains. The pin existed and
+          # this layer could not see it, so the tree declared one version and CI
+          # ran another. `ci-tools-check` now refuses any drift between the two.
+          version: 2026.9.1
           # THE `ci` JOB'S LIST, NOT A NARROWER ONE, and the width is decided by
           # what `enforce` reaches rather than by what this job looks like it
           # needs. `batten.toml`'s `command` rules shell out to `hk`, to `regal`
@@ -886,6 +914,20 @@ jobs:
         run: git fetch origin main:refs/remotes/origin/main
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
+          # PINNED TO `batten.toml`'s `[[provision]]` ROW, NOT LEFT TO RESOLVE
+          # (CLOUD-1672). The action digest above pins the ACTION; this pins the
+          # MISE it installs, which is a separate resolution the digest does not
+          # reach. Unset, it takes whatever is newest when the job starts —
+          # measured 2026-09-08, that was v2026.9.3, whose linux-x64 asset 404s,
+          # and every job in every workflow died at this step inside 11 seconds.
+          # v0.0.152 published with zero binaries as a result.
+          #
+          # The provision row's own comment already names this harm one layer
+          # down: a runner that updates itself under a container makes two
+          # sessions on one commit run different toolchains. The pin existed and
+          # this layer could not see it, so the tree declared one version and CI
+          # ran another. `ci-tools-check` now refuses any drift between the two.
+          version: 2026.9.1
           # One line, for the reason the `ci` job's list states: `ci-tools-check`
           # parses these as a scalar and several names begin with `aqua:`, which
           # a block scalar's continuation lines read as new keys.
@@ -1051,6 +1093,20 @@ jobs:
           fetch-depth: 0
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
+          # PINNED TO `batten.toml`'s `[[provision]]` ROW, NOT LEFT TO RESOLVE
+          # (CLOUD-1672). The action digest above pins the ACTION; this pins the
+          # MISE it installs, which is a separate resolution the digest does not
+          # reach. Unset, it takes whatever is newest when the job starts —
+          # measured 2026-09-08, that was v2026.9.3, whose linux-x64 asset 404s,
+          # and every job in every workflow died at this step inside 11 seconds.
+          # v0.0.152 published with zero binaries as a result.
+          #
+          # The provision row's own comment already names this harm one layer
+          # down: a runner that updates itself under a container makes two
+          # sessions on one commit run different toolchains. The pin existed and
+          # this layer could not see it, so the tree declared one version and CI
+          # ran another. `ci-tools-check` now refuses any drift between the two.
+          version: 2026.9.1
           # rust builds the two binaries under measurement, hyperfine samples
           # them, jq reads the ratio out. See the ci job for why these lists are
           # narrow.
