@@ -7371,10 +7371,10 @@ root = "target"
 keep = 2
 
 [prune.warm]
-mb = 9472
-worst_mb = 9472
+mb = 11140
+worst_mb = 11140
 multiplier = 1
-measured = "2026-09-06"
+measured = "2026-09-08"
 
 [prune.cold]
 mb = 21455
@@ -7698,14 +7698,49 @@ measured = "2026-09-06"
 # warm's basis refreshed to 220 and cold's left at 208, the very next lap refused
 # on `[prune.cold]`'s staleness arm with warm never breached. The two arms are
 # judged at different times and only one of them waits.
+# THE 2026-09-08 MOVE, 220 -> 232, BOTH BASES, AND WARM RE-MEASURED (CLOUD-205).
+#
+# WHAT MOVED THE BASIS is ordinary growth plus one file from this branch:
+# `crates/batten/tests/it/nextest_slow.rs`, the compiled tier for the slow-test
+# ban. The tree was already 11 past the basis before it, so this branch finished a
+# drift rather than causing one.
+#
+# WHY IT HAD TO MOVE NOW. `target-prune` refused and `verify` narrated the refusal
+# as "not enough disk to run the gate" with **13809 MB free against a 10839 MB
+# learned floor**. There was ample disk; the arm that refused was the staleness
+# one. That misnaming is filed separately — it is the same class as a loop naming
+# a cause it never read — and this entry records only that the cause here was the
+# basis and not the disk.
+#
+# WARM IS RE-MEASURED, by the method the block above prescribes: `du -sm target`
+# immediately after a successful prune on this container, **11140 MB at 232
+# stems**. That is 48.02 MB per stem against the previous basis's 45.54, so the
+# `keep x stems x size` model holds and the figure is a measurement rather than a
+# scaling.
+#
+# AND THE OLD FLOOR WAS UNDER-BUDGETED, which is what this move actually repairs.
+# 9472 is 45.54 x 208 — the figure for the basis BEFORE the 2026-09-06 move to 220
+# — so warm has been budgeting for 208 stems against a tree of 232. The block above
+# says what that costs: "a floor taken against a smaller stem count passes and then
+# lets the build write more than it budgeted for", arriving as a rustc IO error
+# inside a test run rather than as a disk fault. The engine had already noticed and
+# was judging against a LEARNED floor of 10839 MB rather than the declared 9472.
+#
+# COLD DOES NOT MOVE, obeying the 2026-09-05 entry rather than ignoring it: its
+# exact measurement needs a build from an empty `target`, which needs more free
+# space than this container has. It cannot be taken here, which is different from
+# being skipped, and it stays OWED. Its BASIS moves with warm's because the
+# 2026-09-06 entry records what happens otherwise — refreshing one basis and not
+# the other made the very next lap refuse on the other arm, with warm never
+# breached. The two arms are judged at different times and only one of them waits.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 220
+count = 232
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 220
+count = 232
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
