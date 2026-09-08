@@ -2665,7 +2665,12 @@ mod tests {
     /// record carrying `0` names the CALLER's own group, so a cancel that
     /// resolved it would signal the lap doing the cancelling — and on this path
     /// that is the test runner. Pinned at this entry point, not only at the leaf.
-    #[cfg(unix)]
+    ///
+    /// **NO `#[cfg(unix)]`** — `cfg-gated-test` found this case carrying one, and
+    /// [`cancel_owned_group`] is compiled on every target: it reaches `kill` only
+    /// through [`terminate_group`] and [`escalate_group`], whose
+    /// `#[cfg(not(unix))]` twins return `false`. So all four refusals hold off
+    /// unix as well, where they are the only thing pinning that path at all.
     #[test]
     fn a_cancel_that_cannot_resolve_its_record_signals_nothing() {
         let root = crate::scratch::scratch("exec-cancel-record");
@@ -2721,7 +2726,14 @@ mod tests {
     /// member, which is a spawn, and a unit test that spawned one would be
     /// asserting over `Command` rather than over this function. The compiled tier
     /// drives it instead.
-    #[cfg(unix)]
+    ///
+    /// **NO `#[cfg(unix)]`, AND THE ABSENCE IS THE ASSERTION** — `cfg-gated-test`
+    /// found this case carrying one. Every arm here is a REFUSAL, and
+    /// `terminate_group` and `escalate_group` both have `#[cfg(not(unix))]` twins
+    /// that return `false` unconditionally, so every assertion holds on Windows
+    /// too. The attribute bought nothing and cost the one thing that matters: it
+    /// took the case out of the off-unix build, where the twins are the only
+    /// implementation there is and nothing else pins them at all.
     #[test]
     fn a_group_that_cannot_be_resolved_is_not_reaped() {
         assert!(

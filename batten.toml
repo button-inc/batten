@@ -13200,6 +13200,19 @@ id = "module read first"
 kind = "document"
 target = "policy/cfg-gated-test.rego"
 
+# THE OVERRIDE IS DECLARED ON THE CLASS, because the legitimate case exists and
+# is measurable. `provision.rs`'s relink case asserts over
+# `std::os::unix::fs::MetadataExt::ino`, a symbol the Windows target does not
+# have, so a `cfg!` arm would not TYPE-CHECK — `cross-check` is what caught that
+# spelling. Without a route a gate whose refusal is sometimes right becomes one
+# an author switches off rather than answers, which is the shape this rule's own
+# header refuses. The precondition is what separates the two: whether the case's
+# SUBJECT exists off the platform, not whether the leg is red.
+[[verdict.route]]
+id = "path admit first"
+kind = "override"
+precondition = "the case reaches a symbol that does not exist on the other target, so a `cfg!` arm would not type-check and the attribute is required rather than chosen to silence a leg"
+
 [[verdict]]
 id = "suite bind missing"
 gloss = "the runner config declares no slow-timeout this gate can read, so no slow-test ban is in force"
