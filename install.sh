@@ -633,8 +633,35 @@ main() {
 	mkdir -p "$dest" ||
 		die 1 "cannot create $dest. Set BATTEN_INSTALL_DIR to a writable directory."
 	chmod +x "$tmp/$BIN"
-	cp "$tmp/$BIN" "$dest/$BIN" ||
-		die 1 "cannot write $dest/$BIN. Set BATTEN_INSTALL_DIR to a writable directory."
+
+	# ATOMIC REPLACE, BECAUSE THE TARGET MAY BE THE RUNNING BINARY (CLOUD-1620).
+	#
+	# `cp` opens the destination inode O_WRONLY|O_TRUNC. When that inode is a
+	# RUNNING executable the kernel refuses with ETXTBSY, and this installer's
+	# `die` then blamed the directory — "Set BATTEN_INSTALL_DIR to a writable
+	# directory" — for a fault that has nothing to do with permissions.
+	#
+	# Measured 2026-09-08: `session:batten` installs the release at session start,
+	# and at that moment `batten` IS executing — it is the SessionStart dispatcher
+	# running this very handler. So the one caller that most needs a current binary
+	# was the one caller guaranteed to fail. It went unseen because the other
+	# caller, `deps-install`, runs at provisioning time when nothing is running
+	# yet, and because `install:local` — the mechanism `session:batten` used before
+	# — spells `install -m 0755`, and GNU coreutils `install` unlinks the
+	# destination first, so it silently had the property this lacked.
+	#
+	# `rename(2)` gives it honestly: the running process keeps its old inode until
+	# it exits, and the name flips in one step, so no reader ever sees a partial
+	# binary. THE TEMPORARY MUST LIVE IN `$dest`, not in `$tmp` — `mv` across
+	# filesystems degrades to a copy onto the destination and re-hits the very
+	# ETXTBSY this avoids, and `$TMPDIR` is routinely a different filesystem.
+	staged="$dest/.$BIN.new.$$"
+	cp "$tmp/$BIN" "$staged" ||
+		die 1 "cannot write $staged. Set BATTEN_INSTALL_DIR to a writable directory."
+	mv -f "$staged" "$dest/$BIN" || {
+		rm -f "$staged"
+		die 1 "cannot replace $dest/$BIN."
+	}
 
 	# KEY=VALUE, the same shape `mise-tasks/dist.sh` emits, so a caller can consume
 	# this without parsing prose.
