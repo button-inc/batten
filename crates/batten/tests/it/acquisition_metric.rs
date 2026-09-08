@@ -56,6 +56,11 @@ const INVOCATION_METRIC: &str = "wall-clock";
 const BENCH_TASKS: &[(&str, &str)] = &[
     ("acquisition-bench", "--example acquisition-bench"),
     ("config-load-bench", "--example config-load-bench"),
+    (
+        "address-transport-bench",
+        "--example address-transport-bench",
+    ),
+    ("refusal-render-bench", "--example refusal-render-bench"),
 ];
 
 fn task_body(task: &str) -> String {

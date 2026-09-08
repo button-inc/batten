@@ -617,7 +617,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "mise,attestation-check,engine-checks-green,engine-config,engine-doctor,engine-landed,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease"
+MUTANT_GATES = "mise,attestation-check,engine-checks-green,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -2166,6 +2166,31 @@ description = "Price `config::load` over the committed batten.toml, with its own
 # figure — so it takes a third stamp, and `crates/batten/tests/acquisition_metric.rs`
 # asserts every bench task carries one and that no two of them collide.
 run = "BENCH_METRIC=config-load-wall-clock cargo run --quiet -p batten --example config-load-bench"
+
+[tasks.refusal-render-bench]
+description = "Price refusal rendering by strategy and explicit residency, writing bench/refusal-render/RESULTS.md (CLOUD-1606)"
+# CLOUD-1606. Extends the shape `address-transport-bench` above already takes —
+# an example target, a one-line body, its own `BENCH_METRIC` stamp, a report
+# never a gate — rather than standing up a parallel harness.
+#
+# NO `--release` AND NO `build:release`, which is `config-load-bench`'s departure
+# above and for its stronger half of the reason: this target spawns nothing and
+# times nothing. Its subject is `hook::deny_text`, one pure call in this process,
+# and what it reports is which BYTES come out — a figure optimisation cannot
+# move. A release build here would buy a slower task and an identical table.
+#
+# ITS OWN METRIC STAMP, and the axis is genuinely new: `wall-clock`,
+# `acquisition-wall-clock` and `config-load-wall-clock` all measure TIME, and
+# `address-transport-characters` measures emitted characters over a payload
+# corpus. This measures emitted characters over a REFUSAL corpus. Sharing a stamp
+# with any of them would let a reader diff two axes and see a step change that
+# never happened.
+#
+# A REPORT, NEVER A GATE, and off the landing path like `perf` itself. The drift
+# check is the tier's rather than this task's: `crates/batten/tests/it/refusal_render_bench.rs`
+# re-renders the six records in-process and diffs them against the committed
+# file, so the report cannot go stale without `test:cargo` reddening.
+run = "BENCH_METRIC=refusal-render-characters cargo run --quiet -p batten --example refusal-render-bench"
 
 [tasks."install:local"]
 description = "Put the built binary where the hook registrations resolve it — `install.sh`'s own destination"

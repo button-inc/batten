@@ -217,6 +217,7 @@ mod record_closes;
 mod redirect_resolves;
 mod reference_coverage;
 mod refusal_ceiling;
+mod refusal_render_bench;
 mod release_provision_parity;
 mod remedy_authorship;
 mod repaired_arms;

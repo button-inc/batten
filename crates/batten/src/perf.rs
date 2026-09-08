@@ -1946,6 +1946,419 @@ fn measure_one(
     record(arm, id, result)
 }
 
+// ---------------------------------------------------------------------------
+// What a refusal costs the context it is emitted into (CLOUD-1606).
+// ---------------------------------------------------------------------------
+//
+// WHAT THIS PRICES, AND IN WHOSE CURRENCY. Every other arm in this module
+// measures WALL CLOCK: how long an invocation takes. This one measures what an
+// invocation LEAVES BEHIND — the characters a refusal puts into the agent's
+// active context, which stay there and shorten the run before compaction. That
+// is a different axis with a different unit, which is why it carries its own
+// `BENCH_METRIC` stamp (`refusal-render-characters`) rather than joining the
+// `wall-clock` series: a reader plotting one stamp would otherwise put a
+// character count beside a millisecond and read the gap as a step change.
+//
+// IT SPAWNS NOTHING, for `config_load`'s reason one measurement over: the
+// subject is `hook::deny_text`, one pure function call in this process. There is
+// no clock here at all, so there is no noise to divide out and no null arm to
+// divide it with — the rendering is DETERMINISTIC, and the whole reading is
+// which bytes come out.
+//
+// NOTHING HERE IS A RENDERER. `hook::deny_text`, `refusal::Refusal::line` and
+// `verdict::render_line` remain the authorities; this module supplies the
+// strategy/residency PROJECTION onto the `first_sighting` input they already
+// take, and a table of what came back. A benchmark that re-implemented the
+// rendering would measure itself.
+
+/// How a strategy proposes to deliver a refusal across repeated firings.
+///
+/// [`Strategy::Current`] is not a proposal but a description: it is what this
+/// binary does today, and it is in the table so the two proposals are priced
+/// against the shipped behaviour rather than against each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Strategy {
+    /// Full detail on a first sighting, the compact line on a repeat — today.
+    Current,
+    /// Full detail on every firing, which is the control this exists to price.
+    FullEveryTime,
+    /// Full detail once, compact thereafter — the same shape as `Current`,
+    /// declared separately so the table proves they project alike rather than
+    /// assuming it.
+    FirstFullThenCompact,
+}
+
+impl Strategy {
+    /// Every strategy, in declaration order, so a caller cannot enumerate a
+    /// subset and report it as the matrix.
+    pub const ALL: &'static [Self] = &[
+        Self::Current,
+        Self::FullEveryTime,
+        Self::FirstFullThenCompact,
+    ];
+
+    /// The name the report carries.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Current => "Current",
+            Self::FullEveryTime => "FullEveryTime",
+            Self::FirstFullThenCompact => "FirstFullThenCompact",
+        }
+    }
+}
+
+/// Whether the class is already resident in the context being rendered into.
+///
+/// **A BENCHMARK INPUT, NEVER AN INFERRED FACT.** Nothing in this repository
+/// detects residency: there is no sightings store, no compaction signal and no
+/// harness lifecycle epoch, and `DecisionRecord.config_epoch` is a configuration
+/// hash rather than a session one. A successor that wants to deliver on
+/// residency must name its own explicit authority for it; this type is the
+/// declared input to a measurement and carries no claim that anything observes
+/// it (CLOUD-1606 §Scope).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Residency {
+    /// The class has not been seen in this context.
+    Cold,
+    /// The class is already resident.
+    Warm,
+}
+
+impl Residency {
+    /// Both inputs, in declaration order.
+    pub const ALL: &'static [Self] = &[Self::Cold, Self::Warm];
+
+    /// The name the report carries.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cold => "Cold",
+            Self::Warm => "Warm",
+        }
+    }
+}
+
+/// Project a strategy and an explicit residency onto the renderer's own input.
+///
+/// This is the whole of what CLOUD-1606 adds to the rendering path: one table,
+/// mapping the two declared axes onto the `first_sighting: bool` that
+/// [`crate::hook::deny_text`] has always taken. Every relationship the tier
+/// asserts is a property of this function plus the renderer, and four of the
+/// five are properties of this function ALONE — both cold arms and the two
+/// compact warm arms project to identical inputs, so their equalities hold for
+/// any renderer whatsoever. They are controls that the projection is wired as
+/// declared, which is exactly why the mutation below is worth having: without
+/// it, a table that collapsed every arm to one value would satisfy four of the
+/// five and report a matrix it never measured.
+#[must_use]
+//MUTANT-SUITE crates/batten/tests/it/refusal_render_bench.rs
+//MUTANT current-warm-first-sighting|s@        (Strategy::Current, Residency::Warm) => false,@        (Strategy::Current, Residency::Warm) => true,@|a_compact_warm_repeat_is_exactly_the_refusal_line
+pub const fn first_sighting(strategy: Strategy, residency: Residency) -> bool {
+    match (strategy, residency) {
+        (Strategy::Current, Residency::Warm) => false,
+        (Strategy::FirstFullThenCompact, Residency::Warm) => false,
+        (_, Residency::Cold) | (Strategy::FullEveryTime, Residency::Warm) => true,
+    }
+}
+
+/// The classes measured, and why there are two of them.
+///
+/// One per ROUTE KIND, because a first sighting appends only `command` routes
+/// (`verdict::command_routes` filters on the kind) and 144 of 201 declared
+/// classes carry none — so a matrix measured on a command-route class alone
+/// would price the renderer's best case and report it as the behaviour.
+///
+/// * `branch write unsafe` — a consumer row in `batten.toml`, two command routes.
+/// * `tool run loose` — vendored, one `document` route (`rules/scanning.md`) and
+///   no command route, raised by the `no-tool-substitution` rule.
+///
+/// The rule id beside each is the one whose refusal names that class, so the
+/// rendered line is the line a caller actually receives.
+pub const MEASURED_CLASSES: &[(&str, &str)] = &[
+    ("branch write unsafe", "leased-push"),
+    ("tool run loose", "no-tool-substitution"),
+];
+
+/// The bypass name the mediated path renders; it reaches the unverdicted arm
+/// only, and is passed so this measures the same call the harness makes.
+const HATCH: &str = "BATTEN_HOOK_BYPASS";
+
+/// One rendered arm: what was asked for, and what it cost to say.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderRecord {
+    pub strategy: Strategy,
+    pub residency: Residency,
+    /// The declared class token, which with the crate version identifies the
+    /// baseline — the only two inputs the rendering reads.
+    pub class: String,
+    /// The `first_sighting` the projection handed the renderer.
+    pub first_sighting: bool,
+    /// Emitted characters.
+    pub characters: usize,
+    /// [`crate::budget::estimate_tokens`] over the same bytes — the estimator
+    /// `policy-budget` already gates instruction files with, rather than a new
+    /// bytes-over-four approximation wearing a precise-looking unit.
+    pub tokens: usize,
+    /// The rendered line itself, so the tier can compare it to
+    /// [`crate::refusal::Refusal::line`] rather than to a length.
+    pub line: String,
+    /// The same arm rendered with NO ceiling, and it is the column that makes the
+    /// shipped one legible.
+    ///
+    /// The committed `[refusal] max_tokens` bounds the carried line, and when a
+    /// class's routes take it over that bound `deny_text` falls back to the
+    /// compact form — so a table of the shipped rendering alone can report every
+    /// arm as equal and look like a broken measurement rather than like a budget
+    /// doing its job. This is what the first sighting WOULD cost if the ceiling
+    /// permitted it, which is both the explanation and the number a successor
+    /// weighing a residency protocol actually needs.
+    pub unbounded_characters: usize,
+    /// [`crate::budget::estimate_tokens`] over that same unbounded rendering.
+    pub unbounded_tokens: usize,
+}
+
+/// Render every strategy × residency × class arm through the shipped path.
+///
+/// The registry and ceiling are the caller's, so the committed authority is what
+/// gets measured: a bench that vendored its own registry would price a class
+/// nobody is ever refused under.
+///
+/// # Errors
+///
+/// A class this repository does not declare. That is a property of the
+/// configuration rather than a verdict about the cost, and reporting a
+/// zero-length rendering for an absent class would be a measurement of nothing.
+pub fn refusal_render(
+    registry: &[crate::verdict::DeclaredVerdict],
+    ceiling: Option<&crate::refusal::Ceiling>,
+) -> Result<Vec<RenderRecord>> {
+    let mut records = Vec::new();
+    for (class, rule) in MEASURED_CLASSES {
+        let refusal = crate::refusal::Refusal::from_class(
+            *rule,
+            registry,
+            class,
+            &[],
+            crate::refusal::Fix::None,
+        );
+        if refusal.verdict().is_none() {
+            bail!(
+                "perf-refusal-render: the registry declares no class {class:?}. \
+                 Nothing rendered, so nothing is measured."
+            );
+        }
+        for strategy in Strategy::ALL {
+            for residency in Residency::ALL {
+                let first = first_sighting(*strategy, *residency);
+                let line = crate::hook::deny_text(&refusal, HATCH, first, ceiling);
+                let unbounded = crate::hook::deny_text(&refusal, HATCH, first, None);
+                records.push(RenderRecord {
+                    strategy: *strategy,
+                    residency: *residency,
+                    class: (*class).to_owned(),
+                    first_sighting: first,
+                    characters: line.chars().count(),
+                    tokens: crate::budget::estimate_tokens(&line),
+                    line,
+                    unbounded_characters: unbounded.chars().count(),
+                    unbounded_tokens: crate::budget::estimate_tokens(&unbounded),
+                });
+            }
+        }
+    }
+    Ok(records)
+}
+
+/// Emit a pipe table in the column-aligned form the repository's Markdown
+/// formatter produces.
+///
+/// **THIS IS NOT DECORATION, IT IS WHAT KEEPS ONE FILE UNDER ONE AUTHORITY.**
+/// prettier owns every tracked `.md`, including this generated one, and it pads
+/// pipe tables — so a generator emitting unpadded rows would leave a tree the
+/// fixer rewrites, and the drift check would then fail against the file the
+/// fixer just produced. That is the two-authorities-over-one-file fight
+/// `lint:deno` excludes generator-owned artifacts from; here the generator
+/// simply emits what the formatter would leave, so both agree and neither has to
+/// yield.
+fn markdown_table(rows: &[Vec<String>]) -> String {
+    let columns = rows.first().map_or(0, Vec::len);
+    let widths: Vec<usize> = (0..columns)
+        .map(|column| {
+            rows.iter()
+                .filter_map(|row| row.get(column))
+                .map(|cell| cell.chars().count())
+                // A delimiter of three is prettier's floor, so a column narrower
+                // than `---` is padded to it rather than to its own header.
+                .chain(std::iter::once(3))
+                .max()
+                .unwrap_or(3)
+        })
+        .collect();
+
+    let render = |row: &[String]| {
+        let cells: Vec<String> = row
+            .iter()
+            .zip(&widths)
+            .map(|(cell, width)| format!("{cell:<width$}"))
+            .collect();
+        format!("| {} |\n", cells.join(" | "))
+    };
+
+    let mut out = String::new();
+    if let Some(header) = rows.first() {
+        out.push_str(&render(header));
+        let rule: Vec<String> = widths.iter().map(|width| "-".repeat(*width)).collect();
+        out.push_str(&format!("| {} |\n", rule.join(" | ")));
+    }
+    for row in rows.iter().skip(1) {
+        out.push_str(&render(row));
+    }
+    out
+}
+
+/// Render the committed report from a set of records.
+///
+/// **THE BYTES ARE THE CONTRACT.** The tier re-renders this in-process and
+/// compares it to the committed file, which is what stops the report going stale
+/// without anything reddening — so this function, not the example that calls it,
+/// is where the report's shape lives.
+///
+/// No commit SHA appears: a file recording the SHA of the commit that contains
+/// it is byte-stable under no commit. The baseline is the crate version and the
+/// declared class ids.
+#[must_use]
+pub fn refusal_render_report(
+    records: &[RenderRecord],
+    version: &str,
+    ceiling: Option<&crate::refusal::Ceiling>,
+) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    out.push_str("# What a refusal costs the context it lands in\n\n");
+    let _ = writeln!(
+        out,
+        "Generated by `mise run refusal-render-bench` at batten **{version}**. A REPORT, never a \
+         gate: no task in `verify` or the hk gate reads it, and it exits 0 whatever the numbers \
+         say.\n"
+    );
+    out.push_str(
+        "`Cold` and `Warm` are benchmark INPUTS, not observations. Nothing in this repository \
+         detects residency — there is no sightings store, no compaction signal and no harness \
+         epoch — so a successor that wants to act on residency must name its own explicit \
+         authority for it.\n\n",
+    );
+    out.push_str(
+        "Characters are what is emitted. The token column is `budget::estimate_tokens`, the \
+         estimator `policy-budget` already holds instruction files to, rather than a new \
+         approximation minted for this table.\n\n",
+    );
+    match ceiling {
+        Some(declared) => {
+            let _ = writeln!(
+                out,
+                "**The declared `[refusal] max_tokens` is {}, and it is an input to every \
+                 `emitted` figure below.** `deny_text` drops the carried routes when they take \
+                 the line over that bound, so a first sighting is not automatically longer than \
+                 a repeat in this repository. The `unbounded` columns are the same arm rendered \
+                 with no ceiling — what the sighting would cost if the budget permitted it.\n",
+                declared.max_tokens
+            );
+        }
+        None => {
+            out.push_str(
+                "**No `[refusal]` ceiling is declared**, so the emitted and unbounded columns \
+                 below are the same rendering.\n\n",
+            );
+        }
+    }
+
+    for (class, rule) in MEASURED_CLASSES {
+        let _ = writeln!(out, "## `{class}` (rule `{rule}`)\n");
+        let mut rows = vec![vec![
+            "strategy".to_owned(),
+            "residency".to_owned(),
+            "first sighting".to_owned(),
+            "emitted characters".to_owned(),
+            "emitted tokens".to_owned(),
+            "unbounded characters".to_owned(),
+            "unbounded tokens".to_owned(),
+        ]];
+        for record in records.iter().filter(|record| record.class == *class) {
+            rows.push(vec![
+                format!("`{}`", record.strategy.as_str()),
+                format!("`{}`", record.residency.as_str()),
+                record.first_sighting.to_string(),
+                record.characters.to_string(),
+                record.tokens.to_string(),
+                record.unbounded_characters.to_string(),
+                record.unbounded_tokens.to_string(),
+            ]);
+        }
+        out.push_str(&markdown_table(&rows));
+        out.push('\n');
+    }
+
+    out.push_str("## The margin\n\n");
+    for (class, _) in MEASURED_CLASSES {
+        let full = records.iter().find(|r| {
+            r.class == *class
+                && r.strategy == Strategy::FullEveryTime
+                && r.residency == Residency::Warm
+        });
+        let compact = records.iter().find(|r| {
+            r.class == *class && r.strategy == Strategy::Current && r.residency == Residency::Warm
+        });
+        if let (Some(full), Some(compact)) = (full, compact) {
+            let _ = writeln!(
+                out,
+                "- **`{class}`** — a warm repeat emits {} characters ({} tokens) today against \
+                 {} ({} tokens) delivered in full every time: **{} characters saved per repeat \
+                 firing**. Unbounded, the same comparison is {} against {}: **{} characters** — \
+                 what a residency protocol would have to deliver, and withhold, per firing.",
+                compact.characters,
+                compact.tokens,
+                full.characters,
+                full.tokens,
+                full.characters.saturating_sub(compact.characters),
+                compact.unbounded_characters,
+                full.unbounded_characters,
+                full.unbounded_characters
+                    .saturating_sub(compact.unbounded_characters)
+            );
+        }
+    }
+    out.push('\n');
+
+    out.push_str(
+        "**A zero in the emitted column is a measurement, not a gap in the table**, and the two \
+         classes reach it by different routes. `tool run loose` declares a `document` route and \
+         no `command` route, and a first sighting appends command routes only — so it renders \
+         the identical line cold and warm however much budget there is. `branch write unsafe` \
+         declares two command routes and WOULD render them, but the carried line exceeds the \
+         declared ceiling and falls back to the compact form. The first is a renderer gap; the \
+         second is a budget decision. A table without the unbounded columns reports them as the \
+         same number and they are not the same finding.\n\n",
+    );
+
+    out.push_str(
+        "## What is NOT priced here, and why it is not an omission\n\n\
+         - **Provider-side prefill and KV-cache cost.** Those are the serving work a request \
+         does; this measures logical occupancy of the agent's active context, which survives \
+         caching and is what shortens a run. One number serving both would be honest about \
+         neither.\n\
+         - **Whether a shorter refusal produces a better outcome.** That is a paired agent trial \
+         (CLOUD-1117), not a rendering measurement, and this table deliberately claims no \
+         completion effect.\n\
+         - **A tokenizer.** The token column is the declared estimator, named above; a \
+         provider's real tokenization is not available here and inventing one would be an \
+         approximation under a more precise-looking label.\n",
+    );
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
