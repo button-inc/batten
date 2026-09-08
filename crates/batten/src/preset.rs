@@ -774,13 +774,14 @@ mod tests {
     fn every_class_a_preset_raises_is_declared_by_its_own_manifest() {
         for manifest in MANIFESTS {
             let declared: BTreeSet<&str> = manifest.verdicts.iter().map(|entry| entry.id).collect();
-            for (pointer, source) in manifest.modules {
-                for token in raised_in(source) {
+            for module in manifest.modules {
+                for token in raised_in(module.source) {
                     assert!(
                         declared.contains(token.as_str()),
-                        "`{}` raises `{token}` in `{pointer}`, which its manifest does not \
+                        "`{}` raises `{token}` in `{}`, which its manifest does not \
                          declare — the refusal would carry no gloss and no route",
-                        manifest.name
+                        manifest.name,
+                        module.pointer
                     );
                 }
             }
@@ -799,7 +800,7 @@ mod tests {
             let raised: BTreeSet<String> = manifest
                 .modules
                 .iter()
-                .flat_map(|(_, source)| raised_in(source))
+                .flat_map(|module| raised_in(module.source))
                 .collect();
             for entry in manifest.verdicts {
                 assert!(
