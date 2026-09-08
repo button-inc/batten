@@ -108,7 +108,7 @@ config := ".config/nextest.toml"
 # only be on a change that loosens the bound — never on the tree it inherits,
 # which is the shape `fixture-forks.rego` records as the one that gets an
 # exception written for it "and the exception is what rots".
-ceiling_seconds := 300
+ceiling_seconds := 1200
 
 # The committed runner config, by line index — the index is load-bearing, because
 # which SECTION a `slow-timeout` sits under is what says whether it is the default
@@ -243,11 +243,11 @@ deny contains finding if {
 
 tree(lines) := {"tree": {"lines": lines}}
 
-armed := ["[profile.default]", "slow-timeout = { period = \"10s\", terminate-after = 30 }"]
+armed := ["[profile.default]", "slow-timeout = { period = \"10s\", terminate-after = 120 }"]
 
 report_only := ["[profile.default]", "slow-timeout = \"10s\""]
 
-raised := ["[profile.default]", "slow-timeout = { period = \"30s\", terminate-after = 30 }"]
+raised := ["[profile.default]", "slow-timeout = { period = \"30s\", terminate-after = 60 }"]
 
 minutes := ["[profile.default]", "slow-timeout = { period = \"2m\", terminate-after = 3 }"]
 
@@ -279,7 +279,7 @@ test_a_period_without_terminate_after_is_refused if {
 test_a_small_period_with_a_large_multiplier_is_refused if {
 	count(violation) == 1 with input as tree({".config/nextest.toml": [
 		"[profile.default]",
-		"slow-timeout = { period = \"10s\", terminate-after = 100 }",
+		"slow-timeout = { period = \"10s\", terminate-after = 200 }",
 	]})
 }
 

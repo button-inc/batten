@@ -48,9 +48,9 @@ const CONFIG: &str = ".config/nextest.toml";
 /// `period` with no `terminate-after` only REPORTS. Not a ban.
 const REPORT_ONLY: &str = "[profile.default]\nslow-timeout = \"10s\"\n";
 
-/// Above the ceiling the module commits to: 30s x 30 is 900s against 300s.
+/// Above the ceiling the module commits to: 30s x 60 is 1800s against 1200s.
 const RAISED_BODY: &str =
-    "[profile.default]\nslow-timeout = { period = \"30s\", terminate-after = 30 }\n";
+    "[profile.default]\nslow-timeout = { period = \"30s\", terminate-after = 60 }\n";
 
 /// A fixture tree carrying a runner config with `body`, or none at all when
 /// `body` is `None`.
@@ -171,14 +171,14 @@ fn a_period_above_the_ceiling_is_refused() {
 /// That version bounded `period` alone. `period` is only when a case is MARKED
 /// slow; `terminate-after` is the multiplier that decides when it is actually
 /// killed, so a small period with a large multiplier passed the gate while
-/// banning nothing — 10s x 100 is a 1000s kill behind a period well inside any
+/// banning nothing — 10s x 200 is a 2000s kill behind a period well inside any
 /// ceiling. The bound has to be on the product, because the product is what
 /// refuses a test.
 #[test]
 fn a_small_period_with_a_large_multiplier_is_refused() {
     let root = repo(
         "nextest-slow-large-multiplier",
-        Some("[profile.default]\nslow-timeout = { period = \"10s\", terminate-after = 100 }\n"),
+        Some("[profile.default]\nslow-timeout = { period = \"10s\", terminate-after = 200 }\n"),
     );
     assert_eq!(
         rules_fired(&root),
