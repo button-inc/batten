@@ -27,8 +27,88 @@
 //! one, and the verb decides nothing. That is the same three-valued read
 //! [`crate::ready::Grammar`] already gives for the pattern registry, and this
 //! module is deliberately its sibling rather than a second mechanism.
+//!
+//! # Layering: this module reaches nothing
+//!
+//! It owns both halves — the declared table [`Board`] and the resolved
+//! [`Columns`] — and imports no other module in the crate, not even `error`.
+//! `config` reads it at load; `landed`, `claim` and `lib` read it at decision
+//! time; it reads none of them. That is `crate::secret`'s placement arrived at
+//! from the same direction: a vocabulary every layer may consult must depend on
+//! nothing, or the honesty of a gate becomes conditional on the layer its words
+//! came through.
+//!
+//! The table lives here rather than in `config` for the reason
+//! [`crate::mcp::McpConfig`] and [`crate::recorder::Declared`] do: a module that
+//! exists owns its own declaration, so the type and the predicate that reads it
+//! cannot drift apart across a module boundary.
 
-use crate::config::Board;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+/// The `[board]` table: this consumer's column vocabulary.
+///
+/// # Why this table exists (non-negotiable rule 1)
+///
+/// [`crate::landed`] and [`crate::claim`] decide over a board's COLUMN NAMES —
+/// which column is the ready queue, which means "pulled", which mean "somebody
+/// has this, or it landed, or it shipped". Those are one tracker's words. Linear
+/// ships `Todo`/`In Progress`/`In Review`/`Done`; Jira ships `To Do`/`In
+/// Development`; a GitHub Project ships whatever the owner typed.
+///
+/// Carried as engine constants they were rule 1's violation in its worst form.
+/// Off this board every comparison is false, so `is_started` never fires, the
+/// landed-honesty sweep reports **zero findings over a board full of dishonest
+/// columns**, and `claim` never refuses. A gate that cannot fire is
+/// indistinguishable from a gate that found nothing, which is the one failure
+/// this whole module family exists to avoid.
+///
+/// # Absent is could-not-look, never a default
+///
+/// An undeclared table does **not** fall back to this repository's own words.
+/// A default would reinstate the violation with an extra step and make the dead
+/// path byte-identical to the working one again — the exact shape that let the
+/// constants survive. A verb needing a column this table does not declare says
+/// so, by name, and decides nothing.
+///
+/// # Why values and not `[[pattern]]` rows
+///
+/// [`crate::config::Ready`]'s reason (CLOUD-472), and one more directly: a
+/// column is matched by
+/// EQUALITY against the string the tracker echoes back, never by a regex over
+/// it. The pattern registry exists so one CONCEPT has one spelling; a literal
+/// the round trip returns verbatim is a value.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Board {
+    /// The column a row must sit in to be pullable — the ready queue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready: Option<String>,
+    /// The column meaning "pulled": somebody is on this now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_progress: Option<String>,
+    /// The column a row whose branch is behind git is asked to move back to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<String>,
+    /// Every column meaning "somebody has this, or it has landed, or it has
+    /// shipped".
+    ///
+    /// **The released column belongs in this set, and leaving it out was a
+    /// measured defect** (CLOUD-1458). The engine constant this replaces read
+    /// `["In Progress", "In Review"]`, so a declined key that reached the
+    /// released column escaped the sweep entirely — and released is where the
+    /// claim is strongest and the lie therefore costs most. Measured on that
+    /// gate's own two rows: CLOUD-186 and CLOUD-1127 were declined with
+    /// `DO-NOT-CLOSE` in the body of the pull request that landed the module,
+    /// advanced by the merge, moved back by hand, and advanced to the released
+    /// column by a release 2026-09-05T02:52:56Z — past the far edge of a
+    /// predicate written the day before.
+    ///
+    /// The ready-queue columns stay OUT: a declined key sitting there is
+    /// `DO-NOT-CLOSE` working, and refusing it would make the marker unwritable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub started: Vec<String>,
+}
 
 /// The columns a landing or claim decision reads, each already proven present.
 ///

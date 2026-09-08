@@ -1166,6 +1166,23 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[WeakeningKind::ReadyCutoverRelaxed]),
     },
     FieldCoverage {
+        field: "board",
+        coverage: Coverage::NotPolicyBearing(
+            "this board's column vocabulary (CLOUD-1623). It IS read by gates — `claim check` \
+             admits only the ready-queue column and `landed` selects on the pulled and started \
+             ones — so the reason is not that it lacks policy weight. It is that an override \
+             cannot speak to it at all: the key is absent from `OverrideConfig` and `resolve` \
+             reads the table from the committed authority alone, `contract`'s structural \
+             guarantee for `epoch`'s reason. That is what makes the obvious attack unwritable — \
+             an uncommitted layer renaming `ready` to a column every row already sits in would \
+             make every row pullable at once. A weakening row would be the wrong instrument, \
+             `mcp`'s point below: it reports a DIRECTION, and a column name has none. Renaming \
+             a queue is not more or less permissive as config — which rows it admits depends on \
+             where the board has put them, which is tracker state rather than a bar this file \
+             sets",
+        ),
+    },
+    FieldCoverage {
         field: "perf",
         coverage: Coverage::Compared(&[WeakeningKind::PerfExemptionAdded]),
     },

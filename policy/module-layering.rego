@@ -85,6 +85,22 @@ declared_modules := {
 	# three tables that had to know about each other.
 	"preset",
 	"brief", "main", "selfwrite",
+	# `board` arrived with CLOUD-1623 and this rule named it once more, on the
+	# gate before landing — module written, clippy green, `module-map-check`
+	# satisfied, and nobody had placed it. The coverage clause working again.
+	#
+	# It is `secret`'s class, arrived at from the same direction: it reaches
+	# NOTHING in this crate, not even `error`. It owns both halves — the declared
+	# `[board]` table and the resolved `Columns` that reads it — and that is its
+	# whole surface. `config` reads it at load; `landed`, `claim` and `lib` read
+	# it at decision time; it reads none of them.
+	#
+	# That direction is the placement rather than an accident of its size. The
+	# module exists so a gate's verdict about a board is stated in the CONSUMER's
+	# words, and an edge from here to any decider would make the honesty of those
+	# words conditional on that decider's own layer — which is the property the
+	# module was written to remove, not to relocate.
+	"board",
 	# `patch` arrived with CLOUD-739 and this rule named it before a human did —
 	# the same property the three above record, working a second time. `symbols`
 	# arrived with CLOUD-760 and it worked a third. `semver` arrived with
