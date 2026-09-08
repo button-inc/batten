@@ -6331,6 +6331,35 @@ tool = "hyperfine"
 version = "1.20.0"
 input = "target/release/batten"
 
+# The slow-test ban's declaration, guarded (CLOUD-1571 follow-on).
+#
+# THE BAN ITSELF IS THE RUNNER'S. `.config/nextest.toml`'s `slow-timeout` marks a
+# case slow at `period` and kills it at `period x terminate-after`, reporting
+# TIMEOUT — a failure, since `on-timeout` defaults to "fail". Measured on this
+# tree: a case under a 50ms period reported TERMINATING, then TIMEOUT, then
+# `error: test run failed`, exit 100.
+#
+# SO THIS ROW GUARDS A DECLARATION RATHER THAN A DURATION, and that division is
+# deliberate. `mise-tasks/suite-bench-check.sh` records why a duration gate is the
+# wrong instrument — it "would be red on every second run and would be bypassed
+# within a day" — and CLOUD-1419 wrote an aggregate ratchet and withdrew it in the
+# same branch. nextest measures and decides; batten refuses the weakening.
+#
+# `lines` NAMES ONE FILE AND THAT IS SAFE HERE, unlike `landing-roster-guarded`
+# which had to declare a whole directory. That module's absent-source arm was dead
+# because a glob matching zero files leaves the rule SKIPPED rather than evaluated
+# — but `.config/nextest.toml` is a literal path, not a glob, so a tree without it
+# still acquires the declared source and `nextest-slow-unbounded` fires on the
+# empty document. `crates/batten/tests/it/nextest_slow.rs` drives the engine over a
+# tree with the file deleted, because that is the only tier that can tell.
+[[rule]]
+id = "nextest-slow"
+kind = "policy"
+scope = "tree"
+lines = [".config/nextest.toml"]
+module = "policy/nextest-slow.rego"
+severity = "deny"
+
 # The agentic trials protocol (CLOUD-1116). A completeness predicate over the two
 # records in `bench/agentic/`, and nothing else — it decides whether a row that
 # CLAIMS an outcome carries the arms, the fixture, the run count and the falsifier
@@ -12534,6 +12563,30 @@ Could-not-look, never a verdict about the tree, and it covers the two ways the w
 id = "module read first"
 kind = "document"
 target = "policy/ci-cache-declared.rego"
+
+[[verdict]]
+id = "suite bind missing"
+gloss = "the runner config declares no slow-timeout this gate can read, so no slow-test ban is in force"
+class = """
+`period` alone only MARKS a case slow and prints it; `terminate-after` is what kills it, and the TIMEOUT that follows is what fails the run. A declaration carrying one and not the other is not a ban and must not read as one. An absent file, a commented-out declaration, and a period in a unit this module cannot convert all reach the same class deliberately: nextest accepts `2m` and `500ms`, either of which would leave the comparison unreachable and the gate silently green over a bound nobody is enforcing. Fail-closed is the only honest direction for a guard whose subject is whether a guard exists.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/nextest-slow.rego"
+
+[[verdict]]
+id = "bound edit refused"
+gloss = "the declared slow-test period is above the ceiling policy/nextest-slow.rego commits to"
+class = """
+The ratchet is "never above", not "always exactly", and the asymmetry is the point: lowering the period is free, so a branch that makes the suite faster tightens the bound without negotiating with this gate. Raising it past the ceiling is refused. Lowering the CEILING is a reviewed edit to the module, which is where a reader sees it in the diff rather than inferring it from a number that moved.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/nextest-slow.rego"
 
 [[startup]]
 id = "engine-reads-the-authority"

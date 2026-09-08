@@ -169,6 +169,7 @@ mod mise_pin_agreement;
 mod mutate;
 mod mutation_declared_case;
 mod narrow_adoption;
+mod nextest_slow;
 mod obligations_bound;
 mod outcome_advice;
 mod perf_assert;

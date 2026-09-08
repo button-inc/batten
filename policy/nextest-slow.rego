@@ -1,0 +1,210 @@
+# The slow-test ban, and the ratchet that walks it down (CLOUD-1571 follow-on).
+#
+# WHAT ENFORCES THE BAN IS NOT THIS MODULE. `.config/nextest.toml` declares
+# `slow-timeout = { period, terminate-after }`; nextest marks a case slow at
+# `period` and KILLS it at `period x terminate-after`, reporting TIMEOUT, and a
+# TIMEOUT is a failure because `on-timeout` defaults to "fail". That is the ban,
+# in the runner, on every local run and in CI. Measured on this tree before this
+# module was written: a case run under a 50ms period reported `TERMINATING`, then
+# `TIMEOUT`, then `error: test run failed`, exit 100.
+#
+# THIS MODULE ONLY REFUSES WEAKENING IT. The split matters. A gate that
+# re-derived per-case durations would be the instrument this repository has
+# already refused twice — `mise-tasks/suite-bench-check.sh` records that a
+# duration gate "would be red on every second run and would be bypassed within a
+# day", and CLOUD-1419 wrote an aggregate ratchet and withdrew it in the same
+# branch because its first firing was on the change that improved the thing it
+# guarded. The runner's timeout has neither problem, so the honest division is:
+# nextest measures and decides, batten guards the declaration.
+#
+# THE CEILING IS A LITERAL HERE, exactly as `perf-assert.rego` holds its budgets.
+# A `policy/*.rego` module IS consumer config, so a number is at home in it;
+# non-negotiable rule 1 scopes to `crates/batten`. `rules/policy-modules.md`
+# refuses a threshold spelled as a `[[pattern]]` row for the opposite reason —
+# arithmetic is not a concept with one spelling — and this is not that.
+#
+# THE RATCHET IS "NEVER ABOVE", NOT "ALWAYS EXACTLY". `ceiling_seconds` is the
+# committed maximum. Lowering the period below it is free, which is the whole
+# point: a branch that makes the suite faster tightens the bound without
+# negotiating with this gate. Raising it above the ceiling is refused, and
+# lowering the CEILING is a reviewed edit to this file that a reader sees in the
+# diff. That asymmetry is what a ratchet is.
+#
+# NO INLINE REGEX, AND THE PARSE IS STRING BUILTINS ONLY. An inline pattern is
+# refused at load and this is not a concept the `[[pattern]]` registry should
+# carry, so the period is read by splitting the line on the quote character.
+# `slow-timeout = { period = "10s", ... }` splits into three parts and part 1 is
+# `10s`; trimming the `s` and converting is the whole parse.
+#
+# AND AN UNREADABLE PERIOD REFUSES RATHER THAN PASSING, which is the direction
+# that matters. nextest accepts `2m` and `500ms` as well as `10s`; both would
+# leave `to_number` undefined, the comparison unreachable, and the gate silently
+# green over a bound nobody is enforcing. So the absent, the unterminated and the
+# unreadable are ONE class — `slow bound missing` — and every one of them means
+# the same thing: no ban is in force that this gate can vouch for.
+#MUTANT-SUITE crates/batten/tests/it/nextest_slow.rs
+#MUTANT terminator-unread|s@^\tcontains(line, "terminate-after")$@\ttrue@|a_period_without_terminate_after_is_refused
+#MUTANT ceiling-may-rise|s@^\tperiod > ceiling_seconds$@\tfalse@|a_period_above_the_ceiling_is_refused
+#MUTANT declaration-unread|s@^\tsome line in input.tree.lines\[config\]$@\tsome line in []@|the_committed_config_declares_a_terminating_slow_timeout
+#
+# THE THIRD MUTATION EMPTIES THE LINE WALK rather than negating a conjunct, for
+# `landing-roster-guarded`'s reason: emptying it makes the declaration
+# unreachable, which reddens the PASS case over the real committed file. The
+# first two redden refusal cases. So the three reach different cases and none of
+# them is shadowed by another.
+
+# METADATA
+# description: |
+#   Bound to the TREE surface: this row is `scope = "tree"`, so it reads
+#   `input.tree` and never the mediated call.
+#   THIS BLOCK IS YAML AND MUST STAY THE LAST COMMENT BLOCK BEFORE `package`.
+# schemas:
+#   - input: schema["policy-input.schema"]
+package batten.nextest_slow
+
+import rego.v1
+
+rules contains "nextest-slow-unbounded"
+
+rules contains "nextest-slow-raised"
+
+# The runner's committed configuration. A consumer path in a consumer module,
+# which is where non-negotiable rule 1 puts it.
+config := ".config/nextest.toml"
+
+# The ceiling, in seconds: the largest `period` this repository will accept.
+#
+# Walked down as the suite gets faster, one reviewed step at a time. It sits at
+# today's declared value, so the gate is exactly as tight as the tree already is
+# and its first firing can only be on a change that loosens the bound — never on
+# the tree it inherits, which is the shape `fixture-forks.rego` records as the one
+# that gets an exception written for it "and the exception is what rots".
+ceiling_seconds := 10
+
+# Every non-comment line of the committed runner config.
+declaration contains line if {
+	some line in input.tree.lines[config]
+	not startswith(trim_space(line), "#")
+}
+
+# A line that declares BOTH halves of the ban. `period` alone only reports; it is
+# `terminate-after` that kills, so a declaration carrying one and not the other
+# is not a ban and must not read as one.
+terminating contains line if {
+	some line in declaration
+	contains(line, "slow-timeout")
+	contains(line, "period")
+	contains(line, "terminate-after")
+}
+
+# The declared period in whole seconds, read with string builtins alone.
+#
+# Undefined where the value is not `<digits>s` — which is deliberate and is what
+# the `nextest-slow-unbounded` arm below turns into a refusal, rather than
+# letting `2m` or `500ms` leave the comparison unreachable and the gate green.
+period_seconds contains seconds if {
+	some line in terminating
+	parts := split(line, "\"")
+	count(parts) > 1
+	value := parts[1]
+	endswith(value, "s")
+	not endswith(value, "ms")
+	seconds := to_number(trim_suffix(value, "s"))
+}
+
+# NO TERMINATING DECLARATION THIS GATE CAN READ.
+#
+# Absent, comment-only, missing `terminate-after`, or carrying a period in a unit
+# this module cannot convert — one class, because every one of them means no ban
+# is in force that can be vouched for. Refusing on an unreadable unit is the
+# fail-closed direction: the alternative is a silently unreachable comparison.
+violation contains {
+	"rule": "nextest-slow-unbounded",
+	"verdict": "suite bind missing",
+	"subjects": [{"path": config}],
+} if {
+	count(period_seconds) == 0
+}
+
+# THE RATCHET. A declared period above the committed ceiling is refused; below it
+# is free, so making the suite faster never has to negotiate with this gate.
+violation contains {
+	"rule": "nextest-slow-raised",
+	"verdict": "bound edit refused",
+	"subjects": [{"path": config}],
+} if {
+	some period in period_seconds
+	period > ceiling_seconds
+}
+
+deny contains finding if {
+	some finding in violation
+}
+
+# --- the module's own tier ---------------------------------------------------
+#
+# These pin the PREDICATE. They cannot pin that the ENGINE builds the input the
+# predicate reads — `with input as` fabricates the very shape the engine may be
+# unable to produce — so `crates/batten/tests/it/nextest_slow.rs` runs the same
+# questions over the compiled binary against the real committed file. Both tiers,
+# per `rules/policy-modules.md`, and the second is not optional.
+
+tree(lines) := {"tree": {"lines": lines}}
+
+armed := ["[profile.default]", "slow-timeout = { period = \"10s\", terminate-after = 9 }"]
+
+report_only := ["[profile.default]", "slow-timeout = \"10s\""]
+
+raised := ["[profile.default]", "slow-timeout = { period = \"30s\", terminate-after = 3 }"]
+
+minutes := ["[profile.default]", "slow-timeout = { period = \"2m\", terminate-after = 3 }"]
+
+commented := ["[profile.default]", "# slow-timeout = { period = \"10s\", terminate-after = 9 }"]
+
+# THE PASS SIDE FIRST: without it every refusal below is satisfied by a module
+# that refuses everything.
+test_an_armed_declaration_at_the_ceiling_is_clean if {
+	count(violation) == 0 with input as tree({".config/nextest.toml": armed})
+}
+
+# LOWERING IS FREE, which is the ratchet's whole asymmetry.
+test_a_period_below_the_ceiling_is_clean if {
+	count(violation) == 0 with input as tree({".config/nextest.toml": [
+		"[profile.default]",
+		"slow-timeout = { period = \"5s\", terminate-after = 9 }",
+	]})
+}
+
+# `period` ALONE ONLY REPORTS. A declaration that marks a case slow and never
+# kills it is not a ban, and must not read as one.
+test_a_period_without_terminate_after_is_refused if {
+	count(violation) == 1 with input as tree({".config/nextest.toml": report_only})
+}
+
+test_a_period_above_the_ceiling_is_refused if {
+	count(violation) == 1 with input as tree({".config/nextest.toml": raised})
+}
+
+# A UNIT THIS MODULE CANNOT CONVERT REFUSES rather than leaving the comparison
+# unreachable. `2m` is a legal nextest value and a silent hole without this.
+test_a_period_in_an_unconvertible_unit_is_refused if {
+	count(violation) == 1 with input as tree({".config/nextest.toml": minutes})
+}
+
+# A COMMENTED-OUT DECLARATION IS NOT A DECLARATION.
+test_a_commented_declaration_does_not_arm_the_ban if {
+	count(violation) == 1 with input as tree({".config/nextest.toml": commented})
+}
+
+# ABSENCE IS THE SAME CLASS: a tree with no runner config has no ban in force.
+test_an_absent_config_is_refused if {
+	count(violation) == 1 with input as tree({})
+}
+
+# THE POINTER IS THE FILE a reader opens (rule 4), and the class is the one the
+# registry declares for it.
+test_the_refusal_points_at_the_runner_config if {
+	some v in violation with input as tree({".config/nextest.toml": raised})
+	v.subjects[0].path == ".config/nextest.toml"
+	v.verdict == "bound edit refused"
+}

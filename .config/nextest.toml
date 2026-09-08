@@ -31,14 +31,44 @@
 # `files_read` and `bytes_read`, which count acquisitions at the boundary and so
 # cannot see an O(n*m) evaluation over a document already in hand.
 
-# THE SLOW-TEST TERMINATOR (CLOUD-1571 follow-on).
+# THE SLOW-TEST TERMINATOR, AND ITS RATCHET (CLOUD-1571 follow-on).
 #
-# PROVISIONAL, REPORT-ONLY: no `terminate-after` yet, so nextest MARKS a case
-# slow and prints it without killing it. This pass exists to produce the list the
-# real setting is chosen from; arming it before measuring would redden cases
-# nobody has looked at.
+# `slow-timeout.period` is when nextest MARKS a case slow and prints it;
+# `period x terminate-after` is when it KILLS it, reporting TIMEOUT — and a
+# TIMEOUT is a FAILURE, because `on-timeout` defaults to "fail". So this pair is
+# the ban on slow tests, enforced by the runner on every local run and in CI.
+# Nothing in batten re-derives the measurement; `policy/nextest-slow.rego` only
+# refuses weakening what is written here.
+#
+# WHY THE RUNNER RATHER THAN A GATE OF OUR OWN. A hand-rolled wall-clock
+# assertion is the instrument this repository has already refused twice:
+# `mise-tasks/suite-bench-check.sh` records that a duration gate "would be red on
+# every second run and would be bypassed within a day", and CLOUD-1419 wrote an
+# aggregate ratchet and withdrew it in the same branch because its first firing
+# was on the change that improved the thing it guarded. nextest's own timeout has
+# neither problem: it is per-case, it carries filtered per-case overrides, and it
+# is maintained upstream.
+#
+# THE NUMBERS COME FROM A MEASURED FULL RUN, not from a target. 5,021 cases, all
+# passing, summed 987.5s against 255.5s wall:
+#
+#   p50 42ms | p95 671ms | p99 2.53s | max 64.85s
+#   over 10s: 11 cases | over 20s: 5 | over 30s: 2 | over 60s: 1
+#
+# `period = "10s"` therefore names 11 cases on every run — the visibility half,
+# and the number the ratchet walks down. `terminate-after = 9` kills at 90s,
+# ~1.4x today's worst (64.85s, `agentic_record::a_replay_over_the_committed_
+# records_fires_on_every_required_key`).
+#
+# THE KILL THRESHOLD IS DELIBERATELY NOT SET AT TODAY'S WORST, and that is why
+# this first step does not redden the tree. These are wall times under
+# parallelism, and nextest bills a case for time spent BLOCKED as well as running
+# (CLOUD-1439) — so a case near the threshold on a quiet box crosses it on a
+# loaded one. A bound a green tree fails on a slower runner is measuring the
+# runner. Each ratchet step down is its own reviewed change, and a step that
+# strands a case gets that case fixed or an override naming why.
 [profile.default]
-slow-timeout = "1s"
+slow-timeout = { period = "10s", terminate-after = 9 }
 
 [[profile.default.overrides]]
 filter = 'test(deleting_six_governed_paths_costs_a_flat_multiple_of_the_floor)'
