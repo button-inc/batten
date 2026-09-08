@@ -329,6 +329,37 @@ uv = "0.12.5"                                       # fast Rust installer the pi
 
 [env]
 CARGO_TERM_COLOR = "always"
+# THE LEASE WAIT DOES NOT GIVE UP ON A HEALTHY FLEET (CLOUD-1620).
+#
+# `land.sh` defaults `LAND_LOCK_MAX_WAITS` to 64 and each lost turn is a
+# `LAND_LOCK_WAIT` (=TTL, 120s) blocking wait, so the default is a ~2h08m
+# deadline assembled out of counted parts — the wall clock
+# `mem:workflow/landing-loop` says exists nowhere in this design. The "it is a
+# count, not a clock" defence holds for `LAND_MAX_LAPS`, whose unit is a lap of
+# variable real work; it does not hold here, where the unit is a fixed duration.
+#
+# AND IT FIRES ON THE HEALTHY CASE ONLY, which is what makes it indefensible
+# rather than merely mis-tuned. A holder that stops advancing is already handled
+# INSIDE `land-lock acquire`: it reaps a lease that beats without progressing
+# (`stalled-lease-unstealable`), so a stuck holder never needs the agent. An
+# unreadable remote is exit 2, could-not-look, its own path. What is left for
+# this budget to stop is a fleet that is working — every turn lost to a rival
+# that went on to land — and stopping there hands the agent a refusal with
+# nothing to debug.
+#
+# The cost is not hypothetical: measured 2026-09-08, four consecutive `land`
+# runs lost every turn to a live holder, burned ~8h between them, and the branch
+# ended 129 commits and two releases behind `main`. Falling behind is the one
+# thing the lap design exists to prevent, and "waiting costs nothing but wall
+# clock" (`land.sh`) prices it against CI minutes while ignoring the resource
+# that actually degrades.
+#
+# So the budget is raised, not removed — the knob is the mechanism's own and
+# `land.sh` is a governed `mise-tasks/*.sh` whose only landable shapes are
+# retire-whole or leave alone. Removing the stop belongs to the CLOUD-843
+# retirement; until then this makes the healthy case wait instead of quitting,
+# and leaves every evidence-based stop exactly as it was.
+LAND_LOCK_MAX_WAITS = "10000"
 # bats comes from the tests/bats submodule, not a mise tool, and this is what
 # puts it on PATH. A tool pin would be the obvious choice and is the wrong one:
 # the published package is a GitHub *source archive*, and those are not
