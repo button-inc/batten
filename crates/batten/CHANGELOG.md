@@ -7,6 +7,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.153](https://github.com/button-inc/batten/compare/v0.0.152...v0.0.153) - 2026-09-08
+
+### Added
+
+- *(land)* give the loop's one human stop a route to take it
+- *(land)* race the gate against its base and cancel the loser
+- *(land)* a gate refusal says WHICH kind of refusal it was
+- *(land)* the entry gates and the retirement of a landed branch
+- *(land)* the lap places the speculation it settles
+- *(land)* the lap settles an outstanding speculation
+- *(lease)* the fast-forward carve-out, and the lane the shell missed
+- *(land)* the ready event, and pr_watch's last gh spawn retired
+- *(land)* the driver runs the undos a lap owes
+- *(pipeline)* the landing composition as a declared list
+- *(lease)* release notes the reclaim census, as the consumer declares it
+- *(land)* the prune, conserving what `--prune` was load-bearing for
+- *(land)* the tap, the transient re-run, and the rate-limit backoff
+- *(land)* abandon the matrix a red check made worthless
+- *(lease)* `guard` — the step-0 precondition as one composite write
+- *(lease)* `carries` — the staleness row that was about to go silently dead
+- *(land)* the lap's ready step, and the two orphaned gates it calls
+- *(land)* the lap ledger — spend is counted, never inferred
+- *(land)* speculation — the bet on the base that is about to exist
+- *(land)* [**breaking**] the stale arm is main-watch's conditional poll, raced
+- *(land)* a freshness probe between the gate and the push
+- *(land)* `lap` — the driver, and the table that says what each answer means
+- *(land)* `fast-forward` as a verb, and one exhaustive match to slot it into
+- *(land)* the fast-forward protocol, keyed to the comment that asked
+
+### Fixed
+
+- *(test)* the entry-gate stub is a program on both targets, not a shebang
+- *(gitwrite)* [**breaking**] a resolution is spent per entry, so a path may conflict twice
+- *(test)* two cases narrowed to unix that hold on both targets
+- *(test)* a corpse is unreachable off unix, so both arms get asserted
+- *(test)* the scratch reaper's case asserted only one arm of its own cfg split
+- *(test)* declare the reinstall fixture's const before the statements
+- *(test)* restore the provision-fence fixture main's module needs
+- *(provision)* replace the cached binary rather than writing through it
+- *(land)* spend each resolution PATH once, not the whole offer at once
+- *(land)* drop a commit whose change is already on the base
+- *(receipt)* committed config is the working tree's, on both anchors
+- *(land)* the raced gate was two dead mechanisms, and this makes both live
+- *(land)* refund the lap whose gate the race reclaimed
+- *(scratch)* place the module and let its tests use expect
+- *(test)* clear $LAND_VERIFY from the census corpus, it was running verify
+- *(scratch)* one owner for out-of-tree test scratch, reaped by liveness
+- *(land)* the lock's binding is used now, so it loses its underscore
+- *(land)* a registration that never moves reads as a stall
+- *(land)* verify's exit 2 means main moved, and the port stopped on it
+- *(land)* the lap takes the singleton, registers, and reaps
+- *(config)* the load-time census reads three loader bodies, not two
+- *(config)* a warn shape row is silent, and the comment claimed otherwise
+- *(trust)* the lane weakening priced INTRODUCING a gate, not widening one
+- *(lease)* git-over-HTTP takes Basic, and the smart-HTTP client sent Bearer
+- *(provision)* the busy-target case is Unix-only, because its subject is
+- *(provision)* a re-link cannot write through the binary it is replacing
+- *(land)* the lap held a 120s lease across a whole matrix, and thirteen more
+- *(engine)* nine could-not-look collapses, each reported as a clean answer
+- *(hook)* a newline inside a quoted argument was a line boundary, and six more
+- *(exec)* `reraise` did not type-check on the Windows target
+- *(lease)* the pre-checkout guard had no lease to read, and six more
+- *(lease)* the guard skipped the lease it exists to read, and six more
+- *(land)* a destructive prune keyed to the wrong remote, and three readings
+- *(land)* the last lap's deferred undos, and a bet flag that outlived its bet
+- *(land)* six findings, and four were a mechanism written and never reached
+- *(land)* thirteen findings, and three of them were gates deciding nothing
+- *(rest)* a dead clock is not an instant, and four more unreachable arms
+- *(land)* a merged pull request is CLOSED, so the merge gate could never pass
+- *(land)* the losing arm of the race stops holding a finished landing
+- *(land)* the lease is handed back, the backoff is honoured, the refund fires
+- *(land)* a skipped bot run is not a merge, and six regressions of my own
+- *(rest)* the retirement dropped a header the forge requires, and two pointers
+- *(land)* the lap takes the lease, so the tap it declares can close
+- *(land)* the lander could not complete a single lap as shipped
+- *(land)* a could-not-look trunk is not a moved trunk, and the fan-in binds
+- *(land)* close the outstanding review findings on #848
+- *(land)* [**breaking**] retire abandon-matrix, and the fan-in it was cancelling
+- *(receipt)* verified_by takes a default rather than refusing
+- *(lease)* the guard read no config at all, and CodeRabbit's ten others
+- *(land)* a red wait stops the lap instead of waiting out the hour
+- *(lease)* every health state names the admitted successor
+- *(land)* an unset fan-in cancels nothing rather than guessing
+- *(main-watch)* an empty base is never reported as movement
+- *(test)* `rest` joins the declared network callers
+- *(land)* the abandon fixtures name no consumer's workflow
+- *(rest)* the forge REST tier moves in process, and a gate over the escapes
+- *(lease)* the status verdict, and the two columns that read it
+- *(surface)* the three new verbs carry a pointer-only disposition
+- *(land)* speculation reads ancestry through gitwrite rather than opening gix
+- *(spec)* the committed surface set carries the three verbs this branch added
+- *(land)* resolve the clone's root, so the configured gate is actually run
+
+### Other
+
+- *(gate)* the compiled tier cfg-gated-test's #MUTANT-SUITE names
+- *(surface)* record --resolve in the golden schema snapshot
+- *(landing)* restore main's landing-roster rows after the replay
+- *(policy)* withdraw the provision fence, it is CLOUD-1550's row
+- *(hook)* main landed CLOUD-1287 too, so the hand-rolled splitter goes
+- *(provision)* close the doc comment the cfg gate split in two
+- *(trust)* the new weakening kind ships with the case its census demands
+- *(ci-parity)* both tiers pin the fan-in binding, in both directions
+- *(shell)* retire the lander, and 146 titles dispositioned one by one
+- *(lease)* [**breaking**] retire land-lock, the cluster's largest program
+- *(lease)* [**breaking**] retire ci-lease-precondition onto `batten lease guard`
+- *(land)* [**breaking**] retire main-watch onto the lap's staleness precheck
+- *(lease)* retire land-lock-check.sh onto `batten lease check`
+- *(shell)* retire verified.sh onto `batten receipt verified`
+
 ## [0.0.152](https://github.com/button-inc/batten/compare/v0.0.151...v0.0.152) - 2026-09-08
 
 ### Added
