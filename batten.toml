@@ -5858,6 +5858,28 @@ delta_sources = ["**"]
 module = "policy/test-targets.rego"
 severity = "deny"
 
+# CLOUD-1148's mechanism half. The doctrine — a platform split inside a `#[test]`
+# is spelled `cfg!` so both arms compile on every target — landed as two doc
+# comments and no gate, which is non-negotiable rule 2 violated by the commit
+# that closed the class.
+#
+# `delta_sources` AND `line_sources` DIFFER HERE ON PURPOSE, and the asymmetry is
+# the interesting half. The delta is the whole tree because the module decides on
+# a path's own content and a pre-filtered delta cannot tell "nothing was added"
+# from "the filter removed it" — the class `test-targets` above states for its
+# own reason. The lines are `crates/**/*.rs` because that is where a `#[test]`
+# can live, and handing the module every path in the repository would make it
+# read `batten.toml` looking for Rust attributes.
+[[rule]]
+id = "cfg-gated-test"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["**"]
+line_sources = ["crates/**/*.rs"]
+module = "policy/cfg-gated-test.rego"
+severity = "deny"
+
 [[rule]]
 id = "stop-posture"
 kind = "policy"
@@ -13165,6 +13187,18 @@ Could-not-look, never a verdict about the tree, and it covers the two ways the w
 id = "module read first"
 kind = "document"
 target = "policy/ci-cache-declared.rego"
+
+[[verdict]]
+id = "test cover partial"
+gloss = "this branch put a #[cfg] platform attribute on a #[test], so one arm is never compiled where it is authored"
+class = """
+The remedy is `cfg!` inside the case, not an attribute over it. An attribute makes the whole case vanish on the other target, so `cross-check` type-checks only the arm the local host admits and the next edit to the other one is discovered by CI; a `cfg!` keeps both arms compiled everywhere and states the off-platform contract where a reader can see it. Measured on CLOUD-1148: `scratch.rs`'s reaper case asserted collection unconditionally, the `windows` job reddened alone, and the first fix put `#[cfg(unix)]` over it -- which is this verdict. A case whose SUBJECT genuinely does not exist off the platform is a different thing and is not what this refuses: the rule is a ratchet over the diff, so the ~40 pairs already in the tree stay. The could-not-look side is `diff read absent`, which this module raises rather than restating.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/cfg-gated-test.rego"
 
 [[verdict]]
 id = "suite bind missing"
