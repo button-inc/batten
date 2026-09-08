@@ -19,8 +19,8 @@ use batten::decision::Outcome;
 use batten::rules::{Decidability, RuleKind};
 use batten::{ExitCode, ReportLevel, RuleSeverity, severity};
 use common::{
-    Fixture, StateHome, batten, declared_patterns, git_in, run, scratch, scratch_outside_tree,
-    stderr, stdout, write,
+    Fixture, StateHome, batten, declared_board, declared_patterns, git_in, run, scratch,
+    scratch_outside_tree, stderr, stdout, write,
 };
 
 /// Run `batten adjudicate --harness <harness>` with `payload` piped to stdin, against
@@ -5382,6 +5382,14 @@ fn census_repo(root: &Path) -> PathBuf {
         // this census is about. Read from the committed table rather than re-typed
         // here, so a fixture cannot drift from the expressions it exercises.
         .config_append(&declared_patterns())
+        // `claim check`'s OTHER minimum input, and the fifth verb family to need
+        // one (CLOUD-1623). The board's column vocabulary is the CONSUMER's for
+        // the reason the grammar above is: a repository declaring no `[board]`
+        // has no ready queue, so the verb refuses by naming the key — the right
+        // answer, and again not the one this census is about. Read from the
+        // committed table for `declared_patterns`' reason, so the fixture cannot
+        // drift from the columns it exercises.
+        .config_append(&declared_board())
         .file("AGENTS.md", "instructions\n")
         // `lint brief`'s minimum input, the third verb to need one. Named by
         // `CENSUS_POSITIONALS` rather than by this call site, so the argv and the
