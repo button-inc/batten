@@ -2006,6 +2006,28 @@ impl Strategy {
             Self::FirstFullThenCompact => "FirstFullThenCompact",
         }
     }
+
+    /// Whether an already-resident class is delivered compactly under this
+    /// strategy — the one bit [`first_sighting`] reads.
+    ///
+    /// WRITTEN AS A NEGATED `matches!` RATHER THAN A THREE-ARM MATCH, and the
+    /// spelling is load-bearing twice over. Two of the three strategies agree
+    /// today, so a per-strategy match has two identical arms and needs a
+    /// `clippy::match_same_arms` escape — which `spawn-widening` refuses, on the
+    /// ground that the answer to that refusal is a better shape rather than an
+    /// annotation. This is that shape: one line, no escape, and the whole
+    /// strategy axis in a form a reader checks at a glance.
+    ///
+    /// It is also the line the declared mutation rewrites. Replacing it with
+    /// `matches!(self, Self::FirstFullThenCompact)` flips `Current`'s warm
+    /// firing to a first sighting and leaves the other two alone, which is
+    /// exactly the row CLOUD-1606 §7 declares.
+    #[must_use]
+    //MUTANT-SUITE crates/batten/tests/it/refusal_render_bench.rs
+    //MUTANT current-warm-first-sighting|s@        !matches!(self, Self::FullEveryTime)@        matches!(self, Self::FirstFullThenCompact)@|a_compact_warm_repeat_is_exactly_the_refusal_line
+    pub const fn warm_is_a_repeat(self) -> bool {
+        !matches!(self, Self::FullEveryTime)
+    }
 }
 
 /// Whether the class is already resident in the context being rendered into.
@@ -2052,18 +2074,10 @@ impl Residency {
 /// it, a table that collapsed every arm to one value would satisfy four of the
 /// five and report a matrix it never measured.
 #[must_use]
-#[expect(
-    clippy::match_same_arms,
-    reason = "each arm is one declared row of the strategy table and stays its own line: the `Current`/`Warm` arm is the anchor a declared mutation rewrites, and collapsing two rows because today they agree would put the table beyond both the sweep's reach and a reader's"
-)]
-//MUTANT-SUITE crates/batten/tests/it/refusal_render_bench.rs
-//MUTANT current-warm-first-sighting|s@        (Strategy::Current, Residency::Warm) => false,@        (Strategy::Current, Residency::Warm) => true,@|a_compact_warm_repeat_is_exactly_the_refusal_line
 pub const fn first_sighting(strategy: Strategy, residency: Residency) -> bool {
-    match (strategy, residency) {
-        (Strategy::Current, Residency::Warm) => false,
-        (Strategy::FirstFullThenCompact, Residency::Warm) => false,
-        (_, Residency::Cold) | (Strategy::FullEveryTime, Residency::Warm) => true,
-    }
+    // A cold firing is a first sighting under every strategy; a warm one is a
+    // first sighting exactly when the strategy does not treat it as a repeat.
+    matches!(residency, Residency::Cold) || !strategy.warm_is_a_repeat()
 }
 
 /// The classes measured, and why there are two of them.
