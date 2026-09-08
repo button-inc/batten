@@ -145,7 +145,7 @@ fn repair_fixes_and_says_so_while_the_bare_verb_changes_nothing() {
 fn a_clone_with_no_commit_hooks_fails_the_row_and_repair_installs_them() {
     let dir = scratch("startup-commit-gate");
     write(&dir, "batten.toml", "version = 1\n\n");
-    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    common::init_repo(&dir);
 
     // The hooks the repair will point git at. Written before the row, so the
     // repair is a redirection and never a creation — it is `session:git-hooks`'s
@@ -162,9 +162,17 @@ fn a_clone_with_no_commit_hooks_fails_the_row_and_repair_installs_them() {
             std::fs::set_permissions(&at, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
     }
+    // THE BUILT BINARY BY ABSOLUTE PATH, never bare `batten` — and this is the
+    // one thing this case got wrong first. `startup` spawns a row's `check` by
+    // resolving it the way any spawn does, so a bare name reaches whatever
+    // `batten` is INSTALLED on PATH. That made this case grade the container's
+    // install currency rather than this tree: it passed while the installed copy
+    // happened to carry the verb, and went red the moment the verb was renamed
+    // here. Which is CLOUD-1650's own subject, arriving inside CLOUD-1398's suite.
+    let bin = json(env!("CARGO_BIN_EXE_batten"));
     let rows = row(
         "commit-gate-installed",
-        "[\"batten\", \"doctor\", \"commit-gate\"]",
+        &format!("[{bin}, \"doctor\", \"gate\"]"),
         Some(&format!(
             "[\"git\", \"config\", \"core.hooksPath\", {}]",
             json(hooks.to_str().unwrap())
@@ -208,11 +216,11 @@ fn a_clone_with_no_commit_hooks_fails_the_row_and_repair_installs_them() {
 fn the_commit_gate_sub_verb_answers_only_its_own_question() {
     let dir = scratch("startup-commit-gate-verb");
     write(&dir, "batten.toml", "version = 1\n\n");
-    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    common::init_repo(&dir);
 
     let bare = batten()
         .current_dir(&dir)
-        .args(["doctor", "commit-gate"])
+        .args(["doctor", "gate"])
         .output()
         .expect("the binary runs");
     assert_eq!(out_code(&bare), 1, "doctor never renders a policy verdict");
@@ -235,7 +243,7 @@ fn the_commit_gate_sub_verb_answers_only_its_own_question() {
     }
     let healthy = batten()
         .current_dir(&dir)
-        .args(["doctor", "commit-gate"])
+        .args(["doctor", "gate"])
         .output()
         .expect("the binary runs");
     assert_eq!(out_code(&healthy), 0);
@@ -252,7 +260,7 @@ fn the_commit_gate_sub_verb_answers_only_its_own_question() {
 fn a_present_but_unrunnable_hook_reads_as_missing() {
     let dir = scratch("startup-commit-gate-mode");
     write(&dir, "batten.toml", "version = 1\n\n");
-    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    common::init_repo(&dir);
     let hooks = dir.join(".git").join("hooks");
     std::fs::create_dir_all(&hooks).unwrap();
     std::fs::write(hooks.join("commit-msg"), "#!/bin/sh\nexit 0\n").unwrap();
@@ -279,7 +287,7 @@ fn a_present_but_unrunnable_hook_reads_as_missing() {
 
     let out = batten()
         .current_dir(&dir)
-        .args(["doctor", "commit-gate"])
+        .args(["doctor", "gate"])
         .output()
         .expect("the binary runs");
     assert_eq!(
@@ -289,7 +297,7 @@ fn a_present_but_unrunnable_hook_reads_as_missing() {
     );
 }
 
-/// The remedy this row was filed about names a path that exists.
+/// The row's own remedy names a path that exists.
 ///
 /// **The assertion that stops CLOUD-1398 recurring, and it is the whole reason
 /// the row exists at all.** `doctor.sh` told an agent to run
@@ -306,19 +314,25 @@ fn every_remedy_the_hook_check_prints_names_something_that_resolves() {
         .parent()
         .and_then(Path::parent)
         .expect("the workspace root is two levels above the crate");
-    let task = root.join("mise-tasks").join("doctor.sh");
-    let body = std::fs::read_to_string(&task).expect("the task is tracked");
-
+    // THE COMMITTED AUTHORITY IS THE SUBJECT, not `mise-tasks/doctor.sh`, and
+    // that narrowing is measured rather than chosen. The shell task's two
+    // `::error::` remedies still name `.claude/hooks/session-start.sh`, which
+    // `7d188580` deleted — the defect this row was filed on. It is NOT repaired
+    // here because `policy/shell-retirement.rego` refuses the edit: its one
+    // admitted arm, `only_drops_a_retired_reference`, requires every removed line
+    // to name a path THIS SAME DELTA deleted, and this delta deletes nothing. So
+    // the task has two landable shapes — retire it whole, or leave it alone — and
+    // this change leaves it alone.
+    //
+    // What the row CAN hold is its own remedy, and that is what this asserts: the
+    // `[[startup]]` row's `repair` argv must name a task the manifest declares and
+    // a hook body present in the tree. A remedy naming a retired file is what
+    // CLOUD-1398 is about; this makes the successor's remedy unable to become one.
+    let config =
+        std::fs::read_to_string(root.join("batten.toml")).expect("the authority is tracked");
     assert!(
-        !body.contains(".claude/hooks/session-start.sh"),
-        "the remedy named a retired program; naming one again is this row's own defect"
-    );
-    // The successor the remedies now name, asserted where it is DECLARED rather
-    // than by running it: a task that exists is what makes the instruction
-    // followable, and running it would install hooks into the test's own clone.
-    assert!(
-        body.contains("mise run session:git-hooks"),
-        "the hook remedies must name the installer that exists"
+        config.contains(r#"repair = ["mise", "run", "session:git-hooks"]"#),
+        "the commit-gate row must repair through the installer that exists"
     );
     let manifest =
         std::fs::read_to_string(root.join("mise.toml")).expect("the manifest is tracked");
@@ -331,7 +345,7 @@ fn every_remedy_the_hook_check_prints_names_something_that_resolves() {
             .join("hooks")
             .join("git-hook.sh")
             .is_file(),
-        "the hook body both remedies point at must be present in the tree"
+        "the hook body the row's repair links must be present in the tree"
     );
 }
 

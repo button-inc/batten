@@ -1175,6 +1175,24 @@ const CENSUS: &[Verb] = &[
     // since the value differs per machine. The remedy is a change to the
     // container's Environment variables field, and the verdict is what says
     // whether to make it.
+    // POINTER-ONLY OVER A SUBJECT THAT IS ENTIRELY PATHS (CLOUD-1398). This verb
+    // resolves a hooks directory — through `core.hooksPath` when set, the common
+    // git dir otherwise — and stats two files in it. Every one of those is an
+    // ABSOLUTE path that differs per machine, so emitting one would defeat §6's
+    // byte-stability and put the layout of somebody's disk in a diagnostic that
+    // promises not to carry one.
+    //
+    // What it emits instead is git's own vocabulary: the hook NAMES, `pre-commit`
+    // and `commit-msg`, as the failure's subjects. They are the actionable half —
+    // a reader knows which hook to install — and they are the same class as a
+    // declared program name in `command-programs`, which is a token the consumer
+    // already has rather than a byte read out of a file.
+    Verb {
+        path: "doctor gate",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "doctor egress",
         args: &[],

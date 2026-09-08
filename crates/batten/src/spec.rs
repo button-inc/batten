@@ -462,6 +462,15 @@ mod tests {
                 // task runner grades a value that runner's env block has already
                 // corrected.
                 "doctor egress".to_owned(),
+                // Whether this checkout's commit path runs the gate (CLOUD-1398).
+                // `read`, and structurally so: it resolves a directory through
+                // git's own config and stats two files. Nothing is EXECUTED, and
+                // the distinction is the whole reason this is admissible — the
+                // stronger question, whether each hook RUNS, needs executing one,
+                // which reaches user-supplied code and is exactly what a row on
+                // this allowlist may not do (CLOUD-170). Following the symlink is
+                // a read of the link's target, not a spawn of it.
+                "doctor gate".to_owned(),
                 // The one row that is both a parent and a `read` verb of its own
                 // (CLOUD-777). House style §2 spells the verb `doctor <SUB>` and
                 // §8 promises what bare `doctor` does, so both are on the list —
@@ -768,6 +777,7 @@ mod tests {
             "design audit".to_owned(),
             "doctor".to_owned(),
             "doctor egress".to_owned(),
+            "doctor gate".to_owned(),
             "doctor hooks".to_owned(),
             "doctor mediator".to_owned(),
             "doctor session".to_owned(),
