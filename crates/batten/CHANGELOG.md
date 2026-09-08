@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.152](https://github.com/button-inc/batten/compare/v0.0.151...v0.0.152) - 2026-09-08
+
+### Added
+
+- *(nextest)* ban slow tests in the runner, and gate the declaration
+
+### Fixed
+
+- *(nextest)* bound a hang from the job budget, not from this box
+- *(nextest)* gate the kill threshold, and start it as a runaway guard
+- *(test)* drop the unused fixture constant the Windows cross-check denied
+- *(test)* resolve the committed config through the Overrides the signature takes
+- *(admission)* narrow a mint's scan to the bundle that publishes the predicate
+
 ## [0.0.151](https://github.com/button-inc/batten/compare/v0.0.150...v0.0.151) - 2026-09-08
 
 ### Fixed
