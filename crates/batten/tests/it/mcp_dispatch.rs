@@ -694,6 +694,151 @@ fn a_successful_envelope_is_still_a_result_and_not_a_refusal() {
 #MUTANT error-message-dropped|s@            .and_then(serde_json::Value::as_str)@            .and_then(|_unread| None::<\&str>)@|a_refusal_carries_the_servers_own_message_and_not_only_its_code
 */
 
+// --- a failed result is not a success (CLOUD-1645) ---------------------------
+//
+// THE SAME TIER AND THE SAME REASON AS THE BLOCK ABOVE: no listener. `outcome` is
+// a pure function of a result, a payload and three strings, so a case can build
+// the exact document a server sent and drive the real decision.
+//
+// WHY THE DECISION IS EXTRACTED AT ALL, rather than asserted end-to-end over the
+// binary. `file_and_report` is private and there is no stub MCP server in this
+// suite (see this file's header), so an end-to-end case would have to assert a
+// conclusion over a precondition nothing created — the shape `rules/rust.md`
+// refuses and `tests/primitives.rs` gates. `outcome` carries BOTH channels the
+// row demands, which is the property that makes the extraction faithful rather
+// than convenient: this defect passed a status-only assertion for its whole life.
+
+/// The verdict for a result, with the framing decision taken the way the verb
+/// takes it — through `payload`, never hand-built.
+fn outcome_for(result: &serde_json::Value) -> batten::mcp::Outcome {
+    let payload = batten::mcp::payload(result);
+    batten::mcp::outcome(
+        result,
+        &payload,
+        "save_issue",
+        "claude-code-remote",
+        "response:abc123",
+    )
+}
+
+#[test]
+fn a_tool_level_error_result_exits_non_zero_and_names_the_method() {
+    // SHAPE 1 AND 2, the measured ones: a rejected write and a refused read both
+    // arrive as a SUCCESSFUL JSON-RPC response whose result carries `isError`.
+    // Both channels asserted, because the defect satisfied one of them.
+    let result = serde_json::json!({
+        "content": [{"type": "text", "text": "Input validation error: Invalid arguments for tool save_issue"}],
+        "isError": true,
+    });
+    let outcome = outcome_for(&result);
+    assert_eq!(
+        outcome.exit,
+        batten::exit::ExitCode::Usage,
+        "a refused call is the caller's malformed invocation, not a clean run"
+    );
+    let line = outcome
+        .failure
+        .as_deref()
+        .expect("a failed call reports a failure line");
+    assert!(line.contains("save_issue"), "the method is named: {line}");
+    assert!(
+        line.contains("response:abc123"),
+        "and the stored response's address travels, so the text is fetchable: {line}"
+    );
+}
+
+#[test]
+fn a_failed_result_is_never_projected() {
+    // THE HALF THAT IS NOT THE EXIT CODE. Projecting an error document is what
+    // produced `{}` — an empty success indistinguishable from a write that
+    // changed nothing — so the refusal to project is its own assertion.
+    let result = serde_json::json!({
+        "content": [{"type": "text", "text": "Invalid input"}],
+        "isError": true,
+    });
+    assert!(
+        !outcome_for(&result).projectable,
+        "a declared projection must never be applied to a failed result"
+    );
+}
+
+#[test]
+fn an_error_document_in_an_unrecognised_frame_is_not_projected_either() {
+    // SHAPE 3, THE WORST OF THE THREE. This body carries no `isError` at all —
+    // it is a not-found answer whose own `status` member is the integer 400, and
+    // `status` is the same key `get_issue`'s success projection uses for the
+    // BOARD STATE. Projected, it yielded a well-formed-looking row whose state
+    // was 400, at exit 0, labelled `reduced`.
+    //
+    // It is caught by the FRAMING rather than by a schema guess: `tools/call`
+    // answers with `content` blocks, and a document carrying neither those nor
+    // `structuredContent` is not the shape any row was written against.
+    let result = serde_json::json!({
+        "error": "invalid_request",
+        "message": "Could not find referenced Issue.",
+        "requestId": "a37a676ee9f88c97",
+        "status": 400,
+    });
+    let outcome = outcome_for(&result);
+    assert!(
+        !outcome.projectable,
+        "an unrecognised frame is passed through whole, never field-picked"
+    );
+    // AND IT IS STILL EXIT 0, stated rather than hidden. Nothing in this document
+    // says the call failed — the server answered, and the answer is unusual, not
+    // refused. Reading it as a failure would make every server whose framing this
+    // engine does not recognise into an error, which is the opposite of the
+    // transparency default the module keeps.
+    assert_eq!(
+        outcome.exit,
+        batten::exit::ExitCode::Success,
+        "an unrecognised frame is not by itself a failed call"
+    );
+    assert!(outcome.failure.is_none(), "and it reports no failure line");
+}
+
+#[test]
+fn a_successful_call_is_byte_identical() {
+    // THE PREMISE CASE, and the acceptance bullet that bounds the whole change.
+    // Without it, an `outcome` that failed everything would satisfy all three
+    // assertions above.
+    let result = serde_json::json!({
+        "content": [{"type": "text", "text": "{\"id\":\"KEY-1\",\"status\":\"Todo\"}"}],
+    });
+    let outcome = outcome_for(&result);
+    assert_eq!(
+        outcome.exit,
+        batten::exit::ExitCode::Success,
+        "a successful call's exit code is unchanged"
+    );
+    assert!(
+        outcome.projectable,
+        "and its declared projection still applies"
+    );
+    assert!(
+        outcome.failure.is_none(),
+        "and nothing is added to what it emits"
+    );
+}
+
+#[test]
+fn is_error_false_is_success_and_a_non_boolean_is_not_a_failure() {
+    // THE BOUND ON THE PREDICATE. `isError: false` is the ordinary spelling of
+    // success, and a non-boolean is a server saying something this does not
+    // understand — reading either as a failure would refuse calls that worked.
+    for flag in [
+        serde_json::json!(false),
+        serde_json::json!("true"),
+        serde_json::json!(0),
+    ] {
+        let result = serde_json::json!({"content": [], "isError": flag});
+        assert!(
+            !batten::mcp::failed(&result),
+            "only a literal `true` is a tool-level failure, not {flag}"
+        );
+    }
+}
+
 /// Run a `capture` verb against the same state home the seed wrote into.
 fn find_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
     let mut command = common::batten();

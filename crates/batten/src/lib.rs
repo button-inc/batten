@@ -1958,14 +1958,25 @@ fn file_and_report(
     // the same conflation the module refuses at every other boundary. The second
     // is loud on stderr, because a reduction that quietly stopped applying is
     // exactly how the saving becomes notional.
+    // THE CALL'S OWN VERDICT, decided before any reduction and owned by `mcp`
+    // rather than re-derived here (CLOUD-1645). Both channels a caller reads —
+    // the exit code and the emitted line — come from this one value, which is
+    // what makes the decision testable without a listener.
+    let outcome = mcp::outcome(result, &payload, method, source, &stored.handle());
     let declared = mcp::row_for(config, method);
-    let reduced = declared.and_then(|row| mcp::reduce(row, &payload.value));
+    let reduced = declared
+        .filter(|_| outcome.projectable)
+        .and_then(|row| mcp::reduce(row, &payload.value));
     let disposition = match (declared, &reduced) {
         (Some(_), Some(_)) => "reduced",
         (Some(_), None) => "unreduced",
         (None, _) => "undeclared",
     };
-    if disposition == "unreduced" {
+    // ONLY THE GENUINE NODE-UNREACHABLE CASE GETS THIS MESSAGE. A row that was
+    // never consulted because the result was unprojectable has nothing wrong with
+    // its `node`, and sending its author to check one would be a remedy pointing
+    // at the wrong file — the class this repository refuses (CLOUD-1050).
+    if disposition == "unreduced" && outcome.projectable {
         writeln!(
             err,
             "batten: mcp call: {method} declares a reduction and its node was not reachable in \
@@ -2001,7 +2012,19 @@ fn file_and_report(
         stored.handle(),
     )?;
     writeln!(out, "{rendered}")?;
-    Ok(ExitCode::Success)
+    // THE EXIT CODE IS THE ANSWER, AND UNTIL CLOUD-1645 IT WAS NOT ONE. This
+    // returned `Ok(ExitCode::Success)` unconditionally, so a refused tool call, a
+    // rejected write and a not-found read all reported clean — a false-completion
+    // signal inside the verb whose purpose is to kill them, and §7's "no per-verb
+    // exception" broken exactly as CLOUD-292 broke it in `exec`.
+    //
+    // The line is pointer-only, per rule 4: the method, the connector and the
+    // stored response's address, so the error text is fetchable from the capture
+    // store without a byte of it entering anyone's context.
+    if let Some(failure) = &outcome.failure {
+        writeln!(err, "{failure}")?;
+    }
+    Ok(outcome.exit)
 }
 
 /// `batten target prune` (CLOUD-1030).

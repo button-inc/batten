@@ -1356,6 +1356,109 @@ pub struct Payload {
     pub unwrapped: bool,
 }
 
+//MUTANT-SUITE crates/batten/tests/it/mcp_dispatch.rs
+//MUTANT is-error-result-projected|s@== Some(true)@== Some(false)@|a_tool_level_error_result_exits_non_zero_and_names_the_method
+
+/// What a caller must do with a `tools/call` result, decided **before** any
+/// reduction runs.
+///
+/// Both channels a caller answers on come from one value, deliberately. The
+/// defect this type exists for (CLOUD-1645) passed a status-only assertion for
+/// its whole life: the exit code said clean while the emitted line said
+/// `reduced`, and each channel on its own looked defensible. Deciding them
+/// together is what makes a case able to check both.
+#[derive(Debug)]
+pub struct Outcome {
+    /// Whether a declared [`ResultRow`] may be applied to this result at all.
+    pub projectable: bool,
+    /// The code the verb returns.
+    pub exit: crate::exit::ExitCode,
+    /// The pointer-only failure line, when there is a failure to report.
+    ///
+    /// `None` on the success path, so a caller cannot print a failure that did
+    /// not happen and the success path stays byte-identical.
+    pub failure: Option<String>,
+}
+
+/// Decide [`Outcome`] for one dispatched call.
+///
+/// `handle` is the stored response's address — the capture the text can be read
+/// from — and it is the only thing about the response that reaches the line.
+/// Rule 4: a check over sensitive content emits a pointer, never the content.
+#[must_use]
+pub fn outcome(
+    result: &serde_json::Value,
+    payload: &Payload,
+    method: &str,
+    source: &str,
+    handle: &str,
+) -> Outcome {
+    // A FAILED CALL AND AN UNRECOGNISED FRAME ARE BOTH UNPROJECTABLE, for one
+    // reason: `Reduce::Project` is a flat field-pick over the expected SUCCESS
+    // shape, so applying it to any other document does not narrow an answer, it
+    // manufactures one. Measured 2026-09-08, both halves — a tool-level failure
+    // projected to `{}`, indistinguishable from a write that changed nothing;
+    // and a not-found body projected to `{"status": 400}`, where `status` is the
+    // same key `get_issue`'s success projection uses for the BOARD STATE.
+    //
+    // `payload.unwrapped` is the second half and is why this is not `isError`
+    // alone. `tools/call` answers with `content` blocks; a document carrying
+    // neither those nor `structuredContent` is not the shape any row was written
+    // against, and [`payload`] has ALREADY decided that question. So this reads
+    // the protocol rather than guessing a tracker's schema.
+    let failed = failed(result);
+    Outcome {
+        projectable: !failed && payload.unwrapped,
+        // `Usage` because the fault is in the invocation the caller composed and
+        // no policy was violated — a `2` would tell every harness with a pre-tool
+        // hook that policy REFUSED a call the server merely rejected. Not
+        // `Internal` either: the engine reached the server and got an answer.
+        exit: if failed {
+            crate::exit::ExitCode::Usage
+        } else {
+            crate::exit::ExitCode::Success
+        },
+        failure: failed.then(|| {
+            format!(
+                "batten: mcp call: {method} via {source} reported a tool-level error — {handle} \
+                 holds the response. The call reached the server and the server refused it, so \
+                 the arguments are what to look at; `batten capture show` reads the stored text."
+            )
+        }),
+    }
+}
+
+/// Whether a `tools/call` result reports a **tool-level** failure.
+///
+/// # A different layer from [`envelope`]'s guard, and that is the whole point
+///
+/// MCP signals a failed tool call inside a **successful** JSON-RPC response: the
+/// transport is fine, `result` is present, and the failure rides in the sibling
+/// `isError` flag beside the content blocks. [`envelope`]'s guard is
+/// `document.get("error")` — the JSON-RPC envelope member, present only when
+/// `result` is ABSENT — so it is structurally unreachable here whatever the tool
+/// answered. CLOUD-1403 fixed the transport half; this is the other one, and
+/// neither subsumes the other.
+///
+/// # Why the caller must consult this BEFORE reducing
+///
+/// A [`ResultRow`] projection is a flat field-pick over the expected success
+/// shape. An error result has a different shape entirely — `content`/`isError`,
+/// not the entity's fields — so projecting one yields nothing, and "yields
+/// nothing" is precisely what a caller cannot tell apart from a write that
+/// changed nothing. Measured 2026-09-08: a `save_issue` with an undeclared
+/// argument emitted `{}` at exit 0 with the row unmodified.
+///
+/// # Strictly `true`, never merely present
+///
+/// `isError: false` is the ordinary spelling of success and a non-boolean is a
+/// server saying something this does not understand — neither is a failure, and
+/// treating either as one would refuse calls that worked.
+#[must_use]
+pub fn failed(result: &serde_json::Value) -> bool {
+    result.get("isError").and_then(serde_json::Value::as_bool) == Some(true)
+}
+
 /// Take MCP's own content-block framing off a `tools/call` result.
 ///
 /// # This is reading the protocol, not guessing a tracker's schema
