@@ -150,7 +150,18 @@ fn repo(name: &str) -> PathBuf {
         // Without these rows `claim check` reports could-not-look naming the
         // first missing id — which is the correct answer for a repository that
         // has declared no Ready grammar, and not what this suite is about.
-        .config(&format!("version = 1\n\n{}", declared_patterns()))
+        //
+        // THE COLUMN VOCABULARY IS THE CONSUMER'S TOO, for the identical reason
+        // one layer over (CLOUD-1623). Without `[board]` this gate refuses the
+        // RUN naming `board.ready` — again the correct answer for a repository
+        // that has declared no board, and again not what this suite is about.
+        // The two comments are the same sentence about two tables, which is the
+        // point: neither the grammar nor the columns are the engine's to assume.
+        .config(&format!(
+            "version = 1\n\n[board]\nready = \"Todo\"\nin_progress = \"In Progress\"\n\
+             review = \"In Review\"\nstarted = [\"In Progress\", \"In Review\", \"Done\"]\n\n{}",
+            declared_patterns()
+        ))
         .file(
             "Cargo.toml",
             "[workspace.package]\nversion = \"0.0.125\"\n\n[workspace.dependencies]\nserde = \"1\"\n",
