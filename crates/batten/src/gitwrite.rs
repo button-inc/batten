@@ -313,11 +313,34 @@ pub fn rebase(dir: &Path, branch: &str, onto: &str) -> Result<Rebase> {
 /// wearing a flag. What the caller supplies is content they wrote, which is a
 /// decision a person made rather than one the engine took for them.
 ///
-/// **EACH PATH IS SPENT ONCE, and the rule is about the path rather than the
-/// commit.** One worktree file carries one version of its content, so using it
-/// for a second merge OF THAT PATH would be replaying a resolution for a merge
-/// nobody looked at. A different path later in the range is a different
-/// question and may be named in the same run.
+/// **EACH RESOLUTION IS SPENT ONCE, AND SINCE CLOUD-1670 THAT IS PER ENTRY
+/// RATHER THAN PER PATH.** The rule it enforces is unchanged: one file carries
+/// one version of its content, so using it for a second merge OF THAT PATH would
+/// be replaying a resolution for a merge nobody looked at. What changed is that
+/// the caller can now WRITE a second version. An entry is `<path>` — content
+/// from the worktree, spent on the first conflict of that path — or
+/// `<path>=<file>`, content from a file authored for one merge of it; entries
+/// naming the same path are spent in the order given, one per conflict.
+///
+/// **The per-path spelling was a permanent stop for a path that conflicts
+/// twice, and this branch is where it was measured.** One declared document
+/// conflicted at FOUR of #848's commits, because four of them edit a single
+/// line the base branch had also moved; a second document conflicted at four
+/// more. Every run resolved the first and refused at the second, moved nothing,
+/// and the next run re-derived the identical range — which is precisely the
+/// shape the paragraph below says the patch-identity drop exists to remove,
+/// arrived at through the path rather than through the offer. Naming the path
+/// four times did not help, by construction: the offer was a SET of paths.
+///
+/// The documents are not named here, and that is rule 1 rather than reticence:
+/// they are a consumer's own config, `document_facts`'s
+/// `no_artifact_name_reaches_the_core` refuses one in this crate, and it caught
+/// the first draft of this very paragraph.
+///
+/// Naming a path more than once is therefore an assertion, not a loophole: the
+/// caller is saying they read each of those merges and wrote an answer for each.
+/// A different path later in the range is still a different question and may be
+/// named in the same run.
 ///
 /// Spending the whole offer at the first conflicting commit enforced the same
 /// rule and made a CHAIN unresolvable, which is worse than the case it guarded:
@@ -479,7 +502,16 @@ fn replay_range(
     };
     let mut cursor = base;
     let mut replayed = 0usize;
-    let mut spent: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // THE OFFER, PARSED ONCE AND SPENT PER OCCURRENCE (CLOUD-1670).
+    //
+    // An entry is `<path>` — content from the worktree, as it always was — or
+    // `<path>=<file>`, content from a file the caller wrote for ONE merge of that
+    // path. The pair is what makes a path conflicting at several commits
+    // resolvable at all, and it is the honest shape rather than reuse: the second
+    // occurrence gets bytes somebody authored for it, not the first occurrence's
+    // answer applied again to a merge nobody looked at.
+    let offer = parse_offer(resolutions);
+    let mut used: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for original in &range {
         // `commit_identity` is `None` for a commit that changes nothing, and an
         // absent identity must not match another absent one — so an empty commit
@@ -504,20 +536,26 @@ fn replay_range(
         // one commit and `egress-fencing.rego` at another — where it is the
         // permanent-stop shape the patch-identity drop above exists to remove,
         // reintroduced by its own remedy.
-        let offered: Vec<String> = resolutions
-            .iter()
-            .filter(|path| !spent.contains(*path))
-            .cloned()
-            .collect();
+        //
+        // SPENT PER OCCURRENCE SINCE CLOUD-1670, and the rule above is unchanged
+        // by it: what a path may not do is reuse ONE resolution twice. The offer
+        // for this commit is, per path, the NEXT unspent entry naming it — so a
+        // caller who wrote four files for four merges of one path gets each
+        // applied to the merge they wrote it for, and a caller who named the path
+        // once still spends it once. Nothing is remembered across invocations;
+        // the whole range re-runs and the offer is re-read from argv.
+        let offered = next_offer(&offer, &used);
         match replay(&context, &repo, cursor, *original, &offered)? {
             Step::Landed(id) => {
                 cursor = id;
                 replayed += 1;
             }
-            Step::Resolved(id, used) => {
+            Step::Resolved(id, spent) => {
                 cursor = id;
                 replayed += 1;
-                spent.extend(used);
+                for path in spent {
+                    *used.entry(path).or_insert(0) += 1;
+                }
             }
             Step::Conflicted(paths) => {
                 return Ok(Rebase::Conflicted {
@@ -592,6 +630,55 @@ enum Step {
 /// Split out of [`rebase`] because the loop and the merge fail for entirely
 /// different reasons, and because a lap's whole decision — take the conflict or
 /// resolve it — lives in six lines here rather than buried in a walk.
+/// One resolution entry read as `(path, source file)` (CLOUD-1670).
+///
+/// `<path>` alone reads the content from the path itself, which is every caller
+/// before this row and stays byte-identical. `<path>=<file>` names a file the
+/// caller authored for ONE merge of that path, which is what makes a path
+/// conflicting at several commits resolvable without reusing an answer.
+///
+/// The split is on the FIRST `=`, so a source file whose own name contains one
+/// still resolves; a path containing `=` is not expressible and is not a shape
+/// this repository has.
+fn parse_offer(resolutions: &[String]) -> Vec<(String, std::path::PathBuf)> {
+    resolutions
+        .iter()
+        .map(|entry| match entry.split_once('=') {
+            Some((path, source)) => (path.to_owned(), std::path::PathBuf::from(source)),
+            None => (entry.clone(), std::path::PathBuf::from(entry)),
+        })
+        .collect()
+}
+
+/// The resolution on offer for the NEXT conflict, one per path (CLOUD-1670).
+///
+/// `offer` is the caller's entries in the order given and `used` counts how many
+/// of each path's entries earlier commits already spent, so a path's offer here
+/// is its `used[path]`-th entry and a path whose entries are exhausted offers
+/// nothing — which is what makes the commit after them conflict rather than
+/// silently reuse the last answer.
+fn next_offer(
+    offer: &[(String, std::path::PathBuf)],
+    used: &std::collections::BTreeMap<String, usize>,
+) -> std::collections::BTreeMap<String, std::path::PathBuf> {
+    let mut offered: std::collections::BTreeMap<String, std::path::PathBuf> =
+        std::collections::BTreeMap::new();
+    for (path, _) in offer {
+        if offered.contains_key(path) {
+            continue;
+        }
+        let already = used.get(path).copied().unwrap_or(0);
+        let mut queue = offer
+            .iter()
+            .filter(|(candidate, _)| candidate == path)
+            .map(|(_, source)| source);
+        if let Some(source) = queue.nth(already) {
+            offered.insert(path.clone(), source.clone());
+        }
+    }
+    offered
+}
+
 /// What every commit in one replay shares.
 ///
 /// A struct rather than six parameters because the walk computes all of it once
@@ -613,7 +700,7 @@ fn replay(
     repo: &gix::Repository,
     cursor: gix::ObjectId,
     original: gix::ObjectId,
-    resolutions: &[String],
+    resolutions: &std::collections::BTreeMap<String, std::path::PathBuf>,
 ) -> Result<Step> {
     let Replay {
         dir,
@@ -664,19 +751,25 @@ fn replay(
         // resolution would write a tree carrying the engine's own pick for the
         // paths the caller did not mention — the auto-resolution this module
         // exists to refuse, arrived at by omission rather than by a flag.
-        let offered: std::collections::BTreeSet<&str> =
-            resolutions.iter().map(String::as_str).collect();
-        if paths.is_empty() || !paths.iter().all(|path| offered.contains(path.as_str())) {
+        if paths.is_empty() || !paths.iter().all(|path| resolutions.contains_key(path)) {
             return Ok(Step::Conflicted(paths));
         }
 
         for path in &paths {
-            // Read the WORKTREE, which is where the caller did the work. A path
-            // that will not read is an error rather than a conflict: the caller
+            // Read the WORKTREE, which is where the caller did the work — at the
+            // SOURCE this offer names, which is the path itself unless the caller
+            // wrote `<path>=<file>` for this particular merge of it. A path that
+            // will not read is an error rather than a conflict: the caller
             // asserted a resolution is there, and replaying their assertion as
             // "still conflicted" would hide the typo in a verdict.
-            let bytes = std::fs::read(dir.join(path)).map_err(|err| {
-                anyhow::anyhow!("gitwrite: {path} carries no resolution to read: {err}")
+            let source = resolutions
+                .get(path)
+                .map_or_else(|| std::path::PathBuf::from(path), Clone::clone);
+            let bytes = std::fs::read(dir.join(&source)).map_err(|err| {
+                anyhow::anyhow!(
+                    "gitwrite: {path} carries no resolution to read at {}: {err}",
+                    source.display()
+                )
             })?;
             let blob = repo
                 .write_blob(bytes)

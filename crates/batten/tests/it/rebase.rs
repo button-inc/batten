@@ -27,6 +27,30 @@
 //! the property this whole campaign exists to keep, and a suite that reaches for
 //! `git` to build its own fixtures is asserting nothing about a `git`-free
 //! engine.
+//!
+//! # The declared mutation, and why the row is in THIS file
+//!
+//! `obligations-bound` reads the declared file's own lines for a row beginning
+//! `#MUTANT <slug>|`, and its `line_sources` covers `crates/batten/tests/**` and
+//! not `crates/batten/src/**` — so the row lives here even though the expression
+//! it applies belongs to `gitwrite::next_offer`. A block comment because the
+//! match is on a line PREFIX and Rust has no line comment starting with `#`.
+//!
+//! It collapses the per-path QUEUE back to a set by never recording a spend, so
+//! every conflict of a path is offered that path's FIRST entry — which is the
+//! behaviour CLOUD-1670 replaced, exactly.
+//!
+//! **It reddens both of the same-path cases, and that is stated rather than
+//! glossed.** The declaration names the chain case, because the content
+//! assertion there is what says the entries were spent in order; the twin turns
+//! red too, since a reused entry resolves the second merge it is supposed to
+//! refuse. Both hinge on the one counter, so no mutation separates them — the
+//! PAIR discriminates the fix, and this mutation discriminates the counter.
+
+/*
+#MUTANT-SUITE crates/batten/tests/it/rebase.rs
+#MUTANT same-path-offer-collapses|s@        *used.entry(path).or_insert(0) += 1;@        *used.entry(path).or_insert(0) += 0;@|a_chain_of_conflicts_at_the_same_path_resolves_with_one_entry_each
+*/
 
 #![cfg(unix)]
 
@@ -418,6 +442,116 @@ fn a_chain_of_conflicts_at_different_paths_resolves_in_one_run() {
     assert_eq!(
         std::fs::read_to_string(dir.join("second.txt")).expect("read second"),
         "second reconciled\n"
+    );
+}
+
+/// **A CHAIN AT ONE PATH resolves, one authored entry per merge (CLOUD-1670).**
+///
+/// The case above drove the rule from "spend the offer at the first conflicting
+/// commit" to "spend each PATH once", and per-path was a permanent stop of its
+/// own for a path that conflicts TWICE. Measured on #848: one declared config
+/// document conflicted at four commits, because four of them edit a single line
+/// the base branch had also moved, and a second document conflicted at four
+/// more. Every run resolved the first and refused at the second, moved nothing,
+/// and the next run re-derived the identical range — the same shape, arrived at
+/// through the path rather than through the offer. Naming the path four times
+/// did not help, because the offer was a SET of paths.
+///
+/// The documents go unnamed for rule 1's reason rather than for brevity: they
+/// are a consumer's own config and this file sits in `crates/batten`, where a
+/// grep for a specific consumer's names must return zero hits.
+///
+/// So an entry may name a SOURCE, and entries naming one path are spent in the
+/// order given. The no-reuse property is unchanged: each merge gets bytes
+/// somebody wrote for it, and what changed is that a second version is now
+/// writable at all.
+#[test]
+fn a_chain_of_conflicts_at_the_same_path_resolves_with_one_entry_each() {
+    let (dir, repo) = init("rebase-resolve-same-path");
+    let root: Files<'_> = &[("shared.txt", "base\n")];
+    let base = commit(&repo, &[], root);
+
+    let trunk: Files<'_> = &[("shared.txt", "trunk\n")];
+    let moved = commit(&repo, &[base], trunk);
+
+    // TWO branch commits editing THE SAME path, so each meets the moved trunk.
+    let one: Files<'_> = &[("shared.txt", "branch one\n")];
+    let first = commit(&repo, &[base], one);
+    let two: Files<'_> = &[("shared.txt", "branch two\n")];
+    let tip = commit(&repo, &[first], two);
+
+    point(&dir, "refs/heads/main", moved);
+    point(&dir, "refs/heads/work", tip);
+    // One file per merge, which is the whole of what the row adds. `shared.txt`
+    // itself is deliberately NOT the content of either: a run that fell back to
+    // reading the path would land these bytes and pass for the wrong reason.
+    materialise(
+        &dir,
+        &[
+            ("shared.txt", "never read\n"),
+            ("first.merged", "first merge\n"),
+            ("second.merged", "second merge\n"),
+        ],
+    );
+
+    let outcome = gitwrite::rebase_resolving(
+        &dir,
+        "refs/heads/work",
+        "refs/heads/main",
+        &[
+            "shared.txt=first.merged".to_owned(),
+            "shared.txt=second.merged".to_owned(),
+        ],
+    )
+    .expect("rebase resolving");
+    let Rebase::Replayed { commits, .. } = outcome else {
+        panic!("a chain at one path must resolve in one run, got {outcome:?}");
+    };
+    assert_eq!(commits, 2, "both commits replayed");
+
+    // THE ORDER IS THE ASSERTION. The second entry is spent on the second
+    // merge, so the tip carries it — a run that spent the first entry twice, or
+    // spent them in the other order, lands `first merge` here.
+    assert_eq!(
+        std::fs::read_to_string(dir.join("shared.txt")).expect("read shared"),
+        "second merge\n"
+    );
+}
+
+/// **AND ONE ENTRY FOR TWO CONFLICTS STILL REFUSES**, which is what says the
+/// no-reuse rule survived the change rather than being widened out of it.
+///
+/// This is the case the per-occurrence spend must NOT pass. If a spent entry
+/// were reused, the second merge would silently take bytes written for the
+/// first — a resolution for a merge nobody looked at, which is the property the
+/// whole mechanism exists to hold.
+#[test]
+fn one_entry_does_not_resolve_a_second_conflict_at_the_same_path() {
+    let (dir, repo) = init("rebase-resolve-same-path-once");
+    let root: Files<'_> = &[("shared.txt", "base\n")];
+    let base = commit(&repo, &[], root);
+    let moved = commit(&repo, &[base], &[("shared.txt", "trunk\n")]);
+    let first = commit(&repo, &[base], &[("shared.txt", "branch one\n")]);
+    let tip = commit(&repo, &[first], &[("shared.txt", "branch two\n")]);
+
+    point(&dir, "refs/heads/main", moved);
+    point(&dir, "refs/heads/work", tip);
+    materialise(&dir, &[("shared.txt", "only answer\n")]);
+
+    let outcome = gitwrite::rebase_resolving(
+        &dir,
+        "refs/heads/work",
+        "refs/heads/main",
+        &["shared.txt".to_owned()],
+    )
+    .expect("rebase resolving");
+    let Rebase::Conflicted { paths, .. } = outcome else {
+        panic!("one entry cannot answer two merges, got {outcome:?}");
+    };
+    assert_eq!(
+        paths,
+        vec!["shared.txt".to_owned()],
+        "the second merge is refused, and it names the path it wants an answer for"
     );
 }
 
