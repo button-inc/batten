@@ -17,6 +17,20 @@ These load when you touch Rust; they do not need to be in context otherwise.
   Prefer end-to-end tests over the
   compiled binary (`crates/batten/tests/it/cli.rs`) for anything a consumer depends
   on — exit codes, output shape, flag handling.
+- **A platform split inside a case is `cfg!`, never `#[cfg]` over it**, and
+  `cfg-gated-test` is the gate rather than this bullet. An attribute deletes the
+  case on every other target, so `cross-check` type-checks only the arm the local
+  host admits and the next edit to the other one is discovered by CI; `cfg!` keeps
+  both compiled and states the off-platform contract where a reader sees it.
+  Measured on CLOUD-1148: `scratch.rs`'s reaper case asserted collection
+  unconditionally, the `windows` job reddened alone, and the first fix put
+  `#[cfg(unix)]` over it — which turned the leg green while leaving one arm never
+  compiled where it is authored.
+  The rule is a RATCHET over the diff, not a state check: a case whose SUBJECT
+  does not exist off the platform is a different thing, ~40 of those are in this
+  tree, and the class declares an `override` route whose precondition is exactly
+  that — the case reaches a symbol the other target does not have, so a `cfg!` arm
+  would not type-check. Red is not the precondition.
 - Branch on the named `ExitCode` variants in `crates/batten/src/exit.rs`, never
   integer literals. One table, no per-verb exception: `2` is the policy verdict
   everywhere — a `check` violation and a `hook` deny alike — and `1`/`3` are the
