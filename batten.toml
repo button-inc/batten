@@ -13487,3 +13487,52 @@ id = "host-dependencies-present"
 gloss = "the released batten resolves by the bare name every hook registration invokes it under"
 check = ["env", "batten", "--version"]
 repair = ["mise", "run", "deps-install"]
+
+# THE COMMIT PATH IS A PRECONDITION, AND NOTHING DECLARED IT (CLOUD-1398).
+#
+# The five rows above ask whether the ENGINE can run. None of them asks whether
+# the engine is on the path a COMMIT takes, and in the container this repository
+# provisions for itself those came apart: `git commit` ran neither `pre-commit`
+# nor `commit-msg`, so every commit bypassed the gate while `batten startup`
+# reported every row green. The session-start advisory's "every declared repair
+# has already run this session; what is listed is what it did not fix" was TRUE
+# and useless — the hooks were never in the declared set at all.
+#
+# `mise-tasks/doctor.sh` did see it and emitted two `::error::` lines, which is
+# the CLOUD-1454 shape one layer up: a reporter is not a gate. Worse, its remedy
+# named `.claude/hooks/session-start.sh`, a program `7d188580` deleted, so the
+# refusal was right and its instruction could not be followed. Declaring the
+# precondition with a repair that RUNS is the half that closes it.
+#
+# NOT `hk install`, AND THAT IS MEASURED RATHER THAN PREFERRED (the row's §8).
+# On this container `hk` resolves only through the pin — `mise exec -- hk
+# --version` answers 1.56.1 while `doctor`'s bare-`PATH` probe reports
+# `program-not-on-path hk` and the pin record is absent. `hk install` generates a
+# hook whose body calls `hk` BARE, so the hook it installs makes every
+# `git commit` fail with `hk: not found`: a repair that reads as installed and
+# breaks the thing it installed. `mise.toml`'s `session:git-hooks` is the
+# symlink-based form that works, and it is already the session-start step — so
+# this row adds an ASSERTION rather than a second installer.
+#
+# WHY A `batten` VERB HERE, WHERE `toolchain-is-provisioned` REFUSED ONE. That
+# row's subject is a third party's install state, and an engine-side reader of it
+# would put a specific tool's output format in `crates/batten` — non-negotiable
+# rule 1. This row's subject is `$GIT_DIR/hooks`, which is git's own vocabulary
+# and every consumer's question, so the engine-side reader names nobody.
+#
+# AND THE SUB-VERB RATHER THAN BARE `doctor`, which is `host-dependencies-present`'s
+# trap approached from the other side. A row decides on an exit status and cannot
+# select one line out of a report, so `check = ["batten", "doctor"]` would fail
+# here whenever any unrelated declared program was unreachable — the state this
+# very container is in, on the `hk` reading above — and would then fire a
+# git-hook repair that cannot fix that, reporting `repair-failed` forever over a
+# gate that is installed.
+#
+# The repair writes under `$GIT_DIR/hooks`, which is outside the worktree and so
+# outside `protected`; this key in the committed authority is the authorisation
+# to run it.
+[[startup]]
+id = "commit-gate-installed"
+gloss = "this clone's commit path runs the gate, so a commit made here cannot bypass it"
+check = ["batten", "doctor", "commit-gate"]
+repair = ["mise", "run", "session:git-hooks"]
