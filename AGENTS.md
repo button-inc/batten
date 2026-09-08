@@ -112,7 +112,7 @@ run in the web sandbox — read `mem:github-access` before doubting.)
    push, and a ready spent before that buys only draft-era skips (CLOUD-247).
 4. **`mise run land`, backgrounded.** Drives the loop — no wall clock, only
    counts, never the PR webhook. Stops on a conflict, a failed `verify`, red CI,
-   or a spent count: **exit 4 spent nothing, RE-RUN IT**; 5 bought CI, look.
+   or a spent lap budget. **When a stop says run it again, run it again.**
 5. **Never re-run CI on an already-tested SHA.** Fast-forward means `main` takes
    the PR's exact, already-passed commits. Don't add push-to-`main` triggers.
 
