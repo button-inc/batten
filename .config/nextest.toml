@@ -31,6 +31,15 @@
 # `files_read` and `bytes_read`, which count acquisitions at the boundary and so
 # cannot see an O(n*m) evaluation over a document already in hand.
 
+# THE SLOW-TEST TERMINATOR (CLOUD-1571 follow-on).
+#
+# PROVISIONAL, REPORT-ONLY: no `terminate-after` yet, so nextest MARKS a case
+# slow and prints it without killing it. This pass exists to produce the list the
+# real setting is chosen from; arming it before measuring would redden cases
+# nobody has looked at.
+[profile.default]
+slow-timeout = "1s"
+
 [[profile.default.overrides]]
 filter = 'test(deleting_six_governed_paths_costs_a_flat_multiple_of_the_floor)'
 threads-required = "num-test-threads"
