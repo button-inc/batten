@@ -8138,14 +8138,42 @@ measured = "2026-09-07"
 # 2026-09-06 entry records what happens otherwise — refreshing one basis and not
 # the other made the very next lap refuse on the other arm, with warm never
 # breached. The two arms are judged at different times and only one of them waits.
+# THE 2026-09-08 REBASE MOVE, 232 -> 244, BOTH BASES, AND NEITHER FLOOR MOVES.
+#
+# WHAT MOVED THE COUNT is the rebase rather than new work: replaying this branch
+# onto the current trunk brought `crates/batten/tests/it/nextest_slow.rs` — the
+# entry above is the commit that added it — together with this branch's own
+# `cfg_gated_test.rs`. `target-prune` refused at `declared 232, live 244,
+# tolerance 10`, which is the staleness arm and not the disk: 18901 MB were free.
+#
+# THE FLOORS DO NOT MOVE, AND THIS ENTRY IS ABOUT WHY THE MEASUREMENT IS OWED
+# RATHER THAN TAKEN. The method the entry above prescribes is `du -sm target`
+# immediately after a successful prune. That reads **6384 MB** here and it is not
+# comparable: this prune ESCALATED below the warm floor and dropped 26926 MB of
+# regrowable cache, so 6384 is the post-escalation figure rather than the ordinary
+# retained state 11140 was measured against. Adopting it would lower a safety
+# floor by 43% on a reading of a different thing, which is CLOUD-861's rustc IO
+# error arriving inside a test run.
+#
+# Scaling instead — 244 x 48.02 — is what the entry above calls the same staleness
+# wearing a newer number, so it is not taken either. The precedent is the
+# 2026-09-06 entry's: a basis refresh is a trend counter, not a byte budget, and
+# moving a floor needs the independent measurement CLOUD-1158 owns. The floor
+# stays where main re-measured it, the count follows the tree, and the honest
+# statement is that an ordinary post-prune `du` was not takeable on this container
+# at this moment — which is different from being skipped.
+#
+# COLD'S BASIS MOVES WITH WARM'S, for the 2026-09-06 entry's measured reason:
+# refreshing one and not the other made the very next lap refuse on the other arm
+# with warm never breached.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 232
+count = 244
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 232
+count = 244
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
@@ -13248,7 +13276,6 @@ The ratchet is "never above", not "always exactly", and the asymmetry is the poi
 id = "module read first"
 kind = "document"
 target = "policy/nextest-slow.rego"
-
 
 [[startup]]
 id = "engine-reads-the-authority"
