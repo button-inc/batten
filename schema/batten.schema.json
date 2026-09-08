@@ -1044,6 +1044,13 @@
       "description": "How a credential is proved usable, declared by the consumer.\n\n**One field, and the control credential is NOT one of them.** A caller does\nnot get to choose what \"known bad\" means: the engine sends a syntactically\nplausible token that must be refused, because a consumer that could name it\ncould name one the route happens to accept and turn the control arm into a\nrubber stamp.",
       "type": "object",
       "properties": {
+        "names": {
+          "description": "The variables a session credential may arrive under, most specific first.\n\n**Declared here rather than listed in the engine, which is non-negotiable\nrule 1.** It was two GitHub-shaped literals in `crates/batten` for one\ncommit, and a consumer on another forge — or on a host that injects under\na third name — has neither: every candidate is then absent,\n[`credential_health`] answers [`Credential::Unusable`], and every removal\nis silently skipped forever. That failure is INVISIBLE, because skipping\na removal is also the correct behaviour when a credential is genuinely\nbad, so the dead path and the working path look identical from outside.\n\nWhich names belong here is a judgement only the consumer can make. A host\nmay inject a substitutable placeholder under the forge's conventional\nnames, so probing those would measure the host's credential rather than\none we hold — the exact conflation this mechanism exists to undo, and the\nreason this list is deliberately not \"every variable that looks like a\ntoken\". Naming none is could-not-look, not health: it authorises nothing.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "probe_url": {
           "description": "The endpoint that answers 2xx for a good credential and refuses a bad\none.\n\nIt must be a route the fence sends DIRECT. Pointed at one an intercepting\nproxy carries, the control arm fails — the junk credential is accepted —\nand the engine reports could-not-look rather than pretending to a verdict\nit cannot reach.",
           "type": [

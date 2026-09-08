@@ -1280,3 +1280,155 @@ fn an_unreadable_trust_bundle_does_not_apply_the_bypass() {
         "a bundle that cannot be read is not evidence of an interceptor: {seen}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// (g) THE CORE STAYS REPO-AGNOSTIC, AS A GATE (CLOUD-1615).
+//
+// Non-negotiable rule 1 was held by convention and by review, and measured
+// 2026-09-07 the convention had failed three times in one commit range — all
+// three by the same route, and all three invisible for the same reason: **each
+// one worked perfectly when it was tested in this repository, on this forge, in
+// this container.** A grep for a specific consumer's names is what the rule
+// itself asks for, so non-negotiable rule 2 makes it a runnable check rather
+// than a paragraph.
+//
+// It scans SOURCE, which is the only surface where the defect is visible: a
+// behavioural case would need a second forge to fail against, and there is not
+// one. Pointer-only (rule 4): a finding is `path:line` and the fragment class,
+// never the matched line.
+// ---------------------------------------------------------------------------
+
+/// Fragments assembled at runtime, and that is not decoration.
+///
+/// Writing the forbidden literal here would put it in `crates/batten` — under
+/// `tests/`, which this scan does not read, but a scanner whose own corpus
+/// carries the shape it hunts is one nobody can trust the negative from. Split
+/// halves also survive the day somebody widens the scan to the whole crate.
+fn forbidden_fragments() -> Vec<(String, &'static str)> {
+    vec![
+        (
+            format!("{}{}", "GITHUB_PERSONAL", "_ACCESS_TOKEN"),
+            "a forge-specific credential variable — declare it in `[credential] names`",
+        ),
+        (
+            format!("{}{}", "BATTEN_GITHUB", "_TOKEN"),
+            "a host-specific credential variable — declare it in `[credential] names`",
+        ),
+        (
+            format!("{}{}", "ghp", "_0000"),
+            "a forge-specific token literal — derive the control credential from the real one",
+        ),
+    ]
+    // DELIBERATELY NOT `schema/batten.schema.json`, and the withdrawal is worth
+    // recording. It was inventoried as a third violation on the reading that the
+    // engine was reaching for a path only this repository generates. It is not:
+    // that path is BATTEN's own convention, the same class as `batten.toml`
+    // itself, and no consumer identifier appears in it. The real defect at that
+    // site was a hand-joined second spelling of `config::SCHEMA_PATH` — two
+    // authorities for one location — which is fixed there rather than gated
+    // here, because a ban on the constant would ban the convention.
+}
+
+/// Every `.rs` under `crates/batten/src`, which is what rule 1 binds.
+///
+/// `src` alone, deliberately: `tests/` is this repository's own corpus and is
+/// entitled to name this repository, which is why the fragments above are
+/// assembled rather than spelled.
+fn engine_sources() -> Vec<PathBuf> {
+    fn walk(at: &Path, into: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(at) else {
+            return;
+        };
+        let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+        // Sorted so a finding is reported at the same place on every run, which
+        // is what makes the output byte-stable (house style §6).
+        paths.sort();
+        for path in paths {
+            if path.is_dir() {
+                walk(&path, into);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                into.push(path);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut found,
+    );
+    found
+}
+
+/// `path:line why` for every forbidden fragment in `text`.
+fn findings_in(path: &Path, text: &str, fragments: &[(String, &'static str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    for (number, line) in text.lines().enumerate() {
+        for (fragment, why) in fragments {
+            if line.contains(fragment.as_str()) {
+                found.push(format!("{}:{} {why}", path.display(), number + 1));
+            }
+        }
+    }
+    found
+}
+
+/// THE PREMISE (CLOUD-249's shape). The case below asserts an ABSENCE, and an
+/// absence passes vacuously if the scan could never have found anything — an
+/// empty file list, a misassembled fragment. So one case proves the instrument
+/// works, over a body that genuinely carries every fragment.
+#[test]
+fn the_agnostic_scan_would_find_a_violation() {
+    let fragments = forbidden_fragments();
+    assert!(
+        !engine_sources().is_empty(),
+        "an empty corpus makes the absence below vacuous"
+    );
+    for (fragment, _) in &fragments {
+        let planted = format!("let x = \"{fragment}\";");
+        assert_eq!(
+            findings_in(Path::new("planted.rs"), &planted, &fragments).len(),
+            1,
+            "the scan must find {fragment} when it IS there, or its absence \
+             below says nothing"
+        );
+    }
+}
+
+#[test]
+fn the_engine_names_no_consumer_of_its_own() {
+    let fragments = forbidden_fragments();
+    let mut findings = Vec::new();
+    for path in engine_sources() {
+        let text = fs::read_to_string(&path).expect("readable source");
+        findings.extend(findings_in(&path, &text, &fragments));
+    }
+    assert!(
+        findings.is_empty(),
+        "non-negotiable rule 1: the core stays repo-agnostic, and a consumer's \
+         fact belongs in that consumer's own `batten.toml`:\n{}",
+        findings.join("\n")
+    );
+}
+
+/// The other half of the same fix: the names the engine no longer holds are
+/// declared, and the type carries them.
+///
+/// A field nothing reads is the dead-gate shape one layer down, so the case
+/// asserts the round trip rather than the declaration.
+#[test]
+fn the_credential_table_carries_the_names_the_engine_dropped() {
+    let declared: batten::provision::CredentialProbe = toml::from_str(
+        "probe_url = \"https://example.invalid/probe\"\nnames = [\"A_TOKEN\", \"B_TOKEN\"]\n",
+    )
+    .expect("the `[credential]` table parses");
+    assert_eq!(declared.names, vec!["A_TOKEN", "B_TOKEN"]);
+
+    // AN ABSENT LIST IS COULD-NOT-LOOK, NOT AN ERROR. A consumer that declares
+    // a probe and no names still loads — the engine reports and authorises no
+    // removal — because refusing the config would make a launcher that cannot
+    // start over a field it could have reported.
+    let bare: batten::provision::CredentialProbe =
+        toml::from_str("probe_url = \"https://example.invalid/probe\"\n")
+            .expect("names is optional");
+    assert!(bare.names.is_empty());
+}

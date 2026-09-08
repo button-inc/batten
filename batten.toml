@@ -7897,8 +7897,24 @@ body_template = ".github/bot-lane-row.md"
 # `[[provision.env]]` no-proxy list above. Pointed at a route the proxy carries,
 # the control arm fails and the engine reports could-not-look rather than
 # inventing a verdict.
+#
+# `names` IS THIS REPOSITORY'S FACT AND WAS AN ENGINE LITERAL FOR ONE COMMIT
+# (CLOUD-1615). `crates/batten` carried `["GITHUB_PERSONAL_ACCESS_TOKEN",
+# "BATTEN_GITHUB_TOKEN"]`, which is rule 1: a consumer on any other forge, or on
+# a host injecting under a third name, finds neither variable set, so every
+# candidate is absent, the verdict is `Unusable`, and every removal above is
+# skipped FOREVER. That failure is invisible, because skipping a removal is also
+# the right answer for a genuinely bad credential.
+#
+# THE SAME TWO NAMES THE ROWS ABOVE PREFER, and no others. `GITHUB_TOKEN` and
+# `GH_TOKEN` are deliberately absent even though tools read them: this container
+# injects a `proxy-`-prefixed marker under both, so probing them would measure
+# the host's substituted credential rather than one we hold — the exact
+# conflation this whole mechanism exists to undo. They stay in `from_first_set`
+# as last resorts and stay out of here as evidence.
 [credential]
 probe_url = "https://api.github.com/rate_limit"
+names = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN"]
 
 [attribution]
 # Authorship. Both fields are judged: a repair reaching only `author` leaves the
