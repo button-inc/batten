@@ -640,24 +640,34 @@ jobs:
     # that was supposed to make this a finding rather than a surprise does not
     # reach it. That asymmetry is the row's to close, not this job's.
     #
-    # COLD, AND THE JUSTIFICATION FOR THAT IS NOW FALSE. `cache-warm-linux`
-    # writes `ci-` on arm64, so no warm x64 entry exists for this job and it pays
-    # a full build every run.
+    # WARM SINCE CLOUD-1477, AND THE TWO PRICINGS BEFORE IT WERE BOTH WRONG.
     #
-    # This comment used to price that as free: "a job running in parallel with a
-    # 1730s pole has ~1200s of slack." The premise was true when it was written
-    # and this repository's own change falsified it. Measured on run 33845451921,
-    # the first warm arm64 run of a real `crates/**` change: `ci` 364s, `bats`
-    # 271s, and THIS JOB 683s — 1.9x the next longest, and the critical path of
-    # the whole workflow. There is no 1730s pole to hide behind any more, because
-    # CLOUD-1410 removed it. The slack is gone and this job is the pole.
+    # The first priced this job's cold build as free: "a job running in parallel
+    # with a 1730s pole has ~1200s of slack." True when written, and falsified by
+    # this repository's own change — CLOUD-1410 removed the pole. Measured on run
+    # 33845451921, the first warm arm64 run of a real `crates/**` change: `ci`
+    # 364s, `bats` 271s, and THIS JOB 683s, 1.9x the next longest and the critical
+    # path of the whole workflow.
     #
-    # What has not changed is the trade that was declined: buying a warm x64
-    # entry needs a second warm writer, doubling the cache families against a
-    # store measured at 10.72 GiB over a 10 GiB ceiling. So the answer is not a
-    # second writer — it is CLOUD-1431, which removes the reason this job is
-    # stranded here at all, or a revert of the family to x64 if `arch-probe.yml`
-    # shows arm64 buys nothing.
+    # The second declined the fix on a ceiling: buying a warm x64 entry needs a
+    # second warm writer, "doubling the cache families against a store measured at
+    # 10.72 GiB over a 10 GiB ceiling", so the answer was said to be CLOUD-1431 or
+    # a revert of the family to x64. Every term of that is now spent.
+    # `cache-sweep.yml` (CLOUD-1453, released v0.0.142) took the store to 3.16 GiB
+    # by evicting merged pull requests' entries, so the ceiling is not the binding
+    # constraint. CLOUD-1431 is Done and landed a GATE over the
+    # release-target/provision-platform pairing rather than an arm64 scanner, so
+    # this job still cannot move. And eviction bought 12% and not a hit: 683s to
+    # 600s across jobs 100903936005 and 101280975479, which is pressure lifting
+    # rather than a restore landing.
+    #
+    # So the second writer is what landed. `cache-warm-linux-x64` in
+    # `release-plz.yml` writes `ci-` on x64 for this job, exactly as
+    # `cache-warm-linux` writes it on arm64 for `ci`, `bats` and `commit-lint`,
+    # and `read-family-has-a-warm-writer` refuses the arrangement where a
+    # read-only consumer has no writer on its own architecture — so the orphaning
+    # that produced this comment's whole history is now a finding rather than a
+    # green run that took longer.
     runs-on: ubuntu-latest
     # DERIVED RATHER THAN OBSERVED, because this job has no history yet. The
     # terms: 189.6s for the step itself (job 100792703868), plus this job's own
@@ -753,22 +763,30 @@ jobs:
         with:
           path: ~/.pkl/cache
           key: pkl-${{ runner.os }}-${{ hashFiles('hk.pkl') }}
-      # THE `ci-` FAMILY, AND THE ONLY STEP IN THIS WORKFLOW THAT STILL WRITES
-      # ONE. That is the rule the `ci`, `bats` and `windows` steps are stated
-      # over, applied rather than excepted: `save-if: false` belongs on a reader
-      # of a family a trunk-side job WARMS, and is wrong where no warm writer
-      # exists, because a pure consumer of an empty family has nothing at all.
-      # `cache-warm-linux` writes `ci-` on arm64 (see this job's `runs-on` for
-      # why this one cannot follow it), so on x64 that family has no writer.
+      # THE `ci-` FAMILY, READ-ONLY LIKE EVERY OTHER PULL-REQUEST CONSUMER OF IT
+      # (CLOUD-1477). This step was this workflow's last writer, and the reason it
+      # was one has been removed rather than merely overruled.
       #
-      # It is not useless. A cache read is scoped to the run's own ref plus the
-      # base branch, so what this cannot do is serve ANOTHER pull request — but
-      # it does serve the next lap of THIS one, and `land` re-runs CI once per
-      # lap on a fresh SHA under the same `refs/pull/N/merge` ref. A landing loop
-      # is exactly where the repeat reads are.
+      # The rule is the one the `ci`, `bats` and `windows` steps are stated over:
+      # `save-if: false` belongs on a reader of a family a trunk-side job WARMS,
+      # and is wrong where no warm writer exists, because a pure consumer of an
+      # empty family has nothing at all. That exception applied here for as long
+      # as `cache-warm-linux` wrote `ci-` on arm64 alone; `cache-warm-linux-x64`
+      # now writes it on x64, so this job is an ordinary consumer and the
+      # exception is spent.
+      #
+      # WHAT THE WRITE WAS BUYING, AND WHY IT IS NOT WORTH KEEPING BESIDE A WARM
+      # WRITER. A cache read is scoped to the run's own ref plus the base branch,
+      # so the entry could never serve another pull request — only the next lap of
+      # this one, under the same `refs/pull/N/merge` ref that `land` re-runs on.
+      # Against a warm x64 entry the first lap now restores instead of building,
+      # so the later laps have nothing left to inherit that they would not already
+      # get; what the write still costs is a multi-gigabyte upload per lap into
+      # the 10 GiB store that `cache-sweep.yml` then has to reclaim.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-
+          save-if: false
       - run: mise run batten-check
         env:
           # `batten-check` reaches `doctor` through the same chain the `ci` job

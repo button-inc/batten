@@ -450,6 +450,51 @@ fn the_same_key_on_the_same_architecture_is_still_refused() {
 }
 
 #[test]
+fn a_read_only_consumer_of_an_unwarmed_family_is_refused() {
+    // RULE 4, OVER THE ENGINE, and the architecture term is exactly why it has to
+    // be: the discriminator is a `runs-on` label the boundary projects out of the
+    // parsed job, which the module's own case supplies for itself.
+    //
+    // `WARM` writes `ci-` on `ubuntu-24.04-arm`; this reader is READ-ONLY on x64,
+    // so rust-cache composes a different key at `config.ts:93` and the entry it
+    // restores from does not exist. Unlike the writer in
+    // `the_same_key_on_another_architecture_is_not_the_same_family`, it has no
+    // later lap to inherit its own entry — it gets nothing, forever. That is the
+    // shape `batten-check` was in before `cache-warm-linux-x64` existed
+    // (CLOUD-1477), and the shape `bats` was in against `bats-` before
+    // CLOUD-1410.
+    let reader = READER.replace("runs-on: ubuntu-24.04-arm", "runs-on: ubuntu-latest");
+    let root = tree(
+        "orphaned-reader",
+        MANIFEST,
+        &[("warm.yml", WARM), ("pr.yml", &reader)],
+    );
+    let found = findings(&root);
+    assert!(
+        !found.is_empty(),
+        "a read-only consumer whose family is warmed on another architecture is refused"
+    );
+}
+
+#[test]
+fn a_read_only_consumer_of_a_family_nothing_writes_is_refused() {
+    // The other direction on the KEY rather than the architecture, so the rule
+    // cannot pass by only ever noticing an architecture split. Same arm64 runner
+    // on both sides; the reader simply names a family `WARM` does not write.
+    let reader = READER.replace("shared-key: ci-", "shared-key: nobody-");
+    let root = tree(
+        "unwritten-family",
+        MANIFEST,
+        &[("warm.yml", WARM), ("pr.yml", &reader)],
+    );
+    let found = findings(&root);
+    assert!(
+        !found.is_empty(),
+        "a read-only consumer of a family nothing writes at all is refused"
+    );
+}
+
+#[test]
 fn the_engine_reads_a_quoted_save_if_as_read_only() {
     // YAML SPELLS `false` TWO WAYS AND THE BOUNDARY DECIDES WHICH ARRIVES. A
     // bare `false` is a boolean and a quoted one is a string; a module comparing

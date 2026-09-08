@@ -183,6 +183,72 @@ jobs:
       - run: mise exec -- cargo nextest run --no-run --workspace
         if: steps.rust-cache.outputs.cache-hit != 'true'
 
+  # THE X64 HALF OF THE `ci-` FAMILY (CLOUD-1477).
+  #
+  # WHY ONE `shared-key` NEEDS TWO WRITERS. `runnerOS-runnerArch` lands at
+  # rust-cache's `config.ts:93`, INSIDE the prefix assigned to `restoreKey` at
+  # `:133`, so `ci-` on arm64 and `ci-` on x64 are two entries that cannot
+  # contend, cannot overwrite one another, and cannot hand a reader the other's
+  # tree. `cache-warm-linux` above writes the arm64 one, read by `ci` and `bats`
+  # (ci.yml) and `commit-lint` (commit-lint.yml). THIS writes the x64 one, and
+  # `batten-check` is its only reader — the one job of the family that cannot
+  # move to arm64, because `batten enforce` carries `no-secrets` and no
+  # ripsecrets release has ever published a linux-aarch64 artifact. CLOUD-1431
+  # closed that row by GATING the release-target/provision-platform pairing, not
+  # by finding an arm64 scanner, so the constraint stands.
+  #
+  # THE TRADE THIS RE-PRICES, because `ci.yml` declined it on a premise that has
+  # since been falsified. A second writer doubles this family's entries, and that
+  # was refused against a store measured at 10.72 GiB over a 10 GiB ceiling.
+  # `cache-sweep.yml` (CLOUD-1453, released v0.0.142) took the store to 3.16 GiB
+  # by evicting entries belonging to merged pull requests, so the ceiling the
+  # refusal rested on is no longer the binding constraint. What eviction did NOT
+  # buy was a hit: measured on jobs 100903936005 and 101280975479,
+  # `batten-check` went 683s to 600s under the swept store — 12%, which is
+  # eviction pressure lifting rather than a restore landing. A cold build is
+  # still a cold build, and this job is what removes it.
+  #
+  # `ubuntu-latest` MUST MATCH `batten-check`'s LABEL ARCHITECTURE rather than
+  # merely being "some x64 runner": `ci-cache-declared`'s
+  # `read-family-has-a-warm-writer` compares the two by the arch their labels
+  # resolve to, so moving either without the other is now a finding rather than a
+  # silent cold build.
+  cache-warm-linux-x64:
+    name: cache-warm-linux-x64
+    runs-on: ubuntu-latest
+    # Grandfathered for `cache-warm-linux`'s reason: no measured p95 exists for a
+    # job that has never run, and a guessed number would read as measured.
+    # CLOUD-352 owns replacing it once the runs exist.
+    timeout-minutes: 30 # budget: grandfathered measured=2026-09-08
+    # A warm job must never be able to red the release lane, exactly as above.
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+        with:
+          # The same list `cache-warm-linux` installs, and for its reason rather
+          # than by copying: what this fills is a cargo target dir, and
+          # `batten-check` reaches it through the same workspace build.
+          install_args: rust github:nextest-rs/nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Read by the compile step below; `ci-local-parity` property 17 holds the
+        # `id` and the guard together.
+        id: rust-cache
+        with:
+          # Must match `ci.yml`'s `batten-check` job exactly or this writes an
+          # entry that job cannot read.
+          shared-key: ci-
+      # Compile only when there is nothing to restore. The evidence and the
+      # failure directions are recorded on the Windows job below; the same
+      # reasoning applies unchanged, and the same property refuses an unguarded
+      # version of this step.
+      - run: mise exec -- cargo nextest run --no-run --workspace
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+
   cache-warm-windows:
     name: cache-warm-windows
     runs-on: windows-latest

@@ -43,6 +43,7 @@
 #MUTANT key-may-carry-a-hash|s@contains(key, "hashFiles")@false@|a_shared_key_carrying_a_content_hash_is_refused
 #MUTANT cargo-reach-may-go-uncached|s@not declares_a_cache(path, name)@false@|a_cargo_job_with_no_cache_step_is_refused
 #MUTANT warmed-family-may-be-written|s@not reads_only(step)@false@|a_pull_request_writer_of_a_warmed_family_is_refused
+#MUTANT orphaned-reader-may-pass|s@not [shared_key(step), arch(runner(path, name))] in warmed@false@|a_read_only_consumer_of_an_unwarmed_family_is_refused
 
 # METADATA
 # description: |
@@ -62,6 +63,8 @@ rules contains "cache-key-carries-a-content-hash"
 rules contains "cargo-reach-declares-a-cache"
 
 rules contains "warmed-family-is-read-only"
+
+rules contains "read-family-has-a-warm-writer"
 
 # --- what is being judged, and whether there is anything to judge -------------
 
@@ -477,6 +480,78 @@ violation contains {
 	not job_placed(path, name)
 }
 
+# --- 4. a pure consumer has a warm writer on its own architecture -------------
+#
+# THE COMPLEMENT OF RULE 3, AND THE HALF THAT ROW EXPLICITLY LEAVES OPEN. Rule 3
+# refuses a pull-request job that WRITES a family the trunk already warms; its
+# own verdict row closes by saying "a family no trunk-side job writes is NOT
+# warmed and is deliberately outside this row: making those read-only would leave
+# them with nothing at all." That sentence names an arrangement nothing then
+# checks — a job ALREADY read-only against a family nothing warms — and this is
+# the predicate for it. A pure consumer of an empty family restores nothing on
+# every run, forever, by construction.
+#
+# THE MEASURED INSTANCE IS AN ARCHITECTURE SPLIT, NOT A TYPO (CLOUD-1477).
+# `batten-check` reads `ci-` on x64 while `cache-warm-linux` writes `ci-` on
+# arm64, and rust-cache composes `runnerOS-runnerArch` at `config.ts:93` INSIDE
+# the restore prefix — so the reader cannot read that writer's entry at all. Not
+# a partial hit: no hit, ever. The `bats` job had the same shape against a `bats-`
+# family nothing on the trunk wrote, and this module's own header records it as
+# one of the three failures that motivated the file. Both were found by reading a
+# job log by hand, which is what this predicate replaces.
+#
+# WHY IT IS SCOPED TO `reads_only` AND NOT TO EVERY READER. Every rust-cache step
+# restores, so "reads a family" would reach `cross-`, `semver-`,
+# `${{ matrix.target }}`, `coverage-`, `fuzz-` and `perf-` — families this
+# repository writes from the pull request on purpose, because they have no trunk
+# writer and `ci.yml` records that as a deferred follow-up rather than an
+# oversight. Those jobs still get their own entry on a later lap; a `save-if:
+# false` job gets nothing. Refusing both would relitigate a decision made
+# elsewhere, which is the same bound rule 3 draws when it excludes the scheduled
+# writers from `warmed`.
+#
+# THE FAMILY IS THE (KEY, ARCHITECTURE) PAIR, read exactly as rule 3 reads it —
+# same `warmed` set, same `arch`, same `runner`. One resolution, so the two
+# predicates cannot disagree about what a family is.
+orphaned(path, name) if {
+	on_pull_request(path)
+	some entry in job_step
+	entry[0] == path
+	entry[1] == name
+	step := entry[2]
+	reads_only(step)
+	not [shared_key(step), arch(runner(path, name))] in warmed
+}
+
+violation contains {
+	"rule": "read-family-has-a-warm-writer",
+	"verdict": "job read empty",
+	"subjects": [{"path": path, "line": number}],
+} if {
+	governed
+	some job in job_of
+	path := job[0]
+	name := job[1]
+	orphaned(path, name)
+	some placement in job_line
+	placement[0] == path
+	placement[1] == name
+	number := placement[2]
+}
+
+violation contains {
+	"rule": "read-family-has-a-warm-writer",
+	"verdict": "job read empty",
+	"subjects": [{"path": path}],
+} if {
+	governed
+	some job in job_of
+	path := job[0]
+	name := job[1]
+	orphaned(path, name)
+	not job_placed(path, name)
+}
+
 # --- could not look ----------------------------------------------------------
 #
 # A DECLARED SOURCE THAT WOULD NOT PARSE IS NOT AN ABSENT ONE. Absent is
@@ -560,6 +635,37 @@ test_the_same_key_on_the_same_architecture_is_still_refused if {
 		pr_reader_on("ci-", true, "ubuntu-24.04-arm"),
 	)
 	finding.rule == "warmed-family-is-read-only"
+}
+
+# RULE 4, AND THE FIXTURE IS THE ORPHANING THAT MOTIVATED IT: a read-only
+# consumer on x64 against a writer on arm64. `test_a_readable_key_with_a_cache_is
+# _clean` is the matched-architecture direction, so between them the pair
+# discriminates the architecture term rather than merely the key.
+test_a_read_only_consumer_of_an_unwarmed_family_is_refused if {
+	some finding in violation with input as tree(
+		warm_writer_on("ubuntu-24.04-arm"),
+		pr_reader_on("ci-", false, "ubuntu-latest"),
+	)
+	finding.rule == "read-family-has-a-warm-writer"
+}
+
+# The other direction on the KEY rather than the architecture: a read-only
+# consumer of a family nothing writes at all. Without this the rule could pass by
+# only ever noticing the architecture split.
+test_a_read_only_consumer_of_a_family_nothing_writes_is_refused if {
+	some finding in violation with input as tree(no_writer, pr_reader("ci-", false))
+	finding.rule == "read-family-has-a-warm-writer"
+}
+
+# ANTI-VACUITY FOR RULE 4, and it is the bound the predicate's header argues for:
+# a job that WRITES an unwarmed family is rule 3's business and not this one's,
+# because it still gets its own entry on a later lap. Shares a fixture with
+# `test_an_unwarmed_family_may_still_be_written` deliberately — that case asserts
+# rule 3 stays silent over it, this one asserts rule 4 does too, and a single
+# `count(violation) == 0` covering both is what keeps the two bounds from drifting
+# apart.
+test_a_writer_of_an_unwarmed_family_is_not_this_rules_business if {
+	count(violation) == 0 with input as tree(no_writer, pr_reader("cross-", true))
 }
 
 test_a_job_reaching_no_cargo_needs_no_cache if {

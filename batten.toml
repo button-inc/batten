@@ -13281,6 +13281,18 @@ kind = "document"
 target = "policy/ci-cache-declared.rego"
 
 [[verdict]]
+id = "job read empty"
+gloss = "a pull-request job is read-only against a cache family that is declared and holds nothing on its architecture"
+class = """
+The complement of `job write unsafe`, and the arrangement that row's own text leaves open: a job already carrying `save-if: false` against a family no trunk-side job writes where that job can read it. The `shared-key` is declared and the entry behind it holds nothing, so the job restores nothing on every run, forever -- and unlike a job that writes its own entry it has no later lap to inherit one, so the cost is a full cold build every time with no term that ever amortises. The failure is silent in the way this whole module is stated over: not a red check, just a green run that took longer, with the symptom in a bill nobody reads. The architecture is half the fact and the half that gets missed: rust-cache composes `runnerOS-runnerArch` into the key INSIDE the restore prefix, so a family written on arm64 and read on x64 is two entries that can never touch, and a reader left behind by an architecture migration keeps a valid `shared-key` and a warm writer that exist on different machines. Measured here on `batten-check`, which could not follow its family to arm64 because its scanner publishes no linux-aarch64 artifact: 683s, 1.9x the next longest job and the critical path of the workflow. The remedy is a warm writer on the reader's own architecture, or moving the reader to the architecture that already has one.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/ci-cache-declared.rego"
+
+[[verdict]]
 id = "task resolve missing"
 gloss = "the task graph this rule walks could not be resolved, so cargo reachability was not decided"
 class = """
