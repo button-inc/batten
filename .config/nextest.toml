@@ -127,3 +127,31 @@ threads-required = "num-test-threads"
 [[profile.default.overrides]]
 filter = 'test(a_replay_over_the_committed_records_fires_on_every_required_key)'
 slow-timeout = { period = "10s", terminate-after = 120 }
+
+# THE `symbols` TRIO, AND THEY ARE NOT SLOW TESTS (CLOUD-1439, CLOUD-1641).
+#
+# All three reported `TIMEOUT [ ~90.2s]` on the `windows` runner, which is what
+# retired the 90s kill. Their cause is documented and is a BILLING ARTIFACT rather
+# than a cost: the three share ONE cold `cargo clippy` build over the workspace on
+# a target directory they also share, so under parallelism one builds and the other
+# two WAIT on cargo's lock — and nextest bills a case for its whole time in flight,
+# including time spent blocked. Measured on Linux by CLOUD-1439: 28.1s at
+# `--test-threads 1` against 186.1s summed under parallelism, for the same work.
+#
+# So the number nextest reports for them is the build, charged three times, and it
+# scales with how slow a cold clippy build is on the runner. On Windows that is
+# far slower than on any box this repository can measure from.
+#
+# NAMED RATHER THAN ABSORBED INTO THE DEFAULT. Raising the default to cover them
+# would spend the ban for all 5,000-odd other cases to accommodate three whose
+# cause is already known and filed. This is what per-test overrides are for, and
+# the row is cited so the exception is filed rather than merely written.
+#
+# AND THE TRUE COST IS STILL UNKNOWN, which is the honest part. Every kill destroys
+# the measurement that would set the number: 90.240s is the THRESHOLD they were
+# stopped at, not what they take. 1200s is chosen to sit above any plausible runner
+# so the next Windows run finally reports a value instead of a floor — and that
+# reading, not another guess, is what the ratchet's next step should move on.
+[[profile.default.overrides]]
+filter = 'test(/^symbols::/)'
+slow-timeout = { period = "10s", terminate-after = 120 }
