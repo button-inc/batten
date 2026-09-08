@@ -1,5 +1,5 @@
-//! One manifest per vendored preset: its identity, the surface it decides, the
-//! modules it ships, and the refusal vocabulary they raise (CLOUD-1181).
+//! One manifest per vendored preset: its identity, the modules it ships with the
+//! surface each decides, and the refusal vocabulary they raise (CLOUD-1181).
 //!
 //! # Why this module exists rather than three tables
 //!
@@ -8,7 +8,9 @@
 //! `verdict.rs`'s `VENDORED` under a comment, and a branch exempting it from the
 //! `[[pattern]]` refusal. Nothing declared a preset, so a preset carried no
 //! identity beyond its name, no version, and — the load-bearing omission — no
-//! SCOPE.
+//! SCOPE. (It carried one scope for the manifest from CLOUD-1181 until
+//! CLOUD-1672 moved it onto each module; the paragraph below is why it had to
+//! exist at all, and `Manifest::modules` is why it could not stay singular.)
 //!
 //! Scope is where the silence costs most. `rules/policy-modules.md`
 //! opens on the class: a module reading a key from the wrong surface evaluates,
