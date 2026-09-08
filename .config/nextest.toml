@@ -73,3 +73,28 @@ slow-timeout = { period = "10s", terminate-after = 9 }
 [[profile.default.overrides]]
 filter = 'test(deleting_six_governed_paths_costs_a_flat_multiple_of_the_floor)'
 threads-required = "num-test-threads"
+
+# THE ONE NAMED EXCEPTION TO THE SLOW-TEST BAN, and it is filed (CLOUD-1641).
+#
+# This case is the suite's slowest by a wide margin: 64.849s on a quiet box
+# against 30.844s for the next slowest and a 42ms median. It is 2.1x the runner-up
+# and 1,544x the median, and nothing else is within a factor of two of it.
+#
+# THE BAN CAUGHT IT, WHICH IS THE MECHANISM WORKING RATHER THAN A REASON TO WIDEN
+# THE CEILING. Armed at a 90s kill, `verify` reported
+# `TIMEOUT [ 90.022s]` for this case — it clears 90s alone and crosses it once the
+# suite shares the machine with the rest of the gate set. That is the effect the
+# block above already names: nextest bills a case for its whole time in flight
+# including time spent BLOCKED (CLOUD-1439), so a quiet reading is a floor and not
+# a number to plan against. The 90s default was set at ~1.4x the quiet reading and
+# that headroom was too thin for this one case.
+#
+# SO THE EXCEPTION IS NAMED RATHER THAN THE BOUND RAISED. Widening the default
+# would spend the ban for all 5,020 other cases to accommodate one; an override
+# holds the ban everywhere else and puts this case's cost somewhere a reader can
+# see it. CLOUD-1641 is the row that makes the case fast enough to delete this
+# block — and until it lands, this case is the binding constraint on every step of
+# the ratchet, because the ceiling cannot go below what the worst case needs.
+[[profile.default.overrides]]
+filter = 'test(a_replay_over_the_committed_records_fires_on_every_required_key)'
+slow-timeout = { period = "10s", terminate-after = 24 }
