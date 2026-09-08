@@ -7244,6 +7244,22 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
             {
                 continue;
             }
+            // The other polarity, against THE SAME LINE for the same reason
+            // (CLOUD-1477's sibling). The operand matcher drops flags before
+            // comparing, so a flag is the one thing a `pattern` cannot see and
+            // this is how a row excludes one. `rebase-not-hand-stepped` is the
+            // measured case: `--onto` makes a rebase a range move rather than the
+            // landing lap the row bans, and the row had no way to say so.
+            //
+            // Line-scoped rather than segment-scoped is load-bearing in the
+            // permissive direction here, which is the direction to fear from an
+            // exemption: matched against the segment, an `echo --onto` on line one
+            // would switch this deny off for a genuine lap on line two.
+            if let Some(exemption) = rule.unless_contains.as_deref()
+                && line.raw.contains(exemption)
+            {
+                continue;
+            }
             matched.push(rule);
         }
     }
@@ -10034,6 +10050,7 @@ mod tests {
             max_age: None,
             requires_field: None,
             contains: contains.map(ToOwned::to_owned),
+            unless_contains: None,
             require_via: None,
             requires_key: None,
             reason: Some(format!("use the sanctioned path for {id}")),

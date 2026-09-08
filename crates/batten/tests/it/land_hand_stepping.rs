@@ -27,8 +27,11 @@
 //! conflict, "resolve and `git rebase --continue`, never a fresh `git rebase
 //! origin/main`". A `shape` row compares operand words with flags already
 //! DROPPED, so `pattern = "git rebase"` alone cannot tell the two apart and
-//! would refuse the one step the contract requires by hand. `contains` matches
-//! the raw text of the same segment, which is what separates them.
+//! would refuse the one step the contract requires by hand. `contains` and
+//! `unless_contains` match the raw text of the same LINE, which is what
+//! separates them: the conflict exits fall out of the first column (they name no
+//! target), and `--onto` needs the second, because a range move DOES name
+//! `origin/main` while being an edit the loop cannot perform.
 //!
 //! So the deny case alone proves nothing: a row that refused every `git rebase`
 //! passes it while breaking conflict resolution, which is this defect pointed
@@ -276,6 +279,41 @@ fn the_other_conflict_exits_are_left_alone() {
 #[test]
 fn a_rebase_that_is_not_the_landing_lap_is_left_alone() {
     not_refused_by_the_row("git rebase -i HEAD~3");
+}
+
+/// A RANGE MOVE IS NOT A LAP, and this arm is why `unless_contains` exists.
+///
+/// `--onto <newbase> <upstream> <branch>` replays a range somewhere else. It
+/// NAMES `origin/main` — so the `contains` half selected it — while being an
+/// operation `land` cannot perform at all: the loop rebases a branch onto its
+/// target and has no notion of dropping commits from the bottom of a range. So
+/// the row refused a history edit its own remedy does not offer, with no
+/// `[[verdict]]` class to override and no `bypass_env` to spend, which is a
+/// wrongly refusing gate rather than a cost.
+///
+/// The discriminator is the flag, and a flag is precisely what a `pattern`
+/// cannot see: the operand matcher drops flags before comparing. A lap never
+/// spells itself with `--onto`, because a lap has no upstream to name.
+///
+/// MEASURED: the command below was refused while dropping four commits that a
+/// PR's `closing-key-check` required be dropped, and there was no sanctioned
+/// route to it.
+#[test]
+fn a_range_move_onto_main_is_not_this_rows_business() {
+    not_refused_by_the_row("git rebase --onto origin/main 321c72dd my-branch");
+}
+
+/// THE EXEMPTION IS LINE-SCOPED, and this is the arm that pins it.
+///
+/// An exemption is the one column whose bug is permissive by construction, so it
+/// gets the treatment `a_needle_on_another_line_does_not_qualify_this_one` gives
+/// the demanding half. Matched against the SEGMENT rather than the line, an
+/// `echo --onto` on line one would switch this deny off for a genuine lap on line
+/// two — and the `&&` spelling is the same evasion written across one line.
+#[test]
+fn the_exemption_does_not_reach_another_lines_lap() {
+    denied_by_the_row("echo --onto\ngit rebase origin/main");
+    denied_by_the_row("git log --onto-nothing\ngit rebase origin/main");
 }
 
 /*

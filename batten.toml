@@ -777,6 +777,25 @@ it rather than holding a foreground poll open."""
 # separates the race from the resolution — is what would remove the cost, and it
 # is a follow-up rather than this branch's work.
 #
+# `--onto` IS THE SECOND EXEMPTION, AND IT IS A CORRECTED FALSE DENY RATHER THAN
+# A SOFTENING. `git rebase --onto <newbase> <upstream> <branch>` names
+# `origin/main`, so `contains` selected it — and it is not a lap at all: it
+# replays a RANGE somewhere else, dropping commits from the bottom, which the
+# landing loop has no notion of and cannot perform. So this row refused an
+# operation its own remedy does not offer, and a `shape` row declares no
+# `[[verdict]]` class and this one carries no `bypass_env`, so there was no
+# sanctioned route to it whatsoever. Measured: a branch that had to drop four
+# commits another issue's PR carried could not, and the refusal named `land` —
+# which would have replayed all twelve.
+#
+# THE DISCRIMINATOR HAS TO BE A FLAG, which is the one thing `pattern` cannot
+# see: the operand matcher drops flags before comparing. `unless_contains` is
+# `contains` in the other polarity for exactly that reason, matched against the
+# same LINE so an `echo --onto` cannot switch this deny off for the line after
+# it. A lap never spells itself with `--onto`, because a lap has no upstream to
+# name — it is `git rebase <target>`, and `--onto` requires the upstream to be
+# written out, which is what makes it a range move rather than a catch-up.
+#
 # `crates/batten/tests/it/land_hand_stepping.rs` carries the whole predicate at
 # DEFAULT strictness, including an arm asserting this row refuses without
 # `--fail-on-warning`, so both a deleted row and a silently lowered one redden.
@@ -787,14 +806,18 @@ scope = "mediated_call"
 severity = "deny"
 pattern = "git rebase"
 contains = "origin/main"
+unless_contains = "--onto"
 reason = """
 Rebasing onto `main` by hand is a lap of the loop `mise run land` drives, and \
 taking it off the task is the race the contract refuses rather than a repair. \
 Background `mise run land`; it fetches, rebases, verifies, pushes and waits, \
-and stops only for a rebase conflict, a failed `verify`, or red CI. A CONFLICT \
-is the one step that is yours, and it is why this warns rather than denies: the \
-engine replays without moving anything, so a conflict leaves no rebase to \
-`--continue`, and re-creating it by hand is the only route to resolving it."""
+and stops only for a rebase conflict, a failed `verify`, or red CI. TWO \
+SPELLINGS ARE LEFT ALONE, and neither is a lap: the conflict exits \
+(`--continue`, `--abort`, `--skip`) name no target at all, and \
+`git rebase --onto <newbase> <upstream> <branch>` is a range move this loop \
+cannot perform. A CONFLICT is the one step that is yours, and this row denies \
+rather than warns because a warn row on this surface reaches nobody — so the \
+conflict stop is a limit this row names rather than one it can soften."""
 
 # The toolchain pin, given a mechanism (CLOUD-271). AGENTS.md has said "never a
 # bare `cargo`" since long before anything enforced it, which non-negotiable

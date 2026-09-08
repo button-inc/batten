@@ -3366,6 +3366,7 @@ fn default_rules() -> Vec<Rule> {
         max_age: None,
         requires_field: None,
         contains: None,
+        unless_contains: None,
         require_via: None,
         requires_key: None,
         reason: None,

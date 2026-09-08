@@ -1413,6 +1413,13 @@
             }
           ]
         },
+        "unless_contains": {
+          "description": "A literal whose presence **exempts** the command from a\n[`RuleKind::Shape`] row that would otherwise fire (CLOUD-1477's sibling).\n\n[`Rule::contains`]'s twin in the other polarity, and it exists for the\nsame structural reason rather than as a general escape hatch: the operand\nmatcher drops flags before comparing, so a row cannot distinguish two\ncommands that differ only by a flag. `contains` is how a row DEMANDS one;\nthis is how a row EXCLUDES one, and without it the only expressible\npredicate over a flag is \"must be present\".\n\n**The measured case is `git rebase`.** `rebase-not-hand-stepped` bans a\nhand-driven landing lap — `git rebase origin/main` — by asking whether the\nline names `origin/main`. But `git rebase --onto origin/main <upstream>\n<branch>` names it too, and is not a lap at all: `--onto` moves a range\nsomewhere else, which is a history edit the landing loop cannot perform,\nso the row refused an operation its own remedy does not offer and declared\nno route to it. A lap never spells itself with `--onto`, because a lap has\nno upstream to name.\n\nMatched against the raw text of the same line as `contains`, quotes\nincluded, and for the same reason: line one's text must not exempt line\ntwo's command.\n\n**The permissive direction is the one to fear here**, which is why it is\n`shape` only and a literal rather than a regex. A `contains` that is wrong\nmakes a row fire less often than it reads; so does this — but this is the\ncolumn whose whole job is to switch a deny off, so it stays the narrowest\nthing that can do the job and is named in the row's `reason` wherever it\nis used.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "use_sources": {
           "description": "The same, glob-selected (CLOUD-762).\n\nA layering rule decides over every module by construction, so the glob is\nthe spelling that matters and it ships with its literal column.",
           "type": "array",

@@ -161,6 +161,11 @@ const SHAPE_PERMITS: &[&str] = &[
     "when_value",
     "reason",
     "contains",
+    // The other polarity of `contains` (CLOUD-1477's sibling). `shape` only: it
+    // switches a deny OFF, and a column that does that has no business on a
+    // precondition row, where the same bytes would silently stop demanding a
+    // receipt.
+    "unless_contains",
     "require_via",
     "requires_key",
     "base",
@@ -1554,6 +1559,37 @@ pub struct Rule {
     /// against the raw text of the same segment, quotes included.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contains: Option<String>,
+    /// A literal whose presence **exempts** the command from a
+    /// [`RuleKind::Shape`] row that would otherwise fire (CLOUD-1477's sibling).
+    ///
+    /// [`Rule::contains`]'s twin in the other polarity, and it exists for the
+    /// same structural reason rather than as a general escape hatch: the operand
+    /// matcher drops flags before comparing, so a row cannot distinguish two
+    /// commands that differ only by a flag. `contains` is how a row DEMANDS one;
+    /// this is how a row EXCLUDES one, and without it the only expressible
+    /// predicate over a flag is "must be present".
+    ///
+    /// **The measured case is `git rebase`.** `rebase-not-hand-stepped` bans a
+    /// hand-driven landing lap — `git rebase origin/main` — by asking whether the
+    /// line names `origin/main`. But `git rebase --onto origin/main <upstream>
+    /// <branch>` names it too, and is not a lap at all: `--onto` moves a range
+    /// somewhere else, which is a history edit the landing loop cannot perform,
+    /// so the row refused an operation its own remedy does not offer and declared
+    /// no route to it. A lap never spells itself with `--onto`, because a lap has
+    /// no upstream to name.
+    ///
+    /// Matched against the raw text of the same line as `contains`, quotes
+    /// included, and for the same reason: line one's text must not exempt line
+    /// two's command.
+    ///
+    /// **The permissive direction is the one to fear here**, which is why it is
+    /// `shape` only and a literal rather than a regex. A `contains` that is wrong
+    /// makes a row fire less often than it reads; so does this — but this is the
+    /// column whose whole job is to switch a deny off, so it stays the narrowest
+    /// thing that can do the job and is named in the row's `reason` wherever it
+    /// is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unless_contains: Option<String>,
     /// Narrow a [`RuleKind::Shape`] deny to a call that reached its program
     /// **without** the named mediator (CLOUD-271).
     ///
@@ -3895,9 +3931,10 @@ impl Rule {
     ///
     /// Shared by the `content` and `tool` arms of [`Rule::validate_shape_columns`]
     /// because the argument is identical one column over, and stating it twice is
-    /// how the two would drift when a fifth modifier lands. Each of the four
-    /// names a COMMAND: `contains` and `require_via` are substring and via-shape
-    /// tests over an argv, `requires_key` asks whether the work is keyed before a
+    /// how the two would drift when a sixth modifier lands. Each of the five
+    /// names a COMMAND: `contains` and `unless_contains` are substring tests over
+    /// an argv in the two polarities, `require_via` is a via-shape test over the
+    /// same argv, `requires_key` asks whether the work is keyed before a
     /// command may run, and `base` exists only to tell `requires_key` which
     /// commits to read. A write and a structured call carry no argv for any of
     /// them to read, so left to load they are accepted, ignored on every call,
@@ -3909,6 +3946,7 @@ impl Rule {
     fn refuse_command_modifiers(&self, keyed_on: &str) -> anyhow::Result<()> {
         for (field, present) in [
             ("contains", self.contains.is_some()),
+            ("unless_contains", self.unless_contains.is_some()),
             ("require_via", self.require_via.is_some()),
             ("requires_key", self.requires_key.is_some()),
             ("base", self.base.is_some()),
@@ -4375,7 +4413,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 54] {
+    fn columns(&self) -> [(&'static str, bool); 55] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -4405,6 +4443,7 @@ impl Rule {
             ("check", self.check.is_some()),
             ("fix", self.fix.is_some()),
             ("contains", self.contains.is_some()),
+            ("unless_contains", self.unless_contains.is_some()),
             ("require_via", self.require_via.is_some()),
             ("requires_key", self.requires_key.is_some()),
             ("reason", self.reason.is_some()),
@@ -13605,6 +13644,7 @@ mod tests {
             max_age: None,
             requires_field: None,
             contains: None,
+            unless_contains: None,
             require_via: None,
             requires_key: None,
             reason: None,
