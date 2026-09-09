@@ -800,30 +800,48 @@ fn the_probing_program_is_not_what_decides_a_task_output_poll() {
 }
 
 #[test]
-fn a_wait_on_a_local_file_that_is_not_a_task_output_is_clean() {
-    // THE OTHER HALF OF THE ANTI-VACUITY PAIR, and the one that keeps this arm
-    // from becoming "no backgrounded loop may read a file". A file another
-    // machine writes is exactly the condition `waits_on_condition` exists to
-    // permit, and it is a local read like any other — what disqualifies the task
-    // output is that the harness already reports it, not that it is on disk.
+fn a_wait_on_a_local_file_that_is_not_a_task_output_is_not_a_task_watch() {
+    // THE OTHER HALF OF THE ANTI-VACUITY PAIR, re-pointed rather than dropped
+    // (CLOUD-1337). It used to assert this call was CLEAN, on the reading that a
+    // file another machine writes is a condition the harness does not report.
+    // Withdrawing the exemption makes the call refused — but by which arm still
+    // matters, and that is what this case now pins: a shared file is not a task
+    // output, so `polls-a-local-process` must stay silent and `background-timer`
+    // must answer. Without it, folding the two arms into one would pass every
+    // case above while losing the count that makes the narrower one worth having.
     let root = fixture("waits-on-a-shared-file");
-    allowed_background(
+    let (deny, text) = hook_background(
         &root,
         "until grep -q ready /mnt/shared/deploy.status; do sleep 30; done",
         true,
     );
+    assert!(deny, "{text}");
+    assert!(text.contains("timer run refused"), "{text}");
+    assert!(
+        !text.contains("task watch duplicate"),
+        "a shared file is not a task output: {text}"
+    );
 }
 
 #[test]
-fn a_wait_on_a_condition_nobody_reports_is_clean() {
-    // THE ANTI-VACUITY MIRROR. Without it every case above is satisfied by a rule
-    // that refuses all waits — and this form is what `timer run refused`'s own
-    // route still recommends for a condition the harness does not report.
+fn a_wait_on_a_condition_nobody_reports_is_a_timer_not_a_task_watch() {
+    // THE ANTI-VACUITY MIRROR, on the same re-pointing (CLOUD-1337). A remote
+    // readiness probe was the last shape left allowed, on the argument that the
+    // harness cannot report it. It cannot — and the poll is still a wake-up the
+    // session performs by hand every five seconds, so the answer is a refusal
+    // under `background-timer`. What stays pinned is that the arms partition:
+    // exactly one of them answers, and it is not the process-poll one.
     let root = fixture("waits-on-a-remote");
-    allowed_background(
+    let (deny, text) = hook_background(
         &root,
         "until curl -sf https://example.test/ready; do sleep 5; done",
         true,
+    );
+    assert!(deny, "{text}");
+    assert!(text.contains("timer run refused"), "{text}");
+    assert!(
+        !text.contains("task watch duplicate"),
+        "a remote probe reads no local process: {text}"
     );
 }
 

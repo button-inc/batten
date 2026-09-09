@@ -3018,6 +3018,80 @@ fi
 echo "lock-check: mise.lock is complete and current"
 '''
 
+# ONE TURN'S CROSS-TRIPLE TYPE-CHECK, DETACHED (CLOUD-1731).
+#
+# `cross-check` runs in exactly one place — inside `verify` — so "this does not
+# compile on Windows" is learned at the cadence of the whole gate, which in
+# practice means after the author has moved on. `rules/rust.md` states the cost
+# in its own words ("the next edit to the other one is discovered by CI") and
+# CLOUD-1148 is the recorded instance: the `windows` job reddening alone, and the
+# first fix making it worse.
+#
+# AFFORDABLE BECAUSE OF THE RECEIPT, measured 2026-09-09 rather than assumed:
+# a re-run whose inputs, command and toolchain are unchanged answers from
+# `step-receipt.sh` in **1.0s**; a run that must re-derive takes 54s cold. So the
+# per-turn cost is a second on every turn that changed no Rust, and 54s on the
+# turns that changed some — which are the turns that need it.
+#
+# DETACHED, BECAUSE A HANDLER THAT WAITS IS A HANDLER THAT TAXES EVERY TURN. The
+# verdict is not needed before the turn proceeds; it is needed before the author
+# stops thinking about the change, which is a much weaker deadline. `verify`
+# remains the blocking authority and this never substitutes for it.
+#
+# THE FAILURE IS REPORTED ON THE NEXT TURN AND SUCCESS IS SILENT. A log nobody
+# reads is sensor-only (non-negotiable rule 2), so the marker file is what turns
+# this from a log into a mechanism: the next invocation prints it and clears it.
+# Success says nothing, because a line on every turn is noise that trains the
+# reader to skip the one turn it matters.
+#
+# THE PATTERN TOLERATES COLOUR RATHER THAN SUPPRESSING IT, and that is the third
+# draft of this line. `[env]` sets `CARGO_TERM_COLOR = "always"` repo-wide, so a
+# machine-read log carries escapes between `: ` and `error`: the first draft
+# scraped `-->` and got nothing, the second matched `: error` and got nothing,
+# and the third set `CARGO_TERM_COLOR=never` on the invocation — which ALSO got
+# nothing, because a task's own environment beats a value inherited from the
+# caller. Three silent failures, each announcing a break with no pointer.
+#
+# So the pattern anchors on the SHAPE `--message-format=short` guarantees —
+# `path:line:col: ` — and lets `.*` span whatever decoration sits after it. It
+# needs no escape literal, survives either colour setting, and excludes the
+# trailing `error: could not compile` summaries, which carry no location and
+# would have spent the cap on nothing.
+#
+# BOUNDED AT FIVE LINES, AND BOUNDED IS NOT THE SAME AS USEFUL. The first draft
+# emitted one fixed sentence, which is cheap and costs the reader a whole turn
+# re-running the check to learn what broke — bounded and useless is its own
+# waste. What it emits instead is the first THREE `path:line` pointers and a
+# path to the rest: actionable enough to fix without a second run, and
+# pointer-only per non-negotiable rule 4, since a compiler's full output is the
+# payload and these are the pointer. The window cost of a failing turn is five
+# lines; of a passing turn, zero.
+#
+# `[hook_output] max_repeats = 1` IS SATISFIED BY THE CLEAR, not by luck: the
+# marker is removed once printed, so one failure is announced once rather than
+# on every turn until it is fixed — which is what would otherwise trip that
+# ceiling and, worse, train the reader to skip the line.
+#
+# ON STDOUT, AND THAT IS THE WHOLE DIFFERENCE BETWEEN AN ALARM AND A LOG.
+# `handler.rs` states the contract: "Exit `0` with stdout: advisory text, to be
+# merged into Batten's own" — so stdout is what reaches the AGENT and stderr is
+# what reaches a log nobody opens. The first draft of this line wrote the marker
+# to stderr, which would have printed the failure, cleared it, and shown it to
+# no one: a sensor wearing an alarm's clothes, one layer inside the rule against
+# exactly that. Caught in review before it landed.
+#
+# ONE LINE JOINED BY `;` RATHER THAN A `"""` BODY, for `deps-install`'s reason:
+# `inline-task-bodies-not-growing-basic` is `non_increasing` against
+# `origin/main` with no `admits_with`, so a new block body is refused and the
+# only routes are extraction or a waiver. Neither is worth spending here.
+#
+# `batten singleton` RATHER THAN A PROCESS PROBE: the lock is the declared
+# mechanism for "may a second copy start in this clone", and polling the process
+# table for one is the shape `polls-a-local-process` refuses.
+[tasks."cross-turn"]
+description = "One turn's cross-triple type-check, detached — reports the previous run's failure and never blocks the turn"
+run = "f=target/cross-turn.fail; if [ -f $f ]; then cat $f; rm -f $f; fi; if batten singleton acquire cross-turn $$ >/dev/null 2>&1; then (mise run cross-check >target/cross-turn.log 2>&1 || { echo '::error:: cross-turn: a declared target did not type-check'; grep -E '^[^ :]+:[0-9]+:[0-9]+: .*error' target/cross-turn.log | head -3 | sed 's/^/  /'; echo '  (full output: target/cross-turn.log)'; } >$f; batten singleton release cross-turn >/dev/null 2>&1) & fi; exit 0"
+
 [tasks.cross-check]
 description = "Type-check for other targets from Linux (no macOS runner needed)"
 # The `rustup target add` below is not idempotent against a half-installed
@@ -3063,7 +3137,13 @@ for t in x86_64-pc-windows-gnu; do
   #
   # It cannot red on a third-party warning: cargo compiles registry dependencies
   # with `--cap-lints allow`, so only workspace code is held to this.
-  if ! RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --target "$t"; then
+  # `--message-format=short` is the compiler doing the reduction instead of a
+  # grep guessing at it: one `path:line:col: error: …` per diagnostic, no span
+  # art and no `-->` lines belonging to notes and helps. Nothing parses this
+  # task's stdout — the loop reads the exit status — so the format is free to be
+  # the useful one, and `cross-turn` extracts pointers from it without having to
+  # tell an error's span from a note's (CLOUD-1731).
+  if ! RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --target "$t" --message-format=short; then
     echo "::error:: cross-check: $t does not type-check cleanly (warnings are denied here — see CLOUD-397)." >&2
     exit 1
   fi
@@ -4092,12 +4172,64 @@ echo "verify: fast-forward-green — rebased on latest main, ci + cross + commit
 
 [tasks.commit-msg]
 description = "Gate: one pending commit message's subject follows the convention (policy: [commit] in batten.toml)"
-# `cargo run` for the same reason `batten-check` and `commit-attribution` use it:
-# the gate must judge the working tree's engine and config as the pair that ships.
+# THE BINARY ON PATH FIRST, AND `cargo run` ONLY WHERE THERE IS NONE — CLOUD-1620's
+# shape, applied to the path that pays it most (CLOUD-1397).
+#
+# A GIT HOOK IS A BATTEN HOOK, and is held to the same published ceiling. README's
+# `wired` row is 8.0ms p50 against a ≤100ms budget, and `perf-assert` enforces it
+# on the mediated surface; nothing argues the commit-msg surface is exempt just
+# because git is the harness rather than Claude Code.
+#
+# MEASURED 2026-09-09 on this container, same message, warm, three runs: this
+# task as the hook fired it, 582ms; `cargo run --quiet` with NOTHING to rebuild
+# 291ms; `target/debug/batten` 176ms; the release binary 125ms; and 8687ms on the
+# first commit after touching one `crates/batten/src` file.
+#
+# A FIRST PASS AT THESE NUMBERS READ 12ms FOR THE RELEASE BINARY AND IT WAS A
+# MEASUREMENT OF A FAILURE. `target/release/batten` was 0.0.155 against a tree at
+# 0.0.158 and REFUSED `batten.toml` outright — "vocabulary `action`: `fix` is
+# declared and no class or route name spends it" — so the 12ms was a config load
+# aborting, not a gate reaching a verdict. Rebuilt, the same call is 125ms. A
+# timing taken over a non-zero exit is not a timing of the work, and a stale
+# binary is exactly the shape that produces one (CLOUD-1688).
+#
+# A HOOK MUST NEVER COMPILE, and this is not a preference. Rebuilding that stale
+# release binary took ~4 minutes on this container (15:48 -> 15:52, `lto = "thin"`
+# in `[profile.release]`), so a hook that rebuilds when it finds a stale binary
+# would spend four minutes at the moment an author saves. The 8687ms debug case is
+# the same defect an order of magnitude cheaper: a hook running the compiler is
+# not a slow gate, it is a different program. The build belongs at provisioning,
+# where `session:batten` already puts it. The
+# `_.path` entry above already resolves a bare `batten` to THIS checkout's
+# `target/release`, built by `session:batten` -> `install:local` at session start
+# with an `::error::` when it cannot be — so the fast branch is the tree's own
+# engine, not a stale installed one, and the property the previous comment claimed
+# for `cargo run` ("judge the working tree's engine and config as the pair that
+# ships") is kept rather than traded.
+#
+# THE CONDITION TESTS PRESENCE AND NOTHING ELSE, which is where `attribution
+# identity`'s spelling must not be copied. That one reads
+# `if command -v batten && batten <verb>; then :; else cargo run …` and its own
+# comment claims `if`/`else` avoids the fallthrough that `a && b || c` has — but
+# those two are the same program: a binary that EXISTS and legitimately REFUSES
+# takes the else branch either way, so the shape it warns about is the shape it
+# ships. Harmless for a write that wants a retry; wrong for a gate, which would
+# then pay the build precisely when it refuses and run the whole judgement twice
+# to reach the same verdict. A gate that is slowest exactly when it says no is a
+# gate authors learn to stop running.
+#
+# So the verdict is not in the condition. Resolve, then run once, and let the
+# exit code be the gate's own.
+#
+# The fallback is what keeps a runner green: CI has no installed binary and
+# `bash: line 25: batten: command not found` is a measured failure there
+# (`auto-bot-land.yml:305-310`), so the branch that builds stays for the host that
+# needs it and never runs where a human is waiting.
+#
 # The pattern itself is `batten.toml`'s, not this file's — a rule about what a
 # commit may BE is the engine's, and `mise.toml` configures how tools run
 # (CLOUD-701).
-run = 'cargo run --quiet -p batten -- commit check --message "{{arg(name="file")}}"'
+run = 'if command -v batten >/dev/null 2>&1; then batten commit check --message "{{arg(name="file")}}"; else cargo run --quiet -p batten -- commit check --message "{{arg(name="file")}}"; fi'
 
 [tasks.commit-attribution]
 description = "Gate: no vendor authorship, branding or session links in BASE_SHA..HEAD_SHA (policy: [attribution] in batten.toml)"
@@ -4110,7 +4242,12 @@ description = "Gate: no vendor authorship, branding or session links in one pend
 # The commit-msg-hook half. Same policy and same engine as `commit-attribution`;
 # only the object differs — a message on disk plus the identity `git var` says
 # git is about to stamp, rather than commits that already exist.
-run = 'cargo run --quiet -p batten -- attribution check --message "{{arg(name="file")}}"'
+#
+# Resolve-then-run, for `commit-msg`'s reasons above and its measurements: these
+# two are the pair that fires on EVERY commit, so the 582ms each was paying was
+# the whole per-commit tax, and the 8687ms first-commit-after-an-edit case was a
+# git hook running the compiler twice over.
+run = 'if command -v batten >/dev/null 2>&1; then batten attribution check --message "{{arg(name="file")}}"; else cargo run --quiet -p batten -- attribution check --message "{{arg(name="file")}}"; fi'
 
 [tasks.attribution-identity]
 description = "Write: set this clone's repo-local git identity when it is unset or carries a denied vendor identity"
