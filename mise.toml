@@ -2937,6 +2937,14 @@ echo "lock-check: mise.lock is complete and current"
 # Success says nothing, because a line on every turn is noise that trains the
 # reader to skip the one turn it matters.
 #
+# ON STDOUT, AND THAT IS THE WHOLE DIFFERENCE BETWEEN AN ALARM AND A LOG.
+# `handler.rs` states the contract: "Exit `0` with stdout: advisory text, to be
+# merged into Batten's own" — so stdout is what reaches the AGENT and stderr is
+# what reaches a log nobody opens. The first draft of this line wrote the marker
+# to stderr, which would have printed the failure, cleared it, and shown it to
+# no one: a sensor wearing an alarm's clothes, one layer inside the rule against
+# exactly that. Caught in review before it landed.
+#
 # ONE LINE JOINED BY `;` RATHER THAN A `"""` BODY, for `deps-install`'s reason:
 # `inline-task-bodies-not-growing-basic` is `non_increasing` against
 # `origin/main` with no `admits_with`, so a new block body is refused and the
@@ -2947,7 +2955,7 @@ echo "lock-check: mise.lock is complete and current"
 # table for one is the shape `polls-a-local-process` refuses.
 [tasks."cross-turn"]
 description = "One turn's cross-triple type-check, detached — reports the previous run's failure and never blocks the turn"
-run = "f=target/cross-turn.fail; if [ -f $f ]; then cat $f >&2; rm -f $f; fi; if batten singleton acquire cross-turn $$ >/dev/null 2>&1; then (mise run cross-check >target/cross-turn.log 2>&1 || echo '::error:: cross-turn: a declared target did not type-check — run `mise run cross-check` for the pointers' >$f; batten singleton release cross-turn >/dev/null 2>&1) & fi; exit 0"
+run = "f=target/cross-turn.fail; if [ -f $f ]; then cat $f; rm -f $f; fi; if batten singleton acquire cross-turn $$ >/dev/null 2>&1; then (mise run cross-check >target/cross-turn.log 2>&1 || echo '::error:: cross-turn: a declared target did not type-check — run `mise run cross-check` for the pointers' >$f; batten singleton release cross-turn >/dev/null 2>&1) & fi; exit 0"
 
 [tasks.cross-check]
 description = "Type-check for other targets from Linux (no macOS runner needed)"
