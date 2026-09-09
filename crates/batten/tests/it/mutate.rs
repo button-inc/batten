@@ -237,6 +237,58 @@ fn census(root: &Path, gates: &str) -> (i32, String, String) {
 // The sweep's decision table.
 // ---------------------------------------------------------------------------
 
+/// ANTI-VACUITY FOR THE SWEEP'S OWN WATCHDOG (CLOUD-1726).
+///
+/// The bound moved out of `BATS_TEST_TIMEOUT` and into the sweep, because the
+/// runner implements its bound as a `sleep N` child it does not reap on a
+/// FAILING case — and a caught mutation is a failing case, so every row the
+/// sweep got right waited the bound out. Unsetting it took this module from
+/// 92.6s to 2.4s.
+///
+/// That is only safe while something still ends a suite that genuinely hangs,
+/// which is what a mutation sweep must survive by construction: a mutant can
+/// make a gate loop forever. Without this case the removal is indistinguishable
+/// from having no bound at all, and the first hanging mutant would block a sweep
+/// until somebody noticed.
+#[cfg(unix)]
+#[test]
+fn a_suite_that_hangs_is_ended_by_the_sweeps_own_bound() {
+    let root = toy("hangs");
+    let mut gate = String::from(TOY_GATE);
+    gate.push_str(CAUGHT);
+    gate.push('\n');
+    write_program(&root, "mise-tasks/toy.sh", &gate);
+    // The case never returns on its own. `read` on a closed stdin would, so the
+    // wait has to be one nothing external can satisfy.
+    write(
+        &root,
+        "tests/toy.bats",
+        "#!/usr/bin/env bats\n@test \"over the limit is refused\" {\n\tsleep 3600\n}\n@test \"under the limit passes\" {\n\ttrue\n}\n",
+    );
+    track(&root);
+    lend_bats(&root);
+
+    let started = std::time::Instant::now();
+    let answer = common::batten()
+        .args(["mutate", "sweep"])
+        .current_dir(&root)
+        .env("MUTANT_GATES", "toy")
+        .env("BATTEN_MUTATE_SUITE_TIMEOUT", "2")
+        .output()
+        .expect("run batten mutate");
+    let waited = started.elapsed();
+
+    assert!(
+        waited < std::time::Duration::from_secs(60),
+        "the sweep waited {waited:?} on a suite that never returns, so the bound \
+         did not fire and a hanging mutant would hold it forever"
+    );
+    // The verdict itself is deliberately not asserted: what a killed suite
+    // reports is the sweep's business and is covered by the decision table
+    // above. This case asserts only that the sweep CAME BACK.
+    let _ = answer.status.code();
+}
+
 #[cfg(unix)]
 #[test]
 fn a_mutation_its_suite_catches_is_a_pass() {

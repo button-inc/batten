@@ -88,6 +88,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
@@ -862,15 +863,155 @@ fn spawn(dir: &Path, program: &str, args: &[String], env: &[(String, String)]) -
     // reported "every one caught". Nothing here feeds a suite from stdin, and
     // closing it is what keeps that true if anything ever does.
     command.stdin(std::process::Stdio::null());
-    let answer = command
-        .output()
+    // OUR OWN WATCHDOG, BECAUSE THE RUNNER'S CHARGES FOR EVERY RED CASE
+    // (CLOUD-1726, and this closes the question that row left open).
+    //
+    // The earlier reading blamed `.output()` reading two pipes to EOF while
+    // bats' watchdog subshell still held them. That is wrong, and the
+    // measurement that settles it does not involve this process at all — bats
+    // invoked straight from a shell, output to `/dev/null`, stdin closed, the
+    // same lent runner and the same `run` helper:
+    //
+    // | case | bound 3 | bound 6 |
+    // | ---- | ------- | ------- |
+    // | passing | 0.086s | 0.084s |
+    // | FAILING | 3.086s | 6.092s |
+    //
+    // The discriminator is the case's VERDICT, not the capture. `bats-exec-test`
+    // aborts its countdown on a normal finish and does not on a failing one, so
+    // the bound is paid in full by exactly the outcome a mutation sweep exists
+    // to produce: a caught mutation IS a red case. Every row this sweep gets
+    // right was buying the whole watchdog, which is why the cost read as linear
+    // in the bound and why unsetting it looked like a fix.
+    //
+    // So the bound moves here and `BATS_TEST_TIMEOUT` goes. The requirement is
+    // unchanged and is the reason a bound has to exist at all — a mutant that
+    // hangs is precisely what a sweep must survive — but a watchdog that only
+    // fires on a hang costs nothing on the rows that pass.
+    //
+    // THE GROUP, NOT THE CHILD. A suite forks: bats runs `bats-exec-suite`,
+    // which runs `bats-exec-test`, which runs the case. Signalling the direct
+    // child leaves the rest orphaned and still holding the staged tree, so the
+    // child leads its own group and the group is what is signalled — the same
+    // primitive and the same reasoning as `exec.rs`'s reaper.
+    // UNSET, NOT SET SMALL, AND THE DIFFERENCE IS THE WHOLE DEFECT. `bats-exec-test`
+    // implements `BATS_TEST_TIMEOUT` as a literal `sleep N` child that it does not
+    // reap on a FAILING case — observed directly, `sleep 300` still running under a
+    // `bats-exec-test` reparented to init while `bats` itself waited on it. A caught
+    // mutation is a failing case, so every row this sweep gets right waited out the
+    // whole bound.
+    //
+    // The 300 is the CONSUMER's, exported from their task runner's environment block
+    // for their own suite, and an exported variable reaches every descendant — so it
+    // arrived here uninvited. Removing this entry from `suite_env` is therefore not
+    // enough: absent an explicit removal the child inherits the ambient value, which
+    // is how a "no bound" reading still cost 300s. It has to be unset on the command.
+    command.env_remove("BATS_TEST_TIMEOUT");
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    // FILES RATHER THAN PIPES, because nothing reads them until the child is
+    // gone. A pipe holds 64 KiB and then blocks its writer, so a chatty failure
+    // would deadlock against a reader that is waiting for the exit — the one
+    // hazard `.output()` avoided by reading both pipes concurrently. A file has
+    // no such bound, and the watchdog above is what makes waiting-then-reading
+    // safe rather than merely tidy.
+    let capture = std::env::temp_dir().join(format!(
+        "batten-mutate-{}-{}",
+        std::process::id(),
+        CAPTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&capture).with_context(|| {
+        format!(
+            "mutate: could not create the capture directory {}",
+            capture.display()
+        )
+    })?;
+    let out_path = capture.join("stdout");
+    let err_path = capture.join("stderr");
+    command.stdout(std::process::Stdio::from(
+        fs::File::create(&out_path)
+            .with_context(|| format!("mutate: could not open {}", out_path.display()))?,
+    ));
+    command.stderr(std::process::Stdio::from(
+        fs::File::create(&err_path)
+            .with_context(|| format!("mutate: could not open {}", err_path.display()))?,
+    ));
+    let mut child = command
+        .spawn()
         .with_context(|| format!("mutate: could not run {program}"))?;
-    let mut output = String::from_utf8_lossy(&answer.stdout).into_owned();
-    output.push_str(&String::from_utf8_lossy(&answer.stderr));
+    let bound = suite_bound();
+    let deadline = std::time::Instant::now() + bound;
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("mutate: could not wait for {program}"))?
+        {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            reap(&mut child);
+            break child
+                .wait()
+                .with_context(|| format!("mutate: could not reap {program}"))?;
+        }
+        // A poll rather than a signal handler: the wait is bounded, the interval
+        // is far below any bound worth setting, and a handler here would race
+        // the reaper `exec.rs` already installs for the whole process.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let mut output = fs::read_to_string(&out_path).unwrap_or_default();
+    output.push_str(&fs::read_to_string(&err_path).unwrap_or_default());
+    // Best effort: a capture left behind is a few bytes under the system temp
+    // directory, and failing a sweep over housekeeping would trade a real
+    // verdict for tidiness.
+    let _ = fs::remove_dir_all(&capture);
     Ok(Ran {
-        ok: answer.status.success(),
+        ok: status.success(),
         output,
     })
+}
+
+/// Distinguishes concurrent captures within one process; the pid separates
+/// processes. A counter rather than a random name, so a leftover directory names
+/// the call that made it.
+static CAPTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How long a suite may run before the sweep stops waiting for it.
+///
+/// Small because the subject is one filtered case over a staged toy tree rather
+/// than a repository's whole suite. Overridable, because a consumer whose gate
+/// suite is genuinely slower needs a way up that is not editing the engine; the
+/// name is batten's own so it cannot collide with the `BATS_*` namespace the
+/// runner owns.
+fn suite_bound() -> std::time::Duration {
+    std::time::Duration::from_secs(
+        std::env::var("BATTEN_MUTATE_SUITE_TIMEOUT")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|seconds| *seconds > 0)
+            .unwrap_or(30),
+    )
+}
+
+/// Kill the group the child leads, best effort.
+///
+/// Best effort is the honest contract, for `exec.rs`'s stated reason: the group
+/// may already have gone, which is the outcome being asked for, and `ESRCH` on
+/// the way out is not a failure anyone can act on.
+#[cfg(unix)]
+fn reap(child: &mut std::process::Child) {
+    if let Some(pid) = rustix::process::Pid::from_raw(i32::try_from(child.id()).unwrap_or_default())
+    {
+        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+    }
+    // The leader itself, in case the group call could not reach it.
+    let _ = child.kill();
+}
+
+/// Off unix there is no group to signal, so the leader is all there is.
+#[cfg(not(unix))]
+fn reap(child: &mut std::process::Child) {
+    let _ = child.kill();
 }
 
 // ---------------------------------------------------------------------------
@@ -926,52 +1067,12 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
             String::from("BATTEN_TEST_SCRATCH_LANE"),
             String::from("mutate"),
         ),
-        // THE SWEEP OWNS ITS OWN SUITE BOUND, AND INHERITING THE CONSUMER'S COST
-        // ~490s OF EVERY `verify` (CLOUD-1726).
-        //
-        // A consumer sets a bats timeout for THEIR suite — this repository's is
-        // 300s, exported from its task runner's environment block, chosen because
-        // a real case once sat at 0% CPU for forty minutes holding the landing
-        // lease. An exported environment reaches every descendant process, so it
-        // also reached the toy repositories a sweep builds:
-        // three files, one filtered case, and a 300-second watchdog.
-        //
-        // AND THE SWEEP WAITS OUT THE WHOLE BOUND EVEN WHEN THE CASE PASSES.
-        // Measured on `mutate::the_tree_is_restored_between_rows`, which runs two
-        // bats suites, so the cost is twice the bound every time:
-        //
-        // | bound | case |
-        // | ----- | ---- |
-        // | 300s  | 600.481s |
-        // | 5s    | 10.664s |
-        // | unset | 0.480s |
-        //
-        // Exactly linear, and 1250x between the ends. `bats-exec-test` aborts its
-        // countdown on a normal finish and closes fds 0-255 on the watchdog
-        // subshell precisely so a passing test cannot wait for it — and a plain
-        // capture of the same bats invocation returns in ~140ms, so those
-        // protections do work. Under `spawn`'s `.output()`, which reads stdout and
-        // stderr to EOF on two separate pipes, they do not. Why is CLOUD-1726's
-        // remaining question and it does not block this: whatever holds the
-        // descriptor, the consumer's number was never the right bound here.
-        //
-        // A BOUND, NOT ITS REMOVAL. Unsetting is the fastest column above and the
-        // wrong fix: a mutant that hangs is exactly what a mutation sweep must
-        // survive, and with no watchdog `.output()` would block forever. So the
-        // sweep declares its own, small because its subject is one filtered case
-        // over a staged toy tree rather than a repository's whole suite.
-        //
-        // OVERRIDABLE, because a consumer whose gate suite is genuinely slower
-        // needs a way up that is not editing the engine. Read from the
-        // environment under a batten-owned name so it cannot collide with the
-        // `BATS_*` namespace the runner owns.
-        (
-            String::from("BATS_TEST_TIMEOUT"),
-            std::env::var("BATTEN_MUTATE_SUITE_TIMEOUT")
-                .ok()
-                .filter(|value| value.parse::<u64>().is_ok_and(|seconds| seconds > 0))
-                .unwrap_or_else(|| String::from("30")),
-        ),
+        // NO `BATS_TEST_TIMEOUT`, AND THAT IS THE POINT OF CLOUD-1726'S FIX.
+        // The runner's watchdog is not cancelled on a FAILING case, and a caught
+        // mutation is a failing case — so the consumer's bound was paid in full
+        // by every row this sweep gets right. The bound now lives in `spawn`,
+        // where it fires on a hang and costs nothing on a verdict; the evidence
+        // is the table there.
     ]
 }
 
