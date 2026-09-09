@@ -4794,13 +4794,29 @@ fn run_wiring_reclaim(
     // by the time a session handler runs, the harness has persisted its own
     // state over that file and there are no registrations left to derive a
     // script path from.
-    let declared = resolve::resolve(hook_authority_root(), overrides)
-        .ok()
-        .and_then(|resolved| resolved.wiring)
+    //
+    // AND A CONFIG THAT WILL NOT LOAD REFUSES HERE, where `doctor hooks` fails
+    // open on the same read. The asymmetry is the verb: a diagnosis over an
+    // unreadable authority is better than a refusal the caller cannot act on,
+    // but a REPAIR that cannot read its own row list and reports success has
+    // told the operator the scripts were handled when nothing looked at them.
+    // Measured while writing this: with the error swallowed, a `path` outside
+    // `$HOME` — the one thing the validator exists to refuse — produced
+    // `removed 0 … across 0 surfaces read` and exit 0.
+    let declared = resolve::resolve(hook_authority_root(), overrides)?
+        .wiring
         .unwrap_or_default();
     let disarmed = wiring::disarm(strategy.home_dir(), &declared.disarm, dry_run)?;
     if !declared.disarm.is_empty() {
-        let verb = if dry_run { "would disarm" } else { "disarmed" };
+        // The registration pass's own label rule, and it has to be this one: the
+        // posture gate can downgrade this pass to a dry run on its own, so a
+        // label taken from the caller's flags alone would report "disarmed" over
+        // a conservative run that deliberately wrote nothing.
+        let verb = if dry_run || !disarmed.authoritative {
+            "would disarm"
+        } else {
+            "disarmed"
+        };
         output::message(
             mode,
             output::Verbosity::Normal,
