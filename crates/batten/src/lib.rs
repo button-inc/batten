@@ -12,6 +12,7 @@ pub mod action;
 pub mod admission;
 pub mod advisory;
 pub mod agent;
+pub mod arm;
 pub mod attribution;
 pub mod baseline;
 pub mod bot;
