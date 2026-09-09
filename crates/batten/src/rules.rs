@@ -6846,9 +6846,41 @@ fn run(
     // engine emitted first — a function of the walk, which is already sorted.
     dedup_scoped(&mut scan.findings);
     // Sort by the pointer tuple so identical input yields identical output.
-    scan.findings.sort_by(|a, b| {
-        (a.path.as_str(), a.line, a.rule.as_str()).cmp(&(b.path.as_str(), b.line, b.rule.as_str()))
-    });
+    //
+    // THE KEY IS TOTAL, AND THE THREE-FIELD VERSION WAS NOT. `sort_by` is
+    // stable, so any two findings the comparator called equal kept the order they
+    // were PUSHED in — which made byte-stability (house style §6, the property
+    // this sort exists to establish) rest on emission order rather than on the
+    // comparator.
+    //
+    // THE EQUAL CASE IS REACHABLE, not theoretical: a `policy` rule's
+    // [`Finding::rule`] is the PREDICATE id and [`Finding::owner`] the row id, so
+    // two predicates of one bundle reporting the same line agree on all three
+    // fields the old key read and differ only in fields it did not.
+    //
+    // `owner` and `identity` close it. `StoredIdentity` already derives `Ord` —
+    // it keys the `BTreeSet` in `dedup_scoped` — and is unique per finding by
+    // construction, so the order is a function of the SET rather than of the walk
+    // that produced it.
+    fn order_key(
+        finding: &Finding,
+    ) -> (
+        &str,
+        Option<usize>,
+        &str,
+        &Option<String>,
+        &crate::identity::StoredIdentity,
+    ) {
+        (
+            finding.path.as_str(),
+            finding.line,
+            finding.rule.as_str(),
+            &finding.owner,
+            &finding.identity,
+        )
+    }
+    scan.findings
+        .sort_by(|a, b| order_key(a).cmp(&order_key(b)));
     scan.requested = requested_sinks(rules, &scan);
     Ok(scan)
 }
