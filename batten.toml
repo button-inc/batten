@@ -1702,6 +1702,25 @@ regex = '^[A-Za-z_][A-Za-z0-9_]*'
 id = "git-object-id"
 regex = '^[0-9a-f]{40}$'
 
+# The two spellings a registry credential takes in a workflow. The
+# alternate-registry form carries the registry's own name in its middle segment,
+# so it is matched on its shape rather than enumerated.
+[[pattern]]
+id = "cargo-registry-token"
+regex = 'CARGO_REGISTRY_TOKEN|CARGO_REGISTRIES_[A-Z0-9_]*_TOKEN'
+
+# A login call, bounded on both sides so a word merely containing it does not
+# fire.
+[[pattern]]
+id = "cargo-login-call"
+regex = '(^|[^A-Za-z0-9_-])cargo login([^A-Za-z0-9_-]|$)'
+
+# The OIDC permission as a KEY, so the phrase in a comment cannot satisfy the
+# implication it discharges.
+[[pattern]]
+id = "oidc-token-permission"
+regex = '^[[:space:]]+id-token:[[:space:]]*write[[:space:]]*(#.*)?$'
+
 [[pattern]]
 id = "release-tag"
 regex = '^v[0-9]+\.[0-9]+\.[0-9]+$'
@@ -7089,6 +7108,22 @@ severity = "deny"
 # draft gets, for the same reason). ABSENT IS NOT PASSING for the first two —
 # their defaults are the values this refuses — and the scanner is the inverse,
 # since its default is already enabled.
+# CLOUD-109, ported from `mise-tasks/publish-credential-check.sh` under CLOUD-843.
+# The load-bearing rule is the IMPLICATION, not the literal: while publishing is
+# off the OIDC permission is not required, and requiring it would be requiring a
+# capability no step uses. The moment publishing becomes true this refuses the
+# commit unless the release job carries it — so publishing cannot be switched on
+# except through OIDC, in the same commit that switches it. An absent `publish`
+# key is NOT false: the release tool's own default is to publish, so a config that
+# says nothing publishes.
+[[rule]]
+id = "publish-credential"
+kind = "policy"
+scope = "tree"
+line_sources = ["release-plz.toml", ".github/workflows/*.yml"]
+module = "policy/publish-credential.rego"
+severity = "deny"
+
 [[rule]]
 id = "coderabbit-config"
 kind = "policy"
@@ -13434,6 +13469,30 @@ id = "config state wrong"
 gloss = "a review-config key is set to the value that switches the lifecycle off"
 class = """
 Flipping one of these back is a one-line diff whose symptom is SILENCE: reviews stop happening, which looks exactly like nobody having pushed, and the gate that consumes the review then refuses every pull request for want of an answer the config quietly stopped producing. The visible failure would be the gate rather than the cause. Restore the value, or accept the consequence deliberately and record it.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "grant carry unsafe"
+gloss = "a workflow can reach a long-lived registry credential"
+class = """
+A credential stored as a secret is the thing trusted publishing exists to retire, and it reaches every job that can read the secret rather than the one step that needs it. Remove the reference and authenticate through OIDC in the same change; a finding here names a key class and a line, never the matched text, because the class of thing being looked for is the class that must not reach a log.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "lane grant missing"
+gloss = "publishing is on without the credential-free way to do it"
+class = """
+The release tool will authenticate to a registry, and the only route that needs no stored credential is the OIDC permission on the job that publishes. Add it and register this repository as a trusted publisher; do not add a registry token. While publishing is off the permission is NOT required — granting it then would be a capability no step uses, which an excessive-permissions audit reads as a finding of its own.
 """
 
 [[verdict.route]]

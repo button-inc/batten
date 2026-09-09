@@ -221,6 +221,7 @@ mod process_group;
 mod prose_only;
 mod prospective_facts;
 mod provision;
+mod publish_credential;
 mod ratchet;
 mod raw_tracker_read;
 mod ready;

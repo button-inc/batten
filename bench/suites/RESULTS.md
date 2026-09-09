@@ -73,7 +73,6 @@ to it pays.
 | 1.2 | 0.3% | `tests/suite-bench-check.bats` |
 | 1.1 | 0.3% | `tests/stop-posture-check.bats` |
 | 1.1 | 0.3% | `tests/duplicate-close-check.bats` |
-| 1.1 | 0.3% | `tests/publish-credential-check.bats` |
 | 0.9 | 0.3% | `tests/branch-age-check.bats` |
 | 0.9 | 0.2% | `tests/board-payloads.bats` |
 | 0.8 | 0.2% | `tests/sonar-gate.bats` |

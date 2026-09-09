@@ -325,38 +325,6 @@ local gate = new Mapping<String, Step> {
       )
     check = "mise run install-check"
   }
-  // Publishing to a registry with a long-lived token is the thing OIDC exists to
-  // retire, and today this repository does neither — `publish = false`, and no
-  // registry secret exists (CLOUD-109). That makes the rule an implication
-  // rather than an edit: while publishing is off the OIDC permission is not
-  // required, and the commit that turns publishing ON must carry
-  // `id-token: write` or fail here. Globbed on the config that decides it and on
-  // every workflow, since a registry credential is refused wherever it appears.
-  ["publish-credential-check"] {
-    glob = List("release-plz.toml", ".github/workflows/*")
-    check = "mise run publish-credential-check"
-  }
-  // The release job publishes a tag; this is what keeps it telling Linear so
-  // (CLOUD-618). Both invocations must be present, SHA-pinned, and bound to the
-  // tag, over a checkout deep enough to carry the commit range the action reads —
-  // each of those failing produces a GREEN job and either no release record or
-  // one with no issues attached, which is why prose could not hold it. The
-  // release path must also REFRESH tags before resolving one, and that assertion
-  // is an ordering rather than a presence: the tag is pushed from a clone the
-  // runner cannot see, so a refresh placed after the resolver is the workflow
-  // that ran 32 times and recorded nothing. Wiring it here rather than as a
-  // CI-only step is what puts it in `mise run ci` -> `verify` -> CI, so
-  // `ci-parity`'s "every task CI runs is one `verify` runs" keeps holding.
-  //
-  // Globbed on BOTH workflows it judges as well as the script that decides, for
-  // the reason the timeout budget below states: a gate that does not re-run when
-  // its subject is edited stops running for exactly the commits it exists to
-  // judge. `linear-release-backfill.yml` is the second subject — the operator
-  // path that records a tag which shipped before the recording worked — and it
-  // needs its own trigger here or it would be judged only when the release path
-  // happened to change. The batten.toml row's glob names only the script — that
-  // one is the rule's subject, and `glob-containment` must be able to prove it
-  // covered.
   ["release-tracking-check"] {
     glob =
       List(
