@@ -88,6 +88,15 @@
       }
     ]
   },
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Button lifecycle commands are normal work in this repository and are allowed, including inside compounds and with heredocs: `mise run <task>`, `mise exec -- cargo ...`, `cargo` directly, `hk check`, and `batten <verb>` — among them `override request`/`override spend`, `claim check`, `check`, `enforce`, `policy`, `config`, `receipt`, `commit check`, `attribution check` and `mutate`.",
+      "Writing a commit message or an admission answer to the session scratchpad (python3/cat/printf into a heredoc or file) and then feeding it to `git commit -F <file>` or `batten override request < <file>` is the DECLARED route for those gates, not an attempt to evade one: `run-shape`'s `commit write missing` and `commit bind missing` refuse every other spelling.",
+      "A compound that combines a scratch-file write with `git add` and `git commit`, or that chains a `batten`/`mise` gate with the command it gates, is one lifecycle step rather than unrelated actions.",
+      "`git commit` and `git push` to the session's own feature branch are ordinary steps here: AGENTS.md makes carrying a change through to landed-and-verified the default and the gates, not a prompt, are what stop it."
+    ]
+  },
   "permissions": {
     "allow": [
       "Edit",
@@ -104,6 +113,11 @@
       "Bash(batten:*)",
       "Bash(cp:*)",
       "Bash(mkdir:*)",
+      "Bash(cargo:*)",
+      "Bash(mise exec:*)",
+      "Bash(python3:*)",
+      "Bash(hk:*)",
+      "Bash(jq:*)",
       "mcp__serena",
       "mcp__serena__delete_memory",
       "mcp__serena__edit_memory",
