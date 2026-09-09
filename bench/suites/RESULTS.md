@@ -78,7 +78,6 @@ to it pays.
 | 0.9 | 0.2% | `tests/board-payloads.bats` |
 | 0.8 | 0.2% | `tests/sonar-gate.bats` |
 | 0.8 | 0.2% | `tests/serena-mcp.bats` |
-| 0.8 | 0.2% | `tests/digest-major-agreement.bats` |
 | 0.8 | 0.2% | `tests/nonverdict-assert.bats` |
 | 0.7 | 0.2% | `tests/connector-allow-guard.bats` |
 | 0.7 | 0.2% | `tests/transcript-corpus-check.bats` |
