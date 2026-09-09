@@ -81,6 +81,7 @@ mod claim_order;
 mod claim_race;
 mod claim_receipt;
 mod cli;
+mod coderabbit_config;
 mod commit;
 mod commit_admission;
 mod commit_arm_sequencing;

@@ -7081,6 +7081,22 @@ severity = "deny"
 # advances and no check anywhere is red. Set equality in both directions, and
 # still load-bearing with both sets empty — it is a ratchet over the next cap
 # either file gains.
+# CLOUD-860, the missing half of CLOUD-847, ported from
+# `mise-tasks/coderabbit-config-check.sh` under CLOUD-843. Three keys carry the
+# review lifecycle: the formal-review workflow (without it the forge's review
+# decision stays null), review of DRAFTS (the free phase, since every CI job here
+# is conditioned on not-a-draft), and the secret scanner (the only scanning a
+# draft gets, for the same reason). ABSENT IS NOT PASSING for the first two —
+# their defaults are the values this refuses — and the scanner is the inverse,
+# since its default is already enabled.
+[[rule]]
+id = "coderabbit-config"
+kind = "policy"
+scope = "tree"
+line_sources = [".coderabbit.yaml"]
+module = "policy/coderabbit-config.rego"
+severity = "deny"
+
 [[rule]]
 id = "cap-drift"
 kind = "policy"
@@ -13394,6 +13410,30 @@ id = "bound carry missing"
 gloss = "an upper bound exists in one of its two files and not the other"
 class = """
 A cap and the withholding rule that mirrors it are one decision written twice, and either half alone is wrong in its own way: a cap with no rule lets the bot propose a version the manifest refuses, reddening a whole grouped batch; a rule with no cap withholds a version the manifest admits, so the crate silently never advances and nothing goes red. The second is the half-lift, and it is the direction with no symptom. Add the missing half, or remove both.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "config carry empty"
+gloss = "the review config declares none of the keys the lifecycle rests on"
+class = """
+A key nobody wrote and a key someone deleted are the same file, and both leave the tool's DEFAULT in force — which is the value these rows exist to refuse. A config carrying no keys at all satisfies every assertion about a key by having nothing to judge, which is the vacuous pass this refuses first. Declare the key with its value.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "config state wrong"
+gloss = "a review-config key is set to the value that switches the lifecycle off"
+class = """
+Flipping one of these back is a one-line diff whose symptom is SILENCE: reviews stop happening, which looks exactly like nobody having pushed, and the gate that consumes the review then refuses every pull request for want of an answer the config quietly stopped producing. The visible failure would be the gate rather than the cause. Restore the value, or accept the consequence deliberately and record it.
 """
 
 [[verdict.route]]
