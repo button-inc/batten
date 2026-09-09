@@ -1,8 +1,10 @@
 # Choosing an instrument for a whole-tree question
 
 These load when you are about to ask something about the whole tree rather than
-about the file in front of you. The question decides the tool, and the three
-questions are not interchangeable.
+about the file in front of you. The question decides the tool, and the five
+questions are not interchangeable. Rows one to four choose between instruments
+that LOOK at something; row five does not, and the section after the table is
+about what its answer licenses.
 
 | the question                                                            | instrument                     |
 | ----------------------------------------------------------------------- | ------------------------------ |
