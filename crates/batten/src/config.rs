@@ -656,6 +656,17 @@ pub struct Config {
     /// (CLOUD-720). Absent means the strict default: an unreachable ref refuses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trust: Option<Trust>,
+    /// The launcher-provisioned scripts this host re-arms every spawn
+    /// (CLOUD-1704), as the authority states them. Absent means this consumer
+    /// declares none, which is every consumer without a launcher.
+    ///
+    /// Consumer-specific by nature, and that is the whole reason it is a table
+    /// rather than a constant: a script path is somebody's launcher artifact,
+    /// and non-negotiable rule 1 keeps those out of `crates/batten`. The core
+    /// carries the mechanism and this table carries the paths. The type, its
+    /// validator and the write are [`crate::wiring`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wiring: Option<crate::wiring::Wiring>,
 }
 
 /// The `[perf]` table: accepted invocation-latency regressions (CLOUD-1163
@@ -1866,6 +1877,15 @@ fn validate_sections(config: &Config) -> Result<()> {
     // and passes every commit silently.
     if let Some(commit) = &config.commit {
         commit.validate()?;
+    }
+    // Same reason again, and here the value being refused is a WRITE TARGET
+    // rather than a threshold: every row names a file this engine will rewrite
+    // under the caller's home directory. A path that is absolute, or climbs out
+    // with `..`, is the one way that write reaches the tracked tree — so it is
+    // refused at load, where `config lint` names the key, rather than at the
+    // write, where the mutation has already happened (CLOUD-1704).
+    if let Some(wiring) = &config.wiring {
+        wiring.validate().map_err(UsageError::raise)?;
     }
     // `[transcript]` is a table too, so the census does not reach it either; the
     // guarded failure is a `path` key present and blank, which would resolve to
@@ -3256,6 +3276,12 @@ impl Config {
             // from a pin either. The default is the strict one, and an absent
             // authority must not be the way to reach the lenient one.
             trust: None,
+            // An authority declaring no scripts disarms none. Absent is the
+            // honest empty here rather than a conservative default with teeth:
+            // the engine cannot know what a launcher on this host writes, and
+            // guessing a path would be exactly the consumer identifier rule 1
+            // keeps out.
+            wiring: None,
         }
     }
 }

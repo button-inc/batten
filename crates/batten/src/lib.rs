@@ -316,7 +316,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // forbidden — transitively, which the layering table states rather than
         // leaves to follow.
         Some(Command::Land { command }) => run_land(&command, out, err),
-        Some(Command::Wiring { command }) => run_wiring(&command, mode, err),
+        Some(Command::Wiring { command }) => run_wiring(&command, mode, &overrides, err),
         // The refinement gate and the pull-time claim (CLOUD-1121). Both read
         // the payload the caller supplies — or, under `--issue`, the one the
         // engine already captured, which is the whole point of the row.
@@ -4640,13 +4640,18 @@ fn run_capture_prune(
 /// # Errors
 ///
 /// Whatever the chosen sub-verb could not do.
-fn run_wiring(command: &cli::WiringCommand, mode: Mode, err: &mut dyn Write) -> Result<ExitCode> {
+fn run_wiring(
+    command: &cli::WiringCommand,
+    mode: Mode,
+    overrides: &Overrides,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
     match command {
         cli::WiringCommand::Reclaim {
             yes,
             dry_run,
             check,
-        } => run_wiring_reclaim(*yes, *dry_run, *check, mode, err),
+        } => run_wiring_reclaim(*yes, *dry_run, *check, mode, overrides, err),
     }
 }
 
@@ -4671,6 +4676,7 @@ fn run_wiring_reclaim(
     dry_run: bool,
     check: bool,
     mode: Mode,
+    overrides: &Overrides,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     use etcetera::BaseStrategy as _;
@@ -4771,6 +4777,57 @@ fn run_wiring_reclaim(
              restart the harness before reading `doctor hooks` as green",
         )?;
     }
+    // THE SECOND PASS, AND THE ONE THAT REACHES THE RUNNING PROCESS (CLOUD-1704).
+    // Everything above edited registrations, which on a host whose launcher
+    // hands the harness its settings on the command line is a file nothing
+    // re-reads: measured, the repair ran and twenty seconds later the same
+    // process dispatched the hook it had just removed. A `command` hook executes
+    // its SCRIPT at fire time, so the script is the object still live, and this
+    // is where it is neutralised.
+    //
+    // AFTER the registration pass rather than before, so a reader of the output
+    // sees the two subjects in the order the verb's own name puts them, and so a
+    // failure to write a script cannot abort the registration repair that had
+    // already succeeded.
+    //
+    // Keyed on the DECLARED paths and never on what was just read off the disk:
+    // by the time a session handler runs, the harness has persisted its own
+    // state over that file and there are no registrations left to derive a
+    // script path from.
+    let declared = resolve::resolve(hook_authority_root(), overrides)
+        .ok()
+        .and_then(|resolved| resolved.wiring)
+        .unwrap_or_default();
+    let disarmed = wiring::disarm(strategy.home_dir(), &declared.disarm, dry_run)?;
+    if !declared.disarm.is_empty() {
+        let verb = if dry_run { "would disarm" } else { "disarmed" };
+        output::message(
+            mode,
+            output::Verbosity::Normal,
+            err,
+            &format!(
+                "wiring reclaim: {verb} {} of {} declared script(s)",
+                disarmed.written,
+                disarmed.rows.len()
+            ),
+        )?;
+        // One line per declared script: a basename and a state token, never the
+        // declared path and never a byte of the body (rule 4). The basename is
+        // what makes the count actionable — which of them is still armed — and
+        // it is already a name the consumer wrote in its own committed config.
+        for row in &disarmed.rows {
+            output::message(
+                mode,
+                output::Verbosity::Normal,
+                err,
+                &format!(
+                    "wiring reclaim: {} {}",
+                    row.basename,
+                    serde_json::to_string(&row.state)?.trim_matches('"')
+                ),
+            )?;
+        }
+    }
     // THE ONE PLACE THIS VERB DECIDES. Bare and `--dry-run` are both `Success`
     // whatever they found, deliberately — a repair is not a check, and `doctor
     // hooks` answers the *is there a sibling* question as a count because
@@ -4778,10 +4835,16 @@ fn run_wiring_reclaim(
     // consumer has already made that judgement, in a `[[startup]]` row, and is
     // asking for the same walk as an exit code.
     //
+    // A `foreign` row counts the same as a sibling, and deliberately: a declared
+    // script still carrying its launcher body is a hook that will fire, which is
+    // the whole condition this verb exists to clear. Leaving it out would let
+    // `[[startup]] hook-surfaces-are-battens` report green over the half of the
+    // wiring that is actually live.
+    //
     // `Usage`, never `Violation`: a merged surface carrying somebody else's hook
     // is the config-or-usage class, and a mediating harness reading `2` as a
     // policy denial must not be told this is one (§7).
-    Ok(if check && done.siblings() > 0 {
+    Ok(if check && (done.siblings() > 0 || disarmed.foreign() > 0) {
         ExitCode::Usage
     } else {
         ExitCode::Success

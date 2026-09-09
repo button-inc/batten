@@ -647,6 +647,15 @@ pub struct Resolved {
     /// under the agent's own session start.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub startup: Vec<crate::startup::Startup>,
+    /// The launcher-provisioned scripts to disarm (CLOUD-1704), as the authority
+    /// states them. **Not layered**, and for `hook`'s and `startup`'s security
+    /// reason rather than a consistency one: every row names a file the engine
+    /// will REWRITE under the caller's home directory, so a local file able to
+    /// add one could blank anything the agent can write — a shell profile, an
+    /// ssh config, a credential helper. The committed authority is the only
+    /// place a disarm target may be declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wiring: Option<crate::wiring::Wiring>,
     /// The judge payload boundary (CLOUD-135), as the authority states it. Not
     /// layered: every field is refusing by default and widening it is the
     /// weakening, so there is no raise-only reading a local file could be
@@ -1694,6 +1703,7 @@ fn assemble(
         must_land_on: repo.must_land_on.clone(),
         hook: repo.hook.clone(),
         startup: repo.startup.clone(),
+        wiring: repo.wiring.clone(),
         transcript: repo.transcript.clone(),
         attribution: repo.attribution.clone(),
         commit: repo.commit.clone(),
@@ -1841,6 +1851,13 @@ fn attribution(
         // provenance the `config show` reader sees.
         ("startup", authority_set(!repo.startup.is_empty())),
         ("drain", authority_set(repo.drain.is_some())),
+        // The launcher scripts to disarm (CLOUD-1704). `authority_set` for
+        // `startup`'s reason, one notch sharper: every row names a file this
+        // engine REWRITES under the caller's home directory, so a local file
+        // able to add one could blank a shell profile or a credential helper.
+        // The committed authority is the only place a disarm target may be
+        // declared, and this row is what says so in the provenance.
+        ("wiring", authority_set(repo.wiring.is_some())),
     ])
 }
 

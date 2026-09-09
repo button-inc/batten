@@ -477,6 +477,7 @@ local gate = new Mapping<String, Step> {
         "crates/batten/src/verbs.rs",
         "crates/batten/src/verdict.rs",
         "crates/batten/src/waiver.rs",
+        "crates/batten/src/wiring.rs",
         "schema/*",
       )
     check = "mise run test:config-schema"

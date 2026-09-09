@@ -1292,6 +1292,26 @@ pub struct WiringReport {
     /// reproduce, in the field added to prevent it, the collapse
     /// `merged_surfaces_read` was added to prevent.
     pub at_load_siblings: Option<usize>,
+    /// What became of each script this consumer declared for disarming
+    /// (CLOUD-1704), in the order the config declares them.
+    ///
+    /// **The surface the `merged_*` counts structurally cannot describe.** Every
+    /// number above is about a REGISTRATION, and on a host whose launcher passes
+    /// its settings on the command line the registrations are not what the
+    /// running process is dispatching from — the harness read them once and the
+    /// file has since been rewritten under it. The scripts are the objects that
+    /// are still live at fire time, so this is the only field here that answers
+    /// *will that hook still do anything*.
+    ///
+    /// **Reported, never judged**, exactly as [`WiringReport::at_load_siblings`]
+    /// is and for its reason: whether a declared script left un-shimmed is
+    /// acceptable is the consumer's call, made in its own gate, and a `foreign`
+    /// row does not move `ok`. `batten wiring reclaim --check` is where this
+    /// repository turns the same reading into an exit code.
+    ///
+    /// Empty when the consumer declared no scripts, which is every consumer
+    /// without a launcher rewriting its hooks.
+    pub disarmed: Vec<wiring::DisarmedRow>,
 }
 
 impl WiringReport {
@@ -1841,10 +1861,16 @@ fn merged_under(
 /// unloadable config; this verb does not re-report it.
 #[must_use]
 pub fn diagnose_hooks(dir: &Path) -> WiringReport {
-    let exclusive = resolve::resolve(dir, &crate::Overrides::default())
-        .ok()
+    // ONE RESOLUTION, TWO READINGS. Both the exclusivity flag and the declared
+    // disarm targets come off the same load, because a second `resolve` here
+    // could observe a different config than the first and the report would then
+    // be describing two trees.
+    let resolved = resolve::resolve(dir, &crate::Overrides::default()).ok();
+    let exclusive = resolved
+        .as_ref()
         .and_then(|resolved| resolved.hook.as_ref().map(|hook| hook.exclusive))
         .unwrap_or(false);
+    let declared = resolved.and_then(|resolved| resolved.wiring);
     let harnesses: Vec<HarnessWiring> = hook::Harness::ALL
         .iter()
         .filter_map(|harness| diagnose_harness(dir, *harness, exclusive))
@@ -1860,6 +1886,23 @@ pub fn diagnose_hooks(dir: &Path) -> WiringReport {
             .ok()
             .flatten()
             .map(|record| record.siblings()),
+        // Reuses the config already resolved above and the same home strategy
+        // `merged_under` reads, rather than resolving either a second time: two
+        // reads of one authority inside one report is how the halves of a
+        // diagnosis start disagreeing. No home resolves is an empty list, which
+        // is the could-not-look arm — a report with nowhere to look must not
+        // claim every declared script is absent.
+        disarmed: declared
+            .as_ref()
+            .map(|rows| {
+                use etcetera::BaseStrategy as _;
+
+                etcetera::choose_base_strategy().map_or_else(
+                    |_| Vec::new(),
+                    |strategy| wiring::disarmed(strategy.home_dir(), &rows.disarm),
+                )
+            })
+            .unwrap_or_default(),
     }
 }
 

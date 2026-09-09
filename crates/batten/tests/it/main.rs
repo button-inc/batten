@@ -277,6 +277,7 @@ mod verdict_registry;
 mod verdict_vocabulary;
 mod waivers;
 mod walker;
+mod wiring_disarm;
 mod wiring_reclaim;
 mod worktree_registration;
 mod zero_config;

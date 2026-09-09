@@ -487,6 +487,270 @@ fn prune_siblings(
     removed
 }
 
+
+// --- the disarm half: the SCRIPT, because the registration is unread ----------
+//
+// Everything above this line edits hook REGISTRATIONS, and against one measured
+// host that is a repair with no subject (CLOUD-1704). A launcher rewrites the
+// registrations and their scripts immediately before every spawn and then starts
+// the harness with the file named on the command line; the harness reads a
+// command-line settings source ONCE and its watcher skips that source by name, so
+// nothing this file does to those bytes reaches the process already running them.
+// Measured: the repair ran, and twenty seconds later the same process dispatched
+// the hook it had just removed.
+//
+// WHAT HOLDS IS THE SCRIPT. A `command` registration names a file and executes it
+// at FIRE TIME, so the body is read long after the registration was. Replacing
+// that body with an `exit 0` shim disarms the hook for the rest of the process,
+// whatever the settings document says.
+//
+// KEYED ON DECLARED PATHS, NEVER ON WHAT IS REGISTERED. By the time a session
+// handler runs, the harness has persisted its own state over that file and the
+// disk shows no registration at all — so a disarm that read the disk to decide
+// what to disarm would find nothing, exactly when it is needed. The paths are the
+// consumer's to declare and this module never guesses one.
+
+/// One declared script to neutralise.
+///
+/// Both fields are the consumer's: this module names no script and no marker
+/// (non-negotiable rule 1). A path here is a launcher's artifact name, which is
+/// precisely what may not appear in `crates/batten`.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Disarm {
+    /// The script, relative to the home directory.
+    ///
+    /// **Under `$HOME` and nowhere else**, enforced by [`Wiring::validate`] at
+    /// load. A shim over a tracked path would be this repair mutating the tree it
+    /// is supposed to be judging, and an absolute path is how that would be
+    /// written — so the refusal is at parse time, where `config lint` names the
+    /// key, rather than at the write, where it would already have happened.
+    pub path: String,
+    /// The comment the shim carries, and the whole of how a second pass knows
+    /// its own work.
+    ///
+    /// Idempotence rides on this: a body containing the marker is left BYTE for
+    /// byte, so running the verb twice writes once. Reading the file's length, or
+    /// its mtime, or whether it merely looks short would each be a proxy that
+    /// drifts; the marker is the consumer's own declared token and cannot.
+    pub marker: String,
+}
+
+/// The `[wiring]` table: what this consumer's launcher re-arms every spawn.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Wiring {
+    /// The declared scripts, in the order the config lists them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disarm: Vec<Disarm>,
+}
+
+impl Wiring {
+    /// Refuse a row that could write outside the home directory.
+    ///
+    /// Refused at LOAD rather than skipped at the write, for the reason every
+    /// other table in this file's `validate_sections` neighbourhood is: a row
+    /// that parses and is then silently ignored is a gate that is off, and the
+    /// author has no way to find out. The three refusals are the three ways a
+    /// relative-to-`$HOME` path stops being one.
+    ///
+    /// # Errors
+    ///
+    /// Returns the offending key's reason when a `path` is empty, absolute, or
+    /// climbs out with `..`, or when a `marker` is blank.
+    pub fn validate(&self) -> Result<(), String> {
+        for row in &self.disarm {
+            if row.path.is_empty() {
+                return Err("[[wiring.disarm]]: `path` is empty, so it names no script".to_owned());
+            }
+            let path = Path::new(&row.path);
+            if path.is_absolute() || path.has_root() {
+                return Err(format!(
+                    "[[wiring.disarm]]: `path` {:?} is absolute — a declared script is relative to \
+                     the home directory, because a shim over a tracked file would be a mutation of \
+                     the tree",
+                    row.path
+                ));
+            }
+            if path
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+            {
+                return Err(format!(
+                    "[[wiring.disarm]]: `path` {:?} climbs out of the home directory with `..`",
+                    row.path
+                ));
+            }
+            // A blank marker matches every body, so the first pass would report
+            // `shimmed` over a file it never touched — the false green this whole
+            // module is built to refuse, one table over.
+            if row.marker.trim().is_empty() {
+                return Err(format!(
+                    "[[wiring.disarm]]: `marker` for {:?} is blank, so no body could carry it",
+                    row.path
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// What one declared script was found to be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum DisarmState {
+    /// The body carries the marker: this pass either wrote it or found it.
+    Shimmed,
+    /// No such file. **Never a finding**: a consumer declares the scripts its
+    /// launcher MAY write, and a host that has none is the ordinary case rather
+    /// than a broken one.
+    Absent,
+    /// The file is there and the marker is not — the state a repair is owed for.
+    Foreign,
+}
+
+/// One declared script and how it was left.
+///
+/// **Pointer-only** (non-negotiable rule 4), and one notch tighter than
+/// [`AtLoadRow`]'s omission because the subject here is a SCRIPT: the basename
+/// alone, never the declared path and never one byte of the body. What a
+/// launcher's hook does is the launcher's business; whether it still does it is
+/// this row.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct DisarmedRow {
+    /// The declared path's final component.
+    pub basename: String,
+    /// What it was found to be.
+    pub state: DisarmState,
+}
+
+/// What one [`disarm`] did, or would do.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[non_exhaustive]
+pub struct Disarmed {
+    /// One row per declared script, in the order the config declares them, so
+    /// two runs over one disk state serialise identically (§6).
+    pub rows: Vec<DisarmedRow>,
+    /// How many bodies this call rewrote. Zero under a dry run, and zero when
+    /// every declared script was already shimmed — which the row list is what
+    /// distinguishes.
+    pub written: usize,
+    /// Whether this environment declared itself disposable, so the repair was
+    /// allowed to write. [`Reclaimed::authoritative`]'s field, for its reason.
+    pub authoritative: bool,
+}
+
+impl Disarmed {
+    /// Every declared script still carrying somebody else's body.
+    #[must_use]
+    pub fn foreign(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| row.state == DisarmState::Foreign)
+            .count()
+    }
+}
+
+//MUTANT-SUITE crates/batten/tests/it/wiring_disarm.rs
+//MUTANT disarm-ignores-marker|s@            Ok(body) if body.contains(&row.marker) => DisarmState::Shimmed,@            Ok(body) if body.is_empty() \&\& row.marker.is_empty() => DisarmState::Shimmed,@|an_already_shimmed_script_is_not_rewritten
+
+/// The body a disarmed script carries.
+///
+/// Two lines, and the second is both the exit and the marker: a shim whose
+/// marker lived in a line the shell never reached would be a comment claiming
+/// something the file does not do.
+fn shim(marker: &str) -> String {
+    format!("#!/bin/sh\nexit 0 # {marker}\n")
+}
+
+/// Neutralise every declared script that is not already neutralised.
+///
+/// Never creates, never deletes, and touches no path the config did not declare.
+///
+/// **A TRUNCATING IN-PLACE WRITE, WHERE [`reclaim`] STAGES AND RENAMES**, and the
+/// difference is the subject rather than a lapse. `reclaim` rewrites a document
+/// carrying keys it never read — everything a consumer put in its host settings
+/// beside the hook map — so a kill mid-write would destroy configuration outside
+/// its own subject, and the rename is what makes that impossible. Here the body
+/// is exactly what is being discarded, so there is nothing to conserve; and a
+/// rename would actively break the repair, because the new file carries the
+/// creating process's mode and a hook script that is no longer executable does
+/// not exit 0 — it fails to run at all. Writing through the existing inode keeps
+/// the permission bits the launcher set, which is the property that matters.
+///
+/// # Errors
+///
+/// Returns an error when a declared script exists, is readable, and cannot be
+/// written back. A script that cannot be READ is a could-not-look and is left
+/// alone, reported [`DisarmState::Foreign`] — the same direction [`reclaim`]
+/// takes on a surface it cannot parse.
+pub fn disarm(home: &Path, declared: &[Disarm], dry_run: bool) -> Result<Disarmed> {
+    // The posture gate is [`reclaim`]'s, and sharing it is the point: a machine
+    // whose home directory is somebody's own must not have its scripts rewritten
+    // either, and two verbs in one module disagreeing about whose disk this is
+    // would be the negotiation CLOUD-1383 deleted.
+    let mut out = Disarmed {
+        authoritative: crate::environment::disposable(),
+        ..Disarmed::default()
+    };
+    let dry_run = dry_run || !out.authoritative;
+    for row in declared {
+        let path = home.join(&row.path);
+        // The declared path's own final component, never the resolved one: a
+        // basename is all that leaves this function (rule 4).
+        let basename = Path::new(&row.path)
+            .file_name()
+            .map_or_else(|| row.path.clone(), |name| name.to_string_lossy().into_owned());
+        let state = match std::fs::read_to_string(&path) {
+            // Absent, or unreadable. Distinguished by `try_exists` rather than
+            // collapsed: a file that is there and unreadable is a repair this
+            // verb owes and could not perform, and reporting it as `absent`
+            // would be the could-not-look-as-clean shape.
+            Err(_) if !path.try_exists().unwrap_or(false) => DisarmState::Absent,
+            Err(_) => DisarmState::Foreign,
+            // ALREADY OURS, SO NOT ONE BYTE MOVES. The idempotence case, and the
+            // one the declared mutation reddens: a disarm that rewrote
+            // unconditionally would answer `shimmed` just the same while
+            // churning the file on every session start.
+            Ok(body) if body.contains(&row.marker) => DisarmState::Shimmed,
+            Ok(_) if dry_run => DisarmState::Foreign,
+            Ok(_) => {
+                std::fs::write(&path, shim(&row.marker))?;
+                out.written += 1;
+                DisarmState::Shimmed
+            }
+        };
+        out.rows.push(DisarmedRow { basename, state });
+    }
+    Ok(out)
+}
+
+/// Read what the declared scripts are, writing nothing.
+///
+/// `doctor`'s half of the same question, and it goes through [`disarm`]'s dry
+/// arm rather than re-deriving the states — the copy that would let the census
+/// and the repair disagree about what `shimmed` means is the defect
+/// [`committed_events`] exists to make unwritable one surface over.
+#[must_use]
+pub fn disarmed(home: &Path, declared: &[Disarm]) -> Vec<DisarmedRow> {
+    disarm(home, declared, true).map(|out| out.rows).unwrap_or_default()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
