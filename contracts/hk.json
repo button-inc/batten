@@ -42,7 +42,6 @@
             "timeout-check",
             "mise-action-floor",
             "policy-budget",
-            "batten-glob-check",
             "skill-check",
             "macos-link-check",
             "shfmt",
@@ -247,123 +246,117 @@
           "parallelGroupId": "group_0"
         },
         {
-          "name": "batten-glob-check",
+          "name": "skill-check",
           "status": "included",
           "orderIndex": 30,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "skill-check",
+          "name": "macos-link-check",
           "status": "included",
           "orderIndex": 31,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "macos-link-check",
+          "name": "shfmt",
           "status": "included",
           "orderIndex": 32,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "shfmt",
+          "name": "shellcheck",
           "status": "included",
           "orderIndex": 33,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "shellcheck",
+          "name": "test:bats",
           "status": "included",
           "orderIndex": 34,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "test:bats",
+          "name": "taplo",
           "status": "included",
           "orderIndex": 35,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "taplo",
+          "name": "taplo-format",
           "status": "included",
           "orderIndex": 36,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "taplo-format",
+          "name": "pkl",
           "status": "included",
           "orderIndex": 37,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "pkl",
+          "name": "pkl-format",
           "status": "included",
           "orderIndex": 38,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "pkl-format",
+          "name": "prettier",
           "status": "included",
           "orderIndex": 39,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "prettier",
+          "name": "deno-fmt",
           "status": "included",
           "orderIndex": 40,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "deno-fmt",
+          "name": "rego",
           "status": "included",
           "orderIndex": 41,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "rego",
+          "name": "actionlint",
           "status": "included",
           "orderIndex": 42,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "actionlint",
+          "name": "cargo-fmt",
           "status": "included",
           "orderIndex": 43,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-fmt",
+          "name": "cargo-clippy",
           "status": "included",
           "orderIndex": 44,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-clippy",
+          "name": "test",
           "status": "included",
           "orderIndex": 45,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "test",
+          "name": "batten-check",
           "status": "included",
           "orderIndex": 46,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "batten-check",
+          "name": "policy-test",
           "status": "included",
           "orderIndex": 47,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "policy-test",
-          "status": "included",
-          "orderIndex": 48,
-          "parallelGroupId": "group_0"
-        },
-        {
           "name": "memories-check",
           "status": "included",
-          "orderIndex": 49,
+          "orderIndex": 48,
           "parallelGroupId": "group_0"
         }
       ]
@@ -473,7 +466,6 @@
             "timeout-check",
             "mise-action-floor",
             "policy-budget",
-            "batten-glob-check",
             "skill-check",
             "macos-link-check",
             "shfmt",
@@ -677,117 +669,111 @@
           "parallelGroupId": "group_0"
         },
         {
-          "name": "batten-glob-check",
+          "name": "skill-check",
           "status": "included",
           "orderIndex": 30,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "skill-check",
+          "name": "macos-link-check",
           "status": "included",
           "orderIndex": 31,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "macos-link-check",
+          "name": "shfmt",
           "status": "included",
           "orderIndex": 32,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "shfmt",
+          "name": "shellcheck",
           "status": "included",
           "orderIndex": 33,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "shellcheck",
+          "name": "test:bats",
           "status": "included",
           "orderIndex": 34,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "test:bats",
+          "name": "taplo",
           "status": "included",
           "orderIndex": 35,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "taplo",
+          "name": "taplo-format",
           "status": "included",
           "orderIndex": 36,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "taplo-format",
+          "name": "pkl",
           "status": "included",
           "orderIndex": 37,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "pkl",
+          "name": "pkl-format",
           "status": "included",
           "orderIndex": 38,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "pkl-format",
+          "name": "prettier",
           "status": "included",
           "orderIndex": 39,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "prettier",
+          "name": "deno-fmt",
           "status": "included",
           "orderIndex": 40,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "deno-fmt",
+          "name": "rego",
           "status": "included",
           "orderIndex": 41,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "rego",
+          "name": "actionlint",
           "status": "included",
           "orderIndex": 42,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "actionlint",
+          "name": "cargo-fmt",
           "status": "included",
           "orderIndex": 43,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-fmt",
+          "name": "cargo-clippy",
           "status": "included",
           "orderIndex": 44,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-clippy",
+          "name": "test",
           "status": "included",
           "orderIndex": 45,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "test",
+          "name": "batten-check",
           "status": "included",
           "orderIndex": 46,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "batten-check",
-          "status": "included",
-          "orderIndex": 47,
-          "parallelGroupId": "group_0"
-        },
-        {
           "name": "policy-test",
           "status": "included",
-          "orderIndex": 48,
+          "orderIndex": 47,
           "parallelGroupId": "group_0"
         }
       ]
