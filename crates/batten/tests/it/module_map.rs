@@ -54,7 +54,7 @@ fn map_repo(name: &str, map: Option<&str>, modules: &[(&str, &str)]) -> PathBuf 
          kind = \"document\"\n\
          target = \"AGENTS.md\"\n\n\
          [[verdict]]\n\
-         id = \"module place missing\"\n\
+         id = \"module list missing\"\n\
          gloss = \"a module is absent from its table\"\n\
          class = \"An unmapped module is not one with no constraints, it is one whose constraints nobody wrote down.\"\n\n\
          [[verdict.route]]\n\

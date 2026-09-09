@@ -37,7 +37,7 @@ fn report_repo(name: &str, manifest: &str, workflow: Option<&str>) -> PathBuf {
         .config(
             "version = 1\n\n\
              [[verdict]]\n\
-             id = \"task run loose\"\n\
+             id = \"task judge silent\"\n\
              gloss = \"a task runs somewhere its verdict is not wanted\"\n\
              class = \"A report emits a number for a human; binding it to landing makes a gate of a tool's opinion.\"\n\n\
              [[verdict.route]]\n\
@@ -45,7 +45,7 @@ fn report_repo(name: &str, manifest: &str, workflow: Option<&str>) -> PathBuf {
              kind = \"document\"\n\
              target = \"AGENTS.md\"\n\n\
              [[verdict]]\n\
-             id = \"task declare dropped\"\n\
+             id = \"task guard missing\"\n\
              gloss = \"the task a rule judges against is not declared\"\n\
              class = \"With no verify task there is nothing to judge a report against, and clean would be a false green.\"\n\n\
              [[verdict.route]]\n\

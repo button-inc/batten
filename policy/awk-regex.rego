@@ -89,7 +89,7 @@ in_regex_position(line, name) if {
 
 violation contains {
 	"rule": "awk-regex",
-	"verdict": "call run loose",
+	"verdict": "pattern carry unsafe",
 	"subjects": [{"path": path, "line": index + 1}],
 } if {
 	some [path, index, line, name] in assigned
@@ -106,7 +106,7 @@ scan(line) := {"tree": {"lines": {"mise-tasks/demo.sh": [line]}}}
 
 test_a_name_used_with_tilde_is_refused if {
 	some v in violation with input as scan("awk -v re=\"$p\" '$0 ~ re'")
-	v.verdict == "call run loose"
+	v.verdict == "pattern carry unsafe"
 }
 
 test_match_is_regex_position_too if {

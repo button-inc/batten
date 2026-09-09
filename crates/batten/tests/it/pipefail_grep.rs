@@ -49,7 +49,7 @@ fn pipefail_repo(name: &str, program: &str) -> PathBuf {
              id = \"pipe-into-grep\"\n\
              regex = '(^|[^|])\\|[[:space:]]*grep([[:space:]]|$)'\n\n\
              [[verdict]]\n\
-             id = \"call run loose\"\n\
+             id = \"spawn read broken\"\n\
              gloss = \"a command is spelled in a way whose behaviour is not defined\"\n\
              class = \"An early-exiting grep under pipefail promotes SIGPIPE to the pipeline's status, so a MATCH reports failure.\"\n\n\
              [[verdict.route]]\n\

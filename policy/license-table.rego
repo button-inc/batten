@@ -69,7 +69,7 @@ resolved_verdict := {"✅", "❌"}
 
 violation contains {
 	"rule": "license-table",
-	"verdict": "tool declare missing",
+	"verdict": "tool grade unclear",
 	"subjects": [{"path": doc}],
 } if {
 	some [_, license, _] in row
@@ -82,7 +82,7 @@ unresolved_license(license) if contains(license, "to confirm")
 
 violation contains {
 	"rule": "license-table",
-	"verdict": "tool declare missing",
+	"verdict": "tool grade unclear",
 	"subjects": [{"path": doc}],
 } if {
 	some [_, license, compat] in row
@@ -94,7 +94,7 @@ violation contains {
 # above, which is the false green the predecessor was written to kill.
 violation contains {
 	"rule": "license-table",
-	"verdict": "tool declare missing",
+	"verdict": "tool grade unclear",
 	"subjects": [{"path": doc}],
 } if {
 	input.tree.lines[doc]
@@ -119,7 +119,7 @@ test_an_explicit_incompatible_verdict_is_resolved if {
 
 test_an_unresolved_license_fails if {
 	some v in violation with input as table([header, sep, "| hk | hooks | _to confirm_ | ✅ |"])
-	v.verdict == "tool declare missing"
+	v.verdict == "tool grade unclear"
 }
 
 test_a_resolved_license_with_an_unresolved_verdict_still_fails if {

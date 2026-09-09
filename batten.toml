@@ -13251,6 +13251,90 @@ kind = "document"
 target = "batten.toml"
 
 [[verdict]]
+id = "module list missing"
+gloss = "a crate source module is absent from the module map"
+class = """
+An unmapped module is not one with no constraints — it is one whose constraints nobody wrote down, and the map is the single authority the layering prose defers to. Add its row, or narrow the rule's selector so the module is honestly out of scope.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "test place wrong"
+gloss = "a runnable doctest exists in a workspace whose runner does not execute doctests"
+class = """
+The scheduler here does not run doctests, so one written as a test is a test nothing runs — an assertion that reads as coverage and can never fail. Move the assertion into a real test target, or mark the block so it is documentation rather than a test.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "pattern carry unsafe"
+gloss = "a shell program hands awk a regex through a `-v` assignment"
+class = """
+A pattern passed that way goes through the assignment's own escape handling before awk ever sees it, and that handling is implementation-defined — so the same program matches differently under different awks. Pass the pattern positionally, or inline it in the program text where the escaping is awk's alone.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "spawn read broken"
+gloss = "a producer is piped into an early-exiting grep under pipefail"
+class = """
+An early-exiting grep signals its producer on the first match, and under pipefail that makes the pipeline report FAILURE on a match — so the verdict inverts, and the more reliably the larger the input. Read the producer into a variable first, or drop the early exit.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "tool grade unclear"
+gloss = "an adopted tool's licence row is unresolved"
+class = """
+The release precondition is that every adopted tool's licence is confirmed, and an unresolved row is a confirmation nobody made rather than a licence that is fine. Resolve the row, or drop the tool.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "task guard missing"
+gloss = "a report task carries no declaration keeping it off the landing path"
+class = """
+A report is a report by a decision no exit code holds unless something declares it. Without the declaration the task's non-gate status is a convention, and a convention is what the next edit walks through.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "task judge silent"
+gloss = "a report task is reachable from the landing path"
+class = """
+A task that reports rather than gates must not be able to redden a landing, and must not be able to green one either — reachability makes its output a verdict nobody intended. Take it off the path, or make it a gate deliberately.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
 id = "module place missing"
 gloss = "a module is judged by the layering rule and absent from its table"
 class = """
