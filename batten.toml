@@ -9281,6 +9281,49 @@ timeout_ms = 2000
 owner = "CLOUD-1731"
 expires = "2027-02-28"
 
+# CLOUD-1650's trigger, and the instance the `command_matcher` column was added
+# for. CLOUD-1630 landed the verdict — `Mediator::BuildBehindSource`, rendered
+# `mediator failed mediator-build-behind-source` — and nothing invoked it, so a
+# tree move mid-session left the engine adjudicating from source it was not built
+# from until somebody ran `doctor` by hand.
+#
+# THE SESSION-START HALF IS A DIFFERENT ROW, and `mediator-matches-the-tree` says
+# so itself: it covers the container that comes up already stale. This covers the
+# container that GOES stale, which is the case a session-start check structurally
+# cannot see — it has already run.
+#
+# `post-tool`, because "did the tree move" is only answerable once the command has
+# run.
+#
+# BOTH MATCHERS, and the second is the whole reason the column exists. For a shell
+# tool the tool name is `Bash` on every call an agent makes, so `matcher` alone
+# cannot tell a row about a dozen git subcommands from a row about every command
+# in the session. `matcher`'s own row carries the price of getting that wrong: an
+# unnarrowed `pre-tool` handler measured 19.6ms p50 on a `Bash` call against a
+# `wired` path whose whole p50 is 21ms. `matcher` is the cheap rejection every
+# non-shell call takes; `command_matcher` is the narrowing.
+#
+# THE SUBCOMMAND SET IS WIDER THAN THE SUITE'S FIXTURE (`merge|rebase|checkout`),
+# because those three were chosen to exercise the selector rather than to state
+# which commands move `HEAD`. A rebuild is what makes the build stale, so the set
+# is the commands that change what is checked out.
+#
+# `batten doctor mediator` rather than a task: the verb is on the read-only
+# allowlist, it is what `mediator-matches-the-tree` already spawns, and a new
+# `mise-tasks/*.sh` program would be refused by `shell-rule-retired` and
+# `bash-surface-not-growing` alike.
+[[hook.handler]]
+id = "head-move-mediator-check"
+on = "post-tool"
+run = ["batten", "doctor", "mediator"]
+matcher = "^Bash$"
+command_matcher = '\bgit\b.*\b(checkout|switch|rebase|merge|reset|pull|cherry-pick|revert|am|worktree)\b'
+# A stat of two paths and a hash comparison; `mediator-matches-the-tree` runs the
+# same verb at session start. Same bound as the other tool-event rows.
+timeout_ms = 2000
+owner = "CLOUD-1650"
+expires = "2027-02-28"
+
 # ---------------------------------------------------------------------------
 # CLOUD-312 ROW 10: `.claude/hooks/session-start.sh` RETIRES, AND ITS ORDER
 # BECOMES THIS LIST.
