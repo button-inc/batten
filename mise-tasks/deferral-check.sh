@@ -114,7 +114,7 @@ body=$(cat) || exit 0
 # `issue-guard` reads the same script, so the two guards cannot drift apart on
 # which issue a branch claims. The body is passed as extra evidence because a
 # closing keyword in it is a claim — the same input `issue-guard` gives it.
-claimed=$(printf '%s' "$body" | "$(dirname "$0")/claimed-keys.sh" 2>/dev/null || true)
+claimed=$(printf '%s' "$body" | batten claim keys 2>/dev/null || true)
 
 violations=0
 report() { # pointer-only: a coordinate, never the prose

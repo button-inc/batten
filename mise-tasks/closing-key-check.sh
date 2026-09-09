@@ -190,9 +190,9 @@ fi
 # `verify` runs when `claim-race-check` hit it.
 served=
 if [[ -n "${SERVED_LOG_GIVEN:-}" ]]; then
-	served=$("$(dirname "$0")/claimed-keys.sh" --refs-first-only --branch "" --title "" --log "$SERVED_LOG" 2>/dev/null || true)
+	served=$(batten claim keys --refs-first-only --branch "" --title "" --log "$SERVED_LOG" 2>/dev/null || true)
 else
-	served=$("$(dirname "$0")/claimed-keys.sh" --refs-first-only 2>/dev/null </dev/null || true)
+	served=$(batten claim keys --refs-first-only 2>/dev/null </dev/null || true)
 fi
 
 # NO CLAIM MEANS DO NOT JUDGE — the reading `claimed-keys` itself documents and

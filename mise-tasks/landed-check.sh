@@ -203,7 +203,6 @@ log=$(git log --format='%B' origin/main 2>/dev/null || true)
 # checkout leaks into a question about `main`'s history, and `--closing-only`
 # because its branch-name and `Refs:` fallbacks answer "what does this branch
 # claim", which is a different question and would readmit the citation.
-here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # THE LOG GOES ON STDIN, NOT IN ARGV. `main`'s history is 1.27 MB here and an
 # argv that size is `Argument list too long` — exit 126, which the disjunction
 # below would have read as "nothing claimed" and reported as a clean column.
@@ -212,7 +211,7 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # `claimed-keys`' own documented channel for evidence the caller holds, so this
 # is the interface it already offers rather than a workaround. The three empty
 # explicit sources are what stop it reading THIS checkout's HEAD instead.
-if ! claimed_ids=$(printf '%s' "$log" | "$here/claimed-keys.sh" --closing-only --branch "" --title "" --log "" 2>/dev/null); then
+if ! claimed_ids=$(printf '%s' "$log" | batten claim keys --closing-only --branch "" --title "" --log "" 2>/dev/null); then
 	echo "::error:: claimed-keys could not read main's log, so a claim cannot be told from a mention. That is not a clean board." >&2
 	exit 2
 fi

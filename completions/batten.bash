@@ -226,6 +226,9 @@ _batten() {
             batten__subcmd__claim,keys)
                 cmd="batten__subcmd__claim__subcmd__keys"
                 ;;
+            batten__subcmd__claim,merged)
+                cmd="batten__subcmd__claim__subcmd__merged"
+                ;;
             batten__subcmd__claim,race)
                 cmd="batten__subcmd__claim__subcmd__race"
                 ;;
@@ -243,6 +246,9 @@ _batten() {
                 ;;
             batten__subcmd__claim__subcmd__help,keys)
                 cmd="batten__subcmd__claim__subcmd__help__subcmd__keys"
+                ;;
+            batten__subcmd__claim__subcmd__help,merged)
+                cmd="batten__subcmd__claim__subcmd__help__subcmd__merged"
                 ;;
             batten__subcmd__claim__subcmd__help,race)
                 cmd="batten__subcmd__claim__subcmd__help__subcmd__race"
@@ -555,6 +561,9 @@ _batten() {
                 ;;
             batten__subcmd__help__subcmd__claim,keys)
                 cmd="batten__subcmd__help__subcmd__claim__subcmd__keys"
+                ;;
+            batten__subcmd__help__subcmd__claim,merged)
+                cmd="batten__subcmd__help__subcmd__claim__subcmd__merged"
                 ;;
             batten__subcmd__help__subcmd__claim,race)
                 cmd="batten__subcmd__help__subcmd__claim__subcmd__race"
@@ -2176,7 +2185,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__claim)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help keys check bot race carry help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help merged keys check bot race carry help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2304,7 +2313,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__claim__subcmd__help)
-            opts="keys check bot race carry help"
+            opts="merged keys check bot race carry help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2387,6 +2396,20 @@ _batten() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        batten__subcmd__claim__subcmd__help__subcmd__merged)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         batten__subcmd__claim__subcmd__help__subcmd__race)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
@@ -2417,6 +2440,40 @@ _batten() {
                     return 0
                     ;;
                 --log)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__claim__subcmd__merged)
+            opts="-q -v -y -h --limit --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --limit)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -3928,7 +3985,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__claim)
-            opts="keys check bot race carry"
+            opts="merged keys check bot race carry"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3984,6 +4041,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__claim__subcmd__keys)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__claim__subcmd__merged)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
