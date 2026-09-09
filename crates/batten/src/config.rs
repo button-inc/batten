@@ -1396,7 +1396,9 @@ pub fn parse_base(text: &str, source: &str) -> Result<Config> {
     }
     let text = toml::to_string(&table)
         .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?;
-    parse(&text, source)
+    let config = parse_ungated_with(&text, source, GrammarReading::Skewed)?;
+    check_min_version(&config, source)?;
+    Ok(config)
 }
 
 /// The override surface: exactly what `batten.local.toml` may carry.
@@ -1657,7 +1659,12 @@ fn validate_remedy_tables(config: &Config) -> Result<()> {
     )
 }
 
-fn validate_tables(config: &Config, text: &str, source: &str) -> Result<()> {
+fn validate_tables(
+    config: &Config,
+    text: &str,
+    source: &str,
+    grammar: GrammarReading,
+) -> Result<()> {
     // The verb table is validated here, at load, because nothing else validates
     // it anywhere: `verbs::validate` had no caller outside its own tests, so a
     // `[[verb]]` row that is inert — `effect = "read"` in a table named for
@@ -1748,7 +1755,15 @@ fn validate_tables(config: &Config, text: &str, source: &str) -> Result<()> {
             .collect();
         under(Native::RuleTableRefused, {
             let mut first = Ok(());
+            // SKEW, NOT A VERDICT (CLOUD-1638). A config read from a git ref is
+            // read to be COMPARED, and an id predating this build's grammar is
+            // the same shape as a key this build has since retired: refusing it
+            // makes adopting the grammar unlandable, because the base of every
+            // comparison is the revision before it.
             for rule in &config.rules {
+                if grammar == GrammarReading::Skewed {
+                    break;
+                }
                 if declared.contains(rule.id.as_str()) {
                     continue;
                 }
@@ -3094,7 +3109,26 @@ fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str, behind: bool
     }
 }
 
+/// Whether this build's rule-id grammar is a verdict on the config being read.
+///
+/// [`parse_base`] reads a config from a git REF, and the reason it exists is
+/// version skew between that ref and this build (CLOUD-1638). A rule id that
+/// predates the grammar is skew of exactly the shape [`RETIRED_KEYS`] already
+/// answers: enforcing it there would make ADOPTING the grammar unlandable,
+/// since the base of every comparison is the revision before the adoption.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GrammarReading {
+    /// The working tree's own authority: the grammar is a verdict.
+    Enforced,
+    /// A config read from a ref, to be compared rather than judged.
+    Skewed,
+}
+
 fn parse_ungated(text: &str, source: &str) -> Result<Config> {
+    parse_ungated_with(text, source, GrammarReading::Enforced)
+}
+
+fn parse_ungated_with(text: &str, source: &str, grammar: GrammarReading) -> Result<Config> {
     // THE COMMON CASE COSTS ONE PARSE, and it used to cost three.
     //
     // A config this build fully understands succeeds here and is DONE — it
@@ -3159,7 +3193,7 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
             waiver.rule = crate::verdict::normalise_rule_id(&waiver.rule);
         }
     }
-    validate_tables(&config, text, source)?;
+    validate_tables(&config, text, source, grammar)?;
     Ok(config)
 }
 
