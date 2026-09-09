@@ -859,6 +859,43 @@ fn check_name(
     Ok(())
 }
 
+/// Normalise a rule id to the space form, accepting the three spellings.
+///
+/// `-` and `_` are accepted at the boundary and NOWHERE stored: a name has one
+/// spelling on every emitted surface, because two spellings of one id is the
+/// same two-names-for-one-thing this row exists to remove, one level down.
+/// Measured over the declared set (`o200k_base`, leading space): space **3.01**
+/// tokens, snake **3.94**, hyphen **4.41** — so the space form is the cheap one
+/// as well as the canonical one.
+///
+/// This does not decide whether the words are declared; [`check_rule_id`] does.
+#[must_use]
+pub fn normalise_rule_id(id: &str) -> String {
+    id.split(['-', '_', ' '])
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A rule id is three vocabulary words, in the same grammar a class token is
+/// (CLOUD-1638).
+///
+/// **The same checker, deliberately.** A rule id and a class token are two names
+/// for things a reader meets in the same line, and a second grammar would be a
+/// second thing to learn for no gain — so this is [`check_name`] with the id
+/// normalised first, not a fork of it.
+///
+/// # Errors
+///
+/// When the id is not exactly [`SLOTS`] words, or a word is not declared in the
+/// vocabulary slot its position names.
+pub fn check_rule_id(id: &str, vocabulary: &Vocabulary) -> anyhow::Result<String> {
+    let normalised = normalise_rule_id(id);
+    let mut used = BTreeSet::new();
+    check_name("rule", &normalised, vocabulary, &mut used)?;
+    Ok(normalised)
+}
+
 /// The per-entry half of [`validate`].
 fn validate_one(
     verdict: &DeclaredVerdict,
@@ -2275,6 +2312,57 @@ mod tests {
         // exemption is the landed precedent.
         validate(&[entry("legacy name probe")], &Vocabulary::default())
             .expect("a consumer that has not adopted the grammar still loads");
+    }
+
+    // --- the rule-id grammar (CLOUD-1638) -----------------------------------
+
+    #[test]
+    fn a_rule_id_is_accepted_in_three_spellings_and_stored_in_one() {
+        // THE POINT OF NORMALISING RATHER THAN PICKING ONE SPELLING: a rule id
+        // reaches this from a `[[rule]] id`, a module's `"rule":` literal, a
+        // `//MUTANT` row and a `policy rule` argument, and those surfaces do not
+        // share a house style. Accepting all three at the boundary and storing
+        // one is what keeps the id ONE name — two spellings of an id would be
+        // the same two-names-for-one-thing this row removes, a level down.
+        for spelling in ["task read first", "task-read-first", "task_read_first"] {
+            let back = check_rule_id(spelling, &vocab())
+                .unwrap_or_else(|error| panic!("`{spelling}` is a legal id: {error}"));
+            assert_eq!(
+                back, "task read first",
+                "every spelling stores as the space form"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rule_id_outside_the_vocabulary_is_refused() {
+        // The membership arm, which is what makes the id a NAME rather than
+        // free-text kebab prose — the defect this row is about.
+        assert!(
+            check_rule_id("task read undeclared", &vocab()).is_err(),
+            "a word no slot declares is refused in an id exactly as in a class"
+        );
+    }
+
+    #[test]
+    fn a_rule_id_of_the_wrong_arity_is_refused() {
+        // BOTH directions, because a two-word id and a four-word id fail for the
+        // same reason and only one of them is the obvious one.
+        for wrong in ["task read", "task read first second", "task"] {
+            assert!(
+                check_rule_id(wrong, &vocab()).is_err(),
+                "`{wrong}` is not three words and must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn normalising_an_id_collapses_repeated_separators_rather_than_minting_empty_words() {
+        // A doubled separator would otherwise yield an empty word, which reads
+        // as a four-word name and fails the arity arm with a message naming the
+        // wrong defect. Cheap to get right, confusing to leave.
+        assert_eq!(normalise_rule_id("task--read__first"), "task read first");
+        assert_eq!(normalise_rule_id("  task read first  "), "task read first");
     }
 
     #[test]
