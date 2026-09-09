@@ -35,6 +35,7 @@
 #MUTANT lander-may-not-abandon|s@not lander_calls_abandon@false@|a_lander_that_never_abandons_is_refused
 #MUTANT cover-may-be-asserted-unchecked|s@\tnot covering_holds(task, covering)@\tfalse@|a_declared_cover_whose_bodies_no_longer_hold_is_refused
 #MUTANT cover-may-skip-the-reach|s@\tlane_reaches(covering)@\ttrue@|a_covered_lane_verify_never_reaches_is_still_refused
+#MUTANT both-lanes-may-be-named|s@\tnames_the_covering_lane(list, covering)@\tfalse@|a_depends_list_naming_a_lane_and_its_cover_is_refused
 #
 #MUTANT-SUITE crates/batten/tests/it/ci_parity.rs
 
@@ -265,6 +266,42 @@ covered_by_a_lane_verify_runs(task) if {
 	covering := covering_lane[task]
 	covering_holds(task, covering)
 	lane_reaches(covering)
+}
+
+# AND THE DUPLICATION ITSELF, which is the mechanism this relation SHIPS WITH
+# rather than the judgement it replaces. Permitting a narrowed lane to go unnamed
+# is only half the change; the other half is that naming BOTH is now a defect, and
+# nothing above notices it. A `depends` list carrying a lane and the lane that
+# covers it runs every step of the narrow one twice per lap — which is the cost
+# the relation exists to let this repository stop paying, and it would come
+# straight back the next time someone adds `ci:quick` to the list "to be sure".
+#
+# THE SUBJECT IS THE DEPENDS LIST, NOT THE PAIR. The pair is sound in both these
+# trees; what is wrong is a caller electing to run both members of it. So this
+# reads the one place that election is made.
+depends_of(name) := object.get(input.tree.documents["mise.toml"].tasks, [name, "depends"], [])
+
+# The covering lane may be named DIRECTLY in the list, or reached through one it
+# names — `ci:quick` beside `ci` is the shape this repository actually had, and a
+# rule that only caught `ci:quick` beside `hooks` would have missed it entirely.
+names_the_covering_lane(list, covering) if covering in list
+
+names_the_covering_lane(list, covering) if {
+	some named in list
+	covering in depends_of(named)
+}
+
+violation contains {
+	"rule": "ci-task-parity",
+	"verdict": "task run duplicate",
+	"subjects": [{"path": "mise.toml"}, {"artifact": task}],
+} if {
+	governed
+	some task, covering in covering_lane
+	some caller in ["verify", "verify:gated"]
+	list := depends_of(caller)
+	task in list
+	names_the_covering_lane(list, covering)
 }
 
 # ANTI-VACUITY, and it is the half that keeps the data above from becoming a
@@ -1074,6 +1111,54 @@ test_a_ci_job_running_the_narrowed_lane_is_covered if {
 	found := violation with input as swap(".github/workflows/ci.yml", wf)
 	every f in found {
 		f.verdict != "task run missing"
+	}
+}
+
+# THE REGRESSION THIS PR'S SUBTRACTION OWES A MECHANISM. Permitting the narrowed
+# lane to go unnamed is only half the change: naming BOTH is now the defect, and
+# nothing else in this module notices it. This is the shape `verify:gated` carried
+# — `ci` and `ci:quick` side by side, so every non-slow hk step ran twice a lap.
+test_a_depends_list_naming_a_lane_and_its_cover_is_refused if {
+	both := object.union(
+		object.remove(sound_manifest.tasks, ["verify:gated"]),
+		{"verify:gated": {"run": "mise run lint", "depends": ["ci", "ci:quick"]}},
+	)
+	m := object.union(object.remove(sound_manifest, ["tasks"]), {"tasks": both})
+	found := violation with input as swap("mise.toml", m)
+	some f in found
+	f.verdict == "task run duplicate"
+	some sub in f.subjects
+	sub.artifact == "ci:quick"
+}
+
+# REACHED THROUGH A NAMED TASK, NOT ONLY NAMED DIRECTLY. `ci:quick` sat beside
+# `ci`, and `ci` is what depends on `hooks` — a rule that only caught the pair
+# spelled `ci:quick` beside `hooks` would have missed the tree it was written for.
+# This is the case that pins the indirect arm.
+test_a_cover_reached_through_a_named_task_is_still_a_duplicate if {
+	found := violation with input as sound_input
+	every f in found {
+		f.verdict != "task run duplicate"
+	}
+
+	both := object.union(
+		object.remove(sound_manifest.tasks, ["verify:gated"]),
+		{"verify:gated": {"run": "mise run lint", "depends": ["ci", "ci:quick"]}},
+	)
+	m := object.union(object.remove(sound_manifest, ["tasks"]), {"tasks": both})
+	dup := violation with input as swap("mise.toml", m)
+	some f in dup
+	f.verdict == "task run duplicate"
+}
+
+# THE MIRROR: naming ONLY the wide lane is the shape this change moves the tree
+# to, and it must be silent. Without this the rule above could be one that fires
+# on every `depends` list carrying `ci`, which would refuse the fix along with the
+# defect.
+test_naming_only_the_covering_lane_is_clean if {
+	found := violation with input as sound_input
+	every f in found {
+		f.verdict != "task run duplicate"
 	}
 }
 

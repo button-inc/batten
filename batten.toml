@@ -11740,6 +11740,27 @@ kind = "document"
 target = "mise.toml"
 
 [[verdict]]
+id = "task run duplicate"
+gloss = "a depends list names a lane and the lane that covers it, so its steps run twice a lap"
+class = """
+Two lanes where one is the other with a filter applied are a set and one of its \
+subsets, not two jobs. CI selects between them; a `depends` list that names both \
+runs every step of the narrow lane twice per lap, against the most expensive \
+gate this repository has. The containment relation exists so the narrow lane can \
+go unnamed without tripping parity — and this is the other half of that change, \
+because permitting the subtraction does not perform it. The list is the subject \
+rather than the pair: both lanes are sound, and what is wrong is a caller \
+electing to run both. Read through one level of `depends` as well as directly, \
+since the pair that cost this tree was spelled beside the task that reaches the \
+cover rather than beside the cover itself.
+"""
+
+[[verdict.route]]
+id = "task read first"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
 id = "check name unknown"
 gloss = "the required roster names a check no job creates, so a wait never terminates"
 class = """
