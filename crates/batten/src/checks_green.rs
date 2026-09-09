@@ -179,7 +179,7 @@ fn key(run: &Run) -> (String, u64) {
     (run.started_at.clone(), run.id)
 }
 
-/// Does the incoming run displace the one held for its name?
+/// Which run answers for one name?
 ///
 /// **A COMPLETED-BUT-UNANSWERED RUN NEVER DISPLACES A REAL VERDICT**, and that
 /// clause is the whole of this function. Everything else is the key-then-rank
@@ -227,26 +227,31 @@ fn key(run: &Run) -> (String, u64) {
 /// their old behaviour, telling us less about which clause the cases pin.
 //MUTANT-SUITE crates/batten/src/checks_green.rs
 //MUTANT unanswered-displaces-a-verdict|s@const UNANSWERED: u8 = 3;@const UNANSWERED: u8 = 9;@|a_later_skipped_twin_does_not_erase_a_verdict
-fn displaces(held: ((String, u64), u8), incoming: ((String, u64), u8)) -> bool {
+fn winner<'a>(runs: &[&'a Run], answered: &[String]) -> &'a Run {
     const UNANSWERED: u8 = 3;
-    const ANSWERED: u8 = 2;
-    let ((hk, hr), (nk, nr)) = (held, incoming);
-    // AN UNORDERABLE PAIR IS UNTOUCHED, and that exclusion is load-bearing rather
-    // than tidiness. A reading carrying no `started_at` and no id leaves every key
-    // equal, and `an_unorderable_pair_falls_to_the_least_conclusive` requires such
-    // a pair to answer exactly as the union did — so it can never read greener
-    // than it did before ordering existed. Preferring the answer there would make
-    // the fail-closed case fail open, which is the one direction this module
-    // cannot afford.
-    if nk != hk {
-        if nr == UNANSWERED && hr <= ANSWERED {
-            return false;
-        }
-        if hr == UNANSWERED && nr <= ANSWERED {
-            return true;
-        }
+    // `max_by_key` over `(key, rank)` is the whole ordering, and it is a
+    // FUNCTION OF THE SET rather than of the arrival order — which is the defect
+    // CLOUD-1722's first shape carried. The old pairwise fold applied a
+    // non-transitive predicate, so a success, an in-flight rerun and a newer
+    // skipped twin read `Green` in one slice order and `Pending` in another.
+    let latest = *runs
+        .iter()
+        .max_by_key(|run| (key(run), rank(run, answered)))
+        .expect("winner is called with at least one run");
+    if rank(latest, answered) != UNANSWERED {
+        return latest;
     }
-    nk > hk || (nk == hk && nr > hr)
+    // The completed-but-unanswered latest yields to the latest run that DID
+    // judge or is still judging — but only when that run is STRICTLY OLDER.
+    // An equal key is the unorderable pair, which must still fall to the least
+    // conclusive reading: preferring the answer there would make the fail-closed
+    // case fail open, the one direction this module cannot afford.
+    runs.iter()
+        .filter(|run| rank(run, answered) != UNANSWERED)
+        .max_by_key(|run| (key(run), rank(run, answered)))
+        .filter(|candidate| key(candidate) < key(latest))
+        .copied()
+        .unwrap_or(latest)
 }
 
 /// Latest run per name (CLOUD-436), over the required subset only.
@@ -260,25 +265,17 @@ fn displaces(held: ((String, u64), u8), incoming: ((String, u64), u8)) -> bool {
 /// construction, emitted from inside the same pass; two passes would only have
 /// it by inspection.
 fn latest_per_name<'a>(runs: &'a [Run], roster: &Roster) -> BTreeMap<&'a str, &'a Run> {
-    let mut best: BTreeMap<&str, &Run> = BTreeMap::new();
+    let mut grouped: BTreeMap<&str, Vec<&Run>> = BTreeMap::new();
     for run in runs {
         if !roster.required.iter().any(|name| name == &run.name) {
             continue;
         }
-        match best.get(run.name.as_str()) {
-            None => {
-                best.insert(&run.name, run);
-            }
-            Some(held) => {
-                let (hk, hr) = (key(held), rank(held, &roster.answered));
-                let (nk, nr) = (key(run), rank(run, &roster.answered));
-                if displaces((hk, hr), (nk, nr)) {
-                    best.insert(&run.name, run);
-                }
-            }
-        }
+        grouped.entry(&run.name).or_default().push(run);
     }
-    best
+    grouped
+        .into_iter()
+        .map(|(name, group)| (name, winner(&group, &roster.answered)))
+        .collect()
 }
 
 /// The judged view: one pointer per required name that HAS a run, in roster
@@ -443,7 +440,7 @@ mod tests {
         }
     }
 
-    /// THE MEASURED SHAPE, and the reason `displaces` exists (CLOUD-1722).
+    /// THE MEASURED SHAPE, and the reason `winner` exists (CLOUD-1722).
     ///
     /// GitHub registers the path-filtered COPY of a workflow a few seconds after
     /// the copy that runs, and the copy that does not apply concludes `skipped`.
@@ -466,6 +463,39 @@ mod tests {
             Ok(Verdict::Green),
             "a skipped copy of a workflow that did not apply judged nothing"
         );
+    }
+
+    /// THE ORDER-INDEPENDENCE CASE, and the defect the first shape carried.
+    ///
+    /// A success, an in-flight rerun of the same name, and a NEWER skipped twin.
+    /// The pairwise fold this replaced applied a non-transitive predicate, so the
+    /// slice order decided the verdict: `skipped, in-flight, success` let the old
+    /// success displace the rerun through the unanswered guard and returned
+    /// `Green` while the rerun was still running — a false green over the exact
+    /// path the anti-vacuity case protects. `runs_from_body` preserves the
+    /// source array order, so the reading depended on what GitHub happened to
+    /// serialise first. Both orders must read `Pending`.
+    #[test]
+    fn a_rerun_in_flight_under_a_newer_skipped_twin_is_pending_in_either_order() {
+        let success = run("completed", "success", "ci", "2026-09-09T02:34:02Z", 1);
+        let in_flight = run("in_progress", "", "ci", "2026-09-09T02:40:00Z", 2);
+        let skipped = run("completed", "skipped", "ci", "2026-09-09T02:40:03Z", 3);
+        for order in [
+            vec![skipped.clone(), in_flight.clone(), success.clone()],
+            vec![success, in_flight, skipped],
+        ] {
+            let mut runs = green_set();
+            runs.retain(|existing| existing.name != "ci");
+            runs.extend(order.clone());
+            assert!(
+                matches!(
+                    decide(&runs, &roster()),
+                    Ok(Verdict::Pending(Pending::Running { .. }))
+                ),
+                "a rerun in flight is not answered by an older success, whatever \
+                 order the runs arrive in: {order:?}"
+            );
+        }
     }
 
     /// THE ANTI-VACUITY HALF, and the one direction this must not buy.
@@ -511,7 +541,7 @@ mod tests {
     }
 
     /// A REAL FAILURE IS STILL RED, whichever order it arrives in. `failure` is an
-    /// answered conclusion, so it is not what `displaces` protects against — and
+    /// answered conclusion, so it is not what `winner` protects against — and
     /// a fix that let a stale success outrank a later failure would be the false
     /// green this whole module exists to stop.
     #[test]
