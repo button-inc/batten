@@ -282,6 +282,96 @@ violation contains {
 	some path in delta.edited
 	governed_at_head(path)
 	not only_drops_a_retired_reference(path)
+	not only_supplies_the_successors_precondition(path)
+}
+
+# THE SECOND ADMITTED EDIT, and it is CLOUD-1051's arm one surface further out.
+#
+# That arm exists because retiring a program requires editing the SIBLINGS that
+# declare it. This one exists because repointing those siblings can invalidate
+# their own governed SUITES — and the module admitted the repoint while refusing
+# the change the repoint forced, so it could not complete a retirement it had
+# itself mandated. The same structural gap, found the same way: by a campaign
+# hitting a wall it built.
+#
+# MEASURED 2026-09-09 (CLOUD-1711). Retiring `claimed-keys.sh` moved the issue-key
+# grammar out of inline shell and into the `[[pattern]]` registry, which is where
+# non-negotiable rule 1 says a consumer fact belongs. The shell answered in ANY
+# tree; the engine leaf resolves the grammar from the committed config and answers
+# could-not-look without one. Every suite whose fixture is a bare scratch repo
+# therefore stopped exercising its gate — and the cases that assert a REFUSAL went
+# green, because a gate with nothing to judge refuses nothing. Fourteen such cases
+# across four suites, all four green on `origin/main`, verified in a clean
+# worktree rather than argued.
+#
+# THE NARROWING IS WHAT KEEPS THIS A RATCHET. `shell edit refused` is the arm that
+# refuses the move which READS as progress and is not, so widening it to "an edit
+# that adds lines" would be the ratchet with a lie in it. Every ADDED line must
+# either be a comment — which cannot change what a suite exercises — or name the
+# committed config or the declared successor's own invocation. An author cannot
+# reach for this to change a program's behaviour, because a line that changes
+# behaviour names neither.
+#
+# REMOVALS STAY THE OTHER ARM'S BUSINESS. This one admits additions only; an edit
+# that both adds a precondition and drops a line has to earn the drop under
+# `only_drops_a_retired_reference` exactly as before.
+only_supplies_the_successors_precondition(path) if {
+	base := delta["base-lines"][path]
+	head := {line | some line in input.tree.lines[path]}
+	added := {line | some line in head; not line in base}
+
+	# An edit that added nothing is not this case — it removed or reordered, and
+	# the sibling arm above owns the first.
+	count(added) > 0
+
+	# EVERY REMOVAL STILL EARNS THE SIBLING ARM. A suite that both drops references
+	# to the retired program and gains its successor's precondition is doing ONE
+	# thing, and the first draft of this clause demanded zero removals — which
+	# earned neither arm and refused `in-progress-drain.bats`, the suite that
+	# stubbed `merged-pr-keys.sh` by name and therefore had to lose those lines.
+	#
+	# Composing rather than widening: the removals answer to `admitted_removal`
+	# exactly as they do above, and the additions answer to `supplies_a_precondition`
+	# below. Neither test is relaxed by standing next to the other.
+	removed := {line | some line in base; not line in head}
+	count({line |
+		some line in removed
+		admitted_removal(path, line, removed)
+	}) == count(removed)
+
+	count({line |
+		some line in added
+		supplies_a_precondition(line)
+	}) == count(added)
+}
+
+# A comment cannot change what the suite exercises, so it carries the reason.
+supplies_a_precondition(line) if {
+	startswith(trim_space(line), "#")
+}
+
+# The committed config, which holds the grammar a retired program carried inline
+# and its successor reads from the `[[pattern]]` registry instead.
+#
+# THE NAME IS A LITERAL HERE, and that is the narrow reading rather than a lapse.
+# `batten.toml` is the ONE committed authority (house-style §8) — there is no
+# second spelling for this module to be a second authority over — and an
+# undefined reference in Rego is not an error but a clause that never holds, so
+# reaching for a token this module does not define would have made the whole arm
+# silently dead. That is the failure this file's own `#MUTANT` rows exist to
+# catch, and it is cheaper to spell the name than to ship an arm that decides
+# nothing.
+supplies_a_precondition(line) if {
+	contains(line, "batten.toml")
+}
+
+# The successor's own invocation, as the retired path's ledger arm declared it —
+# read from the ledger rather than spelled here, so a suite cannot admit a line
+# naming a verb no retirement mapped to it.
+supplies_a_precondition(line) if {
+	some gone in delta.deleted
+	some succ in invocations_for(gone)
+	contains(line, succ)
 }
 
 # THE ONE ADMITTED EDIT, and it is what makes this campaign able to clean up

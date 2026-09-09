@@ -18,6 +18,13 @@ setup() {
 	export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 	git init -q -b work "$REPO"
 	cd "$REPO" || return 1
+	# THE COMMITTED CONFIG, because the sweep delegates to `landed-check`, which
+	# reaches `batten claim keys` now (CLOUD-1711). `claimed-keys.sh` carried the
+	# key grammar inline and answered in any tree; the engine leaf resolves it from
+	# the `[[pattern]]` registry and answers could-not-look without one — which the
+	# sweep then reports as a gate that could not look, so a case asserting the
+	# sweep's own verdict never reaches it.
+	cp "$BATS_TEST_DIRNAME/../batten.toml" "$REPO/batten.toml"
 	git config user.email t@t
 	git config user.name t
 	git commit -q --allow-empty -m "chore: init"
