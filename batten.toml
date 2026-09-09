@@ -1966,9 +1966,49 @@ regex = 'CLOUD-[0-9]+'
 # `[[pattern]]` row and not a literal in the crate: the core stays repo-agnostic,
 # and a consumer whose forge spells the set differently declares its own row
 # rather than patching the engine.
+# BLANK, NEVER SPACE, and the difference is a measured false positive rather than
+# a nicety (CLOUD-1752). `[[:space:]]` matches a NEWLINE, so the anchor above
+# stopped meaning "immediately before a key" the moment a body put the verb at the
+# end of one line and the key at the start of the next — which ordinary prose does
+# constantly. Measured 2026-09-09 over this repository's 713 merged pull requests:
+# 16 rows read as CLOSED that no body closes, `mise-tasks/merged-pr-keys.sh`
+# emitting none of them. PR #163 is the shape:
+#
+#     ## The residue survived the fix
+#
+#     CLOUD-223 taught `.claude/hooks/session-start.sh` …
+#
+# A heading ending in "the fix", a blank line, then a citation — read as a claim.
+# The harm runs the dangerous way: a false CLAIM tells `in-progress-drain` a row
+# landed, and it drains a row that is still live.
+#
+# `[[:blank:]]` is space and tab and nothing else, so the verb must sit on the
+# key's own line — which is what the paragraph above always said this row did.
+# A NEGATED CLOSING VERB IS NOT A CLAIM, and the row above cannot see one
+# (CLOUD-1752). Its anchor decides the text IMMEDIATELY before a key, which is
+# exactly what makes `does not close CLOUD-1` match: the prefix ends in `close`
+# and the negation sits one word further back, outside what an end-anchored
+# pattern can reach. Rust's regex has no lookbehind, so the guard is a second row
+# rather than a cleverer first one.
+#
+# MEASURED 2026-09-09 over this repository's 713 merged pull requests: SIX rows
+# read as closed by a body that says in so many words that it does not close them
+# — `## Why this does NOT close CLOUD-1074`, `It also does not close CLOUD-673`,
+# `**This does not close CLOUD-1050`, `## Why this does not close CLOUD-607`,
+# `Filed, not fixed: CLOUD-466`. Writing out why a change does NOT close a row is
+# a habit this repository actively encourages, so the false positive is not rare
+# and it runs the dangerous way: a false CLAIM moves a live row.
+#
+# ANCHORED AT THE END LIKE ITS SIBLING, and read against the text before the VERB
+# rather than before the key — so `not` must sit on the verb, never merely
+# somewhere earlier in the paragraph.
+[[pattern]]
+id = "ready-closing-negation"
+regex = '(?i)(^|[^0-9A-Za-z-])(not|never|n.t|without|nor)[[:blank:]]*$'
+
 [[pattern]]
 id = "ready-closing-verb"
-regex = '(?i)(^|[^0-9A-Za-z-])(clos(e|es|ed)|fix(|es|ed)|resolv(e|es|ed))[[:space:]]*:?[[:space:]]*#?$'
+regex = '(?i)(^|[^0-9A-Za-z-])(clos(e|es|ed)|fix(|es|ed)|resolv(e|es|ed))[[:blank:]]*:?[[:blank:]]*#?$'
 
 # THE PROSE-DIALECT THRESHOLD (CLOUD-472) IS `[ready]`, NOT A `[[pattern]]` ROW.
 # It was drafted as one — a regex over the exempt key range — and that is the
@@ -5629,6 +5669,13 @@ severity = "deny"
 # green fires this and not that; a commit graded red fires both, and they say
 # different things — do not re-run it, and do not land it.
 #
+# BOTH READINGS NEEDED A PRODUCER, and until CLOUD-1707 neither had one: nothing
+# invoked `batten record forge`, so this fact was `null` and the paragraph above
+# described a discrimination no checkout could make. `mise run record-verdicts`
+# writes it, and writes it ONLY once the fan-in has concluded — so "nothing was
+# recorded at all" now means the forge has not finished judging, which is the
+# could-not-look both rows read it as.
+#
 # `warn`, NOT `deny`, AND THE FIRST LANDING IS THE REASON. `land` re-verifies and
 # re-waits every lap by design, because a rebase mints a new SHA and the receipts
 # keyed to the old one are gone — so the loop legitimately reaches graded commits,
@@ -6597,6 +6644,11 @@ looked at it."""
 # bytes at this version — absent from the map, not a verdict — which is what a
 # checkout gets if the producer was skipped or died. The row that wants a verdict
 # to be REQUIRED is `forge-verdict-required`'s shape and is not this one.
+# THAT CONTRAST ONLY BECAME REAL WITH CLOUD-1707. `forge-verdict-required` had no
+# producer, so it refused nothing and the sentence above named a shape rather than
+# a behaviour. Both rows are fed by `mise run record-verdicts` now, and they still
+# read absence the same way — what differs is what each does with a record that IS
+# present, which is the distinction this block was always drawing.
 [[rule]]
 id = "validator-verdict-clean"
 kind = "policy"
