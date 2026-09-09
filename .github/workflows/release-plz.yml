@@ -322,6 +322,19 @@ jobs:
   cache-warm-darwin-link:
     name: cache-warm-darwin-link
     runs-on: ubuntu-latest
+    # THE MATRIX MIRRORS THE READER'S, AND THAT IS NOT DECORATION.
+    # `ci-cache-declared` resolves a family from the `shared-key` AS WRITTEN in
+    # the workflow, so a writer spelling the expansion (`aarch64-apple-darwin`)
+    # while the reader spells `${{ matrix.target }}` is two families to the gate
+    # and one to GitHub — measured: `read-family-has-a-warm-writer` fired on
+    # `rust.yml`'s `darwin-link` with this job already present. Carrying the same
+    # single-leg matrix makes the two keys identical as text, and keeps the
+    # reader's own promise that restoring a second leg is a one-word change —
+    # it is now one word on each side.
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin]
     # Grandfathered for `cache-warm-linux`'s reason: no measured p95 exists for a
     # job that has never run, and a guessed number would read as measured.
     timeout-minutes: 30 # budget: grandfathered measured=2026-09-09
@@ -348,18 +361,17 @@ jobs:
         # `id` and the guard together.
         id: rust-cache
         with:
-          # THE LITERAL TRIPLE, because the reader spells this key as
-          # `${{ matrix.target }}` over a single-leg matrix and rust-cache sees
-          # only the expansion. If the reader's matrix ever grows a second leg,
-          # this job needs one too or the new leg reads empty.
-          shared-key: aarch64-apple-darwin
+          # SPELLED EXACTLY AS THE READER SPELLS IT — see the matrix note on
+          # this job. rust-cache sees the expansion either way; the gate sees
+          # the text, and only this spelling makes the two one family.
+          shared-key: ${{ matrix.target }}
       # Compile only when there is nothing to restore, as every warm job here
       # does. `DOCTOR_TARGETS` must match the reader's or this fills a different
       # target's artifacts.
-      - run: mise run darwin-link aarch64-apple-darwin
+      - run: mise run darwin-link ${{ matrix.target }}
         if: steps.rust-cache.outputs.cache-hit != 'true'
         env:
-          DOCTOR_TARGETS: aarch64-apple-darwin
+          DOCTOR_TARGETS: ${{ matrix.target }}
 
   # `semver-` IS DELIBERATELY NOT WARMED HERE, and the reason is worth recording
   # so the next reader does not "finish the job". `rust.yml`'s semver block states
