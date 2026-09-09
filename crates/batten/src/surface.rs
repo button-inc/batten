@@ -998,6 +998,45 @@ const NO_CACHE: FlagDecl = FlagDecl {
 /// That one SELECTS a row to run and is optional; this one NAMES a row to print
 /// and is required, so sharing a `FlagDecl` would make one row's `required` a
 /// lie about the other.
+/// `--findings <n>`: how many blocking findings the caller's own run produced.
+///
+/// A COUNT rather than a boolean, because the caller already has one and a
+/// boolean would make it fold twice — once to a flag and once here — which is the
+/// hand-fold this verb exists to remove.
+const VERDICT_FINDINGS: FlagDecl = FlagDecl {
+    id: "findings",
+    long: Some("findings"),
+    short: None,
+    help: "How many blocking findings the run produced",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--unjudgeable <n>`: how many subjects the caller could not read.
+///
+/// Separate from `--findings` rather than folded into it, because the whole
+/// point of the verb is that the two are DIFFERENT answers: a blind spot is not
+/// a small finding, and a caller that adds them together has already lost the
+/// distinction this decides.
+const VERDICT_UNJUDGEABLE: FlagDecl = FlagDecl {
+    id: "unjudgeable",
+    long: Some("unjudgeable"),
+    short: None,
+    help: "How many subjects the run could not read",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const RULE_ID_ARG: FlagDecl = FlagDecl {
     id: "id",
     long: None,
@@ -3467,6 +3506,32 @@ pub const SURFACE: &[CommandDecl] = &[
     // its entire purpose, and the text is the config author's own declaration —
     // the class `config show` exists to echo — not content read out of a subject
     // file.
+    // CLOUD-1718's shape (a). There are two exit-code contracts in this tree and
+    // they are INVERSES: this binary reads `1` as usage and `2` as a violation,
+    // and 82 shell programs read `1` as a violation and `2` as could-not-look.
+    // A caller on the wrong side of that boundary does not get a worse message,
+    // it gets the opposite verdict — a blind spot read as a finding, or a finding
+    // read as a blind spot.
+    //
+    // The bug dies with each program that retires, so this verb is justified by
+    // what does NOT retire: the workflow tree, which is permanently bash by
+    // declaration; the installer, which is bash by construction; and CONSUMER
+    // repositories, whose gates hit the identical inversion with no campaign to
+    // save them. Each of those still needs the fold, and this is the one place it
+    // is decided.
+    //
+    // `read` structurally and in the strongest sense available: it opens no file,
+    // walks no tree and spawns nothing. It reads two integers off its own command
+    // line and returns a code.
+    CommandDecl {
+        path: "verdict",
+        id: "verdict",
+        about: "Fold a run's findings and blind spots into this tool's exit code",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[VERDICT_FINDINGS, VERDICT_UNJUDGEABLE],
+    },
     CommandDecl {
         path: "policy explain",
         id: "policy.explain",

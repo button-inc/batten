@@ -233,6 +233,14 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         ),
         Some(Command::Config { command }) => run_config(&command, &overrides, mode, out, err),
         Some(Command::Spec { format }) => run_spec(format, out),
+        // CLOUD-1718. No config is resolved and nothing is read: the §8 chain
+        // has nothing to contribute to a fold over two integers, and threading it
+        // through would make an unreadable config able to change a verdict this
+        // verb computes without one.
+        Some(Command::Verdict {
+            findings,
+            unjudgeable,
+        }) => Ok(exit::ExitCode::combine(findings, unjudgeable)),
         Some(Command::ShowAgent { json }) => run_show_agent(json, &overrides, out),
         Some(Command::Doctor { command }) => run_doctor(&command, out),
         // `init` reads no config — it is the verb that exists because there is

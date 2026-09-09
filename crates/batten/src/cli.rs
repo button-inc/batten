@@ -121,6 +121,14 @@ pub enum Command {
         /// The output format for the spec.
         format: SpecFormat,
     },
+    /// Fold a run's findings and blind spots into this tool's exit code
+    /// (CLOUD-1718).
+    Verdict {
+        /// How many blocking findings the caller's run produced.
+        findings: usize,
+        /// How many subjects the caller could not read.
+        unjudgeable: usize,
+    },
     /// Report what an agent may do in this repository (CLOUD-1180).
     ShowAgent {
         /// Emit the data document rather than pointer lines.
@@ -2339,6 +2347,21 @@ fn capture_of(matches: &ArgMatches) -> Option<CaptureCommand> {
 /// `show` is a noun over one leaf today, so an absent subcommand is a usage
 /// error rather than a default action — `surface::is_noun` marks it and clap
 /// refuses the bare invocation before this runs.
+/// A non-negative count off the command line, absent reading as zero.
+///
+/// A value that is not a whole number reads as zero too, and deliberately: this
+/// verb's whole job is to be callable from a shell epilogue, where an unset
+/// variable expands to the empty string. Refusing that would put the caller back
+/// to hand-folding the very case it came here to avoid — and the safe direction
+/// is the one that reports LESS, since a miscounted finding is still reported by
+/// the caller's own stderr while a usage error replaces the verdict entirely.
+fn count_of(matches: &ArgMatches, id: &str) -> usize {
+    matches
+        .get_one::<String>(id)
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .unwrap_or(0)
+}
+
 fn show_of(matches: &ArgMatches) -> Option<Command> {
     match matches.subcommand()? {
         ("agent", matches) => Some(Command::ShowAgent {
@@ -2487,6 +2510,15 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "exec" => exec_of(matches),
         "capture" => capture_of(matches).map(|command| Command::Capture { command }),
         "mcp" => mcp_of(matches).map(|command| Command::Mcp { command }),
+        // Two integers off the command line and a code back: no file, no tree,
+        // no spawn. A missing count is ZERO rather than a usage error, because
+        // the caller that has only findings to report should not have to say it
+        // saw no blind spots — and zero is the honest reading of an absent count,
+        // not a default standing in for one.
+        "verdict" => Some(Command::Verdict {
+            findings: count_of(matches, "findings"),
+            unjudgeable: count_of(matches, "unjudgeable"),
+        }),
         "show" => show_of(matches),
         "target" => target_of(matches).map(|command| Command::Target { command }),
         "adjudicate" => matches
