@@ -2713,7 +2713,7 @@ mod lap_tests {
         // that will not accept output, and a `Vec` always accepts, so a panic
         // would be reporting the impossible case as the interesting one.
         assert_eq!(
-            super::wait(&config, &roster, &trunk, 1, &|| (), &mut out).ok(),
+            super::wait(&config, &roster, &trunk, 1, &|_| (), &mut out).ok(),
             Some(super::Waited::Unanswered),
             "an unreachable forge is a could-not-look, never a verdict about the work"
         );
