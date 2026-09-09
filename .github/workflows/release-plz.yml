@@ -319,6 +319,48 @@ jobs:
         env:
           DOCTOR_TARGETS: x86_64-pc-windows-gnu
 
+  cache-warm-darwin-link:
+    name: cache-warm-darwin-link
+    runs-on: ubuntu-latest
+    # Grandfathered for `cache-warm-linux`'s reason: no measured p95 exists for a
+    # job that has never run, and a guessed number would read as measured.
+    timeout-minutes: 30 # budget: grandfathered measured=2026-09-09
+    # A warm job must never be able to red the release lane, exactly as above.
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+        with:
+          # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). The
+          # digest above pins the ACTION; this pins the MISE it installs, which
+          # is a separate resolution the digest does not reach.
+          version: 2026.9.1
+          # What the `darwin-link` job installs, for its stated reason: zig
+          # supplies the Darwin linker, cargo-zigbuild drives cargo through it,
+          # and rust is the compiler.
+          install_args: rust zig github:rust-cross/cargo-zigbuild
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Read by the compile step below; `ci-local-parity` property 17 holds the
+        # `id` and the guard together.
+        id: rust-cache
+        with:
+          # THE LITERAL TRIPLE, because the reader spells this key as
+          # `${{ matrix.target }}` over a single-leg matrix and rust-cache sees
+          # only the expansion. If the reader's matrix ever grows a second leg,
+          # this job needs one too or the new leg reads empty.
+          shared-key: aarch64-apple-darwin
+      # Compile only when there is nothing to restore, as every warm job here
+      # does. `DOCTOR_TARGETS` must match the reader's or this fills a different
+      # target's artifacts.
+      - run: mise run darwin-link aarch64-apple-darwin
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        env:
+          DOCTOR_TARGETS: aarch64-apple-darwin
+
   # `semver-` IS DELIBERATELY NOT WARMED HERE, and the reason is worth recording
   # so the next reader does not "finish the job". `rust.yml`'s semver block states
   # that it builds RUSTDOC with a different rustc than every other job, which is

@@ -314,6 +314,17 @@ jobs:
           # otherwise thrash a shared entry if the second leg is restored.
           # The profile is part of the key too — see `ci.yml`'s `ci` job.
           shared-key: ${{ matrix.target }}
+          # READ-ONLY, because `cache-warm-darwin-link` on trunk is now this
+          # family's writer. A PR-side write lands on `refs/pull/N/merge` and is
+          # readable by no other pull request, so it bought nothing and cost the
+          # store — CLOUD-1453 measured 81% of a 10.77 GiB store as four merged
+          # pull requests' unreadable entries. Same posture as every warmed
+          # family's readers (`:185`, `ci.yml:420`, `:846`, `commit-lint.yml:138`).
+          #
+          # Measured cold on run 34332015804, this job: 242s, the second-longest
+          # completed job on that pull request behind `semver`, and it is in
+          # `CI_REQUIRED_CHECKS` — so every ready paid it.
+          save-if: false
       - run: mise run darwin-link ${{ matrix.target }}
         env:
           # Exactly the target being linked; doctor's default would also fetch
