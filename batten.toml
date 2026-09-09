@@ -9259,6 +9259,48 @@ timeout_ms = 2000
 owner = "CLOUD-312"
 expires = "2027-02-28"
 
+# THE CROSS-TRIPLE CHECK, MOVED FROM A GATE'S CADENCE TO A TURN'S (CLOUD-1731).
+#
+# `cross-check` ran in exactly one place — inside `verify` — so "this does not
+# compile on Windows" was learned at the cadence of the whole gate, which in
+# practice is after the author moved on. `rules/rust.md` says the cost in its own
+# words: an attribute deletes the case on every other target, "and the next edit
+# to the other one is discovered by CI". CLOUD-1148 is the recorded instance —
+# the `windows` job reddening alone, and the first fix making it worse.
+#
+# `user-prompt-submit` IS THE ONLY EVENT THAT FIRES ONCE PER TURN AND FIRES AT ITS
+# START, which is the whole reason it is this row and not a `stop` one. A verdict
+# that arrives after the turn ends is the discovered-late failure one notch
+# smaller; a verdict that arrives while the author still holds the change is the
+# point.
+#
+# MEASURED BEFORE IT WAS WIRED, 2026-09-09: the handler returns in 224ms because
+# the type-check is detached, and the check it launches costs 1.0s on a tree that
+# changed no Rust (the `step-receipt` hit) against 54s when it must re-derive. So
+# the tax is a second on the turns that need nothing and a minute of BACKGROUND
+# work on the turns that do.
+#
+# IT IS NOT A SECOND `verify` AND MUST NOT BECOME ONE. `verify` stays the
+# blocking authority and this row never gates anything: it reports a failure on
+# the following turn and says nothing on success, because a line every turn is
+# noise that teaches the reader to skip the one turn it matters.
+#
+# WHY THE TEST TIER IS THE SUBJECT rather than the library: `cross-check`'s own
+# comment records that the suite is the half most likely to break, because it
+# reaches for `PermissionsExt`, `#!/bin/sh` fixtures and Unix paths as a matter of
+# course while the library's platform code is deliberate and already gated. The
+# change that prompted this row added all three in one file.
+[[hook.handler]]
+id = "turn-cross-check"
+on = "user-prompt-submit"
+run = ["mise", "run", "cross-turn"]
+# Detached, so the bound is process startup and a marker read rather than a
+# type-check. Measured at 224ms; 2000 is an order of headroom, the same figure
+# its two siblings above carry for the same reason.
+timeout_ms = 2000
+owner = "CLOUD-1731"
+expires = "2027-02-28"
+
 # ---------------------------------------------------------------------------
 # CLOUD-312 ROW 10: `.claude/hooks/session-start.sh` RETIRES, AND ITS ORDER
 # BECOMES THIS LIST.

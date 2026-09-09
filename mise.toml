@@ -2911,6 +2911,44 @@ fi
 echo "lock-check: mise.lock is complete and current"
 '''
 
+# ONE TURN'S CROSS-TRIPLE TYPE-CHECK, DETACHED (CLOUD-1731).
+#
+# `cross-check` runs in exactly one place — inside `verify` — so "this does not
+# compile on Windows" is learned at the cadence of the whole gate, which in
+# practice means after the author has moved on. `rules/rust.md` states the cost
+# in its own words ("the next edit to the other one is discovered by CI") and
+# CLOUD-1148 is the recorded instance: the `windows` job reddening alone, and the
+# first fix making it worse.
+#
+# AFFORDABLE BECAUSE OF THE RECEIPT, measured 2026-09-09 rather than assumed:
+# a re-run whose inputs, command and toolchain are unchanged answers from
+# `step-receipt.sh` in **1.0s**; a run that must re-derive takes 54s cold. So the
+# per-turn cost is a second on every turn that changed no Rust, and 54s on the
+# turns that changed some — which are the turns that need it.
+#
+# DETACHED, BECAUSE A HANDLER THAT WAITS IS A HANDLER THAT TAXES EVERY TURN. The
+# verdict is not needed before the turn proceeds; it is needed before the author
+# stops thinking about the change, which is a much weaker deadline. `verify`
+# remains the blocking authority and this never substitutes for it.
+#
+# THE FAILURE IS REPORTED ON THE NEXT TURN AND SUCCESS IS SILENT. A log nobody
+# reads is sensor-only (non-negotiable rule 2), so the marker file is what turns
+# this from a log into a mechanism: the next invocation prints it and clears it.
+# Success says nothing, because a line on every turn is noise that trains the
+# reader to skip the one turn it matters.
+#
+# ONE LINE JOINED BY `;` RATHER THAN A `"""` BODY, for `deps-install`'s reason:
+# `inline-task-bodies-not-growing-basic` is `non_increasing` against
+# `origin/main` with no `admits_with`, so a new block body is refused and the
+# only routes are extraction or a waiver. Neither is worth spending here.
+#
+# `batten singleton` RATHER THAN A PROCESS PROBE: the lock is the declared
+# mechanism for "may a second copy start in this clone", and polling the process
+# table for one is the shape `polls-a-local-process` refuses.
+[tasks."cross-turn"]
+description = "One turn's cross-triple type-check, detached — reports the previous run's failure and never blocks the turn"
+run = "f=target/cross-turn.fail; if [ -f $f ]; then cat $f >&2; rm -f $f; fi; if batten singleton acquire cross-turn $$ >/dev/null 2>&1; then (mise run cross-check >target/cross-turn.log 2>&1 || echo '::error:: cross-turn: a declared target did not type-check — run `mise run cross-check` for the pointers' >$f; batten singleton release cross-turn >/dev/null 2>&1) & fi; exit 0"
+
 [tasks.cross-check]
 description = "Type-check for other targets from Linux (no macOS runner needed)"
 # The `rustup target add` below is not idempotent against a half-installed
