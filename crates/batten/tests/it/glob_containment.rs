@@ -39,6 +39,7 @@
 
 use crate::common;
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
@@ -116,10 +117,10 @@ fn check(dir: &Path) -> Output {
 /// A `["batten-check"]` step selecting `entries`, followed by another step so
 /// the reader's upper bound is a real one.
 fn hooks(entries: &[&str]) -> String {
-    let listed = entries
-        .iter()
-        .map(|e| format!("        \"{e}\",\n"))
-        .collect::<String>();
+    let mut listed = String::new();
+    for entry in entries {
+        writeln!(listed, "        \"{entry}\",").unwrap();
+    }
     format!(
         "hooks {{\n  [\"batten-check\"] {{\n    glob =\n      List(\n{listed}      )\n    check = \"mise run batten-check\"\n  }}\n  [\"other-step\"] {{\n    glob = List(\"unrelated\")\n  }}\n}}\n"
     )
@@ -277,7 +278,7 @@ fn a_comment_inside_the_list_is_not_list_syntax() {
     let dir = glob_repo(
         "glob-comment-in-list",
         &rule_glob("mise.toml"),
-        &"hooks {\n  [\"batten-check\"] {\n    glob =\n      List(\n        \"batten.toml\",\n        \"hk.pkl\",\n        // the rule that made this an input (CLOUD-614)\n        \"policy/**\",\n        \"mise.toml\",\n      )\n  }\n  [\"other-step\"] {\n    glob = List(\"unrelated\")\n  }\n}\n".to_owned(),
+        "hooks {\n  [\"batten-check\"] {\n    glob =\n      List(\n        \"batten.toml\",\n        \"hk.pkl\",\n        // the rule that made this an input (CLOUD-614)\n        \"policy/**\",\n        \"mise.toml\",\n      )\n  }\n  [\"other-step\"] {\n    glob = List(\"unrelated\")\n  }\n}\n",
     );
     let output = check(&dir);
     assert_eq!(
@@ -293,7 +294,7 @@ fn another_steps_list_is_not_read_as_this_ones() {
     let dir = glob_repo(
         "glob-other-step",
         &rule_glob("mise.toml"),
-        &"hooks {\n  [\"batten-check\"] {\n    glob = List(\"batten.toml\", \"hk.pkl\", \"policy/**\")\n  }\n  [\"other-step\"] {\n    glob = List(\"mise.toml\")\n  }\n}\n".to_owned(),
+        "hooks {\n  [\"batten-check\"] {\n    glob = List(\"batten.toml\", \"hk.pkl\", \"policy/**\")\n  }\n  [\"other-step\"] {\n    glob = List(\"mise.toml\")\n  }\n}\n",
     );
     let output = check(&dir);
     assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
@@ -304,7 +305,7 @@ fn a_step_with_no_glob_at_all_is_a_regression_not_a_default() {
     let dir = glob_repo(
         "glob-step-without-list",
         &rule_glob("mise.toml"),
-        &"hooks {\n  [\"batten-check\"] {\n    check = \"mise run batten-check\"\n  }\n  [\"other-step\"] {\n    glob = List(\"unrelated\")\n  }\n}\n".to_owned(),
+        "hooks {\n  [\"batten-check\"] {\n    check = \"mise run batten-check\"\n  }\n  [\"other-step\"] {\n    glob = List(\"unrelated\")\n  }\n}\n",
     );
     let output = check(&dir);
     assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
