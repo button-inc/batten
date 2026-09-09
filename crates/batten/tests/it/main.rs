@@ -219,6 +219,7 @@ mod reference_coverage;
 mod refusal_ceiling;
 mod release_provision_parity;
 mod remedy_authorship;
+mod repaired_arms;
 mod repetition;
 mod retirement_doctrine;
 mod review_answered;

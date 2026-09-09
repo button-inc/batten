@@ -1432,6 +1432,27 @@ transcript CONTENT needs 1029 first, and nothing landed authorises one.
   pointing it at an easier prompt. Every failure path — runner missing, non-zero
   exit, unparseable stream — leaves NO record, so a broken agent and one that
   never ran are indistinguishable and both refuse.
+- `repair.rs` — running a row's declared `fix` at the mediated boundary
+  (CLOUD-1639), for the rows whose raised class declares `applicability =
+retry|silent` and no other. `Rule::fix` had existed since CLOUD-81 as "the
+  mutating half of §9's duality" and was executed by nothing; this is the half
+  that executes it. **It carries no `Command::new` and owes no
+  `#[expect(clippy::disallowed_types)]`**: `policy/spawn-widening.rego` refuses
+  an added escape and CLOUD-1338 already collapsed two spawns into one shared
+  `exec::piped_through`, so a repair routes through `exec::piped_argv` and
+  inherits its process group, forwarded signals and pipe drain. The consumer's
+  `fix` string and the agent's refused call are kept apart, which is the whole
+  safety argument: exactly ONE substitution, `{key}`, whose value the ROW
+  resolved through `key_from`/`key_base`, so nothing from the command line
+  reaches the repair (the echo SRC-056 measures). TWO bounds on that key and
+  they are separate on purpose — a metacharacter list, and a `..` path
+  component — because the adversarial case proved the first alone composed
+  `../../etc/passwd` while `/` cannot join it (a key naming `rules/scanning.md`
+  is what a document-shaped repair operates on). **The order of the arms is the
+  contract**: a non-zero exit, an unresolvable program or an uncomposable key
+  all fall back to the ORIGINAL class's ordinary refusal, so a repair that did
+  not happen can never be reported as one, and only a zero exit reaches the
+  postures. `//MUTANT retry-reports-silent` sits on the arm-selection match.
 - `refusal.rs` — the refusal contract (CLOUD-122): ONE `Refusal` value —
   `{rule, reason, fix}` — constructed at every deny site and projected onto
   whatever channel a host reads, so the shape is never re-typed per harness.

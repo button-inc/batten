@@ -2663,6 +2663,62 @@ pub enum Decision {
     /// Degrades to a plain allow wherever [`Capabilities::preapprove`] is
     /// unreachable, which is silence and is the host's ordinary flow.
     Preapproved(String),
+    /// The boundary ran a row's declared repair and it SUCCEEDED (CLOUD-1639).
+    ///
+    /// **An allow, on [`Decision::Waived`]'s reading and for the same reason**:
+    /// the call proceeds, exit `0`, §7's table untouched. What distinguishes it
+    /// is that the tree is not what it was a moment ago — something was changed
+    /// underneath the caller — and the record is the whole point.
+    ///
+    /// Only the `silent` posture reaches here. A `retry` repair is a
+    /// [`Decision::Deny`] carrying [`crate::verdict::Native::CallRetryNow`],
+    /// because the call as made did not happen; reporting that as an allow is
+    /// exactly the swap `//MUTANT retry-reports-silent` exists to catch.
+    ///
+    /// **A repair that FAILED never reaches here either.** The boundary falls
+    /// back to the original class's ordinary refusal, so "the tree was repaired"
+    /// is a claim only a zero exit can make.
+    Repaired(Repair),
+}
+
+/// What a successful `silent` repair records (CLOUD-1639).
+///
+/// **Pointer-only, and that is rule 4 rather than taste.** A repair runs a
+/// consumer-authored command line, and echoing it back would put the caller's
+/// own text — which could carry anything — onto a channel the model reads. What
+/// travels is the class, the row that declared the repair, and the subject it
+/// was keyed on: three names a reader can look up, and no payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Repair {
+    /// The row whose `fix` ran. The hop to what it declares.
+    pub rule: String,
+    /// The class the row would have raised had the repair not run.
+    ///
+    /// Carried rather than dropped because it is what the record is ABOUT: the
+    /// reader needs to know which refusal did not happen, and the repaired
+    /// class is the only name that says so.
+    pub repaired: String,
+    /// The subject the repair was keyed on, when the row named one.
+    ///
+    /// The `{key}` the fix resolved — a tracker key for a receipt row, absent
+    /// for a `shape` or `pipeline` row, which take no substitution.
+    pub subject: Option<String>,
+}
+
+impl Repair {
+    /// The record line, in [`crate::waiver::Suppressed`]'s shape.
+    ///
+    /// Same shape deliberately: a reader who has learned to read one audit line
+    /// on this channel should not need a second grammar for the other. Class
+    /// first, then the row, then the subject when there is one.
+    #[must_use]
+    pub fn line_text(&self) -> String {
+        let class = crate::verdict::Native::CallFixSilent.id();
+        match self.subject.as_deref() {
+            Some(subject) => format!("{class} {subject} {} {}", self.rule, self.repaired),
+            None => format!("{class} {} {}", self.rule, self.repaired),
+        }
+    }
 }
 
 /// Decode a harness payload into the normalized envelope.
@@ -3672,6 +3728,56 @@ impl Policy {
         })
     }
 
+    /// The repair a refusing row declares, if it declares one (CLOUD-1639).
+    ///
+    /// Returns the `fix` string, the `applicability` its CLASS declares, and the
+    /// `{key}` the row resolves for this call — the three things
+    /// [`crate::repair::run`] needs and nothing else. `None` wherever any of
+    /// them is missing, which the caller reads as "not repairable" and answers
+    /// with the ordinary refusal.
+    ///
+    /// **THE JOIN IS THE POINT.** A `fix` lives on the `[[rule]]` and an
+    /// `applicability` on the `[[verdict]]`, and neither table can see the
+    /// other. `Rule::validate` already refuses a `fix` on a row whose class is
+    /// `advice` at LOAD, so this lookup should never find that pair — and it
+    /// checks anyway, because this is the function that decides whether a
+    /// program runs and a load-time guarantee is the wrong thing to lean on at
+    /// the moment of running one.
+    ///
+    /// The key is resolved through [`Policy::key_base_for`], the same reader a
+    /// receipt row already uses to find its own receipt — so a repair is keyed
+    /// on exactly what the refusal was keyed on, and cannot address a different
+    /// subject than the one that was refused.
+    #[must_use]
+    pub fn repair_for(
+        &self,
+        rule: &str,
+        token: &str,
+        envelope: &Envelope,
+    ) -> Option<(String, crate::verdict::Applicability, Option<String>)> {
+        let row = self.shapes.iter().find(|shape| shape.id == rule)?;
+        let fix = row.fix.as_deref()?;
+        let applicability = self
+            .verdicts
+            .iter()
+            .find(|declared| declared.id == token)
+            .map_or(crate::verdict::Applicability::Advice, |declared| {
+                declared.applicability
+            });
+        if !applicability.repairs() {
+            return None;
+        }
+        // The key only where the fix asks for one. A `shape` or `pipeline` row
+        // takes no substitution, and resolving a key it will not use would be
+        // work whose result nothing reads.
+        let key = if fix.contains("{key}") {
+            self.key_base_for(envelope).map(ToOwned::to_owned)
+        } else {
+            None
+        };
+        Some((fix.to_owned(), applicability, key))
+    }
+
     /// The subject a [`crate::rules::ReceiptKey::Named`] row files under, read
     /// from the row's own [`Rule::key_from`] projection (CLOUD-987).
     ///
@@ -4139,7 +4245,15 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
         // `protected_write` renders exactly one verdict; the others are stated as
         // arms rather than wildcarded so a fifth `Decision` variant has to come
         // back here and be decided rather than silently falling through.
-        Decision::Allow | Decision::Ask(_) | Decision::Waived(_) | Decision::Preapproved(_) => {}
+        Decision::Allow
+            | Decision::Ask(_)
+            | Decision::Waived(_)
+            | Decision::Preapproved(_)
+            // An allow, and one these composers cannot
+            // reach: a repair runs at the boundary, not inside a
+            // gate (CLOUD-1639). Stated rather than wildcarded, the
+            // way the sibling arms are.
+            | Decision::Repaired(_) => {}
     }
     // The content-keyed gate, AFTER the protected-path one and never instead of
     // it (CLOUD-758). The two ask different questions — which file, and what
@@ -4148,7 +4262,15 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     // reviewed file being replaced wholesale.
     match content_rules(policy, envelope, facts.prospective) {
         decided @ Decision::Deny(_) => return decided,
-        Decision::Allow | Decision::Ask(_) | Decision::Waived(_) | Decision::Preapproved(_) => {}
+        Decision::Allow
+            | Decision::Ask(_)
+            | Decision::Waived(_)
+            | Decision::Preapproved(_)
+            // An allow, and one these composers cannot
+            // reach: a repair runs at the boundary, not inside a
+            // gate (CLOUD-1639). Stated rather than wildcarded, the
+            // way the sibling arms are.
+            | Decision::Repaired(_) => {}
     }
     // The tool-keyed gate (CLOUD-924), and its placement is the whole reason it
     // works: ABOVE the `command.is_empty()` early return, which every structured
@@ -4162,7 +4284,10 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     // call which receipt to earn.
     match tool_rules(policy, envelope) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
-        Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
+        Decision::Allow
+        | Decision::Waived(_)
+        | Decision::Preapproved(_)
+        | Decision::Repaired(_) => {}
     }
     // The read-side redirect (CLOUD-1258), beside the tool gate for the same
     // reason: it rides a resolved tool fact and carries no command line. Below
@@ -4171,7 +4296,10 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     // because naming the instrument is more useful than sizing the wrong one.
     match redirected_read(policy, envelope) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
-        Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
+        Decision::Allow
+        | Decision::Waived(_)
+        | Decision::Preapproved(_)
+        | Decision::Repaired(_) => {}
     }
     // The per-call ceiling (CLOUD-925), beside the tool gate because it rides the
     // same selection and the same reason for being above the command early
@@ -4184,7 +4312,10 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     // before measuring anything keeps the order "cheapest decidable first".
     match manifest_ceiling(policy, envelope, facts.manifest) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
-        Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
+        Decision::Allow
+        | Decision::Waived(_)
+        | Decision::Preapproved(_)
+        | Decision::Repaired(_) => {}
     }
     let mut measured = 0;
     let ceiling = ceiling_rules(policy, envelope, &mut measured);
@@ -4196,7 +4327,10 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     }
     match ceiling {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
-        Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
+        Decision::Allow
+        | Decision::Waived(_)
+        | Decision::Preapproved(_)
+        | Decision::Repaired(_) => {}
     }
     // The write-triggered receipt gate (CLOUD-444), reached whether or not this
     // call also carries a command — a write tool carries none, and the early
@@ -4214,7 +4348,10 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     // gate rather than a wider condition on the write-triggered one below.
     match tool_receipt_rules(policy, envelope, receipts) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
-        Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
+        Decision::Allow
+        | Decision::Waived(_)
+        | Decision::Preapproved(_)
+        | Decision::Repaired(_) => {}
     }
     if envelope.writes.is_some() {
         match receipt_rules(policy, envelope, receipts) {
@@ -4230,7 +4367,10 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
             // The `Preapproved` half is the load-bearing one: a gate that could
             // return it would be a rule GRANTING permission, and the whole reason
             // that variant is minted outside this function is that no rule may.
-            Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
+            Decision::Allow
+            | Decision::Waived(_)
+            | Decision::Preapproved(_)
+            | Decision::Repaired(_) => {}
         }
     }
     // THE HAND-WRITTEN COMMAND ROWS, and they sit ABOVE the module gate because
@@ -4268,7 +4408,10 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     if !envelope.command.is_empty() {
         match shape_rules(policy, envelope, &envelope.command, keys) {
             decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
-            Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
+            Decision::Allow
+            | Decision::Waived(_)
+            | Decision::Preapproved(_)
+            | Decision::Repaired(_) => {}
         }
     }
     // The policy gate sits here, before the command early-return, deliberately:
@@ -4279,7 +4422,10 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     // unjudged.
     match policy_rules(policy, envelope, facts) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
-        Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
+        Decision::Allow
+        | Decision::Waived(_)
+        | Decision::Preapproved(_)
+        | Decision::Repaired(_) => {}
     }
     if envelope.command.is_empty() {
         return Decision::Allow;
@@ -4294,14 +4440,16 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     // path-class message.
     match pipeline_rules(policy, envelope) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
-        Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {
-            match receipt_rules(policy, envelope, receipts) {
-                decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
-                Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {
-                    protected_write(policy, envelope, WriteStage::CommandParsed)
-                }
-            }
-        }
+        Decision::Allow
+        | Decision::Waived(_)
+        | Decision::Preapproved(_)
+        | Decision::Repaired(_) => match receipt_rules(policy, envelope, receipts) {
+            decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
+            Decision::Allow
+            | Decision::Waived(_)
+            | Decision::Preapproved(_)
+            | Decision::Repaired(_) => protected_write(policy, envelope, WriteStage::CommandParsed),
+        },
     }
 }
 
@@ -10773,7 +10921,11 @@ mod tests {
             // for a sharper reason: it is a deny that was let through, so folding
             // it in here would let a suppression pass every assertion about what
             // a refusal says while the call actually ran.
-            Decision::Ask(_) | Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {
+            Decision::Ask(_)
+            | Decision::Allow
+            | Decision::Waived(_)
+            | Decision::Preapproved(_)
+            | Decision::Repaired(_) => {
                 panic!("expected a deny")
             }
         }
@@ -10784,7 +10936,11 @@ mod tests {
     fn denial(decision: Decision) -> Refusal {
         match decision {
             Decision::Deny(refusal) => refusal,
-            Decision::Ask(_) | Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {
+            Decision::Ask(_)
+            | Decision::Allow
+            | Decision::Waived(_)
+            | Decision::Preapproved(_)
+            | Decision::Repaired(_) => {
                 panic!("expected a deny")
             }
         }

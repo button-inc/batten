@@ -75,13 +75,6 @@ const PIPELINE_PERMITS: &[&str] = &[
     "policy_url",
     "bypass_env",
     "severity",
-    // CLOUD-1639. `fix` was `RuleKind::Command`-only, which is a TREE-scope
-    // check kind — so the column existed on the one kind that never reaches the
-    // mediated boundary, and the two repaired postures had nowhere to live. It
-    // is admitted here and on the other mediated kinds, gated not by the kind
-    // but by the CLASS the row raises: `validate_repair` refuses a `fix` whose
-    // class is `advice`, which is where the real predicate belongs.
-    "fix",
     "no_retry_reason",
 ];
 
@@ -180,9 +173,6 @@ const SHAPE_PERMITS: &[&str] = &[
     "policy_url",
     "bypass_env",
     "severity",
-    // CLOUD-1639; see `PIPELINE_PERMITS` for why the gate is the class rather
-    // than the kind.
-    "fix",
     "no_retry_reason",
 ];
 
@@ -220,12 +210,6 @@ const RECEIPT_PERMITS: &[&str] = &[
     "policy_url",
     "bypass_env",
     "severity",
-    // CLOUD-1639; see `PIPELINE_PERMITS` for why the gate is the class rather
-    // than the kind. This is the kind the row's first candidate belongs to:
-    // `an-update-owes-a-recent-read` refuses a write whose read receipt is
-    // stale, and the repair — perform the read it is asking for — is exactly
-    // the shape a `retry` class describes.
-    "fix",
     "no_retry_reason",
 ];
 
@@ -803,17 +787,37 @@ impl RuleKind {
     /// refusal exists to prevent.
     pub const fn repairs_at_the_boundary(self) -> bool {
         match self {
-            RuleKind::Receipt | RuleKind::Shape | RuleKind::Pipeline => true,
-            RuleKind::Forbid
+            // `policy` AND ONLY `policy`, AND THE FIXTURE IS WHAT NARROWED IT.
+            //
+            // The first draft answered `true` for `receipt`, `shape` and
+            // `pipeline` — the kinds that reach the mediated boundary — and a
+            // fixture exercising a `shape` row could not be written. A repair is
+            // admissible only where the row's CLASS declares `applicability`, and
+            // a native-kind row declares no class: every `shape` row raises
+            // `call name refused`, every `receipt` row one of four receipt
+            // classes. Putting `applicability` on those would make every row of
+            // the kind repairable at once, which is not a thing any consumer
+            // could want and not what the column means.
+            //
+            // A `policy` row is the one kind whose module raises a class the
+            // CONSUMER declared, so it is the one kind where "this row's class
+            // says repair" is a sentence with a subject. `[[rule]].verdict` is
+            // the pipeline program list and not a class, so no other kind can
+            // name one (CLOUD-1638 measures that seam over 66 rows).
+            RuleKind::Policy => true,
+            RuleKind::Receipt
+            | RuleKind::Shape
+            | RuleKind::Pipeline
+            | RuleKind::Forbid
             | RuleKind::Command
             | RuleKind::Ratchet
             | RuleKind::Judge
             | RuleKind::Secrets
-            | RuleKind::Document
-            | RuleKind::Policy => false,
+            | RuleKind::Document => false,
         }
     }
 
+    #[must_use]
     pub const fn permits(self) -> &'static [&'static str] {
         match self {
             // `verbatim` narrows a hashed span, so only the kind that hashes one
@@ -922,6 +926,16 @@ impl RuleKind {
             // second shape column beside it would be a rule with two authorities
             // over one decision.
             RuleKind::Policy => &[
+                // CLOUD-1639, and this is the ONE kind that may carry `fix` at
+                // the mediated boundary: a repair is admissible only where the
+                // row's CLASS declares `applicability`, and a `policy` row's
+                // module raises a class the CONSUMER declared. Whether the row
+                // then OWES `no_retry_reason` depends on which applicability
+                // that class declares, which a flat per-kind list cannot say —
+                // `validate_repair` carries the conditional, the same split
+                // `Document`'s `pattern`/`reads` pair already uses.
+                "fix",
+                "no_retry_reason",
                 "module",
                 "bundle",
                 "preset",

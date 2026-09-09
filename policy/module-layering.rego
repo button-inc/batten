@@ -68,7 +68,7 @@ declared_modules := {
 	"exit", "facts", "findings", "git", "handler", "hook", "identity", "init",
 	"invocation", "journal", "judge", "landed", "lib", "lint", "markers", "mint", "minted", "outputs",
 	"output", "pattern", "policy", "provision", "receipt", "redirect", "refusal",
-	"render", "resolve", "rules", "secret", "secrets", "session", "severity", "sink",
+	"render", "repair", "resolve", "rules", "secret", "secrets", "session", "severity", "sink",
 	"spec", "state", "stop", "store", "surface", "transcript", "trust", "uses",
 	"verbs", "verdict", "waiver", "worktree",
 	# `brief`, `main` and `selfwrite` were absent from the first draft of this
@@ -577,6 +577,29 @@ forbidden[from] contains to if {
 		# by exactly the route the `fetch` entry refuses, one name later. Found
 		# in review.
 		"hook": {
+			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
+			"pr_watch", "fast_forward", "main_watch",
+		},
+		# `repair` RUNS A CONSUMER'S DECLARED COMMAND ON THE MEDIATED PATH
+		# (CLOUD-1639), so it inherits `hook`'s set entire and for the same
+		# reasons. The row exists because a comment saying "a repair does no
+		# network" is prose, and non-negotiable rule 2 asks for a gate.
+		#
+		# MEASURED AS THE REASON THIS ROW IS HERE: the first candidate the issue
+		# named was `batten mcp call Linear get_issue`, a live tracker read. No
+		# network call can be guaranteed inside CLOUD-689's 100 ms ceiling, and
+		# every other rule at this boundary adjudicates CACHED state — receipts,
+		# claims, captures — never a live read. The candidate was dropped and
+		# this row is what stops it coming back by a different hand.
+		#
+		# The SUBPROCESS is not reached by this table, and that is stated rather
+		# than left as a hole: `repair` spawns through `exec`, so a `fix` string
+		# naming a networking program is a config fact, not a module edge. What
+		# this row buys is that the ENGINE cannot grow the capability inline —
+		# and `hook`'s own comment already says a guarantee routable around by
+		# one hop is not one, which is why the effect bounds in
+		# `crate::repair`'s header carry the other half.
+		"repair": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
 			"pr_watch", "fast_forward", "main_watch",
 		},

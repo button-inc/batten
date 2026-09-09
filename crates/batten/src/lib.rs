@@ -102,6 +102,7 @@ pub mod recorder;
 pub mod redirect;
 pub mod refusal;
 pub mod render;
+pub mod repair;
 pub mod resolve;
 pub mod rest;
 pub mod review;
@@ -12161,6 +12162,26 @@ fn run_hook(
     // The `Allow` path is untouched — advice is the only document there, which is
     // the behaviour CLOUD-1131 measured and shipped. Suppressing advice generally
     // would trade a dropped deny for a dropped advisory.
+    // THE REPAIR RUNS HERE, AND THE PLACE IS THE ARGUMENT (CLOUD-1639).
+    //
+    // Not in `adjudicate`, which is pure and `#[must_use]`: consulting a store
+    // is a write and running a program is a bigger one, and CLOUD-1386 already
+    // settled that the effect belongs at the boundary while the decision stays a
+    // value. Not in `render` either, which deliberately cannot see `policy` so
+    // that a renderer cannot re-decide by accident (CLOUD-898). This is the one
+    // place both are true: the decision is made, the policy is still in hand,
+    // and nothing has been emitted yet.
+    //
+    // AFTER the waiver, which `adjudicate` already applied. A waived refusal is
+    // not happening, so there is nothing to repair and no program should run for
+    // it — a repair on a suppressed deny would be an effect the operator
+    // switched off, arriving anyway.
+    //
+    // BEFORE `emit_channel`, because a repair CHANGES WHICH DECISION IS EMITTED:
+    // a `retry` becomes a different refusal and a `silent` becomes an allow, and
+    // advice about the original call would then be advice about a call that no
+    // longer happened.
+    let decision = settle_repair(&policy, &envelope, decision);
     let ceiling = policy.advisory.as_ref();
     emit_channel(harness, &envelope, out, err, advice, ceiling, &decision)?;
     let hatch = hatch_for(&policy, &decision);
@@ -12169,6 +12190,64 @@ fn run_hook(
         ceiling: policy.refusal.as_ref(),
     };
     render(harness, &envelope, decision, &rendering, mode, out, err)
+}
+
+/// Run the refusing row's declared repair, and say what the boundary decides now.
+///
+/// **Every other decision passes straight through**, and most `Deny`s do too:
+/// the row must declare a `fix`, and the class it raises must declare an
+/// `applicability` other than `advice`. Both halves are checked here rather than
+/// trusted, because this is the function that runs a program.
+///
+/// # The fallback is the identity, which is what makes a failed repair safe
+///
+/// Every path that is not "the repair ran and exited zero" returns the decision
+/// unchanged — no row, no fix, an advice class, an unresolvable key, a program
+/// that will not run, a non-zero exit. The caller then renders the ordinary
+/// refusal it already had. There is no arm here that can report a repair that
+/// did not happen, which is the property the whole feature rests on.
+///
+/// # `Ask` is not repairable, and that is deliberate
+///
+/// An escalation has not refused anything — it asked a person. Repairing
+/// underneath them would answer on their behalf, which is
+/// [`crate::hook::Decision::Waived`]'s own argument for not suppressing an
+/// `Ask` either.
+fn settle_repair(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+    decision: hook::Decision,
+) -> hook::Decision {
+    let hook::Decision::Deny(refusal) = &decision else {
+        return decision;
+    };
+    let Some(token) = refusal.verdict() else {
+        // An undeclared refusal carries no class, so there is no `applicability`
+        // to read and nothing declared this repairable.
+        return decision;
+    };
+    let Some((fix, applicability, key)) = policy.repair_for(refusal.rule(), token, envelope) else {
+        return decision;
+    };
+    match crate::repair::run(hook_authority_root(), &fix, key.as_deref(), applicability) {
+        // The repair did not happen. The refusal the caller already composed is
+        // the honest answer, and it is returned untouched.
+        crate::repair::Outcome::Failed => decision,
+        // Repaired, and the class says re-issue. Still a refusal — exit `2` —
+        // because the call as made did not happen.
+        crate::repair::Outcome::Retry => hook::Decision::Deny(refusal::Refusal::declared(
+            refusal.rule(),
+            crate::verdict::Native::CallRetryNow,
+            &[],
+            refusal::Fix::None,
+        )),
+        // Repaired, and the class says proceed. An allow that owes a record.
+        crate::repair::Outcome::Silent => hook::Decision::Repaired(hook::Repair {
+            rule: refusal.rule().to_owned(),
+            repaired: token.to_owned(),
+            subject: key,
+        }),
+    }
 }
 
 /// The hatch a refusal advertises, by name.
@@ -15104,6 +15183,31 @@ fn render(
         // has nothing to leak even by mistake.
         hook::Decision::Waived(suppressed) => {
             output::message(mode, Verbosity::Normal, err, &suppressed.line_text())?;
+            Ok(ExitCode::Success)
+        }
+        // A REPAIRED CALL IS AN ALLOW THAT OWES A RECORD (CLOUD-1639), which is
+        // `Waived`'s contract one row up, and the arms are deliberately the same
+        // shape: both are a call that proceeds where something happened a reader
+        // would want to know about, and a second grammar for the second one
+        // would be two audit vocabularies on one channel.
+        //
+        // The record is not optional and not a verbosity level's to withhold.
+        // Every surveyed mutating admission controller applies silently and
+        // still writes an annotation; NONE applies silently and leaves nothing.
+        // `Normal` for the reason the waiver arm gives — a repair that was let
+        // through is not a detail a default run should have to ask for — and
+        // stderr because stdout is the host's decision document.
+        //
+        // Pointer-only (rule 4): `Repair` carries a class, a rule id and the
+        // subject the key resolved, and structurally cannot carry the repair's
+        // command line or its output. The consumer's `fix` string never reaches
+        // a channel the model reads.
+        //
+        // ONLY `silent` ARRIVES HERE. A `retry` repair is a `Deny` carrying
+        // `call retry now`, composed at the boundary — the call as made did not
+        // happen, and an allow would be the silent posture nobody declared.
+        hook::Decision::Repaired(repair) => {
+            output::message(mode, Verbosity::Normal, err, &repair.line_text())?;
             Ok(ExitCode::Success)
         }
         // One dispatch for every host, because the *shape* of the answer is the
