@@ -100,9 +100,14 @@ pub struct Run {
     pub status: String,
     pub conclusion: String,
     pub name: String,
-    /// The ordering key's first field. Empty where the caller's reading predates
-    /// CLOUD-436 and carries none.
+    /// The ordering key's second field. Empty where the caller's reading
+    /// predates CLOUD-436 and carries none.
     pub started_at: String,
+    /// The ordering key's FIRST field: when this run reached its conclusion.
+    ///
+    /// Empty for a run that has not reached one, and for a reading that carries
+    /// no such column. The two are told apart by `status`, never by this.
+    pub completed_at: String,
     /// The ordering key's tie-break. Zero where the reading carries none.
     pub id: u64,
 }
@@ -175,8 +180,59 @@ fn rank(run: &Run, answered: &[String]) -> u8 {
 
 /// The ordering key for one run. ISO-8601 sorts lexicographically, so a string
 /// compare is chronological; the zero-padded id breaks a tie inside one second.
-fn key(run: &Run) -> (String, u64) {
-    (run.started_at.clone(), run.id)
+///
+/// **`completed_at` LEADS, BECAUSE `started_at` STOPS TRACKING EVENT ORDER ONCE
+/// TWO EVENTS FOR ONE HEAD ARE IN FLIGHT TOGETHER** (CLOUD-1662). `land`'s
+/// pipeline pushes, which fires `synchronize` while the PR is still a draft and
+/// mints the skip set, then readies, which fires `ready_for_review` and mints the
+/// real run. Processed concurrently, the skip's job can start LATER than the run
+/// it exists to be replaced by, and CLOUD-503's mechanism inverts.
+///
+/// Measured twice, in both directions this can fail:
+///
+/// * `9ea4da6a`: `windows` **failure** started 04:05:37 and a `skipped` twin
+///   started 04:05:39, so the reading buried a red head and `land` sat on it for
+///   30 minutes holding the landing lease.
+/// * `9ca2b3ac`: ONE `pull_request` event minted two CI workflow runs at the
+///   identical `run_started_at` 16:10:20Z — 4986 skipped, 4987 ran and
+///   succeeded — whose jobs started 16:10:30 and 16:10:26. The check-run ids
+///   were inverted against the workflow-run ids too, so the tie-break could not
+///   save it either.
+///
+/// **The conclusion stamp is the event's order, recovered from a field the
+/// check-runs projection ALREADY CARRIES** — which is the measurement CLOUD-1662
+/// asked for before choosing between that and a second read per poll. A run that
+/// judged nothing concludes essentially when it is minted (the twin above:
+/// 16:10:21, one second), while a run that judged concludes when the work
+/// finished (16:31:39). It is not the GAP that decides — nothing here is a
+/// duration, so non-negotiable rule 3 is untouched — it is an absolute order over
+/// a fact each run carries.
+///
+/// **This is what lets the draft economy keep its case** (CLOUD-247, CLOUD-327).
+/// A PR readied, graded green, then RE-DRAFTED re-runs the name as a skip that
+/// genuinely concludes AFTER the success it supersedes, so it still speaks for
+/// the name. Both readings are "a success, then a later skip" by `started_at`
+/// alone, which is why CLOUD-1722 could not tell them apart and reversed that
+/// case; by conclusion they are opposite.
+///
+/// A run that has not concluded sorts ABOVE every run that has. That is the
+/// reading rather than a sentinel — not-yet-finished is later than any finish —
+/// and it keeps a head being re-judged `Pending` instead of falling back to the
+/// success it is re-judging, which is the false-green direction this module must
+/// never fail in.
+///
+/// The mutation drops the conclusion stamp back out of the key, which is exactly
+/// "restore clock-ordering" — the shape CLOUD-1662's Done block requires the
+/// suite to refuse. Verified killed: it reddens the arm that can only be decided
+/// by conclusion.
+//MUTANT skip-outranks-a-concurrent-failure|s@run.completed_at.clone(),@String::new(),@|a_concurrent_skip_does_not_bury_the_failure_it_raced
+fn key(run: &Run) -> (bool, String, String, u64) {
+    (
+        run.completed_at.is_empty() && run.status != "completed",
+        run.completed_at.clone(),
+        run.started_at.clone(),
+        run.id,
+    )
 }
 
 /// Which run answers for one name?
@@ -246,6 +302,20 @@ fn winner<'a>(runs: &[&'a Run], answered: &[String]) -> Option<&'a Run> {
         .iter()
         .max_by_key(|run| (key(run), rank(run, answered)))?;
     if rank(latest, answered) != UNANSWERED {
+        return Some(latest);
+    }
+    // **THE GUARD IS THE BACKSTOP FOR A READING THAT CANNOT BE ORDERED BY
+    // CONCLUSION, AND ONLY THAT** (CLOUD-1662 over CLOUD-1722). Where the rows
+    // carry `completed_at` the key has already put the run that judged on top,
+    // so reaching here at all means the unanswered row concluded LAST — which is
+    // the re-drafted PR, and yielding to the older success would re-open exactly
+    // the draft economy CLOUD-247 and CLOUD-327 established.
+    //
+    // Without the column the key falls back to `started_at`, the concurrent twin
+    // can win it, and this guard is what keeps a green head landable — the
+    // measured six-hour stall. A five-field reading is a live shape, not a legacy
+    // one: `sonar-gate.sh` emits precisely that.
+    if !latest.completed_at.is_empty() {
         return Some(latest);
     }
     // The completed-but-unanswered latest yields to the latest run that DID
@@ -445,7 +515,27 @@ mod tests {
             conclusion: conclusion.to_string(),
             name: name.to_string(),
             started_at: started_at.to_string(),
+            // A reading with no conclusion stamp — every case written before the
+            // column existed. They order on `started_at` exactly as they did and
+            // fall to `winner`'s guard exactly as they did, which is what leaves
+            // them the guard on this change rather than its casualties.
+            completed_at: String::new(),
             id,
+        }
+    }
+
+    /// The same row with the conclusion stamp the forge actually sends, which is
+    /// the only field that orders two runs minted by concurrent events.
+    fn concluded(
+        conclusion: &str,
+        name: &str,
+        started_at: &str,
+        completed_at: &str,
+        id: u64,
+    ) -> Run {
+        Run {
+            completed_at: completed_at.to_string(),
+            ..run("completed", conclusion, name, started_at, id)
         }
     }
 
@@ -928,6 +1018,118 @@ mod tests {
             Ok(Verdict::Green),
             "a run that completed without judging cannot erase the judgement it followed"
         );
+    }
+
+    /// THE CASE CLOUD-1722 GAVE UP, AND THIS ROW BUYS BACK.
+    ///
+    /// A PR readied, graded green, then RE-DRAFTED: the re-draft's `skipped` run
+    /// concludes genuinely after the success it supersedes, so it speaks for the
+    /// name and the head is not an answer. Identical in `started_at` terms to the
+    /// concurrent twin — the reason that reversal was needed — and opposite once
+    /// the conclusion stamps are read. The reversal above therefore narrows to a
+    /// reading that lacks the column rather than governing every reading.
+    #[test]
+    fn a_re_drafted_skip_that_concluded_last_still_speaks() {
+        let reading = vec![
+            concluded(
+                "success",
+                "ci",
+                "2026-09-08T10:00:00Z",
+                "2026-09-08T10:20:00Z",
+                1,
+            ),
+            concluded(
+                "skipped",
+                "ci",
+                "2026-09-09T10:00:00Z",
+                "2026-09-09T10:00:01Z",
+                2,
+            ),
+        ];
+        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&reading, &roster()) else {
+            panic!("a skip that concluded last is the current state of the name");
+        };
+        assert_eq!(findings[0].to_string(), "ci skipped");
+    }
+
+    /// THE ROW'S OWN MEASURED SHAPE (CLOUD-1662), and the false-green direction.
+    ///
+    /// `9ea4da6a`: `windows` FAILED at 04:05:37 and a `skipped` twin from the
+    /// concurrently-processed event started 04:05:39, so the reading buried a
+    /// definitively red head. `land` sat in `Wait` for 30 minutes holding the
+    /// landing lease over a head it could never call. The twin concluded on the
+    /// instant it was minted; the failure concluded when the job failed.
+    #[test]
+    fn a_concurrent_skip_does_not_bury_the_failure_it_raced() {
+        let reading = vec![
+            concluded(
+                "failure",
+                "ci",
+                "2026-09-08T04:05:37Z",
+                "2026-09-08T04:08:52Z",
+                101_933_616_080,
+            ),
+            concluded(
+                "skipped",
+                "ci",
+                "2026-09-08T04:05:39Z",
+                "2026-09-08T04:05:40Z",
+                101_933_643_878,
+            ),
+            concluded(
+                "success",
+                "perf",
+                "2026-09-08T04:05:35Z",
+                "2026-09-08T04:08:00Z",
+                3,
+            ),
+            concluded(
+                "success",
+                "final",
+                "2026-09-08T04:05:35Z",
+                "2026-09-08T04:08:00Z",
+                4,
+            ),
+        ];
+        let Ok(Verdict::Red(findings)) = decide(&reading, &roster()) else {
+            panic!("a skip that judged nothing cannot bury a failure it raced");
+        };
+        assert_eq!(findings[0].to_string(), "ci failure");
+    }
+
+    /// The bound, in the direction this module must never fail in: a rerun still
+    /// in flight outranks every run that concluded, however recently.
+    #[test]
+    fn a_run_still_going_outranks_every_run_that_concluded() {
+        let reading = vec![
+            concluded(
+                "success",
+                "ci",
+                "2026-09-09T16:10:26Z",
+                "2026-09-09T23:59:59Z",
+                9,
+            ),
+            run("in_progress", "-", "ci", "2026-09-09T16:10:30Z", 2),
+            concluded(
+                "success",
+                "perf",
+                "2026-09-09T16:10:26Z",
+                "2026-09-09T16:31:35Z",
+                3,
+            ),
+            concluded(
+                "success",
+                "final",
+                "2026-09-09T16:10:26Z",
+                "2026-09-09T16:31:39Z",
+                4,
+            ),
+        ];
+        let Ok(Verdict::Pending(Pending::Running { pending, .. })) = decide(&reading, &roster())
+        else {
+            panic!("an in-flight re-run holds the poll open");
+        };
+        assert_eq!(pending, 1);
     }
 
     #[test]
