@@ -7050,6 +7050,22 @@ severity = "deny"
 # pairing is what is refused, never either half alone. `line_sources` names three
 # shapes because the judgement is the join across them: which hooks are registered
 # by path, which tools are pinned, and what those scripts actually call.
+# CLOUD-593 and CLOUD-658, ported from `mise-tasks/msrv-pin-agreement.sh` under
+# CLOUD-843. Since CLOUD-593 the toolchain pin is the AUTHORITY and the declared
+# floor is its derived copy, so the predicate is a text equality over the compiler
+# LINE rather than a second compile of the whole workspace at a second toolchain.
+# CLOUD-658 added the third copy: the dependency bot's own updater does not read
+# the floor from the manifest, so MSRV-aware resolution survives the handover only
+# while the number is written into its config — a copy is not the defect, an
+# UNGATED copy is.
+[[rule]]
+id = "msrv-pin-agreement"
+kind = "policy"
+scope = "tree"
+line_sources = ["Cargo.toml", "mise.toml", "renovate.json5"]
+module = "policy/msrv-pin-agreement.rego"
+severity = "deny"
+
 [[rule]]
 id = "hook-pin-check"
 kind = "policy"

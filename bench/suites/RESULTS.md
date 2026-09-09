@@ -70,7 +70,6 @@ to it pays.
 | 1.4 | 0.4% | `tests/timeout-drift.bats` |
 | 1.3 | 0.4% | `tests/macos-link-check.bats` |
 | 1.2 | 0.4% | `tests/done-pr-check.bats` |
-| 1.2 | 0.3% | `tests/msrv-pin-agreement.bats` |
 | 1.2 | 0.3% | `tests/suite-bench-check.bats` |
 | 1.1 | 0.3% | `tests/stop-posture-check.bats` |
 | 1.1 | 0.3% | `tests/duplicate-close-check.bats` |
