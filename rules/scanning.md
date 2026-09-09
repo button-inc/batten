@@ -42,8 +42,10 @@ the same `0`:
   Ready block, `config-lint`, every linter. Exit `0` says _no known defect was
   found_, and the reasoning it cannot reach is still yours to do.
 
-**One question separates them: can this gate be satisfied by content that is
-well-formed and false?** If it can, it is a floor. `crates/batten/src/ready.rs`
+**One question separates them, and it is asked of the PAIR — this gate, your
+question — never of the gate alone: can this gate be satisfied by content that
+is well-formed and false _as an answer to what you are asking_?** If it can, it
+is a floor for your question. `crates/batten/src/ready.rs`
 says this about itself where `REQUIRED_CLAIMS` is declared — the prose path
 "validates the clauses that ARE there and says nothing about absence", and the
 claims object exists because "a key cannot be well-formed prose". A key can be
@@ -58,6 +60,17 @@ well-formed, unverifiable by the gate, false. One of those two was a row whose
 own §2 said its mechanism was still undecided, which is precisely the case
 `REQUIRED_CLAIMS` was built to catch; the fabricated fill hid it. The gate did
 its job exactly as designed. The floor was read as a verdict.
+
+**KIND IS RELATIONAL, WHICH IS WHY THIS STAYS PROSE.** The obvious mechanism —
+a column on each rule declaring which kind it is — does not survive contact:
+`[budget.instructions]` is a **decider** over "is this surface inside its line
+budget" and a **floor** over "is this surface correct", and CLOUD-1687 exists
+precisely because it read green at 199 of 199 lines while the content had forked
+from the spec it cites. One rule, both roles, settled by which question the
+reader brought. A rule cannot declare a property it does not have, and
+non-negotiable rule 3 forbids a gate whose object is "which question did you
+mean" — that is a judgement. So this row is feedforward by construction rather
+than by omission, and CLOUD-1567 owns what a mechanism here could still reach.
 
 So row five's conclusion is bounded: **run the gate to learn what the gate
 decides, then ask whether what it decides is what you were asking.** A decider's
