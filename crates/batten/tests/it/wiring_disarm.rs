@@ -163,24 +163,39 @@ fn an_armed_script_is_replaced_by_a_shim_that_exits_zero() {
 /// Case (a), the half a string assertion cannot make: the shim is still
 /// executable.
 ///
+/// **Cross-platform by construction, which is why this needs no `#[cfg]` and no
+/// waiver.** The obvious spelling asserts `PermissionsExt::mode() & 0o111`, and
+/// `mode` is a `std::os::unix` symbol — so the case would compile on one target,
+/// carry an attribute deleting it on the others, and owe a `[[waiver]]` for the
+/// privilege. `Permissions` is `PartialEq` and portable, so asking whether the
+/// permissions CHANGED answers the same question everywhere: the shim must land
+/// with the bits the launcher set, whatever those bits are on this host.
+///
+/// That is also the stronger assertion. `mode & 0o111` passes over a rewrite
+/// that silently widened the file to `0o777`; equality does not.
+///
 /// Fails by: staging the new body in a temporary and renaming it over the
 /// original, which is what the registration pass does and is wrong here — the
-/// staged file carries the creating process's mode, so the shim lands `0644`,
-/// the harness cannot execute it, and the hook fails instead of exiting 0.
+/// staged file carries the creating process's mode, so the shim lands with the
+/// umask's bits, the harness cannot execute it, and the hook fails to run
+/// instead of exiting 0.
 #[test]
-#[cfg(unix)]
 fn the_shim_keeps_the_mode_the_launcher_set() {
-    use std::os::unix::fs::PermissionsExt as _;
-
     let bench = bench("disarm-mode", &one_row("stop.sh"), &[("stop.sh", ARMED)]);
+    let before = std::fs::metadata(bench.script("stop.sh"))
+        .expect("the fixture script is there")
+        .permissions();
+
     let (status, err) = bench.reclaim(&["-y"]);
     assert_eq!(status, 0, "{err}");
 
-    let mode = std::fs::metadata(bench.script("stop.sh"))
-        .expect("the script is there")
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o111, 0o111, "the shim lost its executable bits");
+    let after = std::fs::metadata(bench.script("stop.sh"))
+        .expect("the script survives the disarm")
+        .permissions();
+    assert_eq!(
+        before, after,
+        "the shim did not land with the permissions the launcher set"
+    );
 }
 
 /// Case (b): an already-shimmed script is left BYTE for byte.
