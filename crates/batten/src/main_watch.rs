@@ -224,6 +224,7 @@ mod tests {
 
     fn ref_body(sha: &str) -> crate::rest::Answer {
         crate::rest::Answer {
+            headers: std::collections::BTreeMap::new(),
             status: 200,
             etag: Some(String::from("W/\"a\"")),
             poll_floor: None,
@@ -234,6 +235,7 @@ mod tests {
 
     fn answer(status: u16, floor: Option<f64>, body: &str) -> crate::rest::Answer {
         crate::rest::Answer {
+            headers: std::collections::BTreeMap::new(),
             status,
             etag: Some(String::from("W/\"a\"")),
             poll_floor: floor,

@@ -65,6 +65,7 @@ const MOVED: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 /// A `200` carrying a ref object, and optionally a validator.
 fn ref_object(sha: &str, etag: Option<&str>) -> Answer {
     Answer {
+        headers: std::collections::BTreeMap::new(),
         status: 200,
         etag: etag.map(ToOwned::to_owned),
         poll_floor: None,
@@ -76,6 +77,7 @@ fn ref_object(sha: &str, etag: Option<&str>) -> Answer {
 /// A `304`: no body, and the validator the server echoes back.
 fn unchanged(etag: Option<&str>) -> Answer {
     Answer {
+        headers: std::collections::BTreeMap::new(),
         status: 304,
         etag: etag.map(ToOwned::to_owned),
         poll_floor: None,
