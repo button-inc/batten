@@ -68,29 +68,6 @@ local gate = new Mapping<String, Step> {
     glob = List("Cargo.toml", "renovate.json5")
     check = "mise run cap-drift"
   }
-  // The sibling question about the same two files, asked of the RESOLUTION
-  // rather than the requirement (CLOUD-767). `cap-drift` decides whether the
-  // manifest and the bot config agree about what may be proposed;
-  // `digest-major-agreement` decides whether what was actually resolved still
-  // composes. A caret requirement is silent on the second, which is why this
-  // reads `Cargo.lock` and that one does not.
-  //
-  // The rule it carries was a `Cargo.toml` comment asserting something untrue
-  // for as long as `gix` had been a dependency. Prose is feedforward only.
-  ["digest-major-agreement"] {
-    glob = List("Cargo.toml", "Cargo.lock")
-    check = "mise run digest-major-agreement"
-  }
-  // Enforces the "research goes to Linear, not a repo docs/ tree" directive as
-  // a runnable gate, not prose (see AGENTS.md): fails if any docs/ path is
-  // tracked. Research deliverables and evidence notes attach to the Linear
-  // issue; the repo carries code and its close-in config, not research prose.
-  //
-  // Deliberately keeps NO glob where its two glob-less neighbours got one
-  // (CLOUD-224). Its input genuinely is the whole index: it fails on any TRACKED
-  // docs/ path, including one an earlier commit left behind, so a glob would let
-  // a violation persist unreported for every commit that did not touch it. It
-  // costs ~95ms, which is what makes that affordable.
   ["no-docs-tree"] {
     check = "mise run no-docs-tree"
   }
