@@ -150,7 +150,7 @@ fn an_armed_script_is_replaced_by_a_shim_that_exits_zero() {
     // run — a lost shebang, a lost mode bit — untested.
     #[expect(
         clippy::disallowed_types,
-        reason = "the hook contract is an execution: the shim must EXIT 0 on the hook's own                   stdin, which no read of its bytes can establish"
+        reason = "stays: the hook contract IS an execution — the shim must exit 0 on the hook's own stdin, and no read of its bytes can establish that. A byte comparison passes over a shim that lost its shebang or its mode bit (CLOUD-320)"
     )]
     let run = std::process::Command::new(bench.script("stop.sh"))
         .stdin(std::process::Stdio::null())
