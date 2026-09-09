@@ -867,7 +867,7 @@ mod tests {
         // relative order, so "later" means nothing between concurrent copies.
         //
         // SO THE DRAFT CONCERN MOVES TO THE GATE THAT ALREADY OWNS IT.
-        // `.github/workflows/fast-forward.yml` refuses a draft head
+        // The consumer's fast-forward workflow refuses a draft head
         // unconditionally, before any checks reading at all — added by CLOUD-853
         // precisely because the ruleset admitted a draft's empty check set as
         // satisfying "required checks green". A re-drafted PR cannot fast-forward

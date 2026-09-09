@@ -930,9 +930,10 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
         // ~490s OF EVERY `verify` (CLOUD-1726).
         //
         // A consumer sets a bats timeout for THEIR suite — this repository's is
-        // 300s in `mise.toml`'s `[env]`, chosen because a real case once sat at
-        // 0% CPU for forty minutes holding the landing lease. `[env]` reaches
-        // every process, so it also reached the toy repositories a sweep builds:
+        // 300s, exported from its task runner's environment block, chosen because
+        // a real case once sat at 0% CPU for forty minutes holding the landing
+        // lease. An exported environment reaches every descendant process, so it
+        // also reached the toy repositories a sweep builds:
         // three files, one filtered case, and a 300-second watchdog.
         //
         // AND THE SWEEP WAITS OUT THE WHOLE BOUND EVEN WHEN THE CASE PASSES.
