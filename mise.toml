@@ -2192,6 +2192,18 @@ description = "Price refusal rendering by strategy and explicit residency, writi
 # file, so the report cannot go stale without `test:cargo` reddening.
 run = "BENCH_METRIC=refusal-render-characters cargo run --quiet -p batten --example refusal-render-bench"
 
+[tasks."doctor:mediator"]
+description = "Report whether the engine adjudicating this tree was built from it"
+# CLOUD-1650's handler spawns this rather than the verb directly. `doctor`'s own
+# `hook-handlers` check resolves every declared handler program, and `batten` is
+# absent from a CI runner's `PATH` — it is built there, not installed — so a row
+# naming it made `batten doctor` exit 1 on every such checkout. `mise` is present
+# wherever the gates run, and what the task spawns is its own business.
+#
+# The body is the engine verb and nothing else: a `mise-tasks/*.sh` program would
+# grow the bash surface two gates are shrinking.
+run = "batten doctor mediator"
+
 [tasks."install:local"]
 description = "Put the built binary where the hook registrations resolve it — `install.sh`'s own destination"
 depends = ["build:release"]

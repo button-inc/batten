@@ -9308,14 +9308,23 @@ expires = "2027-02-28"
 # which commands move `HEAD`. A rebuild is what makes the build stale, so the set
 # is the commands that change what is checked out.
 #
-# `batten doctor mediator` rather than a task: the verb is on the read-only
-# allowlist, it is what `mediator-matches-the-tree` already spawns, and a new
-# `mise-tasks/*.sh` program would be refused by `shell-rule-retired` and
-# `bash-surface-not-growing` alike.
+# THROUGH `mise`, AND NOT `["batten", "doctor", "mediator"]` DIRECTLY, which is
+# what this row said first and what CI refused. `doctor`'s `hook-handlers` check
+# resolves every declared handler program, and `batten` is on `PATH` in a
+# provisioned session but NOT on a CI runner, which builds the engine without
+# installing it — so the direct spelling made `batten doctor` exit 1 on every
+# checkout that had not installed it, and `this_repository_is_healthy` went red
+# while passing locally. Every other handler row names `mise` or a repo-relative
+# script for the same reason. `mediator-matches-the-tree` may spawn `batten`
+# because a `[[startup]]` row is not resolved by that check.
+#
+# The task is the engine verb and nothing else — no new `mise-tasks/*.sh`
+# program, which `shell-rule-retired` and `bash-surface-not-growing` would
+# refuse.
 [[hook.handler]]
 id = "head-move-mediator-check"
 on = "post-tool"
-run = ["batten", "doctor", "mediator"]
+run = ["mise", "run", "doctor:mediator"]
 matcher = "^Bash$"
 command_matcher = '\bgit\b.*\b(checkout|switch|rebase|merge|reset|pull|cherry-pick|revert|am|worktree)\b'
 # A stat of two paths and a hash comparison; `mediator-matches-the-tree` runs the
