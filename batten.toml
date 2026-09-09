@@ -7043,6 +7043,21 @@ severity = "deny"
 # un-retried install, auto-landed — and the rule that forbids it ships as a gate
 # rather than a note. A denylist rather than a required sha, so every legitimate
 # forward bump stays silent.
+# CLOUD-479's own trap, ported from `mise-tasks/hook-pin-check.sh` under
+# CLOUD-843. A hook registered BY PATH does not get the task runner's env, so a
+# tool `[tools]` pins resolves unpinned or not at all — and every hook here is
+# fail-open by design, so an absent one allows SILENTLY rather than erroring. The
+# pairing is what is refused, never either half alone. `line_sources` names three
+# shapes because the judgement is the join across them: which hooks are registered
+# by path, which tools are pinned, and what those scripts actually call.
+[[rule]]
+id = "hook-pin-check"
+kind = "policy"
+scope = "tree"
+line_sources = [".claude/settings.json", "mise.toml", "mise-tasks/*.sh"]
+module = "policy/hook-pin-check.rego"
+severity = "deny"
+
 [[rule]]
 id = "mise-action-floor"
 kind = "policy"

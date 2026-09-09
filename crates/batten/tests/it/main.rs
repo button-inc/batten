@@ -146,6 +146,7 @@ mod hk_fix_selection;
 mod hk_observation;
 mod hk_plan;
 mod hook_cost;
+mod hook_pin_check;
 mod hook_profile;
 mod hook_skip_local;
 mod hook_worktree_root;
