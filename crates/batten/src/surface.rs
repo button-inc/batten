@@ -2924,6 +2924,10 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "doctor.gate",
         about: "Diagnose whether this checkout's commit path runs the gate",
         data_channel: true,
+        // `doctor *`'s set, and for the same reason every sibling takes it: a
+        // diagnosis reports what it found about the checkout and renders no
+        // policy verdict, so it cannot mint a `2`.
+        exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[JSON],
     },
