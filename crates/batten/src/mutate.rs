@@ -1128,17 +1128,43 @@ struct Selection {
 }
 
 /// Run a gate's suite filtered to `want`, inside the staged tree.
+/// Run one declared [`crate::arm::Arm`], which is the harness's unit of work
+/// (CLOUD-1714).
+///
+/// The adapter is one line of destructuring because `spawn` already takes
+/// exactly what an arm carries: an arm's `argv` is program-then-arguments, and
+/// splitting it here is what keeps the declaration a table rather than four
+/// positional parameters at every call site. An arm with an EMPTY argv names no
+/// program, which is a could-not-look rather than a run of nothing.
+fn spawn_arm(arm: &crate::arm::Arm, env: &[(String, String)]) -> Result<Ran> {
+    let (program, args) = arm
+        .argv
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("mutate: arm {} names no program.", arm.id))?;
+    spawn(&arm.cwd, program, args, env)
+}
+
 fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Result<Selection> {
     let env = suite_env(root);
     match suite {
         Suite::Bats(path) => {
-            let args = vec![String::from("--filter"), want.to_owned(), path.to_owned()];
-            let ran = spawn(
-                staged.dir(),
-                &root.join(BATS).to_string_lossy(),
-                &args,
-                &env,
-            )?;
+            // DECLARED AS AN ARM (CLOUD-1714), which is what makes this module
+            // an INSTANCE of the harness rather than a second copy of it. The
+            // arm carries what it takes to run the thing once — where, what,
+            // and under which environment — and `arm::Outcome` carries the
+            // distinction the `selected == 0` reading below already draws: a
+            // suite that selected no case has not passed, it has not been
+            // looked at.
+            let arm = crate::arm::Arm {
+                id: format!("bats:{want}"),
+                cwd: staged.dir().to_path_buf(),
+                argv: std::iter::once(root.join(BATS).to_string_lossy().into_owned())
+                    .chain([String::from("--filter"), want.to_owned(), path.to_owned()])
+                    .collect(),
+                stdin: None,
+                env: env.iter().cloned().collect(),
+            };
+            let ran = spawn_arm(&arm, &env)?;
             Ok(Selection {
                 selected: tap_lines(&ran.output),
                 ok: ran.ok,
@@ -1154,8 +1180,19 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Result<
             // that match nothing is their startup. A target selecting no case
             // is not a pass either: `selected` stays 0 and the caller reports
             // `names-no-case`, which is a could-not-look.
-            let args = vec![String::from("test"), String::from("--"), want.to_owned()];
-            let ran = spawn(staged.dir(), "cargo", &args, &env)?;
+            let arm = crate::arm::Arm {
+                id: format!("cargo:{want}"),
+                cwd: staged.dir().to_path_buf(),
+                argv: vec![
+                    String::from("cargo"),
+                    String::from("test"),
+                    String::from("--"),
+                    want.to_owned(),
+                ],
+                stdin: None,
+                env: env.iter().cloned().collect(),
+            };
+            let ran = spawn_arm(&arm, &env)?;
             Ok(Selection {
                 selected: libtest_lines(&ran.output),
                 ok: ran.ok && !ran.output.contains("error: could not compile"),

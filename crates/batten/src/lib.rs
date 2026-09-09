@@ -12,6 +12,7 @@ pub mod action;
 pub mod admission;
 pub mod advisory;
 pub mod agent;
+pub mod arm;
 pub mod attribution;
 pub mod baseline;
 /// The board's column vocabulary, resolved from config rather than held as
