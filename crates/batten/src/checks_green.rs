@@ -179,6 +179,58 @@ fn key(run: &Run) -> (String, u64) {
     (run.started_at.clone(), run.id)
 }
 
+/// Does the incoming run displace the one held for its name?
+///
+/// **A COMPLETED-BUT-UNANSWERED RUN NEVER DISPLACES A REAL VERDICT**, and that
+/// clause is the whole of this function. Everything else is the key-then-rank
+/// order [`latest_per_name`] always had.
+///
+/// MEASURED, AND IT STOPPED THE WHOLE FLEET. GitHub registers the path-filtered
+/// COPY of a workflow one to five seconds after the copy that actually runs, and
+/// the copy that does not apply concludes `skipped`. So the skipped twin is the
+/// LATER run by `started_at` and won outright — `ci` succeeded at 02:34:02 and
+/// was overruled by a `skipped` twin at 02:34:03, and six required checks read
+/// as "no verdict" over a head whose every job was green. `checks green` returned
+/// `Pending`, which is the correct response to that reading; the reading was
+/// wrong. Nothing landed on `main` for six hours across three branches, each
+/// holding the landing lease while `ci-wait` waited for an answer that had
+/// already arrived and been discarded.
+///
+/// CLOUD-436's rule is not weakened by this, it is completed. That rule exists
+/// because a draft-era skip set "vetoes a verdict that already exists" — and
+/// ordering by start time fixed the union only for the case where the residue is
+/// OLDER. The residue here is newer, so the same veto came back through the
+/// ordering that was supposed to end it.
+///
+/// **STILL-RUNNING IS DELIBERATELY NOT COVERED** (rank 4). A rerun in flight over
+/// a name that already succeeded must still read `Pending`: the new run may fail,
+/// and preferring the old success would be a false green on the one path where
+/// the answer is genuinely not in yet. Only a run that COMPLETED without
+/// producing a verdict — `skipped`, `cancelled`, or whatever GitHub adds next —
+/// is refused the displacement, because such a run judged nothing and a reading
+/// that lets it erase a judgement is reporting the absence of an answer it holds.
+fn displaces(held: ((String, u64), u8), incoming: ((String, u64), u8)) -> bool {
+    const UNANSWERED: u8 = 3;
+    const ANSWERED: u8 = 2;
+    let ((hk, hr), (nk, nr)) = (held, incoming);
+    // AN UNORDERABLE PAIR IS UNTOUCHED, and that exclusion is load-bearing rather
+    // than tidiness. A reading carrying no `started_at` and no id leaves every key
+    // equal, and `an_unorderable_pair_falls_to_the_least_conclusive` requires such
+    // a pair to answer exactly as the union did — so it can never read greener
+    // than it did before ordering existed. Preferring the answer there would make
+    // the fail-closed case fail open, which is the one direction this module
+    // cannot afford.
+    if nk != hk {
+        if nr == UNANSWERED && hr <= ANSWERED {
+            return false;
+        }
+        if hr == UNANSWERED && nr <= ANSWERED {
+            return true;
+        }
+    }
+    nk > hk || (nk == hk && nr > hr)
+}
+
 /// Latest run per name (CLOUD-436), over the required subset only.
 ///
 /// An unrelated check gets neither a vote nor a veto — the same scoping that
@@ -202,7 +254,7 @@ fn latest_per_name<'a>(runs: &'a [Run], roster: &Roster) -> BTreeMap<&'a str, &'
             Some(held) => {
                 let (hk, hr) = (key(held), rank(held, &roster.answered));
                 let (nk, nr) = (key(run), rank(run, &roster.answered));
-                if nk > hk || (nk == hk && nr > hr) {
+                if displaces((hk, hr), (nk, nr)) {
                     best.insert(&run.name, run);
                 }
             }
@@ -371,6 +423,90 @@ mod tests {
             started_at: started_at.to_string(),
             id,
         }
+    }
+
+    /// THE MEASURED SHAPE, and the reason `displaces` exists (CLOUD-1722).
+    ///
+    /// GitHub registers the path-filtered COPY of a workflow a few seconds after
+    /// the copy that runs, and the copy that does not apply concludes `skipped`.
+    /// Ordering purely by `started_at` therefore hands the name to the twin that
+    /// judged nothing. Taken from `2ce05b82`: `ci` succeeded at 02:34:02 and was
+    /// overruled by a `skipped` twin at 02:34:03, six required checks read as "no
+    /// verdict", and no branch in the repository could land for six hours.
+    #[test]
+    fn a_later_skipped_twin_does_not_erase_a_verdict() {
+        let mut runs = green_set();
+        runs.push(run(
+            "completed",
+            "skipped",
+            "ci",
+            "2026-09-09T02:34:03Z",
+            102_315_915_050,
+        ));
+        assert_eq!(
+            decide(&runs, &roster()),
+            Ok(Verdict::Green),
+            "a skipped copy of a workflow that did not apply judged nothing"
+        );
+    }
+
+    /// THE ANTI-VACUITY HALF, and the one direction this must not buy.
+    ///
+    /// A rerun IN FLIGHT over a name that already succeeded is not the same shape:
+    /// the new run may fail, so the answer genuinely is not in yet and `Pending`
+    /// is right. A fix that preferred the standing success here would be a false
+    /// green on the only path where waiting is the correct behaviour — which is
+    /// worse than the stall it replaces, because a stall is recoverable.
+    #[test]
+    fn a_rerun_in_flight_still_reads_pending() {
+        let mut runs = green_set();
+        runs.push(run(
+            "in_progress",
+            "",
+            "ci",
+            "2026-09-09T02:40:00Z",
+            102_315_915_051,
+        ));
+        assert!(
+            matches!(decide(&runs, &roster()), Ok(Verdict::Pending(_))),
+            "a rerun that has not concluded is not answered by the run it replaced"
+        );
+    }
+
+    /// The rule stays a completion of CLOUD-436 rather than a reversal of it: an
+    /// OLDER skip set must still lose to the verdict that came after it, which is
+    /// the direction ordering by start time was introduced to fix.
+    #[test]
+    fn an_older_skip_still_loses_to_the_verdict_that_followed() {
+        let mut runs = green_set();
+        runs.insert(
+            0,
+            run(
+                "completed",
+                "skipped",
+                "ci",
+                "2026-09-09T02:00:00Z",
+                102_315_915_049,
+            ),
+        );
+        assert_eq!(decide(&runs, &roster()), Ok(Verdict::Green));
+    }
+
+    /// A REAL FAILURE IS STILL RED, whichever order it arrives in. `failure` is an
+    /// answered conclusion, so it is not what `displaces` protects against — and
+    /// a fix that let a stale success outrank a later failure would be the false
+    /// green this whole module exists to stop.
+    #[test]
+    fn a_later_failure_still_wins() {
+        let mut runs = green_set();
+        runs.push(run(
+            "completed",
+            "failure",
+            "ci",
+            "2026-09-09T02:45:00Z",
+            102_315_915_052,
+        ));
+        assert!(matches!(decide(&runs, &roster()), Ok(Verdict::Red(_))));
     }
 
     fn green_set() -> Vec<Run> {
@@ -692,18 +828,49 @@ mod tests {
     }
 
     #[test]
-    fn a_success_superseded_by_a_skip_is_not_an_answer() {
-        // The draft economy survives supersession (CLOUD-247, CLOUD-327): a name
-        // whose LATEST run skipped is still not an answer, whatever graded
-        // before it.
+    fn a_success_superseded_by_a_skip_is_an_answer_now() {
+        // REVERSED DELIBERATELY (CLOUD-1722), and the reasoning lives here rather
+        // than only in a commit message because the case it replaces was right
+        // for three weeks and a reader needs to know what changed under it.
+        //
+        // It asserted the draft economy (CLOUD-247, CLOUD-327): a name whose
+        // LATEST run skipped is not an answer, whatever graded before it — so a
+        // PR readied, graded green, then RE-DRAFTED does not keep reading green
+        // off the stale run. That case is real and its two runs are a day apart.
+        //
+        // IT CANNOT BE TOLD FROM THE ONE THAT STOPPED THE FLEET. GitHub registers
+        // the path-filtered COPY of a workflow one to five seconds after the copy
+        // that runs, and the copy that does not apply concludes `skipped`. Both
+        // readings are "a success, then a later skip"; only the gap differs, and
+        // a gate deciding on a duration would be estimating rather than deciding
+        // (non-negotiable rule 3). `check_suite`, the workflow-run id and the
+        // check-run id were each checked as discriminators and none is one: two
+        // workflow files dispatched by a single push take their ids in arbitrary
+        // relative order, so "later" means nothing between concurrent copies.
+        //
+        // SO THE DRAFT CONCERN MOVES TO THE GATE THAT ALREADY OWNS IT.
+        // `.github/workflows/fast-forward.yml` refuses a draft head
+        // unconditionally, before any checks reading at all — added by CLOUD-853
+        // precisely because the ruleset admitted a draft's empty check set as
+        // satisfying "required checks green". A re-drafted PR cannot fast-forward
+        // whatever this predicate answers, so the cost of this reversal is one
+        // wasted lap of `land`, not a merge nobody graded.
+        //
+        // The cost of NOT reversing it was measured on 2026-09-09: six required
+        // checks reading "no verdict" over a head whose every job had succeeded,
+        // three branches taking the landing lease in turn and holding it, and
+        // nothing reaching `main` for six hours.
         let reading = vec![
             run("completed", "success", "ci", "2026-08-11T00:00:00Z", 1),
             run("completed", "skipped", "ci", "2026-08-12T00:00:00Z", 2),
+            run("completed", "success", "perf", "2026-08-11T00:00:00Z", 3),
+            run("completed", "success", "final", "2026-08-11T00:00:00Z", 4),
         ];
-        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&reading, &roster()) else {
-            panic!("the later skip speaks for the name");
-        };
-        assert_eq!(findings[0].to_string(), "ci skipped");
+        assert_eq!(
+            decide(&reading, &roster()),
+            Ok(Verdict::Green),
+            "a run that completed without judging cannot erase the judgement it followed"
+        );
     }
 
     #[test]
