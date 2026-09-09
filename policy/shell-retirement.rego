@@ -324,15 +324,11 @@ only_supplies_the_successors_precondition(path) if {
 	# the sibling arm above owns the first.
 	count(added) > 0
 
-	# EVERY REMOVAL STILL EARNS THE SIBLING ARM. A suite that both drops references
-	# to the retired program and gains its successor's precondition is doing ONE
-	# thing, and the first draft of this clause demanded zero removals — which
-	# earned neither arm and refused `in-progress-drain.bats`, the suite that
-	# stubbed `merged-pr-keys.sh` by name and therefore had to lose those lines.
-	#
-	# Composing rather than widening: the removals answer to `admitted_removal`
-	# exactly as they do above, and the additions answer to `supplies_a_precondition`
-	# below. Neither test is relaxed by standing next to the other.
+	# EVERY REMOVAL STILL EARNS THE SIBLING ARM, unchanged. A suite that both drops
+	# a retired program's stub and gains the grammar its successor reads is doing
+	# ONE thing: `tests/in-progress-drain.bats` fails 26 cases without the config
+	# line, measured, so forbidding removals here would refuse the very suite this
+	# arm exists for.
 	removed := {line | some line in base; not line in head}
 	count({line |
 		some line in removed
@@ -365,14 +361,20 @@ supplies_a_precondition(line) if {
 	contains(line, "batten.toml")
 }
 
-# The successor's own invocation, as the retired path's ledger arm declared it —
-# read from the ledger rather than spelled here, so a suite cannot admit a line
-# naming a verb no retirement mapped to it.
-supplies_a_precondition(line) if {
-	some gone in delta.deleted
-	some succ in invocations_for(gone)
-	contains(line, succ)
-}
+# THERE IS NO THIRD SHAPE, and the one that was here is why this comment is.
+#
+# A draft also admitted an added line naming the retired path's declared successor
+# invocation. It reads as the obvious third case and it is the hole: a REPOINT
+# rewrites a line to name the successor, so every such edit satisfied it — and
+# the module's own suite said so, `a_repointing_that_also_changes_the_rest_of_the_line_is_refused`
+# and `test_replacing_a_span_that_is_not_a_retired_reference_is_refused` both
+# going green. Those two exist to refuse an edit that repoints AND changes the
+# rest, which is precisely what the clause admitted.
+#
+# A repoint is `repoints_at_the_declared_invocation`'s business and already
+# polices that it changes nothing else. What is left here — a comment, or the
+# committed config — is the set a rewritten line cannot be, which is the property
+# that keeps this arm from swallowing the rule it extends.
 
 # THE ONE ADMITTED EDIT, and it is what makes this campaign able to clean up
 # after itself (CLOUD-1051).
