@@ -34,7 +34,6 @@ to it pays.
 | 4.2 | 1.2% | `tests/install.bats` |
 | 4.2 | 1.2% | `tests/doctor-race.bats` |
 | 3.9 | 1.1% | `tests/claimed-keys.bats` |
-| 3.8 | 1.1% | `tests/ci-tools-check.bats` |
 | 3.7 | 1.0% | `tests/with-lock.bats` |
 | 3.4 | 1.0% | `tests/target-ensure.bats` |
 | 3.4 | 0.9% | `tests/signing-posture.bats` |
