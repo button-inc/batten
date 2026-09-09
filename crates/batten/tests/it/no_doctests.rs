@@ -46,7 +46,7 @@ fn doctest_repo(name: &str, source: &str) -> PathBuf {
         .config(
             "version = 1\n\n\
              [[verdict]]\n\
-             id = \"test state early\"\n\
+             id = \"test place wrong\"\n\
              gloss = \"a test exists that nothing runs\"\n\
              class = \"An example nothing executes is dead code a reader trusts for being executable.\"\n\n\
              [[verdict.route]]\n\

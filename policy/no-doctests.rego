@@ -108,7 +108,7 @@ declares_non_running(info) if {
 
 violation contains {
 	"rule": "no-doctests",
-	"verdict": "test state early",
+	"verdict": "test place wrong",
 	"subjects": [{"path": path, "line": index + 1}],
 } if {
 	some [path, index] in runnable
@@ -126,7 +126,7 @@ scan(ls) := {"tree": {"lines": {"crates/demo/src/lib.rs": ls}}}
 
 test_an_unattributed_fence_is_runnable if {
 	some v in violation with input as scan(["/// ```", "/// let x = 1;", "/// ```"])
-	v.verdict == "test state early"
+	v.verdict == "test place wrong"
 }
 
 test_a_text_fence_is_not_a_doctest if {
