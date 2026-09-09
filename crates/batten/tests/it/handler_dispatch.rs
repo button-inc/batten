@@ -48,7 +48,7 @@ const CONFIG: &str = r#"version = 1
 [[hook.handler]]
 id = "head-move-mediator-check"
 on = "post-tool"
-run = ["mediator-advise.sh"]
+run = ["./mediator-advise.sh"]
 matcher = "^Bash$"
 command_matcher = "\\bgit\\b.*\\b(merge|pull|rebase|checkout|switch|reset)\\b"
 timeout_ms = 5000
@@ -64,6 +64,7 @@ struct Bench {
 /// What the door said to the host.
 struct Door {
     out: String,
+    err: String,
 }
 
 impl Bench {
@@ -93,8 +94,14 @@ impl Bench {
             .write_all(payload.as_bytes())
             .expect("write stdin");
         let outcome = child.wait_with_output().expect("wait for batten");
+        // STDERR IS CARRIED because a door that REFUSED says so there, and a case
+        // asserting only over stdout reports "the row did not select" for a call
+        // the engine never adjudicated at all. Two different defects, one failure
+        // message, and the wrong one is the easier to chase.
+        let err = String::from_utf8_lossy(&outcome.stderr).into_owned();
         Door {
             out: stdout(&outcome),
+            err,
         }
     }
 
@@ -140,11 +147,17 @@ fn bench(name: &str, verdict: &str) -> Bench {
 
 /// The advisory the row exists for reaches the agent, and the call is allowed.
 ///
-/// Exit `1` from the handler is `Outcome::Reported`, which the boundary pushes at
-/// `AdvisoryTier::Warning` — so the verdict token travels on `additionalContext`
-/// and nothing about the git call's own decision moves. That pairing is the
-/// row's whole acceptance: CLOUD-1326's posture is that a tree move is
-/// legitimate work, so this may never deny.
+/// Exit `1` from the handler is `Outcome::Reported`, which the boundary pushes as
+/// advice — and MEASURED, that advice reaches the agent on **stderr**, not on
+/// stdout. The distinction matters enough to assert on the real channel rather
+/// than the assumed one: an earlier draft of this case asserted over stdout, went
+/// red against a mechanism that was working, and reported "the verdict must reach
+/// the agent" about a verdict that had.
+///
+/// The decision channel is stdout, so the two assertions read different streams
+/// deliberately: the advice must arrive, and the call's own decision must not
+/// move. That pairing is the row's whole acceptance — CLOUD-1326's posture is
+/// that a tree move is legitimate work, so this may never deny.
 #[test]
 fn a_head_moving_git_call_carries_the_staleness_verdict_as_advice() {
     let bench = bench(
@@ -153,11 +166,17 @@ fn a_head_moving_git_call_carries_the_staleness_verdict_as_advice() {
     );
     let door = bench.door("Bash", "git checkout -");
 
-    assert!(bench.spawned(), "the row selects this command");
     assert!(
-        door.out.contains("mediator-build-behind-source"),
-        "the verdict must reach the agent, not only the handler's own stdout: {}",
-        door.out
+        bench.spawned(),
+        "the row selects this command; door said: {} / {}",
+        door.out,
+        door.err
+    );
+    assert!(
+        door.err.contains("mediator-build-behind-source"),
+        "the verdict must reach the agent on the advisory channel: {} / {}",
+        door.out,
+        door.err
     );
     assert!(
         !door.out.contains("\"permissionDecision\":\"deny\""),
