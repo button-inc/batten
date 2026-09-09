@@ -65,7 +65,7 @@ verify := task if {
 # predecessor spent an explicit exit 2 on.
 violation contains {
 	"rule": "report-only",
-	"verdict": "task declare dropped",
+	"verdict": "task guard missing",
 	"subjects": [{"path": manifest}],
 } if {
 	input.tree.documents[manifest]
@@ -75,7 +75,7 @@ violation contains {
 # A report named in `verify`'s own `depends` list.
 violation contains {
 	"rule": "report-only",
-	"verdict": "task run loose",
+	"verdict": "task judge silent",
 	"subjects": [{"path": manifest}],
 } if {
 	some task in reports
@@ -89,7 +89,7 @@ violation contains {
 # `mise run <task>` rather than the bare name.
 violation contains {
 	"rule": "report-only",
-	"verdict": "task run loose",
+	"verdict": "task judge silent",
 	"subjects": [{"path": manifest}],
 } if {
 	some task in reports
@@ -99,7 +99,7 @@ violation contains {
 # The other way onto the landing path, and the one `verify` cannot see.
 violation contains {
 	"rule": "report-only",
-	"verdict": "task run loose",
+	"verdict": "task judge silent",
 	"subjects": [{"path": path}],
 } if {
 	some path, doc in input.tree.documents
@@ -121,7 +121,7 @@ test_a_clean_manifest_passes if {
 
 test_a_report_in_verifys_depends_is_refused if {
 	some v in violation with input as verify_task({"depends": ["ci", "coverage"], "run": ""})
-	v.verdict == "task run loose"
+	v.verdict == "task judge silent"
 }
 
 test_a_report_invoked_by_verifys_body_is_refused if {
@@ -139,7 +139,7 @@ test_a_longer_identifier_merely_containing_the_name_does_not_fire if {
 
 test_no_verify_task_is_could_not_look if {
 	some v in violation with input as {"tree": {"documents": {"mise.toml": {"tasks": {}}}}}
-	v.verdict == "task declare dropped"
+	v.verdict == "task guard missing"
 }
 
 workflow(trigger, run) := {"tree": {"documents": {
@@ -149,7 +149,7 @@ workflow(trigger, run) := {"tree": {"documents": {
 
 test_a_report_run_on_pull_request_is_refused if {
 	some v in violation with input as workflow({"pull_request": {}}, "mise run coverage")
-	v.verdict == "task run loose"
+	v.verdict == "task judge silent"
 }
 
 # A SCHEDULED workflow running a report is the whole point of the report.

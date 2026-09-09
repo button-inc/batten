@@ -45,7 +45,7 @@ fn awk_repo(name: &str, program: &str) -> PathBuf {
              id = \"leading-identifier\"\n\
              regex = '^[A-Za-z_][A-Za-z0-9_]*'\n\n\
              [[verdict]]\n\
-             id = \"call run loose\"\n\
+             id = \"pattern carry unsafe\"\n\
              gloss = \"a command is spelled in a way whose behaviour is not defined across implementations\"\n\
              class = \"Escape processing on a -v assignment differs between awk implementations, so the same pattern is two different regexes.\"\n\n\
              [[verdict.route]]\n\
