@@ -272,6 +272,7 @@ mod tool_verdict_facts;
 mod transcript_stop_reason;
 mod transcript_tool_result;
 mod trunk_watch;
+mod turn_cross_check;
 mod use_graph;
 mod verdict_registry;
 mod verdict_vocabulary;

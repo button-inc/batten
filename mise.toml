@@ -2937,6 +2937,34 @@ echo "lock-check: mise.lock is complete and current"
 # Success says nothing, because a line on every turn is noise that trains the
 # reader to skip the one turn it matters.
 #
+# THE PATTERN TOLERATES COLOUR RATHER THAN SUPPRESSING IT, and that is the third
+# draft of this line. `[env]` sets `CARGO_TERM_COLOR = "always"` repo-wide, so a
+# machine-read log carries escapes between `: ` and `error`: the first draft
+# scraped `-->` and got nothing, the second matched `: error` and got nothing,
+# and the third set `CARGO_TERM_COLOR=never` on the invocation — which ALSO got
+# nothing, because a task's own environment beats a value inherited from the
+# caller. Three silent failures, each announcing a break with no pointer.
+#
+# So the pattern anchors on the SHAPE `--message-format=short` guarantees —
+# `path:line:col: ` — and lets `.*` span whatever decoration sits after it. It
+# needs no escape literal, survives either colour setting, and excludes the
+# trailing `error: could not compile` summaries, which carry no location and
+# would have spent the cap on nothing.
+#
+# BOUNDED AT FIVE LINES, AND BOUNDED IS NOT THE SAME AS USEFUL. The first draft
+# emitted one fixed sentence, which is cheap and costs the reader a whole turn
+# re-running the check to learn what broke — bounded and useless is its own
+# waste. What it emits instead is the first THREE `path:line` pointers and a
+# path to the rest: actionable enough to fix without a second run, and
+# pointer-only per non-negotiable rule 4, since a compiler's full output is the
+# payload and these are the pointer. The window cost of a failing turn is five
+# lines; of a passing turn, zero.
+#
+# `[hook_output] max_repeats = 1` IS SATISFIED BY THE CLEAR, not by luck: the
+# marker is removed once printed, so one failure is announced once rather than
+# on every turn until it is fixed — which is what would otherwise trip that
+# ceiling and, worse, train the reader to skip the line.
+#
 # ON STDOUT, AND THAT IS THE WHOLE DIFFERENCE BETWEEN AN ALARM AND A LOG.
 # `handler.rs` states the contract: "Exit `0` with stdout: advisory text, to be
 # merged into Batten's own" — so stdout is what reaches the AGENT and stderr is
@@ -2955,7 +2983,7 @@ echo "lock-check: mise.lock is complete and current"
 # table for one is the shape `polls-a-local-process` refuses.
 [tasks."cross-turn"]
 description = "One turn's cross-triple type-check, detached — reports the previous run's failure and never blocks the turn"
-run = "f=target/cross-turn.fail; if [ -f $f ]; then cat $f; rm -f $f; fi; if batten singleton acquire cross-turn $$ >/dev/null 2>&1; then (mise run cross-check >target/cross-turn.log 2>&1 || echo '::error:: cross-turn: a declared target did not type-check — run `mise run cross-check` for the pointers' >$f; batten singleton release cross-turn >/dev/null 2>&1) & fi; exit 0"
+run = "f=target/cross-turn.fail; if [ -f $f ]; then cat $f; rm -f $f; fi; if batten singleton acquire cross-turn $$ >/dev/null 2>&1; then (mise run cross-check >target/cross-turn.log 2>&1 || { echo '::error:: cross-turn: a declared target did not type-check'; grep -E '^[^ :]+:[0-9]+:[0-9]+: .*error' target/cross-turn.log | head -3 | sed 's/^/  /'; echo '  (full output: target/cross-turn.log)'; } >$f; batten singleton release cross-turn >/dev/null 2>&1) & fi; exit 0"
 
 [tasks.cross-check]
 description = "Type-check for other targets from Linux (no macOS runner needed)"
@@ -3002,7 +3030,13 @@ for t in x86_64-pc-windows-gnu; do
   #
   # It cannot red on a third-party warning: cargo compiles registry dependencies
   # with `--cap-lints allow`, so only workspace code is held to this.
-  if ! RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --target "$t"; then
+  # `--message-format=short` is the compiler doing the reduction instead of a
+  # grep guessing at it: one `path:line:col: error: …` per diagnostic, no span
+  # art and no `-->` lines belonging to notes and helps. Nothing parses this
+  # task's stdout — the loop reads the exit status — so the format is free to be
+  # the useful one, and `cross-turn` extracts pointers from it without having to
+  # tell an error's span from a note's (CLOUD-1731).
+  if ! RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --target "$t" --message-format=short; then
     echo "::error:: cross-check: $t does not type-check cleanly (warnings are denied here — see CLOUD-397)." >&2
     exit 1
   fi
