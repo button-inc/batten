@@ -519,12 +519,14 @@ fn a_backgrounded_bare_sleep_raises_the_timer_and_not_the_foreground_rule() {
 }
 
 #[test]
-fn a_bare_sleep_beside_a_condition_loop_is_exempt() {
-    // The one shape `waits_on_condition` actually decides, and therefore the
-    // only case that can discriminate the `loop-is-not-an-exemption` mutation:
-    // a resolvable bare `sleep` AND a loop keyword in the same backgrounded
-    // call. Drop the conjunct and this denies.
-    allowed_background(
+fn a_bare_sleep_beside_a_condition_loop_is_no_longer_exempt() {
+    // The exemption's most obviously wrong reachable shape, and the reason it
+    // is inverted rather than deleted: the `sleep 5` here waits on NOTHING —
+    // the loop beside it has an empty body — so the old rule read a condition
+    // somewhere in the call and exempted a bare timer sitting next to it. That
+    // is the whole argument against asking WHETHER there is a condition instead
+    // of what it is about, and after CLOUD-1337 the question is not asked.
+    denied_background(
         &fixture("mixed-wait"),
         "sleep 5; until [ -f /tmp/done ]; do :; done",
         true,
