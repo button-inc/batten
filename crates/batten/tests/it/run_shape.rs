@@ -165,6 +165,14 @@ fn fixture(name: &str) -> PathBuf {
             "[[pattern]]\n",
             "id = \"commit-message-file-flag\"\n",
             "regex = \"^(-[A-Za-z]*F|--file)$\"\n\n",
+            // The harness's task-output surface (CLOUD-1730). Spelled here
+            // because the fixture is its own consumer: the module reads the row
+            // through `data.batten.patterns`, so a fixture omitting it leaves
+            // the lookup undefined and the arm silently unreachable — which is
+            // how these two cases first failed, over a predicate that was right.
+            "[[pattern]]\n",
+            "id = \"harness-task-output\"\n",
+            "regex = '(^|/)tasks/[A-Za-z0-9._-]+\\.output$'\n\n",
             "[[verdict]]\n",
             "id = \"commit write missing\"\n",
             "gloss = \"a `git commit` names no message source, so git opens $EDITOR and blocks\"\n",
@@ -741,6 +749,60 @@ fn a_liveness_signal_is_the_same_question() {
     denied_background(
         &root,
         "while kill -0 $PID 2>/dev/null; do sleep 5; done",
+        true,
+    );
+}
+
+#[test]
+fn a_backgrounded_wait_polling_a_task_output_file_is_refused() {
+    // THE SURVIVING ESCAPE FROM THE SAME EXEMPTION (CLOUD-1730). The three cases
+    // above all ask the process table, and the arm that catches them reads the
+    // condition's PROGRAM — so the identical duplicate spelled as a file read
+    // walked straight through: `sleeps` holds, `run-in-background` holds,
+    // `waits_on_condition` holds, and no probe is counted.
+    //
+    // It is the DEFAULT spelling rather than a corner. The harness's own tooling
+    // documents `until <condition>; do sleep; done` as the way to wait, and the
+    // natural condition for "did my backgrounded task finish" is a marker in the
+    // file that task writes; reaching for `pgrep` takes a deliberate detour.
+    // Measured 2026-09-09 on CLOUD-1704's branch: over twenty of these in one
+    // session, every result delivered twice by the completion notification that
+    // fires anyway, none of them changing a decision — against a `PreToolUse`
+    // registration that was wired, was asked, and answered allow.
+    let root = fixture("polls-a-task-output");
+    denied_background(
+        &root,
+        "until grep -q LAND_EXIT /tmp/claude-0/x/tasks/bamwztknb.output; do sleep 20; done",
+        true,
+    );
+}
+
+#[test]
+fn the_probing_program_is_not_what_decides_a_task_output_poll() {
+    // The arm asks about the TARGET, never the program, and this is the case
+    // that pins it: `grep` is one of several ways to read the same file, and an
+    // arm enumerating programs would be satisfied by the next one. CLOUD-1337
+    // recorded that lesson for the narrow draft of its own predicate; spending
+    // it twice would be the whole point missed.
+    let root = fixture("polls-a-task-output-awk");
+    denied_background(
+        &root,
+        "until awk '/LAND_EXIT/{f=1} END{exit !f}' /tmp/claude-0/x/tasks/b1.output; do sleep 30; done",
+        true,
+    );
+}
+
+#[test]
+fn a_wait_on_a_local_file_that_is_not_a_task_output_is_clean() {
+    // THE OTHER HALF OF THE ANTI-VACUITY PAIR, and the one that keeps this arm
+    // from becoming "no backgrounded loop may read a file". A file another
+    // machine writes is exactly the condition `waits_on_condition` exists to
+    // permit, and it is a local read like any other — what disqualifies the task
+    // output is that the harness already reports it, not that it is on disk.
+    let root = fixture("waits-on-a-shared-file");
+    allowed_background(
+        &root,
+        "until grep -q ready /mnt/shared/deploy.status; do sleep 30; done",
         true,
     );
 }

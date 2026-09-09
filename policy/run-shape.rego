@@ -92,6 +92,7 @@ rules contains "background-redirect"
 #MUTANT process-poll-unread|s@^\tcount(process_probes) > 0$@\tfalse@|a_backgrounded_wait_polling_a_process_is_refused
 #MUTANT mise-background-unread|s@^\tinput.call\["run-in-background"\] != true$@\ttrue@|a_backgrounded_mise_run_is_allowed
 #MUTANT redirect-background-unread|s@^\tinput.call\["run-in-background"\] == true$@\ttrue@|a_foreground_redirect_is_not_this_rule
+#MUTANT task-output-poll-unread|s@^\tregex.match(data.batten.patterns\["harness-task-output"\], word)$@\tfalse@|a_backgrounded_wait_polling_a_task_output_file_is_refused
 #MUTANT bracket-is-an-exit|s@^\tcondition_program(segment) in {"pgrep", "pkill", "ps", "jobs"}$@\tcondition_program(segment) in {"pgrep", "pkill", "ps", "jobs"}; not contains(segment.raw, "[")@|a_bracketed_pattern_is_refused_just_the_same
 
 violation contains {
@@ -328,6 +329,40 @@ process_probes contains i if {
 	condition_program(segment) == "kill"
 	some word in segment.words
 	word == "-0"
+}
+
+# THE SAME DUPLICATE, READ OFF THE TASK'S OUTPUT FILE INSTEAD OF THE PROCESS
+# TABLE (CLOUD-1730). The two arms above ask WHICH PROGRAM the condition runs,
+# and that is the wrong half of the question: `pgrep` and `grep -q MARKER
+# <task output>` wait on one event — a harness-tracked task exiting — which
+# re-invokes the caller whether or not anybody polls. Nothing about which syscall
+# observes it changes that the notification is guaranteed.
+#
+# CLOUD-1337 closed `until` + `ps` and left `until` + `grep`, and the survivor is
+# the DEFAULT rather than a corner: the harness's own tooling documents
+# `until <condition>; do sleep; done` as the way to wait, and the natural
+# condition for "did my backgrounded task finish" is a marker in the file that
+# task writes. Reaching for `ps` takes a deliberate detour. Measured 2026-09-09
+# on CLOUD-1704's branch: over twenty such watchers in one session, every result
+# delivered twice, none changing a decision — against a `PreToolUse` registration
+# that was wired, was asked, and answered allow.
+#
+# SO THIS ARM ASKS ABOUT THE TARGET AND NEVER THE PROGRAM, which is what makes it
+# hold against the next spelling. `grep`, `rg`, `awk`, `test -s` and `[ -s ]` all
+# reach the same file, and enumerating them would re-run CLOUD-1337's own
+# recorded lesson that a narrow draft "would have made this worse".
+#
+# `waits_on_condition` SURVIVES UNTOUCHED, and must: a loop over a CI run, a
+# remote queue or a file another machine writes exits on an event nothing else
+# reports, and that is the shape the exemption exists to permit. What is refused
+# here is narrower — a condition naming a path this consumer declares as its
+# harness's task-output surface, which by construction is a notification the
+# caller already gets.
+process_probes contains i if {
+	some i, segment in input.call.segments
+	segment.construct.kind in {"until", "while"}
+	some word in segment.words
+	regex.match(data.batten.patterns["harness-task-output"], word)
 }
 
 # The program a LOOP CONDITION segment invokes.

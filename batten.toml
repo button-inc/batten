@@ -1629,6 +1629,29 @@ args = ["--list"]
 # The shape `release-plz` mints, and the one `released`'s successor orders on.
 # A `[[pattern]]` row rather than an inline regex because a module's inline regex
 # is refused at load — one concept, one spelling.
+# The harness's own background-task output surface (CLOUD-1730).
+#
+# A CONSUMER FACT, which is why it is a row rather than a literal in
+# `policy/run-shape.rego`: where a harness writes the file a backgrounded task
+# streams into is that harness's layout, and the module carries the matcher while
+# this file carries the answer. A different host spells it differently and edits
+# one row.
+#
+# WHAT IT IS FOR. `polls-a-local-process` refuses a backgrounded `until` loop
+# whose condition names something the harness ALREADY reports — a task exiting
+# re-invokes the caller whether or not anybody watches. The landed arms read the
+# process table; this is the same duplicate spelled as a file read, which is the
+# spelling the harness's own tooling recommends and therefore the one an agent
+# reaches for first.
+#
+# ANCHORED ON THE `tasks/` SEGMENT AND THE `.output` SUFFIX TOGETHER, never on
+# the temporary root: the root carries a session id and a per-checkout slug, so a
+# pattern spelling it would go stale on the next container and read as a gate
+# switched off rather than as a gate that moved.
+[[pattern]]
+id = "harness-task-output"
+regex = '(^|/)tasks/[A-Za-z0-9._-]+\.output$'
+
 [[pattern]]
 id = "egress-resolver-host"
 regex = 'api\.github\.com'
