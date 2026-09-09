@@ -49,25 +49,25 @@ package batten.sbom_inventory
 
 import rego.v1
 
-rules contains "sbom-empty"
+rules contains "manifest list empty"
 
-rules contains "sbom-unrecorded"
+rules contains "manifest file missing"
 
-rules contains "sbom-package-drift"
+rules contains "manifest count other"
 
-rules contains "sbom-unstable"
+rules contains "manifest mint twice"
 
-rules contains "sbom-components-inflated"
+rules contains "manifest count ahead"
 
-rules contains "sbom-supplier-unset"
+rules contains "manifest own missing"
 
-rules contains "sbom-copyright-unenriched"
+rules contains "manifest own unnamed"
 
-rules contains "sbom-license-unenriched"
+rules contains "manifest grant missing"
 
-rules contains "sbom-action-unenriched"
+rules contains "adapter own missing"
 
-rules contains "sbom-action-unmapped"
+rules contains "pin table missing"
 
 # The lockfile the cargo count is stated against, and the table every SHA-pinned
 # action must appear in. Both are committed text this row declares as
@@ -97,7 +97,7 @@ count_of(key) := value if {
 # missed would otherwise pass every equality below trivially: two empty documents
 # agree, and an empty count matches an empty count.
 violation contains {
-	"rule": "sbom-empty",
+	"rule": "manifest list empty",
 	"verdict": "tool read broken",
 	"subjects": [{"count": count_of(format)}],
 } if {
@@ -109,7 +109,7 @@ violation contains {
 # input. Told apart from ABSENT by `is_object` plus the count — an id nothing
 # recorded never binds `scan` at all.
 violation contains {
-	"rule": "sbom-unrecorded",
+	"rule": "manifest file missing",
 	"verdict": "tool read broken",
 	"subjects": [{"artifact": "sbom"}],
 } if {
@@ -122,7 +122,7 @@ violation contains {
 # SPDX, a fresh serial number and timestamp in CycloneDX. This is what makes the
 # published document a function of the source rather than of when it was cut.
 violation contains {
-	"rule": "sbom-unstable",
+	"rule": "manifest mint twice",
 	"verdict": "tool read broken",
 	"subjects": [{"artifact": format}],
 } if {
@@ -134,7 +134,7 @@ violation contains {
 # inventory: the subject is what the component counts are measured against, so
 # without it every one of them is taken over the wrong set.
 violation contains {
-	"rule": "sbom-unrecorded",
+	"rule": "manifest file missing",
 	"verdict": "tool read broken",
 	"subjects": [{"artifact": "describes"}],
 } if {
@@ -167,7 +167,7 @@ declared := count([line |
 # Each format is counted separately because they render purls differently, so a
 # regression in one renderer is invisible to a gate that only ever reads the other.
 violation contains {
-	"rule": "sbom-package-drift",
+	"rule": "manifest count other",
 	"verdict": "manifest count wrong",
 	"subjects": [{"path": lockfile}, {"count": count_of(format)}],
 } if {
@@ -192,7 +192,7 @@ violation contains {
 # property of the DOCUMENT rather than of the normaliser — a cataloger that starts
 # emitting a new inflated shape is caught without anyone having predicted which.
 violation contains {
-	"rule": "sbom-components-inflated",
+	"rule": "manifest count ahead",
 	"verdict": "manifest count wrong",
 	"subjects": [{"count": count_of("entries")}],
 } if {
@@ -200,7 +200,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "sbom-components-inflated",
+	"rule": "manifest count ahead",
 	"verdict": "manifest count wrong",
 	"subjects": [{"count": count_of(shape)}],
 } if {
@@ -221,7 +221,7 @@ violation contains {
 # entry is a personal name and often an email address, so the finding carries
 # counts and never a value.
 violation contains {
-	"rule": "sbom-supplier-unset",
+	"rule": "manifest own missing",
 	"verdict": "manifest state missing",
 	"subjects": [{"count": count_of(field)}],
 } if {
@@ -239,7 +239,7 @@ violation contains {
 # This field needs pointer-only more than any other: a copyright statement is a
 # personal name, so echoing the value would publish names into every CI log.
 violation contains {
-	"rule": "sbom-copyright-unenriched",
+	"rule": "manifest own unnamed",
 	"verdict": "manifest state missing",
 	"subjects": [{"count": count_of("copyright-unset")}],
 } if {
@@ -254,7 +254,7 @@ violation contains {
 # field rather than a missing one — worse than an honest NOASSERTION, in a field
 # whose whole purpose is to be parsed.
 violation contains {
-	"rule": "sbom-license-unenriched",
+	"rule": "manifest grant missing",
 	"verdict": "manifest state missing",
 	"subjects": [{"count": count_of(field)}],
 } if {
@@ -264,7 +264,7 @@ violation contains {
 
 # Every `pkg:github` component carries both a license and a copyright.
 violation contains {
-	"rule": "sbom-action-unenriched",
+	"rule": "adapter own missing",
 	"verdict": "manifest state missing",
 	"subjects": [{"count": count_of("action-unset")}],
 } if {
@@ -323,7 +323,7 @@ mapped contains line if {
 # Matched on repo AND sha together, because a table row whose sha is stale is
 # exactly the drift.
 violation contains {
-	"rule": "sbom-action-unmapped",
+	"rule": "pin table missing",
 	"verdict": "pin table missing",
 	"subjects": [{"path": actions_table}, {"count": count(unmapped)}],
 } if {
@@ -344,7 +344,7 @@ unmapped contains line if {
 # belongs in `input.tree.missing`, and a module that iterates only what it could
 # read reports green over a file it never opened.
 violation contains {
-	"rule": "sbom-unrecorded",
+	"rule": "manifest file missing",
 	"verdict": "tool read broken",
 	"subjects": [{"path": path}],
 } if {
@@ -425,17 +425,17 @@ test_an_empty_catalog_is_not_also_reported_as_drift if {
 
 test_two_scans_that_disagree_are_refused if {
 	some v in violation with input as tree(object.union(clean, {"spdx-stable": "no"}))
-	v.rule == "sbom-unstable"
+	v.rule == "manifest mint twice"
 }
 
 test_an_inflated_component_set_is_refused if {
 	some v in violation with input as tree(object.union(clean, {"distinct": "1"}))
-	v.rule == "sbom-components-inflated"
+	v.rule == "manifest count ahead"
 }
 
 test_a_pathlike_component_is_refused if {
 	some v in violation with input as tree(object.union(clean, {"pathlike": "1"}))
-	v.rule == "sbom-components-inflated"
+	v.rule == "manifest count ahead"
 }
 
 test_a_document_describing_nothing_is_could_not_look if {
@@ -445,28 +445,28 @@ test_a_document_describing_nothing_is_could_not_look if {
 
 test_an_unset_supplier_is_refused if {
 	some v in violation with input as tree(object.union(clean, {"nosupplier": "4"}))
-	v.rule == "sbom-supplier-unset"
+	v.rule == "manifest own missing"
 }
 
 # THE AGREEMENT HALF, which a supplier count alone cannot see.
 test_an_originator_disagreeing_with_the_manifest_is_refused if {
 	some v in violation with input as tree(object.union(clean, {"originator-disagrees": "1"}))
-	v.rule == "sbom-supplier-unset"
+	v.rule == "manifest own missing"
 }
 
 test_an_unset_copyright_is_refused if {
 	some v in violation with input as tree(object.union(clean, {"copyright-unset": "7"}))
-	v.rule == "sbom-copyright-unenriched"
+	v.rule == "manifest own unnamed"
 }
 
 test_a_slash_form_license_is_refused if {
 	some v in violation with input as tree(object.union(clean, {"license-slashed": "1"}))
-	v.rule == "sbom-license-unenriched"
+	v.rule == "manifest grant missing"
 }
 
 test_an_unenriched_action_is_refused if {
 	some v in violation with input as tree(object.union(clean, {"action-unset": "2"}))
-	v.rule == "sbom-action-unenriched"
+	v.rule == "adapter own missing"
 }
 
 # --- the pinned actions, over committed text rather than a record --------------
@@ -494,7 +494,7 @@ test_a_pin_the_table_declares_is_clean if {
 # line, and the gate fires rather than degrading the document silently.
 test_a_pin_with_no_table_row_is_refused if {
 	some v in violation with input as workflows([pin], [])
-	v.rule == "sbom-action-unmapped"
+	v.rule == "pin table missing"
 }
 
 # A STALE SHA IS THE DRIFT, so a row naming the same repository at a different
@@ -504,7 +504,7 @@ test_a_row_naming_a_different_sha_does_not_map_the_pin if {
 		[pin],
 		["actions/checkout@0000000000000000000000000000000000000000\tMIT\tGitHub"],
 	)
-	v.rule == "sbom-action-unmapped"
+	v.rule == "pin table missing"
 }
 
 # ANTI-VACUITY: a workflow line that is not a SHA-pinned `uses:` is not a pin, so
@@ -552,7 +552,7 @@ test_an_unrecorded_scan_is_not_refused if {
 # count above pass over an absent key.
 test_a_recorded_but_empty_scan_is_refused if {
 	some v in violation with input as recorded({})
-	v.rule == "sbom-unrecorded"
+	v.rule == "manifest file missing"
 }
 
 # COULD-NOT-LOOK, and without the `is_object` guard this case would fault rather

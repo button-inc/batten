@@ -57,13 +57,13 @@ package batten.ci_hygiene
 
 import rego.v1
 
-rules contains "no-job-runs-on-a-draft"
+rules contains "job run early"
 
-rules contains "pull-request-workflow-supersedes-itself"
+rules contains "workflow run twice"
 
-rules contains "workflow-declares-a-concurrency-group"
+rules contains "workflow declare missing"
 
-rules contains "draft-gated-workflow-subscribes-to-ready"
+rules contains "review watch missing"
 
 # --- what counts as a workflow this rule may judge ----------------------------
 #
@@ -111,7 +111,7 @@ job_is_draft_gated(path, name) if {
 }
 
 violation contains {
-	"rule": "no-job-runs-on-a-draft",
+	"rule": "job run early",
 	"verdict": "job run early",
 	"subjects": [{"path": path}, {"artifact": name}],
 } if {
@@ -130,7 +130,7 @@ violation contains {
 supersedes_itself(path) if workflow[path].concurrency["cancel-in-progress"] == true
 
 violation contains {
-	"rule": "pull-request-workflow-supersedes-itself",
+	"rule": "workflow run twice",
 	"verdict": "workflow run twice",
 	"subjects": [{"path": path}],
 } if {
@@ -171,7 +171,7 @@ races_itself(path) if {
 }
 
 violation contains {
-	"rule": "workflow-declares-a-concurrency-group",
+	"rule": "workflow declare missing",
 	"verdict": "workflow declare missing",
 	"subjects": [{"path": path}],
 } if {
@@ -196,7 +196,7 @@ subscribes_to_ready(path) if {
 }
 
 violation contains {
-	"rule": "draft-gated-workflow-subscribes-to-ready",
+	"rule": "review watch missing",
 	"verdict": "review watch missing",
 	"subjects": [{"path": path}],
 } if {

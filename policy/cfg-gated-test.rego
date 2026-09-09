@@ -60,7 +60,7 @@ package batten
 
 import rego.v1
 
-rules contains "platform-gated-test-added"
+rules contains "test cover unseen"
 
 # The branch's own diff, BOUND THROUGH AN OBJECT GUARD because `null` is not
 # `undefined`: the engine emits `null` where the base would not resolve, and
@@ -75,7 +75,7 @@ delta := d if {
 # refuses nothing is byte-identical to a tree that added nothing on the decision
 # surface, so the read failure is REPORTED rather than passed.
 violation contains {
-	"rule": "platform-gated-test-added",
+	"rule": "test cover unseen",
 	"verdict": "diff read absent",
 	"subjects": [{"path": "batten.toml"}],
 } if {
@@ -233,7 +233,7 @@ grew contains [path, after] if {
 }
 
 violation contains {
-	"rule": "platform-gated-test-added",
+	"rule": "test cover unseen",
 	"verdict": "test cover partial",
 	"subjects": [{"path": path}, {"count": after}],
 } if {

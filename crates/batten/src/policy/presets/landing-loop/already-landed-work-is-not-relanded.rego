@@ -62,7 +62,7 @@ package batten.landing_loop
 
 import rego.v1
 
-rules contains "already-landed-work-is-not-relanded"
+rules contains "patch ship twice"
 
 # Every declared target that already carries this branch's work.
 #
@@ -92,7 +92,7 @@ relanded contains target if {
 # own row declared, and naming it is what makes the refusal diagnosable when
 # several targets are declared. Never a commit, never the unlanded list.
 violation contains {
-	"rule": "already-landed-work-is-not-relanded",
+	"rule": "patch ship twice",
 	"verdict": "patch ship twice",
 	"subjects": [{"artifact": target}],
 } if {
@@ -125,7 +125,7 @@ test_a_squash_landed_branch_is_refused_though_unlanded_is_not_empty if {
 		"landed": true,
 		"unlanded": ["1111111", "2222222"],
 	})
-	v.rule == "already-landed-work-is-not-relanded"
+	v.rule == "patch ship twice"
 }
 
 # NOTHING TO LAND IS NOT A DUPLICATE, and this case is the one that keeps the

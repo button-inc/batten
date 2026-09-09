@@ -51,7 +51,7 @@ package batten.pinned_toolchain_probe
 
 import rego.v1
 
-rules contains "pinned-program-probed-bare"
+rules contains "pin probe bare"
 
 # The programs this project's pin provides.
 #
@@ -121,7 +121,7 @@ probed contains name if {
 # The mediation reading is the BOUNDARY's, taken off `programs` rather than
 # re-derived here, for the same reason the sibling rule takes it there.
 violation contains {
-	"rule": "pinned-program-probed-bare",
+	"rule": "pin probe bare",
 	"verdict": "pin probe bare",
 	"subjects": [{"artifact": name}],
 } if {

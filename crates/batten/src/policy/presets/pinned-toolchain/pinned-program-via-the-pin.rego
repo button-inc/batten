@@ -25,7 +25,7 @@ package batten.pinned_toolchain
 
 import rego.v1
 
-rules contains "pinned-program-via-the-pin"
+rules contains "pin reach loose"
 
 # The programs this project's pin provides.
 #
@@ -48,7 +48,7 @@ provided contains name if {
 # argv the engine already parses, and the class of defect that authority split
 # exists to prevent.
 violation contains {
-	"rule": "pinned-program-via-the-pin",
+	"rule": "pin reach loose",
 	"verdict": "pin reach loose",
 	"subjects": [{"artifact": entry.name}],
 } if {
@@ -68,7 +68,7 @@ test_a_pinned_program_reached_around_the_pin_is_refused if {
 		"call": {"programs": [{"program": "./tests/bats/bin/bats", "name": "bats", "mediated": false}]},
 		"facts": {"pinned-programs": ["bats", "jq"]},
 	}
-	v.rule == "pinned-program-via-the-pin"
+	v.rule == "pin reach loose"
 }
 
 test_the_same_program_through_the_pin_is_left_alone if {

@@ -74,13 +74,13 @@ package batten.perf_assert
 
 import rego.v1
 
-rules contains "perf-over-budget"
+rules contains "path measure late"
 
-rules contains "perf-record-incomplete"
+rules contains "path measure partial"
 
-rules contains "perf-budget-unpublished"
+rules contains "prose state wrong"
 
-rules contains "perf-budget-unreadable"
+rules contains "source read missing"
 
 # The budgets, in milliseconds, written once here as data — the placement the
 # predecessor's `BUDGETS` table had, one level over.
@@ -132,7 +132,7 @@ judged := measurements if {
 
 # A budgeted path whose measured p95 is over its ceiling.
 violation contains {
-	"rule": "perf-over-budget",
+	"rule": "path measure late",
 	"verdict": "path measure late",
 	"subjects": [{"count": count(over_budget)}],
 } if {
@@ -152,7 +152,7 @@ over_budget contains id if {
 # absence within a PRESENT record is a finding. The guard is that `judged` itself
 # must resolve: with no record at all there is nothing to be incomplete about.
 violation contains {
-	"rule": "perf-record-incomplete",
+	"rule": "path measure partial",
 	"verdict": "path measure partial",
 	"subjects": [{"count": count(unmeasured)}],
 } if {
@@ -208,7 +208,7 @@ published[id] := budget if {
 
 # A budgeted path README publishes a different number for.
 violation contains {
-	"rule": "perf-budget-unpublished",
+	"rule": "prose state wrong",
 	"verdict": "prose state wrong",
 	"subjects": [{"count": count(disagreeing)}],
 } if {
@@ -237,7 +237,7 @@ disagreeing contains id if {
 # causes apart deliberately, so this reports that it could not look rather than
 # deciding.
 violation contains {
-	"rule": "perf-budget-unreadable",
+	"rule": "source read missing",
 	"verdict": "source read missing",
 	"subjects": [{"path": "README.md"}],
 } if {

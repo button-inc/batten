@@ -593,6 +593,12 @@ pub struct Vocabulary<'a> {
     pub patterns: &'a [crate::pattern::NamedPattern],
     /// The `[[verdict]]` table (CLOUD-1050).
     pub verdicts: &'a [crate::verdict::DeclaredVerdict],
+    /// The `[vocabulary]` word lists (CLOUD-1638).
+    ///
+    /// `None` where the consumer declared none, which is the same exemption the
+    /// class grammar takes: a tree with no lists cannot satisfy membership, so
+    /// holding its finding ids to them would be a demand with no fix available.
+    pub words: Option<&'a crate::verdict::Vocabulary>,
     /// The `[[recorder]]` table (CLOUD-1051).
     ///
     /// Here for the reason stated above rather than as a third thing bolted on:
@@ -613,6 +619,7 @@ impl Vocabulary<'_> {
     pub const EMPTY: Vocabulary<'static> = Vocabulary {
         patterns: &[],
         verdicts: &[],
+        words: None,
         recorders: &[],
     };
 }
@@ -622,7 +629,24 @@ impl<'a> From<&'a crate::config::Config> for Vocabulary<'a> {
         Vocabulary {
             patterns: &config.patterns,
             verdicts: &config.verdicts,
+            words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
             recorders: &config.recorders,
+        }
+    }
+}
+
+/// The same four tables off a RESOLVED config (CLOUD-1638).
+///
+/// `check` and `enforce` resolve before they load, so a converter that only
+/// took `Config` left every real run hand-rolling the struct — and the finding
+/// grammar reached none of them, because the hand-rolled sites had no `words`.
+impl<'a> From<&'a crate::resolve::Resolved> for Vocabulary<'a> {
+    fn from(resolved: &'a crate::resolve::Resolved) -> Self {
+        Vocabulary {
+            patterns: &resolved.patterns,
+            verdicts: &resolved.verdicts,
+            words: (!resolved.vocabulary.is_empty()).then_some(&resolved.vocabulary),
+            recorders: &resolved.recorders,
         }
     }
 }
@@ -690,6 +714,7 @@ pub fn load(
     let Vocabulary {
         patterns,
         verdicts,
+        words,
         recorders: _,
     } = vocabulary;
     // The table is validated at PARSE, beside `verbs` and `redirects` and for
@@ -711,6 +736,7 @@ pub fn load(
     // classes THIS row raises — and a set that has already been merged cannot
     // answer it.
     let mut per_rule: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let tokens = collidable_tokens(verdicts);
     let mut bundles = Vec::new();
     // Keyed on the scope's WORD rather than the enum, so this set does not oblige
     // `RuleScope` to carry `Ord` for one local lookup — the derive would be a
@@ -869,6 +895,9 @@ pub fn load(
             (None, None) => Vec::new(),
         };
         let sources = read_sources(root, &paths, reference, &rule.id, checks)?;
+        if checks != ModuleChecks::SkipOnHotPath {
+            check_finding_ids(&sources, words, &tokens)?;
+        }
 
         // EVERYTHING PAST THE READ IS PURE, and the split is what lets the
         // composition property be tested without a filesystem: `compile` builds
@@ -895,7 +924,7 @@ pub fn load(
 
     if checks == ModuleChecks::Run {
         check_registry_is_exhausted(verdicts, &emitted)?;
-        check_collapse(rules, &per_rule, &collidable_tokens(verdicts))?;
+        check_collapse(rules, &per_rule, &tokens)?;
     }
     Ok(bundles)
 }
@@ -1636,16 +1665,116 @@ fn record_raised(
 /// than a name in use, and refusing a row for spelling one would refuse a name
 /// nothing answers to.
 fn collidable_tokens(verdicts: &[crate::verdict::DeclaredVerdict]) -> BTreeSet<String> {
+    // ALL THREE SOURCES. The consumer's rows, this binary's native sites, and
+    // the VENDORED PRESETS — the third is the one that bites: `trunk push
+    // forced` is a preset's class, and a set built from the first two refuses
+    // a name the collapse arm requires.
+    let vendored = crate::preset::verdict_rows();
     verdicts
         .iter()
         .filter(|entry| !entry.retired())
         .map(|entry| entry.id.clone())
+        .chain(vendored.into_iter().map(|entry| entry.id))
         .chain(
             crate::verdict::native_tokens()
                 .iter()
                 .map(|token| (*token).to_owned()),
         )
         .collect()
+}
+
+/// Every finding id a module declares is a name in the grammar (CLOUD-1638).
+///
+/// # Why the SOURCE and not the compiled set
+///
+/// `Bundle::declared` is read back from the engine, and it is not a clean list
+/// of finding ids: a module with a nested `rules` key — `module-layering`'s
+/// `forbidden["rules"] contains "hook"` — surfaces `hook` there, so holding
+/// that set to the grammar refuses a name no reader ever meets. The literals
+/// are exact and every one of the 136 in this tree is written out, so the
+/// source is both the simpler reader and the correct one.
+///
+/// # Why here at all
+///
+/// A module's `"rule":` is a FINDING name, not the `[[rule]]` row id —
+/// `run-shape.rego` declares five under one row — and it is what the emitted
+/// line and `policy rule` carry. Migrating the row ids alone would leave half
+/// the names a reader meets as free-text kebab.
+///
+/// Two exemptions, both inherited rather than invented: a consumer declaring no
+/// vocabulary is not held to it, and an id that IS a class token is governed by
+/// the class registry, since a vendored preset may spell a word no consumer
+/// declares.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) naming the module and the id.
+fn check_finding_ids(
+    sources: &[(String, String)],
+    vocabulary: Option<&crate::verdict::Vocabulary>,
+    tokens: &BTreeSet<String>,
+) -> Result<()> {
+    let Some(grammar) = vocabulary else {
+        return Ok(());
+    };
+    for (path, text) in sources {
+        for id in finding_ids(text) {
+            if tokens.contains(&id) {
+                continue;
+            }
+            crate::verdict::check_rule_id(&id, grammar)
+                .map_err(|error| UsageError::raise(format!("`{path}` declares `{id}`: {error}")))?;
+        }
+    }
+    Ok(())
+}
+
+/// The finding ids a module's SOURCE declares, in declaration order.
+///
+/// Both spellings the engine honours: `rules contains "<id>"`, which publishes
+/// the id, and a violation's `"rule": "<id>"`, which names it. Read as literals
+/// because every one of them is written out — a computed id would be invisible
+/// here, and is also invisible to a reader of the module, which is the same
+/// objection.
+fn finding_ids(text: &str) -> BTreeSet<String> {
+    /// The first double-quoted run after `from`, if the line has one.
+    fn quoted(line: &str, from: usize) -> Option<&str> {
+        let rest = line.get(from..)?;
+        let open = rest.find('"')?;
+        let after = rest.get(open + 1..)?;
+        let close = after.find('"')?;
+        after.get(..close)
+    }
+
+    let mut ids = BTreeSet::new();
+    // PER LINE, because both spellings are single-line literals and a reader
+    // scanning across them runs from one declaration into the next — measured,
+    // on the first draft of this function, which spliced `violation contains {`
+    // into an id and reported it as an undeclared subject.
+    for line in text.lines() {
+        // AT THE START OF THE LINE. `rules contains` is a substring of
+        // `named_rules contains`, and `rules-drift.rego` has one — a reader
+        // matching anywhere took `path` out of its `{"path": path, …}` body.
+        if let Some(rest) = line.strip_prefix("rules contains ")
+            && let Some(id) = quoted(rest, 0)
+        {
+            ids.insert(id.to_owned());
+        }
+        // `"rule":` must be followed by a STRING. A module's own test fixtures
+        // carry `"rule": [{"id": "r", …}]` — the consumer's `[[rule]]` TABLE as
+        // input — and a reader taking the next quoted run out of that returns
+        // `id`, which is what the first draft reported as a one-word name.
+        if let Some(at) = line.find("\"rule\"")
+            && let Some(colon) = line.get(at..).and_then(|rest| rest.find(':'))
+            && line
+                .get(at + colon + 1..)
+                .is_some_and(|rest| rest.trim_start().starts_with('"'))
+            && let Some(id) = quoted(line, at + colon)
+        {
+            ids.insert(id.to_owned());
+        }
+    }
+    ids
 }
 
 /// One name where a rule and a class name one thing (CLOUD-1638).

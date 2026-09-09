@@ -7722,13 +7722,13 @@ expires = "2026-10-31"
 # finding anchor by the module id too — and nothing gates the mismatch, which is
 # the third surface keyed off a different id from the one `--rule` selects.
 [[waiver]]
-rule = "platform-gated-test-added"
+rule = "test cover unseen"
 path = "crates/batten/tests/it/mutate.rs"
 reason = "the sweep's own watchdog needs a suite that never returns, and every part of that fixture is already unix-only: the case reaches `TOY_GATE` (:107), `CAUGHT` (:134) and `lend_bats` (:177), each carrying `#[cfg(unix)]` because bats is a bash program with no extension that Windows can neither symlink nor execute. So the `cfg!` arm this rule prefers would not type-check — the three items do not exist on that target — and the attribute is required rather than chosen to silence a leg, which is the one bar this route is held to. The case it covers is the anti-vacuity for CLOUD-1726: `BATS_TEST_TIMEOUT` was removed because the runner does not reap its `sleep N` watchdog on a FAILING case and a caught mutation is a failing case, so without a bound of our own a hanging mutant would hold a sweep forever. `base = \"origin/main\"` makes this floor itself on landing, so the row is expected to lapse unused."
 expires = "2026-10-31"
 
 [[waiver]]
-rule = "platform-gated-test-added"
+rule = "test cover unseen"
 path = "crates/batten/src/provision.rs"
 reason = "the relink case asserts over `std::os::unix::fs::MetadataExt::ino`, a symbol absent on the Windows target, so the `cfg!` arm this rule prefers would not type-check and the attribute is required rather than chosen to silence a leg. `base = \"origin/main\"` makes this floor itself on landing, so the row is expected to lapse unused."
 expires = "2026-10-31"
@@ -7804,7 +7804,7 @@ expires = "2026-10-31"
 # that inversion; the fix is in `lint.rs` in this commit, because a wrongly
 # refusing gate is a defect to repair rather than a ticket to file.
 [[waiver]]
-rule = "filed-over-own-diff"
+rule = "issue file same"
 reason = "CLOUD-1547 is implemented and closed by this PR, so `closes` is the exemption that applies; it cannot fire because `pr-closes` is minted from a `gh pr view` call and there is no `gh` on this host (CLOUD-1126, residual on CLOUD-1481). The class's own `path admit first` override route does not consume — eight admissions were spent and the findings did not move, because the anchor resolver falls back to a `call:` anchor on zero stored-finding matches and nothing queries one for a tree finding (CLOUD-1551). Remove this with CLOUD-1551."
 expires = "2026-10-11"
 
@@ -7839,7 +7839,7 @@ expires = "2026-10-11"
 #
 # Remove this with CLOUD-1551, alongside its sibling above.
 [[waiver]]
-rule = "filed-and-left-open"
+rule = "issue file held"
 reason = "CLOUD-1551 defeats this rule's override route the same way it defeats `filed-over-own-diff` above, and measurably worse: an admission binds `call:<head>`, so the replay every landing lap performs when trunk moves orphans the anchor and the spent admission stops suppressing. Measured on two consecutive laps of one tree — lap 1 replayed nothing and reported 0, lap 2 replayed and reported 1, with `06b322be` spent throughout. Re-minting cannot escape it, since the commit carrying the `Admits:` block becomes the new HEAD; and `Waiver::path` cannot narrow this rule, whose subject is an artifact id rather than a path. The deferral's articulation is hash-bound in `13c0dd5e` regardless. Remove this with CLOUD-1551."
 expires = "2026-10-11"
 

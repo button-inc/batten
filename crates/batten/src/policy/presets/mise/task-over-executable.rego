@@ -38,7 +38,7 @@ package batten.mise
 
 import rego.v1
 
-rules contains "task-over-executable"
+rules contains "task reach loose"
 
 # The tasks this project's receipt defines, as name -> argv.
 #
@@ -97,7 +97,7 @@ defined[name] := argv if {
 # uses `program` for this reason. No task here is path-spelled, so nothing in
 # this repository exercised it.
 violation contains {
-	"rule": "task-over-executable",
+	"rule": "task reach loose",
 	"verdict": "task reach loose",
 	"subjects": [{"artifact": name}],
 } if {
@@ -125,7 +125,7 @@ test_a_tasks_own_program_reached_directly_is_refused if {
 		"call": {"programs": [{"name": "a-program", "program": "a-program", "arguments": ["--flag"], "mediated": false}]},
 	}
 
-	finding.rule == "task-over-executable"
+	finding.rule == "task reach loose"
 }
 
 # The refusal names the TASK, never the program: that is the affordance a guard

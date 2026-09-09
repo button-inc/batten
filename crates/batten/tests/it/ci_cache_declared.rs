@@ -117,6 +117,7 @@ fn findings_declared_by(root: &Path, vocabulary_root: &Path) -> Vec<(String, Opt
         batten::policy::Vocabulary {
             patterns: &patterns,
             verdicts: &verdicts,
+            words: None,
             recorders: &[],
         },
         root,

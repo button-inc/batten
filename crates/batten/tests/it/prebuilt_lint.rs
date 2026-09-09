@@ -76,6 +76,7 @@ fn findings(root: &Path) -> Vec<String> {
         batten::policy::Vocabulary {
             patterns: &[],
             verdicts: &[],
+            words: None,
             recorders: &[],
         },
         root,

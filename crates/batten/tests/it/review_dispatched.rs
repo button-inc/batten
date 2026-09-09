@@ -162,6 +162,7 @@ fn verdicts_for(root: &Path, declared: bool) -> Vec<String> {
         batten::policy::Vocabulary {
             patterns: &[],
             verdicts: &verdicts,
+            words: None,
             recorders: &[],
         },
         root,
@@ -221,6 +222,7 @@ fn the_mediated_surface_resolves_no_effect_fact_and_withholds_the_rule() {
     let vocabulary = batten::policy::Vocabulary {
         patterns: &[],
         verdicts: &verdicts,
+        words: None,
         recorders: &[],
     };
     let rows = [row(&root, true)];
@@ -485,6 +487,7 @@ fn verdicts_with(root: &Path, extra: &serde_json::Value) -> Vec<String> {
         batten::policy::Vocabulary {
             patterns: &[],
             verdicts: &verdicts,
+            words: None,
             recorders: &[],
         },
         root,

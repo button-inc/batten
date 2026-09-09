@@ -59,13 +59,13 @@ package batten.ci_cache_declared
 
 import rego.v1
 
-rules contains "cache-key-carries-a-content-hash"
+rules contains "step key dead"
 
-rules contains "cargo-reach-declares-a-cache"
+rules contains "cargo carry missing"
 
-rules contains "warmed-family-is-read-only"
+rules contains "job write unsafe"
 
-rules contains "read-family-has-a-warm-writer"
+rules contains "job read empty"
 
 # --- what is being judged, and whether there is anything to judge -------------
 
@@ -216,7 +216,7 @@ hash_keyed(path) if {
 }
 
 violation contains {
-	"rule": "cache-key-carries-a-content-hash",
+	"rule": "step key dead",
 	"verdict": "step key dead",
 	"subjects": [{"path": path, "line": number}],
 } if {
@@ -229,7 +229,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "cache-key-carries-a-content-hash",
+	"rule": "step key dead",
 	"verdict": "step key dead",
 	"subjects": [{"path": path}],
 } if {
@@ -366,7 +366,7 @@ reach contains [path, name, task] if {
 }
 
 violation contains {
-	"rule": "cargo-reach-declares-a-cache",
+	"rule": "cargo carry missing",
 	"verdict": "job declare missing",
 	"subjects": [{"path": path, "line": number}, {"artifact": task}],
 } if {
@@ -383,7 +383,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "cargo-reach-declares-a-cache",
+	"rule": "cargo carry missing",
 	"verdict": "job declare missing",
 	"subjects": [{"path": path}, {"artifact": task}],
 } if {
@@ -397,7 +397,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "cargo-reach-declares-a-cache",
+	"rule": "cargo carry missing",
 	"verdict": "task resolve missing",
 	"subjects": [{"path": path}, {"artifact": task}],
 } if {
@@ -464,7 +464,7 @@ contested(path, name) if {
 }
 
 violation contains {
-	"rule": "warmed-family-is-read-only",
+	"rule": "job write unsafe",
 	"verdict": "job write unsafe",
 	"subjects": [{"path": path, "line": number}],
 } if {
@@ -480,7 +480,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "warmed-family-is-read-only",
+	"rule": "job write unsafe",
 	"verdict": "job write unsafe",
 	"subjects": [{"path": path}],
 } if {
@@ -536,7 +536,7 @@ orphaned(path, name) if {
 }
 
 violation contains {
-	"rule": "read-family-has-a-warm-writer",
+	"rule": "job read empty",
 	"verdict": "job read empty",
 	"subjects": [{"path": path, "line": number}],
 } if {
@@ -552,7 +552,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "read-family-has-a-warm-writer",
+	"rule": "job read empty",
 	"verdict": "job read empty",
 	"subjects": [{"path": path}],
 } if {
@@ -573,7 +573,7 @@ violation contains {
 # abstains rather than saying so.
 
 violation contains {
-	"rule": "cargo-reach-declares-a-cache",
+	"rule": "cargo carry missing",
 	"verdict": "workflow read unread",
 	"subjects": [{"path": path}],
 } if {
@@ -582,7 +582,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "cargo-reach-declares-a-cache",
+	"rule": "cargo carry missing",
 	"verdict": "task resolve missing",
 	"subjects": [{"path": path}],
 } if {
@@ -604,18 +604,18 @@ test_a_readable_key_with_a_cache_is_clean if {
 
 test_a_shared_key_carrying_a_content_hash_is_refused if {
 	some finding in violation with input as tree(warm_writer, pr_reader("ci-${{ hashFiles('Cargo.toml') }}", false))
-	finding.rule == "cache-key-carries-a-content-hash"
+	finding.rule == "step key dead"
 }
 
 test_a_cargo_job_with_no_cache_step_is_refused if {
 	some finding in violation with input as tree(warm_writer, uncached_reader)
-	finding.rule == "cargo-reach-declares-a-cache"
+	finding.rule == "cargo carry missing"
 	finding.verdict == "job declare missing"
 }
 
 test_a_pull_request_writer_of_a_warmed_family_is_refused if {
 	some finding in violation with input as tree(warm_writer, pr_reader("ci-", true))
-	finding.rule == "warmed-family-is-read-only"
+	finding.rule == "job write unsafe"
 }
 
 # ANTI-VACUITY, AND IT IS WHAT DISCRIMINATES THE THIRD PREDICATE FROM A BLANKET
@@ -646,7 +646,7 @@ test_the_same_key_on_the_same_architecture_is_still_refused if {
 		warm_writer_on("ubuntu-24.04-arm"),
 		pr_reader_on("ci-", true, "ubuntu-24.04-arm"),
 	)
-	finding.rule == "warmed-family-is-read-only"
+	finding.rule == "job write unsafe"
 }
 
 # RULE 4, AND THE FIXTURE IS THE ORPHANING THAT MOTIVATED IT: a read-only
@@ -658,7 +658,7 @@ test_a_read_only_consumer_of_an_unwarmed_family_is_refused if {
 		warm_writer_on("ubuntu-24.04-arm"),
 		pr_reader_on("ci-", false, "ubuntu-latest"),
 	)
-	finding.rule == "read-family-has-a-warm-writer"
+	finding.rule == "job read empty"
 }
 
 # The other direction on the KEY rather than the architecture: a read-only
@@ -666,7 +666,7 @@ test_a_read_only_consumer_of_an_unwarmed_family_is_refused if {
 # only ever noticing the architecture split.
 test_a_read_only_consumer_of_a_family_nothing_writes_is_refused if {
 	some finding in violation with input as tree(no_writer, pr_reader("ci-", false))
-	finding.rule == "read-family-has-a-warm-writer"
+	finding.rule == "job read empty"
 }
 
 # ANTI-VACUITY FOR RULE 4, and it is the bound the predicate's header argues for:
@@ -709,7 +709,7 @@ test_a_job_reaching_no_cargo_needs_no_cache if {
 
 test_a_cargo_reach_through_depends_is_seen if {
 	some finding in violation with input as tree(warm_writer, indirect_reader)
-	finding.rule == "cargo-reach-declares-a-cache"
+	finding.rule == "cargo carry missing"
 }
 
 test_an_unparsed_workflow_is_could_not_look if {

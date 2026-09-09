@@ -24,19 +24,19 @@ package batten.rulesdrift
 
 import rego.v1
 
-rules contains "restated-default-drifts"
+rules contains "default state other"
 
-rules contains "named-event-unwired"
+rules contains "event wire missing"
 
-rules contains "named-input-key-unemittable"
+rules contains "input key dead"
 
-rules contains "named-fixed-rule-unqueried"
+rules contains "rule ask missing"
 
-rules contains "restated-arm-count-drifts"
+rules contains "rule count other"
 
-rules contains "schema-key-undocumented"
+rules contains "input name missing"
 
-rules contains "drift-authority-unreadable"
+rules contains "drift read unread"
 
 # --- the prose surfaces -------------------------------------------------------
 #
@@ -97,7 +97,7 @@ observed(name) if {
 }
 
 violation contains {
-	"rule": "restated-default-drifts",
+	"rule": "default state other",
 	"verdict": "default state other",
 	"subjects": [{"path": claim.path, "line": claim.line}],
 } if {
@@ -201,7 +201,7 @@ event_pointer(claim, name) := line if {
 }
 
 violation contains {
-	"rule": "named-event-unwired",
+	"rule": "event wire missing",
 	"verdict": "event wire missing",
 	"subjects": [{"path": claim.path, "line": event_pointer(claim, name)}],
 } if {
@@ -297,7 +297,7 @@ named_keys contains {"path": path, "line": index + 1, "surface": surface, "key":
 }
 
 violation contains {
-	"rule": "named-input-key-unemittable",
+	"rule": "input key dead",
 	"verdict": "input key dead",
 	"subjects": [{"path": named.path, "line": named.line}],
 } if {
@@ -332,7 +332,7 @@ named_rules contains {"path": path, "line": index + 1, "name": name} if {
 }
 
 violation contains {
-	"rule": "named-fixed-rule-unqueried",
+	"rule": "rule ask missing",
 	"verdict": "rule ask missing",
 	"subjects": [{"path": named.path, "line": named.line}],
 } if {
@@ -396,7 +396,7 @@ arm_count(name) := total if {
 }
 
 violation contains {
-	"rule": "restated-arm-count-drifts",
+	"rule": "rule count other",
 	"verdict": "rule count other",
 	"subjects": [{"path": claim.path, "line": claim.line}, {"count": arm_count(claim.name)}],
 } if {
@@ -437,7 +437,7 @@ names_key(path, surface, key) if {
 }
 
 violation contains {
-	"rule": "schema-key-undocumented",
+	"rule": "input name missing",
 	"verdict": "input name missing",
 	"subjects": [{"path": claimant.path, "line": claimant.line}, {"artifact": sprintf("input.%s.%s", [surface, key])}],
 } if {
@@ -480,7 +480,7 @@ authority_needed contains "crates/batten/src/policy.rs" if {
 # form of `sources` is what keeps the rule alive across an absent file, and the
 # key simply not being in `documents` is then the honest signal.
 violation contains {
-	"rule": "drift-authority-unreadable",
+	"rule": "drift read unread",
 	"verdict": "drift read unread",
 	"subjects": [{"path": path}],
 } if {
@@ -494,7 +494,7 @@ violation contains {
 # named in prose would silently stop being judged. That is the vacuity the fixed
 # path above buys, paid for here rather than left implicit.
 violation contains {
-	"rule": "drift-authority-unreadable",
+	"rule": "drift read unread",
 	"verdict": "drift read unread",
 	"subjects": [{"path": schema_path[named.surface]}],
 } if {
@@ -518,11 +518,11 @@ test_a_restated_default_that_disagrees_is_a_finding if {
 		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
-	v.rule == "restated-default-drifts"
+	v.rule == "default state other"
 }
 
 test_a_restated_default_that_agrees_is_not if {
-	count({v | some v in violation; v.rule == "restated-default-drifts"}) == 0 with input as {"tree": {
+	count({v | some v in violation; v.rule == "default state other"}) == 0 with input as {"tree": {
 		"lines": {
 			"a.md": ["the cap is `MAX_LAPS` (2) laps"],
 			"t.sh": ["laps=\"${MAX_LAPS:-2}\""],
@@ -537,7 +537,7 @@ test_a_restated_default_that_agrees_is_not if {
 # knob named with no value asserted must be untouched, because demanding the
 # value be restated is the discipline this gate would otherwise invert.
 test_a_knob_named_without_a_value_is_untouched if {
-	count({v | some v in violation; v.rule == "restated-default-drifts"}) == 0 with input as {"tree": {
+	count({v | some v in violation; v.rule == "default state other"}) == 0 with input as {"tree": {
 		"lines": {
 			"a.md": ["the cap is `MAX_LAPS`, read it there"],
 			"t.sh": ["laps=\"${MAX_LAPS:-2}\""],
@@ -549,7 +549,7 @@ test_a_knob_named_without_a_value_is_untouched if {
 }
 
 test_a_variable_no_program_defaults_is_untouched if {
-	count({v | some v in violation; v.rule == "restated-default-drifts"}) == 0 with input as {"tree": {
+	count({v | some v in violation; v.rule == "default state other"}) == 0 with input as {"tree": {
 		"lines": {"a.md": ["the cap is `MAX_LAPS` (8) laps"], "t.sh": ["true"]},
 		"documents": {},
 		"missing": {},
@@ -564,11 +564,11 @@ test_an_unwired_event_a_sentence_claims_is_a_finding if {
 		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
-	v.rule == "named-event-unwired"
+	v.rule == "event wire missing"
 }
 
 test_a_wired_event_is_not if {
-	count({v | some v in violation; v.rule == "named-event-unwired"}) == 0 with input as {"tree": {
+	count({v | some v in violation; v.rule == "event wire missing"}) == 0 with input as {"tree": {
 		"lines": {"a.md": ["the guard runs on `PreToolUse` today"]},
 		"documents": {".claude/settings.json": {"hooks": {"PreToolUse": []}}},
 		"missing": {},
@@ -581,7 +581,7 @@ test_a_wired_event_is_not if {
 # same breath, and a paragraph-wide check would forbid the repo from writing its
 # own gaps down beside the wiring they qualify.
 test_a_gap_recorded_beside_a_wiring_is_untouched if {
-	count({v | some v in violation; v.rule == "named-event-unwired"}) == 0 with input as {"tree": {
+	count({v | some v in violation; v.rule == "event wire missing"}) == 0 with input as {"tree": {
 		"lines": {"a.md": [
 			"the guard runs on `PreToolUse`. The `PostToolBatch` entry stays",
 			"absent, and CLOUD-461 is why",
@@ -599,11 +599,11 @@ test_an_unemittable_tree_key_is_a_finding if {
 		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
-	v.rule == "named-input-key-unemittable"
+	v.rule == "input key dead"
 }
 
 test_an_emittable_tree_key_is_not if {
-	count({v | some v in violation; v.rule == "named-input-key-unemittable"}) == 0 with input as {"tree": {
+	count({v | some v in violation; v.rule == "input key dead"}) == 0 with input as {"tree": {
 		"lines": {"a.md": ["a module iterates `input.tree.documents` here"]},
 		"documents": {"schema/policy-input.schema.json": {"properties": {"tree": {"properties": {"documents": {}}}}}},
 		"missing": {},
@@ -621,11 +621,11 @@ test_an_unqueried_fixed_rule_is_a_finding if {
 		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
-	v.rule == "named-fixed-rule-unqueried"
+	v.rule == "rule ask missing"
 }
 
 test_a_queried_fixed_rule_is_not if {
-	count({v | some v in violation; v.rule == "named-fixed-rule-unqueried"}) == 0 with input as {"tree": {
+	count({v | some v in violation; v.rule == "rule ask missing"}) == 0 with input as {"tree": {
 		"lines": {
 			"a.md": ["publish `data.batten.deny` to contribute"],
 			"crates/batten/src/policy.rs": ["const DENY_RULE: &str = \"deny\";"],
@@ -643,13 +643,13 @@ test_an_unreadable_authority_a_claim_depends_on_is_a_finding if {
 		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
-	v.rule == "drift-authority-unreadable"
+	v.rule == "drift read unread"
 }
 
 # THE SCOPE MIRROR. An authority nothing claims against is silent, which is what
 # keeps this row from speaking in every fixture repository inheriting the config.
 test_an_unreadable_authority_no_claim_depends_on_is_silent if {
-	count({v | some v in violation; v.rule == "drift-authority-unreadable"}) == 0 with input as {"tree": {
+	count({v | some v in violation; v.rule == "drift read unread"}) == 0 with input as {"tree": {
 		"lines": {"a.md": ["ordinary prose naming nothing"]},
 		"documents": {},
 		"missing": {},
@@ -673,14 +673,14 @@ test_a_restated_arm_count_that_disagrees_is_a_finding if {
 		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
-	v.rule == "restated-arm-count-drifts"
+	v.rule == "rule count other"
 }
 
 # AND THE INDENTED HEAD IS NOT ONE. The fixture above carries a tab-indented
 # occurrence among five lines, so a count of four is the agreeing case — which is
 # the anchor doing its job rather than a coincidence of the numbers.
 test_a_restated_arm_count_that_agrees_is_not if {
-	count({v | some v in violation; v.rule == "restated-arm-count-drifts"}) == 0 with input as {"tree": {
+	count({v | some v in violation; v.rule == "rule count other"}) == 0 with input as {"tree": {
 		"lines": {
 			"a.md": ["the admission is `admitted_addition` (4 arms) today"],
 			"policy/x.rego": [
@@ -701,7 +701,7 @@ test_a_restated_arm_count_that_agrees_is_not if {
 # asserting how many arms it has must be untouched, or the gate demands that every
 # mention of a mechanism enumerate it.
 test_an_arm_named_without_a_count_is_untouched if {
-	count({v | some v in violation; v.rule == "restated-arm-count-drifts"}) == 0 with input as {"tree": {
+	count({v | some v in violation; v.rule == "rule count other"}) == 0 with input as {"tree": {
 		"lines": {
 			"a.md": ["`admitted_addition` is the authority; read it there"],
 			"policy/x.rego": ["admitted_addition(_, a) if b(a)"],
@@ -713,7 +713,7 @@ test_an_arm_named_without_a_count_is_untouched if {
 }
 
 test_a_count_over_a_rule_no_module_defines_is_untouched if {
-	count({v | some v in violation; v.rule == "restated-arm-count-drifts"}) == 0 with input as {"tree": {
+	count({v | some v in violation; v.rule == "rule count other"}) == 0 with input as {"tree": {
 		"lines": {
 			"a.md": ["the admission is `invented_rule` (3 arms) today"],
 			"policy/x.rego": ["admitted_addition(_, a) if b(a)"],
@@ -734,11 +734,11 @@ test_a_schema_key_the_claiming_file_does_not_name_is_a_finding if {
 		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
-	v.rule == "schema-key-undocumented"
+	v.rule == "input name missing"
 }
 
 test_a_schema_key_the_claiming_file_names_is_not if {
-	count({v | some v in violation; v.rule == "schema-key-undocumented"}) == 0 with input as {"tree": {
+	count({v | some v in violation; v.rule == "input name missing"}) == 0 with input as {"tree": {
 		"lines": {"a.md": [
 			"a module iterates `input.tree.documents` and `input.tree.symbols` here",
 			"rules-drift holds the lists above to those two files",
@@ -752,7 +752,7 @@ test_a_schema_key_the_claiming_file_names_is_not if {
 # THE SCOPE MIRROR, and it is what keeps this inside the anti-restatement bound: a
 # file that makes no claim to enumerate the key set is an ordinary consumer.
 test_a_file_making_no_authority_claim_is_untouched if {
-	count({v | some v in violation; v.rule == "schema-key-undocumented"}) == 0 with input as {"tree": {
+	count({v | some v in violation; v.rule == "input name missing"}) == 0 with input as {"tree": {
 		"lines": {"a.md": ["a module iterates `input.tree.documents` here"]},
 		"documents": {"schema/policy-input.schema.json": {"properties": {"tree": {"properties": {"documents": {}, "symbols": {}}}}}},
 		"missing": {},
@@ -764,7 +764,7 @@ test_a_file_making_no_authority_claim_is_untouched if {
 # arm every hyphenated key would be reported as undocumented, which is the eight
 # false findings that would have made this predicate unusable on its first run.
 test_a_subscripted_key_counts_as_named if {
-	count({v | some v in violation; v.rule == "schema-key-undocumented"}) == 0 with input as {"tree": {
+	count({v | some v in violation; v.rule == "input name missing"}) == 0 with input as {"tree": {
 		"lines": {"a.md": [
 			"a module reads `input.tree[\"base-delta\"]` here",
 			"rules-drift holds the lists above to those two files",

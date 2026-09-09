@@ -83,6 +83,7 @@ impl Scan {
             batten::policy::Vocabulary {
                 patterns: &[],
                 verdicts: &verdicts,
+                words: None,
                 recorders: &[],
             },
             root,

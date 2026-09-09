@@ -77,7 +77,7 @@ package batten.obligations_bound
 
 import rego.v1
 
-rules contains "obligation-unbound"
+rules contains "test name undefined"
 
 # The board record, or nothing. ABSENT IS NOT EMPTY: a branch whose recorder
 # never ran has no key here, Rego reads that as *does not hold*, and this module
@@ -226,7 +226,7 @@ declares_slug(entry) if {
 # than a count they have to reconstruct. The path leads, because that is what a
 # reader opens; the row's id follows it, carried rather than as the pointer.
 violation contains {
-	"rule": "obligation-unbound",
+	"rule": "test name undefined",
 	"verdict": "test name undefined",
 	"subjects": [{"path": obligation_row.file}, {"artifact": obligation_row.id}],
 } if {
@@ -242,7 +242,7 @@ violation contains {
 # and never given a mutation that could kill it. Collapsing them would hand the
 # author one message for two problems.
 violation contains {
-	"rule": "obligation-unbound",
+	"rule": "test name undefined",
 	"verdict": "test name undefined",
 	"subjects": [{"path": obligation_row.file}, {"artifact": obligation_row.id}],
 } if {

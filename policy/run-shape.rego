@@ -57,15 +57,15 @@ package batten.run_shape
 
 import rego.v1
 
-rules contains "commit-names-no-message-source"
+rules contains "commit write missing"
 
-rules contains "unsatisfiable-commit"
+rules contains "commit bind missing"
 
-rules contains "foreground-sleep"
+rules contains "sleep run blocked"
 
-rules contains "background-timer"
+rules contains "timer run refused"
 
-rules contains "polls-a-local-process"
+rules contains "task watch duplicate"
 
 rules contains "foreground-mise"
 
@@ -96,7 +96,7 @@ rules contains "background-redirect"
 #MUTANT bracket-is-an-exit|s@^\tcondition_program(segment) in {"pgrep", "pkill", "ps", "jobs"}$@\tcondition_program(segment) in {"pgrep", "pkill", "ps", "jobs"}; not contains(segment.raw, "[")@|a_bracketed_pattern_is_refused_just_the_same
 
 violation contains {
-	"rule": "commit-names-no-message-source",
+	"rule": "commit write missing",
 	"verdict": "commit write missing",
 } if {
 	# THE CHEAP TERM FIRST, and it is load-bearing rather than tidy. Everything
@@ -112,7 +112,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "unsatisfiable-commit",
+	"rule": "commit bind missing",
 	"verdict": "commit bind missing",
 } if {
 	some segment in input.call.segments
@@ -128,7 +128,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "foreground-sleep",
+	"rule": "sleep run blocked",
 	"verdict": "sleep run blocked",
 } if {
 	sleeps
@@ -142,7 +142,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "background-timer",
+	"rule": "timer run refused",
 	"verdict": "timer run refused",
 } if {
 	sleeps
@@ -177,7 +177,7 @@ violation contains {
 # instead of eleven broken ones, every one still redundant. The waste is the
 # wait, not the typo, so a bracketed pattern is refused here too.
 violation contains {
-	"rule": "polls-a-local-process",
+	"rule": "task watch duplicate",
 	"verdict": "task watch duplicate",
 	"subjects": [{"count": count(process_probes)}],
 } if {
@@ -645,7 +645,7 @@ names_a_message_source(stage) if {
 
 test_a_commit_with_no_message_source_is_refused if {
 	some v in violation with input as {"call": {"command": "git commit"}}
-	v.rule == "commit-names-no-message-source"
+	v.rule == "commit write missing"
 }
 
 test_a_commit_that_names_one_is_left_alone if {
@@ -654,7 +654,7 @@ test_a_commit_that_names_one_is_left_alone if {
 
 test_a_later_element_is_judged_too if {
 	some v in violation with input as {"call": {"command": "cd /tmp && git commit"}}
-	v.rule == "commit-names-no-message-source"
+	v.rule == "commit write missing"
 }
 
 test_another_tool_is_not_judged if {
@@ -672,7 +672,7 @@ test_a_short_cluster_names_a_message_source if {
 # nothing about the change.
 test_a_non_cluster_carrying_m_is_not_a_message_source if {
 	some v in violation with input as {"call": {"command": "git commit -x=mfoo"}}
-	v.rule == "commit-names-no-message-source"
+	v.rule == "commit write missing"
 }
 
 # ---------------------------------------------------------------------------
@@ -718,7 +718,7 @@ test_a_commit_whose_heredoc_binds_to_a_later_element_is_refused if {
 			seg(["mise", "run", "land", "<<'EOF'"], null, true),
 		],
 	}}
-	v.rule == "unsatisfiable-commit"
+	v.rule == "commit bind missing"
 }
 
 # THE DISCRIMINATING ALLOW, and it is the same two words in the same order —
@@ -755,7 +755,7 @@ test_the_long_flag_spelling_is_judged_too if {
 		"run-in-background": null,
 		"segments": [seg(["git", "commit", "--file=-"], null, false)],
 	}}
-	v.rule == "unsatisfiable-commit"
+	v.rule == "commit bind missing"
 }
 
 test_a_foreground_sleep_is_refused if {
@@ -764,7 +764,7 @@ test_a_foreground_sleep_is_refused if {
 		"run-in-background": null,
 		"segments": [seg(["sleep", "90"], null, false)],
 	}}
-	v.rule == "foreground-sleep"
+	v.rule == "sleep run blocked"
 }
 
 test_a_sleep_in_a_later_segment_is_refused_too if {
@@ -777,7 +777,7 @@ test_a_sleep_in_a_later_segment_is_refused_too if {
 			seg(["git", "log"], null, false),
 		],
 	}}
-	v.rule == "foreground-sleep"
+	v.rule == "sleep run blocked"
 }
 
 test_a_backgrounded_bare_sleep_is_a_timer if {
@@ -789,7 +789,7 @@ test_a_backgrounded_bare_sleep_is_a_timer if {
 			seg(["tail", "-6", "land.log"], null, false),
 		],
 	}}
-	v.rule == "background-timer"
+	v.rule == "timer run refused"
 }
 
 # THE ALLOW THAT MATTERS. This is the form both refusals recommend, and denying
@@ -890,7 +890,7 @@ test_a_foreground_wait_on_a_condition_is_refused if {
 			inner(["sleep", "1"], "until", "body", null),
 		],
 	}}
-	v.rule == "foreground-sleep"
+	v.rule == "sleep run blocked"
 }
 
 # A `for` LOOP IS A TIMER: it counts iterations rather than testing a condition,
@@ -901,7 +901,7 @@ test_a_backgrounded_counting_loop_is_a_timer if {
 		"run-in-background": true,
 		"segments": [inner(["sleep", "10"], "for", "body", null)],
 	}}
-	v.rule == "background-timer"
+	v.rule == "timer run refused"
 }
 
 # The exemption's other reachable shape: a bare sleep and a loop keyword in one

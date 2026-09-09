@@ -73,7 +73,7 @@ package batten.fixture_forks
 
 import rego.v1
 
-rules contains "fixture-fork-added"
+rules contains "test add duplicate"
 
 # The branch's own diff. NULL when the base rev does not resolve.
 #
@@ -108,7 +108,7 @@ delta := d if {
 # CI checkout with the base unfetched, the fork with no `origin/main` — and for
 # an absent key alike.
 violation contains {
-	"rule": "fixture-fork-added",
+	"rule": "test add duplicate",
 	"verdict": "diff read absent",
 	"subjects": [{"path": "batten.toml"}],
 } if {
@@ -171,7 +171,7 @@ base_lines(path) := lines if {
 # AN ADDED FIXTURE THAT FORKS. Every matching line is new by construction — the
 # file is absent from base — so each one is a finding with its own pointer.
 violation contains {
-	"rule": "fixture-fork-added",
+	"rule": "test add duplicate",
 	"verdict": "spawn add refused",
 	"subjects": [{"path": path, "line": index + 1}],
 } if {
@@ -192,7 +192,7 @@ violation contains {
 # rule is about the file's total, so naming every line would report a count as a
 # list.
 violation contains {
-	"rule": "fixture-fork-added",
+	"rule": "test add duplicate",
 	"verdict": "spawn add refused",
 	"subjects": [{"path": path, "line": first_fork(path)}],
 } if {
@@ -213,7 +213,7 @@ first_fork(path) := min([found |
 # belongs in `missing` rather than being silently absent, and a module that
 # iterates only the delta reports green over a file it never read.
 violation contains {
-	"rule": "fixture-fork-added",
+	"rule": "test add duplicate",
 	"verdict": "source read unread",
 	"subjects": [{"path": path}],
 } if {

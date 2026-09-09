@@ -61,21 +61,21 @@ package batten.lockcomplete
 
 import rego.v1
 
-rules contains "lock-platform-residue"
+rules contains "lock write other"
 
-rules contains "lock-platform-uninstallable"
+rules contains "lock reach unsafe"
 
-rules contains "lock-tool-unlocked"
+rules contains "tool pin partial"
 
-rules contains "lock-tool-missing"
+rules contains "tool pin absent"
 
-rules contains "lock-pin-stale"
+rules contains "pin read stale"
 
-rules contains "lockfile-writes-enabled"
+rules contains "lock write unsafe"
 
-rules contains "workflow-installs-unlocked"
+rules contains "workflow run unsafe"
 
-rules contains "lock-unreadable"
+rules contains "lock read unread"
 
 # --- the two committed authorities --------------------------------------------
 #
@@ -203,7 +203,7 @@ pointer(path, needles) := {"path": path} if not line_of(path, needles)
 # checksum and no url and which `lock-check` reported "complete and current" over
 # on every run.
 violation contains {
-	"rule": "lock-platform-residue",
+	"rule": "lock write other",
 	"verdict": "lock write other",
 	"subjects": [
 		pointer("mise.lock", [sprintf("\"platforms.%s\"", [platform]), name]),
@@ -224,7 +224,7 @@ violation contains {
 # decision upstream made. That is the defect of the gate being replaced, one level
 # down.
 violation contains {
-	"rule": "lock-platform-uninstallable",
+	"rule": "lock reach unsafe",
 	"verdict": "lock reach missing",
 	"subjects": [
 		pointer("mise.lock", [sprintf("\"platforms.%s\"", [platform]), name]),
@@ -241,7 +241,7 @@ violation contains {
 # one real platform: a tool that locks nothing is predicate 3's finding, and
 # reporting it three times here as well would bury the one line a reader acts on.
 violation contains {
-	"rule": "lock-platform-uninstallable",
+	"rule": "lock reach unsafe",
 	"verdict": "lock reach missing",
 	"subjects": [
 		pointer("mise.lock", [sprintf("[[tools.%s]]", [name])]),
@@ -268,7 +268,7 @@ violation contains {
 # wherever it appears — including on a platform this repository does not install
 # on, where predicate 2 deliberately says nothing.
 violation contains {
-	"rule": "lock-platform-uninstallable",
+	"rule": "lock reach unsafe",
 	"verdict": "lock write partial",
 	"subjects": [
 		pointer("mise.lock", [sprintf("\"platforms.%s\"", [platform]), name]),
@@ -291,7 +291,7 @@ violation contains {
 # exempt backends CANNOT lock a url; a fetch-an-asset backend can, so for one of
 # those "locks nothing" means unlocked rather than exempt.
 violation contains {
-	"rule": "lock-tool-unlocked",
+	"rule": "tool pin partial",
 	"verdict": "tool pin missing",
 	"subjects": [
 		pointer("mise.lock", [sprintf("[[tools.%s]]", [name])]),
@@ -308,7 +308,7 @@ violation contains {
 # different remedy: what it installs cannot be determined rather than can be and
 # is unverified.
 violation contains {
-	"rule": "lock-tool-unlocked",
+	"rule": "tool pin partial",
 	"verdict": "tool declare missing",
 	"subjects": [
 		pointer("mise.lock", [sprintf("[[tools.%s]]", [name])]),
@@ -358,7 +358,7 @@ declared_tools[name] := value if {
 }
 
 violation contains {
-	"rule": "lock-tool-missing",
+	"rule": "tool pin absent",
 	"verdict": "tool pin absent",
 	"subjects": [pointer("mise.toml", [name]), {"artifact": name}],
 } if {
@@ -401,7 +401,7 @@ satisfies(locked, pin) if startswith(locked, sprintf("%s.", [pin]))
 plain_version(pin) if regex.match(data.batten.patterns["plain-dotted-version"], pin)
 
 violation contains {
-	"rule": "lock-pin-stale",
+	"rule": "pin read stale",
 	"verdict": "pin read stale",
 	"subjects": [pointer("mise.toml", [name]), {"artifact": name}],
 } if {
@@ -426,7 +426,7 @@ writes_enabled if manifest.settings.lockfile == true
 writes_enabled if manifest.settings.lockfile == 1
 
 violation contains {
-	"rule": "lockfile-writes-enabled",
+	"rule": "lock write unsafe",
 	"verdict": "lock write unsafe",
 	"subjects": [pointer("mise.toml", ["lockfile"])],
 } if {
@@ -468,7 +468,7 @@ sets_lockfile(path) if {
 }
 
 violation contains {
-	"rule": "workflow-installs-unlocked",
+	"rule": "workflow run unsafe",
 	"verdict": "workflow run unsafe",
 	"subjects": [pointer(path, ["mise-action"])],
 } if {
@@ -492,7 +492,7 @@ declares_tools if {
 }
 
 violation contains {
-	"rule": "lock-unreadable",
+	"rule": "lock read unread",
 	"verdict": "lock read unread",
 	"subjects": [{"path": "mise.lock"}],
 } if {
@@ -540,7 +540,7 @@ test_a_platform_key_mise_does_not_emit_is_a_finding if {
 		fixture_manifest,
 	)
 		with data.batten.patterns as fixture_patterns
-	v.rule == "lock-platform-residue"
+	v.rule == "lock write other"
 }
 
 # A LITERAL RATHER THAN `object.union`, and the difference is the reason this case
@@ -561,7 +561,7 @@ test_a_required_platform_with_no_url_is_a_finding if {
 		fixture_manifest,
 	)
 		with data.batten.patterns as fixture_patterns
-	v.rule == "lock-platform-uninstallable"
+	v.rule == "lock reach unsafe"
 }
 
 # THE NEAR-MISS. A url-less stub on a NON-required platform is mise recording that
@@ -624,7 +624,7 @@ test_a_required_platform_missing_entirely_is_a_finding if {
 		fixture_manifest,
 	)
 		with data.batten.patterns as fixture_patterns
-	v.rule == "lock-platform-uninstallable"
+	v.rule == "lock reach unsafe"
 }
 
 test_a_backend_that_cannot_lock_is_exempt_from_locking_nothing if {
@@ -646,7 +646,7 @@ test_an_asset_backend_that_locks_nothing_is_a_finding if {
 		{"settings": {"lockfile": false}, "tools": {}},
 	)
 		with data.batten.patterns as fixture_patterns
-	v.rule == "lock-tool-unlocked"
+	v.rule == "tool pin partial"
 }
 
 test_a_tool_declaring_no_backend_is_a_finding if {
@@ -667,7 +667,7 @@ test_a_declared_tool_with_no_lock_entry_is_a_finding if {
 		}},
 	)
 		with data.batten.patterns as fixture_patterns
-	v.rule == "lock-tool-missing"
+	v.rule == "tool pin absent"
 }
 
 # THE ALLOWLIST IS FAIL-CLOSED, so a bare name other than `rust` must lock:
@@ -678,7 +678,7 @@ test_a_bare_name_other_than_rust_must_lock if {
 		{"settings": {"lockfile": false}, "tools": {"t": "1.0.0", "node": "24"}},
 	)
 		with data.batten.patterns as fixture_patterns
-	v.rule == "lock-tool-missing"
+	v.rule == "tool pin absent"
 }
 
 test_a_pin_its_entry_does_not_name_is_a_finding if {
@@ -687,11 +687,11 @@ test_a_pin_its_entry_does_not_name_is_a_finding if {
 		{"settings": {"lockfile": false}, "tools": {"t": "2.0.0"}},
 	)
 		with data.batten.patterns as fixture_patterns
-	v.rule == "lock-pin-stale"
+	v.rule == "pin read stale"
 }
 
 test_a_partial_pin_the_lock_extends_is_not if {
-	count({v | some v in violation; v.rule == "lock-pin-stale"}) == 0 with input as fixture_input(
+	count({v | some v in violation; v.rule == "pin read stale"}) == 0 with input as fixture_input(
 		fixture_lock,
 		{"settings": {"lockfile": false}, "tools": {"t": "1.0"}},
 	)
@@ -713,7 +713,7 @@ test_the_extension_must_be_at_a_component_boundary if {
 		{"settings": {"lockfile": false}, "tools": {"t": "1.9"}},
 	)
 		with data.batten.patterns as fixture_patterns
-	v.rule == "lock-pin-stale"
+	v.rule == "pin read stale"
 }
 
 # The spelling the measured defect was written in, and the one a bare-string
@@ -727,11 +727,11 @@ test_an_inline_table_pin_is_read if {
 		}}},
 	)
 		with data.batten.patterns as fixture_patterns
-	v.rule == "lock-pin-stale"
+	v.rule == "pin read stale"
 }
 
 test_a_pin_that_is_not_a_dotted_version_is_skipped if {
-	count({v | some v in violation; v.rule == "lock-pin-stale"}) == 0 with input as fixture_input(
+	count({v | some v in violation; v.rule == "pin read stale"}) == 0 with input as fixture_input(
 		fixture_lock,
 		{"settings": {"lockfile": false}, "tools": {"t": "latest"}},
 	)
@@ -744,7 +744,7 @@ test_re_enabled_lockfile_writes_are_a_finding if {
 		{"settings": {"lockfile": true}, "tools": {"t": "1.0.0"}},
 	)
 		with data.batten.patterns as fixture_patterns
-	v.rule == "lockfile-writes-enabled"
+	v.rule == "lock write unsafe"
 }
 
 # A `lockfile` key outside `[settings]` is not the setting. The predecessor needed
@@ -765,7 +765,7 @@ test_a_workflow_installing_without_the_lockfile_env_is_a_finding if {
 		{"tree": {"lines": {".github/workflows/w.yml": ["      - uses: jdx/mise-action@abc"]}}},
 	)
 		with data.batten.patterns as fixture_patterns
-	v.rule == "workflow-installs-unlocked"
+	v.rule == "workflow run unsafe"
 }
 
 test_the_same_workflow_setting_it_is_not if {
@@ -798,7 +798,7 @@ test_an_unreadable_lockfile_a_manifest_depends_on_is_a_finding if {
 		"missing": {"mise.lock": "absent"},
 	}}
 		with data.batten.patterns as fixture_patterns
-	v.rule == "lock-unreadable"
+	v.rule == "lock read unread"
 }
 
 test_an_unreadable_lockfile_no_manifest_depends_on_is_silent if {

@@ -47,7 +47,7 @@ package batten.landing_loop
 
 import rego.v1
 
-rules contains "lease-authorises-the-branch"
+rules contains "lease grant other"
 
 # The lease answers this branch wrote, IN WRITE ORDER.
 #
@@ -139,7 +139,7 @@ refused if {
 # exists to avoid. So the pointer names the subject of the refusal rather than its
 # cause, and a reader wanting the holder asks the producer.
 violation contains {
-	"rule": "lease-authorises-the-branch",
+	"rule": "lease grant other",
 	"verdict": "lease grant other",
 	"subjects": [{"artifact": latest.branch}],
 } if {
@@ -204,7 +204,7 @@ test_a_reserved_successor_may_spend if {
 # clause above from being satisfied by the mere presence of any reservation.
 test_a_reservation_for_another_branch_does_not_admit_this_one if {
 	some v in violation with input as lease_line("lease held-elsewhere theirs mine")
-	v.rule == "lease-authorises-the-branch"
+	v.rule == "lease grant other"
 }
 
 # A CLONE WITH NO BRANCH CANNOT BE COMPARED, so it allows. A detached HEAD is a

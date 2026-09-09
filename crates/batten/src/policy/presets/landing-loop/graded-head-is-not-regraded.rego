@@ -37,7 +37,7 @@ package batten.landing_loop
 
 import rego.v1
 
-rules contains "graded-head-is-not-regraded"
+rules contains "head grade twice"
 
 # The compiled tier is the one that runs this the way a consumer gets it, with
 # the empty vocabulary — the doc above says so, and CLOUD-1267 makes it the
@@ -72,7 +72,7 @@ graded contains sha if {
 # already holds, and naming it is what makes a stopped lap diagnosable rather
 # than mysterious. Never a check body, never a fetched payload.
 violation contains {
-	"rule": "graded-head-is-not-regraded",
+	"rule": "head grade twice",
 	"verdict": "head grade twice",
 	"subjects": [{"artifact": sha}],
 } if {
@@ -98,7 +98,7 @@ test_a_judged_commit_is_refused if {
 # practice is about re-grading, never about which way the grade went.
 test_a_red_commit_is_refused_too if {
 	some v in violation with input as recorded({"final": "failure"})
-	v.rule == "graded-head-is-not-regraded"
+	v.rule == "head grade twice"
 }
 
 # THE ANTI-VACUITY MIRROR. Without it the two cases above are satisfied by a

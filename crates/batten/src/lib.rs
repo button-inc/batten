@@ -800,6 +800,7 @@ fn run_baseline(
         policy::Vocabulary {
             patterns: &config.patterns,
             verdicts: &config.verdicts,
+            words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
             recorders: &config.recorders,
         },
         &root,
@@ -1312,11 +1313,7 @@ fn run_state_record(
         rules::run_recorded(
             &config.rules,
             &config.provisions,
-            policy::Vocabulary {
-                patterns: &config.patterns,
-                verdicts: &config.verdicts,
-                recorders: &config.recorders,
-            },
+            policy::Vocabulary::from(&config),
             Path::new("."),
             checks,
             surface,
@@ -5890,11 +5887,7 @@ fn admission_anchor(
         let Ok(bundles) = policy::load(
             root,
             &policy_rows,
-            policy::Vocabulary {
-                patterns: &config.patterns,
-                verdicts: &config.verdicts,
-                recorders: &config.recorders,
-            },
+            policy::Vocabulary::from(config),
             // The same entitlement the run below is given. A mint answers about
             // one rule over one subject, so registry equality's exhausted half —
             // a property of the whole authority — is not this verb's to assert.
@@ -5928,6 +5921,7 @@ fn admission_anchor(
         policy::Vocabulary {
             patterns: &config.patterns,
             verdicts: &config.verdicts,
+            words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
             recorders: &config.recorders,
         },
         root,
@@ -6153,6 +6147,7 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
         policy::Vocabulary {
             patterns: &config.patterns,
             verdicts: &config.verdicts,
+            words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
             recorders: &config.recorders,
         },
         policy::ModuleChecks::Run,
@@ -15121,6 +15116,7 @@ fn filed_here_pointers(
     let vocabulary = policy::Vocabulary {
         patterns: &config.patterns,
         verdicts: &config.verdicts,
+        words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
         recorders: &config.recorders,
     };
     // `run_static_over` WITH AN INSTANT, because the four-argument wrapper hands
@@ -18108,6 +18104,7 @@ fn run_rules(
     let vocabulary = policy::Vocabulary {
         patterns: &config.patterns,
         verdicts: &config.verdicts,
+        words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
         recorders: &config.recorders,
     };
     let (selected, checks) = select_rules(&config.rules, only)?;

@@ -23,7 +23,7 @@ package batten.shell_hygiene
 
 import rego.v1
 
-rules contains "sibling-resolves"
+rules contains "program resolve missing"
 
 # A line that computes THIS SCRIPT'S OWN directory. Both markers are required:
 # `dirname` alone catches `dirname "$file"`, which is somebody else's directory,
@@ -135,7 +135,7 @@ constructed(path) := {resolved |
 tracked_set contains entry if some entry in input.tree.tracked
 
 violation contains {
-	"rule": "sibling-resolves",
+	"rule": "program resolve missing",
 	# TWO SUBJECTS, IN THIS ORDER. The file carrying the reference comes first
 	# because that is where the fix goes; the path it computed comes second
 	# because that is what the reader has to reconcile. Reversing them would send
@@ -160,7 +160,7 @@ test_a_sibling_that_lost_its_extension_is_a_finding if {
 		"lines": {"mise-tasks/stop-guard.sh": [`field="$(dirname -- "${BASH_SOURCE[0]}")/payload-field"`]},
 		"tracked": ["mise-tasks/stop-guard.sh", "mise-tasks/payload-field.sh"],
 	}}
-	v.rule == "sibling-resolves"
+	v.rule == "program resolve missing"
 }
 
 # THE LOAD-BEARING ALLOW: the same line, once the reference is repaired. Without

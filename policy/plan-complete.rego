@@ -51,9 +51,9 @@ package batten.plan_complete
 
 import rego.v1
 
-rules contains "plan-unfinished"
+rules contains "plan declare held"
 
-rules contains "plan-unrecorded"
+rules contains "plan declare absent"
 
 # The store, or nothing. ABSENT IS NOT EMPTY, and the two reach different arms
 # below on purpose: an empty file is "I recorded a plan and it holds no entries",
@@ -99,7 +99,7 @@ changed contains path if {
 
 # `plan-unfinished`: an entry the branch declared and left in flight.
 violation contains {
-	"rule": "plan-unfinished",
+	"rule": "plan declare held",
 	"verdict": "plan declare held",
 	"subjects": [{"artifact": entry_row.id}],
 } if {
@@ -137,7 +137,7 @@ claimed if {
 # keeps the remedy honest for a genuinely trivial change: one call saying so,
 # rather than a fabricated entry.
 violation contains {
-	"rule": "plan-unrecorded",
+	"rule": "plan declare absent",
 	"verdict": "plan declare absent",
 	"subjects": [{"count": count(changed)}],
 } if {

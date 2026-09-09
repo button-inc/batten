@@ -75,11 +75,11 @@ package batten.filed_here
 
 import rego.v1
 
-rules contains "filed-unrefined"
+rules contains "issue file unclear"
 
-rules contains "filed-over-own-diff"
+rules contains "issue file same"
 
-rules contains "filed-and-left-open"
+rules contains "issue file held"
 
 # The record, or nothing. ABSENT IS NOT EMPTY: a branch whose recorder never ran
 # has no key here at all, Rego reads that as *does not hold*, and every rule below
@@ -189,7 +189,7 @@ body_read if {
 #
 # `ready` passes and so does `-`; only the tracker's own `unready` refuses.
 violation contains {
-	"rule": "filed-unrefined",
+	"rule": "issue file unclear",
 	"verdict": "issue file unclear",
 	"subjects": [{"artifact": id}],
 } if {
@@ -262,7 +262,7 @@ cites_only(id) if {
 # ONE FINDING PER PATH, as the shell emitted, so a reviewer sees which file rather
 # than a count they have to go and reconstruct.
 violation contains {
-	"rule": "filed-over-own-diff",
+	"rule": "issue file same",
 	"verdict": "issue file same",
 	"subjects": [{"path": path}, {"artifact": id}],
 } if {
@@ -330,7 +330,7 @@ closes_unreadable if {
 #     so the partition cannot be evaluated and the row stays judged as it was
 #     before this arm existed.
 violation contains {
-	"rule": "filed-and-left-open",
+	"rule": "issue file held",
 	"verdict": "issue file held",
 	"subjects": [{"artifact": id}],
 } if {

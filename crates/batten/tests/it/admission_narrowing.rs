@@ -103,6 +103,7 @@ fn load_fixture(root: &Path, rows: &[Rule]) -> Vec<Bundle> {
             // consumer supplies.
             patterns: &[],
             verdicts: &verdicts,
+            words: None,
             recorders: &[],
         },
         policy::ModuleChecks::RunOverSelection,
@@ -203,6 +204,7 @@ fn the_committed_bundles_publish_no_engine_side_rule_name() {
         policy::Vocabulary {
             patterns: &config.patterns,
             verdicts: &config.verdicts,
+            words: None,
             recorders: &config.recorders,
         },
         policy::ModuleChecks::RunOverSelection,

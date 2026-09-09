@@ -62,7 +62,7 @@ package batten.repetition_without_progress
 
 import rego.v1
 
-rules contains "agent-turn-run"
+rules contains "turn run loose"
 
 # OpenHands' monologue threshold. Adopted rather than derived: CLOUD-1352 makes a
 # replay over this repository's own history the precondition for promoting any
@@ -76,7 +76,7 @@ threshold := 3
 # here, because an extraction this host cannot answer is absent from the map and
 # an absent key is undefined, which does not hold.
 violation contains {
-	"rule": "agent-turn-run",
+	"rule": "turn run loose",
 	"verdict": "turn run loose",
 	"subjects": [{"count": input.facts.extracted["agent-turn-run"]}],
 } if {

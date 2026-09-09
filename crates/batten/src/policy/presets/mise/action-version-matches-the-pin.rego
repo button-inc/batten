@@ -51,7 +51,7 @@ package batten.mise_action_version
 
 import rego.v1
 
-rules contains "action-version-matches-the-pin"
+rules contains "job pin wrong"
 
 # --- the two documents, found by shape ----------------------------------------
 
@@ -157,7 +157,7 @@ disagrees(path, name) if {
 }
 
 violation contains {
-	"rule": "action-version-matches-the-pin",
+	"rule": "job pin wrong",
 	"verdict": "job pin other",
 	"subjects": [{"path": path, "line": number}],
 } if {
@@ -170,7 +170,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "action-version-matches-the-pin",
+	"rule": "job pin wrong",
 	"verdict": "job pin other",
 	"subjects": [{"path": path}],
 } if {
@@ -200,7 +200,7 @@ unpinned_reader(path, name) if {
 }
 
 violation contains {
-	"rule": "action-version-matches-the-pin",
+	"rule": "job pin wrong",
 	"verdict": "job pin missing",
 	"subjects": [{"path": path, "line": number}],
 } if {
@@ -213,7 +213,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "action-version-matches-the-pin",
+	"rule": "job pin wrong",
 	"verdict": "job pin missing",
 	"subjects": [{"path": path}],
 } if {
@@ -232,7 +232,7 @@ violation contains {
 # green over a file it never read.
 
 violation contains {
-	"rule": "action-version-matches-the-pin",
+	"rule": "job pin wrong",
 	"verdict": "workflow parse unread",
 	"subjects": [{"path": path}],
 } if {
@@ -241,7 +241,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "action-version-matches-the-pin",
+	"rule": "job pin wrong",
 	"verdict": "workflow parse unread",
 	"subjects": [{"path": path}],
 } if {

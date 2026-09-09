@@ -23,7 +23,7 @@ package batten.shell_hygiene
 
 import rego.v1
 
-rules contains "shebang-names-its-language"
+rules contains "program name unnamed"
 
 # The interpreters worth naming. `env`-mediated and absolute spellings both
 # reduce to the same question, so the match is on the interpreter word rather
@@ -46,7 +46,7 @@ names_shell(path) if endswith(path, ".sh")
 names_shell(path) if endswith(path, ".bash")
 
 violation contains {
-	"rule": "shebang-names-its-language",
+	"rule": "program name unnamed",
 	"verdict": "program name unnamed",
 	"subjects": [{"path": path}],
 } if {
@@ -64,7 +64,7 @@ test_an_extensionless_shell_program_is_named if {
 	# so a tree-wide rename that "helpfully" appended `.sh` here would turn the
 	# deny test into a clean one and the suite would still be green.
 	some v in violation with input as {"tree": {"lines": {"tools/deploy": ["#!/usr/bin/env bash", "set -euo pipefail"]}}}
-	v.rule == "shebang-names-its-language"
+	v.rule == "program name unnamed"
 }
 
 test_an_absolute_interpreter_counts_too if {

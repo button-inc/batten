@@ -127,7 +127,7 @@ package batten.shell_retirement
 
 import rego.v1
 
-rules contains "shell-rule-retired"
+rules contains "shell retire other"
 
 # ---------------------------------------------------------------------------
 # The changed-file set, and the could-not-look channel.
@@ -225,7 +225,7 @@ governed_when_deleted(path) if is_bats(path)
 # ---------------------------------------------------------------------------
 
 violation contains {
-	"rule": "shell-rule-retired",
+	"rule": "shell retire other",
 	"verdict": "shell add refused",
 	"subjects": [{"path": path}],
 } if {
@@ -275,7 +275,7 @@ declares_it_stays_bash(path) if {
 # ---------------------------------------------------------------------------
 
 violation contains {
-	"rule": "shell-rule-retired",
+	"rule": "shell retire other",
 	"verdict": "shell edit refused",
 	"subjects": [{"path": path}],
 } if {
@@ -1071,7 +1071,7 @@ truncates_a_retired_reference(line, removed) if {
 # ---------------------------------------------------------------------------
 
 violation contains {
-	"rule": "shell-rule-retired",
+	"rule": "shell retire other",
 	"verdict": "shell retire missing",
 	"subjects": [{"path": path}],
 } if {
@@ -1081,7 +1081,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "shell-rule-retired",
+	"rule": "shell retire other",
 	"verdict": "shell retire unclear",
 	"subjects": [{"path": path}],
 } if {
@@ -1105,7 +1105,7 @@ violation contains {
 # nothing would be the defect rather than the deliverable. So the arm that could
 # be waived is, and the arm that carries the coverage is not.
 violation contains {
-	"rule": "shell-rule-retired",
+	"rule": "shell retire other",
 	"verdict": "shell port missing",
 	"subjects": [{"path": path}],
 } if {
@@ -1118,7 +1118,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "shell-rule-retired",
+	"rule": "shell retire other",
 	"verdict": "test port missing",
 	"subjects": [{"path": path}],
 } if {
@@ -1144,7 +1144,7 @@ violation contains {
 # consumer module or a preset is already unambiguous, so demanding a field of it
 # would be a refusal that teaches nothing.
 violation contains {
-	"rule": "shell-rule-retired",
+	"rule": "shell retire other",
 	"verdict": "shell port unnamed",
 	"subjects": [{"path": path}],
 } if {
@@ -1165,7 +1165,7 @@ violation contains {
 # blanket permission to delete governed files, which is the thing the module exists
 # to refuse.
 violation contains {
-	"rule": "shell-rule-retired",
+	"rule": "shell retire other",
 	"verdict": "shell retire never",
 	"subjects": [{"path": path}],
 } if {
@@ -1196,7 +1196,7 @@ violation contains {
 # so naming a successor can never trip this, and naming a shell program or a bats
 # suite that this delta does not retire always does.
 violation contains {
-	"rule": "shell-rule-retired",
+	"rule": "shell retire other",
 	"verdict": "program retire never",
 	"subjects": [{"path": path}, {"path": subject}],
 } if {
@@ -1261,7 +1261,7 @@ named_and_alive(path) := subjects if {
 # imitates. That is the shape a fifth arm could have been, and this is what stops
 # it being that.
 violation contains {
-	"rule": "shell-rule-retired",
+	"rule": "shell retire other",
 	"verdict": "suite port unnamed",
 	"subjects": [{"path": path}],
 } if {
@@ -1279,7 +1279,7 @@ violation contains {
 # Admitting it under both markers would let the ledger record one event in two
 # vocabularies, which is the drift every seam in this module is written against.
 violation contains {
-	"rule": "shell-rule-retired",
+	"rule": "shell retire other",
 	"verdict": "suite port dead",
 	"subjects": [{"path": path}, {"path": subject}],
 } if {
@@ -1309,7 +1309,7 @@ violation contains {
 # program alive and untested. Each owes its own row, and this refuses until one
 # arrives.
 violation contains {
-	"rule": "shell-rule-retired",
+	"rule": "shell retire other",
 	"verdict": "suite port held",
 	"subjects": [{"path": path}, {"path": subject}],
 } if {
@@ -1324,7 +1324,7 @@ violation contains {
 # It names no successor, so the reason is the only thing a reader can check the
 # claim against. An arm with neither is a file deleted with a marker on it.
 violation contains {
-	"rule": "shell-rule-retired",
+	"rule": "shell retire other",
 	"verdict": "shell retire empty",
 	"subjects": [{"path": path}],
 } if {
@@ -2434,7 +2434,7 @@ test_a_bats_binding_outside_the_suite_directory_is_not_a_retired_reference if {
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:mise+run+old-gate"],
 		},
 	}}
-	v.rule == "shell-rule-retired"
+	v.rule == "shell retire other"
 }
 
 # ANTI-VACUITY: the invocation must be one the LEDGER declares. Without this the

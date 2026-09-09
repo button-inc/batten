@@ -114,6 +114,7 @@ fn findings(root: &Path) -> Vec<String> {
         batten::policy::Vocabulary {
             patterns: &[],
             verdicts: &verdicts,
+            words: None,
             recorders: &[],
         },
         root,
@@ -482,6 +483,7 @@ fn the_finding_carries_a_count_and_never_a_path() {
         batten::policy::Vocabulary {
             patterns: &[],
             verdicts: &verdicts,
+            words: None,
             recorders: &[],
         },
         &root,

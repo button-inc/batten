@@ -52,25 +52,25 @@ package batten.ci_parity
 
 import rego.v1
 
-rules contains "ci-task-parity"
+rules contains "job run other"
 
-rules contains "required-roster-matches-jobs"
+rules contains "check list other"
 
-rules contains "release-pr-opens-as-a-draft"
+rules contains "release open early"
 
-rules contains "one-bot-serves-every-ecosystem"
+rules contains "bound cover partial"
 
-rules contains "fan-in-is-wired"
+rules contains "job wire missing"
 
-rules contains "lease-authorises-before-spending"
+rules contains "lease ask missing"
 
-rules contains "check-status-decided-in-one-place"
+rules contains "check grade twice"
 
-rules contains "every-bot-branch-has-a-watcher"
+rules contains "branch watch missing"
 
-rules contains "foreign-cargo-is-the-declared-spelling"
+rules contains "cargo spelling wrong"
 
-rules contains "cache-path-is-rebase-stable"
+rules contains "path reach dead"
 
 # --- the manifest, and the guard ----------------------------------------------
 
@@ -184,7 +184,7 @@ ci_task_used contains [path, task] if {
 }
 
 violation contains {
-	"rule": "ci-task-parity",
+	"rule": "job run other",
 	"verdict": "task run missing",
 	"subjects": [{"path": path}, {"artifact": task}],
 } if {
@@ -343,7 +343,7 @@ job_in_roster(name) if name in roster_names
 roster_name_has_a_job(name) if name in job_display_names
 
 violation contains {
-	"rule": "required-roster-matches-jobs",
+	"rule": "check list other",
 	"verdict": "check name unknown",
 	"subjects": [{"path": "mise.toml"}, {"artifact": name}],
 } if {
@@ -353,7 +353,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "required-roster-matches-jobs",
+	"rule": "check list other",
 	"verdict": "job list missing",
 	"subjects": [{"path": "mise.toml"}, {"artifact": name}],
 } if {
@@ -373,7 +373,7 @@ violation contains {
 release_config := input.tree.documents["release-plz.toml"]
 
 violation contains {
-	"rule": "release-pr-opens-as-a-draft",
+	"rule": "release open early",
 	"verdict": "release open early",
 	"subjects": [{"path": "release-plz.toml"}],
 } if {
@@ -405,7 +405,7 @@ renovate := input.tree.documents["renovate.json5"]
 dependabot_absent if not ".github/dependabot.yml" in input.tree.tracked
 
 violation contains {
-	"rule": "one-bot-serves-every-ecosystem",
+	"rule": "bound cover partial",
 	"verdict": "config carry duplicate",
 	"subjects": [{"path": ".github/dependabot.yml"}],
 } if {
@@ -429,7 +429,7 @@ renovate_key_ok("minimumReleaseAge") if count(renovate.minimumReleaseAge) > 0
 renovate_key_ok("vulnerabilityAlerts") if is_object(renovate.vulnerabilityAlerts)
 
 violation contains {
-	"rule": "one-bot-serves-every-ecosystem",
+	"rule": "bound cover partial",
 	"verdict": "bound declare missing",
 	"subjects": [{"path": "renovate.json5"}, {"artifact": key}],
 } if {
@@ -453,7 +453,7 @@ commit_type_is_scoped if {
 }
 
 violation contains {
-	"rule": "one-bot-serves-every-ecosystem",
+	"rule": "bound cover partial",
 	"verdict": "commit name unnamed",
 	"subjects": [{"path": "renovate.json5"}],
 } if {
@@ -470,7 +470,7 @@ violation contains {
 maintained_ecosystems := ["cargo", "github-actions", "mise"]
 
 violation contains {
-	"rule": "one-bot-serves-every-ecosystem",
+	"rule": "bound cover partial",
 	"verdict": "manifest cover missing",
 	"subjects": [{"path": "renovate.json5"}, {"artifact": eco}],
 } if {
@@ -497,7 +497,7 @@ fanin_check := manifest_env.CI_FANIN_CHECK
 fanin_workflow := manifest_env.CI_FANIN_WORKFLOW
 
 violation contains {
-	"rule": "fan-in-is-wired",
+	"rule": "job wire missing",
 	"verdict": "job require missing",
 	"subjects": [{"path": "mise.toml"}, {"artifact": fanin_check}],
 } if {
@@ -506,7 +506,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "fan-in-is-wired",
+	"rule": "job wire missing",
 	"verdict": "workflow declare empty",
 	"subjects": [{"path": fanin_workflow}, {"artifact": fanin_check}],
 } if {
@@ -570,7 +570,7 @@ abandon_reads_declaration if {
 }
 
 violation contains {
-	"rule": "fan-in-is-wired",
+	"rule": "job wire missing",
 	"verdict": "job declare duplicate",
 	"subjects": [{"path": "crates/batten/src/lib.rs"}],
 } if {
@@ -593,7 +593,7 @@ lander_calls_abandon if {
 }
 
 violation contains {
-	"rule": "fan-in-is-wired",
+	"rule": "job wire missing",
 	"verdict": "job reach dead",
 	"subjects": [{"path": "crates/batten/src/lib.rs"}],
 } if {
@@ -624,7 +624,7 @@ starts_with_the_lease(path, name) if {
 }
 
 violation contains {
-	"rule": "lease-authorises-before-spending",
+	"rule": "lease ask missing",
 	"verdict": "lease guard absent",
 	"subjects": [{"path": path}, {"artifact": name}],
 } if {
@@ -693,7 +693,7 @@ tolerated_at(path, i) if {
 }
 
 violation contains {
-	"rule": "lease-authorises-before-spending",
+	"rule": "lease ask missing",
 	"verdict": "lease guard unsafe",
 	"subjects": [{"path": path}],
 } if {
@@ -725,7 +725,7 @@ decides_through_checks_green(path) if {
 }
 
 violation contains {
-	"rule": "check-status-decided-in-one-place",
+	"rule": "check grade twice",
 	"verdict": "check grade twice",
 	"subjects": [{"path": path}],
 } if {
@@ -768,7 +768,7 @@ watched(prefix) if {
 }
 
 violation contains {
-	"rule": "every-bot-branch-has-a-watcher",
+	"rule": "branch watch missing",
 	"verdict": "branch watch missing",
 	"subjects": [{"path": config}, {"artifact": bot_prefix(config)}],
 } if {
@@ -822,7 +822,7 @@ cache_uses(uses) if startswith(uses, "actions/cache/")
 path_varies_between_runs(step) if contains(object.get(step, ["with", "path"], ""), "${{")
 
 violation contains {
-	"rule": "cache-path-is-rebase-stable",
+	"rule": "path reach dead",
 	"verdict": "path reach dead",
 	"subjects": [{"path": path}, {"artifact": name}],
 } if {
@@ -841,7 +841,7 @@ violation contains {
 # boundary tried and failed. Spelling those the same way is how a gate reports
 # green over a file it never read.
 violation contains {
-	"rule": "ci-task-parity",
+	"rule": "job run other",
 	"verdict": "workflow read unread",
 	"subjects": [{"path": path}],
 } if {
@@ -910,7 +910,7 @@ foreign_cargo contains [path, number, cmd] if {
 }
 
 violation contains {
-	"rule": "foreign-cargo-is-the-declared-spelling",
+	"rule": "cargo spelling wrong",
 	"verdict": "cargo spelling other",
 	"subjects": [{"path": path, "line": number}, {"artifact": cmd}],
 } if {
@@ -926,7 +926,7 @@ violation contains {
 # is not answering this question, and refusing it would fire on every fixture
 # that carries a copy of this config and none of its subjects.
 violation contains {
-	"rule": "foreign-cargo-is-the-declared-spelling",
+	"rule": "cargo spelling wrong",
 	"verdict": "cargo reach absent",
 	"subjects": [{"count": 0}],
 } if {
@@ -937,7 +937,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "foreign-cargo-is-the-declared-spelling",
+	"rule": "cargo spelling wrong",
 	"verdict": "task read unread",
 	"subjects": [{"artifact": "test:cargo"}],
 } if {

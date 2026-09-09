@@ -84,16 +84,16 @@ package batten.remedy_authorship
 
 import rego.v1
 
-rules contains "remedy-reaches-the-reader"
+rules contains "remedy select dropped"
 
-rules contains "remedy-has-one-author"
+rules contains "remedy own duplicate"
 
 # ---------------------------------------------------------------------------
 # A: every line of a stderr block carries the error prefix.
 # ---------------------------------------------------------------------------
 
 violation contains {
-	"rule": "remedy-reaches-the-reader",
+	"rule": "remedy select dropped",
 	"verdict": "remedy select dropped",
 	"subjects": [{"path": path, "line": i + 1}],
 } if {
@@ -190,7 +190,7 @@ emits_a_literal(line) if {
 # ---------------------------------------------------------------------------
 
 violation contains {
-	"rule": "remedy-has-one-author",
+	"rule": "remedy own duplicate",
 	"verdict": "remedy own duplicate",
 	"subjects": [{"artifact": name}, {"artifact": var}],
 } if {
@@ -300,7 +300,7 @@ test_an_unprefixed_stderr_line_is_refused if {
 		"\techo \"here is the fix\"",
 		"} >&2",
 	]}}}
-	v.rule == "remedy-reaches-the-reader"
+	v.rule == "remedy select dropped"
 }
 
 test_a_fully_prefixed_block_passes if {
@@ -324,7 +324,7 @@ test_a_block_not_redirected_to_stderr_is_not_judged if {
 
 test_a_caller_naming_a_bypass_it_does_not_read_is_refused if {
 	some v in violation with input as {"tree": {"documents": {"mise.toml": {"tasks": {"verify": {"run": "echo \"set BATTEN_PROSE_ONLY_OVERRIDE=1 to record the exception\""}}}}}}
-	v.rule == "remedy-has-one-author"
+	v.rule == "remedy own duplicate"
 }
 
 # THE DISCRIMINATING CASE for B: the gate that OWNS a hatch must be able to name

@@ -15,10 +15,10 @@ package batten.trunk_based
 
 import rego.v1
 
-rules contains "no-force-push"
+rules contains "trunk push forced"
 
 violation contains {
-	"rule": "no-force-push",
+	"rule": "trunk push forced",
 	"verdict": "trunk push forced",
 } if {
 	# ON THE PROGRAM, NOT ON THE FIRST WORD (CLOUD-1382). This is the anchor's
@@ -88,7 +88,7 @@ test_no_force_push if {
 		"command": "git push --force origin main",
 		"programs": [{"program": "git", "name": "git", "arguments": ["push", "--force", "origin", "main"], "mediated": false}],
 	}}
-	v.rule == "no-force-push"
+	v.rule == "trunk push forced"
 }
 
 test_short_force_flag_is_caught_too if {
@@ -96,7 +96,7 @@ test_short_force_flag_is_caught_too if {
 		"command": "git push -f origin main",
 		"programs": [{"program": "git", "name": "git", "arguments": ["push", "-f", "origin", "main"], "mediated": false}],
 	}}
-	v.rule == "no-force-push"
+	v.rule == "trunk push forced"
 }
 
 # THE CASE CLOUD-857 WAS FILED ON: the force push is the SECOND element of a
@@ -113,7 +113,7 @@ test_a_force_push_later_in_a_list_is_caught if {
 		"command": "cd /tmp && git push --force origin main",
 		"programs": [{"program": "cd", "name": "cd", "arguments": ["/tmp"], "mediated": false}, {"program": "git", "name": "git", "arguments": ["push", "--force", "origin", "main"], "mediated": false}],
 	}}
-	v.rule == "no-force-push"
+	v.rule == "trunk push forced"
 }
 
 # THE CASE CLOUD-1382 WAS FILED ON. `time` is grammar the boundary steps past, so
@@ -124,7 +124,7 @@ test_a_grammar_token_does_not_hide_the_program if {
 		"command": "time git push --force origin main",
 		"programs": [{"program": "git", "name": "git", "arguments": ["push", "--force", "origin", "main"], "mediated": false}],
 	}}
-	v.rule == "no-force-push"
+	v.rule == "trunk push forced"
 }
 
 # A PROGRAM REACHED THROUGH A PATH IS THE SAME PROGRAM, which is what `name`
@@ -134,7 +134,7 @@ test_git_reached_through_a_path_is_still_git if {
 		"command": "/usr/bin/git push --force origin main",
 		"programs": [{"program": "/usr/bin/git", "name": "git", "arguments": ["push", "--force", "origin", "main"], "mediated": false}],
 	}}
-	v.rule == "no-force-push"
+	v.rule == "trunk push forced"
 }
 
 test_force_with_lease_is_left_alone if {

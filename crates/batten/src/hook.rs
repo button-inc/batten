@@ -3285,6 +3285,8 @@ impl Policy {
                 crate::policy::Vocabulary {
                     patterns: &resolved.patterns,
                     verdicts: &resolved.verdicts,
+                    // The hot path does not re-check an authoring property (CLOUD-1638).
+                    words: None,
                     recorders: &resolved.recorders,
                 },
                 crate::policy::ModuleChecks::SkipOnHotPath,
@@ -12038,6 +12040,7 @@ mod tests {
                 crate::policy::Vocabulary {
                     patterns: &[],
                     verdicts: &fixture_verdicts,
+                    words: None,
                     recorders: &[],
                 },
                 crate::policy::ModuleChecks::Run,

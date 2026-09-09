@@ -546,6 +546,14 @@ pub struct Resolved {
     /// redefining a refusal is not one.
     #[serde(rename = "verdict")]
     pub verdicts: Vec<crate::verdict::DeclaredVerdict>,
+    /// The `[vocabulary]` word lists (CLOUD-1638), carried for
+    /// [`Resolved::verdicts`]' reason and layered the same way.
+    ///
+    /// Without it the finding-id grammar could not fire on the surface that
+    /// actually loads modules — `check` and `enforce` resolve before they load,
+    /// so a gate reading only `Config` would be one no real run reaches.
+    #[serde(default)]
+    pub vocabulary: crate::verdict::Vocabulary,
     /// The per-path-class redirect table (CLOUD-280), authority rows plus any a
     /// local file **added**. Local rows append after committed ones, and the
     /// lookup takes the first match, so an uncommitted file can add a class the
@@ -1685,6 +1693,7 @@ fn assemble(
         verbs: repo.verbs.clone(),
         patterns: repo.patterns.clone(),
         verdicts: repo.verdicts.clone(),
+        vocabulary: repo.vocabulary.clone(),
         redirects: tables.redirects,
         facts: tables.facts,
         // Straight from the authority, never through `tables`: see the field's
@@ -1787,6 +1796,13 @@ fn attribution(
         // supply the WORDS a committed gate refuses in — the token stays the same
         // and what it means changes, which is a weakening dressed as an addition.
         ("verdict", authority_set(!repo.verdicts.is_empty())),
+        // AUTHORITY-ONLY for `verdict`'s own reason, one level sharper
+        // (CLOUD-1638): these are the WORDS every class token and every rule id
+        // is spelled from, so a local row would not add a name — it would
+        // change which names are sayable, and therefore what a committed gate
+        // can be renamed to. That is the weakening-dressed-as-an-addition the
+        // row above refuses.
+        ("vocabulary", authority_set(!repo.vocabulary.is_empty())),
         ("marker", authority_set(!repo.markers.is_empty())),
         (
             "exec_pattern",

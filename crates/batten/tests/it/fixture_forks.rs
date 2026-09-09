@@ -120,6 +120,7 @@ fn scan(root: &Path) -> rules::Scan {
         batten::policy::Vocabulary {
             patterns: &patterns,
             verdicts: &verdicts,
+            words: None,
             recorders: &[],
         },
         root,

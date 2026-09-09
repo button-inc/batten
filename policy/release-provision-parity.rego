@@ -29,7 +29,7 @@ package batten.release_provision_parity
 
 import rego.v1
 
-rules contains "release-target-has-a-provisioned-scanner"
+rules contains "release cover missing"
 
 # A rust triple is not a platform key. `provision.rs`'s `platform_key()` builds
 # `<os>-<arch>` with no libc flavour, so `-gnu` and `-musl` collapse to one key —
@@ -85,7 +85,7 @@ pinned[name] := keys if {
 # --- a published target every provision row can serve -------------------------
 
 violation contains {
-	"rule": "release-target-has-a-provisioned-scanner",
+	"rule": "release cover missing",
 	"verdict": "release cover partial",
 	"subjects": [{"artifact": target}, {"artifact": name}],
 } if {
@@ -105,7 +105,7 @@ violation contains {
 # look" and "your gate saying so" is this clause.
 
 violation contains {
-	"rule": "release-target-has-a-provisioned-scanner",
+	"rule": "release cover missing",
 	"verdict": "workflow read unread",
 	"subjects": [{"path": path}],
 } if {
@@ -119,7 +119,7 @@ violation contains {
 # dead-gate shape the whole file guards against. A new release target therefore
 # reddens here until the map names it, which is the trigger the gate exists for.
 violation contains {
-	"rule": "release-target-has-a-provisioned-scanner",
+	"rule": "release cover missing",
 	"verdict": "release cover partial",
 	"subjects": [{"artifact": target}],
 } if {
@@ -156,7 +156,7 @@ test_a_covered_target_is_clean if {
 test_an_uncovered_undeclared_target_is_refused if {
 	found := violation with input as tree(["x86_64-apple-darwin"], covered)
 	some f in found
-	f.rule == "release-target-has-a-provisioned-scanner"
+	f.rule == "release cover missing"
 	f.verdict == "release cover partial"
 }
 

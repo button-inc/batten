@@ -55,11 +55,11 @@ package batten.hk_plan_required
 
 import rego.v1
 
-rules contains "plan-required-step"
+rules contains "step run missing"
 
-rules contains "plan-prohibited-profile"
+rules contains "plan run refused"
 
-rules contains "plan-unacquired"
+rules contains "plan read missing"
 
 # Every declared row, as the engine emitted it: an id maps to the plan it took,
 # or to `null` where it could not take one. `input.tree.plan` is itself `null`
@@ -88,7 +88,7 @@ acquired[id] := plan if {
 # otherwise identical on the decision surface, which is the whole reason this
 # fires rather than passing.
 violation contains {
-	"rule": "plan-unacquired",
+	"rule": "plan read missing",
 	"verdict": "plan read missing",
 	"subjects": [{"artifact": id}],
 } if {
@@ -102,7 +102,7 @@ violation contains {
 # carries which: an absent step has no reason kind, and an excluded one carries
 # the runner's own kind token.
 violation contains {
-	"rule": "plan-required-step",
+	"rule": "step run missing",
 	"verdict": "step run missing",
 	"subjects": [{"artifact": id}, {"count": count(missing_in(id))}],
 } if {
@@ -132,7 +132,7 @@ included(plan, name) if {
 # step missing is a change to the gate, where a prohibited profile is a change to
 # how the gate was invoked.
 violation contains {
-	"rule": "plan-prohibited-profile",
+	"rule": "plan run refused",
 	"verdict": "plan run refused",
 	"subjects": [{"artifact": id}],
 } if {
@@ -162,7 +162,7 @@ test_a_required_step_the_plan_excludes_is_refused if {
 		"steps": [{"name": "one", "status": "skipped", "reasonKind": "profile_exclude"}],
 	}}}}
 
-	finding.rule == "plan-required-step"
+	finding.rule == "step run missing"
 }
 
 test_a_required_step_the_plan_never_names_is_refused if {
@@ -174,13 +174,13 @@ test_a_required_step_the_plan_never_names_is_refused if {
 		"steps": [{"name": "one", "status": "included", "reasonKind": "filter_match"}],
 	}}}}
 
-	finding.rule == "plan-required-step"
+	finding.rule == "step run missing"
 }
 
 test_a_declared_plan_that_could_not_be_acquired_is_refused if {
 	some finding in violation with input as {"tree": {"plan": {"gate": null}}}
 
-	finding.rule == "plan-unacquired"
+	finding.rule == "plan read missing"
 }
 
 test_a_prohibited_profile_is_refused if {
@@ -192,7 +192,7 @@ test_a_prohibited_profile_is_refused if {
 		"steps": [{"name": "one", "status": "included", "reasonKind": "filter_match"}],
 	}}}}
 
-	finding.rule == "plan-prohibited-profile"
+	finding.rule == "plan run refused"
 }
 
 test_a_repository_declaring_no_plan_owes_none if {

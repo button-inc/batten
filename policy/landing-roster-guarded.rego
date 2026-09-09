@@ -84,7 +84,7 @@ package batten.landing_roster
 
 import rego.v1
 
-rules contains "landing-roster-unguarded"
+rules contains "check read never"
 
 # The one workflow that moves `main`. A consumer path in a consumer module, which
 # is where non-negotiable rule 1 puts it: `crates/batten` may not name it and
@@ -126,7 +126,7 @@ guarded if {
 # `main`. Refusing on a whole-tree acquisition failure too is the safe direction
 # — a landing workflow that cannot be read is not one that has been checked.
 violation contains {
-	"rule": "landing-roster-unguarded",
+	"rule": "check read never",
 	"verdict": "check read never",
 	"subjects": [{"path": landing_workflow}],
 } if {

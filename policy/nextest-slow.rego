@@ -90,11 +90,11 @@ package batten.nextest_slow
 
 import rego.v1
 
-rules contains "nextest-slow-unbounded"
+rules contains "suite bind missing"
 
-rules contains "nextest-slow-raised"
+rules contains "bound edit refused"
 
-rules contains "nextest-slow-override-unfiled"
+rules contains "waiver file missing"
 
 # The runner's committed configuration. A consumer path in a consumer module,
 # which is where non-negotiable rule 1 puts it.
@@ -198,7 +198,7 @@ kill_seconds contains kill if {
 # is in force that can be vouched for. Refusing on an unreadable unit is the
 # fail-closed direction: the alternative is a silently unreachable comparison.
 violation contains {
-	"rule": "nextest-slow-unbounded",
+	"rule": "suite bind missing",
 	"verdict": "suite bind missing",
 	"subjects": [{"path": config}],
 } if {
@@ -208,7 +208,7 @@ violation contains {
 # THE RATCHET. A kill threshold above the committed ceiling is refused; below it
 # is free, so making the suite faster never has to negotiate with this gate.
 violation contains {
-	"rule": "nextest-slow-raised",
+	"rule": "bound edit refused",
 	"verdict": "bound edit refused",
 	"subjects": [{"path": config}],
 } if {
@@ -221,7 +221,7 @@ violation contains {
 # behind it is just the ban switched off for whichever test was inconvenient, and
 # it is the thing that rots.
 violation contains {
-	"rule": "nextest-slow-override-unfiled",
+	"rule": "waiver file missing",
 	"verdict": "waiver file missing",
 	"subjects": [{"path": config}],
 } if {

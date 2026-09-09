@@ -127,6 +127,7 @@ fn verdicts(root: &Path) -> Vec<String> {
         batten::policy::Vocabulary {
             patterns: &patterns,
             verdicts: &declared,
+            words: None,
             recorders: &[],
         },
         root,

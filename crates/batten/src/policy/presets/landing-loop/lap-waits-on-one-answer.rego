@@ -40,7 +40,7 @@ package batten.landing_loop
 
 import rego.v1
 
-rules contains "lap-waits-on-one-answer"
+rules contains "wait read both"
 
 # TWO MUTATIONS ON ONE CONJUNCT, IN OPPOSITE DIRECTIONS, which is the pair rather
 # than a duplicate. `loser-read` makes the predicate never fire, so a lap that
@@ -160,7 +160,7 @@ wait_shas := {answer.sha |
 # The arms are a closed vocabulary the consumer's own recorder writes, so naming
 # them carries no content.
 violation contains {
-	"rule": "lap-waits-on-one-answer",
+	"rule": "wait read both",
 	"verdict": "wait read both",
 	"subjects": [{"count": count(wait_answered)}, {"artifact": sha}],
 } if {
@@ -179,7 +179,7 @@ violation contains {
 # inventing a `-` pointer. The two arms are mutually exclusive, so a lap that
 # read both answers yields exactly one finding either way.
 violation contains {
-	"rule": "lap-waits-on-one-answer",
+	"rule": "wait read both",
 	"verdict": "wait read both",
 	"subjects": [{"count": count(wait_answered)}],
 } if {

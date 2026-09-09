@@ -24,21 +24,21 @@ package batten.ci_hygiene
 
 import rego.v1
 
-rules contains "workflow-run-filters-at-the-trigger"
+rules contains "workflow run loose"
 
-rules contains "comment-trigger-is-anchored"
+rules contains "event bind loose"
 
-rules contains "comment-merge-reads-draft-state"
+rules contains "merge run early"
 
-rules contains "declared-trigger-reaches-a-job"
+rules contains "event reach dead"
 
-rules contains "schedules-do-not-collide"
+rules contains "job start same"
 
-rules contains "fan-in-asserts-its-whole-needs"
+rules contains "job require unseen"
 
-rules contains "cache-warm-compile-is-guarded"
+rules contains "job guard missing"
 
-rules contains "interpolation-is-not-swallowed"
+rules contains "input render dropped"
 
 # --- a `workflow_run` trigger filters where filtering is free -----------------
 #
@@ -70,7 +70,7 @@ scopes_head_branch(path) if contains(job_conditions[path], "workflow_run.head_br
 trigger_filters_branches(path) if _ := triggers(path).workflow_run.branches
 
 violation contains {
-	"rule": "workflow-run-filters-at-the-trigger",
+	"rule": "workflow run loose",
 	"verdict": "workflow run loose",
 	"subjects": [{"path": path}],
 } if {
@@ -92,7 +92,7 @@ violation contains {
 # happened to be read that way.
 
 violation contains {
-	"rule": "comment-trigger-is-anchored",
+	"rule": "event bind loose",
 	"verdict": "event bind loose",
 	"subjects": [{"path": path}],
 } if {
@@ -122,7 +122,7 @@ reads_draft_state(path) if {
 }
 
 violation contains {
-	"rule": "comment-merge-reads-draft-state",
+	"rule": "merge run early",
 	"verdict": "merge run early",
 	"subjects": [{"path": path}],
 } if {
@@ -156,7 +156,7 @@ admits(path, trigger) if contains(job_conditions[path], sprintf("github.event_na
 admits(path, "workflow_run") if contains(job_conditions[path], "github.event.workflow_run")
 
 violation contains {
-	"rule": "declared-trigger-reaches-a-job",
+	"rule": "event reach dead",
 	"verdict": "event reach dead",
 	"subjects": [{"path": path}, {"artifact": trigger}],
 } if {
@@ -186,7 +186,7 @@ colliding contains expr if {
 }
 
 violation contains {
-	"rule": "schedules-do-not-collide",
+	"rule": "job start same",
 	"verdict": "job start same",
 	"subjects": [{"path": path}, {"artifact": expr}],
 } if {
@@ -218,7 +218,7 @@ names_the_dependency(path, name, dep) if contains(job_body(path, name), sprintf(
 names_the_dependency(path, name, dep) if contains(job_body(path, name), sprintf("needs['%s']", [dep]))
 
 violation contains {
-	"rule": "fan-in-asserts-its-whole-needs",
+	"rule": "job require unseen",
 	"verdict": "job require unseen",
 	"subjects": [{"path": path}, {"artifact": dep}],
 } if {
@@ -293,7 +293,7 @@ job_caches(path, name) if {
 }
 
 violation contains {
-	"rule": "cache-warm-compile-is-guarded",
+	"rule": "job guard missing",
 	"verdict": "cache build loose",
 	"subjects": [{"path": path}, {"artifact": name}],
 } if {
@@ -331,7 +331,7 @@ step_id_exists(path, id) if {
 }
 
 violation contains {
-	"rule": "cache-warm-compile-is-guarded",
+	"rule": "job guard missing",
 	"verdict": "cache name unknown",
 	"subjects": [{"path": path}, {"artifact": id}],
 } if {
@@ -385,7 +385,7 @@ swallowed(line) if {
 }
 
 violation contains {
-	"rule": "interpolation-is-not-swallowed",
+	"rule": "input render dropped",
 	"verdict": "input render dropped",
 	"subjects": [{"path": path, "line": number}],
 } if {

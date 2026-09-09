@@ -100,7 +100,7 @@ package batten
 
 import rego.v1
 
-rules contains "test-target-added"
+rules contains "test place duplicate"
 
 # The branch's own diff, BOUND THROUGH AN OBJECT GUARD because `null` is not
 # `undefined` (review of #848).
@@ -127,7 +127,7 @@ delta := d if {
 # undefined make `not` hold in Rego, so the bare spelling would be DEAD for
 # exactly the `null` this arm exists for.
 violation contains {
-	"rule": "test-target-added",
+	"rule": "test place duplicate",
 	"verdict": "diff read absent",
 	"subjects": [{"path": "batten.toml"}],
 } if {
@@ -183,7 +183,7 @@ added_target contains path if {
 }
 
 violation contains {
-	"rule": "test-target-added",
+	"rule": "test place duplicate",
 	"verdict": "test add refused",
 	"subjects": [{"path": path}],
 } if {

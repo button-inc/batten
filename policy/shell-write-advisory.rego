@@ -69,7 +69,7 @@
 #   - input: schema["policy-call.schema"]
 package batten.shell_write_advisory
 
-rules contains "shell-write-at-the-edit"
+rules contains "shell edit early"
 
 # The governed set — RESTATED, and that is a defect carrying a mechanism rather
 # than a preference.
@@ -119,7 +119,7 @@ is_bats(path) if {
 # conjunct already fails. That is why this advisory cannot impede the one
 # disposition the tree gate admits.
 violation contains {
-	"rule": "shell-write-at-the-edit",
+	"rule": "shell edit early",
 	"verdict": "shell edit early",
 	"subjects": [{"path": path}],
 } if {

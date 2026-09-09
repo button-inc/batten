@@ -47,7 +47,7 @@ package batten.landing_loop
 
 import rego.v1
 
-rules contains "rebase-conflict-stops-the-lap"
+rules contains "replay halt conflict"
 
 # The compiled tier is the one that runs this the way a consumer gets it, with
 # the empty vocabulary, and CLOUD-1267 makes it the DECLARED suite rather than a
@@ -125,7 +125,7 @@ replay_conflicted if {
 # never a hunk, never a conflict marker, never a byte of either side's content —
 # which is the whole of what a conflict actually consists of.
 violation contains {
-	"rule": "rebase-conflict-stops-the-lap",
+	"rule": "replay halt conflict",
 	"verdict": "replay halt conflict",
 	"subjects": [{"path": last_replay.path}, {"artifact": last_replay.commit}],
 } if {
@@ -141,7 +141,7 @@ violation contains {
 # not exist. The two arms are mutually exclusive on the same column, so a
 # conflicted lap yields exactly one finding either way.
 violation contains {
-	"rule": "rebase-conflict-stops-the-lap",
+	"rule": "replay halt conflict",
 	"verdict": "replay halt conflict",
 	"subjects": [{"artifact": last_replay.commit}],
 } if {

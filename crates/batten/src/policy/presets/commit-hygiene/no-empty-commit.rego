@@ -13,10 +13,10 @@ package batten.commit_hygiene
 
 import rego.v1
 
-rules contains "no-empty-commit"
+rules contains "commit ship empty"
 
 violation contains {
-	"rule": "no-empty-commit",
+	"rule": "commit ship empty",
 	"verdict": "commit ship empty",
 } if {
 	# ON THE PROGRAM (CLOUD-1382), and this module has now carried its sibling
@@ -54,7 +54,7 @@ violation contains {
 # bypasses sit under a green suite.
 test_no_empty_commit if {
 	some v in violation with input as {"call": {"programs": [{"program": "git", "name": "git", "arguments": ["commit", "--allow-empty", "-m", "x"], "mediated": false}]}}
-	v.rule == "no-empty-commit"
+	v.rule == "commit ship empty"
 }
 
 test_an_empty_commit_later_in_a_list_is_caught if {
@@ -62,20 +62,20 @@ test_an_empty_commit_later_in_a_list_is_caught if {
 		{"program": "cd", "name": "cd", "arguments": ["/tmp"], "mediated": false},
 		{"program": "git", "name": "git", "arguments": ["commit", "--allow-empty", "-m", "x"], "mediated": false},
 	]}}
-	v.rule == "no-empty-commit"
+	v.rule == "commit ship empty"
 }
 
 # The grammar case (CLOUD-1382): the caller wrote `time git commit
 # --allow-empty`, and the walk steps past `time`, so the entry names git.
 test_a_grammar_token_does_not_hide_the_program if {
 	some v in violation with input as {"call": {"programs": [{"program": "git", "name": "git", "arguments": ["commit", "--allow-empty"], "mediated": false}]}}
-	v.rule == "no-empty-commit"
+	v.rule == "commit ship empty"
 }
 
 # Reached through a path, still git — what `name` buys over `program`.
 test_git_reached_through_a_path_is_still_git if {
 	some v in violation with input as {"call": {"programs": [{"program": "/usr/bin/git", "name": "git", "arguments": ["commit", "--allow-empty"], "mediated": false}]}}
-	v.rule == "no-empty-commit"
+	v.rule == "commit ship empty"
 }
 
 test_an_ordinary_commit_is_left_alone if {

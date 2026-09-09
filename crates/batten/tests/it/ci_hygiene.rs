@@ -94,6 +94,7 @@ fn findings(root: &Path) -> Vec<(String, Option<usize>)> {
         batten::policy::Vocabulary {
             patterns: &[],
             verdicts: &[],
+            words: None,
             recorders: &[],
         },
         root,

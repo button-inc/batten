@@ -74,9 +74,9 @@ package batten.review_answered
 
 import rego.v1
 
-rules contains "review-unanswered"
+rules contains "review answer missing"
 
-rules contains "review-absent"
+rules contains "review read absent"
 
 # NO BATS SUITE, and that is CLOUD-1059's doing rather than a gap. The suite that
 # drove this module end to end asserted the refusal's PROSE, which CLOUD-1050
@@ -91,7 +91,7 @@ rules contains "review-absent"
 # count — so killing `readying` left that case green. Measured: it survived.
 #MUTANT ready-unread|s@^\treadying$@\tfalse@|the_measured_shape_a_head_carrying_unresolved_threads_is_refused_naming_the_count
 violation contains {
-	"rule": "review-unanswered",
+	"rule": "review answer missing",
 	"verdict": "review answer missing",
 	"subjects": [{"count": record.rows}],
 } if {
@@ -110,7 +110,7 @@ violation contains {
 # information — kept because the ABI's shape is uniform and a refusal with an
 # empty subject list reads as a refusal nobody could locate.
 violation contains {
-	"rule": "review-absent",
+	"rule": "review read absent",
 	"verdict": "review read absent",
 	"subjects": [{"count": record.rows}],
 } if {
@@ -187,7 +187,7 @@ test_a_head_with_open_threads_is_refused if {
 			"review-happened": {"rows": 1},
 		}},
 	}
-	v.rule == "review-unanswered"
+	v.rule == "review answer missing"
 }
 
 test_a_head_with_every_thread_answered_is_left_alone if {
@@ -212,7 +212,7 @@ test_zero_threads_and_no_review_reads_as_unreviewed if {
 			"review-happened": {"rows": 0},
 		}},
 	}
-	v.rule == "review-absent"
+	v.rule == "review read absent"
 }
 
 # THE DISCRIMINATING HALF, and without it the case above would pass over a
@@ -279,7 +279,7 @@ test_a_truncated_page_still_refuses_because_it_is_counted if {
 			"review-happened": {"rows": 1},
 		}},
 	}
-	v.rule == "review-unanswered"
+	v.rule == "review answer missing"
 }
 
 # A COMPOUND COMMAND IS STILL A READY, and this is the case that was missing when
@@ -295,7 +295,7 @@ test_a_compound_command_is_still_a_ready if {
 			"review-happened": {"rows": 1},
 		}},
 	}
-	v.rule == "review-unanswered"
+	v.rule == "review answer missing"
 }
 
 # NO PROSE CASE LIVES HERE, deliberately, and its absence is the honest reading.

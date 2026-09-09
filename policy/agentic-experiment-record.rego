@@ -54,11 +54,11 @@ package batten.agentic_experiment_record
 
 import rego.v1
 
-rules contains "agentic-record-incomplete"
+rules contains "test declare partial"
 
-rules contains "agentic-finding-unsupported"
+rules contains "test state early"
 
-rules contains "agentic-record-unreadable"
+rules contains "input read absent"
 
 trials_path := "bench/agentic/trials.toml"
 
@@ -106,7 +106,7 @@ method := input.tree.documents[method_path].method
 # --- completeness ------------------------------------------------------------
 
 violation contains {
-	"rule": "agentic-record-incomplete",
+	"rule": "test declare partial",
 	"verdict": "test declare partial",
 	"subjects": [{"path": trials_path}, {"count": count(incomplete)}],
 } if {
@@ -140,7 +140,7 @@ incomplete contains index if {
 # window nobody declared makes every row's outcome unattributable, so the record
 # SET is what is partial rather than any one row.
 violation contains {
-	"rule": "agentic-record-incomplete",
+	"rule": "test declare partial",
 	"verdict": "test declare partial",
 	"subjects": [{"path": method_path}, {"count": count(method_gaps)}],
 } if {
@@ -168,7 +168,7 @@ method_gaps contains key if {
 # --- a finding without a result ----------------------------------------------
 
 violation contains {
-	"rule": "agentic-finding-unsupported",
+	"rule": "test state early",
 	"verdict": "test state early",
 	"subjects": [{"path": trials_path}, {"count": count(unsupported)}],
 } if {
@@ -210,7 +210,7 @@ unsupported contains index if {
 # on the decision surface. Both records are named, because either one absent
 # leaves the joint predicate unable to decide.
 violation contains {
-	"rule": "agentic-record-unreadable",
+	"rule": "input read absent",
 	"verdict": "input read absent",
 	"subjects": [{"path": path}],
 } if {
