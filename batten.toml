@@ -7074,6 +7074,21 @@ severity = "deny"
 # compose in one expression, so they must agree with each other. Read from the
 # LOCK, because a caret requirement is not a resolution; the manifest answers only
 # which crates are ours, which is the question the lock cannot answer.
+# CLOUD-593, ported from `mise-tasks/cap-drift.sh` under CLOUD-843. A cap and the
+# bot-side rule that mirrors it are one decision written twice, and the HALF-LIFT
+# is the direction that lands green: lift the manifest side alone and the bot goes
+# on withholding a version the manifest now admits, so the crate silently never
+# advances and no check anywhere is red. Set equality in both directions, and
+# still load-bearing with both sets empty — it is a ratchet over the next cap
+# either file gains.
+[[rule]]
+id = "cap-drift"
+kind = "policy"
+scope = "tree"
+line_sources = ["Cargo.toml", "renovate.json5"]
+module = "policy/cap-drift.rego"
+severity = "deny"
+
 [[rule]]
 id = "digest-major-agreement"
 kind = "policy"
@@ -13367,6 +13382,18 @@ id = "version resolve other"
 gloss = "the workspace's own crypto crates resolved different majors of one substrate"
 class = """
 The crates this workspace declares for itself compose in a single expression, so splitting them across majors is a type that does not exist and a build that cannot succeed. Bump them together or not at all; a transitive dependency's own major is not this workspace's to keep.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "bound carry missing"
+gloss = "an upper bound exists in one of its two files and not the other"
+class = """
+A cap and the withholding rule that mirrors it are one decision written twice, and either half alone is wrong in its own way: a cap with no rule lets the bot propose a version the manifest refuses, reddening a whole grouped batch; a rule with no cap withholds a version the manifest admits, so the crate silently never advances and nothing goes red. The second is the half-lift, and it is the direction with no symptom. Add the missing half, or remove both.
 """
 
 [[verdict.route]]

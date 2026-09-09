@@ -66,6 +66,7 @@ mod bypass_scrub;
 mod call_arguments;
 mod call_background_flag;
 mod call_ceiling;
+mod cap_drift;
 mod capture_fidelity;
 mod captured_facts;
 mod cfg_gated_test;
