@@ -111,7 +111,7 @@ early(token) if {
 
 violation contains {
 	"rule": "pipefail-grep",
-	"verdict": "call run loose",
+	"verdict": "spawn read broken",
 	"subjects": [{"path": path, "line": index + 1}],
 } if {
 	some [path, index, line] in candidate
@@ -125,7 +125,7 @@ scan(ls) := {"tree": {"lines": {"mise-tasks/demo.sh": array.concat(["set -euo pi
 
 test_the_shape_that_broke_issue_guard_is_flagged if {
 	some v in violation with input as scan(["git log --format=%B main | grep -q \"$id\""])
-	v.verdict == "call run loose"
+	v.verdict == "spawn read broken"
 }
 
 test_the_here_string_fix_passes if {
