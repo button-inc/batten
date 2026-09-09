@@ -259,6 +259,7 @@ mod rules_drift;
 mod run_shape;
 mod run_shape_guard_door;
 mod runner_verdict;
+mod rust_paths_check;
 mod sbom_inventory;
 mod scanner_taxonomy;
 mod scratch_hygiene;
