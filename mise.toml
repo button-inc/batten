@@ -4377,7 +4377,7 @@ shell = "bash -c"                                                   # uses ${sha
 # no others: a bot commit reaching anything else is not a bump and is not exempt.
 run = '''
 fail=0
-keys="$(git rev-parse --show-toplevel)/mise-tasks/claimed-keys.sh"
+
 for sha in $(git rev-list --no-merges "${BASE_SHA:?}..${HEAD_SHA:?}"); do
   subject=$(git show -s --format=%s "$sha")
   # The subject-convention half is NOT here: it is `commit-check`, above in
@@ -4405,7 +4405,12 @@ for sha in $(git rev-list --no-merges "${BASE_SHA:?}..${HEAD_SHA:?}"); do
   # extra evidence from stdin whenever stdin is not a tty, so under a task runner
   # — where it never is — a call with nothing piped BLOCKS FOREVER. Measured here
   # as a two-minute harness kill. Same shape as CLOUD-511's bare `cat`.
-  if [ -z "$("$keys" --log "$(git show -s --format='%B' "$sha")" </dev/null 2>/dev/null)" ]; then
+  # `batten claim keys`, not the retired `claimed-keys.sh` (CLOUD-1711). The
+  # binding this replaces pointed at a deleted path, so the command emitted
+  # nothing and every commit read as claiming no issue — including ones carrying
+  # a `Refs:` trailer, which is the tell: a missing program's empty output is
+  # byte-identical to a message that names no row.
+  if [ -z "$(batten claim keys --branch "" --title "" --log "$(git show -s --format='%B' "$sha")" </dev/null 2>/dev/null)" ]; then
     echo "::error::Commit ${sha:0:8} claims no CLOUD-<n> issue: '$subject' — add a 'Refs: CLOUD-<n>' trailer naming the work it serves"
     fail=1
   fi
