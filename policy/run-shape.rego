@@ -67,9 +67,9 @@ rules contains "timer run refused"
 
 rules contains "task watch duplicate"
 
-rules contains "foreground-mise"
+rules contains "task run blocked"
 
-rules contains "background-redirect"
+rules contains "redirect write unread"
 
 # CLOUD-613's three, and none of them is over a program NAME — a mutation on the
 # `sleep` or `git` token survives, because every ALLOW row already fails some
@@ -205,7 +205,7 @@ violation contains {
 # to stop consulting. A predicate with no list cannot be argued with, which is
 # the property (house style §5).
 violation contains {
-	"rule": "foreground-mise",
+	"rule": "task run blocked",
 	"verdict": "task run blocked",
 } if {
 	some program in input.call.programs
@@ -234,7 +234,7 @@ violation contains {
 # INPUT redirect is untouched: reading a file into a backgrounded command
 # discards nothing.
 violation contains {
-	"rule": "background-redirect",
+	"rule": "redirect write unread",
 	"verdict": "redirect write unread",
 } if {
 	input.call["run-in-background"] == true
