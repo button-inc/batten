@@ -22,17 +22,16 @@
 #                                   event already notifies (CLOUD-821: 490 such
 #                                   calls in one session, 2 changed a decision).
 #
-# THE BASH STILL RUNS, and that is the ratchet rather than an oversight.
-# `shell-retirement` admits DELETING a governed file and refuses SHRINKING one,
-# and `run-shape-guard.sh` keeps a fourth family (`cargo-substitutes-for-a-task`)
-# whose blocker is CLOUD-856. So the guard cannot lose these three until it can
-# lose all four, and both authorities decide them until it does. CLOUD-1108 owns
-# that gap; the predicates below are written from the bash's own decision table,
-# with ONE deliberate divergence — this reaches a sleep inside a loop body and
-# `resolve()` does not (CLOUD-1112) — which is in the DENYING direction, so no
-# call gets a weaker answer from the pair than it had from the guard alone. The
-# divergence stands; only its mechanism moved, from `keywords` stepping past a
-# `do` token to the body arriving as its own segment (CLOUD-1381).
+# THE BASH IS GONE AND THIS MODULE IS SOLE AUTHORITY. `mise-tasks/run-shape-guard.sh`
+# is retired, so the paragraph that used to stand here — both authorities decide
+# these families, with one deliberate divergence in the denying direction — is no
+# longer a description of the tree and has been removed rather than left reading
+# as live. What it recorded that still matters: the guard's `resolve()` never
+# reached a sleep inside a loop body (CLOUD-1112), so the whole family passed a
+# looped sleep for want of a resolvable sleep rather than for any reason about
+# waiting. Reaching the body was the precondition for CLOUD-1337 withdrawing the
+# condition exemption; the mechanism is now the body arriving as its own segment
+# (CLOUD-1381) rather than `keywords` stepping past a `do` token.
 #
 # TWO ERAS OF INPUT LIVE HERE, deliberately, and the newer one is the model.
 # `commit-names-no-message-source` landed before `hook::segments` was projected,
@@ -75,7 +74,7 @@ rules contains "background-redirect"
 # `sleep` or `git` token survives, because every ALLOW row already fails some
 # other conjunct. Each of these corrupts the conjunct that carries the verdict.
 #MUTANT redirect-binding-ignored|s@^	segment\["input-redirect"\] == false@	true@|a_redirect_bound_to_the_commits_own_element_is_a_message_source
-#MUTANT background-not-consulted|s@^	input.call\["run-in-background"\] != true@	true@|a_backgrounded_wait_on_a_condition_is_allowed
+#MUTANT background-not-consulted|s@^	input.call\["run-in-background"\] != true@	true@|a_backgrounded_bare_sleep_raises_only_the_timer
 # The mutation restores the exemption this row removed: with the partition term
 # forced false, a backgrounded `sleep` loop carrying a condition falls through
 # `background-timer` exactly as it did before, and only a case asserting THAT
@@ -825,12 +824,15 @@ test_a_liveness_signal_is_the_same_question if {
 	v.verdict == "task watch duplicate"
 }
 
-# THE ANTI-VACUITY MIRROR, and without it every case above is satisfied by a rule
-# that refuses all waits. A condition the harness does NOT report stays allowed —
-# that is the whole narrowing, and `timer run refused`'s route still recommends
-# this shape for it.
-test_a_wait_on_a_condition_nobody_reports_is_clean if {
-	count(violation) == 0 with input as {"call": {
+# THE PARTITION'S OTHER SIDE, and it used to be this family's anti-vacuity
+# mirror: a condition the harness does not report — a remote readiness probe
+# rather than a local process — was the one wait left allowed. CLOUD-1337 removed
+# that allow, so what this case now pins is narrower and still worth pinning: the
+# two arms must not BOTH fire, and the one that answers a non-process condition
+# must be `background-timer` rather than `polls-a-local-process`. A rule that
+# refused every wait under one verdict would fail this.
+test_a_wait_on_a_condition_nobody_reports_is_a_timer_not_a_poll if {
+	count(violation) == 1 with input as {"call": {
 		"command": "until curl -sf https://example.test/ready; do sleep 5; done",
 		"run-in-background": true,
 		"segments": [
@@ -838,6 +840,15 @@ test_a_wait_on_a_condition_nobody_reports_is_clean if {
 			inner(["sleep", "5"], "until", "body", null),
 		],
 	}}
+	some v in violation with input as {"call": {
+		"command": "until curl -sf https://example.test/ready; do sleep 5; done",
+		"run-in-background": true,
+		"segments": [
+			inner(["curl", "-sf", "https://example.test/ready"], "until", "condition", ";"),
+			inner(["sleep", "5"], "until", "body", null),
+		],
+	}}
+	v.rule == "background-timer"
 }
 
 # A PROCESS READ WITH NO LOOP IS NOT A WAIT. `mise run alive` asks once and
@@ -897,10 +908,13 @@ test_a_backgrounded_counting_loop_is_a_timer if {
 	v.rule == "background-timer"
 }
 
-# The exemption's other reachable shape: a bare sleep and a loop keyword in one
-# backgrounded call, where the sleep resolves without any look-through at all.
-test_a_bare_sleep_beside_a_condition_loop_is_exempt if {
-	count(violation) == 0 with input as {"call": {
+# THE EXEMPTION'S WORST REACHABLE SHAPE, and the case that says why asking
+# WHETHER there is a condition was never the right question (CLOUD-1337). The
+# `sleep 5` here waits on nothing at all — the loop beside it has an empty body —
+# so the old rule exempted a bare timer for the company it kept. Inverted rather
+# than deleted: this is the shape the withdrawal is FOR.
+test_a_bare_sleep_beside_a_condition_loop_is_refused if {
+	some v in violation with input as {"call": {
 		"command": "sleep 5; until [ -f /tmp/done ]; do :; done",
 		"run-in-background": true,
 		"segments": [
@@ -909,6 +923,7 @@ test_a_bare_sleep_beside_a_condition_loop_is_exempt if {
 			inner([":"], "until", "body", null),
 		],
 	}}
+	v.rule == "background-timer"
 }
 
 # THE DISCRIMINATING CASE for `run-in-background`: both rules deny, so only the
