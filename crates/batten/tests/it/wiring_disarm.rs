@@ -107,7 +107,7 @@ fn bench(name: &str, rows: &str, scripts: &[(&str, &str)]) -> Bench {
 
 /// The one-row config every case but the multi-row ones uses.
 fn one_row(path: &str) -> String {
-    format!("[[wiring.disarm]]\npath = \".launcher/{path}\"\nmarker = \"{MARKER}\"\n")
+    format!("[[wiring.disarm]]\npath = '.launcher/{path}'\nmarker = \"{MARKER}\"\n")
 }
 
 /// Case (a): a launcher body is replaced, and the result actually exits 0.
@@ -246,7 +246,12 @@ fn an_absent_script_is_reported_and_never_created() {
 #[test]
 fn a_declared_path_outside_the_home_directory_is_refused_at_load() {
     for path in ["/etc/profile", "../outside.sh"] {
-        let rows = format!("[[wiring.disarm]]\npath = \"{path}\"\nmarker = \"{MARKER}\"\n");
+        // A LITERAL STRING, because the value under test IS a path (CLOUD-113):
+        // a basic string processes escapes, so a Windows path reads `\a` as a
+        // control character and `\U` is rejected outright — the fixture then
+        // fails to PARSE and this case dies on its own setup rather than on the
+        // refusal it exists to assert.
+        let rows = format!("[[wiring.disarm]]\npath = '{path}'\nmarker = \"{MARKER}\"\n");
         let bench = bench("disarm-escapes", &rows, &[]);
         let (status, err) = bench.reclaim(&["-y"]);
         assert_eq!(status, 1, "{path} was accepted: {err}");
