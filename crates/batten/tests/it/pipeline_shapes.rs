@@ -62,6 +62,41 @@ fn assert_allowed(command: &str) {
     assert_eq!(verdict(command), Some(0), "must allow: {command}");
 }
 
+/// [`assert_allowed`], with the call's backgrounding STATED.
+///
+/// These adjudicate against the LIVE root, so `foreground-mise` reaches any case
+/// naming a `mise` call and refuses it with no fast list. A case whose subject is
+/// a DIFFERENT row has to state the posture or it measures that one instead.
+/// [`cause`], with the call's backgrounding STATED.
+///
+/// A refusal renders one cause, so a case asserting WHICH class a shape renders
+/// has to keep every other row from firing on the same string.
+fn cause_backgrounded(command: &str) -> String {
+    let encoded = serde_json::to_string(command).expect("a command is encodable");
+    let payload = format!(
+        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
+         \"tool_input\":{{\"command\":{encoded},\"run_in_background\":true}}}}"
+    );
+    stderr(&run_with_stdin_at_real_root(
+        &root(),
+        &["adjudicate", "--harness", "exit-code"],
+        &payload,
+    ))
+}
+
+fn assert_allowed_backgrounded(command: &str) {
+    let encoded = serde_json::to_string(command).expect("a command is encodable");
+    let payload = format!(
+        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
+         \"tool_input\":{{\"command\":{encoded},\"run_in_background\":true}}}}"
+    );
+    let code =
+        run_with_stdin_at_real_root(&root(), &["adjudicate", "--harness", "exit-code"], &payload)
+            .status
+            .code();
+    assert_eq!(code, Some(0), "must allow a backgrounded: {command}");
+}
+
 /// The refusal text, for the cases where WHICH operand a deny names is the thing
 /// under test rather than the verdict. A free function beside the two above
 /// because both families need it now: the discard family asserts that three
@@ -96,7 +131,7 @@ fn a_read_only_query_carries_no_verdict_and_composes_freely() {
     assert_allowed("git log --oneline -5 | head -2");
     assert_allowed("git status --short | wc -l");
     assert_allowed("gh pr view 42 | tail -3");
-    assert_allowed("mise exec -- cargo metadata | jq .packages");
+    assert_allowed_backgrounded("mise exec -- cargo metadata | jq .packages");
     // `jq` is composition rather than a verdict substitute, so it is not a filter
     // even downstream of a real verdict.
     assert_allowed("gh pr view 42 --json title | jq -r .title");
@@ -127,7 +162,7 @@ fn an_and_chain_is_allowed_because_it_cannot_manufacture_a_green() {
     // arithmetic rather than taste: `a && b` short-circuits, so a failure in `a`
     // still exits the list non-zero. There is no false green to stop, and
     // `verify`'s own body is built from guarded chains for that property.
-    assert_allowed("mise run fmt && mise run verify");
+    assert_allowed_backgrounded("mise run fmt && mise run verify");
     // THE GIT-FAMILY ARM, AND ITS OPERAND MOVED (CLOUD-1351). This read
     // `git fetch origin main && git rebase origin/main`, and that command is now
     // DENIED — by `rebase-not-hand-stepped`, for hand-stepping a step
@@ -142,7 +177,7 @@ fn an_and_chain_is_allowed_because_it_cannot_manufacture_a_green() {
     // edited to make a new deny pass is otherwise indistinguishable from a test
     // weakened to fit a change.
     assert_allowed("git fetch origin main && git fetch origin --tags");
-    assert_allowed("mise exec -- cargo build && mise exec -- cargo test");
+    assert_allowed_backgrounded("mise exec -- cargo build && mise exec -- cargo test");
 }
 
 #[test]
@@ -155,31 +190,57 @@ fn detaching_a_verdict_orphans_it_from_the_tool_call() {
 }
 
 #[test]
-fn the_prescribed_form_is_allowed_including_its_redirection() {
-    // THE regression test for the parser change. `2>&1` carries a literal `&`,
-    // and the form this engine prescribes contains one — so an `&` test
-    // that did not exempt redirections would refuse the exact idiom the refusal
-    // recommends, which is the worst failure this gate could have.
-    assert_allowed("mise run verify >/tmp/verify.log 2>&1");
+fn a_redirection_is_not_a_background_ampersand() {
+    // THE regression test for the parser change, and its subject is the PARSER
+    // rather than any prescription: `2>&1` and `&>` carry a literal `&`, so an
+    // `&` test that did not exempt redirections would read a redirect as a
+    // detach. That property is unchanged and is pinned here on a program no
+    // other row has an opinion about.
+    assert_allowed("git push origin branch >/tmp/push.log 2>&1");
+    assert_allowed("git push origin branch &>/tmp/push.log");
+    assert_allowed("git push origin branch >/tmp/p.log 2>&1 && echo queued");
+}
+
+/// THE PRESCRIPTION MOVED, AND THESE ARE THE CASES THAT SAY SO (CLOUD-1722).
+///
+/// `verdict-not-discarded` used to recommend `mise run verify >/tmp/verify.log
+/// 2>&1` — redirect the output rather than pipe it, so the exit status stays the
+/// task's. Two newer rows make that exact string unrunnable from either side:
+/// `foreground-mise` refuses it foreground, because the harness kills a
+/// foreground call at ~2 minutes, and `background-redirect` refuses it
+/// backgrounded, because the harness already captures a backgrounded task's
+/// output where the human watches and a private log file is one nobody reads.
+///
+/// A repository that prescribes a form two of its own rows refuse is worse than
+/// one that prescribes nothing, so the form is now: BACKGROUNDED, UNREDIRECTED,
+/// UNPIPED. All three rows agree on it, and it is what these cases pin.
+#[test]
+fn the_prescribed_form_is_backgrounded_and_keeps_its_own_output() {
+    assert_allowed_backgrounded("mise run verify");
     // NOT `land`, and for CLOUD-438's reason rather than by preference: this
     // case adjudicates against the LIVE root, `land.sh` is the one task that
     // takes a singleton, and the singleton row refuses a second start while a
     // live process holds it — so under `verify`, which runs this suite from
-    // inside `land`, the verdict here would turn on a lock rather than on the
-    // redirection this case is about. `gh_guard.rs` records the same swap after
-    // measuring the failure.
-    assert_allowed("mise run fmt >/tmp/fmt.log 2>&1");
-    assert_allowed("mise exec -- cargo test -p batten >/tmp/test.log 2>&1");
-    assert_allowed("git push origin branch >/tmp/push.log 2>&1");
-    // The other redirection spellings that carry an `&`.
-    assert_allowed("mise run verify &>/tmp/verify.log");
-    assert_allowed("mise run verify >/tmp/v.log 2>&1 && echo queued");
+    // inside `land`, the verdict here would turn on a lock rather than on what
+    // this case is about. `gh_guard.rs` records the same swap after measuring
+    // the failure.
+    assert_allowed_backgrounded("mise run fmt");
+    assert_allowed_backgrounded("mise exec -- cargo test -p batten");
+}
+
+#[test]
+fn the_retired_redirect_form_is_refused_from_both_sides() {
+    // The anti-vacuity half of the case above: without these, "the prescribed
+    // form is backgrounded" is satisfied by a build that allows the old form too,
+    // and the prescription would be advice rather than a rule.
+    assert_denied("mise run verify >/tmp/verify.log 2>&1");
+    assert_denied("mise run verify &>/tmp/verify.log");
 }
 
 #[test]
 fn a_verdict_alone_in_the_call_is_the_prescribed_form() {
-    assert_allowed("mise run verify");
-    assert_allowed("mise exec -- cargo test -p batten");
+    assert_allowed_backgrounded("mise run verify");
+    assert_allowed_backgrounded("mise exec -- cargo test -p batten");
     assert_allowed("git push origin branch");
     assert_allowed("bats tests/land.bats");
 }
@@ -190,7 +251,7 @@ fn a_bare_invocation_that_answers_nothing_is_not_a_verdict() {
     // usage. Piping usage is not discarding a verdict, because there is none.
     assert_allowed("bats --version | head -1");
     assert_allowed("bats --help | tail -5");
-    assert_allowed("mise exec -- cargo | head -3");
+    assert_allowed_backgrounded("mise exec -- cargo | head -3");
 }
 
 #[test]
@@ -208,7 +269,17 @@ fn a_pager_on_an_earlier_query_does_not_condemn_a_later_command() {
     // Judged per segment. A pager attached to a read-only first element says
     // nothing about a verdict-bearing second one, and judging the whole string
     // refused exactly that — a correct command using the recommended form.
-    assert_allowed("git log --oneline | head -3 && mise run verify >/tmp/v.log 2>&1");
+    //
+    // THE RECOMMENDED FORM MOVED, AND THIS CASE FOLLOWED IT (CLOUD-1722). It used
+    // to read `&& mise run verify >/tmp/v.log 2>&1`, which is now two refusals
+    // rather than a model answer: `foreground-mise` refuses the foreground call
+    // because the harness kills one at ~2 minutes, and `background-redirect`
+    // refuses a backgrounded call that redirects its own output, because the
+    // harness already captures it where the human watches. What is left is the
+    // form both rows agree on — backgrounded, unredirected — and pinning THAT
+    // here is the point: this case's subject is the per-segment judging, so it
+    // must carry a second element that is genuinely correct today.
+    assert_allowed_backgrounded("git log --oneline | head -3 && mise run verify");
     // And the direction that matters: a write must not be excused by a read.
     assert_denied("git log --oneline | head -3 && mise run verify | tail -2");
 }
@@ -218,11 +289,9 @@ fn the_refusal_states_the_principle_rather_than_naming_one_command() {
     // CLOUD-199's second instance happened because an agent complied with the
     // narrower wording exactly and made the same error on the next command. The
     // cause therefore has to generalise, and the remedy has to be the row's.
-    let refusal = stderr(&run_with_stdin_at_real_root(
-        &root(),
-        &["adjudicate", "--harness", "exit-code"],
-        &payload("mise run verify | tail -6"),
-    ));
+    // Backgrounded for `each_shape_renders_its_own_cause`'s reason: one refusal
+    // renders one cause, and this case asserts WHICH row the reader is sent to.
+    let refusal = cause_backgrounded("mise run verify | tail -6");
     assert!(
         refusal.contains("verdict-not-discarded"),
         "names the rule: {refusal}"
@@ -263,14 +332,25 @@ fn each_shape_renders_its_own_cause() {
     // arm, so the discrimination this case asserts is now over three registry
     // tokens — the same three structures, reachable from `batten policy explain`
     // instead of only from this file.
-    assert!(cause("mise run verify | tail -1").contains("verdict read dropped"));
-    assert!(cause("mise run verify >log 2>&1; ls").contains("verdict carry other"));
-    assert!(cause("nohup mise run verify &").contains("turn watch dropped"));
+    // BACKGROUNDED, AND THAT IS A PRECONDITION OF THE CASE RATHER THAN A DETAIL
+    // (CLOUD-1722). A refusal renders ONE cause, so a second row firing on the
+    // same string masks the class under test: measured, `mise run verify >log
+    // 2>&1; ls` read `task run blocked foreground-mise` and this case could no
+    // longer see `verdict carry other` at all. Stating the posture takes
+    // `foreground-mise` out of the way and leaves the shape's own row to answer.
+    //
+    // The `>log 2>&1` also left the middle shape, for the same reason one layer
+    // on: backgrounded, `background-redirect` claims it. The redirect was never
+    // what that case was about — `; ls` is, because it hands the exit status to
+    // `ls` — so dropping it makes the case name its own subject.
+    assert!(cause_backgrounded("mise run verify | tail -1").contains("verdict read dropped"));
+    assert!(cause_backgrounded("mise run verify; ls").contains("verdict carry other"));
+    assert!(cause_backgrounded("nohup mise run verify &").contains("turn watch dropped"));
     // And they are three, not one wearing three hats: no shape renders another's
     // class. Without this arm a composer collapsing all three onto one token
     // would still satisfy the three assertions above via a substring.
-    assert!(!cause("mise run verify | tail -1").contains("turn watch dropped"));
-    assert!(!cause("nohup mise run verify &").contains("verdict read dropped"));
+    assert!(!cause_backgrounded("mise run verify | tail -1").contains("turn watch dropped"));
+    assert!(!cause_backgrounded("nohup mise run verify &").contains("verdict read dropped"));
 }
 
 // --- the substitution family (CLOUD-864) --------------------------------------
