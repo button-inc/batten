@@ -489,6 +489,17 @@
       "items": {
         "$ref": "#/$defs/Waiver"
       }
+    },
+    "wiring": {
+      "description": "The launcher-provisioned scripts this host re-arms every spawn\n(CLOUD-1704), as the authority states them. Absent means this consumer\ndeclares none, which is every consumer without a launcher.\n\nConsumer-specific by nature, and that is the whole reason it is a table\nrather than a constant: a script path is somebody's launcher artifact,\nand non-negotiable rule 1 keeps those out of `crates/batten`. The core\ncarries the mechanism and this table carries the paths. The type, its\nvalidator and the write are [`crate::wiring`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Wiring"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "additionalProperties": false,
@@ -1465,6 +1476,25 @@
           "type": "string",
           "const": "non_increasing"
         }
+      ]
+    },
+    "Disarm": {
+      "description": "One declared script to neutralise.\n\nBoth fields are the consumer's: this module names no script and no marker\n(non-negotiable rule 1). A path here is a launcher's artifact name, which is\nprecisely what may not appear in `crates/batten`.",
+      "type": "object",
+      "properties": {
+        "marker": {
+          "description": "The comment the shim carries, and the whole of how a second pass knows\nits own work.\n\nIdempotence rides on this: a body containing the marker is left BYTE for\nbyte, so running the verb twice writes once. Reading the file's length, or\nits mtime, or whether it merely looks short would each be a proxy that\ndrifts; the marker is the consumer's own declared token and cannot.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The script, relative to the home directory.\n\n**Under `$HOME` and nowhere else**, enforced by [`Wiring::validate`] at\nload. A shim over a tracked path would be this repair mutating the tree it\nis supposed to be judging, and an absolute path is how that would be\nwritten — so the refusal is at parse time, where `config lint` names the\nkey, rather than at the write, where it would already have happened.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "marker"
       ]
     },
     "DrainConfig": {
@@ -4742,6 +4772,20 @@
           "const": "both"
         }
       ]
+    },
+    "Wiring": {
+      "description": "The `[wiring]` table: what this consumer's launcher re-arms every spawn.",
+      "type": "object",
+      "properties": {
+        "disarm": {
+          "description": "The declared scripts, in the order the config lists them.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Disarm"
+          }
+        }
+      },
+      "additionalProperties": false
     }
   }
 }
