@@ -12226,18 +12226,7 @@ fn run_hook(
     // end-of-turn surface. The retired shell hook this replaces paid ~330-440ms
     // at the same boundary; `perf`'s `passthrough` and `noop` arms are pre-tool
     // shapes and are untouched by this clause.
-    let adjudicable = !envelope.command.is_empty()
-        || envelope.writes.is_some()
-        || envelope.event == hook::Event::Stop
-        // A FOURTH TIME, and for a mint rather than a verdict (CLOUD-856). Session
-        // start carries no command, no write and no tool name, so this predicate
-        // was false there and config was never loaded — which means the receipt
-        // this event exists to mint could not know which manifests were declared.
-        // The cost is one config load per SESSION, not per call, which is the
-        // same trade the `Stop` clause above makes, and it buys the whole reason
-        // `Fact::Document` can stay `None` on the mediated path.
-        || envelope.event == hook::Event::SessionStart
-        || (envelope.event == hook::Event::PreTool && !envelope.raw_tool.is_empty());
+    let adjudicable = is_adjudicable(&envelope);
     // A BYPASSED CALL NOW PAYS THE CONFIG READ, and that invariant is retired
     // deliberately rather than eroded.
     //
@@ -12256,38 +12245,9 @@ fn run_hook(
     // arms, ~0.7 ms against a 100 ms budget. `!adjudicable` keeps its old
     // behaviour, because an event with nothing to adjudicate has no protected
     // gate to run either, and that is the arm the hot path actually rides.
-    // A CONFIG THIS BUILD CANNOT READ IS CERTAINTY, AND CERTAINTY DENIES
-    // (CLOUD-1688). `?` here propagated a `UsageError` — exit `1` — and
-    // `exit.rs` makes only `2` a denial precisely so no FAILURE path can block a
-    // call. So the harness read this whole class as a non-blocking hook error
-    // and ran the tool anyway. Measured over one 5-day session: 1,149 calls
-    // proceeded unjudged through seven windows of a mid-edit `batten.toml`, and
-    // ~456 more through a preset this build did not ship (`policy.rs`'s
-    // unknown-preset arm, which raises exactly this error).
-    //
-    // THE DISCRIMINATION IS THE SAME ONE `UNREADABLE_STDIN` SITS ON THE OTHER
-    // SIDE OF, and CLOUD-1572 drew it one level down. Where the engine is
-    // GUESSING about the call — stdin it could not read, a payload that would
-    // not decode, an event the host does not declare — allowing is right,
-    // because nothing is known and refusing would make Batten the reason a
-    // session cannot proceed. Here the engine has READ its own authority and
-    // been told it cannot enforce it: the rule set is named, and unavailable.
-    // Proceeding then is not caution — it is a gate reporting a clean allow over
-    // rules it never ran, which is the false green this engine exists to catch.
-    //
-    // A DECISION, NOT AN ERROR, which is why it RENDERS rather than propagates.
-    // `render` owns the per-harness deny channel, so Claude Code gets its JSON
-    // decision object at exit `0` — where the document is the deny — and the
-    // neutral adapter gets `Violation`. Raising a `Denial` here would send `2`
-    // to a host that reads the document instead, which is the one number that
-    // host does not consult.
-    //
-    // THE HATCH IS HONOURED FIRST, and that is what keeps a container
-    // recoverable rather than bricked. A stale binary meeting a newer config
-    // denies every call until one of them moves, so the operator's declared
-    // escape has to still work — the bootstrap window CLOUD-1688 flags as
-    // needing a decision is exactly this state, and this arm is the part of it
-    // that can be settled without one.
+    // A config this build cannot read is CERTAINTY, and certainty denies rather
+    // than exiting non-zero — `deny_unadjudicable` carries the whole argument,
+    // including why the hatch is read first.
     //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
     //MUTANT unloadable-config-allows|s@            Err(_) if bypass => (hook::Policy::declaring_nothing(harness), Vec::new()),@            Err(_) => (hook::Policy::declaring_nothing(harness), Vec::new()),@|a_config_this_build_cannot_load_denies_rather_than_failing_open
     let (policy, waivers) = if adjudicable {
@@ -12539,11 +12499,72 @@ fn run_hook(
     render(harness, &envelope, decision, &rendering, mode, out, err)
 }
 
+/// Whether this envelope has anything for the config to decide about.
+///
+/// **The gate on whether a call pays a config read at all**, which is why the
+/// hot path stays cheap: `perf`'s `passthrough` arm — a `Read` with a
+/// `file_path`, no command, no write — takes the `false` branch, and its
+/// below-`noop` reading comes from doing so.
+///
+/// Every clause was added by a measurement rather than by symmetry, and the
+/// history is the argument for keeping them enumerated here:
+///
+/// * a command or a write is the original shape;
+/// * `Stop` carries neither, so a `mediated_call` module registered for the end
+///   of turn could not run at all — a dead gate whose own suite stayed green,
+///   because a `with input as` case fabricates the shape the boundary never
+///   built (CLOUD-1051);
+/// * `SessionStart` likewise, and for a MINT rather than a verdict (CLOUD-856):
+///   the receipt that event exists to write could not know which manifests were
+///   declared. One config load per session, not per call;
+/// * a `PreTool` call naming a tool is the shape a tool-keyed row exists to
+///   judge, and without it such a row was loaded for no call that could match.
+fn is_adjudicable(envelope: &hook::Envelope) -> bool {
+    !envelope.command.is_empty()
+        || envelope.writes.is_some()
+        || envelope.event == hook::Event::Stop
+        || envelope.event == hook::Event::SessionStart
+        || (envelope.event == hook::Event::PreTool && !envelope.raw_tool.is_empty())
+}
+
 /// Refuse a call whose rules this build could not load (CLOUD-1688).
 ///
 /// Lifted out of [`run_hook`] rather than left inline because that function is
 /// already at its line budget, and a boundary this load-bearing should be
 /// readable on its own rather than as a match arm nine levels in.
+///
+/// # Certainty denies; guessing allows
+///
+/// The load used to propagate with `?`, raising a [`UsageError`] — exit `1` —
+/// and [`crate::exit`] makes only `2` a denial precisely so no FAILURE path can
+/// block a call. So a harness read this whole class as a non-blocking hook error
+/// and ran the mediated tool anyway. Measured over one 5-day session: 1,149
+/// calls proceeded unjudged through seven windows of a mid-edit `batten.toml`,
+/// and ~456 more through a preset the installed build did not ship — the
+/// unknown-preset arm in [`crate::policy`] raises exactly this error.
+///
+/// This is the discrimination `UNREADABLE_STDIN` sits on the other side of, and
+/// the one CLOUD-1572 drew one level down. Where the engine is GUESSING about
+/// the call — stdin it could not read, a payload that would not decode, an event
+/// the host does not declare — allowing is right, because nothing is known and
+/// refusing would make Batten the reason a session cannot proceed. Here the
+/// engine has READ its own authority and been told it cannot enforce it: the
+/// rule set is named, and unavailable. Proceeding is not caution then, it is a
+/// gate reporting a clean allow over rules it never ran.
+///
+/// # The surfaces stay separate
+///
+/// `doctor` still never answers `2` — a diagnosis is not a policy verdict — and
+/// the CLI verbs still raise a usage error over a config they cannot read. The
+/// mediated boundary is the one place where "cannot judge" must not resolve to
+/// "proceed", because here the alternative is a tool call nobody looked at.
+///
+/// # The hatch is read before this is reached
+///
+/// [`run_hook`] takes the bypass arm first, and that is what keeps a container
+/// recoverable rather than bricked: a stale binary meeting a newer config
+/// refuses every call until one of them moves, so the operator's declared escape
+/// has to survive exactly the state that needs it.
 ///
 /// **A DECISION, NOT AN ERROR, WHICH IS WHY IT RENDERS.** [`render`] owns the
 /// per-harness deny channel: Claude Code answers in its JSON decision object at
