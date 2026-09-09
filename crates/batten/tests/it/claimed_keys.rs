@@ -78,7 +78,7 @@
 
 use crate::common;
 
-use common::{git_in, run_with_stdin, scratch, stderr, stdout, write};
+use common::{git_in, init_repo, run_with_stdin, scratch, stderr, stdout, write};
 
 /// A repository whose branch names a key, with one commit carrying a trailer.
 ///
@@ -95,7 +95,8 @@ fn repo(name: &str, branch: &str) -> std::path::PathBuf {
         .join("batten.toml");
     std::fs::copy(&config, dir.join("batten.toml")).expect("the committed config is readable");
     write(&dir, "seed.txt", "seed\n");
-    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    // The TEMPLATE, never a fork (CLOUD-1419), for `record_families.rs`'s reason.
+    init_repo(&dir);
     git_in(&dir, &["add", "-A"]);
     git_in(
         &dir,
