@@ -310,3 +310,97 @@ fn a_stalled_holder_is_stealable_once_its_beat_has_published() {
         "an empty token is what made a stalled holder unstealable"
     );
 }
+
+/// A wait whose checks keep moving keeps publishing a NEW token.
+///
+/// The regression case for the hazard the first version of this change
+/// introduced (CLOUD-1703). `guard.phase` pushes once per step, so nothing inside
+/// `Step::Wait` moved `phase_since` — a lap watching CI for longer than the stall
+/// bound published one unchanging token, and a rival could take its lease. The
+/// wait now pushes the poll's signature as `Signal::Sig`, and `stamp_for` moves
+/// the stamp only when the value changes, so a matrix that is completing checks
+/// keeps advancing.
+#[test]
+fn a_wait_whose_checks_move_keeps_advancing() {
+    let dir = repo("lease-health-wait-advances");
+    let git_dir = dir.join(".git");
+    let pid = std::process::id();
+    let pid_text = pid.to_string();
+    std::fs::create_dir_all(git_dir.join("batten-tasks")).expect("registry dir");
+    std::fs::write(
+        git_dir.join("batten-tasks").join(&pid_text),
+        &format!("task: land\npid: {pid_text}\nphase: wait\nphase_since: 1700000000\ntick_at: 0\nsig_at: 0\n"),
+    )
+    .expect("registry entry");
+
+    batten::task::push(
+        &git_dir,
+        &pid_text,
+        batten::task::Signal::Sig,
+        "7",
+        1700001000,
+    );
+    let first =
+        batten::lease::own_progress(&git_dir, pid).expect("a token after the first reading");
+
+    batten::task::push(
+        &git_dir,
+        &pid_text,
+        batten::task::Signal::Sig,
+        "9",
+        1700002000,
+    );
+    let moved = batten::lease::own_progress(&git_dir, pid).expect("a token after the world moved");
+
+    assert_ne!(
+        first, moved,
+        "a check run completing must advance the published token, or a healthy wait reads as a stall"
+    );
+}
+
+/// A wait where nothing moves keeps publishing the SAME token, and that is the
+/// half that must not be traded away to fix the case above.
+///
+/// `Signal::Tick` would satisfy the previous case and break this one: the token
+/// is `{advance}.{tick_at}`, so a tick pushed every poll moves it every poll and
+/// a holder that beats without landing becomes unstealable again — the exact
+/// defect this row exists to close. Only a signal that moves when the WORLD moves
+/// answers both, which is what `Sig` is for.
+#[test]
+fn a_wait_where_nothing_moves_republishes_the_same_token() {
+    let dir = repo("lease-health-wait-frozen");
+    let git_dir = dir.join(".git");
+    let pid = std::process::id();
+    let pid_text = pid.to_string();
+    std::fs::create_dir_all(git_dir.join("batten-tasks")).expect("registry dir");
+    std::fs::write(
+        git_dir.join("batten-tasks").join(&pid_text),
+        &format!("task: land\npid: {pid_text}\nphase: wait\nphase_since: 1700000000\ntick_at: 0\nsig_at: 0\n"),
+    )
+    .expect("registry entry");
+
+    batten::task::push(
+        &git_dir,
+        &pid_text,
+        batten::task::Signal::Sig,
+        "7",
+        1700001000,
+    );
+    let first =
+        batten::lease::own_progress(&git_dir, pid).expect("a token after the first reading");
+
+    // The same reading, an hour later: the poll went round and learned nothing.
+    batten::task::push(
+        &git_dir,
+        &pid_text,
+        batten::task::Signal::Sig,
+        "7",
+        1700005000,
+    );
+    let still = batten::lease::own_progress(&git_dir, pid).expect("a token after a quiet hour");
+
+    assert_eq!(
+        first, still,
+        "a poll that learns nothing must not advance the token, or nothing is ever stealable"
+    );
+}

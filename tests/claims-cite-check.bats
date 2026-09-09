@@ -87,6 +87,21 @@ added() {
 	[ "$status" -eq 0 ]
 }
 
+@test "a sentence-initial absolute is refused in every spelling" {
+	# The lowercase-only pattern let these through, and a claim is most often the
+	# first word of its sentence — so the gate written to catch this shape was
+	# missing the shape it would meet most.
+	local term
+	for term in Cannot Never Always Nothing; do
+		printf '%s\n' "/// $term happens here." >>"$REPO/crates/batten/src/lib.rs"
+		git add -A
+		run "$CHECK" "$BASE"
+		[ "$status" -eq 1 ]
+		git checkout -- crates/batten/src/lib.rs 2>/dev/null || true
+		git reset -q --hard "$BASE"
+	done
+}
+
 @test "a machine row is data and owes no citation" {
 	# Measured on this gate's own first run, which refused a `//MUTANT` marker for
 	# carrying "never" inside its slug. Slugs and paths are not sentences, and the

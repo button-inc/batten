@@ -50,7 +50,11 @@ fi
 
 # The absolutes. Deliberately short: each is a word that turns a reading into a
 # guarantee, and a longer list would catch prose that is merely emphatic.
-absolutes='\<(cannot|never|always|nothing)\>'
+#
+# BOTH CASES, because a claim is most often the first word of its sentence and the
+# lowercase-only form let `/// Never retry ...` through — the shape this gate is
+# most likely to meet, missed by the gate written to catch it.
+absolutes='\<([Cc]annot|[Nn]ever|[Aa]lways|[Nn]othing)\>'
 # What counts as somewhere to look: a source line, a tracked row, or an issue key.
 # The backticks are REGEX, not a substitution: the third alternative matches a
 # rustdoc intra-doc link, [`symbol`], which is a citation because it resolves.

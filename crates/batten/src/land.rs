@@ -552,7 +552,7 @@ pub fn wait(
     roster: &crate::checks_green::Roster,
     trunk: &crate::main_watch::Config,
     asks: u32,
-    heartbeat: &(dyn Fn() + Sync),
+    heartbeat: &(dyn Fn(u64) + Sync),
     out: &mut dyn std::io::Write,
 ) -> Result<Waited> {
     writeln!(
@@ -595,7 +595,18 @@ pub fn wait(
                 // the caller is where the terms and this clone's identity
                 // already live. It decides its own cadence; this only says WHEN
                 // there is time to spend.
-                heartbeat();
+                //
+                // IT CARRIES THE READING'S SIGNATURE, WHICH IS WHAT KEEPS A
+                // HEALTHY WAIT FROM READING AS A STALL (CLOUD-1703). The lease's
+                // progress token is a `phase_since`/`sig_at` pair, and neither
+                // moves inside this loop — the phase was pushed once on entry, so
+                // a wait longer than the stall bound published an unchanging
+                // token and a rival could take the lease from a lap that was
+                // healthily watching CI. The signature moves when the CHECK RUNS
+                // move, which is the thing whose gaps that bound was measured
+                // against. Still a number and not a lease call: what the caller
+                // does with it stays the caller's.
+                heartbeat(poll.signature());
                 // AND THE SAME NEVER-ANSWERED BOUND `pr_watch::watch` TAKES
                 // (review of #848). A credential the forge refuses answers a
                 // could-not-look to every request, so this arm would spend its

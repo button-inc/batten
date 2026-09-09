@@ -9604,7 +9604,14 @@ fn run_land_wait(
 
     let trunk = trunk_watch(reference, &base, &config.repo, config.interval);
     let holding = Heartbeat::for_clone(root);
-    let waited = land::wait(&config, &roster, &trunk, asks, &|| holding.beat(), out)?;
+    let waited = land::wait(
+        &config,
+        &roster,
+        &trunk,
+        asks,
+        &|observed| holding.beat(observed),
+        out,
+    )?;
     let (answers, code) = match &waited {
         land::Waited::Green { verdict } => (
             land::answers(&sha, Some(verdict.as_str()), None),
@@ -9736,9 +9743,27 @@ impl<'clone> Heartbeat<'clone> {
         lease::own_progress(self.git_dir.as_ref()?, self.pid)
     }
 
-    /// Renew if a beat has elapsed. Silent and best-effort in every arm — see
-    /// [`lease::beat`] for why one failed beat is not a lost lease.
-    fn beat(&self) {
+    /// Renew if a beat has elapsed, recording what the caller last observed.
+    ///
+    /// Silent and best-effort in every arm — see [`lease::beat`] for why one
+    /// failed beat is not a lost lease.
+    ///
+    /// # `observed` IS `Signal::Sig`, AND DELIBERATELY NOT `Signal::Tick`
+    ///
+    /// `Sig` is documented as *the world moved — moves only when a watched thing
+    /// does*, and [`task::stamp_for`] only advances a stamp when the VALUE
+    /// changes, so passing the poll's signature straight through gives exactly
+    /// the reading the stall bound wants: a wait whose check runs are completing
+    /// keeps advancing, and one where nothing has moved for `stall_beats` does
+    /// not.
+    ///
+    /// A `Tick` here would be the wrong signal and would silently undo this whole
+    /// change (CLOUD-1703). The token is `{advance}.{tick_at}`, so a tick moving
+    /// every poll makes the token move every poll — a holder that beats without
+    /// landing becomes unstealable again, which is the defect this row exists to
+    /// close. The tick answers *is the loop going round*; the lease is asking *is
+    /// the world moving*.
+    fn beat(&self, observed: u64) {
         let Some(terms) = self.terms.as_ref() else {
             return;
         };
@@ -9747,6 +9772,15 @@ impl<'clone> Heartbeat<'clone> {
             return;
         }
         self.last.store(now, std::sync::atomic::Ordering::Relaxed);
+        if let Some(git_dir) = self.git_dir.as_ref() {
+            task::push(
+                git_dir,
+                &self.pid.to_string(),
+                task::Signal::Sig,
+                &observed.to_string(),
+                boundary_epoch(),
+            );
+        }
         let progress = self.progress();
         // Bound rather than dropped: `beat` answers a `bool`, and dropping a
         // `Copy` is a lint of its own.

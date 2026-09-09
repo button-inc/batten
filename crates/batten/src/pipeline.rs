@@ -222,9 +222,26 @@ pub enum Precheck {
     /// had to hold.
     ///
     /// **Fails CLOSED, alone among the prechecks.** [`Self::BaseMoved`] fails open
-    /// because a probe that cannot answer costs only a wasted matrix; this one
-    /// guards two landers writing one trunk, so a lease it cannot read is a lease
+    /// because a probe that cannot answer costs only a wasted matrix; this one is
+    /// about two landers writing one trunk, so a lease it cannot read is a lease
     /// it will not move `main` under.
+    ///
+    /// # IT NARROWS THE WINDOW AND DOES NOT CLOSE IT, WHICH IS STATED RATHER THAN
+    /// IMPLIED
+    ///
+    /// The commit point does not itself advance `main` — it posts the
+    /// `/fast-forward` comment that `.github/workflows/fast-forward.yml` acts on,
+    /// and that workflow re-reads the draft bit, the fork head and the check
+    /// roster but never the lease. So a rival that acquires the lease between this
+    /// precheck and that push is not refused by anything here: what this removes
+    /// is the whole width of `Step::Wait`, during which nothing re-read the ref at
+    /// all, and what remains is the gap between the request and the merge.
+    ///
+    /// Closing the rest needs a fencing token the executor revalidates, which is a
+    /// change to that workflow's protocol rather than to this row (CLOUD-1703).
+    /// Named here because a precheck that reads as a guarantee is worse than one
+    /// that reads as a narrowing: the next person to weigh the executor's own
+    /// fence should find the gap written down, not infer its absence.
     LeaseHeld,
 }
 
