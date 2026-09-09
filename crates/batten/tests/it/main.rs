@@ -132,6 +132,7 @@ mod forge_facts;
 mod fuzz_corpus;
 mod gh_guard;
 mod git_facts;
+mod glob_containment;
 mod glob_exclusion;
 mod guardrail_bypass;
 mod handler_dispatch;

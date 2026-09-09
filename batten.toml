@@ -7018,6 +7018,23 @@ line_sources = ["crates/**/*.rs"]
 module = "policy/no-doctests.rego"
 severity = "deny"
 
+# CLOUD-224, ported from `mise-tasks/batten-glob-check.sh` under CLOUD-843. The
+# `batten-check` step's `glob` is a SECOND authority over the set this config
+# already defines, and a second authority narrows silently: add a `[[rule]]` whose
+# glob names a path the step does not select, and the gate stops running for
+# commits that touch only that path with nothing going red. The whole-tree run in
+# CI still covers it, so the symptom is a rule that quietly does not gate a
+# branch — feedback deleted, verdict preserved. `line_sources` names both halves
+# because the containment is a pure function of the two committed files, and
+# because editing either one is a reason to re-decide it.
+[[rule]]
+id = "glob-containment"
+kind = "policy"
+scope = "tree"
+line_sources = ["batten.toml", "hk.pkl"]
+module = "policy/glob-containment.rego"
+severity = "deny"
+
 [[rule]]
 id = "module-map"
 kind = "policy"
