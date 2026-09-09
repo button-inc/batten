@@ -228,10 +228,11 @@ pub fn authored_log(dir: &std::path::Path, base: &str) -> String {
         // back — which is the wider, refusing direction the shell chose.
         let resolved = crate::git::resolve_ref(dir, &spec_base).ok().flatten();
         let shared = crate::git::merge_base(dir, &spec_base).ok().flatten();
-        if resolved.is_some() && resolved == shared {
-            if let Ok(Some(text)) = crate::git::log_messages(dir, &spec_base) {
-                return text;
-            }
+        if resolved.is_some()
+            && resolved == shared
+            && let Ok(Some(text)) = crate::git::log_messages(dir, &spec_base)
+        {
+            return text;
         }
     }
     crate::git::log_messages(dir, base)

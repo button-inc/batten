@@ -112,9 +112,9 @@ fn repo(name: &str, branch: &str) -> std::path::PathBuf {
 }
 
 fn keys(dir: &std::path::Path, args: &[&str], stdin: &str) -> std::process::Output {
-    let mut argv = vec!["claim", "keys"];
-    argv.extend_from_slice(args);
-    run_with_stdin(dir, &argv, stdin)
+    let mut command = vec!["claim", "keys"];
+    command.extend_from_slice(args);
+    run_with_stdin(dir, &command, stdin)
 }
 
 #[test]

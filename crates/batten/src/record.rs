@@ -195,7 +195,11 @@ pub fn run_forge(reference: &str, _overrides: &Overrides) -> Result<ExitCode> {
 /// Whatever the chosen sub-verb returns: a [`UsageError`] for an id or ref that
 /// resolves to nothing, an unreadable subject, or a malformed verdict line, and
 /// an internal error when the store cannot be written.
-pub fn run(command: crate::cli::RecordCommand, overrides: &Overrides) -> Result<ExitCode> {
+pub fn run(
+    command: crate::cli::RecordCommand,
+    overrides: &Overrides,
+    out: &mut dyn std::io::Write,
+) -> Result<ExitCode> {
     match command {
         crate::cli::RecordCommand::Tool { id } => run_tool(&id, overrides),
         crate::cli::RecordCommand::Forge { reference } => run_forge(&reference, overrides),
@@ -203,8 +207,8 @@ pub fn run(command: crate::cli::RecordCommand, overrides: &Overrides) -> Result<
         crate::cli::RecordCommand::Closes => run_closes(overrides),
         crate::cli::RecordCommand::Keyed { family, key } => run_keyed(&family, &key),
         crate::cli::RecordCommand::Journal { family } => run_journal(&family),
-        crate::cli::RecordCommand::Show { family, key } => run_keyed_show(&family, &key),
-        crate::cli::RecordCommand::Fold { family } => run_journal_show(&family),
+        crate::cli::RecordCommand::Show { family, key } => run_keyed_show(&family, &key, out),
+        crate::cli::RecordCommand::Fold { family } => run_journal_show(&family, out),
     }
 }
 
@@ -498,18 +502,18 @@ pub fn run_journal(family: &str) -> Result<ExitCode> {
 ///
 /// A [`UsageError`] when the family or key is not a single path component; an
 /// internal error when the git directory cannot be resolved.
-pub fn run_keyed_show(family: &str, key: &str) -> Result<ExitCode> {
+pub fn run_keyed_show(family: &str, key: &str, out: &mut dyn std::io::Write) -> Result<ExitCode> {
     let family = safe_component("family", family)?;
     let git_dir = git::git_dir(Path::new("."))?;
     match std::fs::read_to_string(keyed_path(&git_dir, &family, key)) {
         Ok(value) => {
-            println!("hit");
-            print!("{value}");
+            writeln!(out, "hit")?;
+            write!(out, "{value}")?;
         }
         // ABSENT IS A MISS, and it is the only reading here: a record that exists
         // and holds nothing is a hit carrying an empty value, because the producer
         // chose to record that.
-        Err(_) => println!("miss"),
+        Err(_) => writeln!(out, "miss")?,
     }
     Ok(ExitCode::Success)
 }
@@ -520,20 +524,20 @@ pub fn run_keyed_show(family: &str, key: &str) -> Result<ExitCode> {
 ///
 /// A [`UsageError`] when the family is not a single path component; an internal
 /// error when the git directory cannot be resolved.
-pub fn run_journal_show(family: &str) -> Result<ExitCode> {
+pub fn run_journal_show(family: &str, out: &mut dyn std::io::Write) -> Result<ExitCode> {
     let family = safe_component("family", family)?;
     let git_dir = git::git_dir(Path::new("."))?;
     let store_dir = git_dir.join(JOURNAL_STORE).join(&family);
     match crate::journal::fold_lines(&store_dir) {
-        crate::journal::Fold::Nothing => println!("nothing"),
+        crate::journal::Fold::Nothing => writeln!(out, "nothing")?,
         crate::journal::Fold::Records(records) => {
             for record in records {
-                println!("{record}");
+                writeln!(out, "{record}")?;
             }
         }
         // A PATH IS A POINTER (§6 names `path:line` outright), so naming the
         // store a reader could not open is rule 4 satisfied rather than breached.
-        crate::journal::Fold::Unreadable(path) => println!("unreadable {}", path.display()),
+        crate::journal::Fold::Unreadable(path) => writeln!(out, "unreadable {}", path.display())?,
     }
     Ok(ExitCode::Success)
 }
