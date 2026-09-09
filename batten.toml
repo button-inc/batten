@@ -5473,7 +5473,7 @@ no_fix_reason = "the missing node is in the workflow, not in this file; add the 
 # A tree-scoped row would hand it a document it has no predicate for and read as
 # a configured gate that never fires.
 [[rule]]
-id = "branch table missing"
+id = "trunk push forced"
 kind = "policy"
 scope = "mediated_call"
 preset = "trunk-based"
@@ -5521,7 +5521,7 @@ severity = "deny"
 # manifest here is refused at load and would put a consumer's filenames in a row
 # that ships to every consumer.
 [[rule]]
-id = "task table missing"
+id = "task reach loose"
 kind = "policy"
 scope = "mediated_call"
 preset = "mise"

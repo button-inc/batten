@@ -1708,6 +1708,58 @@ fn validate_tables(config: &Config, text: &str, source: &str) -> Result<()> {
         Native::VerdictTableRefused,
         crate::verdict::validate(&config.verdicts, &config.vocabulary),
     )?;
+    // THE RULE-ID GRAMMAR (CLOUD-1638), here rather than in `rules::validate`
+    // because this is where both halves are in scope: the ids are on the rule
+    // table and the words they must be drawn from are on the vocabulary, and a
+    // validator holding one cannot decide the other.
+    //
+    // Under `RuleTableRefused` rather than `VerdictTableRefused`: what is being
+    // refused is a `[[rule]]` row, and the class the fault is filed under is
+    // read by a consumer trying to find the row to fix.
+    //
+    // The opt-out is the vocabulary's own, inherited rather than restated — a
+    // consumer that declares no lists cannot satisfy membership, so demanding
+    // it would be a refusal with no fix available. That is the same exemption
+    // `verdict::validate` grants a registry with no vocabulary, and it must be
+    // the same one, or the two names diverge on exactly the trees that have
+    // adopted neither.
+    if !config.vocabulary.is_empty() {
+        // A COLLAPSED ID IS GOVERNED BY THE CLASS REGISTRY, NOT BY THIS LIST.
+        //
+        // Where the id IS a class token, the class's own validation already
+        // holds it to a grammar, and checking it again here would be a second
+        // authority over one name — the defect this row exists to remove,
+        // reintroduced by the row's own gate. It is not hypothetical: the
+        // collapse arm renames the trunk-based preset's row to `trunk push
+        // forced`, and `trunk` is a VENDORED word that no consumer vocabulary
+        // declares. Held to this list, the two arms of CLOUD-1638 would refuse
+        // each other and no tree could satisfy both.
+        // ALL THREE SOURCES OF A CLASS TOKEN, and the third is the one that
+        // matters here: `trunk push forced` is neither a consumer row nor a
+        // native site but a VENDORED PRESET's, and a set built from the first
+        // two refuses it — measured, twice, before this line was written.
+        let vendored = crate::preset::verdict_rows();
+        let declared: std::collections::BTreeSet<&str> = config
+            .verdicts
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .chain(vendored.iter().map(|entry| entry.id.as_str()))
+            .chain(crate::verdict::native_tokens().iter().copied())
+            .collect();
+        under(Native::RuleTableRefused, {
+            let mut first = Ok(());
+            for rule in &config.rules {
+                if declared.contains(rule.id.as_str()) {
+                    continue;
+                }
+                if let Err(error) = crate::verdict::check_rule_id(&rule.id, &config.vocabulary) {
+                    first = Err(error);
+                    break;
+                }
+            }
+            first
+        })?;
+    }
     under(
         Native::RedirectTableRefused,
         crate::redirect::validate(&config.redirects),
@@ -3082,6 +3134,22 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
             "unsupported config version {} in {source}; this build supports version {SUPPORTED_VERSION}",
             config.version
         )));
+    }
+    // NORMALISE BEFORE VALIDATING, so every later reader — the gates, the
+    // emitted line, `policy rule`, a receipt — sees one spelling (CLOUD-1638).
+    // A consumer may write `task-read-first` or `task_read_first`; nothing
+    // downstream should have to know that, and `emit` round-trips the space
+    // form, so the canonical spelling is what a re-emitted config carries too.
+    //
+    // Unconditional, and cheap: a config that has already adopted the space
+    // form is rewritten to itself. Doing it here rather than in the validator
+    // is what makes it a parse-time property rather than a check somebody can
+    // run late.
+    for rule in &mut config.rules {
+        rule.id = crate::verdict::normalise_rule_id(&rule.id);
+    }
+    for waiver in &mut config.waivers {
+        waiver.rule = crate::verdict::normalise_rule_id(&waiver.rule);
     }
     validate_tables(&config, text, source)?;
     Ok(config)

@@ -705,6 +705,12 @@ pub fn load(
     // fix available.
     let registry = registry_for(verdicts)?;
     let mut emitted: BTreeSet<String> = BTreeSet::new();
+    // What each policy row raises, kept PER ROW as well as unioned into
+    // `emitted` (CLOUD-1638). The union answers "is every declared class
+    // raised"; the collapse predicate needs the other direction — how many
+    // classes THIS row raises — and a set that has already been merged cannot
+    // answer it.
+    let mut per_rule: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut bundles = Vec::new();
     // Keyed on the scope's WORD rather than the enum, so this set does not oblige
     // `RuleScope` to carry `Ord` for one local lookup — the derive would be a
@@ -850,7 +856,12 @@ pub fn load(
                 check_tree_paths_are_emittable(rule, &bundle, source_key)?;
                 check_no_inline_regex(rule, &bundle, &declared_patterns, source_key)?;
                 check_verdicts_are_declared(rule, &bundle, &registry, source_key)?;
-                emitted.extend(emitted_verdicts(&bundle));
+                let raised = emitted_verdicts(&bundle);
+                per_rule
+                    .entry(rule.id.clone())
+                    .or_default()
+                    .extend(raised.iter().cloned());
+                emitted.extend(raised);
             }
             claim_ids(&mut ids, &declared, source_key)?;
             bundles.push(bundle.with_severity(rule));
@@ -879,7 +890,12 @@ pub fn load(
             check_tree_paths_are_emittable(rule, &bundle, where_it_came_from)?;
             check_no_inline_regex(rule, &bundle, &declared_patterns, where_it_came_from)?;
             check_verdicts_are_declared(rule, &bundle, &registry, where_it_came_from)?;
-            emitted.extend(emitted_verdicts(&bundle));
+            let raised = emitted_verdicts(&bundle);
+            per_rule
+                .entry(rule.id.clone())
+                .or_default()
+                .extend(raised.iter().cloned());
+            emitted.extend(raised);
         }
 
         claim_ids(&mut ids, &declared, where_it_came_from)?;
@@ -889,6 +905,17 @@ pub fn load(
 
     if checks == ModuleChecks::Run {
         check_registry_is_exhausted(verdicts, &emitted)?;
+        let tokens: BTreeSet<String> = verdicts
+            .iter()
+            .filter(|entry| !entry.retired())
+            .map(|entry| entry.id.clone())
+            .chain(
+                crate::verdict::native_tokens()
+                    .iter()
+                    .map(|t| (*t).to_owned()),
+            )
+            .collect();
+        check_collapse(rules, &per_rule, &tokens)?;
     }
     Ok(bundles)
 }
@@ -1603,6 +1630,85 @@ fn check_tree_paths_are_emittable(rule: &Rule, bundle: &Bundle, source: &str) ->
 /// # Errors
 ///
 /// A [`UsageError`] (exit `1`) naming the unraised tokens.
+/// One name where a rule and a class name one thing (CLOUD-1638).
+///
+/// # The predicate is a property of the PAIR, in both directions
+///
+/// A rule's `id` equals a class token **iff** the rule raises exactly one class
+/// **and** that class has exactly one raiser. Both clauses are refused:
+///
+/// * a row satisfying both whose id differs from that class — two names for one
+///   thing, which is the cost this row removes;
+/// * a row NOT satisfying both whose id equals any class token — one name for
+///   two things, which is worse, because a reader who dereferences it gets an
+///   answer about the other one.
+///
+/// # Why both directions, measured
+///
+/// The issue's Ready block asked only for the first, on a census that counted
+/// classes-with-one-raiser (170 of 174) and read it as rules-with-one-class.
+/// Those are opposite directions. Measured on this tree: **20** policy rows
+/// raise exactly one class and **39** raise more — `ci-parity` raises 21,
+/// `shell-retirement` 13, `lock-complete` 10. The one-directional rule would
+/// have demanded `ci-parity` carry twenty-one ids at once, so it was
+/// unsatisfiable and could not have shipped in that form.
+///
+/// A row this function never sees a class for — every native-kind row, whose
+/// class the ENGINE picks rather than a module — is correctly handled by the
+/// second clause alone: it raises no module class, so it is not collapsible,
+/// so its id must not be a class token.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) naming the row and which direction it broke.
+fn check_collapse(
+    rules: &[Rule],
+    per_rule: &BTreeMap<String, BTreeSet<String>>,
+    registry: &BTreeSet<String>,
+) -> Result<()> {
+    let raisers: BTreeMap<&str, usize> = {
+        let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+        for classes in per_rule.values() {
+            for class in classes {
+                *counts.entry(class.as_str()).or_default() += 1;
+            }
+        }
+        counts
+    };
+    // EVERY VIOLATION, NOT THE FIRST. A migration is the case this fires on,
+    // and one-at-a-time turns a single reading into N builds — measured on
+    // CLOUD-1638's own migration, where the first two runs each bought one
+    // rename. Reporting the set is also what lets a reader see whether the
+    // config disagrees with the modules in one place or systematically.
+    let mut findings: Vec<String> = Vec::new();
+    for rule in rules {
+        let empty = BTreeSet::new();
+        let classes = per_rule.get(&rule.id).unwrap_or(&empty);
+        let sole = match (classes.len(), classes.iter().next()) {
+            (1, Some(class)) if raisers.get(class.as_str()) == Some(&1) => Some(class.as_str()),
+            _ => None,
+        };
+        match sole {
+            Some(class) if rule.id != class => findings.push(format!(
+                "rule `{}` is the only raiser of `{class}` and raises nothing else, so the two \
+                 are one thing and owe one name: rename the row to `{class}`",
+                rule.id
+            )),
+            None if registry.contains(&rule.id) => findings.push(format!(
+                "rule `{}` is spelled as a class token but is not that class's sole raiser, so \
+                 the name answers for two different things — give the row a distinct three-word \
+                 id",
+                rule.id
+            )),
+            _ => {}
+        }
+    }
+    if !findings.is_empty() {
+        return Err(UsageError::raise(findings.join("\n")));
+    }
+    Ok(())
+}
+
 fn check_registry_is_exhausted(
     verdicts: &[crate::verdict::DeclaredVerdict],
     emitted: &BTreeSet<String>,
