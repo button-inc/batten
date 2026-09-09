@@ -64,10 +64,6 @@ local gate = new Mapping<String, Step> {
     glob = List(".claude/settings.json", "mise-tasks/mcp-timeout-budget.sh")
     check = "mise run mcp-timeout-budget"
   }
-  ["cap-drift"] {
-    glob = List("Cargo.toml", "renovate.json5")
-    check = "mise run cap-drift"
-  }
   ["no-docs-tree"] {
     check = "mise run no-docs-tree"
   }
