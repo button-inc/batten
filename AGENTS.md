@@ -141,8 +141,8 @@ by `run-shape-guard`. To ask what a live task is _doing_, `mise run alive`.
 
 **Two habits defeat this silently, both failing green:** piping a `mise run` into
 a pager (the exit status becomes the pager's) or detaching it with `nohup`/`&`
-(the wake-up is lost). Redirect to a file; put `run_in_background` on the long
-command, never on a launcher that returns at once. Gated by `verdict-not-discarded`.
+(the wake-up is lost). Put `run_in_background` on the long command, never a launcher, and
+**never redirect it** — the harness captures where the HUMAN watches. `verdict-not-discarded`.
 **Never** use a foreground `sleep`, spin a foreground busy-poll, or end a turn idle
 "to watch" something — background it, act on its exit, and commit first, since
 **committed-and-pushed is the only state surviving a reclaim, and that is the TREE's

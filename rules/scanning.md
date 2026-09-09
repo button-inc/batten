@@ -4,12 +4,29 @@ These load when you are about to ask something about the whole tree rather than
 about the file in front of you. The question decides the tool, and the three
 questions are not interchangeable.
 
-| the question                                                            | instrument                    |
-| ----------------------------------------------------------------------- | ----------------------------- |
-| does this file contain this literal string                              | a structured text search      |
-| is this token in command position, inside a comment, or inside a string | a tree-sitter matcher         |
-| which type does this name resolve to                                    | clippy, rust-analyzer, Serena |
-| has this already been filed, decided, or measured                       | the board, before the tree    |
+| the question                                                            | instrument                     |
+| ----------------------------------------------------------------------- | ------------------------------ |
+| does this file contain this literal string                              | a structured text search       |
+| is this token in command position, inside a comment, or inside a string | a tree-sitter matcher          |
+| which type does this name resolve to                                    | clippy, rust-analyzer, Serena  |
+| has this already been filed, decided, or measured                       | the board, before the tree     |
+| what does this gate DECIDE over this subject                            | run it, and read the exit code |
+
+**Row five is the one that is not a reader at all, and that is why it gets
+missed.** The other four choose between instruments that LOOK at something; this
+one runs a program and reads its verdict. A question about what a gate _decides_
+is row five; a question about how it is _implemented_ is row one or three.
+Reading source to predict a verdict is answering the first with the second's
+instrument — and it is worse than guessing, because it looks like rigour: you
+cite `file:line`, the reasoning is legible, and it can be confidently wrong.
+
+**Measured 2026-09-09, three answers to one question.** Why did `checks green`
+report `pending` over a head whose every job had succeeded? Reading `pr_watch.rs`
+gave a mechanism; reading `checks_green.rs:33-39` gave the opposite and the first
+was retracted into two Linear rows; `SHA=… mise run checks-green` printed the
+answer in four seconds and the first reading had been right. The retraction had
+to be retracted. Row four's sentence applies unchanged one level up: **source
+feels like an answer and running the predicate feels like a detour.**
 
 Row two is the one the tree kept reaching past. Rows one and three both have a
 habit behind them — `grep` is in every hand, and `rules/rust.md` already
