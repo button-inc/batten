@@ -13630,3 +13630,40 @@ id = "commit-gate-installed"
 gloss = "this clone's commit path runs the gate, so a commit made here cannot bypass it"
 check = ["batten", "doctor", "gate"]
 repair = ["mise", "run", "session:git-hooks"]
+
+# THE ENGINE THAT ADJUDICATES THIS TREE MUST HAVE BEEN BUILT FROM IT (CLOUD-1620).
+#
+# `mise.toml`'s env puts `target/release` ahead of `~/.local/bin`, deliberately:
+# consumer #1 judges with the engine it ships rather than with the last release.
+# What kept that binary current was `session:batten` running `install:local` every
+# session — and CLOUD-1620 removed the build from session start, correctly, because
+# a provisioning path may not assume a toolchain. Nothing replaced the refresh.
+#
+# So the shadowing binary now goes stale on its own, and a stale engine does not
+# fail: it DROPS the rows it cannot resolve and reports a clean load. Measured
+# 2026-09-09 on this container — `target/release/batten` at 0.0.154 shadowing the
+# 0.0.155 release, `doctor` answering `config-rows-dropped`, and `config show`
+# naming `rebase-not-hand-stepped` unresolved, which is to say the gate that
+# refuses a hand-stepped rebase enforced nothing for a whole session.
+#
+# THE READING ALREADY EXISTS AND NOTHING CONSULTED IT. `doctor mediator` is
+# CLOUD-1630's, and `diagnose_mediator`'s own doc states the case this row closes:
+# "A stale mediator reads exactly like a working one, which is the worst." It
+# answers `mediator-build-behind-source` on exactly this state. A verdict nothing
+# asks for is a sensor, not a gate (non-negotiable rule 2).
+#
+# THE REPAIR IS THE OPT-IN BUILD, which is the one case CLOUD-1620 left for it:
+# judging `crates/batten/**` with the engine that tree builds. It is the expensive
+# path and it belongs HERE, where the alternative is every dropped row deciding
+# nothing — not on the unconditional session-start path, where it cost 224.87s to
+# reproduce a binary that already existed.
+#
+# NOT CLOUD-1650's TRIGGER, and the two do not overlap. That row re-checks after a
+# tree move MID-session and needs `command_matcher`, which is unlanded. This is the
+# session-start half, needs no new mechanism, and covers the moment a container
+# comes up already stale — which is how this one came up.
+[[startup]]
+id = "mediator-matches-the-tree"
+gloss = "the engine adjudicating this tree was built from it, so a declared gate is not silently dropped"
+check = ["batten", "doctor", "mediator"]
+repair = ["mise", "run", "install:local"]
