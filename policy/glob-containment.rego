@@ -218,7 +218,7 @@ satisfied(want) if {
 # THE PARSE REFUSALS, both of which fail closed rather than passing vacuously.
 violation contains {
 	"rule": "glob-containment",
-	"verdict": "gate parse unread",
+	"verdict": "config parse unread",
 	"subjects": [{"path": config_path}],
 } if {
 	config_lines
@@ -227,7 +227,7 @@ violation contains {
 
 violation contains {
 	"rule": "glob-containment",
-	"verdict": "step declare missing",
+	"verdict": "step select missing",
 	"subjects": [{"path": hooks_path}],
 } if {
 	hooks_lines
@@ -237,7 +237,7 @@ violation contains {
 
 violation contains {
 	"rule": "glob-containment",
-	"verdict": "manifest cover missing",
+	"verdict": "step cover missing",
 	"subjects": [{"path": sprintf("%s:%d", [config_path, entry.line])}],
 } if {
 	count(covered) > 0
@@ -281,7 +281,7 @@ test_a_sibling_prefix_does_not_count if {
 		["[[rule]]", "glob = \"crates-extra/**/*.rs\""],
 		step(["    glob = List(\"crates/**\")"]),
 	)
-	v.verdict == "manifest cover missing"
+	v.verdict == "step cover missing"
 }
 
 # And the `/**` is what makes an entry a prefix at all: an entry without it
@@ -291,7 +291,7 @@ test_a_slashless_entry_does_not_subsume if {
 		["[[rule]]", "glob = \"crates-extra/**/*.rs\""],
 		step(["    glob = List(\"crates\")"]),
 	)
-	v.verdict == "manifest cover missing"
+	v.verdict == "step cover missing"
 }
 
 test_an_unlisted_glob_is_refused if {
@@ -299,7 +299,7 @@ test_an_unlisted_glob_is_refused if {
 		["[[rule]]", "glob = \"policy/**/*.rego\""],
 		step(["    glob = List(\"crates/**\")"]),
 	)
-	v.verdict == "manifest cover missing"
+	v.verdict == "step cover missing"
 }
 
 # The failure the retired gate actually shipped: a comment inside the list closed
@@ -321,7 +321,7 @@ test_a_budget_files_entry_is_an_input if {
 		["[budget.instructions]", "files = [\"AGENTS.md\"]"],
 		step(["    glob = List(\"crates/**\")"]),
 	)
-	v.verdict == "manifest cover missing"
+	v.verdict == "step cover missing"
 }
 
 test_an_embedded_budget_path_is_an_input if {
@@ -329,7 +329,7 @@ test_an_embedded_budget_path_is_an_input if {
 		["[[budget.instructions.embedded]]", "path = \"rules/rust.md\""],
 		step(["    glob = List(\"crates/**\")"]),
 	)
-	v.verdict == "manifest cover missing"
+	v.verdict == "step cover missing"
 }
 
 # A `path` key belongs to its table, not to its spelling: eight other tables in
@@ -350,7 +350,7 @@ test_a_following_steps_list_is_not_this_steps if {
 			["    glob = List(\"policy/**\")"],
 		),
 	)
-	v.verdict == "manifest cover missing"
+	v.verdict == "step cover missing"
 }
 
 # A glob-less step runs on every commit, which is what the trigger removed — so
@@ -360,7 +360,7 @@ test_a_step_with_no_glob_list_is_refused if {
 		["[[rule]]", "glob = \"crates/**\""],
 		["  [\"batten-check\"]", "  [\"other-step\"]"],
 	)
-	v.verdict == "step declare missing"
+	v.verdict == "step select missing"
 }
 
 # A config this reader parses nothing out of is a failed parse, never a config
@@ -370,7 +370,7 @@ test_a_config_yielding_no_inputs_is_refused if {
 		["# nothing but prose"],
 		step(["    glob = List(\"crates/**\")"]),
 	)
-	v.verdict == "gate parse unread"
+	v.verdict == "config parse unread"
 }
 
 #MUTANT-SUITE crates/batten/tests/it/glob_containment.rs
