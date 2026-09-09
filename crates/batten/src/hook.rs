@@ -4450,6 +4450,15 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
         | Decision::Preapproved(_)
         | Decision::Repaired(_) => {}
     }
+    command_line_gates(policy, envelope, receipts)
+}
+
+/// The gates below the command early-return, in the order they have always run.
+///
+/// Split from [`adjudicated_call_gates`] when the repair arm pushed it past its
+/// line budget, at the seam the chain already had: everything here is about a
+/// COMMAND LINE, so a call carrying none is answered before the first of them.
+fn command_line_gates(policy: &Policy, envelope: &Envelope, receipts: &ReceiptFacts) -> Decision {
     if envelope.command.is_empty() {
         return Decision::Allow;
     }
