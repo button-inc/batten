@@ -134,8 +134,58 @@ pub struct Race {
 /// one function for exactly that reason.
 #[must_use]
 pub fn claimed(branch: &str, title: &str, log: &str, body: &str, keys: &dyn Keys) -> Vec<String> {
+    claimed_from(branch, title, log, body, keys, Source::All)
+}
+
+/// Which of the three sources may answer.
+///
+/// **The shell's two narrowing flags as a type** (CLOUD-1711). `claimed-keys.sh`
+/// spells these `--closing-only` and `--refs-first-only`, and they are mutually
+/// exclusive there because each names a different SINGLE source — asking for both
+/// is a caller that has not decided which question it is asking, never an
+/// intersection to compute. An enum makes that unrepresentable rather than
+/// checked, which is the one thing a port can improve without changing a
+/// decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Source {
+    /// All three, most explicit first. The default, and every existing caller.
+    #[default]
+    All,
+    /// Source 1 alone — a closing keyword — never falling through.
+    ///
+    /// For a caller asking about a LOG rather than a branch (CLOUD-804): over
+    /// `main`'s history the fallbacks answer a different question, and source 3
+    /// in particular is the exact citation signal CLOUD-480 was swept wrong on.
+    ClosingOnly,
+    /// Source 3 alone — the first key of each `Refs:` trailer.
+    ///
+    /// The exact mirror, for one caller with one need: `closing-key-check` asks
+    /// which keys a branch SERVED, to subtract the keys the body closes
+    /// (CLOUD-674). That comparison is only meaningful against a set derived
+    /// WITHOUT reference to the closing keys — the full chain returns source 1
+    /// first, so the answer would agree with the body by construction and the
+    /// gate would pass on exactly the bodies it must refuse.
+    RefsFirstOnly,
+}
+
+/// [`claimed`], narrowed to one source.
+///
+/// The precedence and the citation rule are unchanged; `source` only decides
+/// which branches may run at all.
+#[must_use]
+pub fn claimed_from(
+    branch: &str,
+    title: &str,
+    log: &str,
+    body: &str,
+    keys: &dyn Keys,
+    source: Source,
+) -> Vec<String> {
+    if source == Source::RefsFirstOnly {
+        return refs_first(log, keys);
+    }
     let closing = dedup(keys.closed(&folded(&format!("{body}\n{log}"))));
-    if !closing.is_empty() {
+    if !closing.is_empty() || source == Source::ClosingOnly {
         return closing;
     }
     let declared = dedup(keys.named(&folded(&format!("{branch} {title}"))));
@@ -143,6 +193,51 @@ pub fn claimed(branch: &str, title: &str, log: &str, body: &str, keys: &dyn Keys
         return declared;
     }
     refs_first(log, keys)
+}
+
+/// The commit messages this branch AUTHORED, which is narrower than the ones it
+/// carries (CLOUD-748).
+///
+/// **Carrying this bound is the whole of the port's fidelity.** `land`'s
+/// speculative linearization rebases a waiting branch onto the lease holder's
+/// published head, putting ANOTHER BRANCH'S unlanded commits into this branch's
+/// history. Those commits carry the holder's keys, and the holder has an open
+/// pull request by construction — so a claim derived over the whole branch
+/// history reported the waiter as racing the very pull request the bet was
+/// placed on. Measured twice in one session, each costing a full `verify`. A
+/// port that read `origin/main..HEAD` unconditionally would silently reintroduce
+/// exactly that, and it would look like a passing gate.
+///
+/// [`crate::speculation::PUBLISHED_AS`] is the boundary: the commit the branch
+/// was replayed ONTO, so everything after it on HEAD is this branch's own work.
+///
+/// **Honoured only when it is an ancestor of HEAD**, which is what makes a stale
+/// export harmless: an unwound bet, a `land` that died, or a variable inherited
+/// from an unrelated run all fail that test and the range falls back to
+/// `origin/main`. The failure direction is the WIDER set, which is the one that
+/// refuses — never the narrower one, which would silently stop catching races.
+#[must_use]
+pub fn authored_log(dir: &std::path::Path, base: &str) -> String {
+    let speculated = std::env::var(crate::speculation::PUBLISHED_AS)
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    if let Some(spec_base) = speculated {
+        // ANCESTOR OF HEAD, spelled as "the merge base with HEAD is the base
+        // itself". `merge_base` already answers against HEAD, so an unrelated or
+        // unwound base disagrees with its own resolved id and the range falls
+        // back — which is the wider, refusing direction the shell chose.
+        let resolved = crate::git::resolve_ref(dir, &spec_base).ok().flatten();
+        let shared = crate::git::merge_base(dir, &spec_base).ok().flatten();
+        if resolved.is_some() && resolved == shared {
+            if let Ok(Some(text)) = crate::git::log_messages(dir, &spec_base) {
+                return text;
+            }
+        }
+    }
+    crate::git::log_messages(dir, base)
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 /// Upper-cased, because a key pattern is not obliged to be case-insensitive and
@@ -448,5 +543,100 @@ mod tests {
     #[test]
     fn a_head_sha_no_listed_pull_request_carries_identifies_nothing() {
         assert!(identify(&[pull("1", "a", "aaaa")], "bbbb").is_none());
+    }
+
+    // --- CLOUD-1711: the `Source` selector -----------------------------------
+    //
+    // THE DISCRIMINATING CASE IS THE CITATION TRAP, and it is the one the whole
+    // module exists for: a body CITES related issues as evidence, and reading a
+    // citation as a claim made a pull request racing the very key it cited.
+
+    #[test]
+    fn a_body_that_cites_a_key_without_closing_it_does_not_claim_it() {
+        assert!(
+            claimed_from(
+                "",
+                "",
+                "",
+                "Supersedes the measurement in PROJ-133.",
+                &Fake,
+                Source::All,
+            )
+            .is_empty(),
+            "citing is not claiming"
+        );
+    }
+
+    #[test]
+    fn closing_only_never_falls_through_to_the_branch() {
+        // `--closing-only`'s whole reason: over a LOG rather than a branch the
+        // fallbacks answer a different question, and source 3 in particular is
+        // the citation signal CLOUD-480 was swept wrong on.
+        assert!(
+            claimed_from(
+                "user/proj-843-campaign",
+                "a title (PROJ-9)",
+                "Refs: PROJ-1170\n",
+                "",
+                &Fake,
+                Source::ClosingOnly,
+            )
+            .is_empty(),
+            "with no closing keyword the answer is empty, never the branch or a trailer"
+        );
+        assert_eq!(
+            claimed_from("", "", "", "Closes PROJ-7.", &Fake, Source::ClosingOnly),
+            vec![String::from("PROJ-7")],
+            "and a closing keyword still answers"
+        );
+    }
+
+    #[test]
+    fn refs_first_only_ignores_a_closing_keyword_in_the_body() {
+        // CLOUD-674's circularity: `closing-key-check` subtracts the keys a body
+        // CLOSES from the keys the branch SERVED, so the served set must be
+        // derived without reference to the closing keys — otherwise it agrees
+        // with the body by construction and the gate passes on exactly the
+        // bodies it must refuse.
+        assert_eq!(
+            claimed_from(
+                "user/proj-9-thing",
+                "",
+                "Refs: PROJ-1170\n",
+                "Closes PROJ-7.",
+                &Fake,
+                Source::RefsFirstOnly,
+            ),
+            vec![String::from("PROJ-1170")],
+            "source 3 alone, never sources 1 or 2"
+        );
+    }
+
+    #[test]
+    fn the_default_source_is_the_whole_chain_in_order() {
+        // The anti-vacuity mirror for the two narrowing cases: a selector that
+        // returned nothing for every variant would pass both of them.
+        assert_eq!(
+            claimed_from(
+                "user/proj-843-x",
+                "",
+                "",
+                "Closes PROJ-1170.",
+                &Fake,
+                Source::All
+            ),
+            vec![String::from("PROJ-1170")],
+            "a closing keyword OVERRIDES the branch"
+        );
+        assert_eq!(
+            claimed_from("user/proj-843-x", "", "", "", &Fake, Source::All),
+            vec![String::from("PROJ-843")],
+            "failing that, the branch"
+        );
+        assert_eq!(
+            claimed_from("", "", "Refs: PROJ-1170\n", "", &Fake, Source::All),
+            vec![String::from("PROJ-1170")],
+            "failing that, the first key of a `Refs:` trailer"
+        );
     }
 }

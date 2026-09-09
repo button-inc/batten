@@ -64,7 +64,13 @@ pub const LIVE_REF: &str = "refs/batten-spec/live";
 /// otherwise tell a commit this branch authored from one this speculation
 /// adopted — so it reported the waiter as racing the very PR the bet was placed
 /// on, twice in one session (CLOUD-748). The name is the CONSUMER's and reaches
-/// the child through the environment; nothing in this crate reads it.
+/// the child through the environment.
+///
+/// **`race::authored_log` reads it now** (CLOUD-1711). This doc said "nothing in
+/// this crate reads it", which was true only for as long as the answer lived in
+/// `claimed-keys.sh`: the in-engine port of that program has to carry the same
+/// bound or it silently changes a decision, reading the whole branch history
+/// where the shell read only the commits the branch itself authored.
 pub const PUBLISHED_AS: &str = "BATTEN_SPEC_BASE";
 
 /// What a settle decided.
