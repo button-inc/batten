@@ -209,6 +209,24 @@ fn key(run: &Run) -> (String, u64) {
 /// producing a verdict — `skipped`, `cancelled`, or whatever GitHub adds next —
 /// is refused the displacement, because such a run judged nothing and a reading
 /// that lets it erase a judgement is reporting the absence of an answer it holds.
+/// The named cases are this file's own unit tier, so the declared suite path is
+/// this file (CLOUD-1267's shape, as `landed.rs` uses it).
+///
+/// THE OPENER IS `//`, NOT `///`. `OPENERS` is `["//", "#"]` and the marker must
+/// follow one directly, so a doc comment's third slash leaves `/ MUTANT-SUITE …`
+/// and matches nothing. Declared inside a doc comment this row parses as prose,
+/// the module never becomes a subject, and `mutate census` stays green over a
+/// declaration nobody sweeps — which is the coverage-shaped nothing the verb
+/// exists to refuse. Written here first in exactly that dead form.
+///
+/// The mutation moves `UNANSWERED` off the rank `rank()` actually assigns, so the
+/// guard below can never fire and a later `skipped` twin wins outright again —
+/// which is precisely the state that stopped the fleet. It is a constant rather
+/// than the predicate because a row's script may carry no `|` of its own, and
+/// because a guard commented out would also redden the two arms that must keep
+/// their old behaviour, telling us less about which clause the cases pin.
+//MUTANT-SUITE crates/batten/src/checks_green.rs
+//MUTANT unanswered-displaces-a-verdict|s@const UNANSWERED: u8 = 3;@const UNANSWERED: u8 = 9;@|a_later_skipped_twin_does_not_erase_a_verdict
 fn displaces(held: ((String, u64), u8), incoming: ((String, u64), u8)) -> bool {
     const UNANSWERED: u8 = 3;
     const ANSWERED: u8 = 2;

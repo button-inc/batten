@@ -926,6 +926,51 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
             String::from("BATTEN_TEST_SCRATCH_LANE"),
             String::from("mutate"),
         ),
+        // THE SWEEP OWNS ITS OWN SUITE BOUND, AND INHERITING THE CONSUMER'S COST
+        // ~490s OF EVERY `verify` (CLOUD-1726).
+        //
+        // A consumer sets a bats timeout for THEIR suite — this repository's is
+        // 300s in `mise.toml`'s `[env]`, chosen because a real case once sat at
+        // 0% CPU for forty minutes holding the landing lease. `[env]` reaches
+        // every process, so it also reached the toy repositories a sweep builds:
+        // three files, one filtered case, and a 300-second watchdog.
+        //
+        // AND THE SWEEP WAITS OUT THE WHOLE BOUND EVEN WHEN THE CASE PASSES.
+        // Measured on `mutate::the_tree_is_restored_between_rows`, which runs two
+        // bats suites, so the cost is twice the bound every time:
+        //
+        // | bound | case |
+        // | ----- | ---- |
+        // | 300s  | 600.481s |
+        // | 5s    | 10.664s |
+        // | unset | 0.480s |
+        //
+        // Exactly linear, and 1250x between the ends. `bats-exec-test` aborts its
+        // countdown on a normal finish and closes fds 0-255 on the watchdog
+        // subshell precisely so a passing test cannot wait for it — and a plain
+        // capture of the same bats invocation returns in ~140ms, so those
+        // protections do work. Under `spawn`'s `.output()`, which reads stdout and
+        // stderr to EOF on two separate pipes, they do not. Why is CLOUD-1726's
+        // remaining question and it does not block this: whatever holds the
+        // descriptor, the consumer's number was never the right bound here.
+        //
+        // A BOUND, NOT ITS REMOVAL. Unsetting is the fastest column above and the
+        // wrong fix: a mutant that hangs is exactly what a mutation sweep must
+        // survive, and with no watchdog `.output()` would block forever. So the
+        // sweep declares its own, small because its subject is one filtered case
+        // over a staged toy tree rather than a repository's whole suite.
+        //
+        // OVERRIDABLE, because a consumer whose gate suite is genuinely slower
+        // needs a way up that is not editing the engine. Read from the
+        // environment under a batten-owned name so it cannot collide with the
+        // `BATS_*` namespace the runner owns.
+        (
+            String::from("BATS_TEST_TIMEOUT"),
+            std::env::var("BATTEN_MUTATE_SUITE_TIMEOUT")
+                .ok()
+                .filter(|value| value.parse::<u64>().is_ok_and(|seconds| seconds > 0))
+                .unwrap_or_else(|| String::from("30")),
+        ),
     ]
 }
 
