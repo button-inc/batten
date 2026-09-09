@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.158](https://github.com/button-inc/batten/compare/v0.0.157...v0.0.158) - 2026-09-09
+
+### Added
+
+- *(gate)* refuse an added absolute that cites nothing
+
+### Fixed
+
+- *(land)* take the wait callback's argument in its own unit case
+- *(land)* [**breaking**] advance the lease token when the checks move, not when the poll does
+- *(lease)* publish the progress token a beat was never carrying
+
+### Other
+
+- *(land)* ask a step's prechecks once, and keep the core repo-agnostic
+
 ## [0.0.157](https://github.com/button-inc/batten/compare/v0.0.156...v0.0.157) - 2026-09-09
 
 ### Added
