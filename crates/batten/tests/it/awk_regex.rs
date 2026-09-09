@@ -140,7 +140,7 @@ fn a_name_that_prefixes_another_is_not_confused_for_it() {
 fn an_inline_regex_is_the_recommended_form_not_a_finding() {
     let dir = awk_repo(
         "awk-regex-inline",
-        "#!/usr/bin/env bash\nawk '$0 ~ /^CLOUD-[0-9]+$/' file\n",
+        "#!/usr/bin/env bash\nawk '$0 ~ /^ISSUE-[0-9]+$/' file\n",
     );
     assert_eq!(check(&dir).status.code(), Some(0));
 }
