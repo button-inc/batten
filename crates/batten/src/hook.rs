@@ -4078,21 +4078,6 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
 // rather than hypothetical.
 #[allow(clippy::match_same_arms)]
 fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decision {
-    // Destructured once so the chain below reads as it always has. The bundle is
-    // about how the fact set TRAVELS; each gate still names the single fact it
-    // decides on, which is what keeps a reader able to see that `shape_rules`
-    // cannot see a receipt.
-    //
-    // `bypass` is deliberately NOT among them (CLOUD-1357). No gate in this chain
-    // reads the hatch any more: the chain decides what the policy says, and
-    // [`adjudicated`] decides which of those refusals the hatch may suppress. A
-    // gate that could still see it would be a second place the answer is made.
-    let Facts {
-        receipts,
-        keys,
-        discards,
-        ..
-    } = *facts;
     // The end-of-turn gate (CLOUD-85), and it no longer DENIES (CLOUD-889).
     //
     // It returned `Decision::Deny` here, which is exit 2 — the channel that
@@ -4135,32 +4120,49 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     // So the match below is exhaustive with no wildcard: an eighth `Event` fails
     // to compile here until somebody says what it decides. Each arm's comment is
     // the answer, not decoration — that is the whole of what this replaced.
-    match envelope.event {
+    if let Some(decided) = event_decides(envelope.event) {
+        return decided;
+    }
+    if policy.is_empty() {
+        return Decision::Allow;
+    }
+    adjudicated_call_gates(policy, envelope, facts)
+}
+
+/// What each `Event` decides BEFORE any gate reads the call (CLOUD-777).
+///
+/// `None` means "keep going" and is reachable from exactly one arm; every other
+/// event answers by name. Extracted from [`adjudicated_gates`] when the repair
+/// arm pushed that function past its line budget — the split is where the
+/// function already changed subject, from which MOMENT this is to what the
+/// policy says about the call.
+fn event_decides(event: Event) -> Option<Decision> {
+    match event {
         // The one adjudicated event. Everything past this point is its gate
         // chain.
-        Event::PreTool => {}
+        Event::PreTool => None,
         // No decision, by design. The post-tool moment has no deny channel on any
         // surveyed host — the call already happened — and its reader is the drain
         // (CLOUD-79). Reading a fact off the result is CLOUD-776's, and it lands
         // as a `Decision` here only once there is something to decide.
-        Event::PostTool | Event::PostToolBatch => return Decision::Allow,
+        Event::PostTool | Event::PostToolBatch => Some(Decision::Allow),
         // Handled ABOVE, before the bypass check, because what is judged there is
         // not a call but whether the turn's work is finished (CLOUD-85). Stated
         // rather than folded into the no-ops so this arm cannot silently become
         // the answer if that early return is ever moved.
-        Event::Stop => return Decision::Allow,
+        Event::Stop => Some(Decision::Allow),
         // No decision, by design, and not a gap waiting on CLOUD-461: neither
         // moment carries `Decision` semantics on ANY host. There is nothing to
         // allow or deny at the start of a session or a config reload — what a
         // policy might want there is advisory, which is a channel rather than a
         // verdict.
-        Event::SessionStart | Event::ConfigChange => return Decision::Allow,
+        Event::SessionStart | Event::ConfigChange => Some(Decision::Allow),
         // Claude Code's completion signal, and the one event whose exit 2
         // prevents completion. Batten does not use it yet: the stop gate is the
         // reconciliation point (house-style §10) and `Capabilities::degrade` maps
         // this to the Stop family elsewhere, so deciding here as well would give
         // one question two answers.
-        Event::TaskCompleted => return Decision::Allow,
+        Event::TaskCompleted => Some(Decision::Allow),
         // NOT a stated no-op, and the distinction is the point of the arm
         // (CLOUD-777). Measured 2026-08-21 on this repository's own wiring: the
         // two bash guards registered here reach `exit 2` on five paths between
@@ -4171,16 +4173,37 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
         // allow, with the gap named rather than dressed as a design decision.
         // CLOUD-312 owns the retirement of the two guards; when a kind can key on
         // this event, this arm is where it dispatches.
-        Event::UserPromptSubmit => return Decision::Allow,
+        Event::UserPromptSubmit => Some(Decision::Allow),
         // The host said something this build cannot normalize. Allow, loudly
         // elsewhere: an unrecognized event is a fact about the host, never a
         // reason to refuse a call (CLOUD-45), and guessing which moment it stands
         // for is how a gate fires at one nobody named.
-        Event::Unrecognized => return Decision::Allow,
+        Event::Unrecognized => Some(Decision::Allow),
     }
-    if policy.is_empty() {
-        return Decision::Allow;
-    }
+}
+
+/// The gate chain for a mediated call, in the order the chain has always run.
+///
+/// Split from [`adjudicated_gates`] rather than reordered: every gate below
+/// still names the single fact it decides on, and the chain's ORDER is itself
+/// the contract — the destructive-reset gate's own comment says why it is
+/// first, and that argument is unchanged by the move.
+fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decision {
+    // Destructured once so the chain below reads as it always has. The bundle is
+    // about how the fact set TRAVELS; each gate still names the single fact it
+    // decides on, which is what keeps a reader able to see that `shape_rules`
+    // cannot see a receipt.
+    //
+    // `bypass` is deliberately NOT among them (CLOUD-1357). No gate in this chain
+    // reads the hatch any more: the chain decides what the policy says, and
+    // [`adjudicated`] decides which of those refusals the hatch may suppress. A
+    // gate that could still see it would be a second place the answer is made.
+    let Facts {
+        receipts,
+        keys,
+        discards,
+        ..
+    } = *facts;
     // THE DESTRUCTIVE-RESET GATE (CLOUD-462), and its predicate is REACHABILITY
     // rather than the verb's spelling.
     //
