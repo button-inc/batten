@@ -433,7 +433,7 @@ fn replayed_findings(
         &[],
         batten::policy::Vocabulary {
             patterns: &[],
-            verdicts: &verdicts,
+            verdicts,
             recorders: &[],
         },
         dir,
