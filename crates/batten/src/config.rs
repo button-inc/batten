@@ -1396,7 +1396,7 @@ pub fn parse_base(text: &str, source: &str) -> Result<Config> {
     }
     let text = toml::to_string(&table)
         .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?;
-    let config = parse_ungated_with(&text, source, GrammarReading::Skewed)?;
+    let config = parse_ungated_with(&text, source, Grammar::Skewed)?;
     check_min_version(&config, source)?;
     Ok(config)
 }
@@ -1659,12 +1659,7 @@ fn validate_remedy_tables(config: &Config) -> Result<()> {
     )
 }
 
-fn validate_tables(
-    config: &Config,
-    text: &str,
-    source: &str,
-    grammar: GrammarReading,
-) -> Result<()> {
+fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) -> Result<()> {
     // The verb table is validated here, at load, because nothing else validates
     // it anywhere: `verbs::validate` had no caller outside its own tests, so a
     // `[[verb]]` row that is inert — `effect = "read"` in a table named for
@@ -1730,7 +1725,12 @@ fn validate_tables(
     // `verdict::validate` grants a registry with no vocabulary, and it must be
     // the same one, or the two names diverge on exactly the trees that have
     // adopted neither.
-    if !config.vocabulary.is_empty() {
+    // SKEW IS NOT A VERDICT (CLOUD-1638). A config read from a git ref is read to
+    // be COMPARED, and an id predating this build's grammar is the same shape as
+    // a key this build has since retired: enforcing it there makes ADOPTING the
+    // grammar unlandable, because the base of every comparison is the revision
+    // before the adoption.
+    if !config.vocabulary.is_empty() && grammar == Grammar::Enforced {
         // A COLLAPSED ID IS GOVERNED BY THE CLASS REGISTRY, NOT BY THIS LIST.
         //
         // Where the id IS a class token, the class's own validation already
@@ -1755,15 +1755,7 @@ fn validate_tables(
             .collect();
         under(Native::RuleTableRefused, {
             let mut first = Ok(());
-            // SKEW, NOT A VERDICT (CLOUD-1638). A config read from a git ref is
-            // read to be COMPARED, and an id predating this build's grammar is
-            // the same shape as a key this build has since retired: refusing it
-            // makes adopting the grammar unlandable, because the base of every
-            // comparison is the revision before it.
             for rule in &config.rules {
-                if grammar == GrammarReading::Skewed {
-                    break;
-                }
                 if declared.contains(rule.id.as_str()) {
                     continue;
                 }
@@ -3117,7 +3109,7 @@ fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str, behind: bool
 /// answers: enforcing it there would make ADOPTING the grammar unlandable,
 /// since the base of every comparison is the revision before the adoption.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GrammarReading {
+enum Grammar {
     /// The working tree's own authority: the grammar is a verdict.
     Enforced,
     /// A config read from a ref, to be compared rather than judged.
@@ -3125,10 +3117,10 @@ enum GrammarReading {
 }
 
 fn parse_ungated(text: &str, source: &str) -> Result<Config> {
-    parse_ungated_with(text, source, GrammarReading::Enforced)
+    parse_ungated_with(text, source, Grammar::Enforced)
 }
 
-fn parse_ungated_with(text: &str, source: &str, grammar: GrammarReading) -> Result<Config> {
+fn parse_ungated_with(text: &str, source: &str, grammar: Grammar) -> Result<Config> {
     // THE COMMON CASE COSTS ONE PARSE, and it used to cost three.
     //
     // A config this build fully understands succeeds here and is DONE — it
