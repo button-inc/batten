@@ -176,6 +176,13 @@ jobs:
         with:
           # The profile is part of the key — see `ci.yml`'s `ci` job.
           shared-key: cross-
+          # READ-ONLY, because `cache-warm-cross` on trunk is now this family's
+          # writer. A PR-side write lands on `refs/pull/N/merge` and is readable
+          # by no other pull request, so it bought nothing and cost the store —
+          # CLOUD-1453 measured 81% of a 10.77 GiB store as four merged PRs'
+          # unreadable entries. Same posture as every warmed family's readers
+          # (`ci.yml:420`, `:846`, `commit-lint.yml:138`).
+          save-if: false
       - run: mise run cross-check
         env:
           # Only the triple cross-check type-checks. doctor's default pair would

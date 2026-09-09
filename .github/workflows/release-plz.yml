@@ -257,6 +257,80 @@ jobs:
       - run: mise exec -- cargo nextest run --no-run --workspace
         if: steps.rust-cache.outputs.cache-hit != 'true'
 
+  # THE TWO ORPHANED FAMILIES ON THE PULL-REQUEST PATH (CLOUD-1477's siblings).
+  #
+  # `ci-` has had warm writers since CLOUD-1416/1477 and `windows-` since the job
+  # below. `cross-` and `semver-` had none, and both are REQUIRED checks — so every
+  # pull request cold-built them AND uploaded a multi-hundred-MB entry scoped to
+  # `refs/pull/N/merge` that no other pull request can read. That write is the
+  # store pressure `cache-sweep.yml` exists to reclaim rather than a saving:
+  # CLOUD-1453 measured 10.77 GiB against a 10 GiB ceiling with 81% of it four
+  # already-merged PRs. Their readers now carry `save-if: false`, so these two jobs
+  # are what makes the families readable at all.
+  #
+  # ONE JOB PER FAMILY, NOT A SHARED ENTRY, and `rust.yml`'s matrix block already
+  # records why: a second leg restoring a shared entry thrashes it. `cross` builds
+  # a windows-gnu target and `semver` a base-revision closure; neither is the `ci-`
+  # host artifact set, so pointing them at `ci-` would trade a cold build for a
+  # thrashed one.
+  #
+  # x64 FOR THE READERS' REASON, NOT BY DEFAULT. rust-cache puts
+  # `runnerOS-runnerArch` inside the restore prefix (`config.ts:93`, before `:133`),
+  # so a writer on another arch writes an entry its reader cannot see — the exact
+  # trap CLOUD-1416 sprang on `batten-check`. Both readers are `ubuntu-latest`
+  # (`rust.yml:75`, `:319`); these must move only with them.
+  cache-warm-cross:
+    name: cache-warm-cross
+    runs-on: ubuntu-latest
+    # Grandfathered for `cache-warm-linux`'s reason: no measured p95 exists for a
+    # job that has never run, and a guessed number would read as measured.
+    timeout-minutes: 30 # budget: grandfathered measured=2026-09-09
+    # A warm job must never be able to red the release lane, exactly as above.
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+        with:
+          # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). The
+          # digest above pins the ACTION; this pins the MISE it installs, which
+          # is a separate resolution the digest does not reach.
+          version: 2026.9.1
+          # What the `cross` job installs, for its stated reason: cross-check is
+          # `rustup target add` + `cargo check`, and rust is the only tool it
+          # touches.
+          install_args: rust
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Read by the compile step below; `ci-local-parity` property 17 holds the
+        # `id` and the guard together.
+        id: rust-cache
+        with:
+          # Must match `rust.yml`'s `cross` job exactly or this writes an entry
+          # that job cannot read.
+          shared-key: cross-
+      # Compile only when there is nothing to restore, as every warm job here
+      # does. `DOCTOR_TARGETS` must match the reader's or this fills a different
+      # target's artifacts.
+      - run: mise run cross-check
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        env:
+          DOCTOR_TARGETS: x86_64-pc-windows-gnu
+
+  # `semver-` IS DELIBERATELY NOT WARMED HERE, and the reason is worth recording
+  # so the next reader does not "finish the job". `rust.yml`'s semver block states
+  # that it builds RUSTDOC with a different rustc than every other job, which is
+  # why it holds its own key at all. A warm job running `cargo build --workspace`
+  # would fill that family with host artifacts the reader does not want and still
+  # leave the rustdoc build cold — occupying the slot with the wrong content,
+  # which is worse than the cold build it replaces. Warming it means running what
+  # the reader runs, and `mise run semver` is a COMPARISON against a base rather
+  # than a build, so a trunk-side warmer is a different design question.
+  # `cross-` has no such split: `mise run cross-check` is exactly what its reader
+  # runs, which is why only that one is warmed above.
+
   cache-warm-windows:
     name: cache-warm-windows
     runs-on: windows-latest
