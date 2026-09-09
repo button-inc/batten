@@ -4136,6 +4136,18 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
 /// arm pushed that function past its line budget — the split is where the
 /// function already changed subject, from which MOMENT this is to what the
 /// policy says about the call.
+#[expect(
+    clippy::match_same_arms,
+    reason = "CLOUD-777: the arms deliberately repeat `Some(Decision::Allow)` and \
+              must not be merged. Each event answers BY NAME, with its own comment \
+              saying why it decides nothing, and the match is exhaustive with no \
+              wildcard so an eighth `Event` fails to compile until somebody says \
+              what it decides. Merging them is byte-identical at runtime and the \
+              opposite as a contract — a stated no-op collapsed back into a \
+              fall-through, which is the defect this match replaced. Split out of \
+              `adjudicated_gates` by CLOUD-1639, which is when the lint first \
+              had a function small enough to fire on."
+)]
 fn event_decides(event: Event) -> Option<Decision> {
     match event {
         // The one adjudicated event. Everything past this point is its gate
