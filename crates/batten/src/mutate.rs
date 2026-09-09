@@ -889,11 +889,8 @@ fn spawn(dir: &Path, program: &str, args: &[String], env: &[(String, String)]) -
     // hangs is precisely what a sweep must survive — but a watchdog that only
     // fires on a hang costs nothing on the rows that pass.
     //
-    // THE GROUP, NOT THE CHILD. A suite forks: bats runs `bats-exec-suite`,
-    // which runs `bats-exec-test`, which runs the case. Signalling the direct
-    // child leaves the rest orphaned and still holding the staged tree, so the
-    // child leads its own group and the group is what is signalled — the same
-    // primitive and the same reasoning as `exec.rs`'s reaper.
+    // THE DIRECT CHILD ONLY — see `reap`, which records why signalling the
+    // process group instead cost three unrelated suites in CI.
     // UNSET, NOT SET SMALL, AND THE DIFFERENCE IS THE WHOLE DEFECT. `bats-exec-test`
     // implements `BATS_TEST_TIMEOUT` as a literal `sleep N` child that it does not
     // reap on a FAILING case — observed directly, `sleep 300` still running under a
@@ -907,8 +904,6 @@ fn spawn(dir: &Path, program: &str, args: &[String], env: &[(String, String)]) -
     // enough: absent an explicit removal the child inherits the ambient value, which
     // is how a "no bound" reading still cost 300s. It has to be unset on the command.
     command.env_remove("BATS_TEST_TIMEOUT");
-    #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(&mut command, 0);
     // FILES RATHER THAN PIPES, because nothing reads them until the child is
     // gone. A pipe holds 64 KiB and then blocks its writer, so a chatty failure
     // would deadlock against a reader that is waiting for the exit — the one
@@ -954,9 +949,12 @@ fn spawn(dir: &Path, program: &str, args: &[String], env: &[(String, String)]) -
                 .wait()
                 .with_context(|| format!("mutate: could not reap {program}"))?;
         }
-        // A poll rather than a signal handler: the wait is bounded, the interval
-        // is far below any bound worth setting, and a handler here would race
-        // the reaper `exec.rs` already installs for the whole process.
+        // A poll rather than a signal handler: a handler here would race the
+        // reaper `exec.rs` already installs for the whole process.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a poll bounded by a real terminal state, not a timer standing in for one: the loop above exits on `try_wait` reporting the child gone, and this delay only decides how often that is asked. The wall-clock stop is `suite_bound`, which is what a hanging suite runs into"
+        )]
         std::thread::sleep(std::time::Duration::from_millis(10));
     };
     let mut output = fs::read_to_string(&out_path).unwrap_or_default();
@@ -993,23 +991,21 @@ fn suite_bound() -> std::time::Duration {
     )
 }
 
-/// Kill the group the child leads, best effort.
+/// Stop the child, best effort.
 ///
-/// Best effort is the honest contract, for `exec.rs`'s stated reason: the group
-/// may already have gone, which is the outcome being asked for, and `ESRCH` on
-/// the way out is not a failure anyone can act on.
-#[cfg(unix)]
-fn reap(child: &mut std::process::Child) {
-    if let Some(pid) = rustix::process::Pid::from_raw(i32::try_from(child.id()).unwrap_or_default())
-    {
-        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
-    }
-    // The leader itself, in case the group call could not reach it.
-    let _ = child.kill();
-}
-
-/// Off unix there is no group to signal, so the leader is all there is.
-#[cfg(not(unix))]
+/// THE DIRECT CHILD ONLY, AND NEVER ITS PROCESS GROUP. An earlier version of
+/// this made the child a group leader and signalled the group, reasoning that
+/// bats forks twice and the leader alone leaves the rest orphaned. That is true
+/// and it is not worth the hazard: `kill(-pid)` addresses whatever group carries
+/// that id, so if the group never formed — the call is best effort and its
+/// failure is invisible here — the signal lands on the group this process is
+/// already in, which under a parallel test runner is its SIBLINGS. Measured: the
+/// group-signalling version reddened three `symbols` cases in CI with "the
+/// analyser did not resolve", a suite that shares nothing with this module
+/// except that it was running at the same time.
+///
+/// What an orphan costs by comparison is bounded: a `sleep` under a staged tree
+/// this sweep is about to replace, which exits on its own.
 fn reap(child: &mut std::process::Child) {
     let _ = child.kill();
 }
