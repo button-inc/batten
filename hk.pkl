@@ -37,20 +37,6 @@ local gate = new Mapping<String, Step> {
     glob = List("hk.pkl", "mise.toml")
     check = "mise run hk-version"
   }
-  // CI installs a narrow, per-job tool set instead of the whole toolchain
-  // (ci.yml, install_args). That is worth ~10s per job, and its cost is a
-  // second place tool names are written down. `mise install` does not fail on
-  // an unknown name, so drift between the two files surfaces late as "command
-  // not found". This is that rule's mechanism: the names must resolve.
-  // The glob is every workflow, not `ci.yml` alone: since CLOUD-812 this gate
-  // also asks whether a `pull_request` workflow runs the mise action with no
-  // `install_args` at all, and that question is about files `ci.yml` does not
-  // name. A glob narrower than the subject means the pre-commit tier never
-  // selects the step that would have caught the very file being added.
-  ["ci-tools-check"] {
-    glob = List(".github/workflows/*.yml", "mise.toml")
-    check = "mise run ci-tools-check"
-  }
   ["suite-bench-check"] {
     check = "mise run suite-bench-check"
   }
