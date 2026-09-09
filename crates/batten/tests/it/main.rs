@@ -79,6 +79,7 @@ mod claim_carry;
 mod claim_order;
 mod claim_race;
 mod claim_receipt;
+mod claimed_keys;
 mod cli;
 mod commit;
 mod commit_admission;

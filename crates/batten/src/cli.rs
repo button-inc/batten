@@ -789,6 +789,11 @@ pub enum ClaimCommand {
         /// Answer from the first key of each `Refs:` trailer alone.
         refs_first_only: bool,
     },
+    /// The keys merged pull request bodies CLOSE, as `<key>\t<number>` rows.
+    Merged {
+        /// The most pull requests to read before the answer is truncated.
+        limit: Option<String>,
+    },
     /// Judge a set of payloads and mint the receipt when they are pullable.
     Check {
         /// Claim over the competitor refusals, recording what was overridden.
@@ -2137,6 +2142,9 @@ fn claim_of(matches: &ArgMatches) -> Option<ClaimCommand> {
         }),
         ("bot", _) => Some(ClaimCommand::Bot),
         ("race", _) => Some(ClaimCommand::Race),
+        ("merged", matches) => Some(ClaimCommand::Merged {
+            limit: matches.get_one::<String>("limit").cloned(),
+        }),
         ("keys", matches) => Some(ClaimCommand::Keys {
             branch: matches.get_one::<String>("branch").cloned(),
             title: matches.get_one::<String>("title").cloned(),

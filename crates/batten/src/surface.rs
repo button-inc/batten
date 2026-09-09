@@ -801,6 +801,21 @@ const CONFIG_IN: FlagDecl = FlagDecl {
 ///
 /// Deliberately not global: a global output mode would be silently accepted by
 /// verbs that emit no data — a flag that looks applied and isn't.
+/// The fetch bound `claim merged` refuses at, rather than answering short.
+const MERGED_LIMIT: FlagDecl = FlagDecl {
+    id: "limit",
+    long: Some("limit"),
+    short: None,
+    help: "The most pull requests to read before the answer is truncated (default 5000)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// The explicit sources `claim keys` may be handed for a pull request this
 /// checkout did not author (CLOUD-378, carried by CLOUD-1711).
 ///
@@ -4027,6 +4042,26 @@ pub const SURFACE: &[CommandDecl] = &[
     //
     // Pointer-only: the keys alone, uppercased and sorted, never the prose they
     // were extracted from (rule 4).
+    // CLOUD-1752's forge-window group, and `merged-pr-keys.sh`'s successor. It
+    // asked `claimed-keys` once per pull request body; this asks
+    // `race::claimed_from(.., ClosingOnly)` the same way, so the two sides of
+    // every landed-ness comparison still come out of one authority (CLOUD-338).
+    //
+    // AN EVIDENCE PRODUCER, not a gate: its stdout is DATA its caller consumes,
+    // which is why a could-not-look here exits non-zero where `claim race` — which
+    // answers a question — reports could-not-look on stdout at 0. A producer that
+    // exits clean having produced nothing is indistinguishable from a repository
+    // with no merged pull requests, and that is the exact state the program it
+    // replaces refuses as impossible of a repository with a trunk.
+    CommandDecl {
+        path: "claim merged",
+        id: "claim.merged",
+        about: "The keys merged pull request bodies close, as `<key>\\t<number>` rows",
+        data_channel: true,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[MERGED_LIMIT],
+    },
     CommandDecl {
         path: "claim keys",
         id: "claim.keys",

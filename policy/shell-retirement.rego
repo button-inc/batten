@@ -963,6 +963,45 @@ mentions_retired(path, line, gone) if {
 	contains(line, span)
 }
 
+# AND THE SCRIPT-DIRECTORY BINDING ITSELF, once this delta has taken its last
+# spend (CLOUD-1752).
+#
+# CLOUD-843's arm above closed this for a `local … reg …` DECLARATION. It does
+# not reach the other spelling this tree uses just as often — a standalone
+# `here=$(cd "$(dirname "$0")" && pwd)` whose only consumer was a call to the
+# program being retired. Repoint that call at a verb and `here` is bound and
+# never spent, which `shellcheck` refuses as SC2034; keep the call and the
+# program cannot die. That is the same "no landable spelling in either
+# direction" CLOUD-843 records, one assignment form further on, and it was
+# measured retiring `claimed-keys.sh` out of `mise-tasks/landed-check.sh`.
+#
+# WHY THIS IS NOT A LICENCE: the binding may go only when EVERY line in the BASE
+# that spends the variable is a call to the path this delta deletes. One
+# surviving spend and the arm does not hold, so a caller cannot drop a binding it
+# still uses — which is exactly the conjunct `case_earns_removal`'s second arm
+# relies on, read over a whole file rather than one `@test` block.
+spends_only_the_retired(path, variable, gone) if {
+	spends := {line |
+		some line in delta["base-lines"][path]
+		some spelling in {concat("", ["$", variable]), concat("", ["${", variable, "}"])}
+		contains(line, spelling)
+	}
+	count(spends) > 0
+	every line in spends {
+		some form in {
+			concat("", ["$", variable, "/", basename(gone)]),
+			concat("", ["${", variable, "}/", basename(gone)]),
+		}
+		contains(line, form)
+	}
+}
+
+mentions_retired(path, line, gone) if {
+	variable := assigned_name(line)
+	variable in script_dir_vars(path)
+	spends_only_the_retired(path, variable, gone)
+}
+
 # A REPOINTING: the removed line with the retired path replaced by a successor
 # its own ledger row declares, and nothing else changed (CLOUD-1121).
 #

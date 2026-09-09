@@ -3742,7 +3742,6 @@ fn run_claim_keys(
         (false, false) => race::Source::All,
     };
 
-    let grammar = board_grammar(overrides)?;
     // EXPLICIT MODE IS ALL-OR-NOTHING. Passing any source switches git off
     // entirely, because a remote pull request silently answered from the local
     // branch would be a confident verdict about the wrong repository state.
@@ -3753,11 +3752,22 @@ fn run_claim_keys(
             ask.log.unwrap_or_default().to_owned(),
         )
     } else {
-        let Some(head) = git::current_branch(repo)? else {
+        // BEFORE THE GRAMMAR, and the order is the program's own decision rather
+        // than an accident: outside a git checkout it printed nothing and exited
+        // 0, so the caller behaves exactly as it did before it asked. Resolving
+        // config first would turn that silence into a config error, which is a
+        // different answer to a caller that treats non-zero as "could not look".
+        // ANY failure to name the branch is "no claim", never an error. The
+        // program spelled this `git rev-parse --abbrev-ref HEAD || exit 0`, and
+        // it covers a directory that is not a checkout at all as well as a
+        // checkout with no HEAD. Propagating instead would turn "do not judge"
+        // into a non-zero every caller reads as could-not-look.
+        let Some(head) = git::current_branch(repo).ok().flatten() else {
             return Ok(ExitCode::Success);
         };
         (head, race::authored_log(repo, "origin/main"))
     };
+    let grammar = board_grammar(overrides)?;
 
     // The extra evidence a caller has and this cannot read for itself: the
     // command being guarded, or the pull request body being judged. OPTIONAL — a
@@ -3779,6 +3789,139 @@ fn run_claim_keys(
         source,
     ) {
         writeln!(out, "{key}")?;
+    }
+    Ok(ExitCode::Success)
+}
+
+/// How many merged pull requests `claim merged` reads before refusing.
+///
+/// Carried from `MERGED_PR_KEYS_LIMIT`'s default. A bound rather than an
+/// unbounded walk because the forge's own listing caps out, and the header of the
+/// program this replaces records the measurement: `--limit 400` returned exactly
+/// 400 and hid #170, #337 and #339.
+const MERGED_PR_LIMIT: usize = 5000;
+
+/// Print `<key>\t<number>` for every key a merged pull request body CLOSES.
+///
+/// **Ported off `mise-tasks/merged-pr-keys.sh` (CLOUD-1752).** The extraction is
+/// delegated to [`race::claimed_from`] with [`race::Source::ClosingOnly`], exactly
+/// as the program delegated to `claimed-keys --closing-only`, so both sides of a
+/// landed-ness comparison still come out of one authority (CLOUD-338).
+///
+/// # Every could-not-look, and why each is one
+///
+/// * the remote names no repository this can derive a slug from;
+/// * the forge did not answer, or answered something unparseable;
+/// * the walk hit its page budget — a reading AT the limit is indistinguishable
+///   from one truncated by it, and **a truncated evidence file makes landed work
+///   read as live**;
+/// * the forge reports NO merged pull requests at all, which cannot be true of a
+///   repository with a trunk. That is a reachability problem, not an empty
+///   answer, and reading it as one strands every landed row.
+///
+/// Each exits non-zero. See this verb's `CommandDecl` for why a producer differs
+/// from `claim race` here.
+///
+/// Output is keys and numbers, sorted and de-duplicated so two runs over one
+/// forge are byte-identical (§6) — never a title or a body, which is where the
+/// keyword lives and which rule 4 keeps out of a report.
+fn run_claim_merged(
+    repo: &Path,
+    limit: Option<&str>,
+    overrides: &resolve::Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let cannot_look = |err: &mut dyn Write, why: &str| -> Result<ExitCode> {
+        writeln!(err, "batten: claim merged: {why}")?;
+        Ok(ExitCode::Internal)
+    };
+    let limit = match limit {
+        Some(raw) => match raw.trim().parse::<usize>() {
+            Ok(parsed) if parsed > 0 => parsed,
+            _ => {
+                writeln!(
+                    err,
+                    "batten: claim merged: --limit must be a positive number"
+                )?;
+                return Ok(ExitCode::Usage);
+            }
+        },
+        None => MERGED_PR_LIMIT,
+    };
+
+    let remotes = git::remote_fact(repo)?.remotes;
+    let Some(slug) = remotes.get("origin").and_then(|url| race::slug_of(url)) else {
+        return cannot_look(err, "no origin remote this can derive a repository from");
+    };
+    let git_dir = git::git_dir(repo)?;
+    // ONE PAGE OF 100 PER LAP, so the budget is stated in pull requests rather
+    // than in pages — the same unit `MERGED_PR_KEYS_LIMIT` was written in.
+    let per_page = 100_usize;
+    let pages = u32::try_from(limit.div_ceil(per_page)).unwrap_or(u32::MAX);
+    let rows = match forge::window(
+        &git_dir,
+        &format!("repos/{slug}/pulls"),
+        &[("state", "closed"), ("per_page", "100")],
+        forge::Shape::Bare,
+        pages,
+    ) {
+        forge::Window::Whole(rows) => rows,
+        forge::Window::Truncated { read, .. } => {
+            return cannot_look(
+                err,
+                &format!(
+                    "the walk read {read} pull request(s) and did not reach the end — the answer \
+                     is truncated, and a truncated evidence file makes landed work read as live. \
+                     Raise --limit above {limit} and run again"
+                ),
+            );
+        }
+        forge::Window::CouldNotLook { endpoint, status } => {
+            return cannot_look(
+                err,
+                &format!(
+                    "the forge did not answer for {endpoint} (status {})",
+                    status.map_or_else(|| String::from("none"), |code| code.to_string())
+                ),
+            );
+        }
+    };
+
+    // MERGED, not merely closed. The forge's listing has no merged state, so the
+    // filter is `merged_at`; a closed-unmerged pull request closes nothing and
+    // counting it would report abandoned work as landed.
+    let merged: Vec<&serde_json::Value> = rows
+        .iter()
+        .filter(|row| row.get("merged_at").is_some_and(|at| !at.is_null()))
+        .collect();
+    if merged.is_empty() {
+        return cannot_look(
+            err,
+            "the forge reports no merged pull requests at all, which cannot be true of a \
+             repository with a trunk — a reachability problem, not an empty answer",
+        );
+    }
+
+    let grammar = board_grammar(overrides)?;
+    let mut lines: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for row in merged {
+        let Some(number) = row.get("number").and_then(serde_json::Value::as_u64) else {
+            return cannot_look(
+                err,
+                "a pull request in the reading carries no usable number",
+            );
+        };
+        let body = row
+            .get("body")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        for key in race::claimed_from("", "", "", body, &grammar, race::Source::ClosingOnly) {
+            lines.insert(format!("{key}\t{number}"));
+        }
+    }
+    for line in lines {
+        writeln!(out, "{line}")?;
     }
     Ok(ExitCode::Success)
 }
@@ -4098,6 +4241,9 @@ fn run_claim(
             out,
             err,
         ),
+        ClaimCommand::Merged { limit } => {
+            run_claim_merged(Path::new("."), limit.as_deref(), overrides, out, err)
+        }
         ClaimCommand::Bot => run_claim_bot(Path::new("."), mode, overrides, out, err),
         ClaimCommand::Race => run_claim_race(Path::new("."), mode, overrides, out, err),
         ClaimCommand::Carry { json } => run_claim_carry(Path::new("."), mode, json, out, err),

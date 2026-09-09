@@ -197,7 +197,7 @@ if [[ -n "${DRAIN_MERGED_PRS:-}" ]]; then
 	drain_evidence=(--merged-prs "$DRAIN_MERGED_PRS")
 else
 	gathered="${TMPDIR:-/tmp}/merged-pr-keys.$$"
-	if ! "$here/merged-pr-keys.sh" >"$gathered" 2>/dev/null; then
+	if ! batten claim merged >"$gathered" 2>/dev/null; then
 		rm -f "$gathered"
 		cannot_look "no DRAIN_MERGED_PRS was set and \`merged-pr-keys\` could not gather the evidence itself. Run it directly to see why, or set DRAIN_MERGED_PRS to a prepared file."
 	fi

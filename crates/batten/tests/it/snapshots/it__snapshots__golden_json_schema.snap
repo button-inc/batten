@@ -645,6 +645,24 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "claim merged",
+          "id": "claim.merged",
+          "about": "The keys merged pull request bodies close, as `<key>\\t<number>` rows",
+          "effect": "read",
+          "data_channel": true,
+          "flags": [
+            {
+              "name": "limit",
+              "short": null,
+              "long": "limit",
+              "takes_value": true,
+              "positional": false,
+              "help": "The most pull requests to read before the answer is truncated (default 5000)"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "claim race",
           "id": "claim.race",
           "about": "Refuse a claim a different open pull request already carries, judged by head SHA",
@@ -3168,6 +3186,10 @@ expression: stdout_of(&output)
     {
       "id": "claim.keys",
       "path": "claim keys"
+    },
+    {
+      "id": "claim.merged",
+      "path": "claim merged"
     },
     {
       "id": "claim.race",
