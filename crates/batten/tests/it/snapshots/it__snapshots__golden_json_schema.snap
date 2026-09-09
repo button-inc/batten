@@ -573,7 +573,7 @@ expression: stdout_of(&output)
               "long": "issue",
               "takes_value": true,
               "positional": false,
-              "help": "Resolve the payload from the capture store by this issue key instead of reading stdin"
+              "help": "Read the issue payload from the capture store by key, where `mcp call ... get_issue` put it"
             },
             {
               "name": "json",
@@ -2291,7 +2291,7 @@ expression: stdout_of(&output)
               "long": "issue",
               "takes_value": true,
               "positional": false,
-              "help": "Resolve the payload from the capture store by this issue key instead of reading stdin"
+              "help": "Read the issue payload from the capture store by key, where `mcp call ... get_issue` put it"
             },
             {
               "name": "json",
