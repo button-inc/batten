@@ -72,7 +72,7 @@
 // changed: "unreadable wiring is refused rather than reporting every event unwired" policy/rules-drift.rego conditioned on a wiring claim existing: an unreadable `.claude/settings.json` is `drift read unread` when some sentence claims a wiring, and silent when none does
 // changed: "unreadable schemas are refused rather than reporting every key unemittable" policy/rules-drift.rego same conditioning, plus a READ-BUT-EMPTY arm the predecessor did not need: this build of regorus has no `walk`, so the recursive descent became one fixed path, and a schema whose shape moved parses fine and yields nothing — invisible to `input.tree.missing`, so `schema_vacuous` covers it
 // changed: "unreadable policy source is refused rather than reporting every name unqueried" policy/rules-drift.rego same conditioning, on a named fixed rule existing
-// changed: "the gate is wired into the hk gate, so a drift reddens a commit" policy/rules-drift.rego the assertion moves from the suite to the wiring itself: hk's `rules-drift` step now runs `mise run rules-drift`, which is an inline `batten check --rule rules-drift`, so the step name and the rule id are one object rather than two that a grep held together
+// changed: "the gate is wired into the hk gate, so a drift reddens a commit" policy/rules-drift.rego the assertion moves from the suite to the wiring itself: hk's `rules-drift` step now runs `mise run rules-drift`, which is an inline `batten check --rule 'rule watch other'`, so the step name and the rule id are one object rather than two that a grep held together
 //
 // ONE PREDICATE NARROWED, and it is recorded here rather than absorbed into the
 // carried arm above it. The predecessor took `head -n1` of grep order when a

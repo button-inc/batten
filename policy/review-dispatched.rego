@@ -44,7 +44,7 @@ package batten.review_dispatched
 
 import rego.v1
 
-rules contains "review-dispatched"
+rules contains "prompt run never"
 
 # The reviews this repository declares it will not land without.
 #
@@ -107,7 +107,7 @@ undispatched contains id if {
 }
 
 violation contains {
-	"rule": "review-dispatched",
+	"rule": "prompt run never",
 	"verdict": "prompt run never",
 	"subjects": [{"artifact": id}],
 } if {

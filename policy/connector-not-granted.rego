@@ -40,7 +40,7 @@ package batten.connector_not_granted
 
 import rego.v1
 
-rules contains "connector-not-granted"
+rules contains "connector grant loose"
 
 # The settings file's permission allow list, or nothing.
 #
@@ -72,7 +72,7 @@ granted contains entry if {
 # entries themselves — a finding that listed them would be restating the grant it
 # refuses, and rule 4's subject vocabulary has a `count` for exactly this.
 violation contains {
-	"rule": "connector-not-granted",
+	"rule": "connector grant loose",
 	"verdict": "connector grant loose",
 	"subjects": [{"path": ".claude/settings.json"}, {"count": count(granted)}],
 } if {

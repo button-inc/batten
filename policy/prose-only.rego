@@ -65,7 +65,7 @@ package batten.prose_only
 
 import rego.v1
 
-rules contains "prose-only"
+rules contains "diff ship early"
 
 # Every path this branch touched, whichever way it moved.
 changed := array.concat(
@@ -99,7 +99,7 @@ touches_a_test if {
 # the second it fires on every change, without the third it blocks the doc
 # rewrite that ships with its own test.
 violation contains {
-	"rule": "prose-only",
+	"rule": "diff ship early",
 	"verdict": "diff ship early",
 	"subjects": [{"count": count(changed)}],
 } if {

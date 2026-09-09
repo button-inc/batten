@@ -85,7 +85,7 @@ package batten.mise_pin_agreement
 
 import rego.v1
 
-rules contains "mise-pin-agreement"
+rules contains "pin declare wrong"
 
 # ---------------------------------------------------------------------------
 # The two documents, bound through rules so every predicate below is UNDEFINED
@@ -134,7 +134,7 @@ reference contains {"server": server, "ref": arg, "tool": tool, "want": want} if
 # ---------------------------------------------------------------------------
 
 violation contains {
-	"rule": "mise-pin-agreement",
+	"rule": "pin declare wrong",
 	"verdict": "pin declare other",
 	"subjects": [{"path": ".mcp.json"}, {"artifact": entry.server}, {"artifact": entry.ref}],
 } if {
@@ -149,7 +149,7 @@ violation contains {
 # ---------------------------------------------------------------------------
 
 violation contains {
-	"rule": "mise-pin-agreement",
+	"rule": "pin declare wrong",
 	"verdict": "pin declare missing",
 	"subjects": [{"path": ".mcp.json"}, {"artifact": entry.server}, {"artifact": entry.ref}],
 } if {
@@ -170,7 +170,7 @@ violation contains {
 # ---------------------------------------------------------------------------
 
 violation contains {
-	"rule": "mise-pin-agreement",
+	"rule": "pin declare wrong",
 	"verdict": "call run loose",
 	"subjects": [{"path": ".mcp.json"}, {"artifact": server}],
 } if {
@@ -212,7 +212,7 @@ terminator(args) := count(args) if {
 # ---------------------------------------------------------------------------
 
 violation contains {
-	"rule": "mise-pin-agreement",
+	"rule": "pin declare wrong",
 	"verdict": "pin read unread",
 	"subjects": [{"path": path}],
 } if {

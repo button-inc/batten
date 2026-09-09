@@ -41,7 +41,7 @@ package batten.ancestry
 
 import rego.v1
 
-rules contains "ancestry-decides-nothing"
+rules contains "patch judge wrong"
 
 # The reachability-ANSWER surface, spelled plainly. A Rego string is not Rust
 # source, so this file is not its own corpus and needs none of the scan's
@@ -57,7 +57,7 @@ reachability_answers := {
 }
 
 violation contains {
-	"rule": "ancestry-decides-nothing",
+	"rule": "patch judge wrong",
 	# The site first, then the token that gave it away: the fix is at the line,
 	# and the token is what a reader searches for once there.
 	"verdict": "patch judge wrong",

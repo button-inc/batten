@@ -223,7 +223,7 @@ fn a_call_carrying_no_write_target_is_silent() {
 /// passing its own suite.
 ///
 /// So this drives one corpus through both surfaces and requires the same answer.
-/// `batten check --rule shell-retirement` is the tree authority; the advisory is
+/// `batten check --rule 'shell retire partial'` is the tree authority; the advisory is
 /// the mediated one. The corpus deliberately includes the paths where the two
 /// predicates are known to differ for a REASON — a `mise-tasks/` file with no
 /// shebang is governed for deletion and not for edit — so the assertion is over

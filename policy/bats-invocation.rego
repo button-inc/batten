@@ -61,7 +61,7 @@ package batten.bats_invocation
 
 import rego.v1
 
-rules contains "bats-invocation"
+rules contains "bats run wrong"
 
 # --- what is being judged, and whether there is anything to judge -------------
 
@@ -135,7 +135,7 @@ cost_markers := {
 # --- A: the run is serial, or is about to be ---------------------------------
 
 violation contains {
-	"rule": "bats-invocation",
+	"rule": "bats run wrong",
 	"verdict": "suite run late",
 	"subjects": [{"path": "mise.toml"}, {"artifact": marker}],
 } if {
@@ -145,7 +145,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "bats-invocation",
+	"rule": "bats run wrong",
 	"verdict": "suite run late",
 	"subjects": [{"path": "mise.toml"}, {"artifact": spelling}],
 } if {
@@ -166,7 +166,7 @@ nproc_mentions := [line |
 ]
 
 violation contains {
-	"rule": "bats-invocation",
+	"rule": "bats run wrong",
 	"verdict": "suite run late",
 	"subjects": [{"path": "mise.toml"}, {"count": count(nproc_mentions)}],
 } if {
@@ -178,7 +178,7 @@ violation contains {
 # defaults to probing for GNU parallel, which is not in the mise registry and is
 # pinned nowhere here.
 violation contains {
-	"rule": "bats-invocation",
+	"rule": "bats run wrong",
 	"verdict": "suite run late",
 	"subjects": [{"path": "mise.toml"}, {"artifact": "aqua:shenwei356/rush"}],
 } if {
@@ -212,7 +212,7 @@ ci_install_args := [args |
 ]
 
 violation contains {
-	"rule": "bats-invocation",
+	"rule": "bats run wrong",
 	"verdict": "suite run late",
 	"subjects": [
 		{"path": ".github/workflows/ci.yml"},
@@ -229,7 +229,7 @@ violation contains {
 # --- B: the run proves less than it appears to -------------------------------
 
 violation contains {
-	"rule": "bats-invocation",
+	"rule": "bats run wrong",
 	"verdict": "suite count missing",
 	"subjects": [{"path": "mise.toml"}, {"artifact": marker}],
 } if {
@@ -239,7 +239,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "bats-invocation",
+	"rule": "bats run wrong",
 	"verdict": "suite count missing",
 	"subjects": [{"path": "mise.toml"}, {"artifact": spelling}],
 } if {
@@ -251,7 +251,7 @@ violation contains {
 # --- C: nothing compares what the run cost against a record -------------------
 
 violation contains {
-	"rule": "bats-invocation",
+	"rule": "bats run wrong",
 	"verdict": "suite measure missing",
 	"subjects": [{"path": "mise.toml"}, {"artifact": marker}],
 } if {
@@ -279,7 +279,7 @@ measured_date(line) := date if {
 }
 
 violation contains {
-	"rule": "bats-invocation",
+	"rule": "bats run wrong",
 	"verdict": "suite measure missing",
 	"subjects": [
 		{"path": "mise.toml"},
@@ -302,7 +302,7 @@ violation contains {
 # CLOUD-352's whole scope; demanding a fresh date for one would be asking for a
 # number nobody measured.
 violation contains {
-	"rule": "bats-invocation",
+	"rule": "bats run wrong",
 	"verdict": "suite measure missing",
 	"subjects": [{"path": ".github/workflows/ci.yml", "line": index + 1}],
 } if {
@@ -321,7 +321,7 @@ violation contains {
 # in order. (CLOUD-1049: the engine half does not populate `missing` for a parse
 # failure yet, so this clause is right and the channel is not yet filled.)
 violation contains {
-	"rule": "bats-invocation",
+	"rule": "bats run wrong",
 	"verdict": "bats parse unread",
 	"subjects": [{"path": path}],
 } if {

@@ -49,7 +49,7 @@ package batten.command_task_defined
 
 import rego.v1
 
-rules contains "command-task-defined"
+rules contains "task bind undefined"
 
 # Tasks the manifest declares under `[tasks]`.
 defined contains name if {
@@ -118,7 +118,7 @@ mise_task(command) := task if {
 }
 
 violation contains {
-	"rule": "command-task-defined",
+	"rule": "task bind undefined",
 	# The row first, then the task it names: the fix is on the row.
 	"verdict": "task name undefined",
 	"subjects": [{"artifact": row.id}, {"artifact": row.task}],
@@ -141,7 +141,7 @@ violation contains {
 # judged — which must not be spelled the same way as a config whose every task
 # resolves.
 violation contains {
-	"rule": "command-task-defined",
+	"rule": "task bind undefined",
 	"verdict": "config parse broken",
 	"subjects": [{"path": path}],
 } if {

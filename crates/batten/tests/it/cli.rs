@@ -12174,8 +12174,8 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
     // this config outright — it carries a spawning kind — but `--rule` selects
     // the row BEFORE that refusal is reached, and `no-denied-identity-prescribed`
     // is not one of the three `kind = "command"` rows. `mise.toml` already relies
-    // on this against these same committed bytes: `check --rule prose-only`,
-    // `--rule filed-here`, `--rule memory-graph`.
+    // on this against these same committed bytes: `check --rule 'diff ship early'`,
+    // `--rule 'issue file other'`, `--rule 'memory point missing'`.
     //
     // This comment used to say `enforce`, "and every sibling test over the
     // committed bytes takes the same verb for the same reason". True of an

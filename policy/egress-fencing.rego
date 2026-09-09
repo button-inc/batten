@@ -66,7 +66,7 @@ package batten.egress_fencing
 
 import rego.v1
 
-rules contains "egress-fencing"
+rules contains "provision guard missing"
 
 # ---------------------------------------------------------------------------
 # The authority, bound through a rule so every predicate below is UNDEFINED
@@ -87,7 +87,7 @@ spellings := {"NO_PROXY", "no_proxy"}
 # ---------------------------------------------------------------------------
 
 violation contains {
-	"rule": "egress-fencing",
+	"rule": "provision guard missing",
 	"verdict": "task declare dropped",
 	"subjects": [{"path": "mise.toml"}, {"artifact": key}],
 } if {
@@ -106,7 +106,7 @@ violation contains {
 # ---------------------------------------------------------------------------
 
 violation contains {
-	"rule": "egress-fencing",
+	"rule": "provision guard missing",
 	"verdict": "task declare partial",
 	"subjects": [{"path": "mise.toml"}, {"artifact": key}],
 } if {
@@ -123,7 +123,7 @@ violation contains {
 # ---------------------------------------------------------------------------
 
 violation contains {
-	"rule": "egress-fencing",
+	"rule": "provision guard missing",
 	"verdict": "task read unread",
 	"subjects": [{"path": path}],
 } if {
@@ -169,7 +169,7 @@ fences_resolver(key) if {
 
 # C: no provision row declares the spelling at all.
 violation contains {
-	"rule": "egress-fencing",
+	"rule": "provision guard missing",
 	"verdict": "provision declare dropped",
 	"subjects": [{"path": "batten.toml"}, {"artifact": key}],
 } if {
@@ -180,7 +180,7 @@ violation contains {
 
 # D: a row declares it and no longer prepends the host it exists for.
 violation contains {
-	"rule": "egress-fencing",
+	"rule": "provision guard missing",
 	"verdict": "provision declare partial",
 	"subjects": [{"path": "batten.toml"}, {"artifact": key}],
 } if {
@@ -204,7 +204,7 @@ violation contains {
 # spelling is what went missing; here nothing is left to name one against, and
 # inventing one would point a reader at a key the file never had.
 violation contains {
-	"rule": "egress-fencing",
+	"rule": "provision guard missing",
 	"verdict": "provision declare dropped",
 	"subjects": [{"path": "batten.toml"}],
 } if {
@@ -216,7 +216,7 @@ violation contains {
 
 # Could not look, for the second surface.
 violation contains {
-	"rule": "egress-fencing",
+	"rule": "provision guard missing",
 	"verdict": "provision read unread",
 	"subjects": [{"path": path}],
 } if {

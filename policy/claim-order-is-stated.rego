@@ -48,7 +48,7 @@ package batten.claim_order_is_stated
 
 import rego.v1
 
-rules contains "claim-order-is-stated"
+rules contains "claim declare dropped"
 
 # The always-loaded file. `CLAUDE.md` is a symlink to this; the TRACKED path is
 # the one judged, because the symlink is not what the budget counts.
@@ -100,7 +100,7 @@ rules_carry_both_directions if {
 }
 
 violation contains {
-	"rule": "claim-order-is-stated",
+	"rule": "claim declare dropped",
 	"verdict": "claim declare dropped",
 	"subjects": [{"path": index_path}],
 } if {
@@ -110,7 +110,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "claim-order-is-stated",
+	"rule": "claim declare dropped",
 	"verdict": "claim declare dropped",
 	"subjects": [{"path": index_path}],
 } if {
@@ -120,7 +120,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "claim-order-is-stated",
+	"rule": "claim declare dropped",
 	"verdict": "claim declare dropped",
 	"subjects": [{"path": rules_path}],
 } if {
@@ -132,7 +132,7 @@ violation contains {
 # reported rather than left absent, or this gate comes back green over a file it
 # never opened.
 violation contains {
-	"rule": "claim-order-is-stated",
+	"rule": "claim declare dropped",
 	"verdict": "claim declare dropped",
 	"subjects": [{"path": path}],
 } if {

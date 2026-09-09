@@ -70,7 +70,7 @@ package batten.hook_skip_local
 
 import rego.v1
 
-rules contains "hook-skip-local"
+rules contains "hook skip unseen"
 
 # The declared carve, which is CI's and is judged by `ci-suite-lane` instead.
 #
@@ -86,7 +86,7 @@ ci_lane if {
 }
 
 violation contains {
-	"rule": "hook-skip-local",
+	"rule": "hook skip unseen",
 	"verdict": "hook skip unseen",
 	"subjects": [{"count": 1}],
 } if {

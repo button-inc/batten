@@ -51,14 +51,14 @@ import rego.v1
 # A gate outside $MUTANT_GATES with no row here fails `mise run mutant-census`.
 #MUTANT-EXEMPT CLOUD-845|no compiled-binary tier names this module at all, so there is no suite a declared mutation could redden. That is not the `tests/$gate.bats` hole CLOUD-1267 closed — a suite may now be DECLARED — it is that none exists to declare, and what is owed is the tier
 
-rules contains "opa-tracks-regorus-compliance"
+rules contains "version check stale"
 
 # A file this build could not parse lands in `input.tree.missing` rather than in
 # `documents` (CLOUD-845). Without this clause an unparseable manifest is simply
 # absent from every rule below and the module reports GREEN over a file it never
 # read — a vacuous pass, indistinguishable from a real one.
 violation contains {
-	"rule": "opa-tracks-regorus-compliance",
+	"rule": "version check stale",
 	"verdict": "source parse broken",
 	"subjects": [{"path": path}],
 } if {
@@ -68,7 +68,7 @@ violation contains {
 
 # The checker and the evaluator naming different OPA release lines.
 violation contains {
-	"rule": "opa-tracks-regorus-compliance",
+	"rule": "version check stale",
 	"verdict": "version pin ahead",
 	"subjects": [{"artifact": pin}, {"artifact": declared}],
 } if {
@@ -81,7 +81,7 @@ violation contains {
 # this commit resolves. The number may still be right; nothing here has checked,
 # and that is the point.
 violation contains {
-	"rule": "opa-tracks-regorus-compliance",
+	"rule": "version check stale",
 	"verdict": "claim state stale",
 	"subjects": [{"artifact": recorded_for}, {"artifact": regorus_pin}],
 } if {
@@ -144,7 +144,7 @@ in_this_workspace if input.tree.documents["Cargo.toml"]
 # an absent document is already reported above, and reporting it twice would
 # name the caller's parse failure as four separate findings.
 violation contains {
-	"rule": "opa-tracks-regorus-compliance",
+	"rule": "version check stale",
 	"verdict": "claim declare absent",
 	"subjects": [{"artifact": "opa"}],
 } if {
@@ -154,7 +154,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "opa-tracks-regorus-compliance",
+	"rule": "version check stale",
 	"verdict": "claim declare absent",
 	"subjects": [{"artifact": "REGORUS_OPA_COMPLIANCE"}],
 } if {
@@ -164,7 +164,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "opa-tracks-regorus-compliance",
+	"rule": "version check stale",
 	"verdict": "claim declare absent",
 	"subjects": [{"artifact": "REGORUS_OPA_COMPLIANCE_FOR"}],
 } if {
@@ -174,7 +174,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "opa-tracks-regorus-compliance",
+	"rule": "version check stale",
 	"verdict": "claim declare absent",
 	"subjects": [{"artifact": "regorus"}],
 } if {
@@ -187,7 +187,7 @@ violation contains {
 # undefined propagates into the comparisons as silence — the same vacuous pass
 # one level in. `"1"` against a declared `1.2.0` was measured passing.
 violation contains {
-	"rule": "opa-tracks-regorus-compliance",
+	"rule": "version check stale",
 	"verdict": "version read unread",
 	"subjects": [{"artifact": entry.key}, {"artifact": entry.owner}],
 } if {

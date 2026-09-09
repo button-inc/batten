@@ -34,7 +34,7 @@ package batten.forge_verdict
 
 import rego.v1
 
-rules contains "forge-verdict-required"
+rules contains "forge check red"
 
 # The check that carries this repository's verdict.
 #
@@ -70,7 +70,7 @@ passed(checks) if {
 }
 
 violation contains {
-	"rule": "forge-verdict-required",
+	"rule": "forge check red",
 	"verdict": "forge check red",
 	"subjects": [{"count": count(refused)}],
 } if {

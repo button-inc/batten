@@ -51,7 +51,7 @@ package batten.ci_suite_lane
 
 import rego.v1
 
-rules contains "ci-suite-lane"
+rules contains "job select missing"
 
 # --- what is being judged, and whether there is anything to judge -------------
 
@@ -110,7 +110,7 @@ runs_task(name) if {
 # --- the refusal ---------------------------------------------------------------
 
 violation contains {
-	"rule": "ci-suite-lane",
+	"rule": "job select missing",
 	"verdict": "gate skip unseen",
 	"subjects": [{"path": workflow_path}, {"artifact": name}],
 } if {
@@ -126,7 +126,7 @@ violation contains {
 # boundary tried and failed. Spelling those the same way is how a gate reports
 # green over a file it never read.
 violation contains {
-	"rule": "ci-suite-lane",
+	"rule": "job select missing",
 	"verdict": "workflow read unread",
 	"subjects": [{"path": path}],
 } if {

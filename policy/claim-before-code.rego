@@ -57,7 +57,7 @@ package batten.claim_before_code
 
 import rego.v1
 
-rules contains "claim-before-code"
+rules contains "claim mint absent"
 
 # Every declared id whose captured payload carries no project.
 #
@@ -79,7 +79,7 @@ refused contains id if {
 }
 
 violation contains {
-	"rule": "claim-before-code",
+	"rule": "claim mint absent",
 	"verdict": "claim mint absent",
 	"subjects": [{"count": count(refused)}],
 } if {

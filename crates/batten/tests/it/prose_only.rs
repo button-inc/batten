@@ -383,7 +383,7 @@ fn an_unresolvable_base_says_nothing_rather_than_refusing() {
 /// gate could not fire over it.
 ///
 /// Measured 2026-09-04: a 121→71-comment trim of a policy module, no other
-/// change in the branch, `batten check --rule prose-only` exit 0, a full
+/// change in the branch, `batten check --rule 'diff ship early'` exit 0, a full
 /// required matrix spent. That is exactly the instance CLOUD-827 exists to
 /// price, and it walked past because the classifier had never been told what a
 /// `.rego` comment looks like.

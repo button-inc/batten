@@ -52,7 +52,7 @@ package batten.memories
 
 import rego.v1
 
-rules contains "memory-graph"
+rules contains "memory point missing"
 
 # --- the graph, as the tree holds it ------------------------------------------
 
@@ -91,7 +91,7 @@ name_of(path) := trim_suffix(trim_prefix(path, memories_dir), ".md")
 # minimal repository is unshippable. A repository with no memory directory is not
 # a repository with a broken memory graph.
 violation contains {
-	"rule": "memory-graph",
+	"rule": "memory point missing",
 	"verdict": "memory resolve missing",
 	"subjects": [{"path": root_memory}],
 } if {
@@ -105,7 +105,7 @@ violation contains {
 # because the tooling strips one extension and the reference matcher stops at the
 # first foreign character.
 violation contains {
-	"rule": "memory-graph",
+	"rule": "memory point missing",
 	"verdict": "memory name duplicate",
 	"subjects": [{"path": path}],
 } if {
@@ -114,7 +114,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "memory-graph",
+	"rule": "memory point missing",
 	"verdict": "memory name unseen",
 	"subjects": [{"path": path}],
 } if {
@@ -140,7 +140,7 @@ referrer(path) if {
 }
 
 violation contains {
-	"rule": "memory-graph",
+	"rule": "memory point missing",
 	"verdict": "memory point stale",
 	"subjects": [{"path": path, "line": number}],
 } if {
@@ -161,7 +161,7 @@ violation contains {
 # here it is the exact failure the predecessor could not have: a shell `grep` over
 # an unreadable file is loud, and an absent map key is silent.
 violation contains {
-	"rule": "memory-graph",
+	"rule": "memory point missing",
 	"verdict": "memory read unread",
 	"subjects": [{"path": path}],
 } if {

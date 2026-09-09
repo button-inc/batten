@@ -42,7 +42,7 @@ package batten.worktree
 
 import rego.v1
 
-rules contains "worktree-registration-live"
+rules contains "registry read missing"
 
 # THE FINDING. A registration whose directory is gone, and which nobody locked.
 #
@@ -53,7 +53,7 @@ rules contains "worktree-registration-live"
 # silent when its input changes shape is the recoverable failure; one that starts
 # denying everything is how a guard gets switched off.
 violation contains {
-	"rule": "worktree-registration-live",
+	"rule": "registry read missing",
 	"verdict": "registry name absent",
 	# `artifact` rather than `path`, because the registration's id is not a
 	# repository path and the fact deliberately carries no path at all: a linked
@@ -92,7 +92,7 @@ violation contains {
 # carries the array — EMPTY when there is nothing to report, which is defined, so
 # `not` is false and a repository with only its main checkout stays clean.
 violation contains {
-	"rule": "worktree-registration-live",
+	"rule": "registry read missing",
 	"verdict": "registry list unread",
 	"subjects": [{"count": 0}],
 } if {

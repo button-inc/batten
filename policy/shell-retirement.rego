@@ -239,7 +239,7 @@ violation contains {
 # `shell add refused` offered two routes, and the second -- "declare that it
 # stays bash" -- DID NOT CLEAR THE VERDICT THAT OFFERED IT. Measured 2026-08-28:
 # prepending `# stays-bash: <issue> <why>` to `tests/wiring-reclaim.bats` and
-# re-running `batten check --rule shell-retirement` left the finding byte-
+# re-running `batten check --rule 'shell retire partial'` left the finding byte-
 # identical.
 #
 # The reason was structural rather than a typo. `admits_with = "# stays-bash:"`
@@ -704,7 +704,7 @@ assigned_value(line) := value if {
 # spelling).
 #
 # MEASURED, and it is a non-termination rather than a slowdown: `batten check
-# --rule shell-retirement` spun for three hours on a delta editing
+# --rule 'shell retire partial'` spun for three hours on a delta editing
 # `tests/land-lock.bats` (~2200 lines) and `mise-tasks/land-lock.sh` (~1800),
 # the two largest governed files in the tree. Bisected — `origin/main` returns in
 # under a second, and reverting both edited files returns the same tree to under

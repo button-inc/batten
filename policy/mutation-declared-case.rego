@@ -53,7 +53,7 @@ package batten.mutation_declared_case
 
 import rego.v1
 
-rules contains "mutation-declared-case"
+rules contains "marker name undefined"
 
 # The declared documents, or nothing. ABSENT IS NOT EMPTY: a run acquiring no
 # lines has no key here, Rego reads that as *does not hold*, and this module is
@@ -128,7 +128,7 @@ resolves(entry) if {
 # what a reader opens to fix it; the suite follows as the place the case was
 # looked for.
 violation contains {
-	"rule": "mutation-declared-case",
+	"rule": "marker name undefined",
 	"verdict": "marker name undefined",
 	"subjects": [{"path": entry.path}, {"path": entry.suite}],
 } if {

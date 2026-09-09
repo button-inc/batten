@@ -38,7 +38,7 @@ package batten.denials_outlive_the_turn
 
 import rego.v1
 
-rules contains "denials-outlive-the-turn"
+rules contains "turn deny held"
 
 # The turn ended with refusals recorded and the agent stopping again.
 #
@@ -47,7 +47,7 @@ rules contains "denials-outlive-the-turn"
 # with refusals still in the session's record is the shape `finding-sink-check`
 # exists to catch — a finding produced and then left behind.
 violation contains {
-	"rule": "denials-outlive-the-turn",
+	"rule": "turn deny held",
 	"verdict": "turn deny held",
 	"subjects": [{"count": input.facts.extracted.denials}],
 } if {

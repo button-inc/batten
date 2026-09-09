@@ -85,7 +85,7 @@ package batten.suite_subject_retirable
 
 import rego.v1
 
-rules contains "suite-subject-retirable"
+rules contains "suite retire unclear"
 
 # --- what the campaign can actually delete ------------------------------------
 
@@ -212,7 +212,7 @@ exempt := {
 # --- A: an immortal subject nobody declared ------------------------------------
 
 violation contains {
-	"rule": "suite-subject-retirable",
+	"rule": "suite retire unclear",
 	"verdict": "suite retire never",
 	"subjects": [{"path": path}, {"path": subject}],
 } if {
@@ -230,7 +230,7 @@ violation contains {
 # OUT of this gate — and a suite with no subject is not retirable either, because
 # `SubjectFacts::died` would have nothing to decide over.
 violation contains {
-	"rule": "suite-subject-retirable",
+	"rule": "suite retire unclear",
 	"verdict": "suite declare missing",
 	"subjects": [{"path": path}],
 } if {
@@ -260,7 +260,7 @@ violation contains {
 # present, which is decidable everywhere. The cost is stated rather than hidden: a
 # retired suite leaves a spent row until someone reads the table.
 violation contains {
-	"rule": "suite-subject-retirable",
+	"rule": "suite retire unclear",
 	"verdict": "suite admit stale",
 	"subjects": [{"path": path}],
 } if {
@@ -277,7 +277,7 @@ violation contains {
 # module iterating only `lines` reports green over a file it never opened, which
 # is the class `rules/policy-modules.md` records for this channel.
 violation contains {
-	"rule": "suite-subject-retirable",
+	"rule": "suite retire unclear",
 	"verdict": "suite parse unread",
 	"subjects": [{"path": path}],
 } if {

@@ -34,7 +34,7 @@ package batten.release_tag_shape
 
 import rego.v1
 
-rules contains "release-tag-shape"
+rules contains "tag mint wrong"
 
 # Every tag the declared glob matched.
 #
@@ -47,7 +47,7 @@ shipped contains tag if {
 }
 
 violation contains {
-	"rule": "release-tag-shape",
+	"rule": "tag mint wrong",
 	"verdict": "tag mint wrong",
 	"subjects": [{"count": count(malformed)}],
 } if {

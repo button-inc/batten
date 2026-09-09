@@ -35,7 +35,7 @@ package batten.weakens_declared
 
 import rego.v1
 
-rules contains "weakens-declared"
+rules contains "commit declare empty"
 
 # Every `Weakens:` trailer on every commit in every declared range.
 #
@@ -51,7 +51,7 @@ weakens contains value if {
 }
 
 violation contains {
-	"rule": "weakens-declared",
+	"rule": "commit declare empty",
 	"verdict": "commit declare empty",
 	"subjects": [{"count": count(empty)}],
 } if {

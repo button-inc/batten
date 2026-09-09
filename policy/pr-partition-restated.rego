@@ -58,7 +58,7 @@ package batten.pr_partition_restated
 
 import rego.v1
 
-rules contains "pr-partition-restated"
+rules contains "review state other"
 
 # A line of declared prose asserting the partition AGENTS.md refuses.
 #
@@ -67,7 +67,7 @@ rules contains "pr-partition-restated"
 # and would itself be a tracked copy of the phrase the moment anyone pasted the
 # report into the tree.
 violation contains {
-	"rule": "pr-partition-restated",
+	"rule": "review state other",
 	"verdict": "prose state other",
 	"subjects": [{"path": path, "line": number}],
 } if {
@@ -100,7 +100,7 @@ violation contains {
 # records two live instances of, arriving on the module written to close that
 # class.
 violation contains {
-	"rule": "pr-partition-restated",
+	"rule": "review state other",
 	"verdict": "source parse refused",
 	"subjects": [{"count": count(unreadable)}],
 } if {

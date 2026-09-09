@@ -40,7 +40,7 @@ package batten.validator_verdict
 
 import rego.v1
 
-rules contains "validator-verdict-clean"
+rules contains "tool judge dirty"
 
 # The key a producer writes when the validator had nothing to say.
 #
@@ -98,7 +98,7 @@ findings(verdict) := {key |
 }
 
 violation contains {
-	"rule": "validator-verdict-clean",
+	"rule": "tool judge dirty",
 	"verdict": "tool judge dirty",
 	"subjects": [{"count": count(refused)}],
 } if {

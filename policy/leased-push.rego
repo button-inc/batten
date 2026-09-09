@@ -49,10 +49,10 @@ package batten.leased_push
 
 import rego.v1
 
-rules contains "leased-push"
+rules contains "branch write unsafe"
 
 violation contains {
-	"rule": "leased-push",
+	"rule": "branch write unsafe",
 	"verdict": "branch write unsafe",
 	"subjects": [{"count": 1}],
 } if {

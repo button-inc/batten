@@ -34,7 +34,7 @@ package batten.task_substitution
 
 import rego.v1
 
-rules contains "task-substitution"
+rules contains "task run loose"
 
 # Every declared task this call is a WEAKER SPELLING of.
 #
@@ -112,7 +112,7 @@ weaker_than_program(entry, argv) if {
 }
 
 violation contains {
-	"rule": "task-substitution",
+	"rule": "task run loose",
 	"verdict": "task run loose",
 	"subjects": [{"artifact": task}],
 } if {

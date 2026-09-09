@@ -40,7 +40,7 @@ package batten.hook_profile
 
 import rego.v1
 
-rules contains "hook-profile"
+rules contains "hook declare other"
 
 # The status a step selected by the `check` hook carries in hk's plan.
 included := "included"
@@ -67,7 +67,7 @@ stray contains name if {
 }
 
 violation contains {
-	"rule": "hook-profile",
+	"rule": "hook declare other",
 	"verdict": "step declare missing",
 	"subjects": [{"count": count(stray)}],
 } if {
@@ -81,7 +81,7 @@ violation contains {
 # Told apart from ABSENT by `is_object` plus the count: an id nothing recorded
 # never binds `plan` at all, and that is could-not-look rather than a finding.
 violation contains {
-	"rule": "hook-profile",
+	"rule": "hook declare other",
 	"verdict": "tier list empty",
 	"subjects": [{"artifact": "hk-plan"}],
 } if {
@@ -107,7 +107,7 @@ flagged contains line if {
 }
 
 violation contains {
-	"rule": "hook-profile",
+	"rule": "hook declare other",
 	"verdict": "hook declare missing",
 	"subjects": [{"path": hook}],
 } if {

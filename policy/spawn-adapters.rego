@@ -57,7 +57,7 @@ package batten.spawn_adapters
 
 import rego.v1
 
-rules contains "spawn-adapters"
+rules contains "adapter place missing"
 
 # The placed adapters, each named with what it delegates to. Measured against the
 # tree rather than imagined: this is exactly the resolved set on the commit that
@@ -191,7 +191,7 @@ module_of(path) := name if {
 # The analyser's diagnostic and the source line it quoted are not in the fact at
 # all, so there is nothing here for this module to leak even by mistake.
 violation contains {
-	"rule": "spawn-adapters",
+	"rule": "adapter place missing",
 	"verdict": "spawn place missing",
 	"subjects": [{"path": site.path, "line": site.line}, {"artifact": module_of(site.path)}],
 } if {
@@ -218,7 +218,7 @@ violation contains {
 no_census if not input.tree.symbols.sites
 
 violation contains {
-	"rule": "spawn-adapters",
+	"rule": "adapter place missing",
 	"verdict": "symbol count absent",
 } if {
 	no_census
@@ -227,7 +227,7 @@ violation contains {
 # THE VACUITY GUARD. A table placing nothing decides nothing, and a rule that
 # cannot refuse is off.
 violation contains {
-	"rule": "spawn-adapters",
+	"rule": "adapter place missing",
 	"verdict": "adapter table empty",
 } if {
 	count(adapters) == 0

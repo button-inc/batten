@@ -124,7 +124,7 @@ attribute_or_doc(line) if {
 # reasoned. The first was `every index, line in lines { block_ok(…) }`, which
 # walks the whole file for every candidate `(cfg, test)` pair. The second kept
 # the pairing and narrowed the inner test to `not gap_dirty`, which stops at the
-# first breaking line. `batten check --rule cfg-gated-test` took **1099s** over
+# first breaking line. `batten check --rule 'test cover missing'` took **1099s** over
 # this tree on the second spelling, where the same-`delta_sources`
 # `test-targets` takes **1s**. So the PAIRING is the cost and no inner test
 # removes it: `exec.rs` alone is ~30 `cfg` lines against ~60 `#[test]` lines over

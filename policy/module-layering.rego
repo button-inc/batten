@@ -57,7 +57,7 @@ package batten.module_layering
 
 import rego.v1
 
-rules contains "module-layering"
+rules contains "layer place wrong"
 
 # Every module this table has placed. A module in the judged set and absent here
 # is refused rather than allowed.
@@ -703,7 +703,7 @@ module_of(path) := name if {
 # names. Never the source line — `to` and `item` are path segments, and the text
 # that produced them stays on the engine's side.
 violation contains {
-	"rule": "module-layering",
+	"rule": "layer place wrong",
 	"verdict": "layer reach refused",
 	"subjects": [{"path": path, "line": edge.line}, {"artifact": edge.to}],
 } if {
@@ -720,7 +720,7 @@ violation contains {
 # A module nobody placed. An implicit allow here is the hole this table exists to
 # close, so it is a finding rather than silence.
 violation contains {
-	"rule": "module-layering",
+	"rule": "layer place wrong",
 	"verdict": "module place missing",
 	"subjects": [{"path": path}],
 } if {
@@ -733,7 +733,7 @@ violation contains {
 # reporting "no violations" is CLOUD-251's failure mode, and the reason a gate
 # can be switched off by deletion without anything going red.
 violation contains {
-	"rule": "module-layering",
+	"rule": "layer place wrong",
 	"verdict": "layer table dead",
 } if {
 	count(forbidden) == 0

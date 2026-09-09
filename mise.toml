@@ -1292,7 +1292,7 @@ description = "Gate: a branch whose whole diff is comment lines buys a CI matrix
 #
 # `--rule` naming no declared row is a usage error rather than a clean run, so a
 # renamed row breaks this loudly instead of silently passing.
-run = "cargo run --quiet -p batten -- check --rule prose-only"
+run = "cargo run --quiet -p batten -- check --rule 'diff ship early'"
 
 [tasks."ci-drift"]
 description = "Gate: the committed [ci] table still matches the host ruleset (CLOUD-54)"
@@ -1331,7 +1331,7 @@ description = "Gate: batten is registered exactly once on every hook surface (do
 # the seam between them. `doctor hooks` decides the DERIVATION half — batten
 # registered exactly once on every event a harness emits, no matcher, no drift —
 # and has decided it in-process since CLOUD-777; the shell only re-rendered its
-# findings. `check --rule harness-wiring` decides the CONSUMER half, which the
+# findings. `check --rule 'hook wire missing'` decides the CONSUMER half, which the
 # engine structurally cannot: `doctor.rs` reports a sibling COUNT and never a
 # NAME, because a command line carries a path (rule 4) and whether a hook beside
 # batten's is legitimate is this repository's judgement (rule 1).
@@ -1342,7 +1342,7 @@ description = "Gate: batten is registered exactly once on every hook surface (do
 # ONE LINE, DELIBERATELY, for the reason the task below gives: the multi-line
 # spellings are where a predicate can hide, and there is no decision here to hide
 # — both are the engine's.
-run = "cargo run --quiet -p batten -- doctor hooks && cargo run --quiet -p batten -- check --rule harness-wiring"
+run = "cargo run --quiet -p batten -- doctor hooks && cargo run --quiet -p batten -- check --rule 'hook wire missing'"
 
 [tasks."config-lint"]
 description = "Gate: batten.toml carries no policy smell, and no weakening the groom never saw (arm with CONFIG_LINT_BASE)"
@@ -1637,7 +1637,7 @@ description = "Gate: every row this branch put on the board was refined at creat
 # `stop-guard`'s callers, and `stop-guard` is retired in this same change: those
 # questions are asked at `Stop` by the engine's own hook now, over the same
 # module, so there is still exactly one implementation of the intersection.
-run = "cargo run --quiet -p batten -- check --rule filed-here"
+run = "cargo run --quiet -p batten -- check --rule 'issue file other'"
 
 [tasks.claim-race]
 description = "Gate: no other OPEN pull request already claims a key this branch claims (asks the forge; pointer-only)"
@@ -2018,7 +2018,7 @@ cargo run --quiet -p batten -- record tool perf-p95 <"$records"
 # latency gate would report every other tree rule through it.
 [tasks.perf-assert]
 description = "Gate: every measured invocation path is inside its latency budget, and README publishes the budget this gate enforces"
-run = "cargo run --quiet -p batten -- check --rule perf-assert"
+run = "cargo run --quiet -p batten -- check --rule 'path measure wrong'"
 
 # `[tasks.msrv]` IS RETIRED (CLOUD-593), replaced by
 # `mise-tasks/msrv-pin-agreement.sh`.
@@ -2395,7 +2395,7 @@ description = "Gate: every mem: reference in tracked markdown resolves to a real
 # under the branch, the installed binary predated it, and BOTH wrappers refused
 # with a config parse error that named a section neither gate reads. Nothing in
 # CI installs `batten` either, so the bare form had never been CI-verified.
-run = "cargo run --quiet -p batten -- check --rule memory-graph"
+run = "cargo run --quiet -p batten -- check --rule 'memory point missing'"
 
 # CLOUD-843 / CLOUD-1150, and the same wrapper shape one member over: `hk.pkl`'s
 # `rules-drift` step runs `mise run rules-drift` and still does, so the caller
@@ -2412,7 +2412,7 @@ run = "cargo run --quiet -p batten -- check --rule memory-graph"
 # together across two files, and there is one name here.
 [tasks.rules-drift]
 description = "Gate: a value `.claude/rules/*.md` restates still agrees with the mechanism that owns it (CLOUD-506)"
-run = "cargo run --quiet -p batten -- check --rule rules-drift"
+run = "cargo run --quiet -p batten -- check --rule 'rule watch other'"
 # ---------------------------------------------------------------------------
 # The session-start provisioning steps, one task each (CLOUD-312 row 10).
 #
@@ -2693,7 +2693,7 @@ run = "mise run reclaim-census record-boot >/dev/null 2>&1 || true; v=$(mise run
 # predecessor's own scope stated as a flag.
 [tasks.lock-complete]
 description = "Gate: mise.lock has no partial or bogus platform entry — a pure function of the committed lockfile, no network, no write"
-run = "cargo run --quiet -p batten -- check --rule lock-complete"
+run = "cargo run --quiet -p batten -- check --rule 'lock cover partial'"
 
 [tasks.batten-check]
 description = "Consumer #1: evaluate the committed batten.toml with batten's own engine against this repository"

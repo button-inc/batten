@@ -63,7 +63,7 @@ package batten.hk_fix_selection
 
 import rego.v1
 
-rules contains "hk-fix-selection"
+rules contains "gate select wrong"
 
 # --- what is being judged, and whether there is anything to judge -------------
 
@@ -97,7 +97,7 @@ declares(marker) if {
 fmt_description := input.tree.documents["mise.toml"].tasks.fmt.description
 
 violation contains {
-	"rule": "hk-fix-selection",
+	"rule": "gate select wrong",
 	"verdict": "task state wrong",
 	"subjects": [{"path": "mise.toml"}, {"artifact": "Run every fixer over the tree"}],
 } if {
@@ -107,7 +107,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "hk-fix-selection",
+	"rule": "gate select wrong",
 	"verdict": "task state wrong",
 	"subjects": [
 		{"path": "rules/toolchain.md"},
@@ -138,7 +138,7 @@ fixer_tasks := {name |
 }
 
 violation contains {
-	"rule": "hk-fix-selection",
+	"rule": "gate select wrong",
 	"verdict": "task select missing",
 	"subjects": [{"path": "hk.pkl"}, {"artifact": task}],
 } if {
@@ -155,7 +155,7 @@ violation contains {
 # (CLOUD-1049: the engine half does not populate `missing` for a parse failure
 # yet, so this clause is right and the channel is not yet filled.)
 violation contains {
-	"rule": "hk-fix-selection",
+	"rule": "gate select wrong",
 	"verdict": "gate parse unread",
 	"subjects": [{"path": path}],
 } if {

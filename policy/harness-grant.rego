@@ -37,7 +37,7 @@ package batten.harness_grant
 
 import rego.v1
 
-rules contains "harness-grant"
+rules contains "grant carry missing"
 
 # The settings file's auto-mode allow list, or nothing.
 #
@@ -70,7 +70,7 @@ keeps_the_defaults if {
 # The grant is gone, so this repository's own binary is refused by the layer that
 # actually decides.
 violation contains {
-	"rule": "harness-grant",
+	"rule": "grant carry missing",
 	"verdict": "grant declare absent",
 	"subjects": [{"path": ".claude/settings.json"}],
 } if {
@@ -80,7 +80,7 @@ violation contains {
 
 # The grant is present and every built-in safety rule was discarded with it.
 violation contains {
-	"rule": "harness-grant",
+	"rule": "grant carry missing",
 	"verdict": "default carry dropped",
 	"subjects": [{"path": ".claude/settings.json"}],
 } if {

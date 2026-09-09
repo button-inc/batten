@@ -593,7 +593,7 @@ sha256 = "b2c822742e8cbf355ba0cb4cc690c3cd8fdc9ec1916c8148f27bd9098cb7aee4"
 # like every other row. The column, the per-row lookup and the suppression all
 # ship; what waits is this repository's own use of them.
 [[rule]]
-id = "gh-pr-merge"
+id = "commit ship other"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -609,7 +609,7 @@ discarding the exact objects CI tested. Use `mise run land`, which comments \
 # matches — `contains` looks at the segment as written, which is the only reason
 # this key exists.
 [[rule]]
-id = "gh-pr-comment-fast-forward"
+id = "review ship early"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -622,7 +622,7 @@ lands. Use `mise run land` (backgrounded): it comments, then blocks until the \
 PR is MERGED or the fast-forward bot refuses."""
 
 [[rule]]
-id = "gh-pr-checks"
+id = "check watch loose"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -671,7 +671,7 @@ api`, `gh run view` are NOT blocked.)"""
 # is not a mediated call, so no `mediated_call` row can reach it — and it passes
 # the explicit form anyway, which this allows.
 [[rule]]
-id = "leased-push"
+id = "branch write unsafe"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/leased-push.rego"
@@ -681,14 +681,14 @@ severity = "deny"
 # already gates over the workflow files; the two read different surfaces and do
 # not overlap.
 [[rule]]
-id = "hook-skip-local"
+id = "hook skip unseen"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/hook-skip-local.rego"
 severity = "deny"
 
 [[rule]]
-id = "gh-run-watch"
+id = "job watch loose"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -800,7 +800,7 @@ it rather than holding a foreground poll open."""
 # DEFAULT strictness, including an arm asserting this row refuses without
 # `--fail-on-warning`, so both a deleted row and a silently lowered one redden.
 [[rule]]
-id = "rebase-not-hand-stepped"
+id = "patch run loose"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -848,7 +848,7 @@ conflict stop is a limit this row names rather than one it can soften."""
 # compiling silently against the wrong compiler — measured 2026-08-09, three
 # gates disagreeing with a green local run.
 [[rule]]
-id = "no-bare-cargo"
+id = "cargo run loose"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -904,7 +904,7 @@ mise.toml, so a green local run can mean nothing. Use `mise run <task>` (\
 # `RuleScope::Tree` alone. It lands as a `tree`-scoped `command` rule under
 # `batten enforce`, which is why `mise-tasks/issue-guard.sh` still exists.
 [[rule]]
-id = "pr-names-an-issue"
+id = "review name unnamed"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -922,7 +922,7 @@ the work lands with nothing recording that it did."""
 # are two — the alternative would be a `patterns` list whose only user is this
 # pair.
 [[rule]]
-id = "ready-names-an-issue"
+id = "review open unnamed"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -953,7 +953,7 @@ own push. A PR that names no issue cannot move the board when it merges."""
 # stale-main — so the three refusals `ready-guard` wrote by hand survive the
 # move without this file restating them.
 [[rule]]
-id = "ready-needs-receipts"
+id = "check read unread"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -1193,7 +1193,7 @@ counts = "."
 # about a specific head — a review is of one set of bytes — and `branch` is what a
 # fact about the WORK takes, which is why `claim-needs-receipt` below takes it.
 [[rule]]
-id = "ready-needs-an-answered-review"
+id = "review answer unread"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -1219,7 +1219,7 @@ on 89, so the usual outcome is that there is something to read."""
 # added ones are satisfiable in an environment whose proxy refuses the command
 # above.
 [[rule]]
-id = "ready-needs-the-threads-answered"
+id = "review answer partial"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -1247,7 +1247,7 @@ answer needs another read."""
 # name the read that satisfies THAT check. A shared remedy had to describe both
 # reads and could not tell a reader which one was missing.
 [[rule]]
-id = "ready-needs-a-review-to-exist"
+id = "review list unread"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -1264,7 +1264,7 @@ that was checked out when you read, so a push needs another read."""
 # The DID-YOU-ANSWER-IT half. The module's own header carries the measurement,
 # the count reformulation, and why the thread ids cannot be in the message.
 [[rule]]
-id = "review-answered"
+id = "review judge missing"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/review-answered.rego"
@@ -1301,7 +1301,7 @@ severity = "deny"
 # task's write side is untouched by this row: the engine reads the file it already
 # writes.
 [[rule]]
-id = "claim-needs-receipt"
+id = "claim read unread"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -2753,7 +2753,7 @@ zero-is-a-count = true
 # The receipt is minted by `mise run issue-search-check`, whose write side this
 # row does not touch — the engine reads the file that task already writes.
 [[rule]]
-id = "filing-needs-a-search"
+id = "issue list unread"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -2821,7 +2821,7 @@ gated."""
 # board can change after the read and `save_issue` offers no if-match precondition.
 # Unbounded, one adjudication would authorise every later sweep in the clone.
 [[rule]]
-id = "a-move-to-in-review-owes-an-adjudication"
+id = "review judge unread"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -2906,7 +2906,7 @@ different owner and is not gated here."""
 # the agent is entitled to use is the false-positive rate that gets a guard
 # bypassed rather than satisfied.
 [[rule]]
-id = "a-todo-promotion-owes-a-ready-verdict"
+id = "plan grade unread"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -2975,7 +2975,7 @@ gated here."""
 # named in its own notice, so the receipt attests the bytes the server actually
 # returned rather than a field subset.
 [[rule]]
-id = "an-update-owes-a-recent-read"
+id = "issue read stale"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -3033,7 +3033,7 @@ is never gated by this row (that is `filing-needs-a-search`)."""
 # landing. What replaced it is an actor rather than a louder claim — `pr-unsubscribed
 # drop` makes the call from a task, where no permission control applies.
 [[rule]]
-id = "no-pr-activity-subscription"
+id = "review watch refused"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3046,7 +3046,7 @@ A webhook's silence is not success. Fetching CI on demand is fine; the ban is on
 the timer."""
 
 [[rule]]
-id = "no-scheduled-self-wakeup"
+id = "timer mint refused"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3059,7 +3059,7 @@ session against 2 that changed a decision (CLOUD-821). Background the long comma
 and act on its exit."""
 
 [[rule]]
-id = "no-scheduled-trigger"
+id = "event mint refused"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3097,7 +3097,7 @@ clock nothing reads. Background the task and act on its exit."""
 # file that goes on to read forty passes here and always will. Capping what is
 # written into the prompt is not a claim about what the agent does with it.
 [[rule]]
-id = "a-spawn-names-few-artifacts"
+id = "spawn count wrong"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3123,7 +3123,7 @@ count is what the spawn can actually be made to read."""
 # one (CLOUD-925 §1): one authority for what a ceiling is, so a per-call cap does
 # not arrive with its own arithmetic.
 [[rule]]
-id = "a-spawn-prompt-stays-in-budget"
+id = "prompt measure wrong"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3189,7 +3189,7 @@ always-loaded surface — and let the prompt name the step it is for."""
 # (CLOUD-929 — this sentence used to say "137 programs", which was wrong by
 # eleven within two days of being written).
 [[rule]]
-id = "shell-hygiene"
+id = "shell spelling wrong"
 kind = "policy"
 scope = "tree"
 preset = "shell-hygiene"
@@ -3251,7 +3251,7 @@ exits 0, so a stale reference goes quiet rather than failing."""
 # command line; and anything outside the repository, which keeps the
 # `>/tmp/x.log` form the row above MANDATES allowed.
 [[rule]]
-id = "no-tool-substitution"
+id = "tool select other"
 kind = "pipeline"
 scope = "mediated_call"
 severity = "deny"
@@ -3283,7 +3283,7 @@ a pipe these same utilities are filters over another command's output and are \
 not refused."""
 
 [[rule]]
-id = "verdict-not-discarded"
+id = "verdict guard missing"
 kind = "pipeline"
 scope = "mediated_call"
 severity = "deny"
@@ -3432,7 +3432,7 @@ any_argument = true
 # whole ruleset naming `batten enforce`. `mise run batten-check` already calls
 # `enforce` for the same reason `no-conflict-markers` made it necessary.
 [[rule]]
-id = "no-secrets"
+id = "source carry unsafe"
 kind = "secrets"
 glob = "**"
 severity = "deny"
@@ -3440,7 +3440,7 @@ scope = "tree"
 no_fix_reason = "rotate the credential and purge it from history; removing the line leaves it in every clone and every reflog, so no command can make this right"
 
 [[rule]]
-id = "no-conflict-markers"
+id = "source carry broken"
 kind = "command"
 glob = "crates/**"
 check = "hk util check-merge-conflict --assume-in-merge {{files}}"
@@ -3476,7 +3476,7 @@ no_fix_reason = "resolve the conflict by hand: choosing a side is a judgement no
 # hit, carrying the offending line into the finding; a `forbid` finding is
 # `path:line` and a rule id (non-negotiable rule 4).
 [[rule]]
-id = "no-appeal-to-authority"
+id = "prose point other"
 kind = "forbid"
 glob = "**"
 regex = "jdx|semgrep|opengrep|ast-grep"
@@ -3548,7 +3548,7 @@ no_fix_reason = "state the rule and the evidence in this repo's terms; naming wh
 # could match one. The glob excludes this file, so neither rule matches its own
 # definition.
 [[rule]]
-id = "no-consumer-account-literal"
+id = "fact name other"
 kind = "forbid"
 glob = "crates/**"
 pattern = "etaxbc"
@@ -3557,7 +3557,7 @@ scope = "tree"
 no_fix_reason = "delete the literal; a consumer fact belongs in that consumer's own batten.toml, never in the core"
 
 [[rule]]
-id = "no-consumer-entity-path"
+id = "path name other"
 kind = "forbid"
 glob = "crates/**"
 pattern = "entities/"
@@ -3626,7 +3626,7 @@ no_fix_reason = "delete the literal; a consumer fact belongs in that consumer's 
 # this glob, and `policy/**` carries none at all because a module reads
 # `data.batten.patterns["ready-issue-key"]` by id — the registry doing its job.
 [[rule]]
-id = "issue-key-derivations-not-growing"
+id = "issue key duplicate"
 kind = "ratchet"
 glob = "mise-tasks/**"
 # A LITERAL SUBSTRING, NOT A REGEX, and the distinction is a dead gate away.
@@ -3664,7 +3664,7 @@ no_fix_reason = "read the key from `[[pattern]] ready-issue-key`, or let the pro
 # rule 1 asks for, and `tests/it/claim_race.rs` and `src/race.rs` are right to
 # carry it.
 [[rule]]
-id = "no-tracker-key-in-core"
+id = "issue name other"
 kind = "forbid"
 glob = "crates/**"
 regex = 'CLOUD-(\[0-9\]|\\d|\[\\d\])'
@@ -3692,7 +3692,7 @@ no_fix_reason = "declare it as a `[[pattern]]` row and read it by id; a tracker'
 # author to write the literal inline. This glob names the in-repo module tree,
 # which is exactly where the exemption does not apply.
 [[rule]]
-id = "no-tracker-key-in-modules"
+id = "pattern name other"
 kind = "forbid"
 glob = "policy/**"
 regex = 'CLOUD-(\[0-9\]|\\d|\[\\d\])'
@@ -3715,7 +3715,7 @@ no_fix_reason = "read the key from `[[pattern]] ready-issue-key` by id; a module
 # the four markers anchor it at the start of a line, so nothing but a ledger row
 # can reach the exemption.
 [[rule]]
-id = "no-consumer-repo-name"
+id = "source name other"
 kind = "forbid"
 glob = "crates/**"
 regex = "(?i)complian"
@@ -3733,7 +3733,7 @@ scope = "tree"
 # workspace manifest, the toolchain config, a release workflow and the
 # generated changelog, but nowhere under crates/batten/tests/.
 [[rule]]
-id = "no-origin-literal-in-fixtures"
+id = "forge name other"
 kind = "forbid"
 glob = "crates/batten/tests/**"
 pattern = "button-inc"
@@ -3769,7 +3769,7 @@ no_fix_reason = "rewrite the fixture so it does not name where this repository i
 # (CLOUD-208), never `severity = "allow"`: switching the rule off records nothing
 # and lapses never, which is the undesigned hatch the waiver surface replaced.
 [[rule]]
-id = "no-source-built-tool"
+id = "pin add unsafe"
 kind = "forbid"
 glob = "mise.toml"
 pattern = "\"cargo:"
@@ -3804,7 +3804,7 @@ no_fix_reason = "pin an attested binary in mise.toml instead; what to pin is a s
 # comment mentioning `mise` is prose about the ecosystem, and `\bmise\b` in a
 # sentence is exactly the false positive that gets a gate switched off.
 [[rule]]
-id = "install-does-one-thing"
+id = "program add other"
 kind = "forbid"
 glob = "install.sh"
 regex = '^\s*(mise|cargo|apt|apt-get|npm|pipx|uv|brew|rustup)\s|>>\s*"?\$?\{?HOME\}?/\.(bashrc|profile|zshrc)'
@@ -3831,7 +3831,7 @@ no_fix_reason = "the installer installs the binary and nothing else; a toolchain
 # trailing `__*`, because the failure is the character and not its position, and
 # a row catching one spelling would teach the next author to write the other.
 [[rule]]
-id = "mcp-grant-matches-something"
+id = "grant name loose"
 kind = "forbid"
 glob = ".claude/settings.json"
 regex = '"mcp__[^"]*\*'
@@ -3840,7 +3840,7 @@ scope = "tree"
 no_fix_reason = "an MCP permission entry names a server (`mcp__serena`) or one tool (`mcp__serena__read_memory`) and takes no wildcard; enumerate the tools, which is also the only spelling a reader can check against the server's own list. Measured twice in one session: the wildcard granted nothing, and the bare server form granted the reads and left every write still prompting"
 
 [[rule]]
-id = "no-cargo-install-in-ci"
+id = "cargo add loose"
 kind = "forbid"
 glob = ".github/workflows/*.yml"
 pattern = "cargo install"
@@ -3901,7 +3901,7 @@ no_fix_reason = "pin the tool in mise.toml so CI installs exactly what the lockf
 # literals they explain, for the same reason the agnosticism rules above do not
 # embed theirs: a substring rule over a directory fires on its own explanation.
 [[rule]]
-id = "no-gnu-sed-z"
+id = "shell parse unsafe"
 kind = "forbid"
 glob = "mise-tasks/**"
 pattern = "sed -zE"
@@ -3912,7 +3912,7 @@ scope = "tree"
 # no-suffix spelling from `sed -i.bak`, which BSD accepts and which
 # `tests/helpers.bash` uses.
 [[rule]]
-id = "no-gnu-sed-in-place"
+id = "shell edit unsafe"
 kind = "forbid"
 glob = "mise-tasks/**"
 pattern = "sed -i "
@@ -3920,7 +3920,7 @@ severity = "deny"
 scope = "tree"
 
 [[rule]]
-id = "no-bash4-mapfile"
+id = "shell read unsafe"
 kind = "forbid"
 glob = "mise-tasks/**"
 pattern = "mapfile "
@@ -3928,7 +3928,7 @@ severity = "deny"
 scope = "tree"
 
 [[rule]]
-id = "no-gnu-xargs-r"
+id = "shell list unsafe"
 kind = "forbid"
 glob = "mise-tasks/**"
 pattern = "xargs -r"
@@ -3939,7 +3939,7 @@ scope = "tree"
 # standing half: the refusal that fired before every other gate on a Mac was
 # correct behaviour over a Linux-only primitive.
 [[rule]]
-id = "no-util-linux-flock"
+id = "shell guard unsafe"
 kind = "forbid"
 glob = "mise-tasks/**"
 pattern = "flock "
@@ -3959,7 +3959,7 @@ scope = "tree"
 # `tests/verified.bats`'s moved-main case fail, because it checks that other
 # branch out.
 [[rule]]
-id = "no-branch-f-main"
+id = "branch edit unsafe"
 kind = "forbid"
 glob = "tests/**/*.bats"
 pattern = "branch -f main"
@@ -3989,7 +3989,7 @@ scope = "tree"
 # spelling the same prescription is NOT caught here — it is caught at the commit,
 # by the gate this row exists to stop anyone arguing with.
 [[rule]]
-id = "no-denied-identity-prescribed"
+id = "remedy carry refused"
 kind = "forbid"
 glob = "**/*.md"
 pattern = "user.email noreply@anthropic.com"
@@ -4554,7 +4554,7 @@ fields = [
 # no route at all. Recorded on CLOUD-1122 and CLOUD-1261; the deny lands when a
 # write succeeds through the verb.
 [[rule]]
-id = "no-raw-issue-read"
+id = "issue read loose"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -4790,7 +4790,7 @@ max_repeats = 1
 # an expiry — never `severity = "allow"`, which switches the row off forever and
 # tells nobody.
 [[rule]]
-id = "tests-not-deleted"
+id = "test count dropped"
 kind = "ratchet"
 glob = "crates/**/*.rs"
 pattern = "#[test]"
@@ -4812,7 +4812,7 @@ no_fix_reason = "restore the tests, or waive the reduction deliberately; which o
 # because the narrow glob was only correct while every bats suite sat directly in
 # `tests/` — this one covers a nested one the day it is written.
 [[rule]]
-id = "bats-tests-not-deleted"
+id = "bats count dropped"
 kind = "ratchet"
 glob = "tests/**/*.bats"
 pattern = "@test \""
@@ -4921,7 +4921,7 @@ declared_in = "crates/batten/tests/**/*.rs"
 # a mention does not. (`budget.rs` anchors its HTML-comment scan for the same
 # reason.)
 [[rule]]
-id = "no-new-ignores"
+id = "test skip refused"
 kind = "ratchet"
 glob = "crates/**/*.rs"
 pattern = "\n#[ignore]"
@@ -4962,7 +4962,7 @@ no_fix_reason = "delete the new ignore, or waive it deliberately; an ignore is a
 # CLOUD-807 gave for the sibling: retirement is the steady state of a repo
 # folding its bash into its own engine, not an exception.
 [[rule]]
-id = "bash-surface-not-growing"
+id = "shell count ahead"
 kind = "ratchet"
 glob = "mise-tasks/**"
 pattern = "#MISE description="
@@ -5044,7 +5044,7 @@ no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bas
 # real bash (`8b234af`, `fba3f78`). A row that denies its own campaign's wins is
 # worse than the hole it closes.
 [[rule]]
-id = "inline-task-bodies-not-growing"
+id = "task carry other"
 kind = "ratchet"
 glob = "mise.toml"
 pattern = "run = '''"
@@ -5093,7 +5093,7 @@ no_fix_reason = "migrate the predicate onto a rule kind, or waive the increase d
 # argument applies to every ban in that list, and a row that named only the sleep
 # would leave the multi-thread-runtime ban waivable at will for the same reason.
 [[rule]]
-id = "delay-waivers-not-growing"
+id = "waiver add refused"
 kind = "ratchet"
 glob = "crates/batten/src/**/*.rs"
 pattern = "clippy::disallowed_methods"
@@ -5106,7 +5106,7 @@ no_fix_reason = "a waiver is not a fix: either the delay has a bound it can exit
 # The other spelling of the same concept — see the block above for why it is a
 # second row rather than a second pattern on the first.
 [[rule]]
-id = "inline-task-bodies-not-growing-basic"
+id = "task write other"
 kind = "ratchet"
 glob = "mise.toml"
 pattern = 'run = """'
@@ -5128,7 +5128,7 @@ no_fix_reason = "migrate the predicate onto a rule kind, or waive the increase d
 # `rules/*.md` would count as a program. Zero today; if one lands, the
 # answer is CLOUD-1058's line-anchored `regex`, not a per-file exception.
 [[rule]]
-id = "claude-shell-not-growing"
+id = "shell add other"
 kind = "ratchet"
 glob = ".claude/**"
 pattern = "#!"
@@ -5173,7 +5173,7 @@ no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bas
 # handing it every path in the repository would make it read the engine's own
 # source to answer a question about fixtures.
 [[rule]]
-id = "fixture-forks"
+id = "test fix duplicate"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -5206,7 +5206,7 @@ severity = "deny"
 # which file answers the question — is the module's and is unchanged.
 # Recorded on CLOUD-1320, which owns the general form.
 [[rule]]
-id = "landing-roster-guarded"
+id = "check read never"
 kind = "policy"
 scope = "tree"
 line_sources = [".github/workflows/*.yml"]
@@ -5218,7 +5218,7 @@ severity = "deny"
 # a refactor legitimately merges assertions. `--fail-on-warning` and
 # `--strictness strict` promote it when a run wants the stricter reading.
 [[rule]]
-id = "assertions-not-gutted"
+id = "test grade dropped"
 kind = "ratchet"
 glob = "crates/batten/tests/**/*.rs"
 pattern = "assert"
@@ -5260,7 +5260,7 @@ no_fix_reason = "restore the assertions, or waive the reduction deliberately"
 # rendezvous is documented in comments that say what it replaced, and a rule that
 # forbade the words would delete the explanation along with the construct.
 [[rule]]
-id = "no-bash4-wait-n"
+id = "shell run unsafe"
 kind = "forbid"
 glob = "mise-tasks/**"
 regex = "^[ \\t]*wait -n"
@@ -5286,7 +5286,7 @@ scope = "tree"
 # otherwise make row 2 pass by never asking anything (non-negotiable rule 2, and
 # `sbom-empty`'s lesson one layer up).
 [[rule]]
-id = "sbom-ntia-precondition"
+id = "manifest check unread"
 kind = "command"
 glob = "Cargo.lock"
 check = "mise run ntia-check --precondition"
@@ -5336,7 +5336,7 @@ no_fix_reason = "install the pinned checker (`mise install pipx:ntia-conformance
 # a tuning question. Taking the rate to zero is what this change does; the `deny`
 # is what keeps it there.
 [[rule]]
-id = "sbom-ntia-conformance"
+id = "manifest cover partial"
 kind = "command"
 glob = "Cargo.lock"
 check = "mise run ntia-check"
@@ -5379,7 +5379,7 @@ no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no comm
 # the file the row exists to run is what makes the trigger and the mechanism the
 # same object rather than a coincidence.
 [[rule]]
-id = "release-attestation-precondition"
+id = "release check unread"
 kind = "command"
 glob = "mise-tasks/attestation-check.sh"
 check = "mise run attestation-check --precondition"
@@ -5419,7 +5419,7 @@ no_fix_reason = "install the pinned `gh` (`mise install aqua:cli/cli`) or supply
 # ambient environment the way an earlier `attestation-check` did inside fixture
 # repositories. The only way it reds is the workflow actually losing its wiring.
 [[rule]]
-id = "release-tracking-check"
+id = "release wire missing"
 kind = "command"
 glob = "mise-tasks/release-tracking-check.sh"
 check = "mise run release-tracking-check"
@@ -5473,7 +5473,7 @@ no_fix_reason = "the missing node is in the workflow, not in this file; add the 
 # A tree-scoped row would hand it a document it has no predicate for and read as
 # a configured gate that never fires.
 [[rule]]
-id = "trunk-based-preset"
+id = "branch table missing"
 kind = "policy"
 scope = "mediated_call"
 preset = "trunk-based"
@@ -5521,7 +5521,7 @@ severity = "deny"
 # manifest here is refused at load and would put a consumer's filenames in a row
 # that ships to every consumer.
 [[rule]]
-id = "mise-preset"
+id = "task table missing"
 kind = "policy"
 scope = "mediated_call"
 preset = "mise"
@@ -5553,7 +5553,7 @@ severity = "warn"
 # document; the lines are read to place a finding at a job, and a pointer that
 # cannot be placed costs the line rather than the finding.
 [[rule]]
-id = "mise-preset-tree"
+id = "task table other"
 kind = "policy"
 scope = "tree"
 preset = "mise"
@@ -5566,7 +5566,7 @@ line_sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
 severity = "deny"
 
 [[rule]]
-id = "pinned-toolchain-preset"
+id = "pin table other"
 kind = "policy"
 scope = "mediated_call"
 preset = "pinned-toolchain"
@@ -5590,7 +5590,7 @@ severity = "warn"
 # split is non-negotiable rule 1: a preset reaches every consumer, so this
 # repository's job names may not travel inside one.
 [[rule]]
-id = "ci-hygiene"
+id = "job spelling wrong"
 kind = "policy"
 scope = "tree"
 preset = "ci-hygiene"
@@ -5638,7 +5638,7 @@ severity = "deny"
 # stated rather than hidden: at `warn` the refusal is advice, so a re-grade this
 # row exists to stop still runs.
 [[rule]]
-id = "landing-loop-preset"
+id = "lane declare missing"
 kind = "policy"
 scope = "tree"
 preset = "landing-loop"
@@ -5680,7 +5680,7 @@ severity = "warn"
 # is worth asking, and asking on a change to the gate itself is the case that
 # must never be skipped.
 [[rule]]
-id = "evaluator-closure-io-free"
+id = "layer reach unsafe"
 kind = "command"
 glob = "mise-tasks/evaluator-closure-check.sh"
 check = "mise run evaluator-closure-check"
@@ -5712,7 +5712,7 @@ no_fix_reason = "an IO crate reaching the evaluator is closed where it was enabl
 # schema). A gate that would have refused past releases fires on work nobody can
 # now fix; this one would not have.
 [[rule]]
-id = "no-key-leaves-the-schema-unannounced"
+id = "config retire unnamed"
 kind = "command"
 glob = "crates/batten/tests/it/config_deprecations.rs"
 check = "mise run test:config-deprecations"
@@ -5771,14 +5771,14 @@ regex = "^(-[A-Za-z]*F|--file)$"
 # performs it is precisely what that gate refuses. So the row keeps its name and
 # this comment carries the correction; the module file is the honest label.
 [[rule]]
-id = "commit-message-obtainable"
+id = "commit read missing"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/run-shape.rego"
 severity = "deny"
 
 [[rule]]
-id = "privileged-lane-tests-origin"
+id = "lane guard other"
 kind = "policy"
 scope = "tree"
 sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
@@ -5795,7 +5795,7 @@ severity = "deny"
 # fails loudly the first time it runs; a ROUTE naming one fails when a reader has
 # just been refused, has been handed the one thing to run, and runs it.
 [[rule]]
-id = "verdict-routes-resolve"
+id = "route resolve missing"
 kind = "policy"
 scope = "tree"
 sources = ["batten.toml", "mise.toml"]
@@ -5818,7 +5818,7 @@ severity = "deny"
 # policy at all — which is why `crates/batten/tests/remedy_authorship.rs` drives
 # the binary rather than trusting the schema.
 [[rule]]
-id = "remedy-authorship"
+id = "remedy own other"
 kind = "policy"
 scope = "tree"
 line_sources = ["mise-tasks/*.sh"]
@@ -5849,7 +5849,7 @@ severity = "deny"
 # `perf-gate` is the sensor on whether that stays inside the budget, and the
 # number is reported on the PR rather than asserted here.
 [[rule]]
-id = "shell-retirement"
+id = "shell retire partial"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -5931,7 +5931,7 @@ severity = "deny"
 # `BATTEN_FILED_HERE_OVERLAP`: the point of the admission mechanism is that the
 # bare variable stops working, and this is the row that variable served.
 [[rule]]
-id = "filed-here"
+id = "issue file other"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -5966,7 +5966,7 @@ severity = "deny"
 # `delta_sources` is the whole tree because the subject is the recorded
 # obligation set rather than any path this branch happens to touch.
 [[rule]]
-id = "obligations-bound"
+id = "test name undefined"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -5989,7 +5989,7 @@ severity = "deny"
 # somebody renames a case in the SUITE, which is a different file from the one
 # carrying the promise.
 [[rule]]
-id = "mutation-declared-case"
+id = "marker name undefined"
 kind = "policy"
 scope = "tree"
 line_sources = [
@@ -6003,7 +6003,7 @@ module = "policy/mutation-declared-case.rego"
 severity = "deny"
 
 [[rule]]
-id = "plan-complete"
+id = "plan cover partial"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -6012,7 +6012,7 @@ module = "policy/plan-complete.rego"
 severity = "deny"
 
 [[rule]]
-id = "test-targets"
+id = "test place wrong"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -6033,7 +6033,7 @@ severity = "deny"
 # can live, and handing the module every path in the repository would make it
 # read `batten.toml` looking for Rust attributes.
 [[rule]]
-id = "cfg-gated-test"
+id = "test cover missing"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -6043,7 +6043,7 @@ module = "policy/cfg-gated-test.rego"
 severity = "deny"
 
 [[rule]]
-id = "stop-posture"
+id = "prose report duplicate"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/stop-posture.rego"
@@ -6067,14 +6067,14 @@ severity = "deny"
 # does, and a registered gate emitting into a channel nobody reads is the defect
 # that issue exists inside.
 [[rule]]
-id = "shell-write-advisory"
+id = "shell edit early"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/shell-write-advisory.rego"
 severity = "warn"
 
 [[rule]]
-id = "prose-only"
+id = "diff ship early"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -6123,7 +6123,7 @@ severity = "deny"
 # claim of tree-wide reach. A path no glob names is unread -- `absent` in the
 # could-not-look channel, which the module deliberately stays silent on.
 [[rule]]
-id = "pr-partition-restated"
+id = "review state other"
 kind = "policy"
 scope = "tree"
 line_sources = [
@@ -6138,7 +6138,7 @@ severity = "deny"
 reason = "AGENTS.md is the one authority on how work lands: one branch, one commit per row, and a single request over all of them. A second statement of that decision in the opposite direction is not a duplicate, it is a competing rule -- and prose in this tree is read by an agent that then acts without re-deriving, so it carries the authority of the file it sits in. Measured 2026-09-02: one such line, quoting a single issue's own arrangement, was adopted as convention and produced a plan partitioned eight ways. Delete the sentence or paraphrase it so it states no rate."
 
 [[rule]]
-id = "ancestry-decides-nothing"
+id = "patch judge wrong"
 kind = "policy"
 scope = "tree"
 invocation_sources = ["crates/batten/src/*.rs"]
@@ -6215,7 +6215,7 @@ severity = "deny"
 # that loads at the trigger. Both arms are therefore required: either half alone
 # is a reader who learns half the trap.
 [[rule]]
-id = "claim-order-is-stated"
+id = "claim declare dropped"
 kind = "policy"
 scope = "tree"
 line_sources = ["AGENTS.md", "rules/toolchain.md"]
@@ -6242,7 +6242,7 @@ severity = "deny"
 # rows ask nothing about the registry never opens the common dir's `worktrees/`
 # directory, which is what keeps `Cost::Read` honest.
 [[rule]]
-id = "worktree-registration-live"
+id = "registry read missing"
 kind = "policy"
 scope = "tree"
 git = ["worktrees"]
@@ -6250,7 +6250,7 @@ module = "policy/worktree-registration.rego"
 severity = "deny"
 
 [[rule]]
-id = "forge-verdict-required"
+id = "forge check red"
 kind = "policy"
 scope = "tree"
 forge = ["HEAD"]
@@ -6284,7 +6284,7 @@ severity = "deny"
 # refuses only on a real count, because reading null as "nothing was stranded"
 # is the false green CLOUD-990 measured costing a session an hour.
 [[rule]]
-id = "denials-outlive-the-turn"
+id = "turn deny held"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/denials-outlive-the-turn.rego"
@@ -6331,7 +6331,7 @@ count = "hook-denials"
 # states are null and every one differs from an extractor that ran and counted
 # zero, so the module refuses only on a real count.
 [[rule]]
-id = "repetition-without-progress"
+id = "turn run loose"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/repetition-without-progress.rego"
@@ -6361,7 +6361,7 @@ count = "agent-turn-run"
 # guard comparing a call against an empty task table would refuse every command
 # this project runs.
 [[rule]]
-id = "task-substitution"
+id = "task run loose"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/task-substitution.rego"
@@ -6404,7 +6404,7 @@ node = "tasks"
 # not a negative, so this row is inert on a checkout whose store holds no
 # matching response.
 [[rule]]
-id = "claim-before-code"
+id = "claim mint absent"
 kind = "policy"
 scope = "tree"
 module = "policy/claim-before-code.rego"
@@ -6435,7 +6435,7 @@ reduce = "present"
 # particular prompt ran" a checkable claim rather than an intention, and what
 # stops a consumer satisfying the gate by pointing it at an easier one.
 [[rule]]
-id = "review-dispatched"
+id = "prompt run never"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -6549,7 +6549,7 @@ subject = "tracker-body"
 # that gets a guard switched off. One row cannot carry two keyings, and the two
 # questions genuinely have different answers.
 [[rule]]
-id = "ready-needs-review"
+id = "review ask missing"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -6598,7 +6598,7 @@ looked at it."""
 # checkout gets if the producer was skipped or died. The row that wants a verdict
 # to be REQUIRED is `forge-verdict-required`'s shape and is not this one.
 [[rule]]
-id = "validator-verdict-clean"
+id = "tool judge dirty"
 kind = "policy"
 scope = "tree"
 module = "policy/validator-verdict-clean.rego"
@@ -6638,7 +6638,7 @@ input = "renovate.json5"
 # a FILE rather than of a plan — whether the hook still passes `--profile '!slow'`
 # on a line that actually runs — so it reads `input.tree.lines` and needs no record.
 [[rule]]
-id = "hook-profile"
+id = "hook declare other"
 kind = "policy"
 scope = "tree"
 module = "policy/hook-profile.rego"
@@ -6674,7 +6674,7 @@ input = "hk.pkl"
 # is inert on a checkout whose globs never fired. Present-and-EMPTY is a finding,
 # because every count below would otherwise pass over an absent key.
 [[rule]]
-id = "sbom-inventory"
+id = "manifest list wrong"
 kind = "policy"
 scope = "tree"
 module = "policy/sbom-inventory.rego"
@@ -6737,7 +6737,7 @@ input = "Cargo.lock"
 # pinned producer writes under a different key and does not answer here, which is
 # the same property stated from the tool's side.
 [[rule]]
-id = "perf-assert"
+id = "path measure wrong"
 kind = "policy"
 scope = "tree"
 lines = ["README.md"]
@@ -6772,7 +6772,7 @@ input = "target/release/batten"
 # empty document. `crates/batten/tests/it/nextest_slow.rs` drives the engine over a
 # tree with the file deleted, because that is the only tier that can tell.
 [[rule]]
-id = "nextest-slow"
+id = "suite grade late"
 kind = "policy"
 scope = "tree"
 lines = [".config/nextest.toml"]
@@ -6806,7 +6806,7 @@ severity = "deny"
 # it re-runs whenever the record set grows. Measured 2026-09-05: 6 trial rows, 13
 # required keys, 78 mutations, 78 fired, 0 false positives.
 [[rule]]
-id = "agentic-experiment-record"
+id = "fact file missing"
 kind = "policy"
 scope = "tree"
 documents = ["bench/agentic/trials.toml", "bench/agentic/method.toml"]
@@ -6814,7 +6814,7 @@ module = "policy/agentic-experiment-record.rego"
 severity = "deny"
 
 [[rule]]
-id = "release-tag-shape"
+id = "tag mint wrong"
 kind = "policy"
 scope = "tree"
 module = "policy/release-tag-shape.rego"
@@ -6873,7 +6873,7 @@ tags = "v*"
 # install` REWRITES `mise.lock` behind the author's back, and nothing writes a
 # workflow file but a person.
 [[rule]]
-id = "lock-complete"
+id = "lock cover partial"
 kind = "policy"
 scope = "tree"
 staged = ["mise.lock", "mise.toml"]
@@ -6902,7 +6902,7 @@ severity = "deny"
 # restraint — and an `attribution` predicate that needs `%B` therefore does not
 # migrate and keeps its verb, which is the verdict CLOUD-1193 records.
 [[rule]]
-id = "weakens-declared"
+id = "commit declare empty"
 kind = "policy"
 scope = "tree"
 commits = ["origin/main..HEAD"]
@@ -6910,7 +6910,7 @@ module = "policy/weakens-declared.rego"
 severity = "deny"
 
 [[rule]]
-id = "harness-wiring"
+id = "hook wire missing"
 kind = "policy"
 scope = "tree"
 documents = [
@@ -6967,7 +6967,7 @@ path = ".gemini/settings.json"
 # `documents` rather than `external`: this one IS repo-rooted, so it needs no
 # declared id and no root variable.
 [[rule]]
-id = "harness-grant"
+id = "grant carry missing"
 kind = "policy"
 scope = "tree"
 documents = [".claude/settings.json"]
@@ -6982,7 +6982,7 @@ reason = "`permissions.allow` is not the layer that decides: Claude Code's auto-
 # two modules read the same document for different questions, which is why they
 # are two rules rather than one with two predicates.
 [[rule]]
-id = "connector-not-granted"
+id = "connector grant loose"
 kind = "policy"
 scope = "tree"
 documents = [".claude/settings.json"]
@@ -7028,7 +7028,7 @@ reason = "a `[[mcp.result]]` reduction decides nothing while the raw tool is gra
 # consumer's choice: `no_artifact_name_reaches_the_core` refuses the engine
 # learning this manifest's name (non-negotiable rule 1).
 [[rule]]
-id = "command-task-defined"
+id = "task bind undefined"
 kind = "policy"
 scope = "tree"
 sources = ["batten.toml", "mise.toml"]
@@ -7071,7 +7071,7 @@ severity = "deny"
 # matters. The opposite mistake — a name that matches no step — runs the step in
 # both jobs, which shows up in the bill and needs no gate.
 [[rule]]
-id = "ci-suite-lane"
+id = "job select missing"
 kind = "policy"
 scope = "tree"
 sources = [".github/workflows/ci.yml"]
@@ -7097,7 +7097,7 @@ severity = "deny"
 # program refused in its own words. It stays a mise task, where mise answers for
 # its own task graph.
 [[rule]]
-id = "ci-parity"
+id = "job check other"
 kind = "policy"
 scope = "tree"
 sources = [
@@ -7145,7 +7145,7 @@ severity = "deny"
 # line in `mise.toml`, and declaring one would acquire a document for a pointer
 # no finding carries.
 [[rule]]
-id = "ci-cache-declared"
+id = "job carry missing"
 kind = "policy"
 scope = "tree"
 sources = [".github/workflows/*.yml", "mise.toml"]
@@ -7168,7 +7168,7 @@ severity = "deny"
 # structure — a matrix's `target` values and a platform table's keys — never a
 # line, so declaring a line surface would acquire bytes nothing decides over.
 [[rule]]
-id = "release-provision-parity"
+id = "release check partial"
 kind = "policy"
 scope = "tree"
 sources = [".github/workflows/release-artifacts.yml", "batten.toml"]
@@ -7177,7 +7177,7 @@ severity = "deny"
 no_fix_reason = "a platform a provisioned tool cannot reach is not fixable in this tree: either the upstream artifact exists and the row should pin it, or it does not and the gap is declared with its consequence — and which of the two is a supply-chain decision, not a rewrite"
 
 [[rule]]
-id = "bats-invocation"
+id = "bats run wrong"
 kind = "policy"
 scope = "tree"
 sources = ["mise.toml", ".github/workflows/ci.yml"]
@@ -7221,7 +7221,7 @@ severity = "deny"
 # shipped convention template by path, rather than this row trying to subtract
 # them -- `line_sources` is a union of includes with no negation.
 [[rule]]
-id = "memory-graph"
+id = "memory point missing"
 kind = "policy"
 scope = "tree"
 line_sources = [
@@ -7245,7 +7245,7 @@ module = "policy/memories.rego"
 severity = "deny"
 
 [[rule]]
-id = "suite-subject-retirable"
+id = "suite retire unclear"
 kind = "policy"
 scope = "tree"
 line_sources = ["tests/*.bats", "tests/**/*.bats"]
@@ -7282,7 +7282,7 @@ severity = "deny"
 # Tree-scoped and spawning, which is the right side of the CLOUD-170 split: it
 # runs under `enforce` and the hk gate, never on the mediated path.
 [[rule]]
-id = "fix-selection-complete"
+id = "gate fix missing"
 kind = "command"
 glob = "hk.pkl"
 check = "mise run fix-selection-check"
@@ -7316,7 +7316,7 @@ no_fix_reason = "add the missing step to `fixers` in hk.pkl, or remove the one t
 # rule 1: `crates/batten` names no step of anybody's, and the module reads the
 # list out of the fact it is handed.
 [[rule]]
-id = "hk-plan-required"
+id = "plan require missing"
 kind = "policy"
 scope = "tree"
 module = "policy/hk-plan-required.rego"
@@ -7332,7 +7332,7 @@ hook = "check"
 required = ["batten-check", "test", "policy-test"]
 
 [[rule]]
-id = "hk-contract-drift"
+id = "gate table other"
 kind = "command"
 glob = "hk.pkl"
 check = "mise run hk-drift"
@@ -7341,7 +7341,7 @@ scope = "tree"
 no_fix_reason = "regenerate the projection with `mise run hk-contract` and read the diff: which of an added, removed, reordered or regrouped step is intended is a decision, and a gate that applied it would be absorbing the change nobody reviewed"
 
 [[rule]]
-id = "hk-fix-selection"
+id = "gate select wrong"
 kind = "policy"
 scope = "tree"
 sources = ["mise.toml"]
@@ -7350,7 +7350,7 @@ module = "policy/hk-fix-selection.rego"
 severity = "deny"
 
 [[rule]]
-id = "workspace-dep-referenced"
+id = "workspace list unused"
 kind = "policy"
 scope = "tree"
 sources = ["Cargo.toml", "crates/*/Cargo.toml"]
@@ -7358,7 +7358,7 @@ module = "policy/workspace-dep-referenced.rego"
 severity = "deny"
 
 [[rule]]
-id = "module-layering"
+id = "layer place wrong"
 kind = "policy"
 scope = "tree"
 use_sources = ["crates/batten/src/*.rs"]
@@ -7376,7 +7376,7 @@ severity = "deny"
 # crate the analyser compiles; a glob here would select files the module does not
 # read and skip the row when the glob matched nothing.
 [[rule]]
-id = "spawn-adapters"
+id = "adapter place missing"
 kind = "policy"
 scope = "tree"
 symbols = true
@@ -7408,7 +7408,7 @@ severity = "deny"
 # shape. A spawn that genuinely belongs is a decision for a groomed row and a
 # human, never an annotation an agent writes about its own work.
 [[rule]]
-id = "spawn-widening"
+id = "spawn add other"
 kind = "policy"
 scope = "tree"
 module = "policy/spawn-widening.rego"
@@ -7472,7 +7472,7 @@ line_sources = ["crates/batten/src/**/*.rs", "policy/spawn-adapters.rego"]
 # healthy, and no rule looked at the tree at all. `doctor egress` catches a bad
 # container; this catches the commit.
 [[rule]]
-id = "egress-fencing"
+id = "provision guard missing"
 kind = "policy"
 scope = "tree"
 documents = ["mise.toml", "batten.toml"]
@@ -7481,7 +7481,7 @@ severity = "deny"
 reason = "Two surfaces fence the resolver host out of the agent proxy, and the tree owns both: mise.toml's [env] for what mise spawns, and batten.toml's [[provision.env]] for the wrapper that fences mise's own resolver (CLOUD-1455). Removing or narrowing either restores the 403 the fence exists for. Both spellings are checked on both, because every client in this class reads the lower-case name first."
 
 [[rule]]
-id = "mise-pin-agreement"
+id = "pin declare wrong"
 kind = "policy"
 scope = "tree"
 documents = [".mcp.json", "mise.toml"]
@@ -7490,7 +7490,7 @@ severity = "deny"
 reason = "mise.toml owns the pin and .mcp.json's copy is a reference to it: move the version in mise.toml and repeat it in the scoped `mise exec`, never the other way round. A launch that names no tool before `--` provisions the whole toolchain and dies with any one of it (CLOUD-316)."
 
 [[rule]]
-id = "opa-tracks-regorus-compliance"
+id = "version check stale"
 kind = "policy"
 scope = "tree"
 sources = ["mise.toml", "Cargo.toml"]
@@ -7517,7 +7517,7 @@ severity = "deny"
 # share one binding and a per-file rule would report the other as a false
 # positive. `.regal/rules/.../every_package_binds_input.rego` carries the reasoning.
 [[rule]]
-id = "policy-modules-bind-input"
+id = "module bind missing"
 kind = "command"
 # `glob` NAMES THE LINTER'S OWN CONFIG, not the corpus it reads (CLOUD-614), and
 # this row is where that idiom stopped being a style note. Globbed at
@@ -7552,7 +7552,7 @@ no_fix_reason = "add a `# METADATA schemas:` block binding `input` to the schema
 # annotation requirement is not decoration beside this row; it is the half that
 # makes this row mean anything, and it is the Regal aggregate rule's job.
 [[rule]]
-id = "policy-modules-type-check"
+id = "module read undefined"
 kind = "command"
 # The schema directory rather than the corpus, for the reason spelled out on
 # `policy-modules-bind-input` above: a glob over `policy/**` matches inside the
@@ -7583,7 +7583,7 @@ no_fix_reason = "the module names an input path the engine does not emit; fix th
 # other. Without this row the suite would run nowhere and the rule would be a
 # linter guarded by nothing.
 [[rule]]
-id = "policy-lint-rule-tests"
+id = "module judge red"
 kind = "command"
 glob = ".regal/rules/**/*.rego"
 check = "mise exec -- regal test .regal/rules"
@@ -7592,7 +7592,7 @@ scope = "tree"
 no_fix_reason = "a custom Regal rule's own tests failed; `mise exec -- regal test .regal/rules` names the failing case. Every arm is paired on purpose — if only the negative arm still passes, the predicate has stopped discriminating"
 
 [[rule]]
-id = "no-rego-metadata"
+id = "module reach undefined"
 kind = "forbid"
 glob = "policy/**/*.rego"
 pattern = "rego.metadata."
@@ -7601,7 +7601,7 @@ scope = "tree"
 no_fix_reason = "regorus implements no `rego.metadata.*` builtin, so the rule would pass `opa check` and behave differently under the shipped engine. Carry whatever the annotation held as an explicit fact on the row or in the module itself."
 
 [[rule]]
-id = "claim-not-raced"
+id = "claim mint twice"
 kind = "command"
 glob = "crates/batten/src/race.rs"
 check = "mise run claim-race"
@@ -7637,13 +7637,13 @@ no_fix_reason = "a raced claim is resolved on the board, not in this tree: take 
 # LAPSES. The expiry is the mechanism — when it does, someone re-reads the line
 # rather than inheriting a decision nobody remembers making.
 [[waiver]]
-rule = "no-secrets"
+rule = "source carry unsafe"
 path = ".github/workflows/release-plz.yml"
 reason = "ripsecrets reads `${GH_PAT}` in a git-config URL as an embedded credential; it is a shell expansion of an Actions secret, so nothing is committed. Re-check against the pinned scanner's next version."
 expires = "2026-11-14"
 
 [[waiver]]
-rule = "tests-not-deleted"
+rule = "test count dropped"
 reason = "CLOUD-780 retires four `git.rs` primitives, the pileup predicate and the `worktree reclaim` verb, and every deleted case named a deleted symbol (1850 -> 1834): `git.rs`'s worktree-listing and snapshot cases, `worktree.rs`'s pileup and reclaim cases, and `tests/cli.rs`'s whole pileup block. Deleting them with their subject is the Ready block's own §7 obligation — weakening them instead would leave assertions about a surface that no longer exists. What must NOT fall is the coverage beside them, and it does not: `worktree status`'s four surviving categories keep every case green with no assertion change, which is what proves the drop was surgical."
 expires = "2026-09-13"
 
@@ -7684,7 +7684,7 @@ expires = "2026-09-13"
 # floor becomes 32 on its own and this row suppresses nothing. It exists to get
 # one commit past the gate, not to stand.
 [[waiver]]
-rule = "inline-task-bodies-not-growing"
+rule = "task carry other"
 reason = "CLOUD-1265's `[tasks.record-verdicts]` is a producer's EFFECT, not a predicate: the predicate it replaces migrated to `policy/validator-verdict-clean.rego`, and section 5 leaves no rule kind for a body that must spawn a validator. `mise-tasks/pkl-check.sh` and its suite leave the tree in the same commit, so the bash surface falls while this row's `mise.toml`-only count rises by one."
 expires = "2026-10-31"
 
@@ -7844,7 +7844,7 @@ reason = "CLOUD-1551 defeats this rule's override route the same way it defeats 
 expires = "2026-10-11"
 
 [[waiver]]
-rule = "claim-before-code"
+rule = "claim mint absent"
 reason = "CLOUD-1387: `captured::reduce` selects the first capture whose bytes MENTION the key rather than the one it is the subject of, so a response quoting the row shadows its real payload and `present` answers false over a row that is on a project. Fix is open in PR #842; remove this waiver with it."
 expires = "2026-10-04"
 
@@ -13399,7 +13399,7 @@ target = "policy/spawn-adapters.rego"
 # documents, which is what lets predicate 3 do `jq`'s recursive descent as
 # `walk` rather than as a line scan over JSON.
 [[rule]]
-id = "rules-drift"
+id = "rule watch other"
 kind = "policy"
 scope = "tree"
 module = "policy/rules-drift.rego"
@@ -13739,7 +13739,7 @@ target = "policy/cfg-gated-test.rego"
 # the case that keying exists to separate. `apply_admissions` runs inside `check`,
 # so it runs on the runner too, over a store that cannot be there. A spend
 # therefore suppresses on the host that minted it and nowhere else: the finding
-# below was admitted locally, `batten check --rule cfg-gated-test` read exit 0,
+# below was admitted locally, `batten check --rule 'test cover missing'` read exit 0,
 # and CI's `batten-check` raised
 # `crates/batten/src/provision.rs platform-gated-test-added` on the same commit.
 #

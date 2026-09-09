@@ -54,7 +54,7 @@ package batten.harness_wiring
 
 import rego.v1
 
-rules contains "harness-wiring"
+rules contains "hook wire missing"
 
 # The program every hook registration must resolve to.
 #
@@ -190,7 +190,7 @@ stray(command) if {
 # basename for that reason while its committed half did not. The file is a
 # tracked path, so the pointer is honest and opening it shows the entry.
 violation contains {
-	"rule": "harness-wiring",
+	"rule": "hook wire missing",
 	"verdict": "hook wire loose",
 	"subjects": [{"path": path}, {"count": count(strays_in(path))}],
 } if {
@@ -209,7 +209,7 @@ strays_in(path) := {command |
 # that may be emitted, and the declared id would only tell a reader which
 # home-relative file to open on their own machine.
 violation contains {
-	"rule": "harness-wiring",
+	"rule": "hook wire missing",
 	"verdict": "hook wire duplicate",
 	"subjects": [{"count": count(merged_strays)}],
 } if {
@@ -235,7 +235,7 @@ merged_strays contains command if {
 # existed to prevent. A surface that EXISTS and will not parse is a host reading
 # nothing at all, and nobody can tell that from a clean wiring without this.
 violation contains {
-	"rule": "harness-wiring",
+	"rule": "hook wire missing",
 	"verdict": "hook wire unread",
 	"subjects": [{"count": count(unreadable)}],
 } if {

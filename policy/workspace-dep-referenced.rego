@@ -49,7 +49,7 @@ package batten.workspace_dep_referenced
 
 import rego.v1
 
-rules contains "workspace-dep-referenced"
+rules contains "workspace list unused"
 
 # The root manifest's declared keys.
 declared contains key if {
@@ -83,7 +83,7 @@ referenced contains key if {
 # line of either file. A document finding carries no line number by construction,
 # so the message is where the pointer lives.
 violation contains {
-	"rule": "workspace-dep-referenced",
+	"rule": "workspace list unused",
 	"verdict": "workspace declare unused",
 	"subjects": [{"artifact": key}],
 } if {
@@ -94,7 +94,7 @@ violation contains {
 # COULD NOT LOOK, NEVER A SILENT PASS. A manifest the engine could not parse is
 # in `missing`, and without this the walk above simply does not see it.
 violation contains {
-	"rule": "workspace-dep-referenced",
+	"rule": "workspace list unused",
 	"verdict": "manifest parse broken",
 	"subjects": [{"path": path}],
 } if {
@@ -107,7 +107,7 @@ violation contains {
 # CLOUD-251 shape the whole row is an instance of, closed on the module's own
 # input rather than assumed away.
 violation contains {
-	"rule": "workspace-dep-referenced",
+	"rule": "workspace list unused",
 	"verdict": "workspace table absent",
 } if {
 	count(declared) == 0

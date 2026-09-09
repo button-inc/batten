@@ -64,7 +64,7 @@ import rego.v1
 #MUTANT resolution-conjunct-dropped|s@^\tresolves_head(body)$@\ttrue@|an_outsider_reachable_writer_that_resolves_no_outside_head_is_not_a_subject
 #MUTANT-SUITE crates/batten/tests/it/privileged_lane.rs
 
-rules contains "privileged-lane-tests-origin"
+rules contains "lane guard other"
 
 # A file this build could not parse lands in `input.tree.missing` rather than in
 # `documents` (CLOUD-845). Without this clause a workflow that fails to parse is
@@ -72,7 +72,7 @@ rules contains "privileged-lane-tests-origin"
 # never read — a vacuous pass, which is worse than a wrong answer because it is
 # indistinguishable from a real one.
 violation contains {
-	"rule": "privileged-lane-tests-origin",
+	"rule": "lane guard other",
 	"verdict": "workflow parse broken",
 	"subjects": [{"path": path}],
 } if {
@@ -86,7 +86,7 @@ violation contains {
 #
 # Arm one: the EVENT carries the head, so the test is on the event.
 violation contains {
-	"rule": "privileged-lane-tests-origin",
+	"rule": "lane guard other",
 	"verdict": "lane guard missing",
 	"subjects": [{"path": path}, {"artifact": job}],
 } if {
@@ -108,7 +108,7 @@ violation contains {
 # would get two remedies for one fix. Arm one wins that overlap deliberately: its
 # remedy is the earlier of the two, applied before the lookup happens at all.
 violation contains {
-	"rule": "privileged-lane-tests-origin",
+	"rule": "lane guard other",
 	"verdict": "lane resolve missing",
 	"subjects": [{"path": path}, {"artifact": job}],
 } if {

@@ -59,7 +59,7 @@ package batten.stop_posture
 
 import rego.v1
 
-rules contains "stop-posture"
+rules contains "prose report duplicate"
 
 # The turn's final text, or the empty string when this is not a Stop.
 #
@@ -114,7 +114,7 @@ hits := count(regex.find_n(data.batten.patterns["hedged-flag-framing"], scrubbed
 # here rather than decorative: handing the matched prose back would make this a
 # mirror, and a mirror is cleared by restating it, which is the double-write.
 violation contains {
-	"rule": "stop-posture",
+	"rule": "prose report duplicate",
 	"verdict": "prose report duplicate",
 	"subjects": [{"count": hits}],
 } if {

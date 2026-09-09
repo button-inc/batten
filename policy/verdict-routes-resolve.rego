@@ -67,7 +67,7 @@ package batten.verdict_routes
 
 import rego.v1
 
-rules contains "verdict-routes-resolve"
+rules contains "route resolve missing"
 
 # ---------------------------------------------------------------------------
 # The routes, flattened out of the registry.
@@ -128,7 +128,7 @@ mise_task(command) := task if {
 # ---------------------------------------------------------------------------
 
 violation contains {
-	"rule": "verdict-routes-resolve",
+	"rule": "route resolve missing",
 	"verdict": "route name undefined",
 	"subjects": [{"artifact": entry.verdict}, {"artifact": entry.route}, {"artifact": entry.task}],
 } if {
@@ -147,7 +147,7 @@ violation contains {
 # tree that could not read it has judged no route at all — which must not be
 # spelled the same way as a registry whose every route resolves.
 violation contains {
-	"rule": "verdict-routes-resolve",
+	"rule": "route resolve missing",
 	"verdict": "config parse broken",
 	"subjects": [{"path": path}],
 } if {

@@ -50,7 +50,7 @@ package batten.spawn_widening
 
 import rego.v1
 
-rules contains "spawn-widening"
+rules contains "spawn add other"
 
 # `input.tree["base-delta"]` is NULL when the base rev did not resolve, and
 # `null` is not `undefined` — `not input.tree["base-delta"]` would be FALSE for
@@ -155,7 +155,7 @@ engine_source(path) if {
 }
 
 violation contains {
-	"rule": "spawn-widening",
+	"rule": "spawn add other",
 	"verdict": "spawn write refused",
 	"subjects": [{"path": path}],
 } if {
@@ -177,7 +177,7 @@ violation contains {
 # or may not be.
 
 violation contains {
-	"rule": "spawn-widening",
+	"rule": "spawn add other",
 	"verdict": "adapter add refused",
 	"subjects": [{"path": placements_module}],
 } if {
@@ -195,7 +195,7 @@ violation contains {
 # arm below is what makes the engine record that it could not look.
 
 violation contains {
-	"rule": "spawn-widening",
+	"rule": "spawn add other",
 	"verdict": "diff read absent",
 } if {
 	not delta
@@ -205,7 +205,7 @@ violation contains {
 # parse, and a module iterating only `lines` reports green over a file it never
 # read. `.claude/rules/policy-modules.md`: write the clause.
 violation contains {
-	"rule": "spawn-widening",
+	"rule": "spawn add other",
 	"verdict": "source parse dead",
 	"subjects": [{"path": path}],
 } if {
