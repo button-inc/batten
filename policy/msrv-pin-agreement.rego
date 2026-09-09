@@ -184,7 +184,7 @@ constraint := value if {
 # agreement — which is the failure the whole family exists to prevent.
 violation contains {
 	"rule": "msrv-pin-agreement",
-	"verdict": "pin declare missing",
+	"verdict": "version declare missing",
 	"subjects": [{"path": manifest_path}],
 } if {
 	input.tree.lines[manifest_path]
@@ -193,7 +193,7 @@ violation contains {
 
 violation contains {
 	"rule": "msrv-pin-agreement",
-	"verdict": "pin declare missing",
+	"verdict": "version declare missing",
 	"subjects": [{"path": pins_path}],
 } if {
 	input.tree.lines[pins_path]
@@ -205,7 +205,7 @@ violation contains {
 # the manifest at all.
 violation contains {
 	"rule": "msrv-pin-agreement",
-	"verdict": "pin declare missing",
+	"verdict": "version declare missing",
 	"subjects": [{"path": renovate_path}],
 } if {
 	renovate_lines
@@ -220,7 +220,7 @@ violation contains {
 # retiring program recorded the mutant runner refusing exactly that shape.
 violation contains {
 	"rule": "msrv-pin-agreement",
-	"verdict": "pin declare other",
+	"verdict": "version declare other",
 	"subjects": [{"artifact": sprintf("%s rust-version %s", [manifest_path, floor])}],
 } if {
 	line_of(floor) != line_of(pin)
@@ -228,7 +228,7 @@ violation contains {
 
 violation contains {
 	"rule": "msrv-pin-agreement",
-	"verdict": "pin declare other",
+	"verdict": "version declare other",
 	"subjects": [{"artifact": sprintf("%s constraints.rust %s", [renovate_path, constraint])}],
 } if {
 	line_of(constraint) != line_of(pin)
@@ -275,7 +275,7 @@ test_a_patch_component_is_not_a_divergence if {
 
 test_a_floor_behind_the_pin_is_refused if {
 	some v in violation with input as three("1.85", "1.97.1", "1.97")
-	v.verdict == "pin declare other"
+	v.verdict == "version declare other"
 }
 
 # The whole defect the retired gate was blind to: both numbers were `1.x`
@@ -288,7 +288,7 @@ test_a_major_only_comparison_would_not_catch_this if {
 
 test_a_bot_constraint_naming_another_compiler_is_refused if {
 	some v in violation with input as three("1.97", "1.97.1", "1.85")
-	v.verdict == "pin declare other"
+	v.verdict == "version declare other"
 }
 
 test_an_absent_constraint_is_refused if {
@@ -297,7 +297,7 @@ test_an_absent_constraint_is_refused if {
 		"mise.toml": tools("1.97.1"),
 		"renovate.json5": ["{", "}"],
 	})
-	v.verdict == "pin declare missing"
+	v.verdict == "version declare missing"
 }
 
 # The bot's config discusses the pin at length in its comments, and a gate a
@@ -308,7 +308,7 @@ test_a_commented_constraint_does_not_answer_for_the_real_one if {
 		"mise.toml": tools("1.97.1"),
 		"renovate.json5": ["{", "  // constraints: { rust: \"1.97\" } was here", "}"],
 	})
-	v.verdict == "pin declare missing"
+	v.verdict == "version declare missing"
 }
 
 test_the_bare_pin_spelling_is_understood_too if {
@@ -328,18 +328,18 @@ test_a_nested_floor_cannot_answer_for_the_workspace if {
 		"mise.toml": tools("1.97.1"),
 		"renovate.json5": bot("1.97"),
 	})
-	v.verdict == "pin declare missing"
+	v.verdict == "version declare missing"
 }
 
 # Equality, not a bound: a floor AHEAD of the pin is a divergence too.
 test_a_floor_ahead_of_the_pin_is_refused_too if {
 	some v in violation with input as three("1.99", "1.97.1", "1.97")
-	v.verdict == "pin declare other"
+	v.verdict == "version declare other"
 }
 
 test_a_constraint_ahead_of_the_pin_is_refused_too if {
 	some v in violation with input as three("1.97", "1.97.1", "1.99")
-	v.verdict == "pin declare other"
+	v.verdict == "version declare other"
 }
 
 # A `rust` key OUTSIDE the constraints block cannot answer for it.
@@ -349,7 +349,7 @@ test_a_rust_key_outside_the_block_does_not_answer_for_it if {
 		"mise.toml": tools("1.97.1"),
 		"renovate.json5": ["{", "  packageRules: [{ rust: \"1.97\" }],", "}"],
 	})
-	v.verdict == "pin declare missing"
+	v.verdict == "version declare missing"
 }
 
 test_a_neighbouring_key_does_not_answer_for_the_pin if {
@@ -366,7 +366,7 @@ test_an_absent_floor_is_refused if {
 		"mise.toml": tools("1.97.1"),
 		"renovate.json5": bot("1.97"),
 	})
-	v.verdict == "pin declare missing"
+	v.verdict == "version declare missing"
 }
 
 #MUTANT-SUITE crates/batten/tests/it/msrv_pin_agreement.rs

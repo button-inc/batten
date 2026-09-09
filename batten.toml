@@ -13107,6 +13107,150 @@ kind = "document"
 target = ".serena/memories/core.md"
 
 [[verdict]]
+id = "step cover missing"
+gloss = "the hook step's trigger does not select a path the config makes an input"
+class = """
+A trigger narrower than the rule set it serves deletes feedback while preserving the verdict: the gate simply stops running for commits that touch only that path, and nothing goes red. Add the path to the step's `glob = List(...)`, or narrow the rule that demands it.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "step select missing"
+gloss = "the step that runs the gate declares no trigger at all"
+class = """
+A glob-less step runs on every commit, which is what the trigger removed. Its absence is a regression rather than a default: declare the list, or accept the cost deliberately and say so.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "config parse unread"
+gloss = "the config this containment is read out of yielded no rule glob and no budget path"
+class = """
+A config a containment check parses nothing out of is a failed parse, never a config with no inputs — passing on it is the vacuous green such a check produces most easily. Fix the parse, or the config.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "version pin stale"
+gloss = "a workflow pins an action commit known to predate a fix this repository depends on"
+class = """
+A bump resolving back to that commit is a silent downgrade, and this repository lands bot bumps with no human in the loop — so the next occurrence of the defect reads as fresh. Move the pin forward; never remove the denylist entry, because a commit does not stop predating the fix.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "version pin unread"
+gloss = "no judgeable pin of the action under test was found in the workflows"
+class = """
+A floating ref carries no sha, so the denylist cannot speak about it; a tree with no pin of the action at all is a question this gate could not ask. Either is unreadable rather than clean, because a gate whose subject can vanish and read as green is not a gate.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "tool reach absent"
+gloss = "a hook registered BY PATH shells out to a tool the manifest pins"
+class = """
+A by-path invocation does not get the task runner's env, so that tool resolves unpinned or not at all — and every hook here fails OPEN, so an absent one allows silently instead of erroring. Register it through the runner and pay the startup, drop the dependency, or assert the tool yourself and declare `#PIN-OK: <tool>` beside the assertion.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "tool list empty"
+gloss = "the manifest pins no tool, so no by-path hook can be judged against it"
+class = """
+With the pinned set empty every by-path registration passes vacuously, which is a gate judging nothing while reporting clean. Restore the `[tools]` table, or point the rule at the manifest that has one.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "version declare other"
+gloss = "a derived copy of the toolchain pin names a different compiler line"
+class = """
+The pin is the authority and the declared floor and the bot's constraint are its copies; a copy that drifts switches off the resolution it was written for, silently. Raise the pin, then set both copies to its major.minor — the comparison is equality, not a bound, and a patch component is not a difference.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "version declare missing"
+gloss = "a file that must carry the toolchain number carries none"
+class = """
+Silence on any one of the three would read as agreement, which is the failure this family exists to prevent. An absent bot constraint in particular is MSRV-aware resolution switched off rather than a neutral omission, because that updater does not read the manifest floor.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "input select missing"
+gloss = "a workflow's paths filter does not select an input its jobs read"
+class = """
+A filter that selects too narrowly does not fail: the jobs are simply ABSENT, the required-checks reader accepts absent by design, and the regression lands with every check green. Add the path, or drop the probe that claims the job reads it.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "input select loose"
+gloss = "a workflow's paths filter selects a diff its jobs cannot be affected by"
+class = """
+Every widening is invisible except as a bill, which is why it erodes silently. Narrow the entry that reaches this path, or move the probe if the job really did gain the input.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "workflow read unclear"
+gloss = "the paths filter could not be read, or carries a shape this matcher cannot decide"
+class = """
+A workflow with no filter runs on every pull request — safe and expensive — and reading that as `every probe honoured` reports on a filter that does not exist. A negation, a character class or a star anywhere but the end is refused rather than guessed, because a guessed selection here is the silent false-absent the gate exists to stop: extend the matcher in the same commit as the pattern.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
 id = "module place missing"
 gloss = "a module is judged by the layering rule and absent from its table"
 class = """

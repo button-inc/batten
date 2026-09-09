@@ -31,7 +31,7 @@
 // carried: "another step's glob list is not read as batten-check's" policy/glob-containment.rego
 // carried: "output is a pointer — no file contents echoed" policy/glob-containment.rego
 // changed: "a config the gate parses nothing out of is exit 2, not a pass" policy/glob-containment.rego the refusal is carried whole and its EXIT CODE is the engine's rather than the shell's: the shell reserved 2 for could-not-look and used 1 for a violation, and the engine's one contract makes every deny finding exit 2 with no per-verb exception (AGENTS.md rule 5). So the case still separates a failed parse from a pass, which is what it was for, and no longer separates it from a violation by exit code — it separates it by verdict, which is the pointer a reader acts on
-// changed: "a batten-check step with no glob at all is a regression, not a default" policy/glob-containment.rego same exit-code change as the row above: the shell exited 1 here and the successor emits a `step declare missing` finding, which is exit 2 on the engine's contract
+// changed: "a batten-check step with no glob at all is a regression, not a default" policy/glob-containment.rego same exit-code change as the row above: the shell exited 1 here and the successor emits a `step select missing` finding, which is exit 2 on the engine's contract
 // changed: "a missing input file is exit 2, distinct from a violation" policy/glob-containment.rego the clause has no successor to carry because the ENGINE decides it earlier: a rule whose declared `line_sources` match nothing is not evaluated at all, and `input.tree.missing` is never populated on the tree surface (CLOUD-1049, measured identically for `policy/mise-pin-agreement.rego`'s own could-not-look clause). A case asserting it would assert the engine gap rather than the predicate, so it ships without one until that fact does
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
@@ -56,7 +56,7 @@ fn glob_repo(name: &str, config_body: &str, hooks_body: &str) -> PathBuf {
     let config = format!(
         "version = 1\n\n\
          [[verdict]]\n\
-         id = \"manifest cover missing\"\n\
+         id = \"step cover missing\"\n\
          gloss = \"the manifest does not select a path it must judge\"\n\
          class = \"A trigger narrower than its rule set deletes feedback while preserving the verdict.\"\n\n\
          [[verdict.route]]\n\
@@ -64,7 +64,7 @@ fn glob_repo(name: &str, config_body: &str, hooks_body: &str) -> PathBuf {
          kind = \"document\"\n\
          target = \"AGENTS.md\"\n\n\
          [[verdict]]\n\
-         id = \"step declare missing\"\n\
+         id = \"step select missing\"\n\
          gloss = \"a step declares no trigger\"\n\
          class = \"A step with no glob runs on every commit, which is what the trigger removed.\"\n\n\
          [[verdict.route]]\n\
@@ -72,7 +72,7 @@ fn glob_repo(name: &str, config_body: &str, hooks_body: &str) -> PathBuf {
          kind = \"document\"\n\
          target = \"AGENTS.md\"\n\n\
          [[verdict]]\n\
-         id = \"gate parse unread\"\n\
+         id = \"config parse unread\"\n\
          gloss = \"the gate parsed nothing out of its own input\"\n\
          class = \"A containment check that parses zero requirements passes vacuously.\"\n\n\
          [[verdict.route]]\n\

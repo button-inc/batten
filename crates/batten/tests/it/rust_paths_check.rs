@@ -56,7 +56,7 @@ fn workflow_repo(name: &str, workflow: &str) -> PathBuf {
         .config(
             "version = 1\n\n\
              [[verdict]]\n\
-             id = \"manifest cover missing\"\n\
+             id = \"input select missing\"\n\
              gloss = \"the filter does not select an input its jobs read\"\n\
              class = \"A job left absent is accepted by design, so the regression lands green.\"\n\n\
              [[verdict.route]]\n\
@@ -64,7 +64,7 @@ fn workflow_repo(name: &str, workflow: &str) -> PathBuf {
              kind = \"document\"\n\
              target = \"AGENTS.md\"\n\n\
              [[verdict]]\n\
-             id = \"task run loose\"\n\
+             id = \"input select loose\"\n\
              gloss = \"the filter selects a diff its jobs cannot be affected by\"\n\
              class = \"Every widening is invisible except as a bill.\"\n\n\
              [[verdict.route]]\n\
@@ -72,7 +72,7 @@ fn workflow_repo(name: &str, workflow: &str) -> PathBuf {
              kind = \"document\"\n\
              target = \"AGENTS.md\"\n\n\
              [[verdict]]\n\
-             id = \"gate parse unread\"\n\
+             id = \"workflow read unclear\"\n\
              gloss = \"the filter could not be read, or carries a shape this cannot decide\"\n\
              class = \"A guessed selection here is the silent false-absent the gate exists to stop.\"\n\n\
              [[verdict.route]]\n\

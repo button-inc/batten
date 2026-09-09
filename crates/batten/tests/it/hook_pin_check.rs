@@ -30,7 +30,7 @@
 // carried: "output is pointer-only — the task and the tool, never a line of either file" policy/hook-pin-check.rego
 // carried: "this repository's own registrations pass" policy/hook-pin-check.rego
 // changed: "the refusal names all three ways out, since a deny with no exit is a wall" policy/hook-pin-check.rego the shell wrote its remedy into the refusal's own prose; on the engine a verdict's remedy is DATA — the `[[verdict.route]]` rows the registry resolves — so the three ways out are declared once beside the verdict rather than restated per firing, and `batten policy explain` is what reads them back. The case is carried as the route's existence rather than as a substring of the refusal
-// changed: "no by-path registrations SAYS SO rather than reading as a clean pass" policy/hook-pin-check.rego the shell printed an advisory line to stderr and still exited 0, and the engine's output contract has no advisory channel for a rule that found nothing (AGENTS.md rule 5, one contract with no per-verb exception). The vacuity that actually mattered is kept as a real finding rather than a note: a manifest pinning NOTHING is `pin table missing`, which is what makes every by-path hook stop passing vacuously
+// changed: "no by-path registrations SAYS SO rather than reading as a clean pass" policy/hook-pin-check.rego the shell printed an advisory line to stderr and still exited 0, and the engine's output contract has no advisory channel for a rule that found nothing (AGENTS.md rule 5, one contract with no per-verb exception). The vacuity that actually mattered is kept as a real finding rather than a note: a manifest pinning NOTHING is `tool list empty`, which is what makes every by-path hook stop passing vacuously
 // changed: "a missing settings file is exit 2, not a pass" policy/hook-pin-check.rego the ENGINE decides this earlier — a rule whose declared `line_sources` match nothing is not evaluated at all, and `input.tree.missing` is never populated on the tree surface (CLOUD-1049, measured identically for `policy/mise-pin-agreement.rego`'s own could-not-look clause). A case asserting it would assert the engine gap rather than the predicate
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
@@ -56,7 +56,7 @@ fn pin_repo(
          id = \"md-quoted-span\"\n\
          regex = '\"[^\"]*\"'\n\n\
          [[verdict]]\n\
-         id = \"tool pin missing\"\n\
+         id = \"tool reach absent\"\n\
          gloss = \"a by-path invocation depends on a tool it will not get\"\n\
          class = \"Every hook here fails open, so an absent tool allows silently instead of erroring.\"\n\n\
          [[verdict.route]]\n\
@@ -64,7 +64,7 @@ fn pin_repo(
          kind = \"document\"\n\
          target = \"AGENTS.md\"\n\n\
          [[verdict]]\n\
-         id = \"pin table missing\"\n\
+         id = \"tool list empty\"\n\
          gloss = \"the manifest pins nothing, so the question cannot be asked\"\n\
          class = \"With the pinned set empty every by-path hook passes vacuously.\"\n\n\
          [[verdict.route]]\n\

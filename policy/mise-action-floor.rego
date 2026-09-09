@@ -112,7 +112,7 @@ pin contains {"path": path, "line": i + 1, "sha": sha} if {
 # module could not ask, never a clean answer.
 violation contains {
 	"rule": "mise-action-floor",
-	"verdict": "pin read unread",
+	"verdict": "version pin unread",
 	"subjects": [{"count": 0}],
 } if {
 	input.tree.lines
@@ -121,7 +121,7 @@ violation contains {
 
 violation contains {
 	"rule": "mise-action-floor",
-	"verdict": "pin read stale",
+	"verdict": "version pin stale",
 	"subjects": [{"path": sprintf("%s:%d", [row.path, row.line])}],
 } if {
 	some row in pin
@@ -149,26 +149,26 @@ test_a_forward_pin_is_clean if {
 
 test_a_pre_retry_pin_is_refused if {
 	some v in violation with input as workflows({".github/workflows/ci.yml": ["jobs:", bad]})
-	v.verdict == "pin read stale"
+	v.verdict == "version pin stale"
 }
 
 test_a_tree_with_no_pin_of_this_action_is_could_not_look if {
 	some v in violation with input as workflows({".github/workflows/ci.yml": ["jobs:", "        uses: actions/checkout@v4"]})
-	v.verdict == "pin read unread"
+	v.verdict == "version pin unread"
 }
 
 # A lookalike sha under a DIFFERENT action is not this defect, and firing on it
 # is how a gate's failures stop being read.
 test_another_actions_pin_is_not_this_defect if {
 	some v in violation with input as workflows({".github/workflows/ci.yml": ["        uses: other/action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654"]})
-	v.verdict == "pin read unread"
+	v.verdict == "version pin unread"
 }
 
 # `@v4` carries no sha, so the denylist cannot speak about it — and reporting
 # green over it would be a claim this module cannot support.
 test_a_floating_ref_is_not_a_pin_this_module_can_judge if {
 	some v in violation with input as workflows({".github/workflows/ci.yml": ["        uses: jdx/mise-action@v4"]})
-	v.verdict == "pin read unread"
+	v.verdict == "version pin unread"
 }
 
 # A sha in prose or a comment is not a pin: the coordinate is what scopes it.
@@ -184,7 +184,7 @@ test_the_backslide_is_found_in_any_workflow if {
 		".github/workflows/ci.yml": [good],
 		".github/workflows/release.yml": [bad],
 	})
-	v.verdict == "pin read stale"
+	v.verdict == "version pin stale"
 }
 
 #MUTANT-SUITE crates/batten/tests/it/mise_action_floor.rs

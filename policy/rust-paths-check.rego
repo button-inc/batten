@@ -185,7 +185,7 @@ selected(path) if {
 # "every probe honoured" reports on a filter that does not exist.
 violation contains {
 	"rule": "rust-paths-check",
-	"verdict": "gate parse unread",
+	"verdict": "workflow read unclear",
 	"subjects": [{"path": workflow_path}],
 } if {
 	workflow_lines
@@ -194,7 +194,7 @@ violation contains {
 
 violation contains {
 	"rule": "rust-paths-check",
-	"verdict": "gate parse unread",
+	"verdict": "workflow read unclear",
 	"subjects": [{"artifact": p}],
 } if {
 	some p in pattern
@@ -203,7 +203,7 @@ violation contains {
 
 violation contains {
 	"rule": "rust-paths-check",
-	"verdict": "manifest cover missing",
+	"verdict": "input select missing",
 	"subjects": [{"path": probe}],
 } if {
 	count(pattern) > 0
@@ -213,7 +213,7 @@ violation contains {
 
 violation contains {
 	"rule": "rust-paths-check",
-	"verdict": "task run loose",
+	"verdict": "input select loose",
 	"subjects": [{"path": probe}],
 } if {
 	some probe in must_not_select
@@ -251,36 +251,36 @@ test_a_filter_honouring_every_probe_is_clean if {
 # accepted by design.
 test_a_dropped_input_is_refused if {
 	some v in violation with input as flow(array.concat(array.slice(honest, 0, 5), array.slice(honest, 6, 8)))
-	v.verdict == "manifest cover missing"
+	v.verdict == "input select missing"
 }
 
 test_a_docs_only_path_being_selected_is_refused if {
 	some v in violation with input as flow(array.concat(honest, ["      - \"AGENTS.md\""]))
-	v.verdict == "task run loose"
+	v.verdict == "input select loose"
 }
 
 # A bare `**` strips to nothing. A "did the strip change anything" test reads that
 # as matching NOTHING, so a filter selecting the whole repository passes as narrow.
 test_a_whole_repository_glob_is_refused if {
 	some v in violation with input as flow(["      - \"**\""])
-	v.verdict == "task run loose"
+	v.verdict == "input select loose"
 }
 
 test_a_workflow_with_no_paths_block_is_could_not_look if {
 	some v in violation with input as {"tree": {"lines": {".github/workflows/rust.yml": ["on:", "  pull_request:", "jobs:"]}}}
-	v.verdict == "gate parse unread"
+	v.verdict == "workflow read unclear"
 }
 
 # A shape the matcher cannot decide is refused rather than guessed: a wrong answer
 # here is the silent false-absent the whole gate exists to stop.
 test_a_negation_is_refused_rather_than_guessed if {
 	some v in violation with input as flow(array.concat(honest, ["      - \"!docs/**\""]))
-	v.verdict == "gate parse unread"
+	v.verdict == "workflow read unclear"
 }
 
 test_a_star_in_the_middle_is_refused_rather_than_guessed if {
 	some v in violation with input as flow(array.concat(honest, ["      - \"crates/*/src\""]))
-	v.verdict == "gate parse unread"
+	v.verdict == "workflow read unclear"
 }
 
 #MUTANT-SUITE crates/batten/tests/it/rust_paths_check.rs

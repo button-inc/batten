@@ -35,7 +35,7 @@
 // carried: "a missing constraints.rust is exit 2, never a silent pass" policy/msrv-pin-agreement.rego
 // carried: "the real tree agrees" policy/msrv-pin-agreement.rego
 // changed: "an unreadable file is exit 2 — a gate that cannot look must not report agreement" policy/msrv-pin-agreement.rego the shell opened three named files and refused one it could not read; the successor declares them as `line_sources` and the ENGINE decides this earlier — a rule whose declared paths match nothing is not evaluated at all, and `input.tree.missing` is never populated on the tree surface (CLOUD-1049, measured identically for `policy/mise-pin-agreement.rego`'s own could-not-look clause). What the case protected survives as the three PRESENT-BUT-SILENT arms: a file that resolves and carries no number is still a refusal, never agreement
-// changed: "an unreadable renovate config is exit 2 on the same terms as the other two" policy/msrv-pin-agreement.rego same engine-side decision as the row above, and the arm that matters is kept: a config that resolves with no `constraints.rust` is `pin declare missing`, because an absent constraint is MSRV-aware resolution switched off rather than a neutral omission
+// changed: "an unreadable renovate config is exit 2 on the same terms as the other two" policy/msrv-pin-agreement.rego same engine-side decision as the row above, and the arm that matters is kept: a config that resolves with no `constraints.rust` is `version declare missing`, because an absent constraint is MSRV-aware resolution switched off rather than a neutral omission
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -56,7 +56,7 @@ fn msrv_repo(name: &str, manifest: &str, tools: &str, bot: &str) -> PathBuf {
              id = \"md-quoted-span\"\n\
              regex = '\"[^\"]*\"'\n\n\
              [[verdict]]\n\
-             id = \"pin declare other\"\n\
+             id = \"version declare other\"\n\
              gloss = \"a derived copy names a different compiler than the pin\"\n\
              class = \"The pin is the authority; a copy that drifts switches off what it was written for.\"\n\n\
              [[verdict.route]]\n\
@@ -64,7 +64,7 @@ fn msrv_repo(name: &str, manifest: &str, tools: &str, bot: &str) -> PathBuf {
              kind = \"document\"\n\
              target = \"AGENTS.md\"\n\n\
              [[verdict]]\n\
-             id = \"pin declare missing\"\n\
+             id = \"version declare missing\"\n\
              gloss = \"a file that must carry the number carries none\"\n\
              class = \"Silence on any one of the three would read as agreement.\"\n\n\
              [[verdict.route]]\n\
