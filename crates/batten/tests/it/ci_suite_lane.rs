@@ -37,8 +37,8 @@
 //! critical path, with `perf` finishing at 9.2 min and idling for 24 more.
 //! `mise run ci` was 1832s of the job and `test:bats` ~83% of that. CLOUD-386
 //! swept the worker count at the runner's real width and found every direction
-//! worse, because each point redistributes workers inside one saturated 2-core
-//! box; its point D measured the suite alone with the box to itself at 623s
+//! worse, because each point redistributes workers inside one saturated box;
+//! its point D measured the suite alone with the box to itself at 623s
 //! against 829s contended. The carve-out this row guards is what turns the
 //! gate's wall clock from a sum of the two chains into a max.
 

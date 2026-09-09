@@ -88,10 +88,17 @@
 //! spawns stay under a build strategy rather than a capability limit. `git2` has
 //! the APIs — `Diff::patchid()` included — and is barred by `macos-link-check`
 //! rule 1 because `libgit2-sys` declares a `links` key, because the Darwin legs
-//! cross-build SDK-free under zig, because GitHub bills macOS runners at 10x on
-//! a **private** repository. That last clause is the whole of it, and it has an
-//! expiry: CLOUD-737 owns the re-decision and waits on CLOUD-585 making this
-//! repository public. `provision.rs` documents its own shell-out in this shape,
+//! cross-build SDK-free under zig, because that build strategy is priced by
+//! RUNNER BILLING — an account setting, not a property of this code.
+//!
+//! **The chain ends in a price, and this file must not restate what the price
+//! IS.** An earlier version did: it named a per-OS multiplier and a repository
+//! visibility, and said the clause would expire when the visibility changed. It
+//! did change, and the sentence describing the wait outlived the wait — a
+//! comment holding a fact that lives in another system is a cache with no
+//! invalidation. Name the DEPENDENCY and the row that owns re-deciding it
+//! (CLOUD-737); the value itself is cached once, dated, in `ci.yml` and nowhere
+//! else. `provision.rs` documents its own shell-out in this shape,
 //! and `every_stays_shelled_out_claim_names_its_price` is what keeps this
 //! paragraph here rather than trusting the next author to remember it.
 //!

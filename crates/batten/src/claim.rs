@@ -135,7 +135,11 @@ impl Issue {
         let id = field("id")
             .ok_or_else(|| {
                 UsageError::raise(
-                    "claim: not a set of get_issue payloads (need id and status per issue)"
+                    "claim: not a set of get_issue payloads (need id and status per issue). \
+                     Hand-assembling one is the wrong route and the Ready block will \
+                     refuse the paraphrase: run `batten mcp call <server> get_issue \
+                     '{\"id\":\"<KEY>\"}'`, which stores the whole body, then \
+                     `claim check --issue <KEY>` to read it back"
                         .to_owned(),
                 )
             })?

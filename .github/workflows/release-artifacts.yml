@@ -9,20 +9,23 @@ name: release-artifacts
 # runnable. This workflow is what makes a release installable, which is what
 # dogfooding Batten as consumer #1 requires (house-style §12).
 #
-# EVERY LEG RUNS ON ubuntu-latest, deliberately — macOS included. GitHub bills
-# macOS runners at 10x and Windows at 2x on a private repo; this workflow uses
-# neither.
+# EVERY LEG RUNS ON ubuntu-latest, macOS included, AND THAT IS INHERITED RATHER
+# THAN CHOSEN. It was priced against runner billing, which is an account setting
+# this file does not own and must not restate: the previous version of this
+# comment quoted a per-OS multiplier and a repository visibility, and both were
+# wrong by the time anyone read them — which is how a reader ends up told a price
+# that expired. Runner cost and width live in GitHub's published table plus the
+# account's tier, and this repository already caches that ONCE, dated, at
+# `ci.yml`'s arm64 paragraph. Point there; a second copy is what went stale.
 #
-# THAT IS A COST, NOT A CONSTRAINT, and the distinction is load-bearing because
-# the cost expires: GitHub-hosted runners are free and unmetered on PUBLIC
-# repositories, and the 10x multiplier applies to a private repo's
-# Linux-equivalent minute allowance. So the day this repository goes public
-# (CLOUD-585) the input that produced this whole strategy changes, and with it
-# the SDK question below, `macos-link-check`'s rule 1, and whether the Darwin
-# artifacts can be executed on Darwin at all (CLOUD-364). CLOUD-737 owns that
-# re-decision. Read this paragraph as pricing rather than as a limit — a later
-# reader being told a private-repo price about a public repo is the specific
-# mistake it exists to prevent.
+# What this file CAN say durably is which decisions rest on that price, so they
+# are re-decidable rather than mistaken for capability limits: the SDK question
+# below, `macos-link-check`'s rule 1, and whether the Darwin artifacts can be
+# executed on Darwin at all (CLOUD-364). CLOUD-737 owns re-deciding each.
+#
+# The general form, worth carrying past this file: a comment stating a fact that
+# lives in another system is a cache with no invalidation. State the DEPENDENCY
+# ("this is priced by runner billing"), never the VALUE.
 #
 # `rustup target add` installs only the standard library, so each
 # non-native target needs a LINKER supplied, which is what the two wrappers do:
@@ -188,7 +191,7 @@ jobs:
       #   Failed to persist attestation: Feature not available for the
       #   button-inc organization.
       #
-      # — a plan-gated feature this private repo does not have. Because the step
+      # — a plan-gated feature the organization did not have then. Because the step
       # failed, the upload after it never ran, so an OPTIONAL provenance claim
       # took the artifact itself down with it. Six consecutive total failures
       # went unnoticed because a `release`-triggered run reaches no PR and no

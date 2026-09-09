@@ -1857,7 +1857,7 @@ const ISSUE: FlagDecl = FlagDecl {
     id: "issue",
     long: Some("issue"),
     short: None,
-    help: "Resolve the payload from the capture store by this issue key instead of reading stdin",
+    help: "Read the issue payload from the capture store by key, where `mcp call ... get_issue` put it",
     env: EnvDecl::None,
     global: false,
     positional: false,

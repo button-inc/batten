@@ -521,7 +521,7 @@ jobs:
           # 24 more — `mise run ci` was 1832s of that, and `test:bats` ~83% of
           # THAT. CLOUD-386 swept the worker count at the runner's real width and
           # every direction is worse, because each point redistributes workers
-          # inside one saturated 2-core box. A second runner is the experiment
+          # inside one saturated box. A second runner is the experiment
           # that sweep could not contain, and its own point D already measured the
           # number: the suite alone with the box to itself is 623s against 829s
           # contended. So the gate stops being a sum and becomes a max.
@@ -826,7 +826,7 @@ jobs:
   #
   # It is ~83% of `mise run ci` and `mise run ci` is 92% of the `ci` job, so
   # until this job existed the gate's wall clock was a sum of two chains sharing
-  # two cores. Now it is a max. The `ci` job carves the step out with
+  # one runner's cores. Now it is a max. The `ci` job carves the step out with
   # `HK_SKIP_STEPS`, and `ci-suite-lane` refuses the pairing coming apart in the
   # silent direction — a step skipped there and run by no job here.
   #

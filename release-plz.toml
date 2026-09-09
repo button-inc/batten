@@ -1,6 +1,9 @@
 # release-plz configuration (https://release-plz.dev).
-# Batten is a private repo and is not published to crates.io, so releases are
-# GitHub tags + releases only, driven by Conventional Commits.
+# Batten is not published to crates.io, so releases are GitHub tags + releases
+# only, driven by Conventional Commits. `publish = false` below is that decision;
+# this comment must not also name the repository's visibility, which is neither
+# this file's fact nor a reason for it -- a copy of a setting that lives
+# elsewhere goes stale silently, and this line did.
 
 [workspace]
 publish = false           # do not publish to any cargo registry
