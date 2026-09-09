@@ -12320,32 +12320,7 @@ fn run_hook(
             Ok(loaded) => loaded,
             Err(_) if bypass => (hook::Policy::declaring_nothing(harness), Vec::new()),
             Err(unreadable) => {
-                // Pointer-only (non-negotiable rule 4): the loader's own message
-                // names the key or path that would not load, never its contents.
-                let refusal = Refusal::new(
-                    "engine-cannot-adjudicate",
-                    format!(
-                        "this build could not load the rules it is registered to enforce, so \
-                         nothing judged this call: {unreadable}"
-                    ),
-                    // No remedy the ENGINE may declare: the repair is rebuilding
-                    // or reinstalling the binary, or fixing the config, and both
-                    // are the consumer's own commands (non-negotiable rule 1).
-                    Fix::None,
-                );
-                let rendering = Rendering {
-                    hatch: hook::BYPASS_ENV,
-                    ceiling: None,
-                };
-                return render(
-                    harness,
-                    &envelope,
-                    hook::Decision::Deny(refusal),
-                    &rendering,
-                    mode,
-                    out,
-                    err,
-                );
+                return deny_unadjudicable(harness, &envelope, &unreadable, mode, out, err);
             }
         }
     } else {
@@ -12587,6 +12562,62 @@ fn run_hook(
         ceiling: policy.refusal.as_ref(),
     };
     render(harness, &envelope, decision, &rendering, mode, out, err)
+}
+
+/// Refuse a call whose rules this build could not load (CLOUD-1688).
+///
+/// Lifted out of [`run_hook`] rather than left inline because that function is
+/// already at its line budget, and a boundary this load-bearing should be
+/// readable on its own rather than as a match arm nine levels in.
+///
+/// **A DECISION, NOT AN ERROR, WHICH IS WHY IT RENDERS.** [`render`] owns the
+/// per-harness deny channel: Claude Code answers in its JSON decision object at
+/// exit `0`, where the document *is* the deny, and the neutral adapter answers
+/// [`ExitCode::Violation`]. Raising a [`Denial`] here would send `2` to the one
+/// host that reads the document instead of the number.
+///
+/// **The rendering carries no ceiling and the general hatch**, because both live
+/// on the policy that would not load. `None` reads downstream as "no declared
+/// bound" rather than as a bound of zero, which is the direction that keeps a
+/// refusal about an unreadable config from being truncated by a value nobody
+/// could read.
+fn deny_unadjudicable(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    unreadable: &dyn std::fmt::Display,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    // Pointer-only (non-negotiable rule 4): the loader's own message names the
+    // key or the path that would not load, never the file's contents. The
+    // existing `max_age = 0` and unknown-key diagnostics ride through here
+    // unchanged, which is what keeps the operator's repair as findable as it was
+    // when this arm exited `1`.
+    let refusal = Refusal::new(
+        "engine-cannot-adjudicate",
+        format!(
+            "this build could not load the rules it is registered to enforce, so nothing judged \
+             this call: {unreadable}"
+        ),
+        // No remedy the ENGINE may declare: the repair is rebuilding or
+        // reinstalling the binary, or fixing the config, and each is the
+        // consumer's own command (non-negotiable rule 1).
+        Fix::None,
+    );
+    let rendering = Rendering {
+        hatch: hook::BYPASS_ENV,
+        ceiling: None,
+    };
+    render(
+        harness,
+        envelope,
+        hook::Decision::Deny(refusal),
+        &rendering,
+        mode,
+        out,
+        err,
+    )
 }
 
 /// Run the refusing row's declared repair, and say what the boundary decides now.
