@@ -917,6 +917,25 @@ pub enum WeakeningKind {
     /// [`WeakeningKind::LandingPathRemoved`] states: declaration order is sort
     /// order, so a kind in the middle silently reorders every finding after it.
     FastForwardLaneAdded,
+    /// A `[[wiring.disarm]]` row is gone, so a launcher script this repository
+    /// had neutralised goes back to running (CLOUD-1704).
+    ///
+    /// **The REMOVED direction only, for `StartupRowRemoved`'s reason exactly.**
+    /// `resolve` reads `[wiring]` from the committed authority alone — a row
+    /// names a file the engine REWRITES under `$HOME`, so a local file able to
+    /// add one could blank anything the agent can write. There is therefore no
+    /// local file that could add a row, and between two committed refs an added
+    /// row is a reviewed tightening like any other.
+    ///
+    /// Monotone in the direction that matters: the declared scripts are the ones
+    /// whose bodies this repository has judged hostile to its own landing
+    /// contract, so dropping a row can only return one of them to service.
+    ///
+    /// **Appended rather than placed beside its subject**, which this enum's own
+    /// `PerfExemptionAdded` comment explains and this variant obeys: no `repr`,
+    /// so a variant inserted among its neighbours shifts every later discriminant
+    /// and `semver` reports the whole tail as moved.
+    WiringDisarmRemoved,
 }
 
 impl WeakeningKind {
@@ -984,6 +1003,7 @@ impl WeakeningKind {
         WeakeningKind::LandingPathRemoved,
         WeakeningKind::VerifiedCheckRemoved,
         WeakeningKind::FastForwardLaneAdded,
+        WeakeningKind::WiringDisarmRemoved,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -1005,6 +1025,7 @@ impl WeakeningKind {
             WeakeningKind::VerifiedCheckRemoved => "verified-check-removed",
             WeakeningKind::LandingPathRemoved => "landing-path-removed",
             WeakeningKind::FastForwardLaneAdded => "fast-forward-lane-added",
+            WeakeningKind::WiringDisarmRemoved => "wiring-disarm-removed",
             WeakeningKind::ReadyCutoverRelaxed => "ready-cutover-relaxed",
             WeakeningKind::PerfExemptionAdded => "perf-exemption-added",
             WeakeningKind::VerbRemoved => "verb-removed",
@@ -1377,6 +1398,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "startup",
         coverage: Coverage::Compared(&[WeakeningKind::StartupRowRemoved]),
+    },
+    FieldCoverage {
+        field: "wiring",
+        coverage: Coverage::Compared(&[WeakeningKind::WiringDisarmRemoved]),
     },
     FieldCoverage {
         field: "provisions",
@@ -2265,6 +2290,17 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         "startup",
     ));
 
+    // The launcher scripts this repository neutralises (CLOUD-1704), by the same
+    // reading again. Keyed on the declared PATH rather than on an id, because
+    // these rows carry no id — the path is what identifies the subject, and two
+    // rows over one path would be one subject declared twice rather than two.
+    found.extend(removed_entries(
+        WeakeningKind::WiringDisarmRemoved,
+        &disarm_paths(base),
+        &disarm_paths(working),
+        "wiring.disarm",
+    ));
+
     // The judge's privacy boundary (CLOUD-135). Compared from both sides
     // regardless of whether either declares the table: an absent `[judge]` is
     // the *tightest* setting — pointer-only, at the engine's ceiling — so a
@@ -2472,6 +2508,14 @@ fn ids(entries: impl Iterator<Item = String>) -> Vec<String> {
 /// may be stricter or looser, and only running both would say which.
 fn startup_ids(config: &Config) -> Vec<String> {
     config.startup.iter().map(|row| row.id.clone()).collect()
+}
+
+/// The declared disarm targets, which are what identifies a `[[wiring.disarm]]`
+/// row: the table carries no id, and the path is the subject.
+fn disarm_paths(config: &Config) -> Vec<String> {
+    config.wiring.as_ref().map_or_else(Vec::new, |wiring| {
+        wiring.disarm.iter().map(|row| row.path.clone()).collect()
+    })
 }
 
 fn handler_ids(config: &Config) -> Vec<String> {
@@ -3828,6 +3872,43 @@ mod tests {
         assert!(
             weakenings(&row, &edited).is_empty(),
             "an edited check is not a comparison two parsed configs can settle"
+        );
+    }
+
+    #[test]
+    fn dropping_a_disarm_row_is_a_weakening_and_adding_one_is_not() {
+        // A `[[wiring.disarm]]` row is this repository's judgement that a named
+        // launcher script is hostile to its own landing contract (CLOUD-1704), so
+        // deleting one returns that script to service — the same reading
+        // `StartupRowRemoved` takes, one table over.
+        //
+        // BOTH DIRECTIONS, for the reason its sibling above states: a case
+        // asserting only that "something is reported" passes over a comparison
+        // wired backwards, and would then refuse every branch that disarms one
+        // more script than `main` did.
+        let row =
+            config("[[wiring.disarm]]\npath = \".launcher/stop.sh\"\nmarker = \"neutralized\"\n");
+        assert_eq!(
+            only(&row, &config("")),
+            Weakening::new(
+                WeakeningKind::WiringDisarmRemoved,
+                "wiring.disarm[.launcher/stop.sh]",
+                "present",
+                "absent",
+            )
+        );
+        assert!(weakenings(&config(""), &row).is_empty());
+
+        // AN EDITED MARKER IS NOT COMPARED, and the path is why: the path is the
+        // subject, and a row that still names the same script still disarms it.
+        // Whether one marker is "better" than another is not a comparison two
+        // parsed configs can settle, and the engine rewrites a body that lacks
+        // whichever marker is declared — so the change is inert to this gate.
+        let edited =
+            config("[[wiring.disarm]]\npath = \".launcher/stop.sh\"\nmarker = \"other\"\n");
+        assert!(
+            weakenings(&row, &edited).is_empty(),
+            "the path is the subject, so a re-worded marker disarms the same script"
         );
     }
 

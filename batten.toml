@@ -7710,6 +7710,26 @@ path = "crates/batten/src/provision.rs"
 reason = "the relink case asserts over `std::os::unix::fs::MetadataExt::ino`, a symbol absent on the Windows target, so the `cfg!` arm this rule prefers would not type-check and the attribute is required rather than chosen to silence a leg. `base = \"origin/main\"` makes this floor itself on landing, so the row is expected to lapse unused."
 expires = "2026-10-31"
 
+# The same precondition one file over (CLOUD-1704), and the same narrowness: ONE
+# case in this suite carries the attribute, and it is the one asserting the shim
+# kept its executable bits.
+#
+# THE OTHER CASE IN THE SAME FILE WAS CONVERTED RATHER THAN WAIVED, which is what
+# makes this row the exception it claims to be. `an_armed_script_is_replaced_by_a_shim_that_exits_zero`
+# also began with `#[cfg(unix)]` over it; its platform-shaped half is EXECUTING a
+# `#!/bin/sh` file, and every assertion about the rewritten bytes holds on every
+# target — so the case now compiles everywhere and a `cfg!(unix)` arm guards only
+# the spawn. That is the shape this rule prefers, and it was available there.
+#
+# It is not available here: the assertion is `PermissionsExt::mode() & 0o111`,
+# and `mode` is a `std::os::unix` symbol with no cross-platform spelling, so a
+# `cfg!` arm would not type-check. Attribute required rather than chosen.
+[[waiver]]
+rule = "platform-gated-test-added"
+path = 'crates/batten/tests/it/wiring_disarm.rs'
+reason = "the mode case asserts over `std::os::unix::fs::PermissionsExt::mode`, a symbol absent on the Windows target, so the `cfg!` arm this rule prefers would not type-check. The sibling case in the same file was converted to a `cfg!` arm instead, which is why this covers one case and not a file."
+expires = "2026-10-31"
+
 # CLOUD-1387's shadow, waived for as long as its fix takes to land and no longer.
 #
 # `claim-before-code` reads `node = "project"` off the capture keyed to one row,

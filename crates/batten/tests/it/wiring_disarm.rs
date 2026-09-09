@@ -32,7 +32,7 @@ use crate::common;
 
 use std::path::PathBuf;
 
-use common::{StateHome as _, git_in, scratch, stderr, stdout, write};
+use common::{StateHome as _, scratch, stderr, stdout, write};
 
 /// A stand-in for what a launcher writes: a script that exits non-zero and says
 /// something, so "it no longer runs" is observable rather than assumed.
@@ -85,7 +85,10 @@ fn bench(name: &str, rows: &str, scripts: &[(&str, &str)]) -> Bench {
     let repo = dir.join("repo");
     std::fs::create_dir_all(&repo).expect("the fixture repo");
     write(&repo, "batten.toml", &format!("version = 1\n{rows}"));
-    git_in(&repo, &["init", "-q", "-b", "main", "."]);
+    // The published template rather than a fork: `git init` is 1,819 of the
+    // suite's 9,476 git processes, and `fixture-forks` is the ratchet that stops
+    // a new fixture putting one back.
+    common::init_repo(&repo);
 
     let home = dir.join("home");
     std::fs::create_dir_all(home.join(".launcher")).expect("the fixture home");
@@ -114,8 +117,14 @@ fn one_row(path: &str) -> String {
 /// it, and a shim that carried the marker but exited non-zero — a missing
 /// shebang, a stray character — would satisfy every string assertion and fail
 /// the only thing that matters.
+///
+/// **The platform split is `cfg!` INSIDE the case, never `#[cfg]` over it**
+/// (`rules/rust.md`). The rewrite is the subject and it is the same on every
+/// target, so the assertions about the bytes must compile and run everywhere;
+/// only EXECUTING a `#!/bin/sh` file is POSIX-shaped, and that is the one part
+/// the arm guards. An attribute here would delete the whole case on Windows and
+/// leave the next edit to it discovered by CI.
 #[test]
-#[cfg(unix)]
 fn an_armed_script_is_replaced_by_a_shim_that_exits_zero() {
     let bench = bench("disarm-armed", &one_row("stop.sh"), &[("stop.sh", ARMED)]);
 
@@ -129,7 +138,20 @@ fn an_armed_script_is_replaced_by_a_shim_that_exits_zero() {
     assert!(!body.contains("the launcher hook ran"), "{body}");
 
     // The hook's own contract: a Stop hook is handed JSON on stdin. The shim
-    // must answer 0 with nothing on either stream.
+    // must answer 0 with nothing on either stream. POSIX-only: executing a file
+    // by its shebang is what Windows does not do.
+    if !cfg!(unix) {
+        return;
+    }
+    // A SPAWN IS AN INVENTORY ROW (CLOUD-320), and this one earns its place: the
+    // claim of the whole change is that the harness EXECUTES the shimmed file and
+    // gets nothing, and only running it can say so. Reading the bytes would
+    // assert the shim's text and leave every way a two-line script still fails to
+    // run — a lost shebang, a lost mode bit — untested.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the hook contract is an execution: the shim must EXIT 0 on the hook's own                   stdin, which no read of its bytes can establish"
+    )]
     let run = std::process::Command::new(bench.script("stop.sh"))
         .stdin(std::process::Stdio::null())
         .output()
