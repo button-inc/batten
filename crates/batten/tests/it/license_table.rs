@@ -38,7 +38,7 @@ fn table_repo(name: &str, doc: &str) -> PathBuf {
         .config(
             "version = 1\n\n\
              [[verdict]]\n\
-             id = \"tool declare missing\"\n\
+             id = \"tool grade unclear\"\n\
              gloss = \"an adopted tool's declaration is unresolved\"\n\
              class = \"A row still asking the question cannot be shipped against; read the upstream LICENSE and record the SPDX id.\"\n\n\
              [[verdict.route]]\n\
