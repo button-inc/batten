@@ -103,8 +103,10 @@ what you proved, never where you discover a free-to-catch failure; it runs the s
 `mise` tasks you do, so one it runs that you can't is a bug. (The toolchain _does_
 run in the web sandbox — read `mem:github-access` before doubting.)
 
-1. **PRs start as drafts** (`gh pr create --draft`). CI does not run on drafts —
-   iterate at zero CI cost.
+1. **PRs start as drafts** (`gh pr create --draft`); CI does not run on one, so
+   iteration is free. **PUSH THE IMPERFECT DRAFT, don't sit on a green tree** — a
+   reclaim takes all unpushed work. No slop licensed: a draft cannot merge red, and
+   `land` won't ready what your own gates refuse. Push early, fix after.
 2. **`mise run verify` green before readying.** It mirrors CI and asserts the
    branch is rebased on current `origin/main`. "Green but stale" is not green.
 3. **`mise run linear-check`.** Don't ready by hand: `land` readies, after its
@@ -133,18 +135,15 @@ backgrounded task re-invokes you when it exits (measured 523/524, failures
 included), so the turn in between is the _designed_ state, not one to fill —
 **"idle" means a turn with NOTHING backgrounded**, and it is committed-and-pushed,
 never activity, that survives a reclaim. Manufacturing your own wake-ups with a
-backgrounded `sleep N; tail log` duplicates it (490 in one session, 2 changed a
-decision); **A LOOP IS NO EXEMPTION** (CLOUD-1337) — EVERY sleep is refused, either posture. Live task? `mise run alive`.
+backgrounded `sleep N; tail log` duplicates it (490 in a session, 2 mattered); **A LOOP IS NO EXEMPTION** (CLOUD-1337) — EVERY sleep is refused, either posture. Live task? `mise run alive`.
 
-**Two habits defeat this silently, both failing green:** piping a `mise run` into
-a pager (the exit status becomes the pager's) or detaching it with `nohup`/`&`
-(the wake-up is lost). Put `run_in_background` on the long command, never a launcher, and
+**Two habits defeat this silently, both failing green:** piping a `mise run` into a
+pager (the status becomes the pager's) or detaching it with `nohup`/`&` (the
+wake-up is lost). Put `run_in_background` on the long command, never a launcher, and
 **never redirect it** — the harness captures where the HUMAN watches, so `>log
 2>&1` writes where nobody reads. `verdict-not-discarded`, `background-redirect`.
-**Never** use a foreground `sleep`, spin a foreground busy-poll, or end a turn idle
-"to watch" something — background it, act on its exit, and commit first, since
-**committed-and-pushed is the only state surviving a reclaim, and that is the TREE's
-half**: declared work dies too, so **"unsaved?" is `batten doctor session`**.
+**Never** foreground-`sleep`, busy-poll, or idle "to watch" — background it, act on
+its exit, push. Declared work dies too: **"unsaved?" is `batten doctor session`**.
 
 ## Non-negotiable project rules
 
