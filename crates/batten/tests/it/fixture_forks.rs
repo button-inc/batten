@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use batten::rules::{self, Rule};
 
 /// The predicate id the module declares.
-const FORK_ADDED: &str = "fixture-fork-added";
+const FORK_ADDED: &str = "test add duplicate";
 
 /// A line that forks `git init`, in the short spelling.
 const FORKING: &str = r#"    git_in(&dir, &["init", "-q"]);"#;

@@ -3,7 +3,7 @@
 //!
 //! # The seam this tier owns
 //!
-//! `policy/filed-here.rego`'s `filed-over-own-diff` exempts a row the pull
+//! `policy/filed-here.rego`'s `issue file same` exempts a row the pull
 //! request CLOSES, and reads that from `input.tree.records["pr-closes"]`. Until
 //! this verb existed that record had exactly one producer: the `pr-body-closes`
 //! `[[recorder]]` row, minted from an observed `gh pr view --jq .body` tool

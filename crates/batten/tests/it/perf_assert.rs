@@ -284,7 +284,7 @@ fn an_over_budget_path_is_refused() {
     );
     let answer = findings(&dir);
     assert!(
-        answer.contains("perf-over-budget"),
+        answer.contains("path measure late"),
         "a p95 over its ceiling is a finding:\n{answer}"
     );
 }
@@ -301,7 +301,7 @@ fn a_budgeted_path_absent_from_a_present_record_is_refused() {
     );
     let answer = findings(&dir);
     assert!(
-        answer.contains("perf-record-incomplete"),
+        answer.contains("path measure partial"),
         "a budgeted path missing from a present record is a finding:\n{answer}"
     );
 }
@@ -332,7 +332,7 @@ fn a_record_does_not_survive_its_subject() {
     write(&dir, "subject.bin", "a rebuilt binary\n");
     let answer = findings(&dir);
     assert!(
-        !answer.contains("perf-over-budget"),
+        !answer.contains("path measure late"),
         "a record taken over bytes that have since changed must not answer:\n{answer}"
     );
 }
@@ -349,7 +349,7 @@ fn a_readme_publishing_a_different_budget_is_refused() {
     record(&dir, &clean_record());
     let answer = findings(&dir);
     assert!(
-        answer.contains("perf-budget-unpublished"),
+        answer.contains("prose state wrong"),
         "the published budget and the enforced one must agree:\n{answer}"
     );
 }
@@ -366,7 +366,7 @@ fn a_readme_with_no_row_for_a_budgeted_path_is_refused() {
     record(&dir, &clean_record());
     let answer = findings(&dir);
     assert!(
-        answer.contains("perf-budget-unpublished"),
+        answer.contains("prose state wrong"),
         "a budgeted path README does not publish is a disagreement:\n{answer}"
     );
 }
@@ -381,7 +381,7 @@ fn an_unreadable_readme_is_reported() {
     record(&dir, &clean_record());
     let answer = findings(&dir);
     assert!(
-        answer.contains("perf-budget-unreadable"),
+        answer.contains("source read missing"),
         "a declared source that could not be read is reported, never assumed clean:\n{answer}"
     );
 }
@@ -398,7 +398,7 @@ fn the_committed_readme_publishes_the_budgets_this_module_enforces() {
     let dir = repo("committed-readme", Some(&committed));
     let answer = findings(&dir);
     assert!(
-        !answer.contains("perf-budget-unpublished"),
+        !answer.contains("prose state wrong"),
         "README's Performance table must publish the budget `policy/perf-assert.rego` \
          enforces — move both together:\n{answer}"
     );

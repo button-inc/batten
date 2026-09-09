@@ -6,7 +6,7 @@
 //! they are green over a shape the engine may never build. Two things here can
 //! only be proved against the real boundary, and both are this row's whole point:
 //!
-//! * that `agent-turn-run` is the RUN the engine computes, not the author's
+//! * that `turn run loose` is the RUN the engine computes, not the author's
 //!   arithmetic — a fabricated `{"agent-turn-run": 3}` asserts the latter;
 //! * that an extraction this host cannot answer is **absent** from the map rather
 //!   than reported as `0`. A `with input as` case cannot distinguish those at all,
@@ -51,7 +51,7 @@ fn config(module: &str, extra: &str) -> String {
         r#"version = 1
 
 [[rule]]
-id = "turn run loose"
+id = "agent-turn-run"
 kind = "policy"
 scope = "mediated_call"
 module = "{module}"
@@ -62,7 +62,7 @@ id = "agent-turn-run"
 count = "agent-turn-run"
 {extra}
 [[verdict]]
-id = "turn run loose"
+id = "agent-turn-run"
 gloss = "this session has taken several turns in a row without doing anything"
 class = "Several turns in a row with no tool call between them."
 

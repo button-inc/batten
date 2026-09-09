@@ -39,7 +39,7 @@ fn repo(name: &str, changed: &[&str], plan: Option<&[&str]>) -> PathBuf {
 
 /// The same fixture, with the claim receipt under the caller's control.
 ///
-/// `claimed` is the population `plan-unrecorded` asks about — a branch that
+/// `claimed` is the population `plan declare absent` asks about — a branch that
 /// pulled a row — so a case about an UNCLAIMED tree needs to build one, and that
 /// case is what keeps the committed config usable over a scratch repository.
 fn claimed_repo(name: &str, changed: &[&str], plan: Option<&[&str]>, claimed: bool) -> PathBuf {
@@ -80,7 +80,7 @@ fn write_record(root: &Path, record: &str, lines: &[&str]) {
     // PARTITIONED EXACTLY AS THE READER PARTITIONS (CLOUD-1300), and the comment
     // above is what caught this: writing the unpartitioned name while
     // `recorder_records` resolved the claim pointed the two at different files,
-    // and the `plan-unrecorded` arm went red because the reader found nothing
+    // and the `plan declare absent` arm went red because the reader found nothing
     // where the writer had put something.
     //
     // The `claim` receipt itself is never partitioned, and cannot be: it is the
@@ -154,8 +154,8 @@ fn pointers(root: &Path) -> Vec<String> {
         .collect()
 }
 
-const UNFINISHED: &str = "plan-unfinished";
-const UNRECORDED: &str = "plan-unrecorded";
+const UNFINISHED: &str = "plan declare held";
+const UNRECORDED: &str = "plan declare absent";
 
 // ---------------------------------------------------------------------------
 // THE READ SEAM. Without these two the whole module is a `with input as` suite
@@ -197,13 +197,13 @@ fn an_empty_store_and_an_absent_one_reach_different_arms() {
 }
 
 // ---------------------------------------------------------------------------
-// `plan-unfinished`.
+// `plan declare held`.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn an_unfinished_entry_stops_the_lap() {
     let root = repo(
-        "plan-unfinished",
+        "plan declare held",
         &["src/a.rs"],
         Some(&["1 completed", "2 in_progress"]),
     );
@@ -259,7 +259,7 @@ fn the_refusal_carries_no_entry_prose() {
 }
 
 // ---------------------------------------------------------------------------
-// `plan-unrecorded` — the anti-vacuity arm.
+// `plan declare absent` — the anti-vacuity arm.
 // ---------------------------------------------------------------------------
 
 #[test]

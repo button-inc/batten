@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use batten::rules::{self, Rule};
 
 /// The predicate id the module declares.
-const UNGUARDED: &str = "landing-roster-unguarded";
+const UNGUARDED: &str = "check read never";
 
 /// The one path the module is anchored on.
 const LANDING: &str = ".github/workflows/fast-forward.yml";
@@ -195,7 +195,7 @@ jobs:
 /// the guard's presence rather than on the fixture being a fixture.
 #[test]
 fn a_fixture_landing_workflow_that_consults_the_roster_is_clean() {
-    let root = repo("check read never", Some(GUARDED));
+    let root = repo("landing-roster-guarded", Some(GUARDED));
     assert!(rules_fired(&root).is_empty());
 }
 

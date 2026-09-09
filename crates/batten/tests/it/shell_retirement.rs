@@ -589,7 +589,7 @@ fn an_edit_repointing_a_task_name_while_rewriting_the_line_is_refused() {
     );
     assert_eq!(
         findings(&root),
-        vec![String::from("shell-rule-retired")],
+        vec![String::from("shell retire other")],
         "the span is derived from the diff, so a line that also changed elsewhere \
          has no single repointed span and is refused"
     );
@@ -625,7 +625,7 @@ fn a_task_name_repointed_at_an_undeclared_invocation_is_refused() {
     );
     assert_eq!(
         findings(&root),
-        vec![String::from("shell-rule-retired")],
+        vec![String::from("shell retire other")],
         "without a `runs:` arm there is no declared invocation, so nothing admits \
          the repointing"
     );
@@ -659,7 +659,7 @@ fn an_edit_truncating_a_line_at_a_live_reference_is_refused() {
     );
     assert_eq!(
         findings(&root),
-        vec![String::from("shell-rule-retired")],
+        vec![String::from("shell retire other")],
         "dropping a reference to a file that is still here is maintenance in place"
     );
 }
@@ -694,7 +694,7 @@ fn an_added_shell_rule_is_refused() {
             removed: &[],
         },
     );
-    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+    assert_eq!(findings(&root), vec!["shell retire other".to_owned()]);
 }
 
 #[test]
@@ -707,7 +707,7 @@ fn an_added_bats_suite_is_refused() {
             removed: &[],
         },
     );
-    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+    assert_eq!(findings(&root), vec!["shell retire other".to_owned()]);
 }
 
 /// CLOUD-1088, and this is the tier that matters for it.
@@ -758,7 +758,7 @@ fn the_stays_bash_declaration_does_not_admit_an_edit() {
             removed: &[],
         },
     );
-    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+    assert_eq!(findings(&root), vec!["shell retire other".to_owned()]);
 }
 
 /// The load-bearing arm: an edit is invisible to every other sensor in the tree.
@@ -775,7 +775,7 @@ fn a_shell_rule_edited_in_place_is_refused() {
             removed: &[],
         },
     );
-    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+    assert_eq!(findings(&root), vec!["shell retire other".to_owned()]);
 }
 
 #[test]
@@ -791,7 +791,7 @@ fn a_bats_suite_edited_in_place_is_refused() {
             removed: &[],
         },
     );
-    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+    assert_eq!(findings(&root), vec!["shell retire other".to_owned()]);
 }
 
 #[test]
@@ -804,7 +804,7 @@ fn a_deletion_with_no_mapping_is_refused() {
             removed: &["mise-tasks/old-gate.sh"],
         },
     );
-    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+    assert_eq!(findings(&root), vec!["shell retire other".to_owned()]);
 }
 
 #[test]
@@ -821,7 +821,7 @@ fn a_deletion_carrying_two_arms_is_refused() {
             removed: &["mise-tasks/old-gate.sh"],
         },
     );
-    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+    assert_eq!(findings(&root), vec!["shell retire other".to_owned()]);
 }
 
 #[test]
@@ -837,7 +837,7 @@ fn a_mapping_naming_no_policy_surface_is_refused() {
             removed: &["mise-tasks/old-gate.sh"],
         },
     );
-    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+    assert_eq!(findings(&root), vec!["shell retire other".to_owned()]);
 }
 
 /// The successor KIND obligation, over the engine (CLOUD-1182).
@@ -860,7 +860,7 @@ fn an_engine_source_arm_without_a_declared_kind_is_refused() {
             removed: &["mise-tasks/old-gate.sh"],
         },
     );
-    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+    assert_eq!(findings(&root), vec!["shell retire other".to_owned()]);
 }
 
 /// The anti-vacuity mirror, and the case that proves this gate does not ban a
@@ -949,7 +949,7 @@ fn a_mapping_naming_no_compiled_binary_test_is_refused() {
             removed: &["mise-tasks/old-gate.sh"],
         },
     );
-    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+    assert_eq!(findings(&root), vec!["shell retire other".to_owned()]);
 }
 
 // ---------------------------------------------------------------------------
@@ -987,7 +987,7 @@ fn a_carried_row_naming_a_live_subject_is_refused() {
     );
     assert_eq!(
         findings(&root),
-        vec!["shell-rule-retired".to_owned()],
+        vec!["shell retire other".to_owned()],
         "every successor obligation is met and the subject is still standing"
     );
 }
@@ -1083,7 +1083,7 @@ fn a_withdrawal_over_a_live_subject_is_refused() {
             removed: &["tests/old-gate.bats"],
         },
     );
-    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+    assert_eq!(findings(&root), vec!["shell retire other".to_owned()]);
 }
 
 #[test]
@@ -1104,7 +1104,7 @@ fn a_withdrawal_naming_no_reason_is_refused() {
             removed: &["tests/old-gate.bats", ".claude/old-wrapper.sh"],
         },
     );
-    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+    assert_eq!(findings(&root), vec!["shell retire other".to_owned()]);
 }
 
 #[test]
@@ -1126,7 +1126,7 @@ fn the_successor_obligation_still_binds_the_other_three_arms() {
             removed: &["tests/old-gate.bats", ".claude/old-wrapper.sh"],
         },
     );
-    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+    assert_eq!(findings(&root), vec!["shell retire other".to_owned()]);
 }
 
 // ---------------------------------------------------------------------------
@@ -1409,7 +1409,7 @@ fn a_repointing_at_a_command_no_arm_declares_is_refused() {
         },
     );
     assert!(
-        findings(&root).contains(&"shell-rule-retired".to_owned()),
+        findings(&root).contains(&"shell retire other".to_owned()),
         "the target must come from the ledger, never from the editor: {:?}",
         findings(&root)
     );
@@ -1443,7 +1443,7 @@ fn a_repointing_that_also_changes_the_rest_of_the_line_is_refused() {
         },
     );
     assert!(
-        findings(&root).contains(&"shell-rule-retired".to_owned()),
+        findings(&root).contains(&"shell retire other".to_owned()),
         "dropping ` 2>/dev/null` alongside the repointing is a second edit: {:?}",
         findings(&root)
     );
@@ -1481,7 +1481,7 @@ fn replacing_a_span_that_is_not_a_reference_to_the_retired_path_is_refused() {
         },
     );
     assert!(
-        findings(&root).contains(&"shell-rule-retired".to_owned()),
+        findings(&root).contains(&"shell retire other".to_owned()),
         "a span in somebody else's tree is not a reference to the retired path: {:?}",
         findings(&root)
     );
@@ -1515,7 +1515,7 @@ fn a_malformed_invocation_field_declares_no_command() {
         },
     );
     assert!(
-        findings(&root).contains(&"shell-rule-retired".to_owned()),
+        findings(&root).contains(&"shell retire other".to_owned()),
         "an empty `runs:` tail is not a command: {:?}",
         findings(&root)
     );
@@ -1557,7 +1557,7 @@ fn a_retired_name_dropped_from_a_list_is_admitted() {
         },
     );
     assert!(
-        !findings(&root).contains(&"shell-rule-retired".to_owned()),
+        !findings(&root).contains(&"shell retire other".to_owned()),
         "dropping the name of a gate this delta retires is the honest edit, and \
          both halves see it: the removed line mentions `old-gate` and the added \
          line is that line minus exactly that name: {:?}",
@@ -1599,7 +1599,7 @@ fn dropping_the_name_while_also_changing_the_line_is_refused() {
         },
     );
     assert!(
-        findings(&root).contains(&"shell-rule-retired".to_owned()),
+        findings(&root).contains(&"shell retire other".to_owned()),
         "the name is one this delta retires, so the arm is reached — and the added \
          line is not the removed one minus that name, so it is still refused: {:?}",
         findings(&root)
@@ -1636,7 +1636,7 @@ fn dropping_a_name_this_delta_does_not_retire_is_still_refused() {
         },
     );
     assert!(
-        findings(&root).contains(&"shell-rule-retired".to_owned()),
+        findings(&root).contains(&"shell retire other".to_owned()),
         "`other-gate` names nothing this delta deletes, so dropping it is an \
          ordinary edit to a governed program and stays refused: {:?}",
         findings(&root)
@@ -1767,7 +1767,7 @@ fn a_bats_case_testing_a_live_path_is_still_refused() {
     let root = suite_repo("bats-case-live", CASE_SUITE_LIVE_DROPPED);
     assert_eq!(
         findings(&root),
-        vec![String::from("shell-rule-retired")],
+        vec![String::from("shell retire other")],
         "the surviving case names nothing this delta retires, so dropping it is an \
          ordinary edit to a governed suite"
     );
@@ -1784,7 +1784,7 @@ fn a_half_deleted_bats_case_is_still_refused() {
     let root = suite_repo("bats-case-half", CASE_SUITE_OPENER_ONLY);
     assert_eq!(
         findings(&root),
-        vec![String::from("shell-rule-retired")],
+        vec![String::from("shell retire other")],
         "a case whose naming line survives was edited, not retired"
     );
 }
@@ -1875,7 +1875,7 @@ fn a_bats_case_spending_a_surviving_binding_is_refused() {
     let root = bind_repo("bats-bind-kept", BIND_SUITE_BINDING_KEPT);
     assert_eq!(
         findings(&root),
-        vec![String::from("shell-rule-retired")],
+        vec![String::from("shell retire other")],
         "the binding is still there, so nothing about this case is going away"
     );
 }

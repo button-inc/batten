@@ -16,7 +16,7 @@
 //!
 //! # Why this row is only one flag
 //!
-//! `trunk-based/no-force-push` already denies `--force` and `-f`, per segment.
+//! `trunk-based/trunk push forced` already denies `--force` and `-f`, per segment.
 //! It excludes `--force-with-lease` on a stated argument: it "refuses when the
 //! remote moved". That is true when the sibling's push arrived AFTER your last
 //! fetch — the remote-tracking ref is stale, the comparison differs, the push is

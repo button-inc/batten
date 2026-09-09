@@ -171,7 +171,7 @@ fn a_preset_predicate_denies_and_is_green_by_turns() {
     assert_eq!(violations.len(), 1, "the practice-level predicate fired");
     assert_eq!(
         bundles[0].attribute(&violations[0]),
-        "no-force-push",
+        "trunk push forced",
         "a preset finding names ITS OWN predicate id — never `preset` as a \
          category, and never the enabling row"
     );
@@ -212,7 +212,7 @@ fn the_commit_hygiene_preset_decides_both_ways() {
     else {
         panic!("the preset answered");
     };
-    assert_eq!(bundles[0].attribute(&violations[0]), "no-empty-commit");
+    assert_eq!(bundles[0].attribute(&violations[0]), "commit ship empty");
     assert_eq!(
         policy::deny(&bundles[0], &call("git commit -m x")),
         Look::Is(Vec::new())
@@ -276,7 +276,7 @@ fn the_mise_preset_names_the_task_and_fails_open_on_a_stale_receipt() {
     };
     assert_eq!(
         bundles[0].attribute(&violations[0]),
-        "task-over-executable",
+        "task reach loose",
         "a direct call of a receipted task's program is refused"
     );
 
@@ -364,7 +364,7 @@ fn a_preset_id_colliding_with_an_in_repo_id_is_refused_at_load() {
     // An in-repo module claiming the preset's own id.
     fs::write(
         root.join("mine.rego"),
-        "package batten\nimport rego.v1\nrules contains \"no-force-push\"\n",
+        "package batten\nimport rego.v1\nrules contains \"trunk push forced\"\n",
     )
     .expect("write module");
     let mine: Rule = serde_json::from_value(serde_json::json!({
@@ -385,7 +385,7 @@ fn a_preset_id_colliding_with_an_in_repo_id_is_refused_at_load() {
     )
     .expect_err("one id, two publishers across the boundary");
     let text = format!("{err}");
-    assert!(text.contains("no-force-push"), "names the id: {text}");
+    assert!(text.contains("trunk push forced"), "names the id: {text}");
     assert!(
         text.contains("mine.rego") && text.contains("trunk-based"),
         "and BOTH sides, one of which is vendored: {text}"
@@ -622,7 +622,7 @@ fn decided(bundle: &policy::Bundle, document: &str) -> Vec<policy::Violation> {
     violations
 }
 
-/// (CLOUD-1269) `graded-head-is-not-regraded` refuses a judged commit and is
+/// (CLOUD-1269) `head grade twice` refuses a judged commit and is
 /// silent on one nothing has looked at.
 ///
 /// Both halves, because the first alone passes on a preset that refuses
@@ -638,7 +638,7 @@ fn the_landing_loop_preset_refuses_a_regrade_and_is_green_by_turns() {
     assert_eq!(judged.len(), 1, "a commit the forge already judged");
     assert_eq!(
         bundle.attribute(&judged[0]),
-        "graded-head-is-not-regraded",
+        "head grade twice",
         "a preset finding names ITS OWN predicate id — never `preset` as a \
          category, and never the enabling row"
     );
@@ -808,7 +808,7 @@ fn a_tree_module_reading_a_call_fact_is_refused_at_load() {
     .expect("the same module on the surface that emits the fact");
 }
 
-/// (CLOUD-1280) `already-landed-work-is-not-relanded` refuses a target that
+/// (CLOUD-1280) `patch ship twice` refuses a target that
 /// already carries this work, and is silent on one that does not.
 ///
 /// The deny and its anti-vacuity mirror, plus the two answers that are NOT
@@ -827,7 +827,7 @@ fn the_landing_loop_preset_refuses_a_reland_and_is_green_by_turns() {
     assert_eq!(landed.len(), 1, "the target already carries this work");
     assert_eq!(
         bundle.attribute(&landed[0]),
-        "already-landed-work-is-not-relanded",
+        "patch ship twice",
         "a preset finding names its own predicate id"
     );
 
@@ -893,7 +893,7 @@ fn the_landing_loop_preset_refuses_a_reland_and_is_green_by_turns() {
     );
 }
 
-/// (CLOUD-1280) `lease-authorises-the-branch` refuses a live lease held by
+/// (CLOUD-1280) `lease grant other` refuses a live lease held by
 /// another branch, and ALLOWS every reading it cannot take.
 ///
 /// The fail-open asymmetry is the load-bearing half of this predicate, so the
@@ -914,7 +914,7 @@ fn the_landing_loop_preset_refuses_a_lease_held_elsewhere_and_fails_open() {
     assert_eq!(held.len(), 1, "a live lease grading this clone out");
     assert_eq!(
         bundle.attribute(&held[0]),
-        "lease-authorises-the-branch",
+        "lease grant other",
         "a preset finding names its own predicate id"
     );
 
@@ -988,7 +988,7 @@ fn the_landing_loop_preset_refuses_a_lease_held_elsewhere_and_fails_open() {
     );
 }
 
-/// (CLOUD-1335) `rebase-conflict-stops-the-lap` refuses a lap that conflicted and
+/// (CLOUD-1335) `replay halt conflict` refuses a lap that conflicted and
 /// is silent on one that replayed.
 ///
 /// **This is the case both of the module's declared mutations must redden, and
@@ -1011,7 +1011,7 @@ fn the_landing_loop_preset_stops_a_conflicted_lap_and_is_green_by_turns() {
     assert_eq!(stopped.len(), 1, "a lap whose replay conflicted");
     assert_eq!(
         bundle.attribute(&stopped[0]),
-        "rebase-conflict-stops-the-lap",
+        "replay halt conflict",
         "a preset finding names its own predicate id"
     );
 
@@ -1061,7 +1061,7 @@ fn the_landing_loop_preset_stops_a_conflicted_lap_and_is_green_by_turns() {
     );
 }
 
-/// (CLOUD-1338) `lap-waits-on-one-answer` refuses a lap that read both sides of
+/// (CLOUD-1338) `wait read both` refuses a lap that read both sides of
 /// its race and is silent on one that read a single answer.
 ///
 /// **The case both declared mutations must redden, from opposite sides.**
@@ -1094,7 +1094,7 @@ fn the_landing_loop_preset_refuses_a_lap_that_read_both_answers() {
     );
     assert_eq!(
         bundle.attribute(&both[0]),
-        "lap-waits-on-one-answer",
+        "wait read both",
         "a preset finding names its own predicate id"
     );
 

@@ -31,7 +31,7 @@
 //! is that half's tier.
 //!
 //! Whether the foreign-runner cargo invocation still matches the task's own is
-//! this row's, as `foreign-cargo-is-the-declared-spelling`. It reads
+//! this row's, as `cargo spelling wrong`. It reads
 //! `test:cargo`'s body out of the manifest rather than out of `mise tasks info`,
 //! which no policy module can spawn for — and the two are the same bytes only
 //! while that task carries no template. `task read unread` is the arm

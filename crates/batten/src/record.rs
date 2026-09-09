@@ -253,7 +253,7 @@ pub fn run_closes(overrides: &Overrides) -> Result<ExitCode> {
     // PARTITIONED BY THE CLAIM, exactly as the reader partitions (CLOUD-1300),
     // and `pr-closes` is the record that defect was MEASURED on: after #810
     // merged and its branch was reset onto the new trunk, this file still named
-    // that PR's keys and `filed-over-own-diff`'s exemption was evaluated against
+    // that PR's keys and `issue file same`'s exemption was evaluated against
     // them. A writer that skipped the partition while the reader applied it
     // would be the same staleness with an extra step — the reader would look
     // under the partitioned name, find nothing, and refuse where it used to
@@ -308,7 +308,7 @@ fn claim_of(git_dir: &Path, branch: &str) -> Option<String> {
 /// `lap` joins them for the same reason and with one difference worth stating:
 /// it is the only one of the three that is a HISTORY rather than a current
 /// state. `land::replay` appends a line per lap, and
-/// `rebase-conflict-stops-the-lap` reads the last one — so a conflict resolved by
+/// `replay halt conflict` reads the last one — so a conflict resolved by
 /// a later lap stops refusing, which a store keeping only the newest line could
 /// not express.
 pub const VERB_WRITTEN: &[&str] = &["claim", "plan", crate::land::LAP_RECORD];

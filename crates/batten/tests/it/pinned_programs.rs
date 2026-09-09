@@ -368,7 +368,7 @@ fn a_probe_for_an_unpinned_program_is_not_reported() {
 /// assumed.
 ///
 /// The boundary looks THROUGH `command`, so `command -v gh` resolves an effective
-/// program of `gh` and `pinned-program-via-the-pin` already speaks for it. Firing
+/// program of `gh` and `pin reach loose` already speaks for it. Firing
 /// here too would put one call under two classes with two different remedies.
 ///
 /// This case is why the rule covers `which`/`type` and not `command` at all:

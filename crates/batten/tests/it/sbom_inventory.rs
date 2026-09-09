@@ -257,7 +257,7 @@ fn a_drifted_cargo_count_is_refused_over_the_real_lockfile() {
         Some(2),
         "a cargo count disagreeing with the lockfile is a policy verdict\n{answer}{cause}"
     );
-    assert!(answer.contains("sbom-package-drift"), "{answer}{cause}");
+    assert!(answer.contains("manifest count other"), "{answer}{cause}");
 }
 
 #[test]
@@ -299,7 +299,7 @@ fn an_empty_catalog_is_refused() {
     let outcome = check(&dir);
     let answer = stdout(&outcome);
     assert_eq!(outcome.status.code(), Some(2), "{answer}");
-    assert!(answer.contains("sbom-empty"), "{answer}");
+    assert!(answer.contains("manifest list empty"), "{answer}");
 }
 
 #[test]
@@ -318,7 +318,7 @@ fn an_unstable_scan_is_refused() {
     let outcome = check(&dir);
     let answer = stdout(&outcome);
     assert_eq!(outcome.status.code(), Some(2), "{answer}");
-    assert!(answer.contains("sbom-unstable"), "{answer}");
+    assert!(answer.contains("manifest mint twice"), "{answer}");
 }
 
 #[test]
@@ -335,7 +335,7 @@ fn an_inflated_component_set_is_refused() {
     let outcome = check(&dir);
     let answer = stdout(&outcome);
     assert_eq!(outcome.status.code(), Some(2), "{answer}");
-    assert!(answer.contains("sbom-components-inflated"), "{answer}");
+    assert!(answer.contains("manifest count ahead"), "{answer}");
 }
 
 #[test]
@@ -361,7 +361,7 @@ fn an_unmapped_action_pin_is_refused_from_committed_text_alone() {
     let outcome = check(&dir);
     let answer = stdout(&outcome);
     assert_eq!(outcome.status.code(), Some(2), "{answer}");
-    assert!(answer.contains("sbom-action-unmapped"), "{answer}");
+    assert!(answer.contains("pin table missing"), "{answer}");
 }
 
 #[test]
@@ -401,7 +401,7 @@ fn a_recorded_but_empty_scan_is_refused() {
     let outcome = check(&dir);
     let answer = stdout(&outcome);
     assert_eq!(outcome.status.code(), Some(2), "{answer}");
-    assert!(answer.contains("sbom-unrecorded"), "{answer}");
+    assert!(answer.contains("manifest file missing"), "{answer}");
 }
 
 #[test]
@@ -477,9 +477,9 @@ fn the_report_is_pointer_only() {
     let (answer, cause) = (stdout(&outcome), stderr(&outcome));
     assert_eq!(outcome.status.code(), Some(2), "{answer}{cause}");
     for id in [
-        "sbom-supplier-unset",
-        "sbom-copyright-unenriched",
-        "sbom-license-unenriched",
+        "manifest own missing",
+        "manifest own unnamed",
+        "manifest grant missing",
     ] {
         assert!(answer.contains(id), "{id} is not reported\n{answer}{cause}");
     }

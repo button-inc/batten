@@ -2,7 +2,7 @@
 //!
 //! # The tier this is, and what the preset's own suite structurally cannot prove
 //!
-//! `lease-authorises-the-branch` is a vendored preset, and
+//! `lease grant other` is a vendored preset, and
 //! `crates/batten/tests/it/policy_presets.rs` already proves the PREDICATE decides
 //! for a consumer with no vocabulary of its own. What neither that tier nor the
 //! module's `test_` rules can prove is that the ENGINE writes the line the

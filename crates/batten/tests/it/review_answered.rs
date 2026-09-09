@@ -68,7 +68,7 @@
 //! each is noted below with what the number is now and why.
 //!
 // changed: "review judge missing.bats::THE MEASURED SHAPE: a head carrying unresolved threads is refused, naming the count" crates/batten/tests/it/review_answered.rs the count is identical and where it is read from is not: `4 blocking` was a substring of a free string, and it is now the `Subject::Count` the engine renders beside the token (CLOUD-1050)
-// changed: "review judge missing.bats::VACUITY: zero threads and no review reads as unreviewed, not as all-addressed" crates/batten/tests/it/review_answered.rs the count is 0 now and the rule is `review-absent`: the condition was one element of a `--jq` projection and is a second fact with its own inverted comparison since CLOUD-690, so the assertion moved from prose to a different predicate's subject rather than only to a subject
+// changed: "review judge missing.bats::VACUITY: zero threads and no review reads as unreviewed, not as all-addressed" crates/batten/tests/it/review_answered.rs the count is 0 now and the rule is `review read absent`: the condition was one element of a `--jq` projection and is a second fact with its own inverted comparison since CLOUD-690, so the assertion moved from prose to a different predicate's subject rather than only to a subject
 // changed: "review judge missing.bats::VACUITY: a page the command could not read refuses rather than passing" crates/batten/tests/it/review_answered.rs same number, different producer: the projection emitted an extra element and the `blocking` column adds one, so the discriminating pair with the all-answered case is now two identical thread sets under different page flags
 // changed: "review judge missing.bats::THE BYPASS: a compound command is still a ready" crates/batten/tests/it/review_answered.rs same cause, same number; what the case proves — that the receipt row's selection and this module's narrowing agree about one command — is unchanged
 //!
@@ -505,7 +505,7 @@ fn the_measured_shape_a_head_carrying_unresolved_threads_is_refused_naming_the_c
     reviewed(&dir, &declared);
     let decision = ready(&dir);
     denied(&decision);
-    assert!(decision.contains("review-unanswered"), "{decision}");
+    assert!(decision.contains("review answer missing"), "{decision}");
     // THE COUNT, as the typed ABI renders it: the token and the `Subject::Count`
     // beside it. The retired case read `4 blocking` out of a free string; the
     // number is the same and it is now a decoded subject, and since CLOUD-1286

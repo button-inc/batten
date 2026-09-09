@@ -431,7 +431,7 @@ fn a_foreground_sleep_is_refused() {
     // The harness kills a foreground call at ~2 minutes, so a poll meant to be
     // patient FAILS instead — measured at exit 143 and 144 over a hung commit,
     // after which the container was reclaimed with the work uncommitted.
-    let root = fixture("foreground-sleep");
+    let root = fixture("sleep run blocked");
     denied_background(&root, "sleep 90", false);
     // Judged per segment: the measured shape had the sleep in the middle.
     denied_background(&root, "cd /tmp; sleep 90; git log --oneline -1", false);
@@ -447,7 +447,7 @@ fn a_backgrounded_bare_sleep_is_a_timer() {
     // in one session against 523 of 524 backgrounded tasks re-invoking their
     // caller on exit. Two of the 490 changed a decision.
     denied_background(
-        &fixture("background-timer"),
+        &fixture("timer run refused"),
         "sleep 590; tail -6 /tmp/land.log",
         true,
     );
@@ -499,7 +499,7 @@ fn a_loop_body_is_reached_and_the_exemption_decides_it() {
 fn a_backgrounded_bare_sleep_raises_the_timer_and_not_the_foreground_rule() {
     // THE DISCRIMINATING CASE for `run-in-background`, and it has to read the
     // verdict rather than the decision: both rules deny, so an exit-code
-    // assertion passes over a `foreground-sleep` that ignored the flag entirely.
+    // assertion passes over a `sleep run blocked` that ignored the flag entirely.
     let (deny, text) = hook_background(
         &fixture("timer-not-foreground"),
         "sleep 590; tail -6 /tmp/land.log",
@@ -561,7 +561,7 @@ fn a_token_carrying_an_m_is_not_a_flag_cluster() {
 // carried: "a compound list is judged per element, not by its first word" crates/batten/tests/it/run_shape.rs
 #[test]
 fn a_compound_list_is_judged_per_element() {
-    // THE SHAPE A RAW-STRING MODULE MISSES. The vendored `no-force-push` preset
+    // THE SHAPE A RAW-STRING MODULE MISSES. The vendored `trunk push forced` preset
     // anchors on `words[0] == "git"` over the whole command, so `cd /tmp && git
     // push --force` reaches it as `cd` and is allowed — green tests, silent
     // gate. Every element is a command here.
@@ -658,7 +658,7 @@ fn the_refusal_names_its_predicate_its_class_and_the_route_out() {
     let (deny, text) = hook(&root, "git commit");
     assert!(deny, "the shape is still refused: {text}");
     assert!(
-        text.contains("commit-names-no-message-source"),
+        text.contains("commit write missing"),
         "the predicate id: {text}"
     );
     assert!(

@@ -199,7 +199,7 @@ fn a_platform_key_mise_does_not_emit_is_reported() {
     );
     assert_eq!(code, Some(2), "install-time residue is a finding\n{said}");
     assert!(
-        said.contains("lock-platform-residue"),
+        said.contains("lock write other"),
         "the finding names its rule\n{said}"
     );
 }
@@ -233,7 +233,7 @@ fn a_required_platform_missing_entirely_is_reported() {
     );
     assert_eq!(code, Some(2), "an unlocked platform is a finding\n{said}");
     assert!(
-        said.contains("lock-platform-uninstallable"),
+        said.contains("lock reach unsafe"),
         "the finding names its rule\n{said}"
     );
 }
@@ -247,7 +247,7 @@ fn an_asset_backend_that_locks_no_platform_is_reported() {
     let (code, said) = judge_repo("lock-complete-unlocked", lock, &manifest(""), &[]);
     assert_eq!(code, Some(2), "an unverified download is a finding\n{said}");
     assert!(
-        said.contains("lock-tool-unlocked"),
+        said.contains("tool pin partial"),
         "the finding names its rule\n{said}"
     );
 }
@@ -285,7 +285,7 @@ fn a_declared_tool_with_no_lock_entry_is_reported() {
         "a declared tool with no entry is a finding\n{said}"
     );
     assert!(
-        said.contains("lock-tool-missing"),
+        said.contains("tool pin absent"),
         "the finding names its rule\n{said}"
     );
 }
@@ -294,7 +294,7 @@ fn a_declared_tool_with_no_lock_entry_is_reported() {
 fn a_declared_tool_on_an_exempt_backend_with_no_lock_entry_is_reported() {
     // CLOUD-611. The case above uses an `aqua:` pin, so for its whole life the
     // presence question was only ever asked of backends the url question already
-    // judged — and `lock-tool-missing` inherited `locks_nothing` from that other
+    // judged — and `tool pin absent` inherited `locks_nothing` from that other
     // question, which excused exactly the backends nothing else covered.
     //
     // The two questions are different and only one needs the exemption. "Does
@@ -326,7 +326,7 @@ fn a_declared_tool_on_an_exempt_backend_with_no_lock_entry_is_reported() {
         "an exempt backend with no entry is still a finding\n{said}"
     );
     assert!(
-        said.contains("lock-tool-missing"),
+        said.contains("tool pin absent"),
         "the finding names its rule\n{said}"
     );
 }
@@ -344,7 +344,7 @@ fn a_pin_its_entry_does_not_name_is_reported() {
     );
     assert_eq!(code, Some(2), "a stale pin is a finding\n{said}");
     assert!(
-        said.contains("lock-pin-stale"),
+        said.contains("pin read stale"),
         "the finding names its rule\n{said}"
     );
 }
@@ -373,7 +373,7 @@ fn a_pin_the_lock_extends_only_across_a_boundary_is_reported() {
         "an extension that is not at a component boundary is stale\n{said}"
     );
     assert!(
-        said.contains("lock-pin-stale"),
+        said.contains("pin read stale"),
         "the finding names its rule\n{said}"
     );
 }
@@ -405,7 +405,7 @@ fn re_enabled_lockfile_writes_are_reported() {
     );
     assert_eq!(code, Some(2), "re-enabled writes are a finding\n{said}");
     assert!(
-        said.contains("lockfile-writes-enabled"),
+        said.contains("lock write unsafe"),
         "the finding names its rule\n{said}"
     );
 }
@@ -427,7 +427,7 @@ fn a_workflow_installing_without_the_lockfile_env_is_reported() {
     );
     assert_eq!(code, Some(2), "an unlocked install is a finding\n{said}");
     assert!(
-        said.contains("workflow-installs-unlocked"),
+        said.contains("workflow run unsafe"),
         "the finding names its rule\n{said}"
     );
 }
@@ -481,7 +481,7 @@ fn the_index_answers_not_the_worktree_for_the_committed_rule() {
     let (staged, also) = judge(&dir);
     assert_eq!(staged, Some(2), "a staged residue key still fails\n{also}");
     assert!(
-        also.contains("lock-platform-residue"),
+        also.contains("lock write other"),
         "the finding names its rule\n{also}"
     );
 }
@@ -498,7 +498,7 @@ fn an_unreadable_lockfile_a_manifest_depends_on_is_refused() {
     ));
     assert_eq!(code, Some(2), "an unreadable lockfile is a finding\n{said}");
     assert!(
-        said.contains("lock-unreadable"),
+        said.contains("lock read unread"),
         "the finding names its rule\n{said}"
     );
 }

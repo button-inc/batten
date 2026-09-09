@@ -190,7 +190,7 @@ fn linked_fixture(name: &str, dest: &str, body: &[u8]) -> (PathBuf, PathBuf) {
     );
     write(&dir, "a.txt", "x\n");
     // `init_repo`, never a `git init` fork: main's fixture-fork ratchet
-    // (`fixture-fork-added`) refuses the fork, and under `CARGO_TARGET_TMPDIR`
+    // (`test add duplicate`) refuses the fork, and under `CARGO_TARGET_TMPDIR`
     // this copies the published template at zero forks instead.
     init_repo(&dir);
     (dir, artifact)

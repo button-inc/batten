@@ -4720,7 +4720,7 @@ pub const SURFACE: &[CommandDecl] = &[
         flags: &[],
     },
     // The same argument one layer over, and here the envelope route is not merely
-    // per-harness — it is unreliable in the ordinary case. `filed-over-own-diff`
+    // per-harness — it is unreliable in the ordinary case. `issue file same`
     // exempts a row the PR CLOSES, and reads that from a `pr-closes` record the
     // `pr-body-closes` recorder mints from an observed `gh pr view --jq .body`
     // envelope. `land` fetches exactly that body and pipes it to

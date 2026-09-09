@@ -9332,7 +9332,7 @@ const SHELL_GRAMMAR: [&str; 9] = [
 /// repository's committed config:
 ///
 /// * `(git push origin main --force)` — allowed, because `arguments` ended
-///   `--force)` and `no-force-push` compares for equality. The same command with
+///   `--force)` and `trunk push forced` compares for equality. The same command with
 ///   the flag written earlier denied, so the bypass was a matter of word order.
 /// * `(rm batten.toml)` — allowed, because the operand was `batten.toml)` and no
 ///   protected path matches it. That one predates this row and is the same

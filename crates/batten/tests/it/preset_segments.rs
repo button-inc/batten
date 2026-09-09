@@ -64,7 +64,7 @@ fn assert_preset_denies(command: &str) {
     let (code, cause) = adjudicate(command);
     assert_eq!(code, Some(2), "must refuse: {command}");
     assert!(
-        cause.contains("no-force-push"),
+        cause.contains("trunk push forced"),
         "the deny must be the preset's own, not a neighbouring row's: {command}\n{cause}"
     );
 }
@@ -82,7 +82,7 @@ fn assert_preset_denies(command: &str) {
 fn assert_preset_allows(command: &str) {
     let (_, cause) = adjudicate(command);
     assert!(
-        !cause.contains("no-force-push"),
+        !cause.contains("trunk push forced"),
         "the preset must not refuse: {command}\n{cause}"
     );
 }

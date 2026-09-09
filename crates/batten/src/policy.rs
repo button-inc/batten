@@ -468,7 +468,7 @@ impl Bundle {
 /// **The narrowing a mint needs, and the reason it is a function rather than a
 /// filter written at its one call site.** [`crate::admission`]'s anchor has to
 /// re-run the rule a refusal named in order to recover its fingerprint, and
-/// `--rule` carries a PREDICATE id — `filed-here` publishes `filed-over-own-diff`
+/// `--rule` carries a PREDICATE id — `filed-here` publishes `issue file same`
 /// — so a row-id match selects nothing and the mint silently binds the head
 /// (CLOUD-1087, CLOUD-1125). Widening from there to every `policy` row fixed that
 /// and cost 2m22s per mint, because "which KIND of row" is not "which row":
@@ -1736,7 +1736,7 @@ fn check_finding_ids(
 /// because every one of them is written out — a computed id would be invisible
 /// here, and is also invisible to a reader of the module, which is the same
 /// objection.
-fn finding_ids(text: &str) -> BTreeSet<String> {
+pub(crate) fn finding_ids(text: &str) -> BTreeSet<String> {
     /// The first double-quoted run after `from`, if the line has one.
     fn quoted(line: &str, from: usize) -> Option<&str> {
         let rest = line.get(from..)?;

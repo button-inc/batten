@@ -342,7 +342,7 @@ fn a_restated_default_that_disagrees_is_reported_with_its_pointer() {
         "a disagreeing restatement is a finding\n{said}"
     );
     assert!(
-        said.contains("restated-default-drifts"),
+        said.contains("default state other"),
         "the finding names its rule\n{said}"
     );
     assert!(
@@ -391,7 +391,7 @@ fn a_sentence_claiming_an_unwired_event_is_reported() {
     );
     assert_eq!(code, Some(2), "an unwired claim is a finding\n{said}");
     assert!(
-        said.contains("named-event-unwired"),
+        said.contains("event wire missing"),
         "the finding names its rule\n{said}"
     );
 }
@@ -427,7 +427,7 @@ fn a_named_input_key_the_schema_does_not_carry_is_reported() {
     );
     assert_eq!(code, Some(2), "an unemittable key is a finding\n{said}");
     assert!(
-        said.contains("named-input-key-unemittable"),
+        said.contains("input key dead"),
         "the finding names its rule\n{said}"
     );
 }
@@ -468,7 +468,7 @@ fn a_named_fixed_rule_the_evaluator_does_not_query_is_reported() {
     );
     assert_eq!(code, Some(2), "an unqueried name is a finding\n{said}");
     assert!(
-        said.contains("named-fixed-rule-unqueried"),
+        said.contains("rule ask missing"),
         "the finding names its rule\n{said}"
     );
 }
@@ -529,7 +529,7 @@ fn an_absent_authority_a_claim_depends_on_is_refused() {
         "an absent authority a claim depends on must not be silent\n{said}"
     );
     assert!(
-        said.contains("drift-authority-unreadable"),
+        said.contains("drift read unread"),
         "and it must be its OWN class, distinguishable from a clean pass and \
          from a wiring that is merely absent\n{said}"
     );
@@ -568,7 +568,7 @@ fn an_unparseable_authority_a_claim_depends_on_is_refused() {
         "an authority that will not parse is could-not-look, not a clean tree\n{said}"
     );
     assert!(
-        said.contains("drift-authority-unreadable"),
+        said.contains("drift read unread"),
         "and it reaches the same class as the absent case — one channel, two \
          causes, neither of them silence\n{said}"
     );
@@ -599,7 +599,7 @@ fn an_unparseable_authority_no_prose_claims_against_is_still_silent() {
          unreadable it is\n{said}"
     );
     assert!(
-        !said.contains("drift-authority-unreadable"),
+        !said.contains("drift read unread"),
         "and the could-not-look class must not fire on a tree that asked no \
          question of the file\n{said}"
     );
@@ -703,7 +703,7 @@ fn a_restated_arm_count_that_disagrees_with_the_module_is_reported() {
     );
     assert_eq!(code, Some(2), "a wrong arm count is a finding\n{said}");
     assert!(
-        said.contains("restated-arm-count-drifts"),
+        said.contains("rule count other"),
         "the finding names its rule\n{said}"
     );
 }
@@ -741,7 +741,7 @@ fn an_arm_named_without_a_count_is_untouched() {
 }
 
 /// The sentence `rules/policy-modules.md` closes its key lists with, and
-/// the anchor `schema-key-undocumented` keys on.
+/// the anchor `input name missing` keys on.
 const CLAIM: &str = "`rule watch other` holds the lists above to those two files.\n";
 
 #[test]
@@ -765,7 +765,7 @@ fn a_schema_key_the_claiming_file_omits_is_reported() {
         "an omitted emittable key is a finding\n{said}"
     );
     assert!(
-        said.contains("schema-key-undocumented"),
+        said.contains("input name missing"),
         "the finding names its rule\n{said}"
     );
 }
@@ -862,7 +862,7 @@ fn the_two_anchors_this_gate_keys_on_are_still_one_line_in_the_committed_files()
             .lines()
             .any(|line| line.contains("holds the lists above to those two files")),
         "the schema authority claim must survive on one line or \
-         `schema-key-undocumented` silently stops judging it"
+         `input name missing` silently stops judging it"
     );
 }
 
@@ -901,10 +901,10 @@ package batten.collapse_probe
 
 import rego.v1
 
-rules contains "collapse-probe"
+rules contains "probe read absent"
 
 violation contains {
-	"rule": "collapse-probe",
+	"rule": "probe read absent",
 	"verdict": "probe read absent",
 	"subjects": [{"count": 1}],
 } if {

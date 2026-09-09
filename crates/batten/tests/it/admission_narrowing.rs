@@ -5,7 +5,7 @@
 //!
 //! `admission_anchor` re-runs the rule a refusal named so it can recover that
 //! finding's fingerprint and bind the admission to it. `--rule` carries a
-//! PREDICATE id — `issue file other` publishes `filed-over-own-diff` — so filtering
+//! PREDICATE id — `issue file other` publishes `issue file same` — so filtering
 //! `declared.id == rule` selected nothing, the scan produced no finding, and the
 //! mint silently took the `head()` fallback: an admission answered, spent, and
 //! queried by nothing (CLOUD-1087, CLOUD-1125).
@@ -183,7 +183,7 @@ fn the_fixture_bundles_actually_publish_their_predicates() {
 /// again and the 2m22s comes back with nothing to announce it. That is what this
 /// case refuses, and no fixture can.
 ///
-/// The committed `filed-over-own-diff` is asserted beside it in the same
+/// The committed `issue file same` is asserted beside it in the same
 /// function, because a repository whose bundles failed to load would give an
 /// empty set for the first assertion and pass it for exactly the wrong reason.
 #[test]
@@ -214,7 +214,7 @@ fn the_committed_bundles_publish_no_engine_side_rule_name() {
 
     // ANTI-VACUITY FIRST, so the refusal below cannot pass over an empty set.
     assert!(
-        policy::publishers_of(&bundles, "filed-over-own-diff")
+        policy::publishers_of(&bundles, "issue file same")
             .into_iter()
             .eq(["issue file other"]),
         "the committed tree still publishes a predicate under a differently-named \

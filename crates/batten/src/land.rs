@@ -11,9 +11,9 @@
 //! # It DECIDES nothing, and that separation is the whole design
 //!
 //! Two policy questions arise in a lap and neither is answered here. *May a lap
-//! continue past a conflicted replay?* is `rebase-conflict-stops-the-lap`'s.
+//! continue past a conflicted replay?* is `replay halt conflict`'s.
 //! *Which answer may a lap act on when its wait raced two questions?* is
-//! `lap-waits-on-one-answer`'s. Both are `landing-loop` preset predicates over
+//! `wait read both`'s. Both are `landing-loop` preset predicates over
 //! the records this module writes, which is CLOUD-1148's thesis read forwards:
 //! the mechanics move to the engine and the decisions become Rego. So nothing
 //! here branches on "should we stop" — it does the work, writes down what it
@@ -80,7 +80,7 @@ impl Replay {
     /// The record line this outcome writes.
     ///
     /// Four columns, `rebase <verdict> <commit> <path>`, which is the layout
-    /// `rebase-conflict-stops-the-lap` reads and the reason it is stated in both
+    /// `replay halt conflict` reads and the reason it is stated in both
     /// places rather than derived: the module is vendored into every consumer's
     /// binary and this writer is one consumer of it, so neither can be the
     /// other's authority. `crates/batten/tests/it/land.rs` holds them together.
@@ -105,7 +105,7 @@ impl Replay {
                 // this requires `count(columns) == 4`, so `docs/my notes.md` made
                 // FIVE and the line was dropped from `replays` entirely —
                 // `last_replay` fell back to the previous lap's clean line and
-                // `rebase-conflict-stops-the-lap` reported clean over the lap's
+                // `replay halt conflict` reported clean over the lap's
                 // one human stop. A dropped line and a clean tree are
                 // byte-identical on the decision surface, which is the shape this
                 // repository refuses everywhere.
@@ -412,7 +412,7 @@ pub const LAP_RECORD: &str = "lap";
 /// a run by hand.
 ///
 /// The arms are named rather than numbered because the record is what
-/// `lap-waits-on-one-answer` reads, and a reviewer chasing a refusal needs to
+/// `wait read both` reads, and a reviewer chasing a refusal needs to
 /// know WHICH question answered, not that some arm did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arm {
@@ -456,7 +456,7 @@ impl Answered {
     /// The record line this answer writes.
     ///
     /// Four columns, `wait <arm> <verdict> <sha>`, which is the layout
-    /// `lap-waits-on-one-answer` reads. Stated in both places rather than derived
+    /// `wait read both` reads. Stated in both places rather than derived
     /// for the reason its sibling gives: the module is vendored into every
     /// consumer's binary and this writer is one consumer of it, so neither can be
     /// the other's authority.
@@ -694,7 +694,7 @@ pub fn wait(
 /// abandoned unread — and gets the pair back. The alternative, letting the caller
 /// assemble a `Vec`, is what makes recording only the winner writable, and a
 /// record with a winner and no loser is byte-identical to what a lap that read
-/// BOTH sides produces. `lap-waits-on-one-answer` would then have nothing to
+/// BOTH sides produces. `wait read both` would then have nothing to
 /// tell the two apart, which is the whole property.
 ///
 /// Both arms always appear, so the count of ANSWERING arms is what varies and
@@ -2223,7 +2223,7 @@ pub struct Abandoned {
 /// The constructor is the whole mechanism: a caller reaching for the check name
 /// has to write [`FanIn::from_workflow_path`] over it, which is a lie a reader
 /// can see rather than an argument position that accepts anything. `ci-parity`'s
-/// `fan-in-is-wired` binds on that constructor appearing on the same line as the
+/// `job wire missing` binds on that constructor appearing on the same line as the
 /// declaration read, so the module and the compiler hold the same join — the
 /// module alone could not, because two independent line matches are satisfied by
 /// an unrelated read plus a wrong argument (found in review of #848).

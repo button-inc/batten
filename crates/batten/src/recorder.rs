@@ -1172,7 +1172,7 @@ pub fn blocked_path(git_dir: &Path, branch: &str, claim: Option<&str>) -> std::p
 /// **PARTITIONED BY THE BRANCH'S CLAIM, NOT BY THE BRANCH ALONE (CLOUD-1300).** A
 /// branch name outlives the branch it described, so keying on the name alone let
 /// the next attempt read the previous one's lines as its own — measured, where a
-/// `pr-closes` record still named a merged PR's keys and `filed-over-own-diff`'s
+/// `pr-closes` record still named a merged PR's keys and `issue file same`'s
 /// exemption was evaluated against them. That direction is the dangerous one: it
 /// exempts silently, and nothing downstream re-checks.
 ///

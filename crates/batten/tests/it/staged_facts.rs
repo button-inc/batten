@@ -566,10 +566,10 @@ fn the_committed_lock_rule_refuses_a_partial_entry_over_the_binary() {
     );
     // THE PREDICATE ID, NOT THE ROW ID. A module's finding carries the `rule` id
     // the `violation` object declares — `lock cover partial` is what `--rule` selects
-    // and `lock-platform-uninstallable` is what decided — so asserting the row
+    // and `lock reach unsafe` is what decided — so asserting the row
     // name here would pass over any module that raised anything at all.
     assert!(
-        answer.contains("lock-platform-uninstallable"),
+        answer.contains("lock reach unsafe"),
         "and the finding names the predicate that decided it\n{answer}{cause}"
     );
 }

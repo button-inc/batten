@@ -713,7 +713,7 @@ fn receipt_on_the_same_base(receipt: &Path, base: Option<&str>) -> Option<String
 /// `[[recorder]]`'s record had no such discriminator at all, so the next attempt on
 /// a reused branch name read the previous one's lines as its own. Measured: after
 /// PR #810 merged and the branch was reset, `pr-closes.<branch>` still named that
-/// PR's keys, and `filed-over-own-diff`'s exemption was evaluated against them.
+/// PR's keys, and `issue file same`'s exemption was evaluated against them.
 ///
 /// **The CLAIM rather than the base, and the difference is what makes it usable.**
 /// A base moves on every rebase, and `land` rebases every lap — keying a record on

@@ -224,7 +224,7 @@ fn a_trial_missing_a_required_key_is_reported() {
     );
     let answer = findings(&dir);
     assert!(
-        answer.contains("agentic-record-incomplete"),
+        answer.contains("test declare partial"),
         "a trial naming no fixture cannot be rerun, so the row is incomplete:\n{answer}"
     );
 }
@@ -238,7 +238,7 @@ fn a_single_armed_trial_is_reported() {
     );
     let answer = findings(&dir);
     assert!(
-        answer.contains("agentic-record-incomplete"),
+        answer.contains("test declare partial"),
         "a trial with no baseline arm is an anecdote with a run count:\n{answer}"
     );
 }
@@ -257,7 +257,7 @@ fn a_disposition_asserting_a_finding_without_a_result_is_reported() {
     );
     let answer = findings(&dir);
     assert!(
-        answer.contains("agentic-finding-unsupported"),
+        answer.contains("test state early"),
         "a disposition asserting a finding owes a `[trial.result]`:\n{answer}"
     );
 }
@@ -289,7 +289,7 @@ fn a_disposition_the_method_record_does_not_declare_is_reported() {
     let dir = repo("invented", Some(&body), Some(&complete_method()));
     let answer = findings(&dir);
     assert!(
-        answer.contains("agentic-finding-unsupported"),
+        answer.contains("test state early"),
         "a disposition the method record does not declare means nothing:\n{answer}"
     );
 }
@@ -308,7 +308,7 @@ fn a_method_record_naming_no_unmeasured_dimension_is_reported() {
     );
     let answer = findings(&dir);
     assert!(
-        answer.contains("agentic-record-incomplete"),
+        answer.contains("test declare partial"),
         "the method record owes the dimensions it deliberately does not measure:\n{answer}"
     );
 }
@@ -321,7 +321,7 @@ fn a_tree_with_no_records_at_all_is_silent() {
     let dir = repo("absent", None, None);
     let answer = findings(&dir);
     assert!(
-        answer.contains("agentic-record-unreadable"),
+        answer.contains("input read absent"),
         "a declared record that could not be read is reported, never assumed clean:\n{answer}"
     );
 }
@@ -335,7 +335,7 @@ fn an_unreadable_method_record_is_reported() {
     let dir = repo("no-method", Some(&complete_trial()), None);
     let answer = findings(&dir);
     assert!(
-        answer.contains("agentic-record-unreadable"),
+        answer.contains("input read absent"),
         "the method record is half the joint predicate; its absence is not a clean tree:\n{answer}"
     );
 }
@@ -419,7 +419,7 @@ fn replayed_findings(
     verdicts: &[batten::verdict::DeclaredVerdict],
 ) -> String {
     let row: batten::rules::Rule = serde_json::from_value(serde_json::json!({
-        "id": "agentic-experiment-record",
+        "id": "fact file missing",
         "kind": "policy",
         "scope": "tree",
         "documents": [TRIALS, METHOD],
@@ -502,7 +502,7 @@ fn replay_block(block: usize) {
         // without a second commit — and if that were ever untrue this assertion
         // would go to zero rather than quietly passing.
         write(&dir, TRIALS, &mutated);
-        if replayed_findings(&dir, &verdicts).contains("agentic-record-incomplete") {
+        if replayed_findings(&dir, &verdicts).contains("test declare partial") {
             fired += 1;
         }
     }

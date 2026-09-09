@@ -55,7 +55,7 @@
 //!
 //! It is a block comment because the match is on a line PREFIX and Rust has no
 //! line comment that starts with `#`. Written first as a prose mention in this
-//! header, it did not bind and `obligation-unbound` fired — correctly.
+//! header, it did not bind and `test name undefined` fired — correctly.
 //!
 //! **What the row does NOT yet buy is the sweep, and saying so is the point.**
 //! `mutate`'s `Gate::name` resolves sources from a task name, a module stem or a

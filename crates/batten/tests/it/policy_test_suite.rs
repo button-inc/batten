@@ -121,10 +121,10 @@ package batten.probe
 
 import rego.v1
 
-rules contains "no-force-push"
+rules contains "trunk push forced"
 
 violation contains {
-	"rule": "no-force-push",
+	"rule": "trunk push forced",
 	"verdict": "trunk push forced",
 } if {
 	words := split(input.call.command, " ")
@@ -133,7 +133,7 @@ violation contains {
 
 test_no_force_push if {
 	some v in violation with input as {"call": {"command": "git push --force"}}
-	v.rule == "no-force-push"
+	v.rule == "trunk push forced"
 	count(violation) == 0 with input as {"call": {"command": "git push --force-with-lease"}}
 }
 
@@ -144,7 +144,7 @@ test_no_force_push if {
 # rules file mandates.
 test_a_force_push_in_a_list_is_caught_too if {
 	some v in violation with input as {"call": {"command": "cd /tmp && git push --force"}}
-	v.rule == "no-force-push"
+	v.rule == "trunk push forced"
 }
 "#;
 
@@ -156,10 +156,10 @@ package batten.probe
 
 import rego.v1
 
-rules contains "no-force-push"
+rules contains "trunk push forced"
 
 violation contains {
-	"rule": "no-force-push",
+	"rule": "trunk push forced",
 	"verdict": "trunk push forced",
 } if {
 	contains(input.call.command, "--force")
@@ -167,7 +167,7 @@ violation contains {
 
 test_no_force_push if {
 	some v in violation with input as {"call": {"command": "git push --force"}}
-	v.rule == "no-force-push"
+	v.rule == "trunk push forced"
 	count(violation) == 0 with input as {"call": {"command": "git push --force-with-lease"}}
 }
 "#;
@@ -498,10 +498,10 @@ package batten.probe
 
 import rego.v1
 
-rules contains "no-force-push"
+rules contains "trunk push forced"
 
 violation contains {
-	"rule": "no-force-push",
+	"rule": "trunk push forced",
 	"verdict": "trunk push forced",
 } if {
 	some path, _ in input.tree.documents
@@ -510,7 +510,7 @@ violation contains {
 
 test_no_force_push if {
 	some v in violation with input as {"tree": {"documents": {"a.forbidden": {}}}}
-	v.rule == "no-force-push"
+	v.rule == "trunk push forced"
 	count(violation) == 0 with input as {"tree": {"documents": {"a.json": {}}}}
 }
 "#;
@@ -663,5 +663,5 @@ fn a_registered_module_with_tests_still_loads_and_denies() {
         panic!("the module answered nothing");
     };
     assert_eq!(violations.len(), 1);
-    assert_eq!(violations[0].rule.as_deref(), Some("no-force-push"));
+    assert_eq!(violations[0].rule.as_deref(), Some("trunk push forced"));
 }

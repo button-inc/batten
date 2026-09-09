@@ -303,7 +303,7 @@ fn waiver_smells(
             //
             // `waiver::apply` filters FINDINGS, and a policy finding carries the
             // predicate id rather than the row's. Measured on this repository:
-            // `rule = "filed-over-own-diff"` suppressed and was refused here,
+            // `rule = "issue file same"` suppressed and was refused here,
             // while `rule = "filed-here"` was clean here and suppressed nothing —
             // so no value satisfied both halves, and the one this smell blessed
             // was the dead one. That is precisely the "exemption someone is

@@ -5537,17 +5537,43 @@ fn run_policy_rule(
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
     let config = resolve::resolve(Path::new("."), overrides)?;
-    let Some(rule) = config.rules.iter().find(|rule| rule.id == id) else {
+    // BOTH NAMES A LINE CAN CARRY (CLOUD-1638). A `policy` row's finding is
+    // emitted under the MODULE's `"rule":` — `test add duplicate`, not the row
+    // `test fix duplicate` that binds the module — so resolving only `[[rule]]`
+    // ids left the id a reader actually sees pointing at nothing. Falling back
+    // to the owning row answers the question they asked: what refused me, and
+    // what does its row say to do. The row id is tried FIRST, because where the
+    // two coincide the row is the more specific answer.
+    let owner = config
+        .rules
+        .iter()
+        .find(|rule| rule.id == id)
+        .or_else(|| owning_row(&config, id));
+    let Some(rule) = owner else {
         // Named, and the id is the caller's own argument rather than anything
         // read out of the tree. A list of what IS declared would be every row on
         // stderr; the count plus the sibling verb is the pointer-shaped answer.
         return Err(error::UsageError::raise(format!(
-            "no `[[rule]]` row declares `{id}`; this config declares {} rule(s). A three-word \
-             name is a CLASS rather than a row — resolve it with `batten policy explain`",
+            "no `[[rule]]` row and no module declares `{id}`; this config declares {} rule(s). \
+             A three-word name may be a CLASS instead — resolve it with `batten policy explain`",
             config.rules.len(),
         )));
     };
     explain_rule(rule, &config.facts, json, out)
+}
+
+/// The `[[rule]]` row whose module declares this finding id (CLOUD-1638).
+///
+/// Read off the module SOURCE for [`policy::finding_ids`]' reasons — the
+/// compiled set is not a clean list of finding ids, and this verb must answer
+/// without standing up an engine.
+fn owning_row<'a>(config: &'a resolve::Resolved, id: &str) -> Option<&'a rules::Rule> {
+    config.rules.iter().find(|rule| {
+        rule.module.as_deref().is_some_and(|module| {
+            std::fs::read_to_string(module)
+                .is_ok_and(|text| policy::finding_ids(&text).contains(id))
+        })
+    })
 }
 
 /// Judge this session's hook output against its declared budget (CLOUD-417).
@@ -5826,7 +5852,7 @@ fn admission_anchor(
     // A POLICY PREDICATE IS NOT A ROW ID, and narrowing as though it were made
     // every policy admission a silent no-op (CLOUD-1087, CLOUD-1125).
     //
-    // `filed-here` publishes `filed-over-own-diff`; the refusal names the
+    // `filed-here` publishes `issue file same`; the refusal names the
     // PREDICATE, so that is what `--rule` carries here. Filtering on
     // `declared.id == rule` therefore selected NOTHING, the scan below produced
     // no finding, the match count was `0`, and the mint took the `head()`
@@ -6671,7 +6697,7 @@ fn run_lease(
 ///
 /// A conflicted replay is `2`. That is the policy verdict everywhere
 /// (non-negotiable rule 5) and it is what a conflict is: the lap may not
-/// continue, decided by `rebase-conflict-stops-the-lap` over the record this
+/// continue, decided by `replay halt conflict` over the record this
 /// writes rather than by an arm here. A clone this cannot resolve a remote or a
 /// branch for is `3` — could-not-look, never a false `2`, because a lap that
 /// could not be attempted has not judged the branch.
@@ -7563,7 +7589,7 @@ fn unwind_lap(
                 // An unset one cancels NOTHING rather than guessing;
                 // `land::abandon` holds that guard.
                 // THE CONSTRUCTOR AND THE DECLARATION ARE ONE EXPRESSION, and
-                // that adjacency is what `ci-parity` binds on. `fan-in-is-wired`
+                // that adjacency is what `ci-parity` binds on. `job wire missing`
                 // used to ask two independent questions of this file — does
                 // something read the declaration, does something call
                 // `land::abandon` — which an unrelated read plus a wrong argument
@@ -9827,7 +9853,7 @@ fn verdict_for(repo: &str, sha: &str) -> Option<checks_green::Verdict> {
 ///
 /// [`land::record_wait`] takes both in one call precisely so this cannot write
 /// only the winner: a record with one answer and no loser is what a lap that
-/// read BOTH sides also produces, and `lap-waits-on-one-answer` would then have
+/// read BOTH sides also produces, and `wait read both` would then have
 /// nothing to tell them apart.
 fn run_land_wait(
     root: &Path,
@@ -14657,7 +14683,7 @@ fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope) -> Option<Strin
     // returned first and the completion verdict was never MINTED — not decided
     // "landed", not recorded "could not look", simply absent. Measured on the
     // session that found this: 20 findings in the store, ten of them
-    // `filed-over-own-diff` (which returns at the old rule 3), and zero
+    // `issue file same` (which returns at the old rule 3), and zero
     // `completion.unlanded` rows across a session that stopped on an unlanded
     // branch repeatedly.
     //
@@ -15098,7 +15124,7 @@ fn unlanded_pointer() -> Option<String> {
 ///
 /// # The pointer is the PATH, and that is a stated difference
 ///
-/// The retired shell emitted `<id> filed-over-own-diff <path>` and suppressed on
+/// The retired shell emitted `<id> issue file same <path>` and suppressed on
 /// the id. A `Finding` carries its first path-bearing subject as its pointer and
 /// the row's id travels as an ordered subject the engine does not project onto
 /// the struct, so the nudge names the path and the suppression key is the path.
@@ -15228,7 +15254,7 @@ fn filed_here_pointers(
 
 /// The row the two nudge modes read, and the predicate whose findings rule 3 uses.
 const FILED_HERE_ROW: &str = "filed-here";
-const FILED_OVER_OWN_DIFF: &str = "filed-over-own-diff";
+const FILED_OVER_OWN_DIFF: &str = "issue file same";
 /// The record the checklist enumerates.
 const BOARD_RECORD: &str = "board-writes";
 

@@ -1246,7 +1246,7 @@ fn admits_fixture_with_predicate(name: &str) -> PathBuf {
 /// a mismatched anchor produces.
 ///
 /// Measured before the fix, on this repository: two admissions for
-/// `filed-over-own-diff` and `filed-and-left-open` — both predicates of the
+/// `issue file same` and `issue file held` — both predicates of the
 /// `issue file other` row — were issued, spent, committed, and honoured by neither
 /// gate. `batten-check` reported both findings unchanged afterwards.
 ///

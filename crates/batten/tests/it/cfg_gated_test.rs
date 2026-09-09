@@ -41,7 +41,7 @@ use batten::rules::{self, Rule};
 /// `test cover missing`. The two differ, and the difference is load-bearing: an
 /// admission resolves its anchor by the FINDING's rule, so minting against the
 /// config id silently produces a `call:<head>` anchor that suppresses nothing.
-const GATED_ADDED: &str = "platform-gated-test-added";
+const GATED_ADDED: &str = "test cover unseen";
 
 /// A fixture repository whose base commit carries `before` at
 /// `crates/batten/src/subject.rs` and whose working tree carries `after`.

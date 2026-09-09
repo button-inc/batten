@@ -257,7 +257,7 @@ fn the_commit_gate_sub_verb_answers_only_its_own_question() {
 /// will not run it" is indistinguishable from healthy to a probe that only stats.
 ///
 /// **`cfg!` IN THE BODY RATHER THAN `#[cfg(unix)]` ON THE CASE**, which is
-/// `platform-gated-test-added`'s own remedy and the reason it exists. Narrowing
+/// `test cover unseen`'s own remedy and the reason it exists. Narrowing
 /// the case to unix would turn a red leg green while leaving the Windows
 /// contract unstated and one arm never compiled on the host that authors it.
 /// Both arms compile on every target here, and the Windows expectation is

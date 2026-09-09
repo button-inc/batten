@@ -39,8 +39,8 @@ use std::path::{Path, PathBuf};
 use batten::rules::{self, Rule};
 
 /// The predicate ids the module declares.
-const UNBOUNDED: &str = "nextest-slow-unbounded";
-const RAISED: &str = "nextest-slow-raised";
+const UNBOUNDED: &str = "suite bind missing";
+const RAISED: &str = "bound edit refused";
 
 /// The one path the module is anchored on.
 const CONFIG: &str = ".config/nextest.toml";

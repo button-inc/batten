@@ -129,7 +129,7 @@ fn an_unprefixed_remedy_line_in_a_stderr_block_is_a_finding() {
         scan.findings
     );
     assert_eq!(
-        scan.findings[0].rule, "remedy-reaches-the-reader",
+        scan.findings[0].rule, "remedy select dropped",
         "THE PREDICATE's id, not the row's (CLOUD-832)"
     );
 }
@@ -235,7 +235,7 @@ fn a_caller_naming_a_bypass_it_does_not_implement_is_a_finding() {
         "the predicate fired: {:?}",
         scan.findings
     );
-    assert_eq!(scan.findings[0].rule, "remedy-has-one-author");
+    assert_eq!(scan.findings[0].rule, "remedy own duplicate");
 }
 
 /// THE DISCRIMINATING CASE for B. The gate that OWNS a hatch must be able to

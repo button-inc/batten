@@ -3767,16 +3767,16 @@ fn the_committed_policy_gates_ready_on_receipts_rather_than_banning_it() {
                 // CLOUD-690's two tool-sourced siblings, each a receipt row over
                 // one check, and the two module predicates that read what those
                 // records found. The module rows belong here for the same reason
-                // the receipt rows do: `review-unanswered` refuses until the
-                // threads are answered and `review-absent` until a review exists,
+                // the receipt rows do: `review answer missing` refuses until the
+                // threads are answered and `review read absent` until a review exists,
                 // so both are preconditions on the WORK and neither is a ban on
                 // the command. Which one fires first is a property of the
                 // checkout — measured, a head with a record carrying unresolved
                 // threads reaches the module rather than any receipt row.
                 "review answer partial",
                 "review list unread",
-                "review-unanswered",
-                "review-absent",
+                "review answer missing",
+                "review read absent",
             ]
             .iter()
             .any(|row| stderr.contains(row)),

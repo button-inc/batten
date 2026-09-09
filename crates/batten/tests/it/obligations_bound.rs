@@ -22,7 +22,7 @@
 //! recorder has never written. `recorder.rs` renders a counted column as
 //! `<count><counted-with><joined>` and this one declares `counted-with = ":"`,
 //! so the real line is `1:<file>:<slug>`. The module parsed it with a comma, so
-//! every obligation resolved to the file `"1"`, and `obligation-unbound` fired on
+//! every obligation resolved to the file `"1"`, and `test name undefined` fired on
 //! EVERY row carrying one. Measured 2026-09-03, on CLOUD-1402's own obligation.
 //!
 //! Reaching the engine was not enough, because this suite still hand-wrote the
@@ -169,7 +169,7 @@ fn verdicts(root: &Path) -> Vec<String> {
     .collect()
 }
 
-const UNBOUND: &str = "obligation-unbound";
+const UNBOUND: &str = "test name undefined";
 
 /// The record line the recorder writes: eight fields, with the obligation set
 /// last. Built here rather than inlined so an off-by-one in the module's column

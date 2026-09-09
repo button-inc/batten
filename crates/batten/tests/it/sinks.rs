@@ -338,7 +338,7 @@ fn a_sink_on_a_mediated_call_kind_is_refused_at_load() {
             "version = 1\n\
              \n\
              [[rule]]\n\
-             id = \"no-force-push\"\n\
+             id = \"trunk push forced\"\n\
              kind = \"shape\"\n\
              pattern = \"git push --force\"\n\
              severity = \"deny\"\n\

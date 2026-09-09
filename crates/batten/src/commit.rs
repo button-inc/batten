@@ -398,7 +398,7 @@ pub fn judge_arm_sequencing(sequences: &[ArmSequence]) -> Vec<Finding> {
 //
 // Measured the hard way: the row was written HERE first, with only a prose
 // mention of the slug in the suite. `declares_slug` matches a line PREFIX, a
-// mention inside a doc comment is not one, and `obligation-unbound` fired over a
+// mention inside a doc comment is not one, and `test name undefined` fired over a
 // promise that was in fact kept — which is the gate being right about the
 // binding and me being wrong about where it reads.
 

@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use batten::rules::{self, Rule};
 
 /// The predicate id the module declares.
-const TARGET_ADDED: &str = "test-target-added";
+const TARGET_ADDED: &str = "test place duplicate";
 
 /// A fixture repository whose base is one commit back and whose working tree
 /// ADDS `changed`, so the engine's own `base-delta` resolution is what produces

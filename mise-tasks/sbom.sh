@@ -90,7 +90,7 @@ OUT_DIR="${SBOM_OUT_DIR:-sbom}"
 # harness, no more part of the shipped artifact than `tests/` is — so cataloging
 # it would make the inventory overstate what a consumer receives, which is the
 # false claim this document exists not to make. It would also break the
-# `sbom-package-drift` invariant by construction: that clause compares the
+# `manifest count other` invariant by construction: that clause compares the
 # cargo count against the ROOT `Cargo.lock`, and a second lockfile in scope adds
 # packages no root lockfile names (measured: 175 -> 281).
 readonly EXCLUDES=(--exclude ./tests/bats --exclude ./target --exclude ./fuzz)
@@ -349,7 +349,7 @@ copyright_of() {
 # MATCHED ON THE REPO, NOT THE SHA, and that is forced rather than chosen: syft
 # keys these components by the `# vX` comment beside the pin, not by the pin
 # itself — `pkg:github/actions/checkout@v7` for a component whose `uses:` line
-# resolves to `3d3c42e5…`. The sha in the table is what `sbom-action-unmapped`
+# resolves to `3d3c42e5…`. The sha in the table is what `pin table missing`
 # compares against the workflows, so drift is still caught at the pin; using it
 # here would match nothing.
 ACTIONS_TABLE="${SBOM_ACTIONS_TABLE:-$(cd "$(dirname "$0")" && pwd)/sbom-actions.tsv}"

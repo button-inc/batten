@@ -274,9 +274,9 @@ fn pointers(root: &Path) -> Vec<String> {
         .collect()
 }
 
-const UNREFINED: &str = "filed-unrefined";
-const OVER_DIFF: &str = "filed-over-own-diff";
-const LEFT_OPEN: &str = "filed-and-left-open";
+const UNREFINED: &str = "issue file unclear";
+const OVER_DIFF: &str = "issue file same";
+const LEFT_OPEN: &str = "issue file held";
 
 // ---------------------------------------------------------------------------
 // The pass side first: without it every refusal below is satisfied by a module
@@ -326,7 +326,7 @@ fn a_branch_name_with_a_slash_finds_its_record() {
 }
 
 // ---------------------------------------------------------------------------
-// `filed-unrefined`.
+// `issue file unclear`.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -406,7 +406,7 @@ fn the_refusal_carries_the_id_and_no_prose_from_the_row() {
 }
 
 // ---------------------------------------------------------------------------
-// `filed-over-own-diff`.
+// `issue file same`.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -424,7 +424,7 @@ fn a_row_naming_a_file_this_branch_is_changing_stops_the_lap() {
 }
 
 /// A path outside the diff is not a punt against it — for the PROXIMITY refusal,
-/// which is the only one this case was ever about. `filed-and-left-open` takes it
+/// which is the only one this case was ever about. `issue file held` takes it
 /// instead, and asserting the exact verdict rather than "not empty" is what makes
 /// the partition falsifiable from this tier.
 #[test]
@@ -694,7 +694,7 @@ fn a_six_field_record_with_no_sec1_column_is_judged_exactly_as_before() {
 }
 
 // ---------------------------------------------------------------------------
-// `filed-and-left-open` (CLOUD-1311). The set refusal: a row this branch put on
+// `issue file held` (CLOUD-1311). The set refusal: a row this branch put on
 // the board that it is not landing.
 //
 // Its whole reason for existing is the class the two arms above cannot see — a

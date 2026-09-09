@@ -1001,9 +1001,9 @@ package batten.git
 
 import rego.v1
 
-rules contains "no-force-push"
+rules contains "trunk push forced"
 
-violation contains {"rule": "no-force-push", "verdict": "trunk push forced"} if {
+violation contains {"rule": "trunk push forced", "verdict": "trunk push forced"} if {
     input.call.operation == "write"
 }
 "#;
@@ -1018,7 +1018,7 @@ violation contains {"rule": "no-force-push", "verdict": "trunk push forced"} if 
     .expect("a sub-package module loads");
 
     assert!(
-        bundles[0].declared().contains("no-force-push"),
+        bundles[0].declared().contains("trunk push forced"),
         "the ids a sub-package publishes are reached too, not just its denials"
     );
 
@@ -1028,7 +1028,7 @@ violation contains {"rule": "no-force-push", "verdict": "trunk push forced"} if 
     };
     assert_eq!(
         violations,
-        vec![attributed("no-force-push", "trunk push forced")],
+        vec![attributed("trunk push forced", "trunk push forced")],
         "the package prefix is `batten` and the RULE NAMES are what is fixed; \
          pinning the whole path leaves this module silently unreachable"
     );

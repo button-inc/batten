@@ -741,7 +741,7 @@ fn pointer_never_payload_no_byte_of_the_description_reaches_the_record() {
 ///
 /// Measured before the fix, on this repository's own branch: after PR #810 merged
 /// and the branch was reset, `pr-closes.<branch>` still named that PR's keys, and
-/// `filed-over-own-diff`'s exemption was evaluated against them. A row the
+/// `issue file same`'s exemption was evaluated against them. A row the
 /// PREVIOUS PR closed would have been exempted on a PR that does not close it —
 /// silently, with nothing downstream to re-check.
 #[test]

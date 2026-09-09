@@ -3,7 +3,7 @@
 //!
 //! # Why this tier exists and what the module's own suite cannot do
 //!
-//! `rebase-conflict-stops-the-lap` carries a load-time tier that pins its
+//! `replay halt conflict` carries a load-time tier that pins its
 //! predicate, and every case in it supplies the record with `with input as`. That
 //! fabricates the very shape the engine may be unable to produce — here, the
 //! COLUMN LAYOUT and the STORE the whole family turns on — so the module's suite
@@ -109,7 +109,7 @@ fn a_conflicted_lap_is_refused_and_a_clean_one_is_not() {
         "a conflicted lap is the policy verdict: {err}{out}"
     );
     assert!(
-        format!("{out}{err}").contains("rebase-conflict-stops-the-lap"),
+        format!("{out}{err}").contains("replay halt conflict"),
         "the finding names its own predicate, got {out}{err}"
     );
 
@@ -195,7 +195,7 @@ fn a_lap_that_read_both_answers_is_refused_and_one_answer_is_not() {
     let (code, out, err) = check(&repo);
     assert_eq!(code, 2, "a lap that read both answers: {err}{out}");
     assert!(
-        format!("{out}{err}").contains("lap-waits-on-one-answer"),
+        format!("{out}{err}").contains("wait read both"),
         "the finding names its own predicate, got {out}{err}"
     );
 }
@@ -262,7 +262,7 @@ fn a_conflict_with_no_path_still_refuses() {
         "a conflict with no path to name is still a conflict: {err}{out}"
     );
     assert!(
-        format!("{out}{err}").contains("rebase-conflict-stops-the-lap"),
+        format!("{out}{err}").contains("replay halt conflict"),
         "the finding names its own predicate, got {out}{err}"
     );
 }
