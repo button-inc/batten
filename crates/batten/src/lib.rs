@@ -12088,16 +12088,10 @@ fn run_hook(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let mut raw = String::new();
-    if std::io::stdin().read_to_string(&mut raw).is_err() {
-        output::message(mode, Verbosity::Normal, err, UNREADABLE_STDIN)?;
-        return Ok(ExitCode::Success);
-    }
-    let bypass = std::env::var_os(hook::BYPASS_ENV).is_some_and(|value| !value.is_empty());
-    let Some(mut envelope) = hook::decode(harness, &raw) else {
-        output::message(mode, Verbosity::Normal, err, UNDECODABLE_PAYLOAD)?;
+    let Some((raw, mut envelope)) = read_envelope(harness, mode, err)? else {
         return Ok(ExitCode::Success);
     };
+    let bypass = std::env::var_os(hook::BYPASS_ENV).is_some_and(|value| !value.is_empty());
     // THE WRITE TARGET IS READ AS THE REPOSITORY READS IT (CLOUD-1133), and this
     // is the one place that can do it: `decode` is pure and has no repository,
     // and the readers below — the protected gate, and any module over
@@ -12563,6 +12557,40 @@ fn is_adjudicable(envelope: &hook::Envelope) -> bool {
         || envelope.event == hook::Event::Stop
         || envelope.event == hook::Event::SessionStart
         || (envelope.event == hook::Event::PreTool && !envelope.raw_tool.is_empty())
+}
+
+/// The mediated call on stdin, or `None` where the call must simply proceed.
+///
+/// **THE TWO FAIL-OPEN BOUNDARIES, TOGETHER BECAUSE THEY ARE ONE ANSWER.** Stdin
+/// that will not read and a payload that will not decode are both "the engine
+/// does not know what this call IS", and neither may block it: a guard must never
+/// be the reason a session cannot proceed. That is the opposite side of
+/// [`unreadable_declaration`], where the engine knows the call perfectly well and
+/// has been told it cannot enforce the rules over it.
+///
+/// **Loud, never silent** (CLOUD-43). A guard that cannot read its input is a gate
+/// that did not run, and the silent version of that is byte-identical to a clean
+/// allow — the false green this engine exists to catch, in the one place nobody
+/// would think to look.
+/// **The RAW bytes travel with the decoded value**, because `dispatch_handlers`
+/// hands a declared handler the payload as it arrived. Re-reading stdin for it is
+/// not an option — the stream is consumed — and re-serializing the envelope would
+/// hand a handler a document the host never sent.
+fn read_envelope(
+    harness: hook::Harness,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<Option<(String, hook::Envelope)>> {
+    let mut raw = String::new();
+    if std::io::stdin().read_to_string(&mut raw).is_err() {
+        output::message(mode, Verbosity::Normal, err, UNREADABLE_STDIN)?;
+        return Ok(None);
+    }
+    let Some(envelope) = hook::decode(harness, &raw) else {
+        output::message(mode, Verbosity::Normal, err, UNDECODABLE_PAYLOAD)?;
+        return Ok(None);
+    };
+    Ok(Some((raw, envelope)))
 }
 
 /// Whether this load failure is a declaration nothing could read at all.
