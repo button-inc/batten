@@ -8851,6 +8851,19 @@ measured = "2026-09-07"
 # COLD'S BASIS MOVES WITH WARM'S, for the 2026-09-06 entry's measured reason:
 # refreshing one and not the other made the very next lap refuse on the other arm
 # with warm never breached.
+# THE SECOND 2026-09-09 RETIREMENT MOVE, 256 -> 268, BOTH BASES, NEITHER FLOOR.
+#
+# The entry below predicted this: "the count will keep moving for the rest of this
+# campaign, one tier per retired gate against 39 in this branch's brief, so a
+# tolerance of 10 will be reached again within it." It was, twelve tiers later.
+# That is the gate working as a trend counter rather than drifting.
+#
+# THE FLOORS DO NOT MOVE, on the same grounds the three entries below state and
+# not on a fresh judgement: the prescribed post-prune `du` is disqualified when the
+# prune ESCALATED, and scaling is what those entries name as the same staleness
+# wearing a newer number. The independent measurement stays OWED to CLOUD-1158,
+# and the entry that finally moves a floor should be the one that can take the
+# ordinary reading — not the one that happens to trip the tolerance.
 # THE 2026-09-09 RETIREMENT MOVE, 244 -> 256, BOTH BASES, AND NEITHER FLOOR MOVES.
 #
 # WHAT MOVED THE COUNT is CLOUD-843's own campaign, which is what the block at the
@@ -8878,12 +8891,12 @@ measured = "2026-09-07"
 # COLD'S BASIS MOVES WITH WARM'S, for the 2026-09-06 entry's measured reason.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 256
+count = 268
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 256
+count = 268
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
