@@ -67,40 +67,6 @@ local gate = new Mapping<String, Step> {
   ["no-docs-tree"] {
     check = "mise run no-docs-tree"
   }
-  // The mechanism CLOUD-847 shipped without (CLOUD-860). That row landed
-  // `.coderabbit.yaml` after measuring what each key buys — a formal
-  // CHANGES_REQUESTED review so a verdict exists at all, review on drafts so it
-  // exists in the phase that costs nothing, and `gitleaks` kept because
-  // `mise run ci` is `if: draft == false` and a draft would otherwise have no
-  // secret scanning. Nothing then held the file to those readings, and the
-  // failure is silent in the worst direction: reviews simply stop, which looks
-  // exactly like nobody having pushed.
-  //
-  // Globbed on the one file it reads, unlike its glob-less neighbours above: a
-  // commit touching nothing else cannot change the answer, so the whole-index
-  // scan they need would only cost time here.
-  ["coderabbit-config-check"] {
-    glob = List(".coderabbit.yaml")
-    check = "mise run coderabbit-config-check"
-  }
-  // The two-tier gate ships with its mechanism (non-negotiable 2). The steps
-  // below marked `profiles = List("slow")` are skipped at pre-commit and run by
-  // `check`, and the dangerous direction is not the obvious one: a tier that
-  // stops being SKIPPED merely makes commits slow, while a tier that stops being
-  // RUN by `check` removes clippy, the test suite and `batten-check` from
-  // `mise run ci`, `verify` and CI at once — green everywhere, nothing tested.
-  // Deleting the config-level `profiles` line does exactly that, silently. This
-  // reds it, reading the plan rather than a timing, since a timing cannot tell a
-  // skipped step from a cached one (CLOUD-509).
-  //
-  // Globbed on both files that can move the verdict: hk.pkl declares the tier,
-  // and the hook is the one place it is switched off. A glob on hk.pkl alone
-  // would let the `--profile` flag be deleted from the hook with nothing red —
-  // the step would not even run for that commit.
-  // The step keeps its name and its glob and records rather than decides: the
-  // verdict is `policy/hook-profile.rego`'s now, off the `hk-plan` row
-  // (CLOUD-509, retired under CLOUD-1199). Only the plan half needs a producer —
-  // `hook-missing-profile-flag` reads this step's other globbed file directly.
   ["hook-profile-check"] {
     glob = List("hk.pkl", ".claude/hooks/git-hook.sh")
     check = "mise run record-verdicts"
