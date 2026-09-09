@@ -32,7 +32,7 @@
 // carried: "a matchPackageNames used for grouping is not read as a cap mirror" policy/cap-drift.rego
 // carried: "an allowedVersions named only in a comment mirrors nothing" policy/cap-drift.rego
 // carried: "a rule written inline reads the same as one spread over lines" policy/cap-drift.rego
-// carried: "the real tree agrees" policy/cap-drift.rego
+// carried: "cap-drift.bats::the real tree agrees" policy/cap-drift.rego
 // changed: "an unreadable file is exit 2 — never a silent agreement" policy/cap-drift.rego the shell opened two named files and refused one it could not read; the successor declares them as `line_sources` and the ENGINE decides this earlier — a rule whose declared paths match nothing is not evaluated at all, and `input.tree.missing` is never populated on the tree surface (CLOUD-1049, measured identically for `policy/mise-pin-agreement.rego`'s own could-not-look clause). What the case protected is kept in the shape the engine does allow: each direction guards on the OTHER file having resolved, so a present-but-empty file still reports the pairing rather than reading as agreement
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.

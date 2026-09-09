@@ -11,7 +11,7 @@
 // carried: mise-tasks/license-table-check.sh policy/license-table.rego crates/batten/tests/it/license_table.rs
 // carried: tests/license-table-check.bats policy/license-table.rego crates/batten/tests/it/license_table.rs
 //
-// carried: "the repo as it stands passes" policy/license-table.rego
+// carried: "license-table-check.bats::the repo as it stands passes" policy/license-table.rego
 // carried: "an unresolved license fails, and names the tool" policy/license-table.rego
 // carried: "a resolved license with an unresolved verdict still fails" policy/license-table.rego
 // carried: "a verdict outside the closed set fails rather than passing" policy/license-table.rego
@@ -20,7 +20,7 @@
 // carried: "a table with no rows is a failure, not a vacuous pass" policy/license-table.rego
 // carried: "output is a pointer — it names the tool and the cell, never the table body" policy/license-table.rego
 //
-// changed: "the gate is wired: hk.pkl declares a step that runs this task" policy/license-table.rego the case asserted that a `mise run` step existed in `hk.pkl`, which is how a shell gate reached the hook at all. A rule row has no step of its own — it is reached through `batten-check`, whose glob is itself gated by `batten-glob-check` and whose `line_sources` declaration is what `batten check --rule license-table` resolves. The wiring is asserted by a different mechanism rather than left unasserted
+// changed: "license-table-check.bats::the gate is wired: hk.pkl declares a step that runs this task" policy/license-table.rego the case asserted that a `mise run` step existed in `hk.pkl`, which is how a shell gate reached the hook at all. A rule row has no step of its own — it is reached through `batten-check`, whose glob is itself gated by `batten-glob-check` and whose `line_sources` declaration is what `batten check --rule license-table` resolves. The wiring is asserted by a different mechanism rather than left unasserted
 // changed: "an unreadable file is exit 1 — could not look is not a verdict" policy/license-table.rego the shell took the document as a positional ARGUMENT and could be pointed at an unreadable path. The successor's subject is a declared `line_sources` entry: a glob matching nothing means the rule is not evaluated, and `input.tree.missing` is never populated on the tree surface (CLOUD-1049). There is no caller left that can aim it, so the case has no subject rather than no coverage
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
