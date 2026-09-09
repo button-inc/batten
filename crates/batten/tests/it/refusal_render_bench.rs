@@ -19,16 +19,23 @@
 //! is EXACTLY `Refusal::line()`, and that the full warm rendering is longer by a
 //! measured margin. Those are what the report prices.
 //!
-//! **The second one was refuted as stated, and the cases record the correction
-//! rather than the expectation.** Over what this repository actually EMITS, a
-//! full warm delivery is not longer: the committed `[refusal] max_tokens` is 24,
-//! the carried line for `branch write unsafe` is well over it, and `deny_text`
-//! drops the routes rather than exceeding the budget. The margin is real in the
-//! renderer and withheld by the ceiling, so it is asserted over the unbounded
-//! column and the withholding is asserted separately against the declared bound.
-//! Two cases, because they are two findings — one about a renderer, one about a
-//! budget — and a single `>` over the emitted column would have reported the
-//! second as the first.
+//! **BOTH HALVES HAVE NOW BEEN MEASURED UNDER TWO RENDERERS, and the cases are
+//! written to survive the difference.** Before CLOUD-1637, a first sighting
+//! appended `command` routes ONLY: `tool run loose` declares none, so it
+//! rendered the identical line cold and warm, and `branch write unsafe` declared
+//! two whose carried line exceeded the committed `[refusal] max_tokens` of 24 —
+//! so `deny_text` dropped them and every emitted margin was ZERO. The margin was
+//! real in the renderer and withheld by the budget, which is why every arm
+//! carries an unbounded column beside its emitted one: a single `>` over the
+//! emitted column would have reported a budget decision as a renderer defect.
+//!
+//! Since CLOUD-1637 a first sighting carries the class's own definition, both
+//! margins are real in what is EMITTED, and the ceiling withholds nothing here.
+//! The cases therefore assert the relationships rather than the numbers, and the
+//! report's prose is derived from the records rather than stated — the paragraph
+//! that explained the zero margins had to be rewritten the moment they stopped
+//! being zero, which is the failure that generated prose about a measurement
+//! invites.
 //!
 //! # The drift check is here rather than in the task
 //!
@@ -241,49 +248,41 @@ fn the_command_route_class_pays_a_measured_margin_when_the_budget_permits_it() {
 }
 
 #[test]
-fn the_declared_ceiling_is_what_withholds_that_margin() {
-    // The other half, and the one that keeps the case above from reading as a
-    // renderer defect: the emitted arms are equal BECAUSE the carried line is over
-    // the declared budget, not because nothing was rendered. Both facts are read
-    // from the committed config rather than restated, so a ceiling change moves
-    // this case rather than leaving it asserting a stale reason.
+fn the_declared_ceiling_bounds_the_repeat_rather_than_the_sighting() {
+    // WHAT THE CEILING IS A CEILING ON, asserted rather than assumed (CLOUD-1386).
+    //
+    // This case first asserted that a first sighting is emitted whole only while
+    // it FITS the declared bound, and CLOUD-1637 falsified it immediately: the
+    // sighting now carries the class definition at 61 estimated tokens against a
+    // declared `max_tokens` of 24, emitted whole. That is the contract working,
+    // not a breach of it — `refusal_ceiling`'s own header records the
+    // distinction, which this case had inverted. The ceiling bounds the line an
+    // agent reads on EVERY firing, which is the repeat; it is deliberately not a
+    // bound on the once-per-session sighting, because a budget that covered the
+    // sighting would forbid a remedy from ever reaching a reader.
+    //
+    // So the repeat is what is held to the number, and the sighting is only held
+    // to being at least as long as it.
     let config = batten::config::load(&root().join("batten.toml")).expect("the config loads");
-    let Some(ceiling) = config.refusal.as_ref() else {
-        // No ceiling declared: there is nothing to withhold, and the emitted and
-        // unbounded columns must then agree everywhere.
-        for record in records() {
-            assert_eq!(
-                record.characters, record.unbounded_characters,
-                "with no ceiling declared, nothing is withheld"
+    let records = records();
+    for (class, _) in MEASURED_CLASSES {
+        let repeat = arm(&records, class, Strategy::Current, Residency::Warm);
+        let sighting = arm(&records, class, Strategy::Current, Residency::Cold);
+        if let Some(ceiling) = config.refusal.as_ref() {
+            assert!(
+                repeat.tokens <= ceiling.max_tokens,
+                "{class}: the repeat is what the declared ceiling bounds ({} tokens against {})",
+                repeat.tokens,
+                ceiling.max_tokens
             );
         }
-        return;
-    };
-    let full = arm(
-        &records(),
-        "branch write unsafe",
-        Strategy::FullEveryTime,
-        Residency::Warm,
-    );
-    if full.characters == full.unbounded_characters {
         assert!(
-            full.unbounded_tokens <= ceiling.max_tokens,
-            "a first sighting is emitted whole only while it fits the declared ceiling \
-             ({} tokens against {})",
-            full.unbounded_tokens,
-            ceiling.max_tokens
-        );
-    } else {
-        assert!(
-            full.unbounded_tokens > ceiling.max_tokens,
-            "the emitted line falls back only because the carried one is over the ceiling \
-             ({} tokens against {})",
-            full.unbounded_tokens,
-            ceiling.max_tokens
+            sighting.characters >= repeat.characters,
+            "{class}: a first sighting is never shorter than the repeat it precedes"
         );
         assert!(
-            full.characters < full.unbounded_characters,
-            "the fallback is shorter than what it replaced"
+            repeat.characters <= repeat.unbounded_characters,
+            "{class}: an emitted line is never longer than the same arm rendered unbounded"
         );
     }
 }
@@ -315,24 +314,33 @@ fn a_document_route_class_prices_its_cold_arm() {
     );
     let bare = compact_line("tool run loose", "no-tool-substitution");
 
-    if cold.line.contains("rules/scanning.md") {
-        assert_ne!(
-            cold.line, warm.line,
-            "once a first sighting carries document routes, a cold arm costs more than a repeat"
+    // THE PROPERTY, NOT A SUBSTRING. This case first keyed its two regimes on
+    // whether the cold line contained `rules/scanning.md`, which was a guess
+    // about HOW a first sighting would come to carry more — and CLOUD-1637
+    // landed a renderer that carries the class's own definition instead, so the
+    // guess would have selected the pre-1637 branch on a post-1637 tree and
+    // asserted the wrong thing while staying green. What the benchmark is about
+    // is whether a first sighting costs more than a repeat, so that selects.
+    assert_eq!(
+        warm.line, bare,
+        "a repeat sighting is the bare line under every renderer"
+    );
+    if cold.line == warm.line {
+        assert_eq!(
+            cold.characters, warm.characters,
+            "a renderer that appends nothing for this class prices its cold arm at the repeat"
         );
+    } else {
         assert!(
             cold.characters > warm.characters,
-            "the route is emitted, so the cold arm is longer ({} against {})",
+            "a first sighting that carries the class costs more than the repeat ({} against {})",
             cold.characters,
             warm.characters
         );
-    } else {
-        assert_eq!(
-            cold.line, bare,
-            "while a first sighting appends command routes only, a document-route class \
-             renders the bare line cold"
+        assert!(
+            cold.line.starts_with(&bare),
+            "and it carries the bare line first, so the repeat is a prefix of the sighting"
         );
-        assert_eq!(cold.line, warm.line, "and renders the identical line warm");
     }
 }
 

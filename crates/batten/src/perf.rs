@@ -2023,8 +2023,6 @@ impl Strategy {
     /// firing to a first sighting and leaves the other two alone, which is
     /// exactly the row CLOUD-1606 §7 declares.
     #[must_use]
-    //MUTANT-SUITE crates/batten/tests/it/refusal_render_bench.rs
-    //MUTANT current-warm-first-sighting|s@        !matches!(self, Self::FullEveryTime)@        matches!(self, Self::FirstFullThenCompact)@|a_compact_warm_repeat_is_exactly_the_refusal_line
     pub const fn warm_is_a_repeat(self) -> bool {
         !matches!(self, Self::FullEveryTime)
     }
@@ -2073,7 +2071,20 @@ impl Residency {
 /// declared, which is exactly why the mutation below is worth having: without
 /// it, a table that collapsed every arm to one value would satisfy four of the
 /// five and report a matrix it never measured.
+///
+/// **THE MARKERS SIT AT MODULE LEVEL AND REWRITE A LINE ELSEWHERE, and both
+/// halves are mechanism rather than preference.** A declaration is read from the
+/// line's first bytes, so an indented one resolves no suite and the sweep
+/// reports `no-suite` — could-not-look, not a pass. Inside an `impl` block
+/// rustfmt indents every comment it finds, so a marker there is correct exactly
+/// until the next `mise run fmt`; measured twice here, the second time after the
+/// formatter silently undid the first fix. The rewrite therefore anchors on
+/// `Strategy::warm_is_a_repeat`'s one line rather than on this function's, which
+/// also keeps the script free of the `|` the row itself is split on — a script
+/// carrying `||` reads as eight fields where three are wanted.
 #[must_use]
+//MUTANT-SUITE crates/batten/tests/it/refusal_render_bench.rs
+//MUTANT current-warm-first-sighting|s@        !matches!(self, Self::FullEveryTime)@        matches!(self, Self::FirstFullThenCompact)@|a_compact_warm_repeat_is_exactly_the_refusal_line
 pub const fn first_sighting(strategy: Strategy, residency: Residency) -> bool {
     // A cold firing is a first sighting under every strategy; a warm one is a
     // first sighting exactly when the strategy does not treat it as a repeat.
@@ -2245,9 +2256,7 @@ fn markdown_table(rows: &[Vec<String>]) -> String {
 /// different people — this one is the reader's orientation, the other is the
 /// measurement — and because one function carrying both exceeds the line budget
 /// the workspace lints hold every function to.
-fn refusal_render_preamble(ceiling: Option<&crate::refusal::Ceiling>) -> String {
-    use std::fmt::Write as _;
-
+fn refusal_render_preamble() -> String {
     let mut out = String::new();
     out.push_str("# What a refusal costs the context it lands in\n\n");
     out.push_str(
@@ -2274,25 +2283,114 @@ fn refusal_render_preamble(ceiling: Option<&crate::refusal::Ceiling>) -> String 
          estimator `policy-budget` already holds instruction files to, rather than a new \
          approximation minted for this table.\n\n",
     );
-    match ceiling {
-        Some(declared) => {
-            let _ = writeln!(
-                out,
-                "**The declared `[refusal] max_tokens` is {}, and it is an input to every \
-                 `emitted` figure below.** `deny_text` drops the carried routes when they take \
-                 the line over that bound, so a first sighting is not automatically longer than \
-                 a repeat in this repository. The `unbounded` columns are the same arm rendered \
-                 with no ceiling — what the sighting would cost if the budget permitted it.\n",
-                declared.max_tokens
-            );
-        }
-        None => {
-            out.push_str(
-                "**No `[refusal]` ceiling is declared**, so the emitted and unbounded columns \
-                 below are the same rendering.\n\n",
-            );
-        }
+    out
+}
+
+/// What the declared ceiling actually did to these records, as opposed to what
+/// it is declared to do.
+///
+/// **DERIVED, NEVER ASSERTED, and that distinction is why this function exists.**
+/// This paragraph used to state flatly that the ceiling withholds the carried
+/// routes, which was true when it was written and false one renderer change
+/// later — CLOUD-1637 landed, every emitted figure became its unbounded one, and
+/// the report went on explaining a suppression that was no longer happening. A
+/// sentence about a measurement has to be computed from it.
+fn refusal_render_ceiling_note(
+    records: &[RenderRecord],
+    ceiling: Option<&crate::refusal::Ceiling>,
+) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    let Some(declared) = ceiling else {
+        out.push_str(
+            "**No `[refusal]` ceiling is declared**, so the emitted and unbounded columns below \
+             are the same rendering.\n\n",
+        );
+        return out;
+    };
+    let withheld = records
+        .iter()
+        .filter(|record| record.characters < record.unbounded_characters)
+        .count();
+    if withheld == 0 {
+        let _ = writeln!(
+            out,
+            "**The declared `[refusal] max_tokens` is {}, and on this tree it withholds \
+             NOTHING**: every emitted figure below equals its unbounded one, so the ceiling is \
+             declared and inert over these classes rather than shaping the numbers. The \
+             `unbounded` columns are kept because that is a fact about today's registry, not a \
+             property of the bound.\n",
+            declared.max_tokens
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "**The declared `[refusal] max_tokens` is {}, and it is an input to {} of the {} \
+             arms below**, where the rendered line would exceed it and `deny_text` falls back to \
+             the compact form. The `unbounded` columns are those arms rendered with no ceiling — \
+             what the sighting would cost if the budget permitted it.\n",
+            declared.max_tokens,
+            withheld,
+            records.len()
+        );
     }
+    out
+}
+
+/// Whether any measured class has nothing for a residency protocol to withhold.
+///
+/// **THE SAME LESSON AS THE CEILING NOTE, one paragraph over.** This text used to
+/// explain why both margins were ZERO, as a standing fact about the renderer.
+/// CLOUD-1637 made both margins real and the explanation became a description of
+/// a tree that no longer exists, so the paragraph is chosen by what was measured.
+fn refusal_render_margin_note(records: &[RenderRecord]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    let flat: Vec<&str> = MEASURED_CLASSES
+        .iter()
+        .filter(|(class, _)| {
+            let arm = |strategy, residency| {
+                records.iter().find(|record| {
+                    record.class == *class
+                        && record.strategy == strategy
+                        && record.residency == residency
+                })
+            };
+            match (
+                arm(Strategy::FullEveryTime, Residency::Warm),
+                arm(Strategy::Current, Residency::Warm),
+            ) {
+                (Some(full), Some(compact)) => full.characters == compact.characters,
+                _ => false,
+            }
+        })
+        .map(|(class, _)| *class)
+        .collect();
+    if flat.is_empty() {
+        out.push_str(
+            "**Every class here pays a real margin**, so a residency protocol has something to \
+             withhold on each of them: a first sighting carries the class's own explanation and \
+             a repeat carries the bare line. That was not true of every renderer this benchmark \
+             has measured — a first sighting used to append `command` routes ONLY, which left a \
+             document-route class rendering the identical line cold and warm — so the margin is \
+             a property of the renderer under measurement rather than of the strategy table.\n\n",
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "**A zero in the emitted column is a measurement, not a gap in the table**, and \
+             {} of the measured classes reach it: {}. A class whose first sighting renders \
+             exactly what its repeat renders has nothing for a residency protocol to withhold, \
+             whether because the renderer appends nothing for it or because the declared ceiling \
+             withholds what it would have appended. The unbounded columns are what tell those \
+             two apart.\n",
+            flat.len(),
+            flat.join(", ")
+        );
+    }
+
     out
 }
 
@@ -2316,7 +2414,8 @@ pub fn refusal_render_report(
 ) -> String {
     use std::fmt::Write as _;
 
-    let mut out = refusal_render_preamble(ceiling);
+    let mut out = refusal_render_preamble();
+    out.push_str(&refusal_render_ceiling_note(records, ceiling));
 
     for (class, rule) in MEASURED_CLASSES {
         let _ = writeln!(out, "## `{class}` (rule `{rule}`)\n");
@@ -2375,16 +2474,7 @@ pub fn refusal_render_report(
     }
     out.push('\n');
 
-    out.push_str(
-        "**A zero in the emitted column is a measurement, not a gap in the table**, and the two \
-         classes reach it by different routes. `tool run loose` declares a `document` route and \
-         no `command` route, and a first sighting appends command routes only — so it renders \
-         the identical line cold and warm however much budget there is. `branch write unsafe` \
-         declares two command routes and WOULD render them, but the carried line exceeds the \
-         declared ceiling and falls back to the compact form. The first is a renderer gap; the \
-         second is a budget decision. A table without the unbounded columns reports them as the \
-         same number and they are not the same finding.\n\n",
-    );
+    out.push_str(&refusal_render_margin_note(records));
 
     out.push_str(
         "## What is NOT priced here, and why it is not an omission\n\n\
