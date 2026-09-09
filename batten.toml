@@ -7058,6 +7058,22 @@ severity = "deny"
 # the floor from the manifest, so MSRV-aware resolution survives the handover only
 # while the number is written into its config — a copy is not the defect, an
 # UNGATED copy is.
+# CLOUD-398, ported from `mise-tasks/rust-paths-check.sh` under CLOUD-843. This
+# is the one glob that decides whether a JOB RUNS AT ALL, and its failure is
+# silent in the dangerous direction: too wide costs money and shows in the bill;
+# too narrow leaves the jobs ABSENT, which the required-checks reader accepts by
+# design, so a platform regression lands with every required check green. What is
+# gated are the filter's own CLAIMS, as probes — which paths must re-run these
+# jobs and which must not — because "which files does a job read" is not
+# computable from committed text.
+[[rule]]
+id = "rust-paths-check"
+kind = "policy"
+scope = "tree"
+line_sources = [".github/workflows/rust.yml"]
+module = "policy/rust-paths-check.rego"
+severity = "deny"
+
 [[rule]]
 id = "msrv-pin-agreement"
 kind = "policy"
