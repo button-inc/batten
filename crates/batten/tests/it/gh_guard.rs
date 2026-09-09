@@ -167,7 +167,7 @@ fn allowed(command: &str) {
 
 /// [`allowed`], with the call's backgrounding STATED.
 ///
-/// For a command another committed row reads the posture of. `foreground-mise`
+/// For a command another committed row reads the posture of. `task run blocked`
 /// refuses every foreground `mise` invocation with no fast list, so a case whose
 /// property is something else entirely — wrapper look-through, here — has to
 /// carry the posture or it measures that row instead of its own.
@@ -334,7 +334,7 @@ fn a_task_name_is_not_a_wrapped_program() {
     // it, so the case names one no lock is ever taken for. That `land` itself is
     // allowed when unheld is `singleton_gate.rs::an_unheld_task_starts`, where
     // the lock state is written rather than inherited.
-    // BACKGROUNDED, because `foreground-mise` now refuses the foreground form of
+    // BACKGROUNDED, because `task run blocked` now refuses the foreground form of
     // both and this case is not about that: the property under test is that
     // `mise run` names a TASK while `mise exec` runs another program, and the
     // look-through is what decides it. Left foreground, the case would measure

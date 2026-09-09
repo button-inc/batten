@@ -231,7 +231,7 @@ fn claude_payload(command: &str) -> String {
 /// Most hosts send no `run_in_background` at all and the engine projects `null`,
 /// which is why the plain builder carries no key — that absence is the ordinary
 /// envelope rather than an omission. This one is for the rows that read the
-/// posture: `foreground-mise` refuses an unstated one on the strict side, so a
+/// posture: `task run blocked` refuses an unstated one on the strict side, so a
 /// case asserting the allowed shape has to say so out loud.
 fn claude_payload_backgrounded(command: &str) -> String {
     serde_json::json!({
@@ -3506,7 +3506,7 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
     );
 
     // THE `mise` CALLS MOVED TO THE BACKGROUNDED FORM, and the move is the rule
-    // rather than an accommodation of it. `foreground-mise` refuses every
+    // rather than an accommodation of it. `task run blocked` refuses every
     // foreground `mise` invocation with no fast list, because the harness kills a
     // foreground call at ~2 minutes and each of these two can cross that bound
     // behind a cargo build the caller cannot see coming — `test:cargo` is the

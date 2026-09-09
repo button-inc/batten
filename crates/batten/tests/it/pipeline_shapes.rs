@@ -64,7 +64,7 @@ fn assert_allowed(command: &str) {
 
 /// [`assert_allowed`], with the call's backgrounding STATED.
 ///
-/// These adjudicate against the LIVE root, so `foreground-mise` reaches any case
+/// These adjudicate against the LIVE root, so `task run blocked` reaches any case
 /// naming a `mise` call and refuses it with no fast list. A case whose subject is
 /// a DIFFERENT row has to state the posture or it measures that one instead.
 /// [`cause`], with the call's backgrounding STATED.
@@ -206,8 +206,8 @@ fn a_redirection_is_not_a_background_ampersand() {
 /// `verdict-not-discarded` used to recommend `mise run verify >/tmp/verify.log
 /// 2>&1` — redirect the output rather than pipe it, so the exit status stays the
 /// task's. Two newer rows make that exact string unrunnable from either side:
-/// `foreground-mise` refuses it foreground, because the harness kills a
-/// foreground call at ~2 minutes, and `background-redirect` refuses it
+/// `task run blocked` refuses it foreground, because the harness kills a
+/// foreground call at ~2 minutes, and `redirect write unread` refuses it
 /// backgrounded, because the harness already captures a backgrounded task's
 /// output where the human watches and a private log file is one nobody reads.
 ///
@@ -272,8 +272,8 @@ fn a_pager_on_an_earlier_query_does_not_condemn_a_later_command() {
     //
     // THE RECOMMENDED FORM MOVED, AND THIS CASE FOLLOWED IT (CLOUD-1722). It used
     // to read `&& mise run verify >/tmp/v.log 2>&1`, which is now two refusals
-    // rather than a model answer: `foreground-mise` refuses the foreground call
-    // because the harness kills one at ~2 minutes, and `background-redirect`
+    // rather than a model answer: `task run blocked` refuses the foreground call
+    // because the harness kills one at ~2 minutes, and `redirect write unread`
     // refuses a backgrounded call that redirects its own output, because the
     // harness already captures it where the human watches. What is left is the
     // form both rows agree on — backgrounded, unredirected — and pinning THAT
@@ -337,10 +337,10 @@ fn each_shape_renders_its_own_cause() {
     // same string masks the class under test: measured, `mise run verify >log
     // 2>&1; ls` read `task run blocked foreground-mise` and this case could no
     // longer see `verdict carry other` at all. Stating the posture takes
-    // `foreground-mise` out of the way and leaves the shape's own row to answer.
+    // `task run blocked` out of the way and leaves the shape's own row to answer.
     //
     // The `>log 2>&1` also left the middle shape, for the same reason one layer
-    // on: backgrounded, `background-redirect` claims it. The redirect was never
+    // on: backgrounded, `redirect write unread` claims it. The redirect was never
     // what that case was about — `; ls` is, because it hands the exit status to
     // `ls` — so dropping it makes the case name its own subject.
     assert!(cause_backgrounded("mise run verify | tail -1").contains("verdict read dropped"));

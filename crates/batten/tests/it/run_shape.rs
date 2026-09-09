@@ -826,7 +826,7 @@ fn a_process_read_outside_a_loop_is_not_a_wait() {
     // it would refuse its own remedy.
     let root = fixture("reads-a-process-once");
     allowed_background(&root, "pgrep -f mise", true);
-    // BACKGROUNDED, and it was foreground until `foreground-mise` landed: the
+    // BACKGROUNDED, and it was foreground until `task run blocked` landed: the
     // probe is still the remedy this class recommends, and it is now a
     // backgrounded one like every other `mise` call.
     allowed_background(&root, "mise run alive", true);

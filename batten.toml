@@ -3312,8 +3312,8 @@ unredirected:
 The tool result IS the verdict, and the harness captures the output to a file it \
 names back — read that in a SEPARATE call. THIS TEXT USED TO PRESCRIBE \
 `>/tmp/<task>.log 2>&1` AND THAT FORM IS NOW REFUSED from both sides: \
-`foreground-mise` because the harness kills a foreground call at ~2 minutes, and \
-`background-redirect` because a private log file is one nobody reads while the \
+`task run blocked` because the harness kills a foreground call at ~2 minutes, and \
+`redirect write unread` because a private log file is one nobody reads while the \
 pane the human watches stays empty. A pager over a FILE is fine; a pager over a \
 live task is not."""
 

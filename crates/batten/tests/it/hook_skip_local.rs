@@ -85,7 +85,7 @@ fn allowed(command: &str) {
 /// [`allowed`], with the call's backgrounding STATED.
 ///
 /// These cases adjudicate against the LIVE root, so every committed row reaches
-/// them — `foreground-mise` included, which refuses a foreground `mise` call with
+/// them — `task run blocked` included, which refuses a foreground `mise` call with
 /// no fast list. An anti-vacuity case has to survive on this row's own account
 /// rather than by another row's silence, so the posture is stated and the
 /// remaining question is whether THIS row fires.

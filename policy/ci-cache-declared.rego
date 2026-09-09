@@ -700,7 +700,7 @@ test_a_scheduled_writer_on_another_architecture_still_leaves_the_reader_empty if
 		scheduled_writer,
 		pr_reader_on("ci-", false, "ubuntu-24.04-arm"),
 	)
-	finding.rule == "read-family-has-a-warm-writer"
+	finding.rule == "job read empty"
 }
 
 test_a_job_reaching_no_cargo_needs_no_cache if {

@@ -947,7 +947,7 @@ test_a_mention_of_sleep_is_not_a_call if {
 # backgrounded call keeps its own output.
 #
 # `programs` rather than `words[0]`, and these cases are where that matters:
-# `foreground-mise` anchors on the engine's RESOLVED program, so a fixture must
+# `task run blocked` anchors on the engine's RESOLVED program, so a fixture must
 # carry the key. `sleeps` above reaches for a segment's program through
 # `words_program_index`; this family does not, because the mediated document
 # already publishes the resolution and CLOUD-1382 says a first word is not a
@@ -968,7 +968,7 @@ test_a_foreground_mise_run_is_refused if {
 		"programs": [prog("mise", ["run", "verify"])],
 		"segments": [seg(["mise", "run", "verify"], null, false)],
 	}}
-	v.rule == "foreground-mise"
+	v.rule == "task run blocked"
 }
 
 # THE STRICT SIDE OF THE THREE-VALUED READ, and the ordinary envelope: most hosts
@@ -990,7 +990,7 @@ test_an_unstated_posture_is_refused_too if {
 		"programs": [prog("mise", ["run", "ci"])],
 		"segments": [seg(["mise", "run", "ci"], null, false)],
 	}}
-	v.rule == "foreground-mise"
+	v.rule == "task run blocked"
 }
 
 test_a_backgrounded_mise_run_is_allowed if {
@@ -1020,7 +1020,7 @@ test_a_backgrounded_call_redirecting_its_own_output_is_refused if {
 		"programs": [prog("cargo", ["build"])],
 		"segments": [seg(["cargo", "build", ">", "/tmp/log", "2>&1"], null, false)],
 	}}
-	v.rule == "background-redirect"
+	v.rule == "redirect write unread"
 }
 
 # NOTHING IS CAPTURED FOR A FOREGROUND CALL, so a redirect there discards no
