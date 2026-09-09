@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.157](https://github.com/button-inc/batten/compare/v0.0.156...v0.0.157) - 2026-09-09
+
+### Added
+
+- *(hook)* run the declared repair, and take the arm the class declares
+- *(rules)* admit a repair on the kinds that reach the boundary
+- *(verdict)* declare what the boundary may DO about a class
+
+### Fixed
+
+- *(rules)* carry both census columns the rebase merged
+- *(hook)* name every allowing event in one arm rather than six
+- *(hook)* declare why the event arms repeat rather than merging them
+- *(rules)* [**breaking**] say what `no_retry_reason` declares
+
+### Other
+
+- *(hook)* split the command-line gates out of the call chain
+- *(hook)* split the event dispatch out of the gate chain
+
 ## [0.0.156](https://github.com/button-inc/batten/compare/v0.0.155...v0.0.156) - 2026-09-09
 
 ### Added
