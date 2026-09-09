@@ -3692,6 +3692,97 @@ fn refuse_claim_bot(err: &mut dyn Write, text: &str) -> Result<ExitCode> {
 /// Minted by whoever is at the keyboard, exactly like the agent receipt — the
 /// party that ran the check writes the record of it. A workflow minting one would
 /// be a receipt asserting a check nobody performed.
+/// What `claim keys` was asked about (CLOUD-1711).
+///
+/// Explicit sources exist for a pull request this checkout did not author
+/// (CLOUD-378): `claim race` asks the same question about a COMPETING branch and
+/// had no way to ask it of the local repository.
+struct ClaimKeysAsk<'a> {
+    /// The head branch, source 2.
+    branch: Option<&'a str>,
+    /// The pull request title, also source 2.
+    title: Option<&'a str>,
+    /// Commit messages, sources 1 and 3.
+    log: Option<&'a str>,
+    /// Source 1 alone.
+    closing_only: bool,
+    /// Source 3 alone.
+    refs_first_only: bool,
+}
+
+/// Print the issue keys this branch claims, one per line.
+///
+/// **Ported off `mise-tasks/claimed-keys.sh` (CLOUD-1711).** The precedence, the
+/// citation rule, the explicit-source mode and the `BATTEN_SPEC_BASE` ancestor
+/// bound are all `race`'s; this function is the seam that reads the repository
+/// and prints the answer.
+///
+/// EMPTY IS NOT AN ERROR and exit 0 is the whole contract: every caller treats
+/// "no claim" as "do not judge", because a guard that guesses is one that blocks
+/// correct work. Outside a git repository the same applies.
+fn run_claim_keys(
+    repo: &Path,
+    ask: &ClaimKeysAsk<'_>,
+    overrides: &resolve::Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    // EACH FLAG NAMES ONE SOURCE, so both together is a caller that has not
+    // decided which question it is asking rather than an intersection to compute.
+    let source = match (ask.closing_only, ask.refs_first_only) {
+        (true, true) => {
+            writeln!(
+                err,
+                "batten: claim keys: --closing-only and --refs-first-only each name one source; pick one"
+            )?;
+            return Ok(ExitCode::Usage);
+        }
+        (true, false) => race::Source::ClosingOnly,
+        (false, true) => race::Source::RefsFirstOnly,
+        (false, false) => race::Source::All,
+    };
+
+    let grammar = board_grammar(overrides)?;
+    // EXPLICIT MODE IS ALL-OR-NOTHING. Passing any source switches git off
+    // entirely, because a remote pull request silently answered from the local
+    // branch would be a confident verdict about the wrong repository state.
+    let explicit = ask.branch.is_some() || ask.title.is_some() || ask.log.is_some();
+    let (branch, log) = if explicit {
+        (
+            ask.branch.unwrap_or_default().to_owned(),
+            ask.log.unwrap_or_default().to_owned(),
+        )
+    } else {
+        let Some(head) = git::current_branch(repo)? else {
+            return Ok(ExitCode::Success);
+        };
+        (head, race::authored_log(repo, "origin/main"))
+    };
+
+    // The extra evidence a caller has and this cannot read for itself: the
+    // command being guarded, or the pull request body being judged. OPTIONAL — a
+    // caller with nothing to add closes stdin and the branch and commit sources
+    // still answer, so this must never block on an interactive terminal.
+    let body = if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        String::new()
+    } else {
+        let mut raw = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw).unwrap_or_default();
+        raw
+    };
+    for key in race::claimed_from(
+        &branch,
+        ask.title.unwrap_or_default(),
+        &log,
+        &body,
+        &grammar,
+        source,
+    ) {
+        writeln!(out, "{key}")?;
+    }
+    Ok(ExitCode::Success)
+}
+
 fn run_claim_bot(
     repo: &Path,
     mode: Mode,
@@ -3988,6 +4079,25 @@ fn run_claim(
                 err,
             )
         }
+        ClaimCommand::Keys {
+            branch,
+            title,
+            log,
+            closing_only,
+            refs_first_only,
+        } => run_claim_keys(
+            Path::new("."),
+            &ClaimKeysAsk {
+                branch: branch.as_deref(),
+                title: title.as_deref(),
+                log: log.as_deref(),
+                closing_only,
+                refs_first_only,
+            },
+            overrides,
+            out,
+            err,
+        ),
         ClaimCommand::Bot => run_claim_bot(Path::new("."), mode, overrides, out, err),
         ClaimCommand::Race => run_claim_race(Path::new("."), mode, overrides, out, err),
         ClaimCommand::Carry { json } => run_claim_carry(Path::new("."), mode, json, out, err),

@@ -801,6 +801,87 @@ const CONFIG_IN: FlagDecl = FlagDecl {
 ///
 /// Deliberately not global: a global output mode would be silently accepted by
 /// verbs that emit no data — a flag that looks applied and isn't.
+/// The explicit sources `claim keys` may be handed for a pull request this
+/// checkout did not author (CLOUD-378, carried by CLOUD-1711).
+///
+/// Passing ANY of them switches to explicit mode: git is not consulted at all and
+/// an unsupplied source is empty. All-or-nothing rather than per-source fallback,
+/// because a remote pull request silently answered from the LOCAL branch is the
+/// worst kind of wrong — a confident verdict about the wrong repository state.
+const CLAIM_BRANCH: FlagDecl = FlagDecl {
+    id: "branch",
+    long: Some("branch"),
+    short: None,
+    help: "The head branch, standing in for source 2",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+const CLAIM_TITLE: FlagDecl = FlagDecl {
+    id: "title",
+    long: Some("title"),
+    short: None,
+    help: "The pull request title, also source 2 — a body is not, because a body cites evidence",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+const CLAIM_LOG: FlagDecl = FlagDecl {
+    id: "log",
+    long: Some("log"),
+    short: None,
+    help: "Commit messages, standing in for sources 1 and 3",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// Source 1 alone. Mutually exclusive with [`REFS_FIRST_ONLY`]: each names a
+/// different SINGLE source, so both together is a caller that has not decided
+/// which question it is asking, never an intersection to compute.
+const CLOSING_ONLY: FlagDecl = FlagDecl {
+    id: "closing-only",
+    long: Some("closing-only"),
+    short: None,
+    help: "Answer from a closing keyword alone, never falling through to the branch or a trailer",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+/// Source 3 alone — `closing-key-check`'s need (CLOUD-674).
+const REFS_FIRST_ONLY: FlagDecl = FlagDecl {
+    id: "refs-first-only",
+    long: Some("refs-first-only"),
+    short: None,
+    help: "Answer from the first key of each `Refs:` trailer alone, never sources 1 or 2",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 const JSON: FlagDecl = FlagDecl {
     id: "json",
     long: Some("json"),
@@ -3936,6 +4017,31 @@ pub const SURFACE: &[CommandDecl] = &[
     // than a pure read — the mediated claim gate needs a claimed branch to be
     // distinguishable from an unclaimed one. A row claiming `read` here would put
     // a writing verb on the derived read-only allowlist.
+    // CLOUD-1711. `mise-tasks/claimed-keys.sh` retires onto this leaf, and
+    // `merged-pr-keys.sh` with it — that program shells into this same answer once
+    // per pull request body, so the two are a closed set.
+    //
+    // A LEAF under `claim` rather than a noun of its own (CLOUD-1546's 42
+    // top-level rows). `read`, and honestly so: it mints nothing and writes
+    // nothing — it derives which keys a branch claims and prints them.
+    //
+    // Pointer-only: the keys alone, uppercased and sorted, never the prose they
+    // were extracted from (rule 4).
+    CommandDecl {
+        path: "claim keys",
+        id: "claim.keys",
+        about: "The issue keys this branch CLAIMS, as distinct from the ones it merely mentions",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[
+            CLAIM_BRANCH,
+            CLAIM_TITLE,
+            CLAIM_LOG,
+            CLOSING_ONLY,
+            REFS_FIRST_ONLY,
+        ],
+    },
     CommandDecl {
         path: "claim check",
         id: "claim.check",

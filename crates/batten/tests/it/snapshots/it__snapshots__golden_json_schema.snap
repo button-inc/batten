@@ -595,6 +595,56 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "claim keys",
+          "id": "claim.keys",
+          "about": "The issue keys this branch CLAIMS, as distinct from the ones it merely mentions",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "branch",
+              "short": null,
+              "long": "branch",
+              "takes_value": true,
+              "positional": false,
+              "help": "The head branch, standing in for source 2"
+            },
+            {
+              "name": "closing-only",
+              "short": null,
+              "long": "closing-only",
+              "takes_value": false,
+              "positional": false,
+              "help": "Answer from a closing keyword alone, never falling through to the branch or a trailer"
+            },
+            {
+              "name": "log",
+              "short": null,
+              "long": "log",
+              "takes_value": true,
+              "positional": false,
+              "help": "Commit messages, standing in for sources 1 and 3"
+            },
+            {
+              "name": "refs-first-only",
+              "short": null,
+              "long": "refs-first-only",
+              "takes_value": false,
+              "positional": false,
+              "help": "Answer from the first key of each `Refs:` trailer alone, never sources 1 or 2"
+            },
+            {
+              "name": "title",
+              "short": null,
+              "long": "title",
+              "takes_value": true,
+              "positional": false,
+              "help": "The pull request title, also source 2 — a body is not, because a body cites evidence"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "claim race",
           "id": "claim.race",
           "about": "Refuse a claim a different open pull request already carries, judged by head SHA",
@@ -3114,6 +3164,10 @@ expression: stdout_of(&output)
     {
       "id": "checks.green",
       "path": "checks green"
+    },
+    {
+      "id": "claim.keys",
+      "path": "claim keys"
     },
     {
       "id": "claim.race",

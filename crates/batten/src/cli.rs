@@ -776,6 +776,19 @@ pub enum ReadyCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ClaimCommand {
+    /// The issue keys this branch CLAIMS, as distinct from those it mentions.
+    Keys {
+        /// The head branch, standing in for source 2.
+        branch: Option<String>,
+        /// The pull request title, also source 2.
+        title: Option<String>,
+        /// Commit messages, standing in for sources 1 and 3.
+        log: Option<String>,
+        /// Answer from a closing keyword alone.
+        closing_only: bool,
+        /// Answer from the first key of each `Refs:` trailer alone.
+        refs_first_only: bool,
+    },
     /// Judge a set of payloads and mint the receipt when they are pullable.
     Check {
         /// Claim over the competitor refusals, recording what was overridden.
@@ -2124,6 +2137,13 @@ fn claim_of(matches: &ArgMatches) -> Option<ClaimCommand> {
         }),
         ("bot", _) => Some(ClaimCommand::Bot),
         ("race", _) => Some(ClaimCommand::Race),
+        ("keys", matches) => Some(ClaimCommand::Keys {
+            branch: matches.get_one::<String>("branch").cloned(),
+            title: matches.get_one::<String>("title").cloned(),
+            log: matches.get_one::<String>("log").cloned(),
+            closing_only: flag(matches, "closing-only"),
+            refs_first_only: flag(matches, "refs-first-only"),
+        }),
         ("carry", matches) => Some(ClaimCommand::Carry {
             json: flag(matches, "json"),
         }),
