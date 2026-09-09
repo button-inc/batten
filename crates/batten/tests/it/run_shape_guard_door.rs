@@ -238,15 +238,16 @@ fn the_handler_receives_the_hosts_own_payload_including_the_calls_background_fla
 }
 
 #[test]
-fn a_backgrounded_wait_on_a_condition_stays_allowed() {
-    // Driven against the COMMITTED guard deliberately, because this is its allow
-    // path and the allow path is not broken: the guard prints a document only
-    // when it denies, so a command it passes leaves the door silent either way.
-    // A guard refusing every backgrounded sleep would fail this and be the false
-    // positive that gets a guard switched off (CLOUD-418).
+fn a_backgrounded_wait_on_a_condition_is_denied_at_the_door() {
+    // Driven against the COMMITTED guard deliberately: this case used to assert
+    // the opposite, and it is the one CLOUD-1337 inverted. Refusing every
+    // backgrounded sleep was called the false positive that gets a guard
+    // switched off; measured, the exemption was instead the hole that let a
+    // conditioned loop run 3h34m unseen, so the door is where the withdrawal has
+    // to show up rather than only in the module's own suite.
     let dir = fixture("door-background-wait");
     let answer = door_bg(&dir, "until [ -f /tmp/done ]; do sleep 1; done");
-    assert!(answer.allowed(), "{}", answer.out);
+    assert!(!answer.allowed(), "{}", answer.out);
     assert!(answer.unbroken(), "{}", answer.err);
 }
 
