@@ -19,7 +19,7 @@
 // carried: mise-tasks/coderabbit-config-check.sh policy/coderabbit-config.rego crates/batten/tests/it/coderabbit_config.rs
 // carried: tests/coderabbit-config-check.bats policy/coderabbit-config.rego crates/batten/tests/it/coderabbit_config.rs
 //
-// carried: "the repo as it stands passes" policy/coderabbit-config.rego
+// carried: "coderabbit-config-check.bats::the repo as it stands passes" policy/coderabbit-config.rego
 // carried: "a compliant fixture passes" policy/coderabbit-config.rego
 // carried: "request_changes_workflow flipped off fails, and names the key" policy/coderabbit-config.rego
 // carried: "drafts flipped off fails, and names the key" policy/coderabbit-config.rego
@@ -30,7 +30,7 @@
 // carried: "a comment-only file is a failure, not a vacuous pass" policy/coderabbit-config.rego
 // carried: "a commented-out key does not satisfy the assertion" policy/coderabbit-config.rego
 // carried: "output is pointer-only: it names keys and lines, never the file's contents" policy/coderabbit-config.rego
-// changed: "the gate is wired: hk.pkl declares a step that runs this task" policy/coderabbit-config.rego the task the step ran no longer exists, so the case has no subject to assert. Its property does not go unheld: a `[[rule]]` row IS the wiring on the engine, `batten check` runs every registered row, and `glob-containment` refuses the commit where the hook manifest's trigger stops selecting a path the config makes an input — which is the same claim reached by a mechanism rather than by a suite reading a manifest
+// changed: "coderabbit-config-check.bats::the gate is wired: hk.pkl declares a step that runs this task" policy/coderabbit-config.rego the task the step ran no longer exists, so the case has no subject to assert. Its property does not go unheld: a `[[rule]]` row IS the wiring on the engine, `batten check` runs every registered row, and `glob-containment` refuses the commit where the hook manifest's trigger stops selecting a path the config makes an input — which is the same claim reached by a mechanism rather than by a suite reading a manifest
 // changed: "an absent file fails rather than passing for want of anything to read" policy/coderabbit-config.rego the shell opened a named file and refused when it was gone; the successor declares it as a `line_sources` path and the ENGINE decides this earlier — a rule whose declared path matches nothing is not evaluated at all, and `input.tree.missing` is never populated on the tree surface (CLOUD-1049, measured identically for `policy/mise-pin-agreement.rego`'s own could-not-look clause). What the case protected survives as the vacuity arm: a file that resolves and declares no keys is `config carry empty`, never a pass
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
