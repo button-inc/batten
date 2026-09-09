@@ -38,6 +38,7 @@
 
 use crate::common;
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
@@ -79,10 +80,14 @@ fn pin_repo(
          module = \"policy/hook-pin-check.rego\"\n\
          severity = \"deny\"\n",
     );
-    let hooks = registrations
-        .iter()
-        .map(|c| format!("      {{ \"type\": \"command\", \"command\": \"{c}\" }},\n"))
-        .collect::<String>();
+    let mut hooks = String::new();
+    for command in registrations {
+        writeln!(
+            hooks,
+            "      {{ \"type\": \"command\", \"command\": \"{command}\" }},"
+        )
+        .unwrap();
+    }
     let settings = format!("{{\n  \"hooks\": {{\n    \"PreToolUse\": [\n{hooks}    ]\n  }}\n}}\n");
     fixture = fixture
         .file("AGENTS.md", "the consumer's own authority\n")
