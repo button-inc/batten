@@ -26,13 +26,17 @@ use crate::common;
 
 use std::path::Path;
 
-use common::{git_in, run, run_with_stdin, scratch, stdout, write};
+use common::{git_in, init_repo, run, run_with_stdin, scratch, stdout, write};
 
 /// A repository with a git directory for the stores to live under.
 fn repo(name: &str) -> std::path::PathBuf {
     let dir = scratch(&format!("record-families-{name}"));
     write(&dir, "seed.txt", "seed\n");
-    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    // The TEMPLATE, never a fork (CLOUD-1419). `init_repo` copies a repository
+    // the harness publishes once per filesystem; a hand-rolled `git init` here
+    // pays a process for what the copy already has, and the trace that motivated
+    // the ratchet counted 1,819 of them in one run.
+    init_repo(&dir);
     git_in(&dir, &["add", "-A"]);
     git_in(&dir, &["commit", "-qm", "seed"]);
     dir
