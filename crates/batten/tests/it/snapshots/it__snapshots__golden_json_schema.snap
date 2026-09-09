@@ -2395,6 +2395,24 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "record fold",
+          "id": "record.fold",
+          "about": "Fold a journal family: `nothing`, its records, or `unreadable <path>`",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "family",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The store family to fold"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "record forge",
           "id": "record.forge",
           "about": "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin",
@@ -2413,12 +2431,82 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "record journal",
+          "id": "record.journal",
+          "about": "Append one record to an append-and-fold store family, read from stdin",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "family",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The store family the record belongs to"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "record keyed",
+          "id": "record.keyed",
+          "about": "Put one value into a keyed store family, read from stdin",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "family",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The store family the record belongs to"
+            },
+            {
+              "name": "key",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The key the record is filed under"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "record plan",
           "id": "record.plan",
           "about": "Record this branch's plan, read as `<id> <status>` lines on stdin",
           "effect": "write",
           "data_channel": false,
           "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "record show",
+          "id": "record.show",
+          "about": "Read one keyed record back: `hit` and the value, or `miss`",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "family",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The store family to read"
+            },
+            {
+              "name": "key",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The key to look under"
+            }
+          ],
           "subcommands": []
         },
         {
@@ -3218,6 +3306,14 @@ expression: stdout_of(&output)
     {
       "id": "receipt.verified",
       "path": "receipt verified"
+    },
+    {
+      "id": "record.fold",
+      "path": "record fold"
+    },
+    {
+      "id": "record.show",
+      "path": "record show"
     },
     {
       "id": "show",

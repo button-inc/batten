@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-show 1  batten 
+.SH NAME
+batten\-record\-show \- Read one keyed record back: `hit` and the value, or `miss`
+.SH SYNOPSIS
+\fBbatten record show\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIfamily\fR> <\fIkey\fR> 
+.SH DESCRIPTION
+Read one keyed record back: `hit` and the value, or `miss`
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIfamily\fR>
+The store family to read
+.TP
+<\fIkey\fR>
+The key to look under

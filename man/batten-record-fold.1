@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-fold 1  batten 
+.SH NAME
+batten\-record\-fold \- Fold a journal family: `nothing`, its records, or `unreadable <path>`
+.SH SYNOPSIS
+\fBbatten record fold\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIfamily\fR> 
+.SH DESCRIPTION
+Fold a journal family: `nothing`, its records, or `unreadable <path>`
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIfamily\fR>
+The store family to fold
