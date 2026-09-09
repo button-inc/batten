@@ -75,6 +75,7 @@ mod ci_cache_declared;
 mod ci_hygiene;
 mod ci_parity;
 mod ci_suite_lane;
+mod ci_tools;
 mod claim;
 mod claim_carry;
 mod claim_order;

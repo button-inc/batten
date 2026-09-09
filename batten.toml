@@ -1752,6 +1752,37 @@ regex = '^#[[:space:]]*budget:[[:space:]]*p95=([0-9]+)s[[:space:]]+x([0-9]+)[[:s
 id = "timeout-budget-grandfathered"
 regex = '^#[[:space:]]*budget:[[:space:]]*grandfathered[[:space:]]+measured=[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$'
 
+# An install list, which is a one-line plain scalar by the workflows' own
+# convention: a block scalar would need continuation tracking, and several tool
+# names carry a backend prefix so they read as new keys under any such heuristic.
+[[pattern]]
+id = "install-args-line"
+regex = '^[ \t]*install_args:'
+
+# The trigger that puts a workflow on the pull-request path, which is the scope
+# the install-list rows are argued for.
+[[pattern]]
+id = "workflow-pull-request-trigger"
+regex = '^[ \t]*pull_request:'
+
+# The ASSIGNMENT set to false, not a mention. A substring search would pass a
+# workflow whose only occurrence is the comment explaining why the variable
+# matters, and would pass one setting it true — the same hole in a fix's clothing.
+[[pattern]]
+id = "mise-task-auto-install-off"
+regex = '^[ \t]*MISE_TASK_RUN_AUTO_INSTALL:[ \t]*"?false"?[ \t]*$'
+
+# The other half of the same binding.
+[[pattern]]
+id = "mise-exec-auto-install-off"
+regex = '^[ \t]*MISE_EXEC_AUTO_INSTALL:[ \t]*"?false"?[ \t]*$'
+
+# A tool a rule's own check spawns, which no install list reads and no `[tools]`
+# scan can see.
+[[pattern]]
+id = "mise-exec-spawn"
+regex = 'mise exec -- [a-z][a-z0-9._-]*'
+
 [[pattern]]
 id = "release-tag"
 regex = '^v[0-9]+\.[0-9]+\.[0-9]+$'
@@ -7156,6 +7187,22 @@ severity = "deny"
 # be a `[[rule]]` row and answered honestly that it could not — `forbid` matches a
 # substring and cannot compare integers. A policy module is exactly the missing
 # capability, and rule 1 holds because the arithmetic is this consumer's.
+# CLOUD-180, CLOUD-812 and CLOUD-480, ported from `mise-tasks/ci-tools-check.sh`
+# under CLOUD-843. Narrowing the per-job install set is the largest CI speed-up
+# here, and its cost is a SECOND place tool names are written down. Three
+# directions, because each of the first two is blind to the next: names in a list
+# can be judged, a workflow with NO list has no names to judge (CLOUD-812 measured
+# two such workflows installing everything on every push, with nothing red), and
+# neither can see a tool a `[[rule]]` row itself spawns — which with auto-install
+# off fails CLOSED in CI while passing locally (CLOUD-480, two runs).
+[[rule]]
+id = "ci-tools"
+kind = "policy"
+scope = "tree"
+line_sources = ["mise.toml", "batten.toml", ".github/workflows/*.yml"]
+module = "policy/ci-tools.rego"
+severity = "deny"
+
 [[rule]]
 id = "timeout-budget"
 kind = "policy"
@@ -13613,6 +13660,54 @@ id = "job list empty"
 gloss = "a workflow declares no jobs this rule can read"
 class = """
 A file that cannot be parsed as a workflow is not a workflow with no jobs, and a silent pass over it is the failure this arm exists for. Fix the file, or narrow the rule's selector so it is honestly out of scope.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "tool name unknown"
+gloss = "an install list names a tool the manifest does not declare"
+class = """
+The installer does not fail on an unknown name, so the drift surfaces much later as a missing command in whichever step needed it — a missing TOOL wearing a missing-STEP costume. Correct the name in the list, or declare the tool.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "tool select missing"
+gloss = "a pull-request workflow runs the installer without an install list"
+class = """
+A workflow with no list installs the whole toolchain on every push, and judging the names IN a list can never see it — that is a hole in the trigger rather than in the predicate. Narrow the list to the tools that job invokes.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "tool pin loose"
+gloss = "an install list is declared without the variables that make it bind"
+class = """
+The runner re-installs the missing tools at task time, so the list decides nothing: one job installed a single tool in 13s and then rebuilt the whole toolchain inside the work step. Set both auto-install variables to false, in the same workflow as the list.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "spawn reach absent"
+gloss = "a policy row spawns a declared tool no install list installs"
+class = """
+With auto-install off making the list binding, such a row does not run slowly — it fails CLOSED, at deny, while passing locally where the tool is installed, and the landing loop reads that as a verify/CI disagreement with nothing naming the cause. Add the tool to the list of the job that runs the row.
 """
 
 [[verdict.route]]
