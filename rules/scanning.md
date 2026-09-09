@@ -28,6 +28,41 @@ answer in four seconds and the first reading had been right. The retraction had
 to be retracted. Row four's sentence applies unchanged one level up: **source
 feels like an answer and running the predicate feels like a detour.**
 
+## Running it answers the GATE's question, which is not always yours
+
+Row five is right about the instrument and silent about what the reading
+_licenses_, and that silence is the next failure along. Two kinds of gate return
+the same `0`:
+
+- **A decider** takes your whole question as its object. `checks green` over a
+  SHA, `no_artifact_name_reaches_the_core` over the tree, `closing-key-check`
+  over a PR body. Exit `0` IS the answer, and re-deriving it by hand is the
+  detour row five names.
+- **A floor** takes a NECESSARY condition as its object. `ready lint` over a
+  Ready block, `config-lint`, every linter. Exit `0` says _no known defect was
+  found_, and the reasoning it cannot reach is still yours to do.
+
+**One question separates them: can this gate be satisfied by content that is
+well-formed and false?** If it can, it is a floor. `crates/batten/src/ready.rs`
+says this about itself where `REQUIRED_CLAIMS` is declared — the prose path
+"validates the clauses that ARE there and says nothing about absence", and the
+claims object exists because "a key cannot be well-formed prose". A key can be
+well-formed and untrue, and no exit code reaches that.
+
+**Measured 2026-09-09.** Four rows this branch filed were refused
+`filed-unrefined`. Their Ready blocks were repaired, `ready lint` answered
+`satisfies the checkable Ready clauses` on all four, and that was reported to a
+human as grooming done. Two of the four had had their required `tests` key
+filled with a test file picked off a glob and a mutation name invented to fit —
+well-formed, unverifiable by the gate, false. One of those two was a row whose
+own §2 said its mechanism was still undecided, which is precisely the case
+`REQUIRED_CLAIMS` was built to catch; the fabricated fill hid it. The gate did
+its job exactly as designed. The floor was read as a verdict.
+
+So row five's conclusion is bounded: **run the gate to learn what the gate
+decides, then ask whether what it decides is what you were asking.** A decider's
+`0` ends the question. A floor's `0` is where your reasoning starts.
+
 Row two is the one the tree kept reaching past. Rows one and three both have a
 habit behind them — `grep` is in every hand, and `rules/rust.md` already
 routes the spawn census to name resolution — so a syntax question gets answered
