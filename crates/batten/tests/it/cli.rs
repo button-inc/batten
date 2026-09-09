@@ -226,6 +226,22 @@ fn claude_payload(command: &str) -> String {
     .to_string()
 }
 
+/// [`claude_payload`] with the call's backgrounding STATED.
+///
+/// Most hosts send no `run_in_background` at all and the engine projects `null`,
+/// which is why the plain builder carries no key — that absence is the ordinary
+/// envelope rather than an omission. This one is for the rows that read the
+/// posture: `foreground-mise` refuses an unstated one on the strict side, so a
+/// case asserting the allowed shape has to say so out loud.
+fn claude_payload_backgrounded(command: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": command, "run_in_background": true }
+    })
+    .to_string()
+}
+
 /// A Claude Code `PreToolUse` payload wrapping one bare tool call.
 ///
 /// Empty input, deliberately: a row keyed on the tool name alone reads no field
@@ -3434,16 +3450,38 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
     // state is written by the case rather than inherited from whatever is running
     // — and `another_task_is_none_of_this_gates_business` beside it is what keeps
     // the row from becoming a blanket refusal of `mise run`.
-    for command in [
-        "gh pr view 42",
-        "mise exec -- cargo test -p batten",
-        "mise run test:cargo",
-    ] {
+    for command in ["gh pr view 42"] {
         let output = run_hook_in(&root, "exit-code", &claude_payload(command), false);
         assert_eq!(
             output.status.code(),
             Some(0),
             "the committed policy must allow {command:?}"
+        );
+    }
+
+    // THE `mise` CALLS MOVED TO THE BACKGROUNDED FORM, and the move is the rule
+    // rather than an accommodation of it. `foreground-mise` refuses every
+    // foreground `mise` invocation with no fast list, because the harness kills a
+    // foreground call at ~2 minutes and each of these two can cross that bound
+    // behind a cargo build the caller cannot see coming — `test:cargo` is the
+    // whole nextest lap. Asserting the committed policy still ALLOWS them
+    // foreground would be asserting the gate does not hold.
+    //
+    // They stay in this case rather than leaving it, because the claim they carry
+    // is unchanged and still worth pinning: `mise run` is not blanket-refused
+    // here. A rule that denied it outright would take the backgrounded form too,
+    // and this is where that would surface.
+    for command in ["mise exec -- cargo test -p batten", "mise run test:cargo"] {
+        let output = run_hook_in(
+            &root,
+            "exit-code",
+            &claude_payload_backgrounded(command),
+            false,
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "the committed policy must allow a backgrounded {command:?}"
         );
     }
 }

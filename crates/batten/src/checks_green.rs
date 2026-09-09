@@ -227,31 +227,40 @@ fn key(run: &Run) -> (String, u64) {
 /// their old behaviour, telling us less about which clause the cases pin.
 //MUTANT-SUITE crates/batten/src/checks_green.rs
 //MUTANT unanswered-displaces-a-verdict|s@const UNANSWERED: u8 = 3;@const UNANSWERED: u8 = 9;@|a_later_skipped_twin_does_not_erase_a_verdict
-fn winner<'a>(runs: &[&'a Run], answered: &[String]) -> &'a Run {
+fn winner<'a>(runs: &[&'a Run], answered: &[String]) -> Option<&'a Run> {
     const UNANSWERED: u8 = 3;
     // `max_by_key` over `(key, rank)` is the whole ordering, and it is a
     // FUNCTION OF THE SET rather than of the arrival order — which is the defect
     // CLOUD-1722's first shape carried. The old pairwise fold applied a
     // non-transitive predicate, so a success, an in-flight rerun and a newer
     // skipped twin read `Green` in one slice order and `Pending` in another.
+    //
+    // `Option` RATHER THAN AN `expect`, and the empty case is the caller's to
+    // not have. Every group this is called with is non-empty by construction —
+    // `latest_per_name` builds them by pushing — but a panic message asserting
+    // that is a claim the type could carry instead, and `clippy::expect_used` is
+    // denied here precisely so the assertion goes into the signature. The caller
+    // reads it back with `filter_map`, where an empty group contributes no name
+    // rather than aborting a verdict the rest of the reading could still answer.
     let latest = *runs
         .iter()
-        .max_by_key(|run| (key(run), rank(run, answered)))
-        .expect("winner is called with at least one run");
+        .max_by_key(|run| (key(run), rank(run, answered)))?;
     if rank(latest, answered) != UNANSWERED {
-        return latest;
+        return Some(latest);
     }
     // The completed-but-unanswered latest yields to the latest run that DID
     // judge or is still judging — but only when that run is STRICTLY OLDER.
     // An equal key is the unorderable pair, which must still fall to the least
     // conclusive reading: preferring the answer there would make the fail-closed
     // case fail open, the one direction this module cannot afford.
-    runs.iter()
-        .filter(|run| rank(run, answered) != UNANSWERED)
-        .max_by_key(|run| (key(run), rank(run, answered)))
-        .filter(|candidate| key(candidate) < key(latest))
-        .copied()
-        .unwrap_or(latest)
+    Some(
+        runs.iter()
+            .filter(|run| rank(run, answered) != UNANSWERED)
+            .max_by_key(|run| (key(run), rank(run, answered)))
+            .filter(|candidate| key(candidate) < key(latest))
+            .copied()
+            .unwrap_or(latest),
+    )
 }
 
 /// Latest run per name (CLOUD-436), over the required subset only.
@@ -274,7 +283,7 @@ fn latest_per_name<'a>(runs: &'a [Run], roster: &Roster) -> BTreeMap<&'a str, &'
     }
     grouped
         .into_iter()
-        .map(|(name, group)| (name, winner(&group, &roster.answered)))
+        .filter_map(|(name, group)| Some((name, winner(&group, &roster.answered)?)))
         .collect()
 }
 
