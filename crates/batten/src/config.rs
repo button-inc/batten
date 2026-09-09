@@ -1386,7 +1386,8 @@ pub const RETIRED_KEYS: &[(&str, &str)] = &[(
 ///
 /// [`trust::load_base`]: crate::trust::load_base
 pub fn parse_base(text: &str, source: &str) -> Result<Config> {
-    let mut table: toml::Table = toml::from_str(text).map_err(|err| config_error(source, &err))?;
+    let mut table: toml::Table =
+        toml::from_str(text).map_err(|err| config_error(source, text, &err))?;
     // Nothing is reported when a key is dropped: the report this feeds is a
     // comparison of two policies, and "the base declared a key this build no
     // longer has" is a fact about the build rather than about either policy.
@@ -1518,7 +1519,8 @@ pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
             prune_unresolvable::<OverrideConfig>(text, binary_is_behind_the_config(source, text));
         let config = match pruned.config {
             Some(config) => config,
-            None => toml::from_str(&pruned.text).map_err(|err| config_error(source, &err))?,
+            None => toml::from_str(&pruned.text)
+                .map_err(|err| config_error(source, &pruned.text, &err))?,
         };
         (config, pruned.dropped)
     };
@@ -1967,8 +1969,35 @@ fn names_an_unknown_key(rendered: &str) -> bool {
 //MUTANT-SUITE crates/batten/tests/it/config_skew.rs
 //MUTANT skew-reads-as-malformed|s@    if !names_an_unknown_key(&rendered) {@    if true {@|an_unknown_key_names_the_rebuild
 //MUTANT every-parse-error-blames-skew|s@    if !names_an_unknown_key(&rendered) {@    if false {@|a_malformed_config_does_not_mention_a_rebuild
-pub(crate) fn config_error(source: &str, err: &toml::de::Error) -> anyhow::Error {
+pub(crate) fn config_error(source: &str, text: &str, err: &toml::de::Error) -> anyhow::Error {
     let rendered = err.to_string();
+    // THE SYNTAX PROBE, AND IT RUNS ONLY HERE — ON THE ERROR PATH (CLOUD-1677).
+    //
+    // `toml::de::Error` is the one type for two very different faults, and the
+    // rendering hides it: a missing field and an invalid type both arrive as
+    // "TOML parse error at line N, column C", exactly like a stray brace. Reading
+    // the message cannot tell them apart, and `names_an_unknown_key` answers a
+    // third question again — measured on the `[[fact]]`-with-no-`returns` fixture,
+    // which is a SCHEMA fault that renders as a parse error and was classed as
+    // unreadable by the message alone.
+    //
+    // A `Table` parse answers it exactly: if the bytes are well-formed TOML then
+    // whatever failed was the SCHEMA over them, and the file still has rows a
+    // build can read. This is the probe the comment in `parse_ungated` records as
+    // removed for costing a parse on the hot path — it is free here, because
+    // nothing reaches this function until a parse has already failed.
+    if toml::from_str::<toml::Table>(text).is_err() {
+        // CLASSED, AND THE CLASS IS A DISCRIMINATOR RATHER THAN A LABEL. This is
+        // the one config fault with no partial function left to preserve — the
+        // file is not TOML, so no row is readable and none can be enforced. Every
+        // other fault leaves the rest of the file deciding, which is what lets an
+        // agent be told to repair the broken part instead of losing the gate
+        // surface entirely. `Native::ConfigUnreadable` carries the full argument.
+        return UsageError::raise_as(
+            crate::verdict::Native::ConfigUnreadable,
+            format!("invalid config {source}: {err}"),
+        );
+    }
     if !names_an_unknown_key(&rendered) {
         return UsageError::raise(format!("invalid config {source}: {err}"));
     }
@@ -3042,7 +3071,8 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
         let pruned = prune_unresolvable::<Config>(text, binary_is_behind_the_config(source, text));
         let config = match pruned.config {
             Some(config) => config,
-            None => toml::from_str(&pruned.text).map_err(|err| config_error(source, &err))?,
+            None => toml::from_str(&pruned.text)
+                .map_err(|err| config_error(source, &pruned.text, &err))?,
         };
         (config, pruned.dropped)
     };

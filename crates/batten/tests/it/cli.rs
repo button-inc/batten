@@ -2680,24 +2680,56 @@ fn hook_allows_when_no_authority_is_configured() {
 }
 
 #[test]
-fn hook_fails_open_and_loud_on_an_unloadable_authority() {
-    // The opposite case, and the one CLOUD-40 could not reach because `hook`
-    // loaded no config: an authority that EXISTS and cannot be read means the
-    // rules the operator wrote are not being applied. Allowing silently there
-    // would be the false green the engine exists to catch, so it is a usage
-    // error — loud on stderr, exit 1, and structurally not a deny, because §7
-    // spends 2 on the verdict alone.
+fn hook_refuses_and_is_loud_on_an_unloadable_authority() {
+    // RENAMED FROM `hook_fails_open_and_loud_…`, because the first half stopped
+    // being true (CLOUD-1677) — and ONLY for this fixture's fault.
+    //
+    // The reasoning it was written on is what the row acted on: an authority that
+    // EXISTS and cannot be read means the operator's rules are not being applied,
+    // and allowing silently is the false green the engine exists to catch. What
+    // was wrong is that "loud" was the whole remedy — exit `1` is a NON-BLOCKING
+    // hook error, so the tool ran anyway and the loudness reached a log nobody
+    // gates on. Measured: 1,149 calls proceeded through seven windows of a
+    // mid-edit `batten.toml`, which is itself a protected path, so the gate
+    // guarding the config stopped guarding it during the one operation that
+    // changes it.
+    //
+    // **THIS FIXTURE IS `not toml at all`, WHICH IS THE WHOLE SCOPE.** A config
+    // that parses and merely fails a validator, or names a key this build
+    // predates, still answers `1` — every other row in it remains readable and
+    // enforceable, and an agent can still be told to repair the broken one.
+    // Refusing there would trade a working partial gate surface for nothing.
+    // Here there is no partial surface: nothing parsed, so nothing is enforced.
     let dir = repo_with_config("hook-broken-authority", "this is not toml at all\n");
     for harness in harnesses() {
         let output = run_hook_in(&dir, harness, &claude_payload("gh pr view 42"), false);
         let code = output.status.code();
-        assert_eq!(code, Some(1), "{harness}: an unreadable authority is usage");
-        assert_ne!(code, Some(2), "{harness}: must never deny");
-        assert!(output.stdout.is_empty(), "{harness}: no decision document");
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // WHAT THIS CASE PROVES IS THAT NO HARNESS FAILS OPEN, and it deliberately
+        // does not assert the channel. Six protocols write six different decision
+        // documents, so a `permissionDecision` assertion inside this loop tests
+        // Claude Code's spelling five times and passes it off as coverage. The
+        // per-protocol detail — the document on a host that reads one, the `2` on
+        // the neutral adapter whose only channel is the number — belongs where it
+        // can be stated exactly, which is `adjudicate_absent.rs`.
+        //
+        // `1` was the whole defect: non-blocking, so the call ran. `0` would be a
+        // clean allow over an authority nothing could read.
         assert!(
-            stderr.contains("batten.toml"),
-            "{harness}: the failure names the file, got: {stderr}"
+            matches!(code, Some(2 | 3)),
+            "{harness}: a call under an unreadable authority must not proceed, got {code:?}"
+        );
+        // NEVER SILENT, AND NEVER ANONYMOUS — the half of the original case that
+        // was always right, asked of whichever channel actually carried the
+        // refusal. The original asked stderr of every harness, which was true
+        // while the answer was always an exit-`1` diagnostic; now a document
+        // harness puts the reason in the document and leaves stderr empty, so
+        // asserting stderr alone would fail on the hosts that refuse best.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let spoken = format!("{stderr}{stdout}");
+        assert!(
+            spoken.contains("batten.toml"),
+            "{harness}: the failure names the file, got: {spoken}"
         );
     }
 }

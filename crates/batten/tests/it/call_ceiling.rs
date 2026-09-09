@@ -169,16 +169,12 @@ reason = "..."
         &["adjudicate", "--harness", "exit-code"],
         &payload(&prompt_of(10)),
     );
-    // A CONFIG FAULT IS STILL NOT A POLICY VERDICT — and on THIS surface it is
-    // still a refusal (CLOUD-1688). `rules/rust.md`'s rule that no Batten failure
-    // may read as a deny is what keeps `doctor` and the CLI verbs on `1`; the
-    // mediated boundary is the exception, because there `1` is non-blocking and
-    // the call it could not judge simply ran. The classification below is
-    // unchanged and so is the `measures` diagnostic the next assertion pins.
+    // Exit 1 is the usage code: a config fault, never a policy verdict, so no
+    // Batten failure can read as a deny (`rules/rust.md`).
     assert_eq!(
         output.status.code(),
-        Some(2),
-        "a partial ceiling is a config fault, and one this call cannot be judged under: {}",
+        Some(1),
+        "a partial ceiling is a config fault: {}",
         stderr(&output)
     );
     assert!(
