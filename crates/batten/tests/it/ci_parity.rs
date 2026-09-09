@@ -339,6 +339,23 @@ run = "mise run verify:gated"
 
 [tasks."verify:gated"]
 run = "mise run lint"
+depends = ["ci"]
+
+# THE TWO LANES THE COVERING RELATION IS ABOUT, AND THEY ARE A REGRESSION TERM
+# RATHER THAN SCENERY. `ci-task-parity` lets a narrowed lane go unnamed when the
+# manifest declares a lane that covers it, and `task cover stale` is the sensor
+# that the two bodies still stand in that relation. A fixture declaring neither
+# reports a stale cover over a tree that simply has no lanes — so every case in
+# this file would be judging that finding rather than its own subject. Removing
+# these makes the suite answer a different question than the tree does.
+[tasks.ci]
+depends = ["hooks", "deny"]
+
+[tasks.hooks]
+run = "hk check --all"
+
+[tasks."ci:quick"]
+run = "hk check --all --profile '!slow'"
 
 [tasks."test:cargo"]
 run = """
