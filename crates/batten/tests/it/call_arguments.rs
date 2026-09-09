@@ -257,7 +257,10 @@ reason = "unreachable"
         .build();
     assert_eq!(
         verdict(&contradictory, "mcp__Linear__save_issue", r"{}"),
-        Some(1),
+        // `2` rather than `1` for CLOUD-1688's reason, stated in full at the
+        // `max_age = 0` case: the classification below is unchanged, but on the
+        // mediated boundary `1` is non-blocking and let the call through.
+        Some(2),
         "a row that can never fire is a usage error, not a silently inert gate"
     );
 
@@ -429,8 +432,11 @@ reason = "unreachable"
             "mcp__Linear__save_issue",
             r#"{"id":"CLOUD-1"}"#
         ),
-        Some(1),
-        "a named key with no projection is a usage error"
+        // `2` rather than `1` for CLOUD-1688's reason, stated in full at the
+        // `max_age = 0` case below: the classification is unchanged, but on the
+        // mediated boundary `1` is non-blocking and let the call through.
+        Some(2),
+        "a call whose rules would not load must be refused, not allowed by the failure"
     );
 
     let wrong_key = Fixture::new("args-from-wrong-key")
@@ -454,7 +460,10 @@ reason = "unreachable"
         .build();
     assert_eq!(
         verdict(&wrong_key, "mcp__Linear__save_issue", r#"{"id":"CLOUD-1"}"#),
-        Some(1),
+        // `2` rather than `1` for CLOUD-1688's reason, stated in full at the
+        // `max_age = 0` case: the classification below is unchanged, but on the
+        // mediated boundary `1` is non-blocking and let the call through.
+        Some(2),
         "a projection on a branch-keyed row is a usage error, not an ignored column"
     );
 }
@@ -628,10 +637,24 @@ reason = "unreachable"
         .git()
         .base_commit()
         .build();
+    // WAS `1`, AND THE CHANGE IS THE POINT (CLOUD-1688). The classification this
+    // asserted is still true — a bound of zero is a misconfiguration, never a
+    // very strict policy — but `1` is the code the harness reads as a
+    // NON-BLOCKING hook error, so on the mediated path it let the call through
+    // unjudged. Measured over one 5-day session, 1,149 calls proceeded exactly
+    // this way.
+    //
+    // The surfaces stay separate rather than one winning: `doctor` still never
+    // answers `2` (`a_failing_diagnosis_is_never_a_policy_verdict`), and the CLI
+    // verbs still raise a usage error over a config they cannot read. This is the
+    // one surface where "cannot judge" must not resolve to "proceed", because
+    // here the alternative is a tool call nobody looked at.
+    //
+    // The diagnostic is unchanged, which the next assertion is what proves.
     assert_eq!(
         verdict(&zero, "mcp__Linear__save_issue", r#"{"id":"CLOUD-1"}"#),
-        Some(1),
-        "a bound of zero is a usage error, not a very strict policy"
+        Some(2),
+        "a call whose rules would not load must be refused, not allowed by the failure"
     );
     let refusal = run_with_stdin(
         &zero,
