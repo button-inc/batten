@@ -649,6 +649,22 @@ MUTANT_GATES = "mise,attestation-check,engine-checks-green,engine-config,engine-
 # clear` before EACH arm: without it the first arm that succeeds makes every
 # later arm pass from cache, which is how this was misread three times.
 GH_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=''))) }}"
+# THE OTHER HALF OF THE SAME REPAIR, and its absence is why the paragraph above
+# describes a 401 the paragraph above did not fix. `GH_TOKEN` is what `gh` and
+# zizmor read; `GITHUB_TOKEN` is what MISE'S OWN backends read — aqua, the
+# `github:` backend, every tool resolution in `[tools]`. Setting only the first
+# left the second holding the ambient `proxy-` placeholder, so the moment
+# `NO_PROXY` sends a call direct the placeholder goes with it and GitHub answers
+# 401. Measured 2026-09-09 on a cold container: `mise install` resolved nine
+# tools and 401'd on the four that needed a release listing, with the fix for
+# exactly that failure sitting two lines above, applied to the wrong name.
+#
+# THE AMBIENT VALUE IS STILL THE FALLBACK, because in CI it is the job token and
+# is the only credential there — but a `proxy-` value is dropped rather than
+# forwarded. That is the whole discrimination: a placeholder is not a weaker
+# token, it is a string that authenticates as nobody, and sending it is strictly
+# worse than sending nothing (60 requests/hour unauthenticated beats a 401).
+GITHUB_TOKEN = "{% set ours = get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=''))) %}{% set ambient = get_env(name='GITHUB_TOKEN', default='') %}{% if ours %}{{ ours }}{% elif ambient | truncate(length=6, end='') != 'proxy-' %}{{ ambient }}{% endif %}"
 NO_PROXY = "{% set cur = get_env(name='NO_PROXY', default='') %}{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
 no_proxy = "{% set cur = get_env(name='no_proxy', default=get_env(name='NO_PROXY', default='')) %}{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
 
