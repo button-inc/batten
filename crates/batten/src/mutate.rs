@@ -1327,19 +1327,60 @@ struct Selection {
 }
 
 /// Run a gate's suite filtered to `want`, inside the staged tree.
+/// Run one declared [`crate::arm::Arm`], which is the harness's unit of work
+/// (CLOUD-1714).
+///
+/// The adapter is one line of destructuring because `spawn` already takes
+/// exactly what an arm carries: an arm's `argv` is program-then-arguments, and
+/// splitting it here is what keeps the declaration a table rather than four
+/// positional parameters at every call site. An arm with an EMPTY argv names no
+/// program, which is a could-not-look rather than a run of nothing.
+/// **THE BOUND IS THE CALLER'S AND TRAVELS BESIDE THE ARM, not inside it.**
+///
+/// Two changes met here: CLOUD-1714 made this module an INSTANCE of the declared
+/// arm harness, and CLOUD-1860 bounded a suite by what it must do so a timeout is
+/// never read as a filter fault. Both are kept.
+///
+/// The duration is a parameter rather than an `Arm` field, which is the same
+/// division `spawn`'s own header states one level down: how long a child may take
+/// is the CALLER's question, and `arm::Arm` describes what to run — where, what,
+/// and under which environment — for every instance of the harness. Putting one
+/// instance's clock into the shared type would make the generic harness carry a
+/// concern only `mutate` has, which is the drift the extraction removed.
+fn spawn_arm(
+    arm: &crate::arm::Arm,
+    env: &[(String, String)],
+    bound: std::time::Duration,
+) -> Result<Ran> {
+    let (program, args) = arm
+        .argv
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("mutate: arm {} names no program.", arm.id))?;
+    spawn(&arm.cwd, program, args, env, bound)
+}
+
 fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Result<Selection> {
     let env = suite_env(root);
     let bound = suite_bound(suite);
     match suite {
         Suite::Bats(path) => {
-            let args = vec![String::from("--filter"), want.to_owned(), path.to_owned()];
-            let ran = spawn(
-                staged.dir(),
-                &root.join(BATS).to_string_lossy(),
-                &args,
-                &env,
-                bound,
-            )?;
+            // DECLARED AS AN ARM (CLOUD-1714), which is what makes this module
+            // an INSTANCE of the harness rather than a second copy of it. The
+            // arm carries what it takes to run the thing once — where, what,
+            // and under which environment — and `arm::Outcome` carries the
+            // distinction the `selected == 0` reading below already draws: a
+            // suite that selected no case has not passed, it has not been
+            // looked at.
+            let arm = crate::arm::Arm {
+                id: format!("bats:{want}"),
+                cwd: staged.dir().to_path_buf(),
+                argv: std::iter::once(root.join(BATS).to_string_lossy().into_owned())
+                    .chain([String::from("--filter"), want.to_owned(), path.to_owned()])
+                    .collect(),
+                stdin: None,
+                env: env.iter().cloned().collect(),
+            };
+            let ran = spawn_arm(&arm, &env, bound)?;
             Ok(Selection {
                 selected: tap_lines(&ran.output),
                 ok: ran.ok,
@@ -1356,8 +1397,19 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Result<
             // that match nothing is their startup. A target selecting no case
             // is not a pass either: `selected` stays 0 and the caller reports
             // `names-no-case`, which is a could-not-look.
-            let args = vec![String::from("test"), String::from("--"), want.to_owned()];
-            let ran = spawn(staged.dir(), "cargo", &args, &env, bound)?;
+            let arm = crate::arm::Arm {
+                id: format!("cargo:{want}"),
+                cwd: staged.dir().to_path_buf(),
+                argv: vec![
+                    String::from("cargo"),
+                    String::from("test"),
+                    String::from("--"),
+                    want.to_owned(),
+                ],
+                stdin: None,
+                env: env.iter().cloned().collect(),
+            };
+            let ran = spawn_arm(&arm, &env, bound)?;
             Ok(Selection {
                 selected: libtest_lines(&ran.output),
                 ok: ran.ok && !ran.output.contains("error: could not compile"),
