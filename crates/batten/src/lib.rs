@@ -11674,10 +11674,23 @@ fn commit_admissions(
 /// since retired, and refusing there would make retiring a key unlandable. The
 /// head side of every other clause in the same run parses the config strictly, so
 /// a genuinely broken config is already refused — loudly, and with the key named.
-fn conserves_arms(text: &str, source: &str) -> std::collections::BTreeMap<String, String> {
+///
+/// So the answer is `None`, never an empty map. The two were conflated until
+/// CLOUD-1638: an empty map is "this revision declares no arm", which is a
+/// comparison the caller can complete, and reading a parse failure as one turned
+/// could-not-look into a refusal of the very shape this section rules out.
+fn conserves_arms(text: &str, source: &str) -> Option<std::collections::BTreeMap<String, String>> {
     let mut arms = std::collections::BTreeMap::new();
+    // COULD-NOT-LOOK, NEVER AN EMPTY SET (CLOUD-1638). An empty map here reads as
+    // "the base declared no arm", which makes every arm the head declares look
+    // INTRODUCED and fabricates a refusal over a commit that added nothing. The
+    // case is not hypothetical: this binary refuses a rule id that is not three
+    // words, so every config predating that grammar is unparseable to it, and
+    // the ratchet ledger is read at each commit's PARENT. `None` is the honest
+    // answer and the function's own doc already names the direction a miss must
+    // fail in.
     let Ok(parsed) = config::parse_base(text, source) else {
-        return arms;
+        return None;
     };
     for rule in &parsed.rules {
         let Some(conserves) = rule.conserves.as_ref() else {
@@ -11705,7 +11718,7 @@ fn conserves_arms(text: &str, source: &str) -> std::collections::BTreeMap<String
                 .or_insert_with(|| format!("{}.{arm}", rule.id));
         }
     }
-    arms
+    Some(arms)
 }
 
 /// The lines `rev` added to `path` relative to `parent`, as a set difference.
@@ -11832,7 +11845,9 @@ fn commit_arm_sequencing(
             else {
                 return Ok(Vec::new());
             };
-            let introduced = introduced_arms(&before, after);
+            let Some(introduced) = introduced_arms(&before, after) else {
+                return Ok(Vec::new());
+            };
             if introduced.is_empty() {
                 return Ok(Vec::new());
             }
@@ -11872,13 +11887,21 @@ fn commit_arm_sequencing(
 }
 
 /// The arms `after` declares that `before` did not, keyed by the config pointer.
-fn introduced_arms(before: &str, after: &str) -> std::collections::BTreeMap<String, String> {
-    let held = conserves_arms(before, "the parent revision's batten.toml");
-    conserves_arms(after, config::CONFIG_FILE)
-        .into_iter()
-        .filter(|(token, _)| !held.contains_key(token))
-        .map(|(token, pointer)| (pointer, token))
-        .collect()
+///
+/// `None` when either side is unparseable, which leaves the commit unjudged
+/// rather than reading every arm the head declares as introduced.
+fn introduced_arms(
+    before: &str,
+    after: &str,
+) -> Option<std::collections::BTreeMap<String, String>> {
+    let held = conserves_arms(before, "the parent revision's batten.toml")?;
+    Some(
+        conserves_arms(after, config::CONFIG_FILE)?
+            .into_iter()
+            .filter(|(token, _)| !held.contains_key(token))
+            .map(|(token, pointer)| (pointer, token))
+            .collect(),
+    )
 }
 
 /// One commit's two sets, resolved.
@@ -11892,7 +11915,7 @@ fn arm_sequence(
 ) -> commit::ArmSequence {
     let before = git::show(root, parent, config::CONFIG_FILE).unwrap_or_default();
     let after = git::show(root, rev, config::CONFIG_FILE).unwrap_or_default();
-    let introduced = introduced_arms(&before, &after);
+    let introduced = introduced_arms(&before, &after).unwrap_or_default();
     if introduced.is_empty() {
         // No arm arrived, so no line can spend one. Returning early keeps the
         // ledger's blobs unread on every commit that merely edited the config.

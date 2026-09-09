@@ -66,6 +66,7 @@
 
 /*
 #MUTANT same-commit-spend-passes|s@                .any(|line| line.trim_start().starts_with(token.as_str()))@                .any(|_unread| false)@|a_commit_that_adds_an_arm_and_spends_it_is_refused
+#MUTANT unparseable-parent-reads-empty|s@^        return None;$@        return Some(arms);@|a_commit_whose_parent_config_cannot_be_parsed_is_unjudged
 */
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -237,6 +238,40 @@ fn a_commit_that_spends_an_arm_the_tree_already_carried_passes() {
         code,
         Some(0),
         "an arm the tree already carried is not self-authorized: {report}"
+    );
+}
+
+#[test]
+fn a_commit_whose_parent_config_cannot_be_parsed_is_unjudged() {
+    // COULD-NOT-LOOK, NEVER A FABRICATED REFUSAL (CLOUD-1638). The arm sets are
+    // read from the config at each commit and its PARENT, and a parent this
+    // binary cannot parse yields no set at all. Reading that as "the parent
+    // declared no arm" makes every arm the head declares look introduced, so a
+    // commit that added nothing is refused for spending what it did not create.
+    //
+    // NOT HYPOTHETICAL, AND NOT A FIXTURE'S IDEA. A binary enforcing a rule-id
+    // grammar refuses every config predating it, which is exactly the history
+    // this clause walks — measured on this repository's own branch, where the
+    // migration commit was refused over an arm it had carried unchanged.
+    let dir = fixture("arm-unparseable-parent", false);
+    write(&dir, "batten.toml", "version = 1\nthis is not toml\n");
+    commit(&dir, "chore(config): break the authority");
+    write(&dir, "batten.toml", &config(true));
+    write(
+        &dir,
+        LEDGER,
+        &format!("// the successors of the alpha suite\n{ARM_ROW}"),
+    );
+    commit(&dir, "feat(config): add the withdrawn arm and use it");
+    let (code, report) = check(&dir, "HEAD~2..HEAD");
+    assert_eq!(
+        code,
+        Some(0),
+        "an unreadable parent leaves the commit unjudged rather than refused: {report}"
+    );
+    assert!(
+        !report.contains("arm-self-authorized"),
+        "no finding may be fabricated from a set that could not be read: {report}"
     );
 }
 
