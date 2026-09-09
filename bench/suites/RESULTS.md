@@ -70,7 +70,6 @@ to it pays.
 | 1.3 | 0.4% | `tests/macos-link-check.bats` |
 | 1.2 | 0.4% | `tests/done-pr-check.bats` |
 | 1.2 | 0.3% | `tests/suite-bench-check.bats` |
-| 1.1 | 0.3% | `tests/stop-posture-check.bats` |
 | 1.1 | 0.3% | `tests/duplicate-close-check.bats` |
 | 0.9 | 0.3% | `tests/branch-age-check.bats` |
 | 0.9 | 0.2% | `tests/board-payloads.bats` |
