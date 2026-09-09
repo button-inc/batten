@@ -22,6 +22,35 @@
 //! The suite's successor is the module, which is where the one rule that COULD
 //! be a predicate went.
 //!
+//
+// CLOUD-1753. The program was ALREADY PORTED: `policy/stop-posture.rego` and
+// `[[pattern]] hedged-flag-framing` shipped under CLOUD-1051, and this file is
+// the tier that drives them over the compiled binary. So the retirement is a
+// deletion against an existing successor rather than a second port — which is
+// what the row asks for, and the case titles below map one-for-one onto the
+// module's own predicates.
+// carried: mise-tasks/stop-posture-check.sh policy/stop-posture.rego crates/batten/tests/it/stop_posture.rs
+// carried: tests/stop-posture-check.bats policy/stop-posture.rego crates/batten/tests/it/stop_posture.rs
+//
+// carried: "stop-posture-check.bats::the first tell AGENTS.md names fires" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::the second tell AGENTS.md names fires" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::the inflection that a closed two-item list would have missed fires" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::the report carries a count" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::THE WITNESSED MISS: the CLOUD-347 sentence fires" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::the asymmetry is gone: mentioning is a flagging verb under BOTH openers" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::every opener carries the witnessed verb" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::an UNWITNESSED near-miss stays out — that is the line against inventing a list" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::the report never echoes the sentence it judged" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::a code span carrying the tell does not fire" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::a double-quoted span carrying the tell does not fire" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::a block quote carrying the tell does not fire" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::a fenced block carrying the tell does not fire" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::a LINE-WRAPPED quoted span carrying the tell does not fire" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::reporting a measured value is not hedged framing" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::a command flag is not hedged framing" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::a plainly stated finding with a durable home does not fire" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::empty stdin is clean rather than an error" policy/stop-posture.rego
+// carried: "stop-posture-check.bats::a clean message produces no output at all" policy/stop-posture.rego
 // carried: mise-tasks/stop-guard.sh crates/batten/src/lib.rs kind:mechanism crates/batten/tests/it/stop_posture.rs
 //
 // CLOUD-1163's unlanded unit. The program was spawned by `stop_nudges` with
