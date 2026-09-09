@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.155](https://github.com/button-inc/batten/compare/v0.0.154...v0.0.155) - 2026-09-09
+
+### Fixed
+
+- *(rules)* classify `unless_contains` in the column census
+- *(policy)* a range move is not a landing lap
+- *(preset)* write the action as a coordinate, not a bare vendor name
+- *(preset)* the manifest census reads a module's named fields
+- *(policy)* gate the mise pin against the version workflows install
+- *(ci)* give the x64 `ci-` family a warm writer, and gate the orphaning
+- *(session)* install the release at session start, never a compile
+- *(doctor)* drop the exit-set declaration, written against a borrowed base
+- *(doctor)* declare the new verb's exit set
+- *(doctor)* state the Windows hook contract instead of gating the case away
+- *(doctor)* the exec-bit reading is unix's, so the case that asserts it is too
+- *(doctor)* the commit-gate predicate is a sub-verb, not a report row
+- *(doctor)* the commit path becomes a checked precondition
+
+### Other
+
+- *(preset)* [**breaking**] the module header says scope is per module now
+
 ## [0.0.154](https://github.com/button-inc/batten/compare/v0.0.153...v0.0.154) - 2026-09-08
 
 ### Fixed
