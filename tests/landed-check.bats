@@ -29,7 +29,7 @@ setup() {
 	# that is currently checked out, so the same line failed outright the moment
 	# a developer's default was the trunk's own name. Naming the branch makes the
 	# topology explicit instead of inheriting it, and `main` is then a fresh name
-	# needing no force at all. `branch edit unsafe` in batten.toml keeps the old
+	# needing no force at all. `no-branch-f-main` in batten.toml keeps the old
 	# form out; the literal is not spelled here, because that row is a substring
 	# rule over this directory and would fire on its own explanation.
 	git init -q -b work "$REPO"

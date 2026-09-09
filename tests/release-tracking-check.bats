@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/release wire missing.sh .github/workflows/release-plz.yml .github/workflows/linear-release-backfill.yml
-# release wire missing's decision table (CLOUD-618).
+# subject: mise-tasks/release-tracking-check.sh .github/workflows/release-plz.yml .github/workflows/linear-release-backfill.yml
+# release-tracking-check's decision table (CLOUD-618).
 #
 # Every case below is a shape that leaves a job GREEN while a shipped tag fails to
 # reach Linear, which is what makes them worth a gate at all — a dropped
@@ -21,7 +21,7 @@
 # nothing.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/release wire missing.sh"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/release-tracking-check.sh"
 	WORKFLOW="$BATS_TEST_TMPDIR/release-plz.yml"
 	BACKFILL="$BATS_TEST_TMPDIR/linear-release-backfill.yml"
 	clean_workflow >"$WORKFLOW"

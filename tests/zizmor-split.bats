@@ -8,7 +8,7 @@
 # dropping `--offline` restores a green-looking gate whose verdict depends on
 # api.github.com, and nothing else in the tree would notice until a rate limit
 # stopped a landing again. So the split is pinned as text, the same way
-# `hk-version` and `pin declare wrong` pin agreements no runtime check reaches.
+# `hk-version` and `mise-pin-agreement` pin agreements no runtime check reaches.
 #
 # The measurement behind it: two laps of one `land` run over an unchanged tree —
 # `No findings to report`, then `403 Forbidden` on

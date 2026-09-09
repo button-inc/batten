@@ -5853,6 +5853,12 @@ id = "shell retire partial"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
+# THE PARSED AUTHORITY, for the rename-rewrite admission (CLOUD-1638). That arm
+# asks whether a token a governed file started naming is a rule id this config
+# declares, and `input.tree.documents` is populated only for a row that names
+# its source — without this the arm is undefined on every real tree while its
+# own synthetic cases pass, which is exactly how it first shipped.
+sources = ["batten.toml"]
 # THE SELECTOR IS `**` FOR THE FOURTH ARM (CLOUD-1080), and it is the same
 # correction `prose-only` records one row down. What this row GOVERNS is unchanged
 # — `governed_at_head` and `governed_when_deleted` still select `mise-tasks/**` and

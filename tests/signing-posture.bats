@@ -17,7 +17,7 @@ setup() {
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	# `main` from the start, so no row has to force a branch into place later:
-	# `branch edit unsafe` forbids that shape in a suite, and rightly — a `branch -f`
+	# `no-branch-f-main` forbids that shape in a suite, and rightly — a `branch -f`
 	# that escaped the fixture would move the real trunk.
 	git -C "$REPO" init --quiet --initial-branch=main
 	# Per fixture, never inherited: a CI runner carries no global identity.

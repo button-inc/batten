@@ -111,7 +111,7 @@ hooks_with() {
 @test "a config the gate parses nothing out of is exit 2, not a pass" {
 	# The vacuous green a containment check produces most easily: parse zero
 	# requirements and every list covers them. Distinguished from a violation,
-	# the same way a missing lockfile is in lock cover partial.
+	# the same way a missing lockfile is in lock-complete.
 	printf '[epoch]\ntracked = ["batten.toml"]\n' >"$CONFIG"
 	hooks_with "crates/**"
 

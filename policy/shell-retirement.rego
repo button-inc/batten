@@ -282,6 +282,7 @@ violation contains {
 	some path in delta.edited
 	governed_at_head(path)
 	not only_drops_a_retired_reference(path)
+	not only_rewrites_a_renamed_id(path)
 }
 
 # THE ONE ADMITTED EDIT, and it is what makes this campaign able to clean up
@@ -2490,3 +2491,141 @@ test_an_invocation_field_is_not_a_successor if {
 	# and it would have passed over a module refusing for a different reason.
 	v.verdict == "shell port missing"
 }
+
+# THE SECOND ADMITTED EDIT, and it exists for the sibling's reason one axis over
+# (CLOUD-1638).
+#
+# `only_drops_a_retired_reference` admits a governed file dropping a reference to
+# a path THIS delta deleted. The same deadlock arrives when the delta renames a
+# `[[rule]] id` rather than deleting a file: `tests/ntia-check.bats` and
+# `tests/remedy-payload-source.bats` slice the authority with
+# `awk '/^id = "sbom-ntia-conformance"/'`, so putting the rule ids in the
+# three-word grammar breaks eight cases the branch is then refused permission to
+# fix. `shell edit refused` declares no override route and no `bypass_env`, so
+# again the campaign mandates an edit it cannot land.
+#
+# THE NARROWING IS EXACT AND NOT A JUDGEMENT. Every removed line must pair with
+# an added line that is the SAME BYTES either side of one span, that span must
+# become an id the authority declares, and what it replaced must not be one. A
+# branch renaming no rule has no admitted rewrite; an added line with no removed
+# counterpart is refused; so this cannot become a licence to maintain a shell
+# rule in place, which is the whole reason the arm above exists.
+#
+# COULD-NOT-LOOK REFUSES, for the sibling's reason: an unreadable base side makes
+# the removed set unknowable, the admission does not hold, and the edit is
+# refused. That is the safe direction for an arm whose failure mode is a silent
+# licence.
+#MUTANT rename-rewrite-unchecked|s@^	not old in head_rule_ids$@	true@|a_rewrite_naming_an_unrenamed_token_is_refused
+only_rewrites_a_renamed_id(path) if {
+	base := delta["base-lines"][path]
+	base_set := {line | some line in base}
+	head := {line | some line in input.tree.lines[path]}
+	removed := {line | some line in base_set; not line in head}
+	added := {line | some line in head; not line in base_set}
+
+	# An edit that removed nothing is not this case, and one that added nothing
+	# is the sibling's.
+	count(removed) > 0
+	count(added) > 0
+
+	# Every removed line becomes one of the added ones by a rename.
+	count({line | some line in removed; rewritten_by_a_rename(line, added)}) == count(removed)
+
+	# AND EVERY ADDED LINE HAS AN ORIGIN, so nothing rides along. Asked this way
+	# round rather than by running the predicate backwards: an added line carries
+	# the NEW id, so looking for the old token in it can never hold, and that
+	# inversion made the positive case fail while its two negatives passed.
+	count({
+	line |
+		some line in added
+		some was in removed
+		rewritten_by_a_rename(was, {line})
+	}) == count(added)
+}
+
+# One line is the other with a declared rule id put where a non-id token was.
+#
+# READ OFF THE HEAD DOCUMENT, not off `base-lines`. The tree surface populates
+# `base-lines` for the paths this module governs — `mise-tasks/**` and
+# `tests/**` — and `batten.toml` is neither, so a first version asking what the
+# authority declared AT BASE was undefined on every real tree while passing its
+# own synthetic case. `input.tree.documents["batten.toml"].rule` is the reader
+# two other modules already use, and it is populated.
+#
+# NO SUBSTRING ENUMERATION, which is what makes this decidable. The NEW id is
+# known — the authority declares it — so finding it in the added line fixes the
+# prefix and the suffix, and the token it replaced is whatever the removed line
+# carries between the same two. Nothing is guessed.
+#
+# SPLIT-AND-REJOIN, not `replace`: `drops_a_retired_name` above already does span
+# surgery with `indexof` and `substring` for the reason a repository gate must —
+# `replace` is not a builtin the shipped engine implements, so a body using it is
+# UNDEFINED rather than false, and its negative cases then pass vacuously.
+rewritten_by_a_rename(was, others) if {
+	some other in others
+	some new in head_rule_ids
+	at := indexof(other, new)
+	at >= 0
+	before := substring(other, 0, at)
+	after := substring(other, at + count(new), -1)
+
+	# The removed line agrees byte for byte either side of the span.
+	startswith(was, before)
+	endswith(was, after)
+	count(was) >= count(before) + count(after)
+
+	# And what it carried there was NOT itself a live id, so this admits a rename
+	# and not a rewrite from one live name to another.
+	old := substring(was, count(before), (count(was) - count(before)) - count(after))
+	count(old) > 0
+	not old in head_rule_ids
+}
+
+# Every rule id the committed authority declares at head.
+head_rule_ids contains id if {
+	some row in input.tree.documents["batten.toml"].rule
+	id := row.id
+}
+
+# THE RENAME-REWRITE ARM, over a synthetic input.
+test_a_rename_rewrite_is_admitted if {
+	only_rewrites_a_renamed_id("tests/probe.bats") with input as rename_input(
+		"\trun awk '/^id = \"old-kebab-name\"/'",
+		"\trun awk '/^id = \"new three words\"/'",
+	)
+}
+
+# ANTI-VACUITY: a rewrite naming a token the authority does not declare is
+# refused, which is the whole narrowing.
+test_a_rewrite_naming_an_unrenamed_token_is_refused if {
+	not only_rewrites_a_renamed_id("tests/probe.bats") with input as rename_input(
+		"\trun awk '/^id = \"unrelated-token\"/'",
+		"\trun awk '/^id = \"also-unrelated\"/'",
+	)
+}
+
+# AND NOTHING RIDES ALONG: an added line with no removed counterpart is refused.
+test_an_unrelated_addition_is_refused if {
+	not only_rewrites_a_renamed_id("tests/probe.bats") with input as object.union(
+		rename_input(
+			"\trun awk '/^id = \"old-kebab-name\"/'",
+			"\trun awk '/^id = \"new three words\"/'",
+		),
+		{"tree": {"lines": {"tests/probe.bats": [
+			"\trun awk '/^id = \"new three words\"/'",
+			"\techo smuggled",
+		]}}},
+	)
+}
+
+# One edited governed path, and the authority declaring the id it now names.
+rename_input(base_line, head_line) := {"tree": {
+	"lines": {"tests/probe.bats": [head_line]},
+	"documents": {"batten.toml": {"rule": [{"id": "new three words"}]}},
+	"base-delta": {
+		"added": [],
+		"deleted": [],
+		"edited": ["tests/probe.bats"],
+		"base-lines": {"tests/probe.bats": [base_line]},
+	},
+}}
