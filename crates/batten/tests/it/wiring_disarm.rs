@@ -117,11 +117,7 @@ fn one_row(path: &str) -> String {
 #[test]
 #[cfg(unix)]
 fn an_armed_script_is_replaced_by_a_shim_that_exits_zero() {
-    let bench = bench(
-        "disarm-armed",
-        &one_row("stop.sh"),
-        &[("stop.sh", ARMED)],
-    );
+    let bench = bench("disarm-armed", &one_row("stop.sh"), &[("stop.sh", ARMED)]);
 
     let (status, err) = bench.reclaim(&["-y"]);
     assert_eq!(status, 0, "{err}");
@@ -154,11 +150,7 @@ fn an_armed_script_is_replaced_by_a_shim_that_exits_zero() {
 fn the_shim_keeps_the_mode_the_launcher_set() {
     use std::os::unix::fs::PermissionsExt as _;
 
-    let bench = bench(
-        "disarm-mode",
-        &one_row("stop.sh"),
-        &[("stop.sh", ARMED)],
-    );
+    let bench = bench("disarm-mode", &one_row("stop.sh"), &[("stop.sh", ARMED)]);
     let (status, err) = bench.reclaim(&["-y"]);
     assert_eq!(status, 0, "{err}");
 
@@ -216,7 +208,10 @@ fn an_absent_script_is_reported_and_never_created() {
     assert_eq!(status, 0, "{err}");
     assert!(err.contains("stop.sh absent"), "{err}");
     assert!(err.contains("disarmed 0 of 1 declared script(s)"), "{err}");
-    assert!(!bench.script("stop.sh").exists(), "the verb created a script");
+    assert!(
+        !bench.script("stop.sh").exists(),
+        "the verb created a script"
+    );
 }
 
 /// Case (d): a path that escapes the home directory is refused at LOAD.
@@ -258,11 +253,7 @@ fn a_blank_marker_is_refused_at_load() {
 /// `foreign` script has to move it at all.
 #[test]
 fn check_is_red_while_a_script_is_armed_and_green_once_it_is_shimmed() {
-    let bench = bench(
-        "disarm-check",
-        &one_row("stop.sh"),
-        &[("stop.sh", ARMED)],
-    );
+    let bench = bench("disarm-check", &one_row("stop.sh"), &[("stop.sh", ARMED)]);
 
     let (status, err) = bench.reclaim(&["--check"]);
     assert_eq!(status, 1, "a repair is owed: {err}");
@@ -351,11 +342,7 @@ fn the_registration_pass_still_runs_beside_the_script_pass() {
 /// it is still armed.
 #[test]
 fn doctor_hooks_reports_each_declared_script_without_naming_a_path() {
-    let bench = bench(
-        "disarm-doctor",
-        &one_row("stop.sh"),
-        &[("stop.sh", ARMED)],
-    );
+    let bench = bench("disarm-doctor", &one_row("stop.sh"), &[("stop.sh", ARMED)]);
     let report = bench.run_in("disposable", &["doctor", "hooks", "-J"]);
     let document: serde_json::Value =
         serde_json::from_str(&stdout(&report)).expect("the report is JSON");
@@ -388,9 +375,10 @@ fn a_foreign_script_does_not_move_doctors_own_verdict() {
         serde_json::from_str(&stdout(&with_script)).expect("the report is JSON");
 
     let none = bench("disarm-doctor-verdict-clean", &one_row("stop.sh"), &[]);
-    let without: serde_json::Value =
-        serde_json::from_str(&stdout(&none.run_in("disposable", &["doctor", "hooks", "-J"])))
-            .expect("the report is JSON");
+    let without: serde_json::Value = serde_json::from_str(&stdout(
+        &none.run_in("disposable", &["doctor", "hooks", "-J"]),
+    ))
+    .expect("the report is JSON");
 
     assert_eq!(with_script["disarmed"][0]["state"], "foreign");
     assert_eq!(without["disarmed"][0]["state"], "absent");

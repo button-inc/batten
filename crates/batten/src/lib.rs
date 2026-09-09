@@ -4860,11 +4860,13 @@ fn run_wiring_reclaim(
     // `Usage`, never `Violation`: a merged surface carrying somebody else's hook
     // is the config-or-usage class, and a mediating harness reading `2` as a
     // policy denial must not be told this is one (§7).
-    Ok(if check && (done.siblings() > 0 || disarmed.foreign() > 0) {
-        ExitCode::Usage
-    } else {
-        ExitCode::Success
-    })
+    Ok(
+        if check && (done.siblings() > 0 || disarmed.foreign() > 0) {
+            ExitCode::Usage
+        } else {
+            ExitCode::Success
+        },
+    )
 }
 
 /// One half of a `FROM:TO` range, as a 1-indexed line number.

@@ -487,7 +487,6 @@ fn prune_siblings(
     removed
 }
 
-
 // --- the disarm half: the SCRIPT, because the registration is unread ----------
 //
 // Everything above this line edits hook REGISTRATIONS, and against one measured
@@ -541,14 +540,7 @@ pub struct Disarm {
 
 /// The `[wiring]` table: what this consumer's launcher re-arms every spawn.
 #[derive(
-    Debug,
-    Clone,
-    Default,
-    PartialEq,
-    Eq,
-    serde::Serialize,
-    serde::Deserialize,
-    schemars::JsonSchema,
+    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
@@ -713,9 +705,10 @@ pub fn disarm(home: &Path, declared: &[Disarm], dry_run: bool) -> Result<Disarme
         let path = home.join(&row.path);
         // The declared path's own final component, never the resolved one: a
         // basename is all that leaves this function (rule 4).
-        let basename = Path::new(&row.path)
-            .file_name()
-            .map_or_else(|| row.path.clone(), |name| name.to_string_lossy().into_owned());
+        let basename = Path::new(&row.path).file_name().map_or_else(
+            || row.path.clone(),
+            |name| name.to_string_lossy().into_owned(),
+        );
         let state = match std::fs::read_to_string(&path) {
             // Absent, or unreadable. Distinguished by `try_exists` rather than
             // collapsed: a file that is there and unreadable is a repair this
@@ -748,7 +741,9 @@ pub fn disarm(home: &Path, declared: &[Disarm], dry_run: bool) -> Result<Disarme
 /// [`committed_events`] exists to make unwritable one surface over.
 #[must_use]
 pub fn disarmed(home: &Path, declared: &[Disarm]) -> Vec<DisarmedRow> {
-    disarm(home, declared, true).map(|out| out.rows).unwrap_or_default()
+    disarm(home, declared, true)
+        .map(|out| out.rows)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
