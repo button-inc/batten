@@ -2149,8 +2149,8 @@ fn claim_of(matches: &ArgMatches) -> Option<ClaimCommand> {
             branch: matches.get_one::<String>("branch").cloned(),
             title: matches.get_one::<String>("title").cloned(),
             log: matches.get_one::<String>("log").cloned(),
-            closing_only: flag(matches, "closing-only"),
-            refs_first_only: flag(matches, "refs-first-only"),
+            closing_only: flag(matches, "closing_only"),
+            refs_first_only: flag(matches, "refs_first_only"),
         }),
         ("carry", matches) => Some(ClaimCommand::Carry {
             json: flag(matches, "json"),

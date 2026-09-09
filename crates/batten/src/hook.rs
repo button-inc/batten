@@ -8844,13 +8844,17 @@ fn flatten_in(
         // **A CONTROL-FLOW BODY IS WALKED AND TAGGED**, which is what makes a
         // module able to decide from structure (CLOUD-1381).
         //
-        // An earlier revision walked these UNTAGGED and it was an over-deny:
-        // `run-shape-guard` exempts a `sleep` inside a condition loop, and a
-        // body command lifted into a bare segment carries nothing saying it was
-        // in a loop, so `until [ -f /tmp/done ]; do sleep 1; done` -- the wait
-        // this repository's own rules recommend -- was refused as a bare timer.
-        // A second revision withdrew the walk entirely, which stopped that
-        // over-deny and left the module unable to see the loop at all.
+        // An earlier revision walked these UNTAGGED, and at the time that was an
+        // over-deny: `run-shape` then exempted a `sleep` inside a condition
+        // loop, and a body command lifted into a bare segment carries nothing
+        // saying it was in a loop, so a conditioned wait was refused as a bare
+        // timer. A second revision withdrew the walk entirely, which stopped
+        // that over-deny and left the module unable to see the loop at all.
+        //
+        // CLOUD-1337 has since withdrawn the exemption, so that particular
+        // over-deny is no longer possible -- but the tagging is not vestigial:
+        // `polls-a-local-process` and `background-timer` PARTITION on what the
+        // loop body reads, and neither can see a body it was never handed.
         //
         // Tagging is the answer both attempts were missing. The condition and
         // the body are DIFFERENT roles and a module needs them apart: the
@@ -15447,11 +15451,12 @@ deny contains "refused by themodule" if {
     ///
     /// The tag is what makes a module able to decide from structure rather than
     /// from a keyword, and both halves matter. Walking untagged was an
-    /// over-deny: `run-shape-guard` exempts a `sleep` inside a condition loop,
-    /// and a body command lifted into a bare segment carries nothing saying it
-    /// was in a loop, so the sanctioned `until … do sleep 1; done` wait was
-    /// refused as a bare timer. Not walking at all left the module unable to see
-    /// the loop.
+    /// over-deny while `run-shape` still exempted a `sleep` inside a condition
+    /// loop: a body command lifted into a bare segment carries nothing saying it
+    /// was in a loop, so a conditioned wait was refused as a bare timer. Not
+    /// walking at all left the module unable to see the loop. CLOUD-1337 has
+    /// since withdrawn the exemption, and the tag is still what the two arms
+    /// partition on.
     ///
     /// The condition and the body are separate roles because a module needs them
     /// apart: a process probe lives in the condition, a sleep in the body.

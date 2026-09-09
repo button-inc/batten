@@ -206,7 +206,7 @@ fn fixture(name: &str) -> PathBuf {
             "[[verdict.route]]\n",
             "id = \"task run first\"\n",
             "kind = \"command\"\n",
-            "target = \"until <test>; do sleep 1; done\"\n\n",
+            "target = \"run_in_background on the long command itself\"\n\n",
             "[[verdict]]\n",
             "id = \"timer run refused\"\n",
             "gloss = \"a backgrounded `sleep` with no loop around it is a timer, not a wait\"\n",
@@ -217,7 +217,7 @@ fn fixture(name: &str) -> PathBuf {
             "[[verdict.route]]\n",
             "id = \"task run first\"\n",
             "kind = \"command\"\n",
-            "target = \"until <test>; do sleep 1; done\"\n\n",
+            "target = \"run_in_background on the long command itself\"\n\n",
             "[[verdict]]\n",
             "id = \"task run blocked\"\n",
             "gloss = \"a foreground `mise` call is killed at ~2 minutes, so it fails rather than runs slowly\"\n",
@@ -454,14 +454,22 @@ fn a_backgrounded_bare_sleep_is_a_timer() {
 }
 
 #[test]
-fn a_backgrounded_wait_on_a_condition_is_allowed() {
-    // THE ALLOW THIS WHOLE FAMILY IS SHAPED AROUND. It is the form both refusals
-    // recommend, and denying it is the pure false positive that gets a guard
-    // bypassed (CLOUD-199). The keyword is in a DIFFERENT segment from the
-    // sleep, which is why the loop test is over the whole call.
+fn a_backgrounded_conditioned_sleep_loop_is_refused() {
+    // THE EXEMPTION THIS FAMILY WAS SHAPED AROUND, WITHDRAWN. The case used to
+    // assert the opposite, on the argument that a loop testing a condition exits
+    // on the condition rather than the clock. That is true and was never the
+    // question: the loop still spends the session performing by hand the wake-up
+    // the runtime already delivers on a backgrounded task's exit (measured 523
+    // of 524). CLOUD-1337 priced the exemption at eleven duplicate watchers
+    // running 9h35m; measured again 2026-09-09, one conditioned loop ran 3h34m
+    // in this session and the detector was a human reading `ps`.
+    //
+    // So the two arms now PARTITION on `count(process_probes)` and nothing falls
+    // between them: every backgrounded sleep is refused, with or without a
+    // condition around it.
     let root = fixture("conditional-wait");
-    allowed_background(&root, "until [ -f /tmp/done ]; do sleep 1; done", true);
-    allowed_background(
+    denied_background(&root, "until [ -f /tmp/done ]; do sleep 1; done", true);
+    denied_background(
         &root,
         "while ! grep -q ready /tmp/log; do sleep 5; done",
         true,
@@ -469,29 +477,26 @@ fn a_backgrounded_wait_on_a_condition_is_allowed() {
 }
 
 #[test]
-fn a_loop_body_is_reached_and_the_exemption_decides_it() {
-    // THE PAIR THAT MAKES THE EXEMPTION LOAD-BEARING (CLOUD-1112). One command,
-    // twice, differing only in posture — so `waits_on_condition` is what decides
-    // it, which is what CLOUD-613's acceptance always claimed.
+fn a_loop_body_is_reached_in_either_posture() {
+    // THE PAIR THAT ONCE MADE THE EXEMPTION LOAD-BEARING (CLOUD-1112). One
+    // command, twice, differing only in posture — and since CLOUD-1337 withdrew
+    // the condition exemption the POSTURE no longer changes the answer; it
+    // changes only which rule answers, `foreground-sleep` or `background-timer`.
+    // What the pair still proves is the keyword look-through: without it neither
+    // call resolves a sleep at all and both pass vacuously.
     //
-    // Reaching it needed a keyword look-through. `do sleep 1` resolves to the
-    // program `do` without one, and `run-shape-guard.sh`'s `resolve()` still
-    // does: the wrapper table covers `env`/`timeout`/`sudo`/… and no keyword. So
-    // in the bash BOTH postures pass, for want of a resolvable sleep rather than
-    // for any reason about waiting, and its comment that an element-scoped test
-    // "would deny every correct wait" presumes an element it never reaches.
-    // Porting that would have satisfied the acceptance vacuously.
+    // Reaching the body needs a keyword look-through: `do sleep 1` resolves to
+    // the program `do` without one, so a resolver whose wrapper table covers
+    // `env`/`timeout`/`sudo`/… and no keyword finds no sleep here at all and
+    // passes the whole family vacuously. That was the retired bash guard's
+    // behaviour, and it is why this case reads the verdict rather than a count.
     //
-    // This is the one place the two authorities deliberately disagree while both
-    // are live, and it is in the DENYING direction — no call gets a weaker
-    // answer than it had.
-    //
-    // `for` is not a wait: it counts iterations, so it exits on the clock like
-    // any timer. The guard calls that a deliberate non-catch "because narrowing
-    // it costs a real parser"; it costs none now.
+    // `for` is not a wait either — it counts iterations, so it exits on the
+    // clock like any timer — and after CLOUD-1337 it needs no separate argument:
+    // there is no shape of loop that exempts the sleep inside it.
     let root = fixture("loop-body");
     denied_background(&root, "until [ -f /tmp/done ]; do sleep 1; done", false);
-    allowed_background(&root, "until [ -f /tmp/done ]; do sleep 1; done", true);
+    denied_background(&root, "until [ -f /tmp/done ]; do sleep 1; done", true);
     denied_background(&root, "for i in $(seq 60); do sleep 10; done", true);
 }
 

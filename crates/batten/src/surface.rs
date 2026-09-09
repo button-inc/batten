@@ -869,7 +869,7 @@ const CLAIM_LOG: FlagDecl = FlagDecl {
 /// different SINGLE source, so both together is a caller that has not decided
 /// which question it is asking, never an intersection to compute.
 const CLOSING_ONLY: FlagDecl = FlagDecl {
-    id: "closing-only",
+    id: "closing_only",
     long: Some("closing-only"),
     short: None,
     help: "Answer from a closing keyword alone, never falling through to the branch or a trailer",
@@ -884,7 +884,7 @@ const CLOSING_ONLY: FlagDecl = FlagDecl {
 
 /// Source 3 alone — `closing-key-check`'s need (CLOUD-674).
 const REFS_FIRST_ONLY: FlagDecl = FlagDecl {
-    id: "refs-first-only",
+    id: "refs_first_only",
     long: Some("refs-first-only"),
     short: None,
     help: "Answer from the first key of each `Refs:` trailer alone, never sources 1 or 2",
@@ -4057,7 +4057,13 @@ pub const SURFACE: &[CommandDecl] = &[
         path: "claim merged",
         id: "claim.merged",
         about: "The keys merged pull request bodies close, as `<key>\\t<number>` rows",
-        data_channel: true,
+        // `data_channel` is exactly "declares `-J`", which
+        // `every_data_emitting_verb_declares_the_json_flag` pins in both
+        // directions — it is not the wider claim the header paragraph makes
+        // about stdout being data rather than a verdict. Two-column rows are
+        // this family's shape and `claim keys` beside it says the same, so the
+        // answer is the line shape, not a second encoding of it.
+        data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[MERGED_LIMIT],

@@ -133,9 +133,8 @@ backgrounded task re-invokes you when it exits (measured 523/524, failures
 included), so the turn in between is the _designed_ state, not one to fill —
 **"idle" means a turn with NOTHING backgrounded**, and it is committed-and-pushed,
 never activity, that survives a reclaim. Manufacturing your own wake-ups with a
-backgrounded `sleep N; tail log` is a timer where an exit condition belongs,
-duplicating the notification (490 in one session, 2 changed a decision); refused
-by `run-shape-guard`. To ask what a live task is _doing_, `mise run alive`.
+backgrounded `sleep N; tail log` duplicates it (490 in one session, 2 changed a
+decision); **A LOOP IS NO EXEMPTION** (CLOUD-1337) — EVERY sleep is refused, either posture. Live task? `mise run alive`.
 
 **Two habits defeat this silently, both failing green:** piping a `mise run` into
 a pager (the exit status becomes the pager's) or detaching it with `nohup`/`&`
