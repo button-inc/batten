@@ -11950,7 +11950,7 @@ target = "crates/batten/src/lib.rs"
 id = "cargo spelling other"
 gloss = "a foreign runner's cargo invocation is not the one `test:cargo` declares"
 class = """
-`ci-task-parity` exempts a foreign runner, and correctly — there is no local \
+`job run other` exempts a foreign runner, and correctly — there is no local \
 Windows, so "a free local run would have caught it" is false there. The cost of \
 that exemption is this class: the job's command becomes a SECOND SPELLING of \
 `test:cargo`'s body, accurate today and only today. Change the task and every \

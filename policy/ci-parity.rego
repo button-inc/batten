@@ -94,7 +94,7 @@ rules contains "path reach dead"
 # use site. Do not re-collapse them.
 #
 # WHAT THIS COST, because it is the whole reason the comment is this long. The
-# properties in this module are `ci-task-parity`, the required-check roster in
+# properties in this module are `job run other`, the required-check roster in
 # both directions, the fan-in wiring, and the lease-before-spending precondition
 # — and a gate that passes because it is dead is byte-identical, on the decision
 # surface, to a gate that passed. The suite could not see it either: the fixture
@@ -864,7 +864,7 @@ violation contains {
 # job's command is a second spelling of `test:cargo`'s body, accurate today and
 # only today. Change the task and every Linux leg follows it while the foreign
 # leg keeps running the old command, green on work it no longer covers.
-# `ci-task-parity` cannot object, because its exemption is per JOB, not per
+# `job run other` cannot object, because its exemption is per JOB, not per
 # property.
 #
 # WHY THIS READS THE MANIFEST RATHER THAN `mise tasks info`, stated because the
@@ -1040,7 +1040,7 @@ swap(key, doc) := out if {
 # --- the foreign cargo spelling ----------------------------------------------
 
 # A foreign leg running something `test:cargo` does not declare is the whole
-# defect: the Linux legs follow the task, this one does not, and `ci-task-parity`
+# defect: the Linux legs follow the task, this one does not, and `job run other`
 # cannot see it because its exemption is per job.
 test_a_foreign_leg_running_a_different_cargo_is_refused if {
 	drifted := object.union(sound_input.tree.lines, {".github/workflows/rust.yml": ["      - run: mise exec -- cargo nextest run --workspace --all-features"]})
