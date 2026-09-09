@@ -337,11 +337,11 @@ fn conditional_get(git_dir: &Path, path: &str, fetch: Transport<'_>) -> Option<(
     // PERSIST BEFORE ANSWERING, and a failure to persist is not a failure to
     // read: the store is an optimisation, so a read-only git directory costs a
     // conditional request next time rather than the answer this time.
-    if let Some(validator) = answer.etag.as_deref() {
-        if std::fs::create_dir_all(&stored).is_ok() {
-            let _ = std::fs::write(stored.join("etag"), validator);
-            let _ = std::fs::write(stored.join("body"), &answer.body);
-        }
+    if let Some(validator) = answer.etag.as_deref()
+        && std::fs::create_dir_all(&stored).is_ok()
+    {
+        let _ = std::fs::write(stored.join("etag"), validator);
+        let _ = std::fs::write(stored.join("body"), &answer.body);
     }
     Some((answer.status, answer.body))
 }
@@ -396,10 +396,13 @@ pub fn window_over(
     // Resolving it from the process's cwd would make the validator store depend
     // on where the caller happened to be standing, and would make this untestable
     // without a chdir — which is shared mutable state across a parallel suite.
-    let query: String = params
-        .iter()
-        .map(|(key, value)| format!("&{key}={value}"))
-        .collect();
+    let query: String = params.iter().fold(String::new(), |mut acc, (key, value)| {
+        use std::fmt::Write as _;
+        // `write!` to a String cannot fail; the result is bound rather than
+        // dropped because the lint that sent us here is `#[must_use]`-adjacent.
+        let _ = write!(acc, "&{key}={value}");
+        acc
+    });
     // THE PAGE SIZE IS THE END-OF-COLLECTION SIGNAL where the endpoint reports
     // no `total_count`: a page carrying fewer rows than were asked for is the
     // last one. Read off the caller's own `per_page` rather than assumed,

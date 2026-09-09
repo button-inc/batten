@@ -707,20 +707,6 @@ impl Grammar {
         keys
     }
 
-    /// The keys a span names in CLOSING form — the ones a merge will move.
-    ///
-    /// **Naming a key and closing one are different facts, and conflating them is
-    /// the defect this narrows** (CLOUD-674): a body citing a row as evidence is
-    /// not claiming it, and `claimed-keys` already learned that distinction the
-    /// expensive way. So this is [`Self::keys_in`] filtered by what precedes each
-    /// match rather than a second search — the same one definition of a key, asked
-    /// a narrower question.
-    ///
-    /// The verb set is the forge's rather than this repository's, and it lives in
-    /// the pattern registry for the reason every other token does: one concept,
-    /// one spelling. Anchored at the END, so it decides the text immediately
-    /// before the key and nothing further back.
-
     /// Does `prefix` end in a closing verb that is NOT negated?
     ///
     /// **Two rows rather than one cleverer row, because Rust's regex has no
@@ -744,6 +730,19 @@ impl Grammar {
         !self.closing_negation.is_match(&prefix[..verb.start()])
     }
 
+    /// The keys a span names in CLOSING form — the ones a merge will move.
+    ///
+    /// **Naming a key and closing one are different facts, and conflating them is
+    /// the defect this narrows** (CLOUD-674): a body citing a row as evidence is
+    /// not claiming it, and `claimed-keys` already learned that distinction the
+    /// expensive way. So this is [`Self::keys_in`] filtered by what precedes each
+    /// match rather than a second search — the same one definition of a key, asked
+    /// a narrower question.
+    ///
+    /// The verb set is the forge's rather than this repository's, and it lives in
+    /// the pattern registry for the reason every other token does: one concept,
+    /// one spelling. Anchored at the END, so it decides the text immediately
+    /// before the key and nothing further back.
     #[must_use]
     pub fn keys_closed_in(&self, text: &str) -> Vec<IssueKey> {
         let found: BTreeSet<&str> = self

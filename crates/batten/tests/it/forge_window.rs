@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use batten::forge::{Shape, Window};
 
-/// A canned page: a status, an ETag, and a body.
+/// A canned page: a status, an `ETag`, and a body.
 #[derive(Clone)]
 struct Page {
     status: u16,

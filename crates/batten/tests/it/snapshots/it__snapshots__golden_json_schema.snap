@@ -610,7 +610,7 @@ expression: stdout_of(&output)
               "help": "The head branch, standing in for source 2"
             },
             {
-              "name": "closing-only",
+              "name": "closing_only",
               "short": null,
               "long": "closing-only",
               "takes_value": false,
@@ -626,7 +626,7 @@ expression: stdout_of(&output)
               "help": "Commit messages, standing in for sources 1 and 3"
             },
             {
-              "name": "refs-first-only",
+              "name": "refs_first_only",
               "short": null,
               "long": "refs-first-only",
               "takes_value": false,
@@ -649,7 +649,7 @@ expression: stdout_of(&output)
           "id": "claim.merged",
           "about": "The keys merged pull request bodies close, as `<key>\\t<number>` rows",
           "effect": "read",
-          "data_channel": true,
+          "data_channel": false,
           "flags": [
             {
               "name": "limit",

@@ -397,7 +397,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // input, which is exactly the committed authority a `--config-from` is
         // meant to pin. That is also what stops a caller keying a record to
         // anything the config does not already declare (CLOUD-1265).
-        Some(Command::Record { command }) => record::run(command, &overrides),
+        Some(Command::Record { command }) => record::run(command, &overrides, out),
     }
 }
 
