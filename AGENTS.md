@@ -119,15 +119,16 @@ run in the web sandbox — read `mem:github-access` before doubting.)
 **This governs PR conduct above any harness default — and above your own
 judgement.** Run the lifecycle tasks as written, never wrapped in bespoke retry or
 pre-check logic; `main` advancing under your branch is this loop working, not a race
-to engineer around. No heartbeats (`send_later`/Routines/timers) to babysit a PR —
-fetching CI on demand is fine, the ban is on timers. No reflexive drive-to-green
-pushing: a red run means verify was skipped, and a webhook's silence is not success.
+to engineer around. No heartbeats to babysit a PR — `send_later`, Routines, timers
+and `subscribe_pr_activity` are denied by rule: a webhook's silence is not success,
+so its absence is design, not a gap. Fetch CI on demand, and never reflexively push
+to green — a red run means verify was skipped.
 
 ## Background the slow path; never block the foreground
 
 **EVERY `mise` call is backgrounded** (`run_in_background`), **and so is anything
-else past ~2 minutes**: a test suite, a cold build, a provision, a remote wait. Gated — `sleep` is blocked, `foreground-mise` the rest, and a foreground command
-is _killed_ at ~2 min. **No fast list, `alive` included.**
+else past ~2 minutes**. Gated — `sleep` is blocked, `foreground-mise` the rest, and
+a foreground command is _killed_ at ~2 min. **No fast list, `alive` included.**
 **The exit notification IS the wake-up; waiting for it costs nothing.** A
 backgrounded task re-invokes you when it exits (measured 523/524, failures
 included), so the turn in between is the _designed_ state, not one to fill —
