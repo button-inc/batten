@@ -3969,12 +3969,64 @@ echo "verify: fast-forward-green — rebased on latest main, ci + cross + commit
 
 [tasks.commit-msg]
 description = "Gate: one pending commit message's subject follows the convention (policy: [commit] in batten.toml)"
-# `cargo run` for the same reason `batten-check` and `commit-attribution` use it:
-# the gate must judge the working tree's engine and config as the pair that ships.
+# THE BINARY ON PATH FIRST, AND `cargo run` ONLY WHERE THERE IS NONE — CLOUD-1620's
+# shape, applied to the path that pays it most (CLOUD-1397).
+#
+# A GIT HOOK IS A BATTEN HOOK, and is held to the same published ceiling. README's
+# `wired` row is 8.0ms p50 against a ≤100ms budget, and `perf-assert` enforces it
+# on the mediated surface; nothing argues the commit-msg surface is exempt just
+# because git is the harness rather than Claude Code.
+#
+# MEASURED 2026-09-09 on this container, same message, warm, three runs: this
+# task as the hook fired it, 582ms; `cargo run --quiet` with NOTHING to rebuild
+# 291ms; `target/debug/batten` 176ms; the release binary 125ms; and 8687ms on the
+# first commit after touching one `crates/batten/src` file.
+#
+# A FIRST PASS AT THESE NUMBERS READ 12ms FOR THE RELEASE BINARY AND IT WAS A
+# MEASUREMENT OF A FAILURE. `target/release/batten` was 0.0.155 against a tree at
+# 0.0.158 and REFUSED `batten.toml` outright — "vocabulary `action`: `fix` is
+# declared and no class or route name spends it" — so the 12ms was a config load
+# aborting, not a gate reaching a verdict. Rebuilt, the same call is 125ms. A
+# timing taken over a non-zero exit is not a timing of the work, and a stale
+# binary is exactly the shape that produces one (CLOUD-1688).
+#
+# A HOOK MUST NEVER COMPILE, and this is not a preference. Rebuilding that stale
+# release binary took ~4 minutes on this container (15:48 -> 15:52, `lto = "thin"`
+# in `[profile.release]`), so a hook that rebuilds when it finds a stale binary
+# would spend four minutes at the moment an author saves. The 8687ms debug case is
+# the same defect an order of magnitude cheaper: a hook running the compiler is
+# not a slow gate, it is a different program. The build belongs at provisioning,
+# where `session:batten` already puts it. The
+# `_.path` entry above already resolves a bare `batten` to THIS checkout's
+# `target/release`, built by `session:batten` -> `install:local` at session start
+# with an `::error::` when it cannot be — so the fast branch is the tree's own
+# engine, not a stale installed one, and the property the previous comment claimed
+# for `cargo run` ("judge the working tree's engine and config as the pair that
+# ships") is kept rather than traded.
+#
+# THE CONDITION TESTS PRESENCE AND NOTHING ELSE, which is where `attribution
+# identity`'s spelling must not be copied. That one reads
+# `if command -v batten && batten <verb>; then :; else cargo run …` and its own
+# comment claims `if`/`else` avoids the fallthrough that `a && b || c` has — but
+# those two are the same program: a binary that EXISTS and legitimately REFUSES
+# takes the else branch either way, so the shape it warns about is the shape it
+# ships. Harmless for a write that wants a retry; wrong for a gate, which would
+# then pay the build precisely when it refuses and run the whole judgement twice
+# to reach the same verdict. A gate that is slowest exactly when it says no is a
+# gate authors learn to stop running.
+#
+# So the verdict is not in the condition. Resolve, then run once, and let the
+# exit code be the gate's own.
+#
+# The fallback is what keeps a runner green: CI has no installed binary and
+# `bash: line 25: batten: command not found` is a measured failure there
+# (`auto-bot-land.yml:305-310`), so the branch that builds stays for the host that
+# needs it and never runs where a human is waiting.
+#
 # The pattern itself is `batten.toml`'s, not this file's — a rule about what a
 # commit may BE is the engine's, and `mise.toml` configures how tools run
 # (CLOUD-701).
-run = 'cargo run --quiet -p batten -- commit check --message "{{arg(name="file")}}"'
+run = 'if command -v batten >/dev/null 2>&1; then batten commit check --message "{{arg(name="file")}}"; else cargo run --quiet -p batten -- commit check --message "{{arg(name="file")}}"; fi'
 
 [tasks.commit-attribution]
 description = "Gate: no vendor authorship, branding or session links in BASE_SHA..HEAD_SHA (policy: [attribution] in batten.toml)"
@@ -3987,7 +4039,12 @@ description = "Gate: no vendor authorship, branding or session links in one pend
 # The commit-msg-hook half. Same policy and same engine as `commit-attribution`;
 # only the object differs — a message on disk plus the identity `git var` says
 # git is about to stamp, rather than commits that already exist.
-run = 'cargo run --quiet -p batten -- attribution check --message "{{arg(name="file")}}"'
+#
+# Resolve-then-run, for `commit-msg`'s reasons above and its measurements: these
+# two are the pair that fires on EVERY commit, so the 582ms each was paying was
+# the whole per-commit tax, and the 8687ms first-commit-after-an-edit case was a
+# git hook running the compiler twice over.
+run = 'if command -v batten >/dev/null 2>&1; then batten attribution check --message "{{arg(name="file")}}"; else cargo run --quiet -p batten -- attribution check --message "{{arg(name="file")}}"; fi'
 
 [tasks.attribution-identity]
 description = "Write: set this clone's repo-local git identity when it is unset or carries a denied vendor identity"

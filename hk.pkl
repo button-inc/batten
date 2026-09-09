@@ -1186,10 +1186,56 @@ hooks {
   // Conventional Commits (https://www.conventionalcommits.org/en/v1.0.0/).
   // PRs land by fast-forward, so every commit reaches main with its original
   // SHA and must be conventional for release-plz to compute semver correctly.
+  //
+  // THESE TWO STEPS CALL THE BINARY, NOT A TASK, AND THAT IS THE BUDGET RATHER
+  // THAN A STYLE PREFERENCE (CLOUD-1397). A git hook is a batten hook: README's
+  // `wired` row is 8.0ms p50 against a published ≤100ms ceiling, and nothing
+  // makes the commit-msg surface exempt because git is the harness.
+  //
+  // Measured 2026-09-09, same message, warm, three runs each:
+  //
+  //   mise run commit-msg, body spelling `cargo run`      582ms
+  //   mise run commit-msg, body resolving the binary      ~300ms
+  //   batten commit check --message                       121-130ms
+  //   batten attribution check --message                  16-18ms
+  //
+  // THE TASK LAYER CANNOT REACH THE CEILING NO MATTER WHAT ITS BODY DOES, which
+  // is why these steps left it: `mise --version` alone — the process, no task —
+  // is 105-125ms on this container, and `mise run` over a 101-task `mise.toml`
+  // adds config load, graph resolution and tera arg rendering on top. The floor
+  // is above the budget before a body runs.
+  //
+  // `commit check` AT ~125ms IS STILL OVER, AND IS NOT WHAT THIS STEP FIXED.
+  // Attributed: 6ms process start, 13ms to load a 13,749-line `batten.toml`, 4ms
+  // for the staged-set read — and ~100ms inside the verb that nothing here has
+  // profiled yet. `attribution check` over the same message is 16-18ms, so the
+  // cost is that verb's rather than the surface's. Removing the wrapper took the
+  // pair from ~1.16s to ~145ms; closing the last 25ms over budget is a separate
+  // measurement and belongs to CLOUD-1397 rather than to this comment.
+  //
+  // The 8687ms case (the first commit after touching one `crates/batten/src`
+  // file) was a hook running the compiler, which is not a slow gate but a
+  // different program.
+  //
+  // THE BINARY MUST BE THE TREE'S, AND A STALE ONE IS THE HAZARD THIS TRADES FOR
+  // LATENCY — measured on the change itself. `_.path` resolved a bare `batten` to
+  // a `target/release` build three versions behind the tree, which refused today's
+  // `batten.toml` outright, so this very step blocked the commit that introduced
+  // it. `session:batten` -> `install:local` builds that binary at session start
+  // and reports an `::error::` when it cannot, which is the compensating control;
+  // CLOUD-1688 is what makes it one artifact rather than two, and CLOUD-1397 §4
+  // named this exact failure before it happened.
+  //
+  // THE TASK STAYS AND IS STILL THE ONE CI RUNS, so this is not the divergence
+  // `lint:rego` and `cargo-fmt` route through tasks to prevent. Those steps share a
+  // FIXER and a config with their task; these two share neither — the body is one
+  // `batten` call and nothing else, so the step and the task cannot disagree about
+  // anything except how long they take. `commit-lint`'s range half still reaches
+  // the same verb through `mise run` in CI, where no installed binary exists.
   ["commit-msg"] {
     steps {
       ["conventional-commit"] {
-        check = "mise run commit-msg {{commit_msg_file}}"
+        check = "batten commit check --message {{commit_msg_file}}"
       }
       // The commit-time half of the attribution gate (CLOUD-274). Range mode runs
       // from `commit-lint` and catches an offending commit after it exists; this
@@ -1197,7 +1243,7 @@ hooks {
       // the identity git is about to stamp, so refusing here means the commit is
       // never created and there is nothing to amend or rebase away.
       ["commit-attribution"] {
-        check = "mise run commit-attribution-msg {{commit_msg_file}}"
+        check = "batten attribution check --message {{commit_msg_file}}"
       }
     }
   }
